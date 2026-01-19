@@ -10,60 +10,60 @@
 
 ## Phase 1: Core Types and Interfaces
 
-- [ ] T001 [US1] Create `src/scheduler/types.ts` with Job, JobPriority, JobStatus, JobType, JobCreateInput, RetryConfig, SchedulerConfig, ConcurrencyConfig
-- [ ] T002 [P] [US1] Create `src/scheduler/backends/backend.interface.ts` with QueueBackend interface and HealthCheckResult
-- [ ] T003 [P] [US1] Create `src/scheduler/events.ts` with SchedulerEvents interface, SchedulerMetrics type, and event constants
+- [X] T001 [US1] Create `src/scheduler/types.ts` with Job, JobPriority, JobStatus, JobType, JobCreateInput, RetryConfig, SchedulerConfig, ConcurrencyConfig
+- [X] T002 [P] [US1] Create `src/scheduler/backends/backend.interface.ts` with QueueBackend interface and HealthCheckResult
+- [X] T003 [P] [US1] Create `src/scheduler/events.ts` with SchedulerEvents interface, SchedulerMetrics type, and event constants
 
 ## Phase 2: In-Memory Backend (Testing Foundation)
 
-- [ ] T004 [US2] Create `tests/scheduler/backends/memory-backend.test.ts` with test cases for all QueueBackend operations
-- [ ] T005 [US2] Create `src/scheduler/backends/memory-backend.ts` implementing QueueBackend with priority arrays
-- [ ] T006 [US2] Implement priority ordering in memory backend (high > normal > low, FIFO within priority)
-- [ ] T007 [US2] Implement visibility timeout handling in memory backend (visibleAt tracking, auto-release)
-- [ ] T008 [US2] Implement dead letter queue operations in memory backend (getDeadLetterJobs, retryDeadLetter)
+- [X] T004 [US2] Create `tests/scheduler/backends/memory-backend.test.ts` with test cases for all QueueBackend operations
+- [X] T005 [US2] Create `src/scheduler/backends/memory-backend.ts` implementing QueueBackend with priority arrays
+- [X] T006 [US2] Implement priority ordering in memory backend (high > normal > low, FIFO within priority)
+- [X] T007 [US2] Implement visibility timeout handling in memory backend (visibleAt tracking, auto-release)
+- [X] T008 [US2] Implement dead letter queue operations in memory backend (getDeadLetterJobs, retryDeadLetter)
 
 ## Phase 3: Redis Backend
 
-- [ ] T009 [US1] Create `tests/scheduler/backends/redis-backend.test.ts` with integration tests
-- [ ] T010 [US1] Create `src/scheduler/backends/redis-backend.ts` with Redis sorted set implementation
-- [ ] T011 [US1] Implement priority scoring in redis backend (offset + timestamp for priority ordering)
-- [ ] T012 [US1] Implement atomic dequeue in redis backend (Lua script or WATCH/MULTI)
-- [ ] T013 [US1] Implement visibility timeout in redis backend (separate ZSET for processing jobs)
-- [ ] T014 [US1] Implement dead letter operations in redis backend
-- [ ] T015 [P] [US1] Create `src/scheduler/backends/index.ts` exporting both backends
+- [X] T009 [US1] Create `tests/scheduler/backends/redis-backend.test.ts` with integration tests
+- [X] T010 [US1] Create `src/scheduler/backends/redis-backend.ts` with Redis sorted set implementation
+- [X] T011 [US1] Implement priority scoring in redis backend (offset + timestamp for priority ordering)
+- [X] T012 [US1] Implement atomic dequeue in redis backend (Lua script or WATCH/MULTI)
+- [X] T013 [US1] Implement visibility timeout in redis backend (separate ZSET for processing jobs)
+- [X] T014 [US1] Implement dead letter operations in redis backend
+- [X] T015 [P] [US1] Create `src/scheduler/backends/index.ts` exporting both backends
 
 ## Phase 4: Job Scheduler Core
 
-- [ ] T016 [US1] Create `tests/scheduler/job-scheduler.test.ts` with scheduler tests
-- [ ] T017 [US1] Create `src/scheduler/job-scheduler.ts` with JobScheduler class skeleton
-- [ ] T018 [US1] Implement enqueue() - add job with priority, emit job:enqueued event
-- [ ] T019 [US1] Implement dequeue() - fetch highest priority job, emit job:started event
-- [ ] T020 [US1] Implement getJob() and updateJob() for job state management
-- [ ] T021 [US1] Implement pause() and resume() for processing control
-- [ ] T022 [US1] Implement getDeadLetterQueue() and retryDeadLetter() wrappers
+- [X] T016 [US1] Create `tests/scheduler/job-scheduler.test.ts` with scheduler tests
+- [X] T017 [US1] Create `src/scheduler/job-scheduler.ts` with JobScheduler class skeleton
+- [X] T018 [US1] Implement enqueue() - add job with priority, emit job:enqueued event
+- [X] T019 [US1] Implement dequeue() - fetch highest priority job, emit job:started event
+- [X] T020 [US1] Implement getJob() and updateJob() for job state management
+- [X] T021 [US1] Implement pause() and resume() for processing control
+- [X] T022 [US1] Implement getDeadLetterQueue() and retryDeadLetter() wrappers
 
 ## Phase 5: Job Processor and Retry Logic
 
-- [ ] T023 [US1] Create `tests/scheduler/retry.test.ts` with backoff calculation tests
-- [ ] T024 [US1] Create `tests/scheduler/job-processor.test.ts` with processor tests
-- [ ] T025 [US1] Create `src/scheduler/job-processor.ts` with JobProcessor class
-- [ ] T026 [US1] Implement process() loop - dequeue, execute, handle result
-- [ ] T027 [US1] Implement retry logic with exponential backoff (reuse calculateRetryDelay from src/utils/retry.ts)
-- [ ] T028 [US1] Implement job completion handling - acknowledge, emit job:completed
-- [ ] T029 [US1] Implement job failure handling - nack, increment attempts, emit job:failed
-- [ ] T030 [US1] Implement dead letter transition - emit job:dead when attempts >= maxAttempts
+- [X] T023 [US1] Create `tests/scheduler/retry.test.ts` with backoff calculation tests
+- [X] T024 [US1] Create `tests/scheduler/job-processor.test.ts` with processor tests
+- [X] T025 [US1] Create `src/scheduler/job-processor.ts` with JobProcessor class
+- [X] T026 [US1] Implement process() loop - dequeue, execute, handle result
+- [X] T027 [US1] Implement retry logic with exponential backoff (reuse calculateRetryDelay from src/utils/retry.ts)
+- [X] T028 [US1] Implement job completion handling - acknowledge, emit job:completed
+- [X] T029 [US1] Implement job failure handling - nack, increment attempts, emit job:failed
+- [X] T030 [US1] Implement dead letter transition - emit job:dead when attempts >= maxAttempts
 
 ## Phase 6: Metrics and Health Checks
 
-- [ ] T031 [P] [US1] Implement periodic metrics:snapshot emission in JobScheduler
-- [ ] T032 [P] [US1] Implement healthCheck() method aggregating backend health status
+- [X] T031 [P] [US1] Implement periodic metrics:snapshot emission in JobScheduler
+- [X] T032 [P] [US1] Implement healthCheck() method aggregating backend health status
 
 ## Phase 7: Integration and Exports
 
-- [ ] T033 Create `src/scheduler/index.ts` exporting public API (JobScheduler, types, backends)
-- [ ] T034 Update `src/index.ts` to export scheduler module
-- [ ] T035 Run full test suite and fix any failures
-- [ ] T036 Verify Redis backend with docker-compose redis service
+- [X] T033 Create `src/scheduler/index.ts` exporting public API (JobScheduler, types, backends)
+- [X] T034 Update `src/index.ts` to export scheduler module
+- [X] T035 Run full test suite and fix any failures
+- [X] T036 Verify Redis backend with docker-compose redis service
 
 ## Dependencies & Execution Order
 
