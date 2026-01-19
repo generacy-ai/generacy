@@ -4,8 +4,6 @@
 
 ## Summary
 
-## Summary
-
 Implement the baseline recommendation generator - the component that produces AI recommendations without human wisdom for the three-layer decision model.
 
 ## Parent Epic
@@ -14,7 +12,33 @@ Implement the baseline recommendation generator - the component that produces AI
 
 ## Dependencies
 
-- generacy-ai/contracts - Three-layer decision model schemas
+- AIService abstraction (shared service for LLM invocation)
+- Local interfaces for DecisionRequest/BaselineRecommendation (to be extracted to @generacy-ai/contracts later)
+
+## Architectural Decisions
+
+Based on clarification responses:
+
+### AD-1: LLM Integration via AIService
+The baseline generator uses a shared AIService abstraction for LLM invocation. This provides:
+- Clean separation of concerns (generator focuses on prompting strategy)
+- Pluggable LLM backends via configuration
+- Testability via mock implementations
+- Consistency with plugin architecture
+
+### AD-2: Best Practices from LLM Training
+Domain best practices come from the LLM's training knowledge with appropriate prompting. For MVP, this avoids infrastructure complexity while the baseline explicitly must NOT access human knowledge stores.
+
+### AD-3: Local Contracts Pattern
+DecisionRequest and BaselineRecommendation interfaces are defined locally, mirroring intended contracts structure. This allows immediate development while making future extraction to @generacy-ai/contracts mechanical.
+
+### AD-4: Context via DecisionRequest
+Project context is passed as part of the DecisionRequest input (not queried from knowledge stores). This keeps the baseline generator dependency-free beyond AIService and makes context explicit/traceable.
+
+### AD-5: Hybrid Confidence Calculation
+Confidence scores use a hybrid approach:
+1. **Algorithmic base**: Initial confidence from factor agreement/conflict (explainable, consistent)
+2. **LLM adjustment**: Model adjusts within bounds based on reasoning (handles edge cases)
 
 ## Purpose
 
@@ -85,11 +109,11 @@ interface ConsiderationFactor {
 ```
 
 ### Integration Points
-- Receives DecisionRequest from workflow engine
-- Consults project context (from knowledge stores)
-- Consults domain best practices (curated knowledge)
+- Receives DecisionRequest from workflow engine (context included in request per AD-4)
+- Invokes AIService for LLM-based recommendation generation (per AD-1)
+- Uses LLM training knowledge for domain best practices (per AD-2)
 - Returns BaselineRecommendation to decision flow
-- Does NOT access individual human knowledge
+- Does NOT access individual human knowledge stores
 
 ## Features
 
@@ -126,35 +150,59 @@ interface ConsiderationFactor {
 
 ## User Stories
 
-### US1: [Primary User Story]
+### US1: Generate Baseline Recommendation
 
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
+**As a** decision flow orchestrator,
+**I want** to get an objective AI recommendation for a decision request,
+**So that** I can compare it with the protégé's recommendation to measure human value.
 
 **Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
+- [ ] Receives DecisionRequest with context and options
+- [ ] Returns BaselineRecommendation with chosen option and reasoning
+- [ ] Provides confidence score based on factor analysis
+
+### US2: Analyze Decision Factors
+
+**As a** decision reviewer,
+**I want** to see which factors influenced the baseline recommendation,
+**So that** I can understand the reasoning and compare against human judgment.
+
+**Acceptance Criteria**:
+- [ ] Lists all factors considered with weights
+- [ ] Shows factor impact (supports/opposes/neutral)
+- [ ] Explains why alternatives were not chosen
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
+| FR-001 | Accept DecisionRequest with context, options, and constraints | P1 | Context passed in request |
+| FR-002 | Generate recommendation via AIService | P1 | Uses shared abstraction |
+| FR-003 | Return structured BaselineRecommendation | P1 | Includes reasoning |
+| FR-004 | Calculate hybrid confidence score | P1 | Algorithmic + LLM adjustment |
+| FR-005 | Analyze all provided options | P2 | Not just chosen option |
+| FR-006 | Support configurable factor weights | P2 | Via BaselineConfig |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
+| SC-001 | Recommendation generation | 100% | All valid requests produce recommendations |
+| SC-002 | Reasoning completeness | Every recommendation | All recommendations include factor breakdown |
+| SC-003 | Test coverage | >80% | Unit tests for generator logic |
 
 ## Assumptions
 
-- [Assumption 1]
+- AIService abstraction will be available or can be defined as an interface
+- DecisionRequest will contain sufficient context for baseline analysis
+- LLM can provide reasonable domain best practices via prompting
 
 ## Out of Scope
 
-- [Exclusion 1]
+- Direct LLM client implementation (handled by AIService)
+- Knowledge store integration (context comes via DecisionRequest)
+- Protégé recommendation generation (separate component)
+- Decision outcome tracking and learning
 
 ---
 
