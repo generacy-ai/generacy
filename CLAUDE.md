@@ -30,6 +30,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 020-baseline-recommendation-generator: Added configuration
 - 004-agent-invocation-abstraction: Added configuration
 - 005-message-router-channel-system: Added configuration
 - 024-knowledge-store-management: Added configuration

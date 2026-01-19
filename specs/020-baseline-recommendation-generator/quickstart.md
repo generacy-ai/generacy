@@ -1,0 +1,204 @@
+# Quickstart: Baseline Recommendation Generator
+
+## Installation
+
+The baseline generator is part of the generacy package. No additional installation needed.
+
+```bash
+# From project root
+npm install
+npm run build
+```
+
+## Basic Usage
+
+### 1. Create an AIService
+
+The generator requires an AIService implementation. For development/testing, use the mock:
+
+```typescript
+import { MockAIService, createBaselineGenerator } from 'generacy';
+
+const aiService = new MockAIService();
+const generator = createBaselineGenerator(aiService);
+```
+
+For production, implement the AIService interface with your LLM provider:
+
+```typescript
+import { AIService, createBaselineGenerator } from 'generacy';
+
+class OpenAIService implements AIService {
+  async complete(request) {
+    // Your OpenAI implementation
+  }
+}
+
+const generator = createBaselineGenerator(new OpenAIService());
+```
+
+### 2. Generate a Recommendation
+
+```typescript
+import { DecisionRequest } from 'generacy';
+
+const request: DecisionRequest = {
+  id: 'tech-choice-001',
+  description: 'Choose a frontend framework for the dashboard',
+  options: [
+    {
+      id: 'react',
+      name: 'React',
+      description: 'Component-based library with large ecosystem',
+      pros: ['Large community', 'Flexible', 'Rich ecosystem'],
+      cons: ['Requires additional libraries', 'Learning curve'],
+    },
+    {
+      id: 'vue',
+      name: 'Vue.js',
+      description: 'Progressive framework with built-in state management',
+      pros: ['Batteries included', 'Gentle learning curve'],
+      cons: ['Smaller ecosystem', 'Fewer job candidates'],
+    },
+  ],
+  context: {
+    name: 'Analytics Dashboard',
+    techStack: ['TypeScript', 'Node.js', 'PostgreSQL'],
+    teamSize: 4,
+    phase: 'planning',
+    domain: 'web',
+  },
+  requestedAt: new Date(),
+};
+
+const recommendation = await generator.generateBaseline(request);
+
+console.log(`Recommended: ${recommendation.optionId}`);
+console.log(`Confidence: ${recommendation.confidence}%`);
+console.log('Reasoning:', recommendation.reasoning);
+```
+
+### 3. Configure Generator Behavior
+
+```typescript
+import { BaselineConfig } from 'generacy';
+
+const config: BaselineConfig = {
+  factors: {
+    projectContext: true,
+    domainBestPractices: true,
+    teamSize: true,
+    existingStack: true,  // Weight existing tech stack
+  },
+  confidenceThreshold: 60,  // Only recommend if >60% confident
+  requireReasoning: true,
+};
+
+generator.configure(config);
+```
+
+## API Reference
+
+### BaselineRecommendationGenerator
+
+```typescript
+interface BaselineRecommendationGenerator {
+  generateBaseline(request: DecisionRequest): Promise<BaselineRecommendation>;
+  configure(config: BaselineConfig): void;
+}
+```
+
+### DecisionRequest
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `id` | string | Yes | Unique request identifier |
+| `description` | string | Yes | Decision description |
+| `options` | DecisionOption[] | Yes | Available choices |
+| `context` | ProjectContext | Yes | Project information |
+| `constraints` | DecisionConstraints | No | Optional constraints |
+
+### BaselineRecommendation
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `optionId` | string | Recommended option ID |
+| `confidence` | number | Confidence score (0-100) |
+| `reasoning` | string[] | Step-by-step logic |
+| `factors` | ConsiderationFactor[] | Factors considered |
+| `alternativeOptionAnalysis` | AlternativeAnalysis[] | Why others not chosen |
+
+## Testing
+
+### Using MockAIService
+
+The mock service returns predictable responses for testing:
+
+```typescript
+import { MockAIService } from 'generacy';
+
+const mockService = new MockAIService({
+  defaultResponse: {
+    optionId: 'option-a',
+    confidence: 80,
+    reasoning: ['Test reasoning'],
+  },
+});
+
+// Use in tests
+const generator = createBaselineGenerator(mockService);
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+npm test
+
+# Run baseline-specific tests
+npm test -- baseline
+
+# Watch mode
+npm run test:watch
+```
+
+## Troubleshooting
+
+### Low Confidence Results
+
+If recommendations have unexpectedly low confidence:
+
+1. Check that context is comprehensive
+2. Verify options have sufficient detail (pros/cons)
+3. Consider reducing `confidenceThreshold` in config
+4. Check for conflicting factors in the output
+
+### AIService Errors
+
+```typescript
+try {
+  const recommendation = await generator.generateBaseline(request);
+} catch (error) {
+  if (error instanceof AIServiceError) {
+    // LLM provider issue - retry with backoff
+  }
+  if (error instanceof InvalidRequestError) {
+    // Fix request and retry
+  }
+}
+```
+
+### Parsing Failures
+
+If the LLM returns unparseable output:
+- Check AIService implementation temperature setting
+- Ensure structured output format is supported
+- Review prompt in debug logs
+
+## Examples
+
+See `tests/baseline/fixtures/decision-requests.ts` for example decision scenarios.
+
+---
+
+*Generated by speckit*
