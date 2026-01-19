@@ -10,24 +10,24 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Create `.specify/templates/` directory structure
+- [x] T001 Create `.specify/templates/` directory structure
 
 ## Phase 2: Core Implementation
 
-- [ ] T010 [P] [US1] Create `CLAUDE.md` at repository root with project overview, technologies, structure, commands, and code style sections (reference: `/workspaces/claude-plugins/CLAUDE.md`)
-- [ ] T011 [P] [US2] Copy `spec-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
-- [ ] T012 [P] [US2] Copy `plan-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
-- [ ] T013 [P] [US2] Copy `tasks-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
-- [ ] T014 [P] [US2] Copy `checklist-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
-- [ ] T015 [P] [US2] Copy `agent-file-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
-- [ ] T016 [P] [US3] Create `.mcp.json` at repository root with Context7 and Playwright MCP servers (reference: `/workspaces/agency/.mcp.json`)
+- [x] T010 [P] [US1] Create `CLAUDE.md` at repository root with project overview, technologies, structure, commands, and code style sections (reference: `/workspaces/claude-plugins/CLAUDE.md`)
+- [x] T011 [P] [US2] Copy `spec-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
+- [x] T012 [P] [US2] Copy `plan-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
+- [x] T013 [P] [US2] Copy `tasks-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
+- [x] T014 [P] [US2] Copy `checklist-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
+- [x] T015 [P] [US2] Copy `agent-file-template.md` from `/workspaces/claude-plugins/.specify/templates/` to `.specify/templates/`
+- [x] T016 [P] [US3] Create `.mcp.json` at repository root with Context7 and Playwright MCP servers (reference: `/workspaces/agency/.mcp.json`)
 
 ## Phase 3: Verification
 
-- [ ] T020 Verify CLAUDE.md contains all required sections (project overview, technologies, structure, commands, code style)
-- [ ] T021 [P] Verify `.specify/templates/` contains all 5 template files
-- [ ] T022 [P] Verify `.mcp.json` is valid JSON with both MCP servers configured
-- [ ] T023 Test `/speckit:specify` command creates features correctly (manual test)
+- [x] T020 Verify CLAUDE.md contains all required sections (project overview, technologies, structure, commands, code style)
+- [x] T021 [P] Verify `.specify/templates/` contains all 5 template files
+- [x] T022 [P] Verify `.mcp.json` is valid JSON with both MCP servers configured
+- [ ] T023 Test `/speckit:specify` command creates features correctly [manual]
 
 ## Dependencies & Execution Order
 
