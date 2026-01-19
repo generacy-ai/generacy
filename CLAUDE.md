@@ -8,6 +8,7 @@ Auto-generated from all feature plans.
 <!-- TECHNOLOGIES START -->
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -29,6 +30,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 004-agent-invocation-abstraction: Added configuration
 - 005-message-router-channel-system: Added configuration
 - 024-knowledge-store-management: Added configuration
 - 003-workflow-engine-implementation: Added configuration
