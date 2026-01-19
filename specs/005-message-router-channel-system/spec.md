@@ -64,24 +64,51 @@ interface HumancyConnection {
 
 ### Routing Rules
 
-1. **Decision Requests**: Agency → Router → Humancy
-2. **Decision Responses**: Humancy → Router → Agency
+1. **Decision Requests**: Agency → Router → Humancy (broadcast to all connected instances)
+2. **Decision Responses**: Humancy → Router → Agency (via correlation ID)
 3. **Mode Commands**: Router → Agency
-4. **Workflow Events**: Router → Humancy
-5. **Channel Messages**: Plugin-defined routing
+4. **Workflow Events**: Router → Humancy (broadcast to all connected instances)
+5. **Channel Messages**: Dynamic plugin-defined routing via registered channels
+
+### Channel System
+
+- **Dynamic channel registration**: Plugins can register custom communication channels
+  - `agency.registerChannel(channelName, handler)` for registration
+  - `humancy.findChannel(channelName)` for discovery
+  - Standard envelope with `channel` field for routing
+- Router routes messages by channel, doesn't interpret content
+- Supports plugin-to-plugin communication patterns
+
+### Multiple Humancy Routing
+
+- When multiple Humancy instances are connected (VSCode, cloud), messages are **broadcast to all**
+- Ensures humans see pending decisions from any connected interface
+- Supports centralized decision queue view across all interfaces
+- Response correlation IDs handle routing replies back to the correct Agency
 
 ### Dead Letter Queue
 
 - Failed message handling
-- Retry policies
+- **Retry policy**: Exponential backoff (1s, 2s, 4s, etc. up to configurable max)
+  - Prevents thundering herd problems on transient failures
+  - Gives intermittent issues time to self-resolve
+  - Limits impact on system resources during outages
 - Manual inspection
 - Alerting
 
 ### Message Persistence
 
+- **Storage**: Redis (already part of standard Generacy stack)
+  - No additional dependencies required
+  - Provides pub/sub semantics for real-time routing
+  - Battle-tested for message queuing
+  - Supports persistence + TTL requirements natively
 - Queue messages when recipient offline
 - Deliver on reconnect
-- TTL expiration
+- **Default TTL**: 1 hour (session-based delivery)
+  - Handles temporary disconnections (network blips, IDE restarts)
+  - Prevents stale decision requests from accumulating
+  - Can be overridden per-message via `meta.ttl` field in envelope
 - Acknowledgment tracking
 
 ## Acceptance Criteria

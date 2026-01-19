@@ -13,7 +13,7 @@ Questions and answers to clarify the feature specification.
 - C: External database (SQLite, Redis, etc.)
 - D: Pluggable storage adapter (allow any backend)
 
-**Answer**: *Pending*
+**Answer**: C - External database (Redis). Redis is already part of the standard Generacy stack per the architecture docs. Using it for message persistence requires no additional dependencies, provides proper pub/sub semantics for real-time routing, is battle-tested for message queuing, and supports persistence + TTL requirements natively.
 
 ### Q2: Dead Letter Queue Retry Policy
 **Context**: The spec mentions retry policies for failed messages but doesn't specify the behavior. This affects error handling and message delivery guarantees.
@@ -24,7 +24,7 @@ Questions and answers to clarify the feature specification.
 - C: Exponential backoff (e.g., 1s, 2s, 4s up to max)
 - D: Configurable policy per message type
 
-**Answer**: *Pending*
+**Answer**: C - Exponential backoff (e.g., 1s, 2s, 4s up to max). Exponential backoff is the industry standard that prevents thundering herd problems on transient failures, gives intermittent issues time to self-resolve, limits impact on system resources during outages, and aligns with the overall graceful degradation philosophy.
 
 ### Q3: Default Message TTL
 **Context**: Messages have TTL expiration for persistence, but no default is specified. This affects how long messages are queued for offline recipients.
@@ -35,7 +35,7 @@ Questions and answers to clarify the feature specification.
 - C: Medium TTL (e.g., 1 hour) for session-based delivery
 - D: Long TTL (e.g., 24 hours) for guaranteed delivery
 
-**Answer**: *Pending*
+**Answer**: C - Medium TTL (1 hour) for session-based delivery. A 1-hour TTL handles temporary disconnections (network blips, IDE restarts), prevents stale decision requests from accumulating, aligns with typical development session lengths, and can be overridden per-message via the meta.ttl field in the envelope.
 
 ### Q4: Channel Message Routing
 **Context**: Routing rule 5 says 'Plugin-defined routing' for Channel Messages, but there's no definition of how plugins register routing rules or what channels exist.
@@ -46,7 +46,7 @@ Questions and answers to clarify the feature specification.
 - C: Allow dynamic channel registration by plugins
 - D: Route all channel messages to all connected Humancy instances
 
-**Answer**: *Pending*
+**Answer**: C - Allow dynamic channel registration by plugins. This is explicitly described in the extensibility docs. The router should support dynamic plugin-defined channels from the start, with agency.registerChannel() for registration, humancy.findChannel() for discovery, and standard envelope with channel field for routing.
 
 ### Q5: Multiple Humancy Connections
 **Context**: The spec shows multiple Humancy connections can register (VSCode, cloud). When routing to Humancy, it's unclear which instance receives the message.
@@ -57,5 +57,5 @@ Questions and answers to clarify the feature specification.
 - C: Send to a specific type (prefer VSCode over cloud)
 - D: Include explicit target in message, fail if not connected
 
-**Answer**: *Pending*
+**Answer**: A - Send to all connected Humancy instances (broadcast). Broadcasting to all instances ensures humans see pending decisions from any connected interface (VS Code or cloud), supports the centralized view model, aligns with urgency triage, and response correlation IDs handle routing replies back to the correct Agency.
 
