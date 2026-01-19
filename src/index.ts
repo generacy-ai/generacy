@@ -121,6 +121,34 @@ export {
   formatTtl,
 } from './utils/index.js';
 
+// Baseline Recommendation Generator
+export {
+  BaselineRecommendationGenerator,
+  RecommendationGenerationError,
+  AIResponseParseError,
+  PromptBuilder,
+  ConfidenceCalculator,
+  DEFAULT_BASELINE_CONFIG,
+  type DecisionRequest,
+  type DecisionOption,
+  type ProjectContext,
+  type DecisionConstraints,
+  type BaselineRecommendation,
+  type ConsiderationFactor,
+  type AlternativeAnalysis,
+  type BaselineConfig,
+  type FactorConfig,
+} from './baseline/index.js';
+
+// Services
+export {
+  MockAIService,
+  type AIService,
+  type AICompletionRequest,
+  type AICompletionResponse,
+  type AITokenUsage,
+} from './services/index.js';
+
 // Agents
 export {
   AgentFeature,
