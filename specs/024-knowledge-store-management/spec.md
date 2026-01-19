@@ -4,8 +4,6 @@
 
 ## Summary
 
-## Summary
-
 Implement knowledge store management - the service that persists and manages individual knowledge (philosophy, principles, patterns, context).
 
 ## Parent Epic
@@ -14,7 +12,7 @@ Implement knowledge store management - the service that persists and manages ind
 
 ## Dependencies
 
-- generacy-ai/contracts - Knowledge store schemas
+- None for MVP (types defined inline, to be extracted to `@generacy-ai/contracts` later)
 
 ## Purpose
 
@@ -78,19 +76,18 @@ interface StorageProvider {
   get<T>(key: string): Promise<T | null>;
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
-  
+
   // List operations
   list(prefix: string): Promise<string[]>;
-  
-  // Versioning
+
+  // Versioning (full snapshots - simpler, small document sizes make storage efficient)
   getVersion(key: string, version: number): Promise<any>;
   listVersions(key: string): Promise<VersionInfo[]>;
 }
 
-// Implementations
+// MVP Implementation - LocalFileStorage only
+// CloudFirestoreStorage and HybridStorage deferred to future iterations
 class LocalFileStorage implements StorageProvider { }
-class CloudFirestoreStorage implements StorageProvider { }
-class HybridStorage implements StorageProvider { }  // Local + Cloud sync
 ```
 
 ### Portability Levels
@@ -130,63 +127,70 @@ interface ExportOptions {
 ### Import/Export
 - Export at multiple portability levels
 - Import with merge strategy
-- Conflict detection and resolution
+- Conflict resolution: auto-resolve simple conflicts (timestamps, context), user review for complex ones (philosophy, high-weight principles)
 - Verification of imported data
 
-### Sync
-- Local-first storage
-- Background sync to cloud
-- Conflict resolution
-- Offline support
+### Sync (Deferred)
+- Local-first storage (MVP: local only)
+- Background sync to cloud (future)
+- Conflict resolution (future)
+- Offline support (future)
 
 ### Integrity
 - Validate knowledge consistency
 - Detect circular principle conflicts
 - Warn on unusual patterns
 
-## Acceptance Criteria
+## Acceptance Criteria (MVP Scope)
 
 - [ ] CRUD operations for philosophy, principles, patterns, context
-- [ ] Versioning with full history
+- [ ] Versioning with full history (full snapshots)
 - [ ] Query principles by domain
 - [ ] Export at full/redacted/abstracted levels
-- [ ] Import with merge and conflict resolution
+- [ ] Import with merge and conflict resolution (auto-resolve simple, user review complex)
 - [ ] Local file storage provider
-- [ ] Cloud storage provider (for cloud version)
-- [ ] Hybrid sync between local and cloud
 - [ ] Audit trail for all changes
+- [ ] Types defined inline (ready for future extraction to contracts package)
+
+### Deferred to Future Iterations
+- Cloud storage provider (Firestore)
+- Hybrid sync between local and cloud
+- HTTP API endpoints (consumed via library by orchestrator)
 
 ## User Stories
 
-### US1: [Primary User Story]
+### US1: Store and Retrieve Knowledge
 
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
+**As a** Generacy user,
+**I want** to store my philosophy, principles, patterns, and context,
+**So that** my AI assistant can learn from my decisions over time.
 
 **Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
+- [ ] Can create/update/read/delete each knowledge type
+- [ ] Changes are versioned and can be reverted
 
-## Functional Requirements
+### US2: Export Knowledge for Portability
 
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
+**As a** user changing jobs or contexts,
+**I want** to export my knowledge at different privacy levels,
+**So that** I can take my principles with me without exposing sensitive details.
 
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
+**Acceptance Criteria**:
+- [ ] Export at full/redacted/abstracted levels
+- [ ] Abstracted export removes identifying information
 
 ## Assumptions
 
-- [Assumption 1]
+- Knowledge documents are relatively small (JSON files < 1MB each)
+- Single-user access per knowledge store (no concurrent writes)
+- File system available for local storage
 
-## Out of Scope
+## Out of Scope (MVP)
 
-- [Exclusion 1]
+- HTTP/REST API endpoints
+- Cloud storage providers
+- Real-time sync between devices
+- Multi-user collaboration on knowledge stores
 
 ---
 

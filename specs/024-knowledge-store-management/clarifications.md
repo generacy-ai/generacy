@@ -12,7 +12,9 @@ Questions and answers to clarify the feature specification.
 - B: Create contracts package first as a blocking dependency
 - C: Define types inline and keep them in this package (no extraction)
 
-**Answer**: *Pending*
+**Answer**: **A - Define types inline now, extract to contracts later**
+
+The docs clearly envision `@generacy-ai/contracts` as the shared schemas package with structure for `common/`, `agency-generacy/`, etc. However, blocking on contracts would slow down parallel development. Defining inline with extraction planned keeps momentum while aligning with the intended architecture.
 
 ### Q2: Storage Scope
 **Context**: The spec lists three storage providers (LocalFile, CloudFirestore, HybridStorage) but this may be more than needed for MVP.
@@ -22,7 +24,9 @@ Questions and answers to clarify the feature specification.
 - B: LocalFileStorage + CloudFirestoreStorage (no hybrid sync)
 - C: All three including HybridStorage with sync
 
-**Answer**: *Pending*
+**Answer**: **A - LocalFileStorage only (MVP approach)**
+
+The adoption ladder shows a progressive path from local → cloud. The architecture emphasizes "local-first storage" with cloud as an advanced feature. Starting with LocalFileStorage allows validating the core API before adding sync complexity. Cloud/hybrid can be a separate issue.
 
 ### Q3: Version Storage
 **Context**: Versioning requires storing historical data. The approach (git-like, database snapshots, or delta-based) affects storage size and implementation complexity.
@@ -32,7 +36,9 @@ Questions and answers to clarify the feature specification.
 - B: Delta-based (complex, efficient storage)
 - C: Git-like (store as git commits in a data repo)
 
-**Answer**: *Pending*
+**Answer**: **A - Full snapshots (simpler, larger storage)**
+
+The knowledge architecture describes a bi-temporal model with `validFrom`, `validTo`, `ingestedAt`, `supersededAt`, `supersededBy` fields - this aligns with full snapshot versioning. The knowledge stores (Philosophy, Principles, Patterns) are relatively small documents, not large datasets, so storage size isn't a major concern. Delta-based adds complexity without clear benefit for this use case.
 
 ### Q4: Conflict Resolution
 **Context**: Import with 'merge and conflict resolution' is listed but the strategy isn't defined. This affects whether imports can be automated or require user interaction.
@@ -42,7 +48,9 @@ Questions and answers to clarify the feature specification.
 - B: Always require user review for conflicts
 - C: Auto-resolve simple conflicts, user review for complex ones
 
-**Answer**: *Pending*
+**Answer**: **C - Auto-resolve simple conflicts, user review for complex ones**
+
+The Humancy philosophy emphasizes human ownership and control of their wisdom. Philosophy and high-weight principles deserve human attention on conflicts. But simple conflicts (e.g., timestamp-only differences, context updates) can be auto-resolved. This balances user experience with the principle that humans control their knowledge.
 
 ### Q5: API Boundary
 **Context**: The KnowledgeStoreManager interface is defined, but it's unclear if this is an internal service or should expose REST/GraphQL endpoints.
@@ -52,5 +60,7 @@ Questions and answers to clarify the feature specification.
 - B: Include REST API endpoints
 - C: Include GraphQL API
 
-**Answer**: *Pending*
+**Answer**: **A - Library-only (TypeScript package, no HTTP)**
+
+The generacy repo separates `packages/` (libraries) from `services/` (orchestrator/worker). The knowledge store is a core capability consumed by the orchestration services, not a standalone API. HTTP endpoints would be exposed by the orchestrator service layer, not the knowledge store library.
 
