@@ -10,35 +10,35 @@
 
 ## Phase 1: Foundation (Types & Interfaces)
 
-- [ ] T001 [P] Create local contract interfaces in `src/baseline/types.ts` - DecisionRequest, DecisionOption, ProjectContext, DecisionConstraints
-- [ ] T002 [P] Create BaselineRecommendation interfaces in `src/baseline/types.ts` - BaselineRecommendation, ConsiderationFactor, AlternativeAnalysis
-- [ ] T003 [P] Create BaselineConfig interface with FactorConfig and default config in `src/baseline/types.ts`
-- [ ] T004 [P] Create AIService interface in `src/services/ai-service.ts` - AICompletionRequest, AICompletionResponse
-- [ ] T005 [P] Create mock AIService implementation in `src/services/ai-service.ts` for testing
+- [x] T001 [P] Create local contract interfaces in `src/baseline/types.ts` - DecisionRequest, DecisionOption, ProjectContext, DecisionConstraints
+- [x] T002 [P] Create BaselineRecommendation interfaces in `src/baseline/types.ts` - BaselineRecommendation, ConsiderationFactor, AlternativeAnalysis
+- [x] T003 [P] Create BaselineConfig interface with FactorConfig and default config in `src/baseline/types.ts`
+- [x] T004 [P] Create AIService interface in `src/services/ai-service.ts` - AICompletionRequest, AICompletionResponse
+- [x] T005 [P] Create mock AIService implementation in `src/services/ai-service.ts` for testing
 
 ## Phase 2: Core Implementation
 
-- [ ] T006 [US1] Implement PromptBuilder class in `src/baseline/prompt-builder.ts` - builds system and user prompts from DecisionRequest
-- [ ] T007 [US2] Implement ConfidenceCalculator in `src/baseline/confidence-calculator.ts` - hybrid algorithmic + LLM adjustment scoring
-- [ ] T008 [US1] Implement BaselineRecommendationGenerator class in `src/baseline/baseline-generator.ts` - constructor with AIService injection
-- [ ] T009 [US1] Implement generateBaseline method - orchestrates prompt building, AI invocation, response parsing
-- [ ] T010 [US1] Implement configure method for updating BaselineConfig at runtime
-- [ ] T011 [US2] Add factor extraction and weight calculation in generator - uses ConfidenceCalculator
-- [ ] T012 [US2] Add alternative option analysis generation in generator response
+- [x] T006 [US1] Implement PromptBuilder class in `src/baseline/prompt-builder.ts` - builds system and user prompts from DecisionRequest
+- [x] T007 [US2] Implement ConfidenceCalculator in `src/baseline/confidence-calculator.ts` - hybrid algorithmic + LLM adjustment scoring
+- [x] T008 [US1] Implement BaselineRecommendationGenerator class in `src/baseline/baseline-generator.ts` - constructor with AIService injection
+- [x] T009 [US1] Implement generateBaseline method - orchestrates prompt building, AI invocation, response parsing
+- [x] T010 [US1] Implement configure method for updating BaselineConfig at runtime
+- [x] T011 [US2] Add factor extraction and weight calculation in generator - uses ConfidenceCalculator
+- [x] T012 [US2] Add alternative option analysis generation in generator response
 
 ## Phase 3: Testing
 
-- [ ] T013 [P] Create test fixtures in `tests/baseline/fixtures/decision-requests.ts` - sample DecisionRequest objects for various scenarios
-- [ ] T014 [P] Write unit tests for PromptBuilder in `tests/baseline/prompt-builder.test.ts`
-- [ ] T015 [P] Write unit tests for ConfidenceCalculator in `tests/baseline/confidence-calculator.test.ts`
-- [ ] T016 Write unit tests for BaselineRecommendationGenerator in `tests/baseline/baseline-generator.test.ts` - uses mock AIService
-- [ ] T017 Write integration test for full recommendation flow with mock AIService
+- [x] T013 [P] Create test fixtures in `tests/baseline/fixtures/decision-requests.ts` - sample DecisionRequest objects for various scenarios
+- [x] T014 [P] Write unit tests for PromptBuilder in `tests/baseline/prompt-builder.test.ts`
+- [x] T015 [P] Write unit tests for ConfidenceCalculator in `tests/baseline/confidence-calculator.test.ts`
+- [x] T016 Write unit tests for BaselineRecommendationGenerator in `tests/baseline/baseline-generator.test.ts` - uses mock AIService
+- [x] T017 Write integration test for full recommendation flow with mock AIService
 
 ## Phase 4: Integration
 
-- [ ] T018 Create public exports in `src/baseline/index.ts` - export generator, types, and default config
-- [ ] T019 Add baseline module to main `src/index.ts` exports
-- [ ] T020 Verify npm test passes with >80% coverage on baseline module
+- [x] T018 Create public exports in `src/baseline/index.ts` - export generator, types, and default config
+- [x] T019 Add baseline module to main `src/index.ts` exports
+- [x] T020 Verify npm test passes with >80% coverage on baseline module
 
 ## Dependencies & Execution Order
 
