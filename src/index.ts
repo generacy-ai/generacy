@@ -148,3 +148,22 @@ export {
   type AICompletionResponse,
   type AITokenUsage,
 } from './services/index.js';
+
+// Agents
+export {
+  AgentFeature,
+  type AgentInvoker,
+  type InvocationConfig,
+  type InvocationContext,
+  type InvocationResult,
+  type ToolCallRecord,
+  type InvocationError,
+  AgentUnavailableError,
+  AgentInitializationError,
+  AgentNotFoundError,
+  DefaultAgentNotConfiguredError,
+  AgentExistsError,
+  InvocationErrorCodes,
+  AgentRegistry,
+  ClaudeCodeInvoker,
+} from './agents/index.js';

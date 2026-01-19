@@ -62,3 +62,14 @@ export {
   DEFAULT_REDIS_CONFIG,
   createRouterConfig,
 } from './config.js';
+
+// Agent types
+export {
+  AgentFeature,
+  type AgentInvoker,
+  type InvocationConfig,
+  type InvocationContext,
+  type InvocationResult,
+  type ToolCallRecord,
+  type InvocationError,
+} from '../agents/index.js';
