@@ -10,13 +10,13 @@
 
 ## Phase 1: Setup & Types
 
-- [ ] T001 Create `src/agents/` directory and `src/agents/index.ts` barrel export
-- [ ] T002 [P] Create `src/agents/types.ts` with AgentFeature enum, AgentInvoker interface, InvocationConfig, InvocationContext, InvocationResult, ToolCallRecord, InvocationError types
-- [ ] T003 [P] Create `src/agents/errors.ts` with AgentUnavailableError, AgentInitializationError, AgentNotFoundError, DefaultAgentNotConfiguredError, AgentExistsError classes and InvocationErrorCodes const
+- [x] T001 Create `src/agents/` directory and `src/agents/index.ts` barrel export
+- [x] T002 [P] Create `src/agents/types.ts` with AgentFeature enum, AgentInvoker interface, InvocationConfig, InvocationContext, InvocationResult, ToolCallRecord, InvocationError types
+- [x] T003 [P] Create `src/agents/errors.ts` with AgentUnavailableError, AgentInitializationError, AgentNotFoundError, DefaultAgentNotConfiguredError, AgentExistsError classes and InvocationErrorCodes const
 
 ## Phase 2: Tests First
 
-- [ ] T010 [US2] Create `tests/agents/agent-registry.test.ts` with tests for:
+- [x] T010 [US2] Create `tests/agents/agent-registry.test.ts` with tests for:
   - Register an agent invoker
   - Unregister an agent invoker
   - Get agent by name (found and not found)
@@ -27,7 +27,7 @@
   - Throw DefaultAgentNotConfiguredError when default not set
   - Throw AgentNotFoundError when setting default to non-existent agent
 
-- [ ] T011 [US1] [US3] Create `tests/agents/claude-code-invoker.test.ts` with tests for:
+- [x] T011 [US1] [US3] Create `tests/agents/claude-code-invoker.test.ts` with tests for:
   - isAvailable() returns true when claude CLI exists
   - isAvailable() returns false when claude CLI missing
   - initialize() succeeds when CLI available
@@ -44,7 +44,7 @@
 
 ## Phase 3: Core Implementation
 
-- [ ] T020 [US2] Create `src/agents/agent-registry.ts` implementing AgentRegistry class with:
+- [x] T020 [US2] Create `src/agents/agent-registry.ts` implementing AgentRegistry class with:
   - Private agents Map<string, AgentInvoker>
   - Private defaultAgentName: string | undefined
   - register(invoker) - throws AgentExistsError if duplicate
@@ -54,7 +54,7 @@
   - setDefault(name) - throws AgentNotFoundError if not registered
   - getDefault() - throws DefaultAgentNotConfiguredError if not set
 
-- [ ] T021 [US1] [US2] [US3] Create `src/agents/claude-code-invoker.ts` implementing ClaudeCodeInvoker class with:
+- [x] T021 [US1] [US2] [US3] Create `src/agents/claude-code-invoker.ts` implementing ClaudeCodeInvoker class with:
   - name = 'claude-code' readonly property
   - Private supportedFeatures Set with Streaming and McpTools
   - supports(feature) - checks supportedFeatures set
@@ -66,14 +66,14 @@
 
 ## Phase 4: Integration & Export
 
-- [ ] T030 Update `src/agents/index.ts` to export all types, errors, AgentRegistry, and ClaudeCodeInvoker
-- [ ] T031 [P] Update `src/types/index.ts` to re-export agent types from `../agents/index.js`
+- [x] T030 Update `src/agents/index.ts` to export all types, errors, AgentRegistry, and ClaudeCodeInvoker
+- [x] T031 [P] Update `src/types/index.ts` to re-export agent types from `../agents/index.js`
 
 ## Phase 5: Verification
 
-- [ ] T040 Run all tests with `npm test` and ensure 100% pass rate
-- [ ] T041 [P] Run linter with `npm run lint` and fix any issues
-- [ ] T042 Verify acceptance criteria:
+- [x] T040 Run all tests with `npm test` and ensure 100% pass rate
+- [x] T041 [P] Run linter with `npm run lint` and fix any issues
+- [x] T042 Verify acceptance criteria:
   - Claude Code agent invocation works
   - Plugin interface (AgentInvoker) is available for additional agents
   - Mode passed through InvocationConfig.context
