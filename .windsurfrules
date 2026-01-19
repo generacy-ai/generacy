@@ -32,6 +32,7 @@ Follow standard conventions
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
 - 023-attribution-calculation-engine: Added configuration
+- 006-job-scheduler-queue-system: Added configuration
 - 021-prot-u00e9g-u00e9-recommendation: Added configuration
 - 020-baseline-recommendation-generator: Added configuration
 - 004-agent-invocation-abstraction: Added configuration
