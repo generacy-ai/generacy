@@ -1,0 +1,59 @@
+# Standard Development Workflow
+# Built-in workflow for the standard SDLC process
+
+name: standard-development
+version: "1.0"
+
+metadata:
+  description: Standard development workflow with specification, planning, implementation, and review
+  author: Generacy
+  tags:
+    - sdlc
+    - development
+    - standard
+
+steps:
+  - id: specify
+    type: agent
+    config:
+      command: "/speckit:specify"
+      mode: research
+    next: plan
+
+  - id: plan
+    type: agent
+    config:
+      command: "/speckit:plan"
+      mode: research
+    next: human-review-plan
+
+  - id: human-review-plan
+    type: human
+    config:
+      action: review
+      urgency: blocking_soon
+      prompt: "Please review the implementation plan and approve to proceed with implementation."
+    next: implement
+
+  - id: implement
+    type: agent
+    config:
+      command: "/speckit:implement"
+      mode: coding
+    next: human-review-code
+
+  - id: human-review-code
+    type: human
+    config:
+      action: review
+      urgency: when_available
+      prompt: "Please review the implementation and provide feedback."
+
+# Timeout: 1 hour for the entire workflow
+timeout: 3600000
+
+# Error handling
+onError:
+  type: escalate
+  urgency: blocking_soon
+  message: "An error occurred during workflow execution. Human intervention required."
