@@ -13,7 +13,7 @@ Questions and answers to clarify the feature specification.
 - C: SQLite database (embedded, no external dependencies)
 - D: Pluggable storage adapter (allow multiple backends)
 
-**Answer**: *Pending*
+**Answer**: D - Pluggable storage adapter. The planning docs emphasize extensibility throughout - plugins, capability discovery, and protocol versioning. A pluggable storage adapter aligns with this philosophy. The default implementation should be SQLite for zero external dependencies, but the interface should support swapping backends for cloud deployments or team preferences.
 
 ### Q2: Parallel Branch Execution
 **Context**: The spec mentions 'support parallel branches' but doesn't explain how workflows can define or execute parallel paths. This is needed to design the step execution model.
@@ -23,7 +23,7 @@ Questions and answers to clarify the feature specification.
 - B: Explicit 'parallel' step type that wraps concurrent branches
 - C: Not needed for MVP - implement sequential execution only
 
-**Answer**: *Pending*
+**Answer**: B - Explicit 'parallel' step type. The architecture overview explicitly mentions "parallel agent invocation and coordination" as a Generacy capability. An explicit `parallel` step type is cleaner semantically and more readable than overloading the `next` field.
 
 ### Q3: Error Handler Definition
 **Context**: WorkflowDefinition references ErrorHandler type but it's not defined. Need to understand error handling semantics.
@@ -33,7 +33,7 @@ Questions and answers to clarify the feature specification.
 - B: Rich handler with retry policies, fallback steps, and error transformation
 - C: Defer error handling design - use simple abort-on-error for MVP
 
-**Answer**: *Pending*
+**Answer**: B - Rich handler with retry policies, fallback steps, and error transformation. The docs describe human escalation with urgency levels. Error handling should integrate with this - certain errors might retry automatically, while others escalate to humans. For MVP, implement a subset (retry + abort + escalate-to-human).
 
 ### Q4: Condition Step Evaluation
 **Context**: The 'condition' step type is listed but no example or explanation is provided. Need to understand how conditions are evaluated.
@@ -43,7 +43,7 @@ Questions and answers to clarify the feature specification.
 - B: Simple property path checks (e.g., 'context.status == approved')
 - C: Predefined condition types only (e.g., 'stepSucceeded', 'outputContains')
 
-**Answer**: *Pending*
+**Answer**: B - Simple property path checks. JavaScript eval introduces security concerns. Predefined-only is too limiting. Simple property path checks like `context.approval.status == 'approved'` are safe (no arbitrary code execution), expressive enough for most workflows, and easy to validate and debug. Should support operators: `==`, `!=`, `>`, `<`, `contains`, `exists`.
 
 ### Q5: External Dependency on Contracts
 **Context**: The spec lists 'generacy-ai/contracts - Workflow schemas' as a dependency. Need to know if these schemas exist or need to be created as part of this feature.
@@ -53,5 +53,5 @@ Questions and answers to clarify the feature specification.
 - B: Define types locally in this package, extract to contracts later
 - C: Create contracts package first as a prerequisite task
 
-**Answer**: *Pending*
+**Answer**: B - Define types locally first, extract to contracts later. The contracts package is planned but likely doesn't exist yet. Defining types locally first avoids blocking on a prerequisite package, allows the types to stabilize through implementation, and makes extraction cleaner once the interfaces are battle-tested.
 
