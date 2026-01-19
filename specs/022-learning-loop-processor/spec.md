@@ -208,13 +208,50 @@ interface PromotionEvaluation {
 |----|--------|--------|-------------|
 | SC-001 | [Metric] | [Target] | [How to measure] |
 
+## Clarified Decisions
+
+### Decision Storage (Q1)
+**Decision**: Repository pattern with pluggable backend
+- Start with in-memory storage for testing/MVP
+- Allow swapping backends without changing business logic
+- Aligns with architecture's plugin extensibility emphasis
+
+### Pattern Detection Thresholds (Q2)
+**Decision**: Configurable thresholds per domain/user
+- Default thresholds: 5+ occurrences, 80%+ consistency
+- Thresholds can be overridden per domain or user
+- Supports personalization for different decision styles
+
+### Update Approval UX (Q3)
+**Decision**: Auto-approve low-impact, require approval for high-impact
+- Auto-approve: Low-confidence principle reinforcements (small weight increases)
+- Require approval: New principles, significant weight changes
+- Aligns with "Do Without Doing" philosophy - minimize unnecessary human intervention
+
+### Knowledge Store Integration (Q4)
+**Decision**: Call existing knowledge store API (#24 Knowledge Store Management)
+- This processor generates `KnowledgeUpdate` objects
+- Delegates actual storage to the knowledge store component
+- Clear separation of concerns between learning and storage
+
+### MVP Scope (Q5)
+**Decision**: Core learning only for initial implementation
+- **In scope**: Decision capture, coaching processing
+- **Deferred**: Pattern detection (added incrementally)
+- Focuses on foundation that feeds the entire system
+
 ## Assumptions
 
-- [Assumption 1]
+- Knowledge Store Management (#24) provides the storage API
+- Contract schemas from generacy-ai/contracts are available
+- In-memory storage is acceptable for initial MVP
 
 ## Out of Scope
 
-- [Exclusion 1]
+- Pattern detection algorithms (deferred to later iteration)
+- Complex statistical analysis of decision history
+- Real-time pattern streaming
+- Multi-tenant isolation (single user context for MVP)
 
 ---
 

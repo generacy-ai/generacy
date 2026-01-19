@@ -12,7 +12,7 @@ Questions and answers to clarify the feature specification.
 - B: Repository pattern with pluggable backend (abstract storage, configure later)
 - C: Direct integration with existing data layer (requires knowledge of current persistence)
 
-**Answer**: *Pending*
+**Answer**: B - Repository pattern with pluggable backend. The humancy-knowledge-architecture.md establishes Decision as a core entity with rich relationships. The architecture emphasizes plugin extensibility throughout. A repository pattern allows starting with in-memory for testing/MVP, swapping backends without changing business logic, and aligning with the "Recommended Stack" section.
 
 ### Q2: Pattern Detection Thresholds
 **Context**: Pattern detection evaluates when regularities should be promoted to principles, but no thresholds are defined. This affects the algorithm design.
@@ -22,7 +22,7 @@ Questions and answers to clarify the feature specification.
 - B: Configurable thresholds per domain/user
 - C: AI-determined thresholds based on context
 
-**Answer**: *Pending*
+**Answer**: B - Configurable thresholds per domain/user. The knowledge architecture defines Pattern with frequency and confidence fields. The Humancy vision emphasizes personalization - different humans have different decision styles. Ship with sensible defaults (e.g., 5+ occurrences, 80%+ consistency) that can be overridden.
 
 ### Q3: Update Approval UX
 **Context**: The spec mentions humans can approve/reject updates, but not how this workflow operates. This affects integration with the broader system.
@@ -32,7 +32,7 @@ Questions and answers to clarify the feature specification.
 - B: Batched approval (daily/weekly summary of pending updates)
 - C: Auto-approve low-confidence updates, require approval for high-impact changes
 
-**Answer**: *Pending*
+**Answer**: C - Auto-approve low-confidence updates, require approval for high-impact changes. This aligns with the "Do Without Doing" philosophy and the focus on "efficient intervention" - human attention goes to genuinely novel decisions. Low-confidence principle reinforcements shouldn't require approval, but new principles or significant weight changes should.
 
 ### Q4: Knowledge Store Integration
 **Context**: The processor generates KnowledgeUpdate objects but the actual storage mechanism isn't specified. Need to understand the boundary.
@@ -42,7 +42,7 @@ Questions and answers to clarify the feature specification.
 - B: Emit events/updates for external knowledge store to consume
 - C: Call existing knowledge store API (assuming #24 Knowledge Store Management)
 
-**Answer**: *Pending*
+**Answer**: C - Call existing knowledge store API (assuming #24 Knowledge Store Management). The issue mentions dependency on generacy-ai/contracts - Knowledge store schemas and there's a separate issue #24 for Knowledge Store Management. The separation of concerns suggests this processor generates KnowledgeUpdate objects but delegates storage to the knowledge store component.
 
 ### Q5: MVP Scope
 **Context**: The spec lists many features (decision capture, coaching analysis, pattern detection, principle refinement, update verification). Clarifying scope helps prioritize implementation.
@@ -52,5 +52,5 @@ Questions and answers to clarify the feature specification.
 - B: Core learning only - decision capture + coaching processing, defer pattern detection
 - C: Scaffolding only - interfaces and basic flow, detailed logic later
 
-**Answer**: *Pending*
+**Answer**: B - Core learning only (decision capture + coaching processing, defer pattern detection). Decision capture and coaching processing are the foundation. Pattern detection is valuable but computationally heavier and can be added incrementally. The acceptance criteria prioritizes "Processes all decisions into learning events" and "Extracts learning from coaching data" first.
 
