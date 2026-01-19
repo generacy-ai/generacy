@@ -12,7 +12,7 @@ Questions and answers to clarify the feature specification.
 - B: GitHub repo (provide URL)
 - C: Skip reference - create from scratch using best practices
 
-**Answer**: *Pending*
+**Answer**: The `claude-plugins` repo and other repos are cloned under `/workspaces/`. (Source: @christrudelpw via GitHub)
 
 ### Q2: MCP Server Selection
 **Context**: The spec mentions Context7 and Playwright as recommended MCP servers, plus 'consider Redis/Docker if available'. This affects the .mcp.json configuration.
@@ -22,7 +22,7 @@ Questions and answers to clarify the feature specification.
 - B: Include all available MCP servers (Context7, Playwright, Redis, Docker)
 - C: Start minimal (Context7 only) and add others later
 
-**Answer**: *Pending*
+**Answer**: Reference `/workspaces/agency/.mcp.json` for an example of MCP server configuration. (Source: @christrudelpw via GitHub)
 
 ### Q3: Spec Template Sections
 **Context**: The spec.md contains unfilled template sections (User Stories, Functional Requirements, Success Criteria, Assumptions, Out of Scope) which could block implementation clarity.
@@ -32,5 +32,5 @@ Questions and answers to clarify the feature specification.
 - B: Remove empty template sections - tasks and acceptance criteria are sufficient
 - C: Keep as placeholders for future use
 
-**Answer**: *Pending*
+**Answer**: Remove the empty template sections - this is a simple infrastructure setup task, so tasks and acceptance criteria are sufficient. (Source: @christrudelpw via GitHub)
 

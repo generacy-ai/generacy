@@ -4,8 +4,6 @@
 
 ## Summary
 
-## Summary
-
 Set up the foundational development infrastructure for AI-assisted development in this repository.
 
 ## Tasks
@@ -20,11 +18,11 @@ Create a `CLAUDE.md` file at the repository root with:
 - Code style guidelines
 - Manual additions section for repo-specific guidance
 
-Reference: Use the format from `claude-plugins` repo as a template, adapting for this monorepo's structure.
+Reference: Use the format from `claude-plugins` repo at `/workspaces/claude-plugins` as a template, adapting for this monorepo's structure.
 
 ### 2. Set up .speckit templates
 
-Create `.specify/templates/` directory with the following templates copied from `claude-plugins`:
+Create `.specify/templates/` directory with the following templates copied from `/workspaces/claude-plugins`:
 - `spec-template.md` - Feature specification template
 - `plan-template.md` - Implementation plan template
 - `tasks-template.md` - Task list template
@@ -33,7 +31,9 @@ Create `.specify/templates/` directory with the following templates copied from 
 
 ### 3. Configure .mcp.json
 
-Create `.mcp.json` at the repository root to configure MCP servers for development:
+Create `.mcp.json` at the repository root to configure MCP servers for development.
+
+Reference: Use `/workspaces/agency/.mcp.json` as an example for MCP server configuration format.
 
 **Recommended servers:**
 - **Context7** - Documentation and code context lookup
@@ -50,38 +50,6 @@ Create `.mcp.json` at the repository root to configure MCP servers for developme
 ## Context
 
 This is part of bootstrapping all generacy-ai repos for spec-driven development using the orchestrator/worker infrastructure.
-
-## User Stories
-
-### US1: [Primary User Story]
-
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
-
-**Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
-
-## Assumptions
-
-- [Assumption 1]
-
-## Out of Scope
-
-- [Exclusion 1]
 
 ---
 
