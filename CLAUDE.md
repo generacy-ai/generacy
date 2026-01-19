@@ -29,6 +29,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 005-message-router-channel-system: Added configuration
 - 024-knowledge-store-management: Added configuration
 - 003-workflow-engine-implementation: Added configuration
 - 001-bootstrap-claude-md-speckit: Added configuration

@@ -1,28 +1,22 @@
 /**
- * Utility Exports
- *
- * Re-export all utilities from the utils module.
+ * Public exports for utility functions.
  */
 
 export {
-  generateWorkflowId,
-  generatePrefixedId,
-  isValidUuid,
-  isValidPrefixedId,
-} from './IdGenerator.js';
-
-export type {
-  ComparisonOperator,
-  ParsedExpression,
-  EvaluationResult,
-} from './PropertyPathParser.js';
+  MaxRetriesExceededError,
+  calculateRetryDelay,
+  calculateRetryDelayDeterministic,
+  retry,
+  withRetry,
+  type RetryOptions,
+} from './retry.js';
 
 export {
-  parseExpression,
-  parseValue,
-  getValueAtPath,
-  compare,
-  evaluateExpression,
-  evaluateAll,
-  evaluateAny,
-} from './PropertyPathParser.js';
+  calculateExpiration,
+  calculateRemainingTtl,
+  isExpired,
+  ttlToSeconds,
+  remainingTtlToSeconds,
+  parseTtl,
+  formatTtl,
+} from './ttl.js';

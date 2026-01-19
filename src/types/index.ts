@@ -1,93 +1,64 @@
 /**
- * Type Exports
- *
- * Re-export all types from the types module.
+ * Public type exports for the message router.
  */
 
-// Workflow Definition
+// Message types
 export type {
-  WorkflowDefinition,
-  WorkflowStep,
-  StepType,
-  StepConfig,
-  AgentStepConfig,
-  HumanStepConfig,
-  IntegrationStepConfig,
-  ConditionConfig,
-  ParallelConfig,
-  ConditionalNext,
-} from './WorkflowDefinition.js';
+  MessageType,
+  EndpointType,
+  MessageEndpoint,
+  MessageMeta,
+  MessageEnvelope,
+  MessageHandler,
+} from './messages.js';
 
 export {
-  isAgentStepConfig,
-  isHumanStepConfig,
-  isIntegrationStepConfig,
-  isConditionConfig,
-  isParallelConfig,
-} from './WorkflowDefinition.js';
+  DEFAULT_TTL,
+  createMessageEnvelope,
+  isMessageExpired,
+} from './messages.js';
 
-// Workflow State
+// Connection types
 export type {
-  WorkflowState,
-  WorkflowStatus,
-  StepResult,
-  StepError,
-  WorkflowError,
-  WorkflowFilter,
-} from './WorkflowState.js';
-
-// Workflow Context
-export type {
-  WorkflowContext,
-  WorkflowMetadata,
-  WorkflowInput,
-} from './WorkflowContext.js';
-
-export { createWorkflowContext } from './WorkflowContext.js';
-
-// Workflow Events
-export type {
-  WorkflowEvent,
-  WorkflowEventType,
-  WorkflowEventPayload,
-  WorkflowEventHandler,
-  WorkflowCreatedPayload,
-  WorkflowStartedPayload,
-  WorkflowPausedPayload,
-  WorkflowResumedPayload,
-  WorkflowCompletedPayload,
-  WorkflowFailedPayload,
-  WorkflowCancelledPayload,
-  StepStartedPayload,
-  StepCompletedPayload,
-  StepFailedPayload,
-  StepWaitingPayload,
-  StepTimeoutPayload,
-} from './WorkflowEvent.js';
-
-export { createWorkflowEvent } from './WorkflowEvent.js';
-
-// Error Handler
-export type {
-  ErrorHandler,
-  ErrorHandlerFunction,
-  ErrorAction,
-  RetryAction,
-  AbortAction,
-  EscalateAction,
-  FallbackAction,
-  SkipAction,
-} from './ErrorHandler.js';
+  HumancyType,
+  ConnectionStatus,
+  BaseConnection,
+  AgencyConnection,
+  HumancyConnection,
+  Connection,
+  RegisteredConnection,
+} from './connections.js';
 
 export {
-  isRetryAction,
-  isAbortAction,
-  isEscalateAction,
-  isFallbackAction,
-  isSkipAction,
-  defaultErrorHandler,
-  createRetryErrorHandler,
-} from './ErrorHandler.js';
+  isAgencyConnection,
+  isHumancyConnection,
+} from './connections.js';
 
-// Storage Adapter
-export type { StorageAdapter } from './StorageAdapter.js';
+// Channel types
+export type {
+  ChannelContext,
+  ChannelHandler,
+  Channel,
+} from './channels.js';
+
+export {
+  RESERVED_CHANNEL_NAMES,
+  CHANNEL_NAME_PATTERN,
+  isValidChannelName,
+  InvalidChannelNameError,
+  ChannelExistsError,
+  ChannelNotFoundError,
+} from './channels.js';
+
+// Config types
+export type {
+  RedisConfig,
+  RetryConfig,
+  RouterConfig,
+} from './config.js';
+
+export {
+  DEFAULT_RETRY_CONFIG,
+  DEFAULT_REDIS_CONFIG,
+  createRouterConfig,
+} from './config.js';

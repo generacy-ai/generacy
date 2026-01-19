@@ -1,149 +1,122 @@
 /**
- * Generacy - Workflow Engine
+ * Generacy Message Router
  *
- * Core workflow engine for orchestrating SDLC workflows.
+ * A message routing system that connects Agency instances with Humancy.
+ *
+ * @packageDocumentation
  */
-
-// Engine
-export { WorkflowEngine, type WorkflowEngineOptions } from './engine/index.js';
-export {
-  WorkflowRuntime,
-  type WorkflowRuntimeOptions,
-  type StepExecutor,
-  type StepExecutionResult,
-} from './engine/index.js';
 
 // Types
 export type {
-  WorkflowDefinition,
-  WorkflowStep,
-  StepType,
-  StepConfig,
-  AgentStepConfig,
-  HumanStepConfig,
-  IntegrationStepConfig,
-  ConditionConfig,
-  ParallelConfig,
-  ConditionalNext,
+  MessageType,
+  EndpointType,
+  MessageEndpoint,
+  MessageMeta,
+  MessageEnvelope,
+  MessageHandler,
+  HumancyType,
+  ConnectionStatus,
+  BaseConnection,
+  AgencyConnection,
+  HumancyConnection,
+  Connection,
+  RegisteredConnection,
+  ChannelContext,
+  ChannelHandler,
+  Channel,
+  RedisConfig,
+  RetryConfig,
+  RouterConfig,
 } from './types/index.js';
 
+// Type utilities and constants
 export {
-  isAgentStepConfig,
-  isHumanStepConfig,
-  isIntegrationStepConfig,
-  isConditionConfig,
-  isParallelConfig,
+  DEFAULT_TTL,
+  createMessageEnvelope,
+  isMessageExpired,
+  isAgencyConnection,
+  isHumancyConnection,
+  RESERVED_CHANNEL_NAMES,
+  CHANNEL_NAME_PATTERN,
+  isValidChannelName,
+  InvalidChannelNameError,
+  ChannelExistsError,
+  ChannelNotFoundError,
+  DEFAULT_RETRY_CONFIG,
+  DEFAULT_REDIS_CONFIG,
+  createRouterConfig,
 } from './types/index.js';
 
-export type {
-  WorkflowState,
-  WorkflowStatus,
-  StepResult,
-  StepError,
-  WorkflowError,
-  WorkflowFilter,
-} from './types/index.js';
-
-export type {
-  WorkflowContext,
-  WorkflowMetadata,
-  WorkflowInput,
-} from './types/index.js';
-
-export { createWorkflowContext } from './types/index.js';
-
-export type {
-  WorkflowEvent,
-  WorkflowEventType,
-  WorkflowEventPayload,
-  WorkflowEventHandler,
-} from './types/index.js';
-
-export { createWorkflowEvent } from './types/index.js';
-
-export type {
-  ErrorHandler,
-  ErrorHandlerFunction,
-  ErrorAction,
-  RetryAction,
-  AbortAction,
-  EscalateAction,
-  FallbackAction,
-  SkipAction,
-} from './types/index.js';
-
+// Router
 export {
-  isRetryAction,
-  isAbortAction,
-  isEscalateAction,
-  isFallbackAction,
-  isSkipAction,
-  defaultErrorHandler,
-  createRetryErrorHandler,
-} from './types/index.js';
+  MessageRouter,
+  type MessageRouterEvents,
+  type RouteOptions,
+  determineRoute,
+  validateMessageForRouting,
+  expectsResponse,
+  getSourceTypeConstraint,
+  RoutingError,
+  DestinationNotFoundError,
+  NoRecipientsError,
+  type RouteTarget,
+  type RoutingDecision,
+  CorrelationManager,
+  CorrelationTimeoutError,
+  CorrelationCancelledError,
+  type CorrelationManagerEvents,
+} from './router/index.js';
 
-export type { StorageAdapter } from './types/index.js';
-
-// Storage
-export { InMemoryStorageAdapter } from './storage/index.js';
-export { SQLiteStorageAdapter, type SQLiteStorageOptions } from './storage/index.js';
-
-// Events
-export { WorkflowEventEmitter } from './events/index.js';
-
-// Execution
+// Connections
 export {
-  StepExecutorRegistry,
-  BaseStepExecutor,
-  createDefaultRegistry,
-} from './execution/index.js';
+  ConnectionRegistry,
+  ConnectionExistsError,
+  ConnectionNotFoundError,
+  type ConnectionRegistryEvents,
+  createAgencyConnection,
+  createMockAgencyConnection,
+  type AgencyConnectionOptions,
+  createHumancyConnection,
+  createMockHumancyConnection,
+  type HumancyConnectionOptions,
+} from './connections/index.js';
 
+// Channels
 export {
-  AgentStepExecutor,
-  createAgentStepExecutor,
-  type CommandExecutor,
-  type CommandResult,
-} from './execution/index.js';
+  ChannelRegistry,
+  type ChannelRegistryEvents,
+  ChannelMessageHandler,
+  type ChannelMessageHandlerEvents,
+  type ChannelMessageHandlerOptions,
+} from './channels/index.js';
 
+// Persistence
 export {
-  HumanStepExecutor,
-  createHumanStepExecutor,
-  validateHumanInput,
-  type HumanStepNotifier,
-} from './execution/index.js';
-
-export {
-  ConditionEvaluator,
-  createConditionEvaluator,
-  evaluateCondition,
-  evaluateAllConditions,
-  evaluateAnyCondition,
-} from './execution/index.js';
-
-export {
-  ParallelExecutor,
-  createParallelExecutor,
-  type BranchExecutor,
-  type BranchResult,
-} from './execution/index.js';
+  RedisStore,
+  REDIS_KEYS,
+  type StoredConnection,
+  MessageQueue,
+  type MessageQueueEvents,
+  type DeliveryFunction,
+  DeadLetterQueue,
+  type DeadLetterEntry,
+  type DeadLetterStatus,
+  type DeadLetterQueueEvents,
+} from './persistence/index.js';
 
 // Utilities
 export {
-  generateWorkflowId,
-  generatePrefixedId,
-  isValidUuid,
-  isValidPrefixedId,
-} from './utils/index.js';
-
-export {
-  parseExpression,
-  parseValue,
-  getValueAtPath,
-  compare,
-  evaluateExpression,
-  evaluateAll,
-  evaluateAny,
-  type ComparisonOperator,
-  type ParsedExpression,
-  type EvaluationResult,
+  MaxRetriesExceededError,
+  calculateRetryDelay,
+  calculateRetryDelayDeterministic,
+  retry,
+  withRetry,
+  type RetryOptions,
+  calculateExpiration,
+  calculateRemainingTtl,
+  isExpired,
+  ttlToSeconds,
+  remainingTtlToSeconds,
+  parseTtl,
+  formatTtl,
 } from './utils/index.js';
