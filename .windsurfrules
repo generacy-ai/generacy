@@ -7,6 +7,7 @@ Auto-generated from all feature plans.
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- TECHNOLOGIES START -->
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -28,5 +29,6 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 005-message-router-channel-system: Added configuration
 - 001-bootstrap-claude-md-speckit: Added configuration
 <!-- CHANGES END -->
