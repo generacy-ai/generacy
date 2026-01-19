@@ -9,6 +9,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -30,6 +31,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 023-attribution-calculation-engine: Added configuration
 - 021-prot-u00e9g-u00e9-recommendation: Added configuration
 - 020-baseline-recommendation-generator: Added configuration
 - 004-agent-invocation-abstraction: Added configuration
