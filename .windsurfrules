@@ -34,6 +34,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 013-plugin-generacy-ai-generacy: Added configuration
 - 012-plugin-generacy-ai-generacy: Added configuration
 - 010-docker-compose-local-development: Added configuration
 - 009-worker-service: Added configuration
