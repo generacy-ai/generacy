@@ -65,7 +65,7 @@
 
 - [x] T070 Create Dockerfile for worker service (`docker/worker/Dockerfile`)
 - [x] T071 [P] Create docker-compose entry for local development (`docker/docker-compose.worker.yml`)
-- [ ] T072 Verify Docker image builds and runs (`manual validation`)
+- [x] T072 Verify Docker image builds and runs (`manual validation`)
 
 ---
 
