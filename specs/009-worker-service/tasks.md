@@ -12,59 +12,59 @@
 
 ## Phase 1: Setup & Types
 
-- [ ] T001 Create worker module structure (`src/worker/index.ts` - exports)
-- [ ] T002 [P] Define worker types and interfaces (`src/worker/types.ts`)
-- [ ] T003 [P] Create configuration schema with defaults (`src/worker/config/worker-config.ts`, `src/worker/config/defaults.ts`)
-- [ ] T004 [P] Add configuration index exports (`src/worker/config/index.ts`)
+- [x] T001 Create worker module structure (`src/worker/index.ts` - exports)
+- [x] T002 [P] Define worker types and interfaces (`src/worker/types.ts`)
+- [x] T003 [P] Create configuration schema with defaults (`src/worker/config/worker-config.ts`, `src/worker/config/defaults.ts`)
+- [x] T004 [P] Add configuration index exports (`src/worker/config/index.ts`)
 
 ## Phase 2: Tests First (TDD)
 
-- [ ] T010 [P] [US1] Write unit tests for WorkerProcessor lifecycle (`tests/worker/worker-processor.test.ts`)
-- [ ] T011 [P] [US2] Write unit tests for AgentHandler (`tests/worker/handlers/agent-handler.test.ts`)
-- [ ] T012 [P] [US3] Write unit tests for HumanHandler (`tests/worker/handlers/human-handler.test.ts`)
-- [ ] T013 [P] Write unit tests for IntegrationHandler (`tests/worker/handlers/integration-handler.test.ts`)
-- [ ] T014 [P] [US1] Write unit tests for retry policies (`tests/worker/retry/retry-policy.test.ts`)
-- [ ] T015 [P] [US4] Write unit tests for HealthServer (`tests/worker/health/health-server.test.ts`)
-- [ ] T016 [P] [US4] Write unit tests for Heartbeat (`tests/worker/health/heartbeat.test.ts`)
+- [x] T010 [P] [US1] Write unit tests for WorkerProcessor lifecycle (`tests/worker/worker-processor.test.ts`)
+- [x] T011 [P] [US2] Write unit tests for AgentHandler (`tests/worker/handlers/agent-handler.test.ts`)
+- [x] T012 [P] [US3] Write unit tests for HumanHandler (`tests/worker/handlers/human-handler.test.ts`)
+- [x] T013 [P] Write unit tests for IntegrationHandler (`tests/worker/handlers/integration-handler.test.ts`)
+- [x] T014 [P] [US1] Write unit tests for retry policies (`tests/worker/retry/retry-policy.test.ts`)
+- [x] T015 [P] [US4] Write unit tests for HealthServer (`tests/worker/health/health-server.test.ts`)
+- [x] T016 [P] [US4] Write unit tests for Heartbeat (`tests/worker/health/heartbeat.test.ts`)
 
 ## Phase 3: Core Implementation
 
 ### Retry Policies
-- [ ] T020 [US1] Implement ExponentialBackoffPolicy for agent jobs (`src/worker/retry/retry-policy.ts`)
-- [ ] T021 [P] Implement NoRetryPolicy for human jobs (`src/worker/retry/retry-policy.ts`)
-- [ ] T022 [P] Implement StatusCodeRetryPolicy for integration jobs (`src/worker/retry/retry-policy.ts`)
-- [ ] T023 Add retry module exports (`src/worker/retry/index.ts`)
+- [x] T020 [US1] Implement ExponentialBackoffPolicy for agent jobs (`src/worker/retry/retry-policy.ts`)
+- [x] T021 [P] Implement NoRetryPolicy for human jobs (`src/worker/retry/retry-policy.ts`)
+- [x] T022 [P] Implement StatusCodeRetryPolicy for integration jobs (`src/worker/retry/retry-policy.ts`)
+- [x] T023 Add retry module exports (`src/worker/retry/index.ts`)
 
 ### Job Handlers
-- [ ] T030 [US2] Implement AgentHandler with registry integration (`src/worker/handlers/agent-handler.ts`)
-- [ ] T031 [US3] Implement HumanHandler with router integration (`src/worker/handlers/human-handler.ts`)
-- [ ] T032 Implement IntegrationHandler (`src/worker/handlers/integration-handler.ts`)
-- [ ] T033 Add handlers module exports (`src/worker/handlers/index.ts`)
+- [x] T030 [US2] Implement AgentHandler with registry integration (`src/worker/handlers/agent-handler.ts`)
+- [x] T031 [US3] Implement HumanHandler with router integration (`src/worker/handlers/human-handler.ts`)
+- [x] T032 Implement IntegrationHandler (`src/worker/handlers/integration-handler.ts`)
+- [x] T033 Add handlers module exports (`src/worker/handlers/index.ts`)
 
 ### Worker Processor
-- [ ] T040 [US1] Implement WorkerProcessor core (start/stop, process loop) (`src/worker/worker-processor.ts`)
-- [ ] T041 [US1] Add job dispatching to handlers by type (`src/worker/worker-processor.ts`)
-- [ ] T042 [US4] Add graceful shutdown logic with timeout (`src/worker/worker-processor.ts`)
-- [ ] T043 Add event emission for observability (`src/worker/worker-processor.ts`)
+- [x] T040 [US1] Implement WorkerProcessor core (start/stop, process loop) (`src/worker/worker-processor.ts`)
+- [x] T041 [US1] Add job dispatching to handlers by type (`src/worker/worker-processor.ts`)
+- [x] T042 [US4] Add graceful shutdown logic with timeout (`src/worker/worker-processor.ts`)
+- [x] T043 Add event emission for observability (`src/worker/worker-processor.ts`)
 
 ## Phase 4: Health & Monitoring
 
-- [ ] T050 [US4] Implement HealthServer with /health, /health/live, /health/ready (`src/worker/health/health-server.ts`)
-- [ ] T051 [P] [US4] Implement Redis Heartbeat publisher (`src/worker/health/heartbeat.ts`)
-- [ ] T052 Add health module exports (`src/worker/health/index.ts`)
+- [x] T050 [US4] Implement HealthServer with /health, /health/live, /health/ready (`src/worker/health/health-server.ts`)
+- [x] T051 [P] [US4] Implement Redis Heartbeat publisher (`src/worker/health/heartbeat.ts`)
+- [x] T052 Add health module exports (`src/worker/health/index.ts`)
 
 ## Phase 5: Integration & Polish
 
-- [ ] T060 [US4] Add shutdown signal handlers (SIGTERM, SIGINT) (`src/worker/worker-processor.ts`)
-- [ ] T061 [P] Create worker factory function (`src/worker/index.ts`)
-- [ ] T062 Write integration test: full job processing flow (`tests/worker/integration/job-processing.test.ts`)
-- [ ] T063 [P] Write integration test: graceful shutdown (`tests/worker/integration/graceful-shutdown.test.ts`)
-- [ ] T064 Update module exports in main index (`src/worker/index.ts`)
+- [x] T060 [US4] Add shutdown signal handlers (SIGTERM, SIGINT) (`src/worker/worker-processor.ts`)
+- [x] T061 [P] Create worker factory function (`src/worker/index.ts`)
+- [x] T062 Write integration test: full job processing flow (`tests/worker/integration/job-processing.test.ts`)
+- [x] T063 [P] Write integration test: graceful shutdown (`tests/worker/integration/graceful-shutdown.test.ts`)
+- [x] T064 Update module exports in main index (`src/worker/index.ts`)
 
 ## Phase 6: Docker & Deployment
 
-- [ ] T070 Create Dockerfile for worker service (`docker/worker/Dockerfile`)
-- [ ] T071 [P] Create docker-compose entry for local development (`docker/docker-compose.worker.yml`)
+- [x] T070 Create Dockerfile for worker service (`docker/worker/Dockerfile`)
+- [x] T071 [P] Create docker-compose entry for local development (`docker/docker-compose.worker.yml`)
 - [ ] T072 Verify Docker image builds and runs (`manual validation`)
 
 ---
