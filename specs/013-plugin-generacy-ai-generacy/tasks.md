@@ -2,7 +2,7 @@
 
 **Input**: Design documents from `/specs/013-plugin-generacy-ai-generacy/`
 **Prerequisites**: plan.md (required), spec.md (required), data-model.md, research.md, contracts/
-**Status**: Complete
+**Status**: Implementation Complete
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -10,67 +10,67 @@
 
 ## Phase 1: Setup & Core Types
 
-- [ ] T001 Create package scaffolding: `packages/generacy-plugin-claude-code/package.json` with dependencies (dockerode, pino, zod)
-- [ ] T002 [P] Create `packages/generacy-plugin-claude-code/tsconfig.json` extending root config
-- [ ] T003 [P] Create `packages/generacy-plugin-claude-code/src/index.ts` with placeholder exports
-- [ ] T004 Define core types in `packages/generacy-plugin-claude-code/src/types.ts` (copy from contracts/plugin-interface.ts, add internal types)
-- [ ] T005 [P] Define Zod validation schemas in `packages/generacy-plugin-claude-code/src/schemas.ts` (ContainerConfigSchema, InvokeOptionsSchema, InvokeParamsSchema)
-- [ ] T006 [P] [US3] Create custom error classes in `packages/generacy-plugin-claude-code/src/errors.ts` (SessionNotFoundError, ContainerStartError, InvocationError classes)
+- [X] T001 Create package scaffolding: `packages/generacy-plugin-claude-code/package.json` with dependencies (dockerode, pino, zod)
+- [X] T002 [P] Create `packages/generacy-plugin-claude-code/tsconfig.json` extending root config
+- [X] T003 [P] Create `packages/generacy-plugin-claude-code/src/index.ts` with placeholder exports
+- [X] T004 Define core types in `packages/generacy-plugin-claude-code/src/types.ts` (copy from contracts/plugin-interface.ts, add internal types)
+- [X] T005 [P] Define Zod validation schemas in `packages/generacy-plugin-claude-code/src/schemas.ts` (ContainerConfigSchema, InvokeOptionsSchema, InvokeParamsSchema)
+- [X] T006 [P] [US3] Create custom error classes in `packages/generacy-plugin-claude-code/src/errors.ts` (SessionNotFoundError, ContainerStartError, InvocationError classes)
 
 ## Phase 2: Container Management
 
-- [ ] T010 [US1] Implement `ContainerManager` class in `packages/generacy-plugin-claude-code/src/container/container-manager.ts` with dockerode integration
-- [ ] T011 [P] Define container types in `packages/generacy-plugin-claude-code/src/container/types.ts` (internal container state, health check types)
-- [ ] T012 [US1] Implement container lifecycle methods: create(), start(), attach(), cleanup()
-- [ ] T013 [US3] Add health check and timeout handling to ContainerManager
-- [ ] T014 [US1] Write unit tests for ContainerManager in `packages/generacy-plugin-claude-code/tests/unit/container-manager.test.ts`
+- [X] T010 [US1] Implement `ContainerManager` class in `packages/generacy-plugin-claude-code/src/container/container-manager.ts` with dockerode integration
+- [X] T011 [P] Define container types in `packages/generacy-plugin-claude-code/src/container/types.ts` (internal container state, health check types)
+- [X] T012 [US1] Implement container lifecycle methods: create(), start(), attach(), cleanup()
+- [X] T013 [US3] Add health check and timeout handling to ContainerManager
+- [X] T014 [US1] Write unit tests for ContainerManager in `packages/generacy-plugin-claude-code/tests/unit/container-manager.test.ts`
 
 ## Phase 3: Session Management
 
-- [ ] T020 [US1] Define session types in `packages/generacy-plugin-claude-code/src/session/types.ts` (SessionState discriminated union, internal session interface)
-- [ ] T021 [US1] Implement `Session` class in `packages/generacy-plugin-claude-code/src/session/session.ts` with state machine
-- [ ] T022 [US1] Implement state transitions: created → running → executing → terminated
-- [ ] T023 [US2] Add awaiting_input state for human decision handling
-- [ ] T024 [US1] Implement `SessionManager` class in `packages/generacy-plugin-claude-code/src/session/session-manager.ts` (registry pattern)
-- [ ] T025 Write unit tests for Session state machine in `packages/generacy-plugin-claude-code/tests/unit/session.test.ts`
-- [ ] T026 [P] Write unit tests for SessionManager in `packages/generacy-plugin-claude-code/tests/unit/session-manager.test.ts`
+- [X] T020 [US1] Define session types in `packages/generacy-plugin-claude-code/src/session/types.ts` (SessionState discriminated union, internal session interface)
+- [X] T021 [US1] Implement `Session` class in `packages/generacy-plugin-claude-code/src/session/session.ts` with state machine
+- [X] T022 [US1] Implement state transitions: created → running → executing → terminated
+- [X] T023 [US2] Add awaiting_input state for human decision handling
+- [X] T024 [US1] Implement `SessionManager` class in `packages/generacy-plugin-claude-code/src/session/session-manager.ts` (registry pattern)
+- [X] T025 Write unit tests for Session state machine in `packages/generacy-plugin-claude-code/tests/unit/session.test.ts`
+- [X] T026 [P] Write unit tests for SessionManager in `packages/generacy-plugin-claude-code/tests/unit/session-manager.test.ts`
 
 ## Phase 4: Output Streaming
 
-- [ ] T030 [US1] Define output types in `packages/generacy-plugin-claude-code/src/streaming/types.ts` (RawOutputChunk from Claude Code JSON)
-- [ ] T031 [US1] Implement `OutputParser` in `packages/generacy-plugin-claude-code/src/streaming/output-parser.ts` to parse Claude Code JSON Lines format
-- [ ] T032 [US1] Implement `OutputStream` async generator in `packages/generacy-plugin-claude-code/src/streaming/output-stream.ts`
-- [ ] T033 [US2] Add question detection logic to OutputParser (detect type: 'question' chunks with urgency)
-- [ ] T034 [US3] Add error chunk detection and classification in OutputParser
-- [ ] T035 Write unit tests for OutputParser in `packages/generacy-plugin-claude-code/tests/unit/output-parser.test.ts`
+- [X] T030 [US1] Define output types in `packages/generacy-plugin-claude-code/src/streaming/types.ts` (RawOutputChunk from Claude Code JSON)
+- [X] T031 [US1] Implement `OutputParser` in `packages/generacy-plugin-claude-code/src/streaming/output-parser.ts` to parse Claude Code JSON Lines format
+- [X] T032 [US1] Implement `OutputStream` async generator in `packages/generacy-plugin-claude-code/src/streaming/output-stream.ts`
+- [X] T033 [US2] Add question detection logic to OutputParser (detect type: 'question' chunks with urgency)
+- [X] T034 [US3] Add error chunk detection and classification in OutputParser
+- [X] T035 Write unit tests for OutputParser in `packages/generacy-plugin-claude-code/tests/unit/output-parser.test.ts`
 
 ## Phase 5: Invocation
 
-- [ ] T040 [US1] Define invocation types in `packages/generacy-plugin-claude-code/src/invocation/types.ts` (internal invocation state)
-- [ ] T041 [US1] Implement `Invoker` class in `packages/generacy-plugin-claude-code/src/invocation/invoker.ts`
-- [ ] T042 [US1] Build Claude Code CLI command with headless mode: `claude --headless --prompt "..." --output json`
-- [ ] T043 [US1] Connect Invoker to Session and ContainerManager for execution flow
-- [ ] T044 [US1] Implement mode setting via Agency integration (call `agency mode set <mode>` in container)
-- [ ] T045 Write unit tests for Invoker in `packages/generacy-plugin-claude-code/tests/unit/invoker.test.ts`
+- [X] T040 [US1] Define invocation types in `packages/generacy-plugin-claude-code/src/invocation/types.ts` (internal invocation state)
+- [X] T041 [US1] Implement `Invoker` class in `packages/generacy-plugin-claude-code/src/invocation/invoker.ts`
+- [X] T042 [US1] Build Claude Code CLI command with headless mode: `claude --headless --prompt "..." --output json`
+- [X] T043 [US1] Connect Invoker to Session and ContainerManager for execution flow
+- [X] T044 [US1] Implement mode setting via Agency integration (call `agency mode set <mode>` in container)
+- [X] T045 Write unit tests for Invoker in `packages/generacy-plugin-claude-code/tests/unit/invoker.test.ts`
 
 ## Phase 6: Plugin Integration
 
-- [ ] T050 [US1] Implement `ClaudeCodePlugin` main class in `packages/generacy-plugin-claude-code/src/plugin/claude-code-plugin.ts`
-- [ ] T051 [US1] Wire SessionManager, ContainerManager, Invoker, and OutputStream together
-- [ ] T052 [US1] Implement public API: invoke(), invokeWithPrompt(), startSession()
-- [ ] T053 [US2] Implement continueSession() for providing answers to questions
-- [ ] T054 [US1] Implement endSession() with proper cleanup
-- [ ] T055 [US1] Implement streamOutput() returning AsyncIterable<OutputChunk>
-- [ ] T056 [US1] Implement setMode() for Agency mode control
-- [ ] T057 Add pino structured logging throughout the plugin
-- [ ] T058 Update `packages/generacy-plugin-claude-code/src/index.ts` with final exports
+- [X] T050 [US1] Implement `ClaudeCodePlugin` main class in `packages/generacy-plugin-claude-code/src/plugin/claude-code-plugin.ts`
+- [X] T051 [US1] Wire SessionManager, ContainerManager, Invoker, and OutputStream together
+- [X] T052 [US1] Implement public API: invoke(), invokeWithPrompt(), startSession()
+- [X] T053 [US2] Implement continueSession() for providing answers to questions
+- [X] T054 [US1] Implement endSession() with proper cleanup
+- [X] T055 [US1] Implement streamOutput() returning AsyncIterable<OutputChunk>
+- [X] T056 [US1] Implement setMode() for Agency mode control
+- [X] T057 Add pino structured logging throughout the plugin
+- [X] T058 Update `packages/generacy-plugin-claude-code/src/index.ts` with final exports
 
 ## Phase 7: Testing
 
-- [ ] T060 Write integration tests in `packages/generacy-plugin-claude-code/tests/integration/plugin.integration.test.ts`
-- [ ] T061 [P] Add mock Docker tests for CI environments without Docker access
-- [ ] T062 [P] Create test fixtures for Claude Code JSON output samples
-- [ ] T063 Verify all acceptance criteria pass: invoke in container, mode setting, output streaming, session management, headless mode, error handling, human decision handling
+- [X] T060 Write integration tests in `packages/generacy-plugin-claude-code/tests/integration/plugin.integration.test.ts`
+- [X] T061 [P] Add mock Docker tests for CI environments without Docker access
+- [X] T062 [P] Create test fixtures for Claude Code JSON output samples
+- [X] T063 Verify all acceptance criteria pass: invoke in container, mode setting, output streaming, session management, headless mode, error handling, human decision handling
 
 ## Dependencies & Execution Order
 
