@@ -1,0 +1,730 @@
+openapi: 3.1.0
+info:
+  title: Generacy Orchestrator API
+  version: 1.0.0
+  description: Main API server for Generacy workflow orchestration
+  contact:
+    name: Generacy Team
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.generacy.ai
+    description: Production
+
+security:
+  - apiKey: []
+  - bearerAuth: []
+
+paths:
+  /workflows:
+    post:
+      summary: Create and start a workflow
+      operationId: createWorkflow
+      tags: [Workflows]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateWorkflowRequest'
+      responses:
+        '201':
+          description: Workflow created
+          headers:
+            Location:
+              schema:
+                type: string
+              description: URL of the created workflow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
+    get:
+      summary: List workflows
+      operationId: listWorkflows
+      tags: [Workflows]
+      parameters:
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/WorkflowStatus'
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: List of workflows
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /workflows/{id}:
+    get:
+      summary: Get workflow details
+      operationId: getWorkflow
+      tags: [Workflows]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      responses:
+        '200':
+          description: Workflow details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      summary: Cancel workflow
+      operationId: cancelWorkflow
+      tags: [Workflows]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      responses:
+        '204':
+          description: Workflow cancelled
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /workflows/{id}/pause:
+    post:
+      summary: Pause workflow
+      operationId: pauseWorkflow
+      tags: [Workflows]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      responses:
+        '200':
+          description: Workflow paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /workflows/{id}/resume:
+    post:
+      summary: Resume workflow
+      operationId: resumeWorkflow
+      tags: [Workflows]
+      parameters:
+        - $ref: '#/components/parameters/WorkflowId'
+      responses:
+        '200':
+          description: Workflow resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /queue:
+    get:
+      summary: Get decision queue
+      operationId: getQueue
+      tags: [Queue]
+      parameters:
+        - name: priority
+          in: query
+          schema:
+            $ref: '#/components/schemas/DecisionPriority'
+        - name: workflowId
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Decision queue items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DecisionQueueItem'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /queue/{id}/respond:
+    post:
+      summary: Submit decision response
+      operationId: respondToDecision
+      tags: [Queue]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DecisionResponseRequest'
+      responses:
+        '200':
+          description: Decision responded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DecisionResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+
+  /agents:
+    get:
+      summary: List connected agents
+      operationId: listAgents
+      tags: [Agents]
+      responses:
+        '200':
+          description: List of connected agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConnectedAgent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /integrations:
+    get:
+      summary: Get integration status
+      operationId: getIntegrations
+      tags: [Integrations]
+      responses:
+        '200':
+          description: Integration status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Service healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Service unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /metrics:
+    get:
+      summary: Prometheus metrics
+      operationId: getMetrics
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-API-Key
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    WorkflowId:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    CreateWorkflowRequest:
+      type: object
+      properties:
+        definitionId:
+          type: string
+          description: Reference to a stored workflow definition
+        definition:
+          type: object
+          description: Inline workflow definition
+        context:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          properties:
+            name:
+              type: string
+              maxLength: 255
+            tags:
+              type: array
+              items:
+                type: string
+                maxLength: 50
+              maxItems: 10
+      required:
+        - context
+
+    WorkflowResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: '#/components/schemas/WorkflowStatus'
+        currentStep:
+          type: string
+          nullable: true
+        context:
+          type: object
+          additionalProperties: true
+        metadata:
+          type: object
+          properties:
+            name:
+              type: string
+            tags:
+              type: array
+              items:
+                type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - status
+        - currentStep
+        - context
+        - metadata
+        - createdAt
+        - updatedAt
+
+    WorkflowListResponse:
+      type: object
+      properties:
+        workflows:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowResponse'
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            pageSize:
+              type: integer
+            total:
+              type: integer
+            hasMore:
+              type: boolean
+          required:
+            - page
+            - pageSize
+            - total
+            - hasMore
+      required:
+        - workflows
+        - pagination
+
+    WorkflowStatus:
+      type: string
+      enum:
+        - created
+        - running
+        - paused
+        - completed
+        - cancelled
+        - failed
+
+    DecisionQueueItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowId:
+          type: string
+          format: uuid
+        stepId:
+          type: string
+        type:
+          $ref: '#/components/schemas/DecisionType'
+        prompt:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: '#/components/schemas/DecisionOption'
+        context:
+          type: object
+          additionalProperties: true
+        priority:
+          $ref: '#/components/schemas/DecisionPriority'
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - workflowId
+        - stepId
+        - type
+        - prompt
+        - context
+        - priority
+        - createdAt
+
+    DecisionType:
+      type: string
+      enum:
+        - approval
+        - choice
+        - input
+        - review
+
+    DecisionOption:
+      type: object
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+      required:
+        - id
+        - label
+
+    DecisionPriority:
+      type: string
+      enum:
+        - blocking_now
+        - blocking_soon
+        - when_available
+
+    DecisionResponseRequest:
+      type: object
+      properties:
+        response:
+          oneOf:
+            - type: string
+            - type: boolean
+            - type: array
+              items:
+                type: string
+        comment:
+          type: string
+          maxLength: 1000
+      required:
+        - response
+
+    DecisionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        response:
+          oneOf:
+            - type: string
+            - type: boolean
+            - type: array
+              items:
+                type: string
+        comment:
+          type: string
+        respondedBy:
+          type: string
+        respondedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - response
+        - respondedBy
+        - respondedAt
+
+    ConnectedAgent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+            - claude
+            - gpt4
+            - custom
+        status:
+          type: string
+          enum:
+            - connected
+            - idle
+            - busy
+            - disconnected
+        capabilities:
+          type: array
+          items:
+            type: string
+        lastSeen:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          properties:
+            version:
+              type: string
+            platform:
+              type: string
+            workflowId:
+              type: string
+              format: uuid
+      required:
+        - id
+        - name
+        - type
+        - status
+        - capabilities
+        - lastSeen
+
+    IntegrationStatus:
+      type: object
+      properties:
+        integrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/Integration'
+      required:
+        - integrations
+
+    Integration:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum:
+            - github
+            - gitlab
+            - jira
+            - slack
+            - linear
+        status:
+          type: string
+          enum:
+            - connected
+            - disconnected
+            - error
+        lastSync:
+          type: string
+          format: date-time
+          nullable: true
+        config:
+          type: object
+          properties:
+            enabled:
+              type: boolean
+            autoSync:
+              type: boolean
+        error:
+          type: string
+          nullable: true
+      required:
+        - id
+        - name
+        - type
+        - status
+        - config
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum:
+            - ok
+            - degraded
+            - error
+        timestamp:
+          type: string
+          format: date-time
+        services:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+              - ok
+              - error
+      required:
+        - status
+        - timestamp
+        - services
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          format: uri
+        code:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+        traceId:
+          type: string
+      required:
+        - type
+        - title
+        - status
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    Conflict:
+      description: Conflict with current state
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    RateLimited:
+      description: Rate limit exceeded
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds until rate limit resets
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+tags:
+  - name: Workflows
+    description: Workflow management operations
+  - name: Queue
+    description: Decision queue operations
+  - name: Agents
+    description: Connected agent operations
+  - name: Integrations
+    description: Integration status
+  - name: System
+    description: System health and metrics

@@ -1,0 +1,145 @@
+// Server
+export { createServer, startServer, createTestServer, type CreateServerOptions } from './server.js';
+
+// Configuration
+export {
+  loadConfig,
+  createTestConfig,
+  validateConfig,
+  type OrchestratorConfig,
+  type ServerConfig,
+  type RedisConfig,
+  type AuthConfig,
+  type RateLimitConfig,
+  type CorsConfig,
+  type LoggingConfig,
+  type LoadConfigOptions,
+} from './config/index.js';
+
+// Types
+export {
+  // Problem Details
+  type ProblemDetails,
+  type ValidationError,
+  type ErrorType,
+  ErrorTypes,
+  createProblemDetails,
+  // Workflow
+  type WorkflowStatus,
+  type CreateWorkflowRequest,
+  type WorkflowResponse,
+  type WorkflowListResponse,
+  type ListWorkflowsQuery,
+  type Pagination,
+  // Decision Queue
+  type DecisionType,
+  type DecisionPriority,
+  type DecisionOption,
+  type DecisionQueueItem,
+  type DecisionResponseRequest,
+  type DecisionResponse,
+  type QueueQuery,
+  // Agents
+  type AgentType,
+  type AgentConnectionStatus,
+  type ConnectedAgent,
+  // Integrations
+  type IntegrationType,
+  type IntegrationStatusValue,
+  type Integration,
+  type IntegrationStatus,
+  // Health
+  type HealthStatus,
+  type ServiceStatus,
+  type HealthResponse,
+  // Authentication
+  type ApiScope,
+  type ApiKeyCredential,
+  type JWTPayload,
+  type GitHubUser,
+  type AuthContext,
+  // WebSocket
+  type Channel,
+  type ClientMessage,
+  type ServerMessage,
+  type WorkflowEventMessage,
+  type QueueUpdateMessage,
+  type AgentStatusMessage,
+  type SubscriptionFilters,
+} from './types/index.js';
+
+// Services
+export {
+  WorkflowService,
+  InMemoryWorkflowStore,
+  type WorkflowEngine,
+} from './services/workflow-service.js';
+
+export {
+  QueueService,
+  InMemoryQueueStore,
+  type MessageRouter,
+} from './services/queue-service.js';
+
+export {
+  AgentRegistry,
+  type AgentRegistration,
+} from './services/agent-registry.js';
+
+// Auth
+export {
+  API_KEY_HEADER,
+  hashApiKey,
+  validateApiKey,
+  InMemoryApiKeyStore,
+  type ApiKeyStore,
+} from './auth/api-key.js';
+
+export {
+  createAuthMiddleware,
+  requireScopes,
+  requireRead,
+  requireWrite,
+  type AuthMiddlewareOptions,
+} from './auth/middleware.js';
+
+// Middleware
+export {
+  setupRateLimit,
+  generateRateLimitKey,
+} from './middleware/rate-limit.js';
+
+export {
+  setupErrorHandler,
+  HttpError,
+  Errors,
+} from './middleware/error-handler.js';
+
+// Routes
+export {
+  registerRoutes,
+  type RouteRegistrationOptions,
+} from './routes/index.js';
+
+export {
+  InMemoryIntegrationRegistry,
+  type IntegrationRegistry,
+} from './routes/integrations.js';
+
+// WebSocket
+export {
+  setupWebSocketHandler,
+  getConnectionCount,
+  SubscriptionManager,
+  getSubscriptionManager,
+  createWorkflowEventMessage,
+  createQueueUpdateMessage,
+  createAgentStatusMessage,
+} from './websocket/index.js';
+
+// Utils
+export {
+  setupGracefulShutdown,
+  CORRELATION_ID_HEADER,
+  generateCorrelationId,
+} from './utils/index.js';

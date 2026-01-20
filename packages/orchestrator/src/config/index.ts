@@ -1,0 +1,26 @@
+export {
+  // Schema types
+  LogLevelSchema,
+  type LogLevel,
+  ServerConfigSchema,
+  type ServerConfig,
+  RedisConfigSchema,
+  type RedisConfig,
+  GitHubOAuthConfigSchema,
+  type GitHubOAuthConfig,
+  JWTConfigSchema,
+  type JWTConfig,
+  AuthConfigSchema,
+  type AuthConfig,
+  RateLimitConfigSchema,
+  type RateLimitConfig,
+  CorsConfigSchema,
+  type CorsConfig,
+  LoggingConfigSchema,
+  type LoggingConfig,
+  OrchestratorConfigSchema,
+  type OrchestratorConfig,
+  validateConfig,
+} from './schema.js';
+
+export { loadConfig, createTestConfig, type LoadConfigOptions } from './loader.js';
