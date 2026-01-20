@@ -35,6 +35,7 @@ Follow standard conventions
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
 - 018-documentation-site-developer-guides: Added configuration
+- 013-plugin-generacy-ai-generacy: Added configuration
 - 010-docker-compose-local-development: Added configuration
 - 009-worker-service: Added configuration
 - 008-orchestrator-service: Added configuration
