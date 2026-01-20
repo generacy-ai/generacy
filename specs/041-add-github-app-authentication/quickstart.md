@@ -36,16 +36,17 @@
 ```bash
 export GITHUB_APP_ID=123456
 export GITHUB_APP_PRIVATE_KEY_PATH=/path/to/private-key.pem
-# OR inline (not recommended for production)
+# OR inline (base64-encoded keys are auto-decoded)
 export GITHUB_APP_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
 ...
 -----END RSA PRIVATE KEY-----"
 ```
 
 ```typescript
-import { createClient } from '@generacy-ai/generacy-plugin-github-issues';
+import { createClientAsync } from '@generacy-ai/generacy-plugin-github-issues';
 
-const client = createClient({
+// Use createClientAsync for GitHub App auth (requires async initialization)
+const client = await createClientAsync({
   owner: 'your-org',
   repo: 'your-repo',
   // Credentials loaded from environment automatically
@@ -55,9 +56,9 @@ const client = createClient({
 ### Option 2: File Path
 
 ```typescript
-import { createClient } from '@generacy-ai/generacy-plugin-github-issues';
+import { createClientAsync } from '@generacy-ai/generacy-plugin-github-issues';
 
-const client = createClient({
+const client = await createClientAsync({
   owner: 'your-org',
   repo: 'your-repo',
   app: {
@@ -70,10 +71,10 @@ const client = createClient({
 ### Option 3: Inline Configuration
 
 ```typescript
-import { createClient } from '@generacy-ai/generacy-plugin-github-issues';
+import { createClientAsync } from '@generacy-ai/generacy-plugin-github-issues';
 import { readFileSync } from 'fs';
 
-const client = createClient({
+const client = await createClientAsync({
   owner: 'your-org',
   repo: 'your-repo',
   app: {
@@ -86,30 +87,39 @@ const client = createClient({
 ### Mixed Configuration (App + PAT Fallback)
 
 ```typescript
-const client = createClient({
+import { createClientAsync } from '@generacy-ai/generacy-plugin-github-issues';
+
+const client = await createClientAsync({
   owner: 'your-org',
   repo: 'your-repo',
   app: {
     appId: 123456,
     privateKeyPath: '/path/to/private-key.pem',
   },
-  token: process.env.GITHUB_TOKEN, // Fallback PAT
+  token: process.env.GITHUB_TOKEN, // Fallback PAT if App auth fails
 });
 ```
 
 ## Verifying Authentication
 
 ```typescript
-const client = createClient({ /* config */ });
+import { createClientAsync } from '@generacy-ai/generacy-plugin-github-issues';
+
+const client = await createClientAsync({ /* config */ });
+
+// Check which auth method is active
+console.log(`Auth type: ${client.authenticationType}`);
+// Output: "Auth type: github-app" or "Auth type: pat"
 
 // Verify auth works
 const auth = await client.verifyAuth();
-console.log(`Authenticated as: ${auth.login}`);
-// Output: "Authenticated as: your-app-name[bot]"
+console.log(`Authenticated as: ${auth.login} (${auth.type})`);
+// Output: "Authenticated as: your-app-name[bot] (Bot)"
 
 // Check rate limit (should show higher limits with App auth)
 const rateLimit = await client.getRateLimit();
 console.log(`Rate limit: ${rateLimit.remaining}/${rateLimit.limit}`);
+// GitHub Apps get 5,000 requests/hour per installation
 ```
 
 ## Troubleshooting
