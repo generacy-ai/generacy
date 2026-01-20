@@ -4,9 +4,19 @@
 
 ## Summary
 
-## Summary
-
 Implement the orchestrator service - the main API server for Generacy.
+
+## Technical Decisions
+
+The following decisions were made during the clarification phase:
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Web Framework | **Fastify** | Native TypeScript support, built-in schema validation (integrates with Zod), better performance for high-throughput orchestrator |
+| Rate Limiting | **Per-API-key limits** | Start simple (100 req/min), align with progressive adoption model, can evolve to tiered limits later |
+| OAuth2 Provider | **GitHub OAuth only** | GitHub is primary integration, developer-focused workflow, simpler initial implementation |
+| WebSocket Auth | **HTTP upgrade with auth header** | Standard approach, secure (no token leakage), compatible with existing HTTP auth middleware |
+| Error Format | **RFC 7807 Problem Details** | Industry standard, TypeScript-friendly, extensible, aligns with stable contracts principles |
 
 ## Parent Epic
 
@@ -56,32 +66,54 @@ GET    /metrics                Prometheus metrics
 
 ### Authentication
 
-- API key authentication for CLI/CI
-- OAuth2 for Humancy extension
+- API key authentication for CLI/CI (with per-key rate limiting: 100 req/min default)
+- GitHub OAuth2 for Humancy extension
 - JWT tokens for sessions
+- WebSocket connections authenticated via HTTP upgrade request with auth header
 
 ### Server Implementation
 
 ```typescript
-// Express.js or Fastify
-const app = express();
+// Fastify with TypeScript
+import Fastify from 'fastify';
+import cors from '@fastify/cors';
+import helmet from '@fastify/helmet';
+import rateLimit from '@fastify/rate-limit';
+import websocket from '@fastify/websocket';
 
-// Middleware
-app.use(cors());
-app.use(helmet());
-app.use(rateLimiter());
-app.use(requestLogger());
-app.use(authMiddleware());
+const app = Fastify({ logger: true });
+
+// Middleware (Fastify plugins)
+await app.register(cors, { origin: true });
+await app.register(helmet);
+await app.register(rateLimit, { max: 100, timeWindow: '1 minute' });
+await app.register(websocket);
 
 // Routes
-app.use('/workflows', workflowRoutes);
-app.use('/queue', queueRoutes);
-app.use('/agents', agentRoutes);
-app.use('/integrations', integrationRoutes);
-app.use('/health', healthRoutes);
+app.register(workflowRoutes, { prefix: '/workflows' });
+app.register(queueRoutes, { prefix: '/queue' });
+app.register(agentRoutes, { prefix: '/agents' });
+app.register(integrationRoutes, { prefix: '/integrations' });
+app.register(healthRoutes, { prefix: '/health' });
 
-// WebSocket upgrade
-app.ws('/ws', webSocketHandler);
+// WebSocket with auth via upgrade headers
+app.register(async (fastify) => {
+  fastify.get('/ws', { websocket: true }, webSocketHandler);
+});
+```
+
+### Error Response Format
+
+RFC 7807 Problem Details format:
+```typescript
+interface ProblemDetails {
+  type: string;       // URI reference identifying the problem type
+  title: string;      // Short summary
+  status: number;     // HTTP status code
+  detail?: string;    // Explanation specific to this occurrence
+  instance?: string;  // URI reference to the specific occurrence
+  extensions?: Record<string, unknown>; // Additional context
+}
 ```
 
 ### Configuration
@@ -98,7 +130,11 @@ orchestrator:
     enabled: true
     providers:
       - apiKey
-      - oauth2
+      - github-oauth2
+
+  rateLimit:
+    max: 100
+    timeWindow: '1 minute'
       
   cors:
     origins:
