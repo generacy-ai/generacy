@@ -12,95 +12,95 @@
 
 ## Phase 1: Project Setup
 
-- [ ] T001 Initialize Docusaurus 3.x project in `docs/` directory with TypeScript support
-- [ ] T002 [P] Configure `docs/package.json` with required dependencies (@docusaurus/core, @docusaurus/preset-classic, @docusaurus/theme-mermaid)
-- [ ] T003 [P] Create `docs/tsconfig.json` with appropriate TypeScript configuration
-- [ ] T004 Configure `docs/docusaurus.config.ts` with site metadata, theme, and Mermaid plugin
-- [ ] T005 Configure `docs/sidebars.ts` with initial navigation structure
-- [ ] T006 [P] Create `docs/static/img/` directory with logo.svg and favicon.ico placeholders
-- [ ] T007 [P] Create `docs/src/css/custom.css` with basic theme customizations
-- [ ] T008 Create `.github/workflows/docs.yml` for GitHub Pages deployment via GitHub Actions
-- [ ] T009 Configure GitHub repository settings for GitHub Pages (gh-pages branch or Actions)
+- [X] T001 Initialize Docusaurus 3.x project in `docs/` directory with TypeScript support
+- [X] T002 [P] Configure `docs/package.json` with required dependencies (@docusaurus/core, @docusaurus/preset-classic, @docusaurus/theme-mermaid)
+- [X] T003 [P] Create `docs/tsconfig.json` with appropriate TypeScript configuration
+- [X] T004 Configure `docs/docusaurus.config.ts` with site metadata, theme, and Mermaid plugin
+- [X] T005 Configure `docs/sidebars.ts` with initial navigation structure
+- [X] T006 [P] Create `docs/static/img/` directory with logo.svg and favicon.ico placeholders
+- [X] T007 [P] Create `docs/src/css/custom.css` with basic theme customizations
+- [X] T008 Create `.github/workflows/docs.yml` for GitHub Pages deployment via GitHub Actions
+- [X] T009 Configure GitHub repository settings for GitHub Pages (gh-pages branch or Actions) [manual]
 
 ---
 
 ## Phase 2: Getting Started Guides (MVP)
 
-- [ ] T010 [US1] Create `docs/docs/intro.md` - Introduction and landing page content
-- [ ] T011 [US1] Create `docs/docs/getting-started/_category_.json` with category metadata
-- [ ] T012 [US1] Create `docs/docs/getting-started/quick-start.md` - 5-minute quick start guide
-- [ ] T013 [US1] Create `docs/docs/getting-started/installation.md` - Detailed installation guide
-- [ ] T014 [US1] Create `docs/docs/getting-started/level-1-agency-only.md` - Agency-only setup guide
-- [ ] T015 [US1] Create `docs/docs/getting-started/level-2-agency-humancy.md` - Agency + Humancy integration guide
-- [ ] T016 [P] Create `docs/src/pages/index.tsx` - Custom landing page with adoption level cards
-- [ ] T017 [P] Create `docs/src/components/AdoptionLevel/index.tsx` - Adoption level card component
+- [X] T010 [US1] Create `docs/docs/intro.md` - Introduction and landing page content
+- [X] T011 [US1] Create `docs/docs/getting-started/_category_.json` with category metadata
+- [X] T012 [US1] Create `docs/docs/getting-started/quick-start.md` - 5-minute quick start guide
+- [X] T013 [US1] Create `docs/docs/getting-started/installation.md` - Detailed installation guide
+- [X] T014 [US1] Create `docs/docs/getting-started/level-1-agency-only.md` - Agency-only setup guide
+- [X] T015 [US1] Create `docs/docs/getting-started/level-2-agency-humancy.md` - Agency + Humancy integration guide
+- [X] T016 [P] Create `docs/src/pages/index.tsx` - Custom landing page with adoption level cards
+- [X] T017 [P] Create `docs/src/components/AdoptionLevel/index.tsx` - Adoption level card component
 
 ---
 
 ## Phase 3: Component Guides
 
-- [ ] T018 Create `docs/docs/guides/_category_.json` with guides category metadata
-- [ ] T019 [P] Create `docs/docs/guides/agency/overview.md` - Agency component overview
-- [ ] T020 [P] Create `docs/docs/guides/agency/configuration.md` - Agency configuration reference
-- [ ] T021 [P] Create `docs/docs/guides/humancy/overview.md` - Humancy component overview
-- [ ] T022 [P] Create `docs/docs/guides/humancy/configuration.md` - Humancy configuration reference
-- [ ] T023 [P] Create `docs/docs/guides/generacy/overview.md` - Generacy component overview
-- [ ] T024 [P] Create `docs/docs/guides/generacy/configuration.md` - Generacy configuration reference
+- [X] T018 Create `docs/docs/guides/_category_.json` with guides category metadata
+- [X] T019 [P] Create `docs/docs/guides/agency/overview.md` - Agency component overview
+- [X] T020 [P] Create `docs/docs/guides/agency/configuration.md` - Agency configuration reference
+- [X] T021 [P] Create `docs/docs/guides/humancy/overview.md` - Humancy component overview
+- [X] T022 [P] Create `docs/docs/guides/humancy/configuration.md` - Humancy configuration reference
+- [X] T023 [P] Create `docs/docs/guides/generacy/overview.md` - Generacy component overview
+- [X] T024 [P] Create `docs/docs/guides/generacy/configuration.md` - Generacy configuration reference
 
 ---
 
 ## Phase 4: API Reference Integration
 
-- [ ] T025 [US3] Install and configure `docusaurus-plugin-typedoc` in docs/package.json
-- [ ] T026 [US3] Create TypeDoc configuration in `docs/typedoc.json` pointing to npm package entry points
-- [ ] T027 [US3] Create `docs/api/.gitkeep` directory for TypeDoc generated output
-- [ ] T028 [US3] Create `docs/docs/reference/_category_.json` with reference category metadata
-- [ ] T029 [US3] Create `docs/docs/reference/api/index.md` - API reference landing page
-- [ ] T030 [US3] Create `docs/static/api/orchestrator.yaml` - OpenAPI spec for orchestrator REST API
-- [ ] T031 [US3] Configure OpenAPI rendering in docusaurus.config.ts or create reference page
+- [X] T025 [US3] Install and configure `docusaurus-plugin-typedoc` in docs/package.json
+- [X] T026 [US3] Create TypeDoc configuration in `docs/typedoc.json` pointing to npm package entry points
+- [X] T027 [US3] Create `docs/api/.gitkeep` directory for TypeDoc generated output
+- [X] T028 [US3] Create `docs/docs/reference/_category_.json` with reference category metadata
+- [X] T029 [US3] Create `docs/docs/reference/api/index.md` - API reference landing page
+- [X] T030 [US3] Create `docs/static/api/orchestrator.yaml` - OpenAPI spec for orchestrator REST API
+- [X] T031 [US3] Configure OpenAPI rendering in docusaurus.config.ts or create reference page
 
 ---
 
 ## Phase 5: Plugin Development Guides
 
-- [ ] T032 [US2] Create `docs/docs/plugins/_category_.json` with plugins category metadata
-- [ ] T033 [US2] Create `docs/docs/plugins/developing-plugins.md` - Plugin development overview
-- [ ] T034 [US2] Create `docs/docs/plugins/agency-plugins.md` - Agency plugin tutorial
-- [ ] T035 [US2] Create `docs/docs/plugins/humancy-plugins.md` - Humancy plugin tutorial
-- [ ] T036 [US2] Create `docs/docs/plugins/generacy-plugins.md` - Generacy plugin tutorial
-- [ ] T037 [US2] Create `docs/docs/plugins/manifest-reference.md` - Plugin manifest reference
+- [X] T032 [US2] Create `docs/docs/plugins/_category_.json` with plugins category metadata
+- [X] T033 [US2] Create `docs/docs/plugins/developing-plugins.md` - Plugin development overview
+- [X] T034 [US2] Create `docs/docs/plugins/agency-plugins.md` - Agency plugin tutorial
+- [X] T035 [US2] Create `docs/docs/plugins/humancy-plugins.md` - Humancy plugin tutorial
+- [X] T036 [US2] Create `docs/docs/plugins/generacy-plugins.md` - Generacy plugin tutorial
+- [X] T037 [US2] Create `docs/docs/plugins/manifest-reference.md` - Plugin manifest reference
 
 ---
 
 ## Phase 6: Configuration Reference
 
-- [ ] T038 Create `docs/docs/reference/config/agency.md` - Agency configuration options reference
-- [ ] T039 [P] Create `docs/docs/reference/config/humancy.md` - Humancy configuration options reference
-- [ ] T040 [P] Create `docs/docs/reference/config/generacy.md` - Generacy configuration options reference
-- [ ] T041 Create `docs/docs/reference/cli/commands.md` - CLI command reference
+- [X] T038 Create `docs/docs/reference/config/agency.md` - Agency configuration options reference
+- [X] T039 [P] Create `docs/docs/reference/config/humancy.md` - Humancy configuration options reference
+- [X] T040 [P] Create `docs/docs/reference/config/generacy.md` - Generacy configuration options reference
+- [X] T041 Create `docs/docs/reference/cli/commands.md` - CLI command reference
 
 ---
 
 ## Phase 7: Architecture Documentation
 
-- [ ] T042 Create `docs/docs/architecture/_category_.json` with architecture category metadata
-- [ ] T043 Create `docs/docs/architecture/overview.md` - System overview with Mermaid diagrams
-- [ ] T044 [P] Create `docs/docs/architecture/contracts.md` - Contract schemas documentation
-- [ ] T045 [P] Create `docs/docs/architecture/security.md` - Security model documentation
-- [ ] T046 [P] Create Excalidraw diagram for The Triad overview (export to `docs/static/img/diagrams/triad-overview.png`)
-- [ ] T047 [P] Create Excalidraw diagram for adoption path (export to `docs/static/img/diagrams/adoption-path.png`)
-- [ ] T048 Create `docs/src/components/DiagramEmbed/index.tsx` - Excalidraw diagram embed component
+- [X] T042 Create `docs/docs/architecture/_category_.json` with architecture category metadata
+- [X] T043 Create `docs/docs/architecture/overview.md` - System overview with Mermaid diagrams
+- [X] T044 [P] Create `docs/docs/architecture/contracts.md` - Contract schemas documentation
+- [X] T045 [P] Create `docs/docs/architecture/security.md` - Security model documentation
+- [X] T046 [P] Create SVG diagram for The Triad overview (exported to `docs/static/img/diagrams/triad-overview.svg`)
+- [X] T047 [P] Create SVG diagram for adoption path (exported to `docs/static/img/diagrams/adoption-path.svg`)
+- [X] T048 Create `docs/src/components/DiagramEmbed/index.tsx` - Diagram embed component
 
 ---
 
 ## Phase 8: Testing & Polish
 
-- [ ] T049 Verify documentation site builds successfully with `npm run build`
-- [ ] T050 Test GitHub Pages deployment workflow
-- [ ] T051 Validate Quick Start guide completion time < 5 minutes
-- [ ] T052 Run accessibility audit for WCAG 2.1 AA compliance
-- [ ] T053 Verify all internal links and navigation work correctly
-- [ ] T054 Update sidebar configuration with final navigation structure
+- [X] T049 Verify documentation site builds successfully with `npm run build`
+- [ ] T050 Test GitHub Pages deployment workflow [manual]
+- [ ] T051 Validate Quick Start guide completion time < 5 minutes [manual]
+- [ ] T052 Run accessibility audit for WCAG 2.1 AA compliance [manual]
+- [X] T053 Verify all internal links and navigation work correctly
+- [X] T054 Update sidebar configuration with final navigation structure
 
 ---
 

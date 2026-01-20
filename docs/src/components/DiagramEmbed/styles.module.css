@@ -1,0 +1,22 @@
+.diagramContainer {
+  margin: 2rem 0;
+  text-align: center;
+}
+
+.diagram {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme='dark'] .diagram {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+.caption {
+  margin-top: 0.75rem;
+  font-size: 0.9rem;
+  color: var(--ifm-color-emphasis-600);
+  font-style: italic;
+}
