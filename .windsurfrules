@@ -10,6 +10,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -31,6 +32,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 008-orchestrator-service: Added configuration
 - 023-attribution-calculation-engine: Added configuration
 - 022-learning-loop-processor: Added configuration
 - 006-job-scheduler-queue-system: Added configuration
