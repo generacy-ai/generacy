@@ -1,0 +1,57 @@
+{
+  "name": "@generacy-ai/orchestrator",
+  "version": "0.1.0",
+  "description": "Orchestrator service - main API server for Generacy workflow orchestration",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src tests --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "@fastify/cors": "^10.0.0",
+    "@fastify/helmet": "^12.0.0",
+    "@fastify/rate-limit": "^10.0.0",
+    "@fastify/websocket": "^11.0.0",
+    "@fastify/jwt": "^9.0.0",
+    "@fastify/oauth2": "^8.0.0",
+    "zod": "^3.23.0",
+    "ioredis": "^5.4.0",
+    "prom-client": "^15.0.0",
+    "pino": "^9.0.0",
+    "yaml": "^2.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0",
+    "tsx": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist"
+  ],
+  "keywords": [
+    "orchestrator",
+    "api",
+    "fastify",
+    "generacy"
+  ],
+  "license": "MIT"
+}

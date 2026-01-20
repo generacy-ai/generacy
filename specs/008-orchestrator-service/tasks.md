@@ -12,85 +12,85 @@
 
 ## Phase 1: Project Setup and Configuration
 
-- [ ] T001 Create `packages/orchestrator/package.json` with Fastify v5, Zod, ioredis, and dev dependencies
-- [ ] T002 [P] Create `packages/orchestrator/tsconfig.json` extending root config with ESM settings
-- [ ] T003 [P] Create `src/types/problem-details.ts` - RFC 7807 ProblemDetails interface and ErrorTypes constants
-- [ ] T004 [P] Create `src/types/api.ts` - Request/response types (CreateWorkflowRequest, WorkflowResponse, etc.)
-- [ ] T005 [P] Create `src/types/websocket.ts` - WebSocket message types (ClientMessage, ServerMessage, Channel)
-- [ ] T006 Create `src/types/index.ts` - Export all types
-- [ ] T007 Create `src/config/schema.ts` - Zod schema for OrchestratorConfig
-- [ ] T008 Create `src/config/loader.ts` - Environment variable and YAML config loading
-- [ ] T009 Create `src/config/index.ts` - Export config loader and schema
+- [x] T001 Create `packages/orchestrator/package.json` with Fastify v5, Zod, ioredis, and dev dependencies
+- [x] T002 [P] Create `packages/orchestrator/tsconfig.json` extending root config with ESM settings
+- [x] T003 [P] Create `src/types/problem-details.ts` - RFC 7807 ProblemDetails interface and ErrorTypes constants
+- [x] T004 [P] Create `src/types/api.ts` - Request/response types (CreateWorkflowRequest, WorkflowResponse, etc.)
+- [x] T005 [P] Create `src/types/websocket.ts` - WebSocket message types (ClientMessage, ServerMessage, Channel)
+- [x] T006 Create `src/types/index.ts` - Export all types
+- [x] T007 Create `src/config/schema.ts` - Zod schema for OrchestratorConfig
+- [x] T008 Create `src/config/loader.ts` - Environment variable and YAML config loading
+- [x] T009 Create `src/config/index.ts` - Export config loader and schema
 
 ## Phase 2: Server Foundation and Utilities
 
-- [ ] T010 Create `src/utils/correlation.ts` - Request correlation ID middleware (X-Request-ID)
-- [ ] T011 [P] Create `src/utils/shutdown.ts` - Graceful shutdown handler (SIGTERM, SIGINT)
-- [ ] T012 Create `src/utils/index.ts` - Export utilities
-- [ ] T013 Create `src/server.ts` - Fastify server setup with cors, helmet, websocket plugins
-- [ ] T014 Write `tests/unit/utils/correlation.test.ts` - Test correlation ID generation
-- [ ] T015 [P] Write `tests/unit/utils/shutdown.test.ts` - Test graceful shutdown sequence
+- [x] T010 Create `src/utils/correlation.ts` - Request correlation ID middleware (X-Request-ID)
+- [x] T011 [P] Create `src/utils/shutdown.ts` - Graceful shutdown handler (SIGTERM, SIGINT)
+- [x] T012 Create `src/utils/index.ts` - Export utilities
+- [x] T013 Create `src/server.ts` - Fastify server setup with cors, helmet, websocket plugins
+- [x] T014 Write `tests/unit/utils/correlation.test.ts` - Test correlation ID generation
+- [x] T015 [P] Write `tests/unit/utils/shutdown.test.ts` - Test graceful shutdown sequence
 
 ## Phase 3: Authentication
 
-- [ ] T016 Create `src/auth/api-key.ts` - API key validation (X-API-Key header)
-- [ ] T017 [P] Create `src/auth/jwt.ts` - JWT token creation, validation, and payload types
-- [ ] T018 Create `src/auth/github-oauth.ts` - GitHub OAuth2 flow (authorization URL, callback, token exchange)
-- [ ] T019 Create `src/auth/middleware.ts` - Fastify preHandler hook that validates API key or JWT
-- [ ] T020 Create `src/auth/index.ts` - Export auth modules
-- [ ] T021 Write `tests/unit/auth/api-key.test.ts` - Test API key validation
-- [ ] T022 [P] Write `tests/unit/auth/jwt.test.ts` - Test JWT creation and validation
+- [x] T016 Create `src/auth/api-key.ts` - API key validation (X-API-Key header)
+- [x] T017 [P] Create `src/auth/jwt.ts` - JWT token creation, validation, and payload types
+- [x] T018 Create `src/auth/github-oauth.ts` - GitHub OAuth2 flow (authorization URL, callback, token exchange)
+- [x] T019 Create `src/auth/middleware.ts` - Fastify preHandler hook that validates API key or JWT
+- [x] T020 Create `src/auth/index.ts` - Export auth modules
+- [x] T021 Write `tests/unit/auth/api-key.test.ts` - Test API key validation
+- [x] T022 [P] Write `tests/unit/auth/jwt.test.ts` - Test JWT creation and validation
 
 ## Phase 4: Middleware
 
-- [ ] T023 Create `src/middleware/rate-limit.ts` - Per-API-key rate limiting with @fastify/rate-limit + Redis
-- [ ] T024 [P] Create `src/middleware/request-logger.ts` - Structured pino logging with correlation ID
-- [ ] T025 Create `src/middleware/error-handler.ts` - Global error handler returning RFC 7807 format
-- [ ] T026 Create `src/middleware/index.ts` - Export middleware
-- [ ] T027 Write `tests/unit/middleware/rate-limit.test.ts` - Test rate limit key generation and enforcement
-- [ ] T028 [P] Write `tests/unit/middleware/error-handler.test.ts` - Test error formatting
+- [x] T023 Create `src/middleware/rate-limit.ts` - Per-API-key rate limiting with @fastify/rate-limit + Redis
+- [x] T024 [P] Create `src/middleware/request-logger.ts` - Structured pino logging with correlation ID
+- [x] T025 Create `src/middleware/error-handler.ts` - Global error handler returning RFC 7807 format
+- [x] T026 Create `src/middleware/index.ts` - Export middleware
+- [x] T027 Write `tests/unit/middleware/rate-limit.test.ts` - Test rate limit key generation and enforcement
+- [x] T028 [P] Write `tests/unit/middleware/error-handler.test.ts` - Test error formatting
 
 ## Phase 5: Services Layer
 
-- [ ] T029 Create `src/services/workflow-service.ts` - Facade over WorkflowEngine (#3) for CRUD operations
-- [ ] T030 [P] Create `src/services/queue-service.ts` - Decision queue operations via MessageRouter (#5)
-- [ ] T031 [P] Create `src/services/agent-registry.ts` - Track connected agents with connection status
-- [ ] T032 Create `src/services/index.ts` - Export services
-- [ ] T033 Write `tests/unit/services/workflow-service.test.ts` - Test workflow service with mocked engine
-- [ ] T034 [P] Write `tests/unit/services/queue-service.test.ts` - Test queue service with mocked router
+- [x] T029 Create `src/services/workflow-service.ts` - Facade over WorkflowEngine (#3) for CRUD operations
+- [x] T030 [P] Create `src/services/queue-service.ts` - Decision queue operations via MessageRouter (#5)
+- [x] T031 [P] Create `src/services/agent-registry.ts` - Track connected agents with connection status
+- [x] T032 Create `src/services/index.ts` - Export services
+- [x] T033 Write `tests/unit/services/workflow-service.test.ts` - Test workflow service with mocked engine
+- [x] T034 [P] Write `tests/unit/services/queue-service.test.ts` - Test queue service with mocked router
 
 ## Phase 6: HTTP Routes
 
-- [ ] T035 Create `src/routes/health.ts` - GET /health endpoint with service status checks
-- [ ] T036 [P] Create `src/routes/metrics.ts` - GET /metrics endpoint with Prometheus prom-client
-- [ ] T037 Create `src/routes/workflows.ts` - POST/GET/DELETE /workflows, POST /workflows/:id/pause|resume
-- [ ] T038 [P] Create `src/routes/queue.ts` - GET /queue, POST /queue/:id/respond
-- [ ] T039 [P] Create `src/routes/agents.ts` - GET /agents endpoint
-- [ ] T040 [P] Create `src/routes/integrations.ts` - GET /integrations endpoint
-- [ ] T041 Create `src/routes/index.ts` - Route registration function
-- [ ] T042 Write `tests/integration/routes/health.test.ts` - Test health endpoint
-- [ ] T043 [P] Write `tests/integration/routes/workflows.test.ts` - Test workflow CRUD endpoints
-- [ ] T044 [P] Write `tests/integration/routes/queue.test.ts` - Test queue endpoints
+- [x] T035 Create `src/routes/health.ts` - GET /health endpoint with service status checks
+- [x] T036 [P] Create `src/routes/metrics.ts` - GET /metrics endpoint with Prometheus prom-client
+- [x] T037 Create `src/routes/workflows.ts` - POST/GET/DELETE /workflows, POST /workflows/:id/pause|resume
+- [x] T038 [P] Create `src/routes/queue.ts` - GET /queue, POST /queue/:id/respond
+- [x] T039 [P] Create `src/routes/agents.ts` - GET /agents endpoint
+- [x] T040 [P] Create `src/routes/integrations.ts` - GET /integrations endpoint
+- [x] T041 Create `src/routes/index.ts` - Route registration function
+- [x] T042 Write `tests/integration/routes/health.test.ts` - Test health endpoint
+- [x] T043 [P] Write `tests/integration/routes/workflows.test.ts` - Test workflow CRUD endpoints
+- [x] T044 [P] Write `tests/integration/routes/queue.test.ts` - Test queue endpoints
 
 ## Phase 7: WebSocket Support
 
-- [ ] T045 Create `src/websocket/messages.ts` - Zod schemas for ClientMessage and ServerMessage validation
-- [ ] T046 Create `src/websocket/subscriptions.ts` - Channel subscription manager (subscribe, unsubscribe, broadcast)
-- [ ] T047 Create `src/websocket/handler.ts` - WebSocket connection handler with auth via preHandler
-- [ ] T048 Create `src/websocket/index.ts` - Export WebSocket modules
-- [ ] T049 Write `tests/integration/websocket/subscriptions.test.ts` - Test subscription and broadcast
+- [x] T045 Create `src/websocket/messages.ts` - Zod schemas for ClientMessage and ServerMessage validation
+- [x] T046 Create `src/websocket/subscriptions.ts` - Channel subscription manager (subscribe, unsubscribe, broadcast)
+- [x] T047 Create `src/websocket/handler.ts` - WebSocket connection handler with auth via preHandler
+- [x] T048 Create `src/websocket/index.ts` - Export WebSocket modules
+- [x] T049 Write `tests/integration/websocket/subscriptions.test.ts` - Test subscription and broadcast
 
 ## Phase 8: Entry Points and Integration
 
-- [ ] T050 Create `src/index.ts` - Public exports (createServer, types, config)
-- [ ] T051 Integrate all plugins and routes in `src/server.ts` with proper initialization order
-- [ ] T052 Write `tests/integration/server.test.ts` - Full server lifecycle test (start, request, shutdown)
+- [x] T050 Create `src/index.ts` - Public exports (createServer, types, config)
+- [x] T051 Integrate all plugins and routes in `src/server.ts` with proper initialization order
+- [x] T052 Write `tests/integration/server.test.ts` - Full server lifecycle test (start, request, shutdown)
 
 ## Phase 9: Docker and Documentation
 
-- [ ] T053 Create `Dockerfile` - Multi-stage build (build + production alpine image)
-- [ ] T054 Create `tests/fixtures/workflows.ts` - Test workflow fixtures
-- [ ] T055 [P] Create `tests/fixtures/auth.ts` - Test auth fixtures (API keys, JWT tokens)
+- [x] T053 Create `Dockerfile` - Multi-stage build (build + production alpine image)
+- [x] T054 Create `tests/fixtures/workflows.ts` - Test workflow fixtures
+- [x] T055 [P] Create `tests/fixtures/auth.ts` - Test auth fixtures (API keys, JWT tokens)
 
 ---
 
