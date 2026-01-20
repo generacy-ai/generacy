@@ -1,0 +1,56 @@
+import type { FastifyInstance } from 'fastify';
+import { setupHealthRoutes, type HealthCheckOptions } from './health.js';
+import { setupMetricsRoutes } from './metrics.js';
+import { setupWorkflowRoutes } from './workflows.js';
+import { setupQueueRoutes } from './queue.js';
+import { setupAgentRoutes } from './agents.js';
+import { setupIntegrationRoutes, type IntegrationRegistry } from './integrations.js';
+import type { WorkflowService } from '../services/workflow-service.js';
+import type { QueueService } from '../services/queue-service.js';
+import type { AgentRegistry } from '../services/agent-registry.js';
+
+/**
+ * Route registration options
+ */
+export interface RouteRegistrationOptions {
+  /** Workflow service */
+  workflowService: WorkflowService;
+  /** Queue service */
+  queueService: QueueService;
+  /** Agent registry */
+  agentRegistry: AgentRegistry;
+  /** Integration registry */
+  integrationRegistry: IntegrationRegistry;
+  /** Health check options */
+  healthCheckOptions?: HealthCheckOptions;
+}
+
+/**
+ * Register all routes
+ */
+export async function registerRoutes(
+  server: FastifyInstance,
+  options: RouteRegistrationOptions
+): Promise<void> {
+  // System routes (no auth required)
+  await setupHealthRoutes(server, options.healthCheckOptions);
+  await setupMetricsRoutes(server);
+
+  // API routes (auth required)
+  await setupWorkflowRoutes(server, options.workflowService);
+  await setupQueueRoutes(server, options.queueService);
+  await setupAgentRoutes(server, options.agentRegistry);
+  await setupIntegrationRoutes(server, options.integrationRegistry);
+}
+
+// Re-export route setup functions
+export { setupHealthRoutes, type HealthCheckOptions } from './health.js';
+export { setupMetricsRoutes, initializeMetrics, recordHttpRequest } from './metrics.js';
+export { setupWorkflowRoutes } from './workflows.js';
+export { setupQueueRoutes } from './queue.js';
+export { setupAgentRoutes } from './agents.js';
+export {
+  setupIntegrationRoutes,
+  InMemoryIntegrationRegistry,
+  type IntegrationRegistry,
+} from './integrations.js';

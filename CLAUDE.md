@@ -33,6 +33,7 @@ Follow standard conventions
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
 - 009-worker-service: Added configuration
+- 008-orchestrator-service: Added configuration
 - 023-attribution-calculation-engine: Added configuration
 - 022-learning-loop-processor: Added configuration
 - 006-job-scheduler-queue-system: Added configuration
