@@ -1,8 +1,13 @@
 # Dependencies
 node_modules/
+**/node_modules/
 
 # Build output
 dist/
+**/build/
+
+# Docusaurus
+.docusaurus/
 
 # IDE and editor files
 .idea/
