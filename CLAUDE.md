@@ -11,6 +11,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -32,6 +33,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 010-docker-compose-local-development: Added configuration
 - 009-worker-service: Added configuration
 - 008-orchestrator-service: Added configuration
 - 023-attribution-calculation-engine: Added configuration
