@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 400" width="900" height="400">
+  <defs>
+    <linearGradient id="level1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#059669"/>
+    </linearGradient>
+    <linearGradient id="level2" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#2563eb"/>
+    </linearGradient>
+    <linearGradient id="level3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="level4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#d97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="900" height="400" fill="#f8fafc"/>
+
+  <!-- Title -->
+  <text x="450" y="40" font-family="system-ui, sans-serif" font-size="24" font-weight="bold" text-anchor="middle" fill="#1e293b">Progressive Adoption Path</text>
+
+  <!-- Level 1 -->
+  <g transform="translate(50, 80)">
+    <rect width="180" height="200" rx="12" fill="url(#level1)"/>
+    <text x="90" y="40" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">Level 1</text>
+    <text x="90" y="65" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle" fill="white" opacity="0.9">Agency Only</text>
+    <rect x="20" y="90" width="140" height="90" rx="8" fill="white" opacity="0.2"/>
+    <text x="90" y="120" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ MCP Tools</text>
+    <text x="90" y="140" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Context</text>
+    <text x="90" y="160" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Plugins</text>
+  </g>
+
+  <!-- Arrow 1 -->
+  <path d="M240 180 L260 180 L260 170 L280 180 L260 190 L260 180" fill="#94a3b8"/>
+
+  <!-- Level 2 -->
+  <g transform="translate(280, 80)">
+    <rect width="180" height="200" rx="12" fill="url(#level2)"/>
+    <text x="90" y="40" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">Level 2</text>
+    <text x="90" y="65" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle" fill="white" opacity="0.9">+ Humancy</text>
+    <rect x="20" y="90" width="140" height="90" rx="8" fill="white" opacity="0.2"/>
+    <text x="90" y="115" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Review Gates</text>
+    <text x="90" y="135" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Approvals</text>
+    <text x="90" y="155" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Audit Trail</text>
+  </g>
+
+  <!-- Arrow 2 -->
+  <path d="M470 180 L490 180 L490 170 L510 180 L490 190 L490 180" fill="#94a3b8"/>
+
+  <!-- Level 3 -->
+  <g transform="translate(510, 80)">
+    <rect width="180" height="200" rx="12" fill="url(#level3)"/>
+    <text x="90" y="40" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">Level 3</text>
+    <text x="90" y="65" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle" fill="white" opacity="0.9">Local Stack</text>
+    <rect x="20" y="90" width="140" height="90" rx="8" fill="white" opacity="0.2"/>
+    <text x="90" y="115" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Orchestration</text>
+    <text x="90" y="135" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Job Queue</text>
+    <text x="90" y="155" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Integrations</text>
+  </g>
+
+  <!-- Arrow 3 -->
+  <path d="M700 180 L720 180 L720 170 L740 180 L720 190 L720 180" fill="#94a3b8"/>
+
+  <!-- Level 4 -->
+  <g transform="translate(740, 80)">
+    <rect width="140" height="200" rx="12" fill="url(#level4)"/>
+    <text x="70" y="40" font-family="system-ui, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">Level 4</text>
+    <text x="70" y="65" font-family="system-ui, sans-serif" font-size="14" text-anchor="middle" fill="white" opacity="0.9">Cloud</text>
+    <rect x="15" y="90" width="110" height="90" rx="8" fill="white" opacity="0.2"/>
+    <text x="70" y="115" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Scale</text>
+    <text x="70" y="135" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Team</text>
+    <text x="70" y="155" font-family="system-ui, sans-serif" font-size="12" text-anchor="middle" fill="white">✓ Enterprise</text>
+  </g>
+
+  <!-- Labels -->
+  <text x="140" y="320" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle" fill="#64748b">Beginner</text>
+  <text x="370" y="320" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle" fill="#64748b">Intermediate</text>
+  <text x="600" y="320" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle" fill="#64748b">Intermediate</text>
+  <text x="810" y="320" font-family="system-ui, sans-serif" font-size="11" text-anchor="middle" fill="#64748b">Advanced</text>
+
+  <!-- Footer -->
+  <text x="450" y="370" font-family="system-ui, sans-serif" font-size="13" text-anchor="middle" fill="#94a3b8">Start simple, grow at your own pace</text>
+</svg>
