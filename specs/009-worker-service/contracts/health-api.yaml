@@ -1,0 +1,115 @@
+openapi: 3.0.3
+info:
+  title: Worker Service Health API
+  description: Health check endpoints for the worker service
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+
+paths:
+  /health:
+    get:
+      summary: Get full health status
+      description: Returns comprehensive health information about the worker
+      operationId: getHealth
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Worker health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '503':
+          description: Worker is unhealthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /health/live:
+    get:
+      summary: Liveness probe
+      description: Returns 200 if the worker process is running
+      operationId: getLiveness
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Worker is alive
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+
+  /health/ready:
+    get:
+      summary: Readiness probe
+      description: Returns 200 if the worker is ready to process jobs
+      operationId: getReadiness
+      tags:
+        - Health
+      responses:
+        '200':
+          description: Worker is ready
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+        '503':
+          description: Worker is not ready (e.g., Redis disconnected)
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: NOT READY
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+        - uptime
+        - currentJobs
+        - version
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+          description: Overall health status
+          example: healthy
+        uptime:
+          type: number
+          description: Seconds since worker started
+          example: 3600
+        currentJobs:
+          type: integer
+          description: Number of jobs currently being processed
+          example: 1
+        lastJobCompleted:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO timestamp of last completed job
+          example: "2024-01-15T10:25:00Z"
+        version:
+          type: string
+          description: Worker version
+          example: "1.0.0"
+        details:
+          type: object
+          properties:
+            redis:
+              type: string
+              enum: [connected, disconnected]
+              description: Redis connection status
+            queueDepth:
+              type: integer
+              description: Number of jobs in the queue
+              example: 5
