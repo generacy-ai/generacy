@@ -10,24 +10,24 @@
 
 ## Phase 1: Docker Configuration Files
 
-- [ ] T001 Create `docker-compose.yml` with orchestrator, worker, and redis services including health checks, volumes, and networking
-- [ ] T002 [P] Create `docker-compose.override.yml` with development-specific overrides (dev target, volume mounts, npm run dev)
+- [X] T001 Create `docker-compose.yml` with orchestrator, worker, and redis services including health checks, volumes, and networking
+- [X] T002 [P] Create `docker-compose.override.yml` with development-specific overrides (dev target, volume mounts, npm run dev)
 
 ## Phase 2: Environment Configuration
 
-- [ ] T003 Create `.env.example` with documented environment variables (REDIS_URL, ORCHESTRATOR_PORT, LOG_LEVEL, WORKER_CONCURRENCY, API_KEY, GITHUB_TOKEN)
+- [X] T003 Create `.env.example` with documented environment variables (REDIS_URL, ORCHESTRATOR_PORT, LOG_LEVEL, WORKER_CONCURRENCY, API_KEY, GITHUB_TOKEN)
 
 ## Phase 3: Development Scripts
 
-- [ ] T004 [P] Create `scripts/start-local.sh` - start services and display status messages
-- [ ] T005 [P] Create `scripts/stop-local.sh` - clean shutdown with docker-compose down
-- [ ] T006 [P] Create `scripts/logs.sh` - view logs for all or specific services
-- [ ] T007 [P] Create `scripts/reset.sh` - volume cleanup and fresh restart
+- [X] T004 [P] Create `scripts/start-local.sh` - start services and display status messages
+- [X] T005 [P] Create `scripts/stop-local.sh` - clean shutdown with docker-compose down
+- [X] T006 [P] Create `scripts/logs.sh` - view logs for all or specific services
+- [X] T007 [P] Create `scripts/reset.sh` - volume cleanup and fresh restart
 
 ## Phase 4: Verification
 
-- [ ] T008 Verify `docker-compose config` validates without errors
-- [ ] T009 Document usage in README or quickstart guide
+- [X] T008 Verify `docker-compose config` validates without errors
+- [X] T009 Document usage in README or quickstart guide
 
 ## Dependencies & Execution Order
 

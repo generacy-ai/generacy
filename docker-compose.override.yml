@@ -1,0 +1,14 @@
+services:
+  orchestrator:
+    build:
+      target: development
+    volumes:
+      - ./services/orchestrator:/app
+    command: npm run dev
+
+  worker:
+    build:
+      target: development
+    volumes:
+      - ./services/worker:/app
+    command: npm run dev
