@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://generacy.ai/schemas/worker-heartbeat.json",
+  "title": "WorkerHeartbeat",
+  "description": "Heartbeat message published by workers to Redis",
+  "type": "object",
+  "required": ["workerId", "timestamp", "status", "metrics"],
+  "properties": {
+    "workerId": {
+      "type": "string",
+      "description": "Unique identifier for the worker",
+      "pattern": "^worker_[a-f0-9-]+$",
+      "examples": ["worker_abc123-def456"]
+    },
+    "timestamp": {
+      "type": "integer",
+      "description": "Unix timestamp in milliseconds",
+      "examples": [1705312800000]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["idle", "processing", "draining", "stopped"],
+      "description": "Current worker status"
+    },
+    "currentJob": {
+      "type": "string",
+      "description": "ID of the job currently being processed (if any)",
+      "pattern": "^job_[a-f0-9-]+$",
+      "examples": ["job_123-456"]
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["jobsProcessed", "jobsSucceeded", "jobsFailed", "errorRate", "avgProcessingTime"],
+      "properties": {
+        "jobsProcessed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Total number of jobs processed since worker started"
+        },
+        "jobsSucceeded": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of jobs that completed successfully"
+        },
+        "jobsFailed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of jobs that failed"
+        },
+        "errorRate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Ratio of failed jobs to total processed"
+        },
+        "avgProcessingTime": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Average job processing time in milliseconds"
+        },
+        "lastProcessingTime": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Processing time of the most recent job in milliseconds"
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "workerId": "worker_abc123-def456",
+      "timestamp": 1705312800000,
+      "status": "processing",
+      "currentJob": "job_123-456",
+      "metrics": {
+        "jobsProcessed": 150,
+        "jobsSucceeded": 145,
+        "jobsFailed": 5,
+        "errorRate": 0.033,
+        "avgProcessingTime": 12500,
+        "lastProcessingTime": 15000
+      }
+    }
+  ]
+}
