@@ -10,52 +10,52 @@
 
 ## Phase 1: Project Setup
 
-- [ ] T001 Initialize package.json with dependencies in `packages/github-issues/package.json`
-- [ ] T002 [P] Create TypeScript config in `packages/github-issues/tsconfig.json`
-- [ ] T003 [P] Create vitest config in `packages/github-issues/vitest.config.ts`
+- [x] T001 Initialize package.json with dependencies in `packages/github-issues/package.json`
+- [x] T002 [P] Create TypeScript config in `packages/github-issues/tsconfig.json`
+- [x] T003 [P] Create vitest config in `packages/github-issues/vitest.config.ts`
 
 ## Phase 2: Type Definitions
 
-- [ ] T010 [P] Create configuration types in `packages/github-issues/src/types/config.ts`
-- [ ] T011 [P] Create issue types in `packages/github-issues/src/types/issues.ts`
-- [ ] T012 [P] Create webhook event types in `packages/github-issues/src/types/events.ts`
-- [ ] T013 [P] Create API response types in `packages/github-issues/src/types/responses.ts`
-- [ ] T014 Create type barrel export in `packages/github-issues/src/types/index.ts`
+- [x] T010 [P] Create configuration types in `packages/github-issues/src/types/config.ts`
+- [x] T011 [P] Create issue types in `packages/github-issues/src/types/issues.ts`
+- [x] T012 [P] Create webhook event types in `packages/github-issues/src/types/events.ts`
+- [x] T013 [P] Create API response types in `packages/github-issues/src/types/responses.ts`
+- [x] T014 Create type barrel export in `packages/github-issues/src/types/index.ts`
 
 ## Phase 3: Utilities & Error Handling
 
-- [ ] T020 Create custom error classes in `packages/github-issues/src/utils/errors.ts`
-- [ ] T021 [P] Create Zod validation schemas in `packages/github-issues/src/utils/validation.ts`
+- [x] T020 Create custom error classes in `packages/github-issues/src/utils/errors.ts`
+- [x] T021 [P] Create Zod validation schemas in `packages/github-issues/src/utils/validation.ts`
 
 ## Phase 4: Core Implementation
 
-- [ ] T030 [US1] Implement GitHub API client wrapper in `packages/github-issues/src/client.ts`
-- [ ] T031 [US1] Implement issue CRUD operations in `packages/github-issues/src/operations/issues.ts`
-- [ ] T032 [P] [US1] Implement label operations in `packages/github-issues/src/operations/labels.ts`
-- [ ] T033 [P] [US1] Implement comment operations in `packages/github-issues/src/operations/comments.ts`
-- [ ] T034 [US3] Implement PR linking operations in `packages/github-issues/src/operations/pull-requests.ts`
+- [x] T030 [US1] Implement GitHub API client wrapper in `packages/github-issues/src/client.ts`
+- [x] T031 [US1] Implement issue CRUD operations in `packages/github-issues/src/operations/issues.ts`
+- [x] T032 [P] [US1] Implement label operations in `packages/github-issues/src/operations/labels.ts`
+- [x] T033 [P] [US1] Implement comment operations in `packages/github-issues/src/operations/comments.ts`
+- [x] T034 [US3] Implement PR linking operations in `packages/github-issues/src/operations/pull-requests.ts`
 
 ## Phase 5: Webhook Handling
 
-- [ ] T040 [US2] Implement webhook event parser in `packages/github-issues/src/webhooks/parser.ts`
-- [ ] T041 [US2] Implement workflow trigger logic in `packages/github-issues/src/webhooks/triggers.ts`
-- [ ] T042 [US2] Implement webhook handler in `packages/github-issues/src/webhooks/handler.ts`
+- [x] T040 [US2] Implement webhook event parser in `packages/github-issues/src/webhooks/parser.ts`
+- [x] T041 [US2] Implement workflow trigger logic in `packages/github-issues/src/webhooks/triggers.ts`
+- [x] T042 [US2] Implement webhook handler in `packages/github-issues/src/webhooks/handler.ts`
 
 ## Phase 6: Plugin Integration
 
-- [ ] T050 [US1] Implement main plugin class in `packages/github-issues/src/plugin.ts`
-- [ ] T051 Create main barrel export in `packages/github-issues/src/index.ts`
+- [x] T050 [US1] Implement main plugin class in `packages/github-issues/src/plugin.ts`
+- [x] T051 Create main barrel export in `packages/github-issues/src/index.ts`
 
 ## Phase 7: Unit Tests
 
-- [ ] T060 [P] Write tests for issue operations in `packages/github-issues/tests/unit/operations/issues.test.ts`
-- [ ] T061 [P] Write tests for label operations in `packages/github-issues/tests/unit/operations/labels.test.ts`
-- [ ] T062 [P] Write tests for comment operations in `packages/github-issues/tests/unit/operations/comments.test.ts`
-- [ ] T063 [P] Write tests for webhook handler in `packages/github-issues/tests/unit/webhooks/handler.test.ts`
+- [x] T060 [P] Write tests for issue operations in `packages/github-issues/tests/unit/operations/issues.test.ts`
+- [x] T061 [P] Write tests for label operations in `packages/github-issues/tests/unit/operations/labels.test.ts`
+- [x] T062 [P] Write tests for comment operations in `packages/github-issues/tests/unit/operations/comments.test.ts`
+- [x] T063 [P] Write tests for webhook handler in `packages/github-issues/tests/unit/webhooks/handler.test.ts`
 
 ## Phase 8: Integration Tests
 
-- [ ] T070 Write integration tests for client in `packages/github-issues/tests/integration/client.test.ts`
+- [x] T070 Write integration tests for client in `packages/github-issues/tests/integration/client.test.ts`
 
 ## Phase 9: Documentation
 
