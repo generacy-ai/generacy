@@ -2,7 +2,30 @@
 export { GitHubIssuesPlugin, createPlugin } from './plugin.js';
 
 // Client export
-export { GitHubClient, createClient } from './client.js';
+export { GitHubClient, createClient, createClientAsync } from './client.js';
+
+// Auth exports
+export {
+  GitHubAppAuthStrategy,
+  PATAuthStrategy,
+  createAuthStrategy,
+  createGitHubAppAuth,
+  TokenCache,
+  readGitHubAppConfigFromEnv,
+  hasGitHubAppEnvConfig,
+  GitHubAppConfigSchema,
+  ENV_VARS,
+} from './auth/index.js';
+
+export type {
+  GitHubAppConfig,
+  AuthStrategy,
+  AuthVerification,
+  CachedToken,
+  AuthContext,
+  AuthFactoryConfig,
+  TokenCacheOptions,
+} from './auth/index.js';
 
 // Operations exports
 export { IssueOperations, createIssueOperations } from './operations/issues.js';
@@ -77,6 +100,8 @@ export {
 export {
   GitHubIssuesError,
   GitHubAuthError,
+  GitHubAppAuthError,
+  GitHubAppErrorCode,
   GitHubRateLimitError,
   GitHubNotFoundError,
   GitHubValidationError,

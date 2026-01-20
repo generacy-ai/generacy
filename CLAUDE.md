@@ -13,6 +13,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -34,6 +35,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 041-add-github-app-authentication: Added configuration
 - 018-documentation-site-developer-guides: Added configuration
 - 013-plugin-generacy-ai-generacy: Added configuration
 - 012-plugin-generacy-ai-generacy: Added configuration

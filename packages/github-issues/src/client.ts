@@ -1,6 +1,9 @@
 import { Octokit } from '@octokit/rest';
 import type { GitHubIssuesConfig } from './types/index.js';
+import type { AuthStrategy } from './auth/types.js';
 import { validateConfig } from './utils/validation.js';
+import { createAuthStrategy } from './auth/auth-factory.js';
+import { readGitHubAppConfigFromEnv } from './auth/env.js';
 import {
   GitHubAuthError,
   GitHubRateLimitError,
@@ -9,18 +12,64 @@ import {
 
 /**
  * GitHub API client wrapper with authentication and error handling
+ *
+ * Supports both PAT and GitHub App authentication.
  */
 export class GitHubClient {
   private readonly octokit: Octokit;
   private readonly config: GitHubIssuesConfig;
+  private authStrategy: AuthStrategy | null = null;
+  private authType: 'pat' | 'github-app' | undefined;
 
+  /**
+   * Create a new GitHubClient
+   *
+   * For synchronous construction (backward compatible), use token-based auth.
+   * For GitHub App auth, use the async createClient() function instead.
+   */
   constructor(config: GitHubIssuesConfig) {
     this.config = validateConfig(config);
 
+    // For synchronous construction, use token if available
+    // GitHub App auth requires async initialization
     this.octokit = new Octokit({
       auth: this.config.token,
       baseUrl: this.config.baseUrl,
     });
+  }
+
+  /**
+   * Initialize authentication strategy
+   * Called automatically by createClientAsync for GitHub App auth
+   */
+  async initializeAuth(): Promise<void> {
+    // Merge env config with explicit config (explicit takes precedence)
+    const envAppConfig = readGitHubAppConfigFromEnv();
+    const appConfig = this.config.app ?? envAppConfig;
+
+    this.authStrategy = await createAuthStrategy({
+      owner: this.config.owner,
+      repo: this.config.repo,
+      token: this.config.token,
+      app: appConfig,
+      baseUrl: this.config.baseUrl,
+    });
+
+    this.authType = this.authStrategy.type;
+
+    // Log which auth method is active
+    if (this.authType === 'github-app') {
+      console.log(`[GitHubClient] Initialized with GitHub App authentication for ${this.config.owner}/${this.config.repo}`);
+    } else {
+      console.log(`[GitHubClient] Initialized with PAT authentication for ${this.config.owner}/${this.config.repo}`);
+    }
+  }
+
+  /**
+   * Get the authentication type being used
+   */
+  get authenticationType(): 'pat' | 'github-app' | undefined {
+    return this.authType;
   }
 
   /**
@@ -66,12 +115,29 @@ export class GitHubClient {
   }
 
   /**
+   * Get the current authentication token
+   * For GitHub App, this returns the installation access token
+   */
+  async getToken(): Promise<string> {
+    if (this.authStrategy) {
+      return this.authStrategy.getToken();
+    }
+    // Fallback to configured token
+    return this.config.token ?? '';
+  }
+
+  /**
    * Verify authentication by fetching the authenticated user
    */
-  async verifyAuth(): Promise<{ login: string; id: number }> {
+  async verifyAuth(): Promise<{ login: string; id: number; type?: 'User' | 'Bot' }> {
     try {
+      if (this.authStrategy) {
+        const verification = await this.authStrategy.verify();
+        return { login: verification.login, id: verification.id, type: verification.type };
+      }
+
       const { data } = await this.octokit.rest.users.getAuthenticated();
-      return { login: data.login, id: data.id };
+      return { login: data.login, id: data.id, type: data.type as 'User' | 'Bot' };
     } catch (error) {
       throw new GitHubAuthError('Failed to verify authentication', error);
     }
@@ -153,8 +219,22 @@ export class GitHubClient {
 }
 
 /**
- * Create a new GitHub client instance
+ * Create a new GitHub client instance (synchronous, backward compatible)
+ *
+ * Note: For GitHub App authentication, use createClientAsync() instead.
  */
 export function createClient(config: GitHubIssuesConfig): GitHubClient {
   return new GitHubClient(config);
+}
+
+/**
+ * Create a new GitHub client instance with full auth initialization
+ *
+ * This async version properly initializes GitHub App authentication
+ * and should be used when GitHub App auth is configured.
+ */
+export async function createClientAsync(config: GitHubIssuesConfig): Promise<GitHubClient> {
+  const client = new GitHubClient(config);
+  await client.initializeAuth();
+  return client;
 }

@@ -24,6 +24,31 @@ export class GitHubAuthError extends GitHubIssuesError {
 }
 
 /**
+ * GitHub App authentication error codes
+ */
+export enum GitHubAppErrorCode {
+  INVALID_PRIVATE_KEY = 'INVALID_PRIVATE_KEY',
+  PRIVATE_KEY_NOT_FOUND = 'PRIVATE_KEY_NOT_FOUND',
+  INSTALLATION_NOT_FOUND = 'INSTALLATION_NOT_FOUND',
+  TOKEN_GENERATION_FAILED = 'TOKEN_GENERATION_FAILED',
+  JWT_GENERATION_FAILED = 'JWT_GENERATION_FAILED',
+}
+
+/**
+ * GitHub App authentication specific error
+ */
+export class GitHubAppAuthError extends GitHubIssuesError {
+  constructor(
+    message: string,
+    public readonly errorCode: GitHubAppErrorCode,
+    cause?: unknown
+  ) {
+    super(message, errorCode, cause);
+    this.name = 'GitHubAppAuthError';
+  }
+}
+
+/**
  * Rate limit exceeded error
  */
 export class GitHubRateLimitError extends GitHubIssuesError {
