@@ -12,7 +12,7 @@ Questions and answers to clarify the feature specification.
 - B: Require explicit Installation ID in config (faster startup, more predictable)
 - C: Support both - try config first, fall back to auto-discovery
 
-**Answer**: *Pending*
+**Answer**: A - Auto-discover the Installation ID by querying the GitHub API for the App's installations (simpler config, but requires an additional API call). [Answered by @christrudelpw on GitHub](https://github.com/generacy-ai/generacy/issues/41#issuecomment-3773918981)
 
 ### Q2: Token Refresh Strategy
 **Context**: Installation access tokens expire after 1 hour. The refresh strategy affects reliability and API usage.
@@ -21,7 +21,7 @@ Questions and answers to clarify the feature specification.
 - A: Proactive refresh at 50 minutes (prevents any 401 errors, slightly more token generations)
 - B: Reactive refresh on 401 (fewer token generations, but may cause brief interruptions)
 
-**Answer**: *Pending*
+**Answer**: A - Proactive refresh at 50 minutes (prevents any 401 errors, slightly more token generations). [Answered by @christrudelpw on GitHub](https://github.com/generacy-ai/generacy/issues/41#issuecomment-3773918981)
 
 ### Q3: Configuration Format
 **Context**: GitHub App authentication requires App ID and Private Key. The private key is a multi-line PEM file that needs secure handling.
@@ -31,7 +31,7 @@ Questions and answers to clarify the feature specification.
 - B: Config file path for private key + env var for App ID
 - C: Support multiple formats (env vars, file path, or inline in config)
 
-**Answer**: *Pending*
+**Answer**: C - Support multiple formats (env vars, file path, or inline in config). [Answered by @christrudelpw on GitHub](https://github.com/generacy-ai/generacy/issues/41#issuecomment-3773918981)
 
 ### Q4: Auth Fallback Behavior
 **Context**: The plugin should maintain backward compatibility with PAT tokens. Need to define behavior when both auth methods are configured or when App auth fails.
@@ -41,5 +41,5 @@ Questions and answers to clarify the feature specification.
 - B: GitHub App takes precedence, fallback to PAT on failure (maximum availability)
 - C: User configures precedence explicitly via config option
 
-**Answer**: *Pending*
+**Answer**: B - GitHub App takes precedence, with automatic fallback to PAT on failure (maximum availability). [Answered by @christrudelpw on GitHub](https://github.com/generacy-ai/generacy/issues/41#issuecomment-3773918981)
 
