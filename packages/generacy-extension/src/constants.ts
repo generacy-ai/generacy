@@ -25,6 +25,9 @@ export const WORKFLOW_FILE_PATTERNS = {
  */
 export const COMMANDS = {
   createWorkflow: 'generacy.createWorkflow',
+  renameWorkflow: 'generacy.renameWorkflow',
+  deleteWorkflow: 'generacy.deleteWorkflow',
+  duplicateWorkflow: 'generacy.duplicateWorkflow',
   runWorkflow: 'generacy.runWorkflow',
   debugWorkflow: 'generacy.debugWorkflow',
   validateWorkflow: 'generacy.validateWorkflow',
