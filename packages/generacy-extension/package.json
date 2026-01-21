@@ -44,6 +44,12 @@
         "icon": "$(play)"
       },
       {
+        "command": "generacy.runPhase",
+        "title": "Run Phase",
+        "category": "Generacy",
+        "icon": "$(play-circle)"
+      },
+      {
         "command": "generacy.debugWorkflow",
         "title": "Debug Workflow",
         "category": "Generacy",

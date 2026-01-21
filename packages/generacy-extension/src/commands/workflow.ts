@@ -5,81 +5,19 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { getConfig, getLogger, GeneracyError, ErrorCode } from '../utils';
-import { WORKFLOW_TEMPLATES, WORKFLOW_EXTENSIONS } from '../constants';
+import { WORKFLOW_EXTENSIONS } from '../constants';
+import {
+  getTemplateManager,
+  showTemplateQuickPick,
+} from '../views/local/explorer';
 
 /**
- * Template definitions for workflow creation
- */
-const WORKFLOW_TEMPLATE_CONTENT: Record<string, string> = {
-  basic: `# Basic Workflow
-name: my-workflow
-description: A basic workflow template
-
-phases:
-  - name: main
-    steps:
-      - name: step-1
-        action: shell
-        command: echo "Hello, Generacy!"
-`,
-  'multi-phase': `# Multi-Phase Workflow
-name: my-workflow
-description: A multi-phase workflow template
-
-phases:
-  - name: setup
-    steps:
-      - name: prepare
-        action: shell
-        command: echo "Setting up..."
-
-  - name: build
-    steps:
-      - name: compile
-        action: shell
-        command: echo "Building..."
-
-  - name: deploy
-    steps:
-      - name: publish
-        action: shell
-        command: echo "Deploying..."
-`,
-  'with-triggers': `# Workflow with Triggers
-name: my-workflow
-description: A workflow with trigger configuration
-
-triggers:
-  - type: webhook
-    path: /trigger
-  - type: schedule
-    cron: "0 0 * * *"
-
-phases:
-  - name: main
-    steps:
-      - name: process
-        action: shell
-        command: echo "Processing triggered workflow..."
-`,
-};
-
-/**
- * Quick pick item for template selection
- */
-interface TemplateQuickPickItem extends vscode.QuickPickItem {
-  label: string;
-  description: string;
-  detail: string;
-  templateKey: string;
-}
-
-/**
- * Create a new workflow file with template selection
+ * Create a new workflow file with template selection and preview
  */
 export async function createWorkflow(): Promise<void> {
   const logger = getLogger();
   const config = getConfig();
+  const templateManager = getTemplateManager();
 
   logger.info('Command: Create Workflow');
 
@@ -92,32 +30,9 @@ export async function createWorkflow(): Promise<void> {
     );
   }
 
-  // Show template selection
-  const templateItems: TemplateQuickPickItem[] = [
-    {
-      label: '$(file) Basic',
-      description: 'Single phase with one step',
-      detail: 'Best for simple workflows and getting started',
-      templateKey: WORKFLOW_TEMPLATES.basic,
-    },
-    {
-      label: '$(layers) Multi-Phase',
-      description: 'Setup, build, and deploy phases',
-      detail: 'Best for CI/CD and multi-stage workflows',
-      templateKey: WORKFLOW_TEMPLATES.multiPhase,
-    },
-    {
-      label: '$(zap) With Triggers',
-      description: 'Webhook and schedule triggers',
-      detail: 'Best for automated workflows that respond to events',
-      templateKey: WORKFLOW_TEMPLATES.withTriggers,
-    },
-  ];
-
-  const selectedTemplate = await vscode.window.showQuickPick(templateItems, {
-    placeHolder: 'Select a workflow template',
-    title: 'Create New Workflow',
-  });
+  // Show template selection with preview
+  const templates = templateManager.getTemplateMetadata();
+  const selectedTemplate = await showTemplateQuickPick(templates);
 
   if (!selectedTemplate) {
     logger.info('Workflow creation cancelled - no template selected');
@@ -163,14 +78,14 @@ export async function createWorkflow(): Promise<void> {
   }
 
   // Get template content and customize
-  const rawTemplate = WORKFLOW_TEMPLATE_CONTENT[selectedTemplate.templateKey];
-  if (!rawTemplate) {
+  const template = await templateManager.getTemplate(selectedTemplate.id);
+  if (!template) {
     throw new GeneracyError(
       ErrorCode.ConfigInvalid,
-      `Unknown template: ${selectedTemplate.templateKey}`
+      `Failed to load template: ${selectedTemplate.id}`
     );
   }
-  const templateContent = rawTemplate.replace(/name: my-workflow/g, `name: ${workflowName}`);
+  const templateContent = templateManager.customizeTemplate(template, workflowName);
 
   // Write the file
   const encoder = new TextEncoder();

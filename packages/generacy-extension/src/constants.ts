@@ -29,6 +29,7 @@ export const COMMANDS = {
   deleteWorkflow: 'generacy.deleteWorkflow',
   duplicateWorkflow: 'generacy.duplicateWorkflow',
   runWorkflow: 'generacy.runWorkflow',
+  runPhase: 'generacy.runPhase',
   debugWorkflow: 'generacy.debugWorkflow',
   validateWorkflow: 'generacy.validateWorkflow',
   refreshExplorer: 'generacy.refreshExplorer',
