@@ -20,6 +20,7 @@ import {
   validateWorkflow as runValidateWorkflow,
   initializeRunner,
 } from './commands/runner';
+import { initializeExecutionStatusBar } from './providers';
 
 // Module-level provider reference for command handlers
 let workflowTreeProvider: WorkflowTreeProvider | undefined;
@@ -66,6 +67,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize workflow runner
   initializeRunner(context);
   logger.info('Workflow runner initialized');
+
+  // Initialize execution status bar
+  initializeExecutionStatusBar(context);
+  logger.info('Execution status bar initialized');
 
   // Listen for configuration changes
   context.subscriptions.push(
