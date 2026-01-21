@@ -16,10 +16,10 @@
 **Tests**: `packages/generacy-extension/src/utils/__tests__/`
 
 ## Tasks
-- [ ] Implement configuration manager using VS Code settings API
-- [ ] Create extension logger with output channel integration
-- [ ] Build error handling utilities with user-friendly messages
-- [ ] Add telemetry stub (opt-in, no actual tracking yet)
+- [X] Implement configuration manager using VS Code settings API
+- [X] Create extension logger with output channel integration
+- [X] Build error handling utilities with user-friendly messages
+- [X] Add telemetry stub (opt-in, no actual tracking yet)
 
 ## Source
 <!-- task-group-id: TG-002 -->

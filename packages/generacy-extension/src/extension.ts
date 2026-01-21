@@ -1,10 +1,6 @@
 import * as vscode from 'vscode';
-import { EXTENSION_ID, COMMANDS, CONFIG_KEYS } from './constants';
-
-/**
- * Extension activation state
- */
-let outputChannel: vscode.OutputChannel | undefined;
+import { EXTENSION_ID, COMMANDS } from './constants';
+import { getConfig, getLogger, getTelemetry, withErrorHandling, ErrorCode, GeneracyError } from './utils';
 
 /**
  * Called when the extension is activated.
@@ -12,27 +8,34 @@ let outputChannel: vscode.OutputChannel | undefined;
  * - When a workspace contains .generacy/*.yaml or .generacy/*.yml files
  */
 export function activate(context: vscode.ExtensionContext): void {
-  outputChannel = vscode.window.createOutputChannel('Generacy');
-  outputChannel.appendLine(`Generacy extension v${getExtensionVersion()} activated`);
+  // Initialize utilities
+  const logger = getLogger();
+  logger.initialize(context);
+
+  const config = getConfig();
+  config.initialize(context);
+
+  const telemetry = getTelemetry();
+  telemetry.initialize(context);
+
+  // Log activation
+  logger.info(`Generacy extension v${getExtensionVersion()} activated`);
+  logger.info(`Workflow directory: ${config.get('workflowDirectory')}`);
 
   // Register commands
   registerCommands(context);
 
-  // Log configuration
-  const config = vscode.workspace.getConfiguration('generacy');
-  const workflowDir = config.get<string>(CONFIG_KEYS.workflowDirectory);
-  outputChannel.appendLine(`Workflow directory: ${workflowDir}`);
-
-  // Set up configuration change listener
+  // Listen for configuration changes
   context.subscriptions.push(
-    vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('generacy')) {
-        onConfigurationChanged();
-      }
+    config.onDidChange((event) => {
+      logger.info(`Configuration changed: ${event.key}`, {
+        oldValue: event.oldValue as string | number | boolean,
+        newValue: event.newValue as string | number | boolean,
+      });
     })
   );
 
-  outputChannel.appendLine('Extension initialization complete');
+  logger.info('Extension initialization complete');
 }
 
 /**
@@ -40,33 +43,38 @@ export function activate(context: vscode.ExtensionContext): void {
  * Clean up resources here.
  */
 export function deactivate(): void {
-  if (outputChannel) {
-    outputChannel.appendLine('Generacy extension deactivated');
-    outputChannel.dispose();
-    outputChannel = undefined;
-  }
+  const logger = getLogger();
+  logger.info('Generacy extension deactivating');
+
+  // Clean up utilities
+  getTelemetry().dispose();
+  getConfig().dispose();
+  logger.dispose();
 }
 
 /**
  * Register all extension commands
  */
 function registerCommands(context: vscode.ExtensionContext): void {
+  const logger = getLogger();
+  const telemetry = getTelemetry();
+
   const commands: Array<{ id: string; handler: () => void | Promise<void> }> = [
     {
       id: COMMANDS.createWorkflow,
-      handler: handleCreateWorkflow,
+      handler: withErrorHandling(handleCreateWorkflow, { showOutput: true }),
     },
     {
       id: COMMANDS.runWorkflow,
-      handler: handleRunWorkflow,
+      handler: withErrorHandling(handleRunWorkflow, { showOutput: true }),
     },
     {
       id: COMMANDS.debugWorkflow,
-      handler: handleDebugWorkflow,
+      handler: withErrorHandling(handleDebugWorkflow, { showOutput: true }),
     },
     {
       id: COMMANDS.validateWorkflow,
-      handler: handleValidateWorkflow,
+      handler: withErrorHandling(handleValidateWorkflow, { showOutput: true }),
     },
     {
       id: COMMANDS.refreshExplorer,
@@ -75,9 +83,24 @@ function registerCommands(context: vscode.ExtensionContext): void {
   ];
 
   for (const { id, handler } of commands) {
-    const disposable = vscode.commands.registerCommand(id, handler);
+    const wrappedHandler = async () => {
+      const startTime = Date.now();
+      logger.debug(`Executing command: ${id}`);
+      try {
+        await handler();
+        telemetry.trackCommand(id, Date.now() - startTime);
+      } catch (error) {
+        telemetry.trackError(
+          error instanceof GeneracyError ? error.code : ErrorCode.Unknown,
+          error instanceof Error ? error.message : String(error)
+        );
+        throw error;
+      }
+    };
+
+    const disposable = vscode.commands.registerCommand(id, wrappedHandler);
     context.subscriptions.push(disposable);
-    outputChannel?.appendLine(`Registered command: ${id}`);
+    logger.debug(`Registered command: ${id}`);
   }
 }
 
@@ -85,38 +108,33 @@ function registerCommands(context: vscode.ExtensionContext): void {
  * Command handlers
  */
 async function handleCreateWorkflow(): Promise<void> {
-  outputChannel?.appendLine('Command: Create Workflow');
+  const logger = getLogger();
+  logger.info('Command: Create Workflow');
   await vscode.window.showInformationMessage('Create Workflow - Not yet implemented');
 }
 
 async function handleRunWorkflow(): Promise<void> {
-  outputChannel?.appendLine('Command: Run Workflow');
+  const logger = getLogger();
+  logger.info('Command: Run Workflow');
   await vscode.window.showInformationMessage('Run Workflow - Not yet implemented');
 }
 
 async function handleDebugWorkflow(): Promise<void> {
-  outputChannel?.appendLine('Command: Debug Workflow');
+  const logger = getLogger();
+  logger.info('Command: Debug Workflow');
   await vscode.window.showInformationMessage('Debug Workflow - Not yet implemented');
 }
 
 async function handleValidateWorkflow(): Promise<void> {
-  outputChannel?.appendLine('Command: Validate Workflow');
+  const logger = getLogger();
+  logger.info('Command: Validate Workflow');
   await vscode.window.showInformationMessage('Validate Workflow - Not yet implemented');
 }
 
 function handleRefreshExplorer(): void {
-  outputChannel?.appendLine('Command: Refresh Explorer');
+  const logger = getLogger();
+  logger.info('Command: Refresh Explorer');
   // Tree view refresh will be implemented in a future task
-}
-
-/**
- * Handle configuration changes
- */
-function onConfigurationChanged(): void {
-  outputChannel?.appendLine('Configuration changed');
-  const config = vscode.workspace.getConfiguration('generacy');
-  const workflowDir = config.get<string>(CONFIG_KEYS.workflowDirectory);
-  outputChannel?.appendLine(`New workflow directory: ${workflowDir}`);
 }
 
 /**
