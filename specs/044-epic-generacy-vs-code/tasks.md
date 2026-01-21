@@ -14,7 +14,7 @@
 ## Phase 1: Foundation & Project Setup
 <!-- Phase boundary: Must complete before Phase 2 -->
 
-### TG-001 [P] Extension Scaffolding & Build Configuration
+### TG-001 [#46] [P] Extension Scaffolding & Build Configuration
 **Scope**: 4-6 hours
 **Files**: `packages/generacy-extension/package.json`, `packages/generacy-extension/tsconfig.json`, `packages/generacy-extension/.vscodeignore`, `packages/generacy-extension/esbuild.config.js`, `packages/generacy-extension/src/extension.ts`, `packages/generacy-extension/src/constants.ts`
 **Tests**: `packages/generacy-extension/src/__tests__/extension.test.ts`
@@ -30,7 +30,7 @@
 
 ---
 
-### TG-002 [P] Shared Utilities & Infrastructure
+### TG-002 [#47] [P] Shared Utilities & Infrastructure
 **Scope**: 3-4 hours
 **Files**: `packages/generacy-extension/src/utils/config.ts`, `packages/generacy-extension/src/utils/logger.ts`, `packages/generacy-extension/src/utils/errors.ts`
 **Tests**: `packages/generacy-extension/src/utils/__tests__/`
@@ -42,7 +42,7 @@
 
 ---
 
-### TG-003 [P] YAML Schema & Validation Foundation
+### TG-003 [#48] [P] YAML Schema & Validation Foundation
 **Scope**: 4-5 hours
 **Files**: `packages/generacy-extension/schemas/workflow.schema.json`, `packages/generacy-extension/src/language/schema.ts`, `packages/generacy-extension/src/language/validator.ts`
 **Tests**: `packages/generacy-extension/src/language/__tests__/validator.test.ts`
@@ -57,7 +57,7 @@
 ## Phase 2: Local Mode - Workflow Explorer
 <!-- Phase boundary: Complete Phase 1 before starting -->
 
-### TG-004 Workflow Explorer Tree View
+### TG-004 [#49] Workflow Explorer Tree View
 **Scope**: 5-7 hours
 **Files**: `packages/generacy-extension/src/views/local/explorer/provider.ts`, `packages/generacy-extension/src/views/local/explorer/tree-item.ts`, `packages/generacy-extension/src/views/local/explorer/decorations.ts`, `packages/generacy-extension/src/providers/workflow-tree.ts`
 **Tests**: `packages/generacy-extension/src/views/local/explorer/__tests__/`
@@ -71,7 +71,7 @@
 
 ---
 
-### TG-005 [P] Workflow CRUD Commands
+### TG-005 [#50] [P] Workflow CRUD Commands
 **Scope**: 3-4 hours
 **Files**: `packages/generacy-extension/src/commands/workflow.ts`, `packages/generacy-extension/src/commands/index.ts`
 **Tests**: `packages/generacy-extension/src/commands/__tests__/workflow.test.ts`
@@ -84,7 +84,7 @@
 
 ---
 
-### TG-006 [P] Template Library
+### TG-006 [#51] [P] Template Library
 **Scope**: 2-3 hours
 **Files**: `packages/generacy-extension/resources/templates/`, `packages/generacy-extension/src/views/local/explorer/templates.ts`
 **Tests**: Template validation in schema tests
@@ -98,7 +98,7 @@
 ## Phase 3: Local Mode - Editor Features
 <!-- Phase boundary: Complete Phase 2 before starting -->
 
-### TG-007 YAML IntelliSense & Diagnostics
+### TG-007 [#52] YAML IntelliSense & Diagnostics
 **Scope**: 6-8 hours
 **Files**: `packages/generacy-extension/src/views/local/editor/completion.ts`, `packages/generacy-extension/src/views/local/editor/diagnostics.ts`, `packages/generacy-extension/src/views/local/editor/hover.ts`, `packages/generacy-extension/src/language/formatter.ts`
 **Tests**: `packages/generacy-extension/src/views/local/editor/__tests__/`
@@ -111,7 +111,7 @@
 
 ---
 
-### TG-008 [P] CodeLens & Quick Actions
+### TG-008 [#53] [P] CodeLens & Quick Actions
 **Scope**: 3-4 hours
 **Files**: `packages/generacy-extension/src/views/local/editor/codelens.ts`
 **Tests**: `packages/generacy-extension/src/views/local/editor/__tests__/codelens.test.ts`
@@ -126,7 +126,7 @@
 ## Phase 4: Local Mode - Runner
 <!-- Phase boundary: Complete Phase 3 before starting -->
 
-### TG-009 Local Workflow Executor
+### TG-009 [#54] Local Workflow Executor
 **Scope**: 6-8 hours
 **Files**: `packages/generacy-extension/src/views/local/runner/executor.ts`, `packages/generacy-extension/src/views/local/runner/output-channel.ts`, `packages/generacy-extension/src/views/local/runner/terminal.ts`, `packages/generacy-extension/src/commands/runner.ts`
 **Tests**: `packages/generacy-extension/src/views/local/runner/__tests__/`
@@ -140,7 +140,7 @@
 
 ---
 
-### TG-010 [P] Execution Status UI
+### TG-010 [#55] [P] Execution Status UI
 **Scope**: 2-3 hours
 **Files**: `packages/generacy-extension/src/providers/status-bar.ts`
 **Tests**: Integration tests with runner
@@ -154,7 +154,7 @@
 ## Phase 5: Local Mode - Debugger
 <!-- Phase boundary: Complete Phase 4 before starting -->
 
-### TG-011 Debug Adapter Protocol Implementation
+### TG-011 [#56] Debug Adapter Protocol Implementation
 **Scope**: 8-10 hours
 **Files**: `packages/generacy-extension/src/debug/adapter.ts`, `packages/generacy-extension/src/debug/protocol.ts`, `packages/generacy-extension/src/debug/runtime.ts`, `packages/generacy-extension/src/debug/state.ts`
 **Tests**: `packages/generacy-extension/src/debug/__tests__/`
@@ -167,7 +167,7 @@
 
 ---
 
-### TG-012 Breakpoints & Stepping
+### TG-012 [#57] Breakpoints & Stepping
 **Scope**: 4-5 hours
 **Files**: `packages/generacy-extension/src/views/local/debugger/breakpoints.ts`, `packages/generacy-extension/src/views/local/debugger/session.ts`, `packages/generacy-extension/src/views/local/debugger/adapter.ts`
 **Tests**: `packages/generacy-extension/src/views/local/debugger/__tests__/`
@@ -180,7 +180,7 @@
 
 ---
 
-### TG-013 [P] State Inspection & Replay
+### TG-013 [#58] [P] State Inspection & Replay
 **Scope**: 4-5 hours
 **Files**: Extensions to debug state and UI
 
@@ -195,7 +195,7 @@
 ## Phase 6: Authentication & API Client
 <!-- Phase boundary: Complete Phase 5 before starting -->
 
-### TG-014 API Client Foundation
+### TG-014 [#59] API Client Foundation
 **Scope**: 4-5 hours
 **Files**: `packages/generacy-extension/src/api/client.ts`, `packages/generacy-extension/src/api/types.ts`
 **Tests**: `packages/generacy-extension/src/api/__tests__/client.test.ts`
@@ -208,7 +208,7 @@
 
 ---
 
-### TG-015 GitHub OAuth Authentication
+### TG-015 [#60] GitHub OAuth Authentication
 **Scope**: 5-6 hours
 **Files**: `packages/generacy-extension/src/api/auth.ts`, `packages/generacy-extension/src/commands/cloud.ts`
 **Tests**: `packages/generacy-extension/src/api/__tests__/auth.test.ts`
@@ -225,7 +225,7 @@
 ## Phase 7: Cloud Mode - Dashboard
 <!-- Phase boundary: Complete Phase 6 before starting -->
 
-### TG-016 Organization Dashboard Webview
+### TG-016 [#61] Organization Dashboard Webview
 **Scope**: 6-8 hours
 **Files**: `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`, `packages/generacy-extension/src/views/cloud/dashboard/panel.ts`, `packages/generacy-extension/src/api/endpoints/orgs.ts`
 **Tests**: `packages/generacy-extension/src/views/cloud/dashboard/__tests__/`
@@ -242,7 +242,7 @@
 ## Phase 8: Cloud Mode - Workflow Queue
 <!-- Phase boundary: Complete Phase 7 before starting -->
 
-### TG-017 Queue Tree View
+### TG-017 [#62] Queue Tree View
 **Scope**: 5-6 hours
 **Files**: `packages/generacy-extension/src/views/cloud/queue/provider.ts`, `packages/generacy-extension/src/views/cloud/queue/tree-item.ts`, `packages/generacy-extension/src/providers/queue-tree.ts`, `packages/generacy-extension/src/api/endpoints/queue.ts`
 **Tests**: `packages/generacy-extension/src/views/cloud/queue/__tests__/`
@@ -255,7 +255,7 @@
 
 ---
 
-### TG-018 [P] Queue Actions
+### TG-018 [#63] [P] Queue Actions
 **Scope**: 3-4 hours
 **Files**: `packages/generacy-extension/src/views/cloud/queue/actions.ts`
 **Tests**: Integration tests with queue provider
@@ -270,7 +270,7 @@
 ## Phase 9: Cloud Mode - Integrations
 <!-- Phase boundary: Complete Phase 8 before starting -->
 
-### TG-019 Integration Management
+### TG-019 [#64] Integration Management
 **Scope**: 5-6 hours
 **Files**: `packages/generacy-extension/src/views/cloud/integrations/github.ts`, `packages/generacy-extension/src/views/cloud/integrations/status.ts`, `packages/generacy-extension/src/views/cloud/integrations/config.ts`, `packages/generacy-extension/src/api/endpoints/integrations.ts`
 **Tests**: `packages/generacy-extension/src/views/cloud/integrations/__tests__/`
@@ -286,7 +286,7 @@
 ## Phase 10: Cloud Mode - Publishing
 <!-- Phase boundary: Complete Phase 9 before starting -->
 
-### TG-020 Workflow Publishing
+### TG-020 [#65] Workflow Publishing
 **Scope**: 6-8 hours
 **Files**: `packages/generacy-extension/src/views/cloud/publish/sync.ts`, `packages/generacy-extension/src/views/cloud/publish/compare.ts`, `packages/generacy-extension/src/views/cloud/publish/version.ts`, `packages/generacy-extension/src/api/endpoints/workflows.ts`
 **Tests**: `packages/generacy-extension/src/views/cloud/publish/__tests__/`
@@ -303,7 +303,7 @@
 ## Phase 11: Polish & Marketplace
 <!-- Phase boundary: Complete Phase 10 before starting -->
 
-### TG-021 Error Handling & UX Polish
+### TG-021 [#66] Error Handling & UX Polish
 **Scope**: 4-5 hours
 **Files**: Enhancements across all modules
 **Tests**: Error scenario tests
@@ -316,7 +316,7 @@
 
 ---
 
-### TG-022 [P] Documentation & Marketplace Assets
+### TG-022 [#67] [P] Documentation & Marketplace Assets
 **Scope**: 3-4 hours
 **Files**: `packages/generacy-extension/README.md`, `packages/generacy-extension/CHANGELOG.md`, `packages/generacy-extension/resources/`
 **Tests**: N/A
@@ -328,7 +328,7 @@
 
 ---
 
-### TG-023 [P] Marketplace Publishing
+### TG-023 [#68] [P] Marketplace Publishing
 **Scope**: 2-3 hours
 **Files**: `packages/generacy-extension/.vscode/launch.json`, CI/CD configuration
 **Tests**: Extension packaging tests
