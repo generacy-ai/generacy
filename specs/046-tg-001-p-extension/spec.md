@@ -19,14 +19,14 @@
 **Tests**: `packages/generacy-extension/src/__tests__/extension.test.ts`
 
 ## Tasks
-- [ ] Create `packages/generacy-extension` package with proper monorepo setup
-- [ ] Configure `package.json` with extension manifest, commands, views, and activation events
-- [ ] Set up TypeScript configuration extending workspace base
-- [ ] Configure esbuild bundling for extension
-- [ ] Implement extension entry point with activation/deactivation lifecycle
-- [ ] Create constants file for extension-wide values
-- [ ] Add `.vscodeignore` to exclude dev files from packaging
-- [ ] Create basic extension activation test
+- [x] Create `packages/generacy-extension` package with proper monorepo setup
+- [x] Configure `package.json` with extension manifest, commands, views, and activation events
+- [x] Set up TypeScript configuration extending workspace base
+- [x] Configure esbuild bundling for extension
+- [x] Implement extension entry point with activation/deactivation lifecycle
+- [x] Create constants file for extension-wide values
+- [x] Add `.vscodeignore` to exclude dev files from packaging
+- [x] Create basic extension activation test
 
 ## Source
 <!-- task-group-id: TG-001 -->

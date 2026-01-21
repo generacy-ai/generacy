@@ -1,0 +1,206 @@
+{
+  "name": "generacy-extension",
+  "displayName": "Generacy",
+  "description": "Workflow development IDE for local development and cloud orchestration management",
+  "version": "0.1.0",
+  "publisher": "generacy-ai",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/generacy-ai/generacy"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "generacy",
+    "workflow",
+    "yaml",
+    "ai",
+    "automation"
+  ],
+  "activationEvents": [
+    "workspaceContains:.generacy/**/*.yaml",
+    "workspaceContains:.generacy/**/*.yml"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "generacy.createWorkflow",
+        "title": "Create Workflow",
+        "category": "Generacy"
+      },
+      {
+        "command": "generacy.runWorkflow",
+        "title": "Run Workflow",
+        "category": "Generacy"
+      },
+      {
+        "command": "generacy.debugWorkflow",
+        "title": "Debug Workflow",
+        "category": "Generacy"
+      },
+      {
+        "command": "generacy.validateWorkflow",
+        "title": "Validate Workflow",
+        "category": "Generacy"
+      },
+      {
+        "command": "generacy.refreshExplorer",
+        "title": "Refresh Explorer",
+        "category": "Generacy",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "generacy",
+          "title": "Generacy",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "generacy": [
+        {
+          "id": "generacy.workflows",
+          "name": "Workflows",
+          "contextualTitle": "Generacy Workflows"
+        },
+        {
+          "id": "generacy.queue",
+          "name": "Queue",
+          "contextualTitle": "Workflow Queue",
+          "when": "generacy.isAuthenticated"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "generacy.refreshExplorer",
+          "when": "view == generacy.workflows",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "generacy.runWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "inline"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Generacy",
+      "properties": {
+        "generacy.workflowDirectory": {
+          "type": "string",
+          "default": ".generacy",
+          "description": "Directory containing workflow YAML files"
+        },
+        "generacy.defaultTemplate": {
+          "type": "string",
+          "default": "basic",
+          "enum": ["basic", "multi-phase", "with-triggers"],
+          "description": "Default template for new workflows"
+        },
+        "generacy.cloudEndpoint": {
+          "type": "string",
+          "default": "https://api.generacy.ai",
+          "description": "Generacy cloud API endpoint"
+        },
+        "generacy.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable anonymous usage telemetry"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "generacy-workflow",
+        "aliases": ["Generacy Workflow", "generacy"],
+        "extensions": [".generacy.yaml", ".generacy.yml"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "generacy",
+        "label": "Generacy Workflow",
+        "languages": ["generacy-workflow", "yaml"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["workflow"],
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "description": "Path to the workflow file to debug"
+              },
+              "dryRun": {
+                "type": "boolean",
+                "default": false,
+                "description": "Run in dry-run mode (validate without executing)"
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables to set during execution"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "generacy",
+            "request": "launch",
+            "name": "Debug Workflow",
+            "workflow": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Generacy: Debug Workflow",
+            "description": "Debug a Generacy workflow file",
+            "body": {
+              "type": "generacy",
+              "request": "launch",
+              "name": "Debug Workflow",
+              "workflow": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0",
+    "jsonc-parser": "^3.2.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.3.0",
+    "@vscode/vsce": "^2.22.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0",
+    "esbuild": "^0.19.0"
+  }
+}
