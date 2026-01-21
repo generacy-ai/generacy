@@ -1,0 +1,222 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://generacy.ai/schemas/workflow.schema.json",
+  "title": "Generacy Workflow",
+  "description": "Schema for Generacy workflow definition files",
+  "type": "object",
+  "required": ["version", "metadata", "phases"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Workflow schema version (e.g., '1.0')"
+    },
+    "metadata": {
+      "$ref": "#/definitions/metadata"
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/trigger"
+      },
+      "description": "Events that trigger this workflow"
+    },
+    "phases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/phase"
+      },
+      "minItems": 1,
+      "description": "Workflow phases (executed in order)"
+    },
+    "variables": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/definitions/variable"
+      },
+      "description": "Workflow variables and their definitions"
+    }
+  },
+  "definitions": {
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Workflow display name"
+        },
+        "description": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Workflow description"
+        },
+        "author": {
+          "type": "string",
+          "description": "Workflow author"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags for categorization"
+        }
+      }
+    },
+    "trigger": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["issue", "pull_request", "push", "schedule", "manual", "webhook"],
+          "description": "Trigger type"
+        },
+        "config": {
+          "type": "object",
+          "description": "Trigger-specific configuration"
+        },
+        "condition": {
+          "type": "string",
+          "description": "Expression to evaluate for conditional triggering"
+        }
+      }
+    },
+    "phase": {
+      "type": "object",
+      "required": ["id", "name", "steps"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+          "description": "Unique phase identifier"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Phase display name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Phase description"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/step"
+          },
+          "minItems": 1,
+          "description": "Steps in this phase"
+        },
+        "condition": {
+          "type": "string",
+          "description": "Expression to evaluate for conditional execution"
+        },
+        "parallel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Execute steps in parallel"
+        }
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": ["id", "name", "action"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-zA-Z][a-zA-Z0-9_-]*$",
+          "description": "Unique step identifier"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Step display name"
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Action to execute (built-in or plugin)"
+        },
+        "inputs": {
+          "type": "object",
+          "description": "Input parameters for the action"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Output variable names"
+        },
+        "timeout": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Step timeout in seconds"
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Number of retry attempts on failure"
+        },
+        "condition": {
+          "type": "string",
+          "description": "Expression to evaluate for conditional execution"
+        },
+        "continueOnError": {
+          "type": "boolean",
+          "default": false,
+          "description": "Continue workflow even if this step fails"
+        }
+      }
+    },
+    "variable": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "boolean", "secret", "file"],
+          "description": "Variable type"
+        },
+        "default": {
+          "description": "Default value"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether the variable is required"
+        },
+        "description": {
+          "type": "string",
+          "description": "Variable description"
+        },
+        "validation": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Regex pattern for validation"
+            },
+            "min": {
+              "type": "number",
+              "description": "Minimum value (for numbers)"
+            },
+            "max": {
+              "type": "number",
+              "description": "Maximum value (for numbers)"
+            },
+            "enum": {
+              "type": "array",
+              "description": "Allowed values"
+            }
+          }
+        }
+      }
+    }
+  }
+}
