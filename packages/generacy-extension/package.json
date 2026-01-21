@@ -34,7 +34,26 @@
       {
         "command": "generacy.createWorkflow",
         "title": "Create Workflow",
-        "category": "Generacy"
+        "category": "Generacy",
+        "icon": "$(add)"
+      },
+      {
+        "command": "generacy.renameWorkflow",
+        "title": "Rename Workflow",
+        "category": "Generacy",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "generacy.deleteWorkflow",
+        "title": "Delete Workflow",
+        "category": "Generacy",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "generacy.duplicateWorkflow",
+        "title": "Duplicate Workflow",
+        "category": "Generacy",
+        "icon": "$(copy)"
       },
       {
         "command": "generacy.runWorkflow",
@@ -85,6 +104,11 @@
     "menus": {
       "view/title": [
         {
+          "command": "generacy.createWorkflow",
+          "when": "view == generacy.workflows",
+          "group": "navigation"
+        },
+        {
           "command": "generacy.refreshExplorer",
           "when": "view == generacy.workflows",
           "group": "navigation"
@@ -95,6 +119,21 @@
           "command": "generacy.runWorkflow",
           "when": "view == generacy.workflows && viewItem == workflow",
           "group": "inline"
+        },
+        {
+          "command": "generacy.renameWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_modification@1"
+        },
+        {
+          "command": "generacy.duplicateWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_modification@2"
+        },
+        {
+          "command": "generacy.deleteWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_modification@3"
         }
       ]
     },
