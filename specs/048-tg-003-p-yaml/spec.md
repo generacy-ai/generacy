@@ -16,10 +16,10 @@
 **Tests**: `packages/generacy-extension/src/language/__tests__/validator.test.ts`
 
 ## Tasks
-- [ ] Create JSON Schema for workflow YAML files
-- [ ] Implement schema loader that registers with YAML extension
-- [ ] Build Zod-based runtime validator matching schema
-- [ ] Create validation error formatter for diagnostics
+- [x] Create JSON Schema for workflow YAML files
+- [x] Implement schema loader that registers with YAML extension
+- [x] Build Zod-based runtime validator matching schema
+- [x] Create validation error formatter for diagnostics
 
 ## Source
 <!-- task-group-id: TG-003 -->
