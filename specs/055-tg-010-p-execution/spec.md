@@ -14,9 +14,9 @@
 **Tests**: Integration tests with runner
 
 ## Tasks
-- [ ] Implement status bar item showing current execution
-- [ ] Add progress notification during execution
-- [ ] Show execution summary on completion
+- [x] Implement status bar item showing current execution
+- [x] Add progress notification during execution
+- [x] Show execution summary on completion
 
 ## Source
 <!-- task-group-id: TG-010 -->
