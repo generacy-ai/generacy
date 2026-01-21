@@ -8,6 +8,7 @@ import {
   registerWorkflowDecorationProvider,
   WorkflowTreeItem,
   isWorkflowTreeItem,
+  getTemplateManager,
 } from './views/local/explorer';
 import {
   createWorkflowCodeLensProvider,
@@ -39,6 +40,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   // Register commands
   registerCommands(context);
+
+  // Initialize template manager
+  const templateManager = getTemplateManager();
+  templateManager.initialize(context);
+  context.subscriptions.push(templateManager);
+  logger.info('Template manager initialized');
 
   // Register workflow tree view and decoration provider
   workflowTreeProvider = createWorkflowTreeProvider(context);

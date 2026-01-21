@@ -32,3 +32,14 @@ export {
   resetWorkflowDecorationProvider,
   type WorkflowDecorationData,
 } from './decorations';
+
+// Templates
+export {
+  TemplateManager,
+  getTemplateManager,
+  showTemplateQuickPick,
+  createTemplateQuickPickItems,
+  type TemplateMetadata,
+  type WorkflowTemplate,
+  type TemplateQuickPickItem,
+} from './templates';
