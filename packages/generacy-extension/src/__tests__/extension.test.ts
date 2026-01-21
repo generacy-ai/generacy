@@ -7,6 +7,8 @@ vi.mock('vscode', () => {
   const mockOutputChannel = {
     appendLine: vi.fn(),
     dispose: vi.fn(),
+    show: vi.fn(),
+    clear: vi.fn(),
   };
 
   const mockExtensionContext = {
@@ -52,6 +54,7 @@ vi.mock('vscode', () => {
     workspace: {
       getConfiguration: vi.fn(() => mockConfiguration),
       onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
+      workspaceFolders: [{ uri: { fsPath: '/workspace', path: '/workspace' } }],
     },
     extensions: {
       getExtension: vi.fn(() => ({
@@ -59,6 +62,21 @@ vi.mock('vscode', () => {
       })),
     },
     ExtensionContext: mockExtensionContext,
+    env: {
+      isTelemetryEnabled: true,
+    },
+    Uri: {
+      joinPath: vi.fn((base: { path: string }, ...segments: string[]) => ({
+        fsPath: `${base.path}/${segments.join('/')}`,
+        path: `${base.path}/${segments.join('/')}`,
+      })),
+    },
+    ConfigurationTarget: {
+      Global: 1,
+      Workspace: 2,
+      WorkspaceFolder: 3,
+    },
+    Disposable: vi.fn().mockImplementation((fn: () => void) => ({ dispose: fn })),
   };
 });
 
