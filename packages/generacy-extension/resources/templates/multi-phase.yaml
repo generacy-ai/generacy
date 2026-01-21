@@ -1,0 +1,47 @@
+# Multi-Phase Workflow Template
+# A workflow with setup, build, and deploy phases for CI/CD pipelines
+#
+# Usage: Customize each phase with your build and deployment steps
+
+name: my-workflow
+version: "1.0.0"
+description: A multi-phase CI/CD workflow
+
+env:
+  BUILD_ENV: development
+
+phases:
+  - name: setup
+    description: Prepare the environment
+    steps:
+      - name: checkout
+        description: Prepare workspace
+        run: echo "Setting up workspace..."
+
+      - name: install-deps
+        description: Install dependencies
+        run: echo "Installing dependencies..."
+
+  - name: build
+    description: Build the application
+    steps:
+      - name: compile
+        description: Compile source code
+        run: echo "Building application..."
+
+      - name: test
+        description: Run tests
+        run: echo "Running tests..."
+        continue_on_error: false
+
+  - name: deploy
+    description: Deploy to environment
+    condition: "${{ env.BUILD_ENV == 'production' }}"
+    steps:
+      - name: publish
+        description: Publish artifacts
+        run: echo "Deploying to $BUILD_ENV..."
+
+      - name: notify
+        description: Send deployment notification
+        run: echo "Deployment complete!"
