@@ -1,6 +1,36 @@
 import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
 import { CONFIG_KEYS, DEFAULTS } from '../../constants';
 
+// Mock the templates module - these need to be hoisted so we use vi.hoisted
+const {
+  mockGetTemplateMetadata,
+  mockGetTemplate,
+  mockCustomizeTemplate,
+  mockShowTemplateQuickPick,
+} = vi.hoisted(() => ({
+  mockGetTemplateMetadata: vi.fn(() => [
+    { id: 'basic', name: 'Basic', description: 'test', detail: 'test', icon: '$(file)', category: 'starter' },
+    { id: 'multi-phase', name: 'Multi-Phase', description: 'test', detail: 'test', icon: '$(layers)', category: 'starter' },
+    { id: 'with-triggers', name: 'With Triggers', description: 'test', detail: 'test', icon: '$(zap)', category: 'starter' },
+  ]),
+  mockGetTemplate: vi.fn(),
+  mockCustomizeTemplate: vi.fn((template: { content: string }, name: string) =>
+    template.content.replace(/name: my-workflow/g, `name: ${name}`)
+  ),
+  mockShowTemplateQuickPick: vi.fn(),
+}));
+
+vi.mock('../../views/local/explorer', () => ({
+  getTemplateManager: vi.fn(() => ({
+    getTemplateMetadata: mockGetTemplateMetadata,
+    getTemplate: mockGetTemplate,
+    customizeTemplate: mockCustomizeTemplate,
+    initialize: vi.fn(),
+    dispose: vi.fn(),
+  })),
+  showTemplateQuickPick: mockShowTemplateQuickPick,
+}));
+
 // Mock vscode module
 vi.mock('vscode', () => {
   const mockOutputChannel = {
@@ -92,6 +122,44 @@ vi.mock('vscode', () => {
         this.uri = uri;
       }
     },
+    TreeItem: class {
+      label: string;
+      collapsibleState?: number;
+      constructor(label: string, collapsibleState?: number) {
+        this.label = label;
+        this.collapsibleState = collapsibleState;
+      }
+    },
+    TreeItemCollapsibleState: {
+      None: 0,
+      Collapsed: 1,
+      Expanded: 2,
+    },
+    ViewColumn: {
+      Beside: 2,
+    },
+    ThemeIcon: class {
+      id: string;
+      constructor(id: string) {
+        this.id = id;
+      }
+    },
+    EventEmitter: class {
+      fire = vi.fn();
+      event = vi.fn();
+      dispose = vi.fn();
+    },
+    FileDecoration: class {
+      badge?: string;
+      tooltip?: string;
+      color?: { id: string };
+    },
+    ThemeColor: class {
+      id: string;
+      constructor(id: string) {
+        this.id = id;
+      }
+    },
   };
 });
 
@@ -142,23 +210,17 @@ describe('Workflow CRUD Commands', () => {
   describe('createWorkflow', () => {
     it('should show template selection quick pick', async () => {
       // User cancels template selection
-      (vscode.window.showQuickPick as Mock).mockResolvedValue(undefined);
+      mockShowTemplateQuickPick.mockResolvedValue(undefined);
 
       await workflow.createWorkflow();
 
-      expect(vscode.window.showQuickPick).toHaveBeenCalled();
-      const call = (vscode.window.showQuickPick as Mock).mock.calls[0];
-      expect(call[0]).toHaveLength(3); // 3 templates
-      expect(call[1]).toMatchObject({
-        placeHolder: 'Select a workflow template',
-        title: 'Create New Workflow',
-      });
+      expect(mockShowTemplateQuickPick).toHaveBeenCalled();
     });
 
     it('should prompt for workflow name after template selection', async () => {
-      (vscode.window.showQuickPick as Mock).mockResolvedValue({
-        label: '$(file) Basic',
-        templateKey: 'basic',
+      mockShowTemplateQuickPick.mockResolvedValue({
+        id: 'basic',
+        name: 'Basic',
       });
       (vscode.window.showInputBox as Mock).mockResolvedValue(undefined);
 
@@ -172,9 +234,14 @@ describe('Workflow CRUD Commands', () => {
     });
 
     it('should create workflow file with correct content', async () => {
-      (vscode.window.showQuickPick as Mock).mockResolvedValue({
-        label: '$(file) Basic',
-        templateKey: 'basic',
+      mockShowTemplateQuickPick.mockResolvedValue({
+        id: 'basic',
+        name: 'Basic',
+      });
+      mockGetTemplate.mockResolvedValue({
+        id: 'basic',
+        name: 'Basic',
+        content: 'name: my-workflow\nversion: "1.0.0"\nphases:\n  - name: main',
       });
       (vscode.window.showInputBox as Mock).mockResolvedValue('test-workflow');
       (vscode.workspace.fs.stat as Mock).mockRejectedValue(new Error('File not found'));
@@ -193,7 +260,7 @@ describe('Workflow CRUD Commands', () => {
     });
 
     it('should cancel when no template selected', async () => {
-      (vscode.window.showQuickPick as Mock).mockResolvedValue(undefined);
+      mockShowTemplateQuickPick.mockResolvedValue(undefined);
 
       await workflow.createWorkflow();
 
@@ -202,9 +269,9 @@ describe('Workflow CRUD Commands', () => {
     });
 
     it('should cancel when no name provided', async () => {
-      (vscode.window.showQuickPick as Mock).mockResolvedValue({
-        label: '$(file) Basic',
-        templateKey: 'basic',
+      mockShowTemplateQuickPick.mockResolvedValue({
+        id: 'basic',
+        name: 'Basic',
       });
       (vscode.window.showInputBox as Mock).mockResolvedValue(undefined);
 
@@ -353,9 +420,9 @@ describe('Workflow CRUD Commands', () => {
 
   describe('workflow name validation', () => {
     it('should validate workflow names correctly', async () => {
-      (vscode.window.showQuickPick as Mock).mockResolvedValue({
-        label: '$(file) Basic',
-        templateKey: 'basic',
+      mockShowTemplateQuickPick.mockResolvedValue({
+        id: 'basic',
+        name: 'Basic',
       });
       (vscode.window.showInputBox as Mock).mockResolvedValue(undefined);
 
