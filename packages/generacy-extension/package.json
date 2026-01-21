@@ -34,28 +34,62 @@
       {
         "command": "generacy.createWorkflow",
         "title": "Create Workflow",
-        "category": "Generacy"
+        "category": "Generacy",
+        "icon": "$(add)"
       },
       {
         "command": "generacy.runWorkflow",
         "title": "Run Workflow",
-        "category": "Generacy"
+        "category": "Generacy",
+        "icon": "$(play)"
       },
       {
         "command": "generacy.debugWorkflow",
         "title": "Debug Workflow",
-        "category": "Generacy"
+        "category": "Generacy",
+        "icon": "$(debug-alt)"
       },
       {
         "command": "generacy.validateWorkflow",
         "title": "Validate Workflow",
-        "category": "Generacy"
+        "category": "Generacy",
+        "icon": "$(check)"
       },
       {
         "command": "generacy.refreshExplorer",
         "title": "Refresh Explorer",
         "category": "Generacy",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.renameWorkflow",
+        "title": "Rename Workflow",
+        "category": "Generacy",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "generacy.deleteWorkflow",
+        "title": "Delete Workflow",
+        "category": "Generacy",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "generacy.duplicateWorkflow",
+        "title": "Duplicate Workflow",
+        "category": "Generacy",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "generacy.openWorkflow",
+        "title": "Open Workflow",
+        "category": "Generacy",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "generacy.revealInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "Generacy",
+        "icon": "$(folder-opened)"
       }
     ],
     "viewsContainers": {
@@ -85,16 +119,66 @@
     "menus": {
       "view/title": [
         {
+          "command": "generacy.createWorkflow",
+          "when": "view == generacy.workflows",
+          "group": "navigation@1"
+        },
+        {
           "command": "generacy.refreshExplorer",
           "when": "view == generacy.workflows",
-          "group": "navigation"
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
         {
           "command": "generacy.runWorkflow",
           "when": "view == generacy.workflows && viewItem == workflow",
-          "group": "inline"
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.debugWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "inline@2"
+        },
+        {
+          "command": "generacy.openWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_open@1"
+        },
+        {
+          "command": "generacy.revealInExplorer",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_open@2"
+        },
+        {
+          "command": "generacy.runWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "2_run@1"
+        },
+        {
+          "command": "generacy.debugWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "2_run@2"
+        },
+        {
+          "command": "generacy.validateWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "2_run@3"
+        },
+        {
+          "command": "generacy.renameWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "3_edit@1"
+        },
+        {
+          "command": "generacy.duplicateWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "3_edit@2"
+        },
+        {
+          "command": "generacy.deleteWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "4_delete@1"
         }
       ]
     },
@@ -109,7 +193,11 @@
         "generacy.defaultTemplate": {
           "type": "string",
           "default": "basic",
-          "enum": ["basic", "multi-phase", "with-triggers"],
+          "enum": [
+            "basic",
+            "multi-phase",
+            "with-triggers"
+          ],
           "description": "Default template for new workflows"
         },
         "generacy.cloudEndpoint": {
@@ -127,8 +215,14 @@
     "languages": [
       {
         "id": "generacy-workflow",
-        "aliases": ["Generacy Workflow", "generacy"],
-        "extensions": [".generacy.yaml", ".generacy.yml"],
+        "aliases": [
+          "Generacy Workflow",
+          "generacy"
+        ],
+        "extensions": [
+          ".generacy.yaml",
+          ".generacy.yml"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -136,10 +230,15 @@
       {
         "type": "generacy",
         "label": "Generacy Workflow",
-        "languages": ["generacy-workflow", "yaml"],
+        "languages": [
+          "generacy-workflow",
+          "yaml"
+        ],
         "configurationAttributes": {
           "launch": {
-            "required": ["workflow"],
+            "required": [
+              "workflow"
+            ],
             "properties": {
               "workflow": {
                 "type": "string",
@@ -191,16 +290,16 @@
     "package": "vsce package"
   },
   "dependencies": {
+    "jsonc-parser": "^3.2.0",
     "yaml": "^2.4.0",
-    "zod": "^3.23.0",
-    "jsonc-parser": "^3.2.0"
+    "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.108.1",
     "@vscode/test-electron": "^2.3.0",
     "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.0",
     "typescript": "^5.6.0",
-    "vitest": "^2.0.0",
-    "esbuild": "^0.19.0"
+    "vitest": "^2.0.0"
   }
 }
