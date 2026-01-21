@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import * as path from 'path';
 import { EXTENSION_ID, COMMANDS } from './constants';
 import { getConfig, getLogger, getTelemetry, withErrorHandling, ErrorCode, GeneracyError } from './utils';
+import { registerCommands as registerBaseCommands, setRefreshExplorerCallback } from './commands';
 import {
   WorkflowTreeProvider,
   createWorkflowTreeProvider,
@@ -33,12 +33,19 @@ export function activate(context: vscode.ExtensionContext): void {
   logger.info(`Generacy extension v${getExtensionVersion()} activated`);
   logger.info(`Workflow directory: ${config.get('workflowDirectory')}`);
 
-  // Register commands
-  registerCommands(context);
+  // Register base commands from commands module
+  registerBaseCommands(context);
+
+  // Register tree view-specific commands
+  registerTreeViewCommands(context);
 
   // Register workflow tree view and decoration provider
   workflowTreeProvider = createWorkflowTreeProvider(context);
   registerWorkflowDecorationProvider(context);
+
+  // Set the refresh callback so the commands module can trigger refreshes
+  setRefreshExplorerCallback(() => workflowTreeProvider?.refresh());
+
   logger.info('Workflow explorer registered');
 
   // Listen for configuration changes
@@ -69,9 +76,9 @@ export function deactivate(): void {
 }
 
 /**
- * Register all extension commands
+ * Register tree view-specific commands that need access to the workflowTreeProvider
  */
-function registerCommands(context: vscode.ExtensionContext): void {
+function registerTreeViewCommands(context: vscode.ExtensionContext): void {
   const logger = getLogger();
   const telemetry = getTelemetry();
 
@@ -79,38 +86,6 @@ function registerCommands(context: vscode.ExtensionContext): void {
     id: string;
     handler: (...args: unknown[]) => void | Promise<void>;
   }> = [
-    {
-      id: COMMANDS.createWorkflow,
-      handler: withErrorHandling(handleCreateWorkflow, { showOutput: true }),
-    },
-    {
-      id: COMMANDS.runWorkflow,
-      handler: withErrorHandling(handleRunWorkflow, { showOutput: true }),
-    },
-    {
-      id: COMMANDS.debugWorkflow,
-      handler: withErrorHandling(handleDebugWorkflow, { showOutput: true }),
-    },
-    {
-      id: COMMANDS.validateWorkflow,
-      handler: withErrorHandling(handleValidateWorkflow, { showOutput: true }),
-    },
-    {
-      id: COMMANDS.refreshExplorer,
-      handler: handleRefreshExplorer,
-    },
-    {
-      id: COMMANDS.renameWorkflow,
-      handler: withErrorHandling(handleRenameWorkflow, { showOutput: true }),
-    },
-    {
-      id: COMMANDS.deleteWorkflow,
-      handler: withErrorHandling(handleDeleteWorkflow, { showOutput: true }),
-    },
-    {
-      id: COMMANDS.duplicateWorkflow,
-      handler: withErrorHandling(handleDuplicateWorkflow, { showOutput: true }),
-    },
     {
       id: COMMANDS.openWorkflow,
       handler: withErrorHandling(handleOpenWorkflow, { showOutput: true }),
@@ -144,39 +119,6 @@ function registerCommands(context: vscode.ExtensionContext): void {
 }
 
 /**
- * Command handlers
- */
-async function handleCreateWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Create Workflow');
-  await vscode.window.showInformationMessage('Create Workflow - Not yet implemented');
-}
-
-async function handleRunWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Run Workflow');
-  await vscode.window.showInformationMessage('Run Workflow - Not yet implemented');
-}
-
-async function handleDebugWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Debug Workflow');
-  await vscode.window.showInformationMessage('Debug Workflow - Not yet implemented');
-}
-
-async function handleValidateWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Validate Workflow');
-  await vscode.window.showInformationMessage('Validate Workflow - Not yet implemented');
-}
-
-function handleRefreshExplorer(): void {
-  const logger = getLogger();
-  logger.info('Command: Refresh Explorer');
-  workflowTreeProvider?.refresh();
-}
-
-/**
  * Helper to get workflow item from command argument or active editor
  */
 async function getWorkflowItem(arg: unknown): Promise<WorkflowTreeItem | undefined> {
@@ -207,135 +149,8 @@ async function getWorkflowItem(arg: unknown): Promise<WorkflowTreeItem | undefin
 }
 
 /**
- * CRUD Command handlers
+ * Tree view-specific command handlers
  */
-async function handleRenameWorkflow(arg?: unknown): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Rename Workflow');
-
-  const item = await getWorkflowItem(arg);
-  if (!item) {
-    await vscode.window.showWarningMessage('No workflow selected');
-    return;
-  }
-
-  const currentName = path.basename(item.uri.fsPath);
-  const newName = await vscode.window.showInputBox({
-    prompt: 'Enter new workflow name',
-    value: currentName,
-    validateInput: (value) => {
-      if (!value || value.trim() === '') {
-        return 'Name cannot be empty';
-      }
-      if (!/^[\w\-. ]+\.(yaml|yml)$/i.test(value)) {
-        return 'Name must be a valid YAML filename (e.g., my-workflow.yaml)';
-      }
-      return undefined;
-    },
-  });
-
-  if (!newName || newName === currentName) {
-    return;
-  }
-
-  const newUri = vscode.Uri.joinPath(vscode.Uri.file(path.dirname(item.uri.fsPath)), newName);
-
-  try {
-    await vscode.workspace.fs.rename(item.uri, newUri);
-    logger.info(`Renamed workflow: ${currentName} -> ${newName}`);
-    workflowTreeProvider?.refresh();
-  } catch (error) {
-    throw new GeneracyError(
-      ErrorCode.FileWriteError,
-      `Failed to rename workflow: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
-async function handleDeleteWorkflow(arg?: unknown): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Delete Workflow');
-
-  const item = await getWorkflowItem(arg);
-  if (!item) {
-    await vscode.window.showWarningMessage('No workflow selected');
-    return;
-  }
-
-  const fileName = path.basename(item.uri.fsPath);
-  const confirmation = await vscode.window.showWarningMessage(
-    `Are you sure you want to delete "${fileName}"?`,
-    { modal: true },
-    'Delete'
-  );
-
-  if (confirmation !== 'Delete') {
-    return;
-  }
-
-  try {
-    await vscode.workspace.fs.delete(item.uri);
-    logger.info(`Deleted workflow: ${fileName}`);
-    workflowTreeProvider?.refresh();
-  } catch (error) {
-    throw new GeneracyError(
-      ErrorCode.FileWriteError,
-      `Failed to delete workflow: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
-async function handleDuplicateWorkflow(arg?: unknown): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Duplicate Workflow');
-
-  const item = await getWorkflowItem(arg);
-  if (!item) {
-    await vscode.window.showWarningMessage('No workflow selected');
-    return;
-  }
-
-  const currentName = path.basename(item.uri.fsPath);
-  const extension = path.extname(currentName);
-  const baseName = path.basename(currentName, extension);
-  const suggestedName = `${baseName}-copy${extension}`;
-
-  const newName = await vscode.window.showInputBox({
-    prompt: 'Enter name for the duplicated workflow',
-    value: suggestedName,
-    validateInput: (value) => {
-      if (!value || value.trim() === '') {
-        return 'Name cannot be empty';
-      }
-      if (!/^[\w\-. ]+\.(yaml|yml)$/i.test(value)) {
-        return 'Name must be a valid YAML filename (e.g., my-workflow.yaml)';
-      }
-      return undefined;
-    },
-  });
-
-  if (!newName) {
-    return;
-  }
-
-  const newUri = vscode.Uri.joinPath(vscode.Uri.file(path.dirname(item.uri.fsPath)), newName);
-
-  try {
-    await vscode.workspace.fs.copy(item.uri, newUri);
-    logger.info(`Duplicated workflow: ${currentName} -> ${newName}`);
-    workflowTreeProvider?.refresh();
-
-    // Open the new file
-    const doc = await vscode.workspace.openTextDocument(newUri);
-    await vscode.window.showTextDocument(doc);
-  } catch (error) {
-    throw new GeneracyError(
-      ErrorCode.FileWriteError,
-      `Failed to duplicate workflow: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-}
-
 async function handleOpenWorkflow(arg?: unknown): Promise<void> {
   const logger = getLogger();
   logger.info('Command: Open Workflow');
