@@ -9,6 +9,10 @@ import {
   WorkflowTreeItem,
   isWorkflowTreeItem,
 } from './views/local/explorer';
+import {
+  createWorkflowCodeLensProvider,
+  createWorkflowCodeActionProvider,
+} from './views/local/editor';
 
 // Module-level provider reference for command handlers
 let workflowTreeProvider: WorkflowTreeProvider | undefined;
@@ -40,6 +44,11 @@ export function activate(context: vscode.ExtensionContext): void {
   workflowTreeProvider = createWorkflowTreeProvider(context);
   registerWorkflowDecorationProvider(context);
   logger.info('Workflow explorer registered');
+
+  // Register CodeLens and Code Action providers for editor features
+  createWorkflowCodeLensProvider(context);
+  createWorkflowCodeActionProvider(context);
+  logger.info('Editor features registered');
 
   // Listen for configuration changes
   context.subscriptions.push(

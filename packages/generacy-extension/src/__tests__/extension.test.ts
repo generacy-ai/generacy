@@ -136,6 +136,7 @@ vi.mock('vscode', () => {
     workspace: {
       getConfiguration: vi.fn(() => mockConfiguration),
       onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChangeTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
       workspaceFolders: [{ uri: { fsPath: '/workspace', path: '/workspace', toString: () => 'file:///workspace' } }],
       createFileSystemWatcher: vi.fn(() => ({
         onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
@@ -188,6 +189,51 @@ vi.mock('vscode', () => {
       WorkspaceFolder: 3,
     },
     Disposable: vi.fn().mockImplementation((fn: () => void) => ({ dispose: fn })),
+    // CodeLens and CodeAction related exports
+    CodeLens: class {
+      constructor(
+        public range: unknown,
+        public command?: unknown
+      ) {}
+    },
+    CodeAction: class {
+      diagnostics?: unknown[];
+      isPreferred?: boolean;
+      edit?: unknown;
+      command?: unknown;
+      constructor(
+        public title: string,
+        public kind?: unknown
+      ) {}
+    },
+    CodeActionKind: {
+      QuickFix: 'quickfix',
+      Refactor: 'refactor',
+      RefactorExtract: 'refactor.extract',
+    },
+    Range: class {
+      constructor(
+        public startLine: number,
+        public startChar: number,
+        public endLine: number,
+        public endChar: number
+      ) {}
+    },
+    Position: class {
+      constructor(
+        public line: number,
+        public character: number
+      ) {}
+    },
+    WorkspaceEdit: class {
+      insert = vi.fn();
+      replace = vi.fn();
+      delete = vi.fn();
+    },
+    languages: {
+      registerCodeLensProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      registerCodeActionsProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    },
   };
 });
 
