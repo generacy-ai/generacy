@@ -14,6 +14,12 @@ import {
   createWorkflowCodeLensProvider,
   createWorkflowCodeActionProvider,
 } from './views/local/editor';
+import {
+  runWorkflow,
+  runPhase,
+  validateWorkflow as runValidateWorkflow,
+  initializeRunner,
+} from './commands/runner';
 
 // Module-level provider reference for command handlers
 let workflowTreeProvider: WorkflowTreeProvider | undefined;
@@ -56,6 +62,10 @@ export function activate(context: vscode.ExtensionContext): void {
   createWorkflowCodeLensProvider(context);
   createWorkflowCodeActionProvider(context);
   logger.info('Editor features registered');
+
+  // Initialize workflow runner
+  initializeRunner(context);
+  logger.info('Workflow runner initialized');
 
   // Listen for configuration changes
   context.subscriptions.push(
@@ -102,6 +112,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
     {
       id: COMMANDS.runWorkflow,
       handler: withErrorHandling(handleRunWorkflow, { showOutput: true }),
+    },
+    {
+      id: COMMANDS.runPhase,
+      handler: withErrorHandling(handleRunPhase, { showOutput: true }),
     },
     {
       id: COMMANDS.debugWorkflow,
@@ -168,10 +182,12 @@ async function handleCreateWorkflow(): Promise<void> {
   await vscode.window.showInformationMessage('Create Workflow - Not yet implemented');
 }
 
-async function handleRunWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Run Workflow');
-  await vscode.window.showInformationMessage('Run Workflow - Not yet implemented');
+async function handleRunWorkflow(arg?: unknown): Promise<void> {
+  await runWorkflow(arg);
+}
+
+async function handleRunPhase(arg?: unknown): Promise<void> {
+  await runPhase(arg);
 }
 
 async function handleDebugWorkflow(): Promise<void> {
@@ -180,10 +196,8 @@ async function handleDebugWorkflow(): Promise<void> {
   await vscode.window.showInformationMessage('Debug Workflow - Not yet implemented');
 }
 
-async function handleValidateWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Validate Workflow');
-  await vscode.window.showInformationMessage('Validate Workflow - Not yet implemented');
+async function handleValidateWorkflow(arg?: unknown): Promise<void> {
+  await runValidateWorkflow(arg);
 }
 
 function handleRefreshExplorer(): void {
