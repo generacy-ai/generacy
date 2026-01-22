@@ -15,11 +15,11 @@ API Client Foundation
 **Tests**: `packages/generacy-extension/src/api/__tests__/client.test.ts`
 
 ## Tasks
-- [ ] Implement fetch-based HTTP client with error handling
-- [ ] Create Zod schemas for all API response types
-- [ ] Add request/response interceptors for auth headers
-- [ ] Implement retry logic with exponential backoff
-- [ ] Create API endpoint type definitions
+- [x] Implement fetch-based HTTP client with error handling
+- [x] Create Zod schemas for all API response types
+- [x] Add request/response interceptors for auth headers
+- [x] Implement retry logic with exponential backoff
+- [x] Create API endpoint type definitions
 
 ## Source
 <!-- task-group-id: TG-014 -->
