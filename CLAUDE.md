@@ -17,6 +17,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -38,6 +39,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 067-tg-022-p-documentation: Added configuration
 - 066-tg-021-error-handling: Added configuration
 - 065-tg-020-workflow-publishing: Added configuration
 - 062-tg-017-queue-tree: Added configuration
