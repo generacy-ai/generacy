@@ -13,11 +13,11 @@
 - `Extensions to debug state and UI`
 
 ## Tasks
-- [ ] Implement variables view showing current execution state
-- [ ] Add watch expressions support
-- [ ] Create "replay from step" functionality
-- [ ] Build execution history panel
-- [ ] Add error analysis with stack trace
+- [X] Implement variables view showing current execution state
+- [X] Add watch expressions support
+- [X] Create "replay from step" functionality
+- [X] Build execution history panel
+- [X] Add error analysis with stack trace
 
 ## Source
 <!-- task-group-id: TG-013 -->
