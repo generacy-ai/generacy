@@ -2,7 +2,21 @@
 
 **Input**: Design documents from `/specs/066-tg-021-error-handling/`
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md
-**Status**: Complete
+**Status**: Infrastructure Complete - Integration In Progress
+
+**Infrastructure Status** (Ready for use):
+- ✓ Enhanced error messages (T001)
+- ✓ Error recovery actions (T002)
+- ✓ Error message templates (T003)
+- ✓ Network detection utility (T008)
+- ✓ Retry logic with backoff (T009)
+- ✓ Cache layer for offline mode (T010)
+- ✓ Progress indicator utilities (T022)
+
+**Integration Status** (Remaining):
+- Module integration tasks (T004-T007, T011-T021, T023-T028): 24 tasks
+- Manual testing tasks (T029, T032-T034): 4 tasks
+- These integration tasks apply the infrastructure across all modules
 
 ## Format: `[ID] [P?] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -28,32 +42,36 @@ Enhance the ERROR_MESSAGES dictionary with actionable messages following the Wha
 
 ---
 
-### T002 [P] Add error recovery actions infrastructure
+### T002 ✓ [P] Add error recovery actions infrastructure
 **Files**: `packages/generacy-extension/src/utils/errors.ts`
 **Priority**: P1
+**Status**: Complete
 
 Extend the error handling system to support recovery actions:
-- Add `actions` parameter to `showError()` and `showWarning()` functions
-- Implement action button rendering in error dialogs
-- Add support for primary action indication
-- Create helper functions for common actions (retry, show logs, open settings)
-- Add telemetry for action usage (opt-in)
+- ✓ Add `actions` parameter to `showError()` and `showWarning()` functions
+- ✓ Implement action button rendering in error dialogs
+- ✓ Add support for primary action indication
+- ✓ Create helper functions for common actions (retry, show logs, open settings)
+- ✓ Action infrastructure complete (telemetry deferred to usage phase)
 
 **Acceptance**: Error dialogs can display actionable buttons that execute recovery functions
 
 ---
 
-### T003 [P] Create error message templates
+### T003 ✓ [P] Create error message templates
 **Files**: `packages/generacy-extension/src/utils/error-templates.ts` (new)
 **Priority**: P1
+**Status**: Complete
 
 Create reusable error message templates for common scenarios:
-- Configuration errors (missing/invalid config)
-- File system errors (not found, permission denied)
-- Network errors (offline, timeout, rate limited)
-- Authentication errors (required, expired, failed)
-- Validation errors (workflow, schema)
-- Each template should include default actions
+- ✓ Configuration errors (missing/invalid config)
+- ✓ File system errors (not found, permission denied)
+- ✓ Network errors (offline, timeout, rate limited)
+- ✓ Authentication errors (required, expired, failed)
+- ✓ Validation errors (workflow, schema)
+- ✓ Execution errors with debug actions
+- ✓ Directory errors with create actions
+- ✓ Helper functions for common actions
 
 **Acceptance**: Template library exists with 10+ common error scenarios
 
@@ -502,7 +520,7 @@ Test progress indication:
 
 ---
 
-### T032 Manual testing: Error scenarios
+### T032 [manual] Manual testing: Error scenarios
 **Priority**: P1
 
 Manually test common error scenarios:
@@ -516,7 +534,7 @@ Manually test common error scenarios:
 
 ---
 
-### T033 [P] Manual testing: Walkthrough flow
+### T033 [P] [manual] Manual testing: Walkthrough flow
 **Priority**: P2
 
 Test walkthrough user experience:
@@ -529,7 +547,7 @@ Test walkthrough user experience:
 
 ---
 
-### T034 [P] Manual testing: Keyboard shortcuts
+### T034 [P] [manual] Manual testing: Keyboard shortcuts
 **Priority**: P2
 
 Test all keyboard shortcuts:
