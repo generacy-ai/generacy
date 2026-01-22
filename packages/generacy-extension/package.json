@@ -96,6 +96,24 @@
         "title": "Reveal in Explorer",
         "category": "Generacy",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "generacy.login",
+        "title": "Sign In",
+        "category": "Generacy",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "generacy.logout",
+        "title": "Sign Out",
+        "category": "Generacy",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "generacy.showAccount",
+        "title": "Show Account",
+        "category": "Generacy",
+        "icon": "$(account)"
       }
     ],
     "viewsContainers": {

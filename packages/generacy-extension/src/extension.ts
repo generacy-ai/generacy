@@ -22,6 +22,7 @@ import {
 } from './commands/runner';
 import { initializeExecutionStatusBar } from './providers';
 import { registerDebugAdapter } from './debug';
+import { registerCloudCommands, initializeCloudServices } from './commands/cloud';
 
 // Module-level provider reference for command handlers
 let workflowTreeProvider: WorkflowTreeProvider | undefined;
@@ -76,6 +77,11 @@ export function activate(context: vscode.ExtensionContext): void {
   // Register debug adapter
   registerDebugAdapter(context);
   logger.info('Debug adapter registered');
+
+  // Initialize cloud services and register cloud commands
+  registerCloudCommands(context);
+  void initializeCloudServices(context);
+  logger.info('Cloud services initialized');
 
   // Listen for configuration changes
   context.subscriptions.push(

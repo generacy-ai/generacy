@@ -15,12 +15,12 @@ GitHub OAuth Authentication
 **Tests**: `packages/generacy-extension/src/api/__tests__/auth.test.ts`
 
 ## Tasks
-- [ ] Implement GitHub OAuth flow via VS Code URI handler
-- [ ] Create SecretStorage integration for token persistence
-- [ ] Build authentication state management
-- [ ] Add login/logout commands
-- [ ] Implement progressive authentication (anonymous → free → org)
-- [ ] Handle token refresh and expiration
+- [x] Implement GitHub OAuth flow via VS Code URI handler
+- [x] Create SecretStorage integration for token persistence
+- [x] Build authentication state management
+- [x] Add login/logout commands
+- [x] Implement progressive authentication (anonymous → free → org)
+- [x] Handle token refresh and expiration
 
 ## Source
 <!-- task-group-id: TG-015 -->
