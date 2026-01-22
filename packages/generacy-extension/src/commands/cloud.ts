@@ -25,6 +25,8 @@ export const CLOUD_COMMANDS = {
   publishWorkflow: 'generacy.publishWorkflow',
   compareWithCloud: 'generacy.compareWithCloud',
   viewVersionHistory: 'generacy.viewVersionHistory',
+  compareWithCloud: 'generacy.compareWithCloud',
+  viewVersionHistory: 'generacy.viewVersionHistory',
   rollbackWorkflow: 'generacy.rollbackWorkflow',
   refreshSyncStatus: 'generacy.refreshSyncStatus',
 } as const;
