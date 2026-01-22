@@ -46,28 +46,68 @@ export enum ErrorCode {
 
 /**
  * User-friendly error messages for each error code
+ * Following What-Why-How pattern: what happened, why it occurred, what to do
  */
 const ERROR_MESSAGES: Record<ErrorCode, string> = {
-  [ErrorCode.ConfigInvalid]: 'Invalid configuration',
-  [ErrorCode.ConfigMissing]: 'Required configuration is missing',
-  [ErrorCode.FileNotFound]: 'File not found',
-  [ErrorCode.FileReadError]: 'Unable to read file',
-  [ErrorCode.FileWriteError]: 'Unable to write file',
-  [ErrorCode.DirectoryNotFound]: 'Directory not found',
-  [ErrorCode.WorkflowInvalid]: 'Invalid workflow file',
-  [ErrorCode.WorkflowParseError]: 'Unable to parse workflow',
-  [ErrorCode.WorkflowValidationError]: 'Workflow validation failed',
-  [ErrorCode.WorkflowExecutionError]: 'Workflow execution failed',
-  [ErrorCode.AuthRequired]: 'Authentication required',
-  [ErrorCode.AuthExpired]: 'Authentication has expired',
-  [ErrorCode.AuthFailed]: 'Authentication failed',
-  [ErrorCode.ApiConnectionError]: 'Unable to connect to server',
-  [ErrorCode.ApiRequestError]: 'Request failed',
-  [ErrorCode.ApiResponseError]: 'Invalid response from server',
-  [ErrorCode.ApiRateLimited]: 'Too many requests, please try again later',
-  [ErrorCode.DebugSessionError]: 'Debug session error',
-  [ErrorCode.DebugBreakpointError]: 'Breakpoint error',
-  [ErrorCode.Unknown]: 'An unexpected error occurred',
+  [ErrorCode.ConfigInvalid]:
+    'Invalid configuration detected. Your settings may contain syntax errors or invalid values. Check your workspace and user settings for the Generacy extension and correct any errors.',
+
+  [ErrorCode.ConfigMissing]:
+    'Required configuration is missing. The Generacy extension needs certain settings to function properly. Set "generacy.workflowDirectory" in your settings to specify where workflow files are stored.',
+
+  [ErrorCode.FileNotFound]:
+    'File not found. The requested file may have been moved, renamed, or deleted. Check the file path and try refreshing the explorer to reload the file list.',
+
+  [ErrorCode.FileReadError]:
+    'Unable to read file. The file may be locked by another program, or you may not have permission to access it. Close any programs using this file and verify you have read permissions.',
+
+  [ErrorCode.FileWriteError]:
+    'Unable to write file. The file may be read-only, locked by another program, or you may not have write permissions. Check file permissions and ensure the file is not open elsewhere.',
+
+  [ErrorCode.DirectoryNotFound]:
+    'Directory not found. The workflow directory may not exist or may have been moved. Create the directory or update the "generacy.workflowDirectory" setting to point to the correct location.',
+
+  [ErrorCode.WorkflowInvalid]:
+    'Invalid workflow file. The workflow file structure does not match the expected format. Check your workflow against the schema documentation and fix any structural issues.',
+
+  [ErrorCode.WorkflowParseError]:
+    'Unable to parse workflow. The workflow file contains syntax errors that prevent it from being read. Validate your YAML syntax and ensure all required fields are present.',
+
+  [ErrorCode.WorkflowValidationError]:
+    'Workflow validation failed. The workflow contains invalid or missing fields that prevent execution. Review the validation errors and update your workflow to fix them.',
+
+  [ErrorCode.WorkflowExecutionError]:
+    'Workflow execution failed. An error occurred while running your workflow. Check the output logs for details about which step failed and why.',
+
+  [ErrorCode.AuthRequired]:
+    'Authentication required. You must sign in to Generacy to use cloud features. Click "Sign In" to authenticate with your Generacy account.',
+
+  [ErrorCode.AuthExpired]:
+    'Authentication has expired. Your session has timed out for security reasons. Sign in again to continue using cloud features.',
+
+  [ErrorCode.AuthFailed]:
+    'Authentication failed. Your credentials could not be verified. Check your username and password, or contact support if you continue to experience issues.',
+
+  [ErrorCode.ApiConnectionError]:
+    'Unable to connect to Generacy API. Your internet connection may be offline, or the Generacy service may be temporarily unavailable. Check your connection and try again, or visit status.generacy.ai for service status.',
+
+  [ErrorCode.ApiRequestError]:
+    'API request failed. The server encountered an error while processing your request. This may be a temporary issue - try again in a moment. If the problem persists, check the output logs for details.',
+
+  [ErrorCode.ApiResponseError]:
+    'Invalid response from server. The server returned data in an unexpected format. This may indicate a version mismatch or service issue. Try updating the extension or check for service announcements.',
+
+  [ErrorCode.ApiRateLimited]:
+    'Too many requests. You have exceeded the API rate limit. Wait a few minutes before trying again, or upgrade your plan for higher rate limits.',
+
+  [ErrorCode.DebugSessionError]:
+    'Debug session error. The debugger could not start or maintain a connection to your workflow. Check that the workflow is valid and try restarting the debug session.',
+
+  [ErrorCode.DebugBreakpointError]:
+    'Breakpoint error. The breakpoint could not be set at the requested location. The line may not contain executable code, or the workflow may have changed. Try setting the breakpoint on a different line.',
+
+  [ErrorCode.Unknown]:
+    'An unexpected error occurred. Something went wrong that we did not anticipate. Check the output logs for technical details, and report this issue if it continues to happen.',
 };
 
 /**
