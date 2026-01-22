@@ -1,7 +1,18 @@
 /**
  * API module exports for Generacy extension.
- * Provides HTTP client and type definitions for the Generacy cloud API.
+ * Provides HTTP client, authentication, and type definitions for the Generacy cloud API.
  */
+
+// Authentication
+export {
+  AuthService,
+  getAuthService,
+  AuthTier,
+  type AuthUser,
+  type AuthToken,
+  type AuthState as AuthServiceState,
+  type AuthChangeEvent,
+} from './auth';
 
 // Client
 export { ApiClient, getApiClient } from './client';
