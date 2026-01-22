@@ -254,6 +254,10 @@ vi.mock('vscode', () => {
       registerCodeActionsProvider: vi.fn(() => ({ dispose: vi.fn() })),
       registerCompletionItemProvider: vi.fn(() => ({ dispose: vi.fn() })),
     },
+    debug: {
+      registerDebugAdapterDescriptorFactory: vi.fn(() => ({ dispose: vi.fn() })),
+      registerDebugConfigurationProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    },
     CompletionItemKind: {
       Text: 0,
       Method: 1,
