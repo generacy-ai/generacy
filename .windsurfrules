@@ -16,6 +16,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -37,6 +38,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 065-tg-020-workflow-publishing: Added configuration
 - 062-tg-017-queue-tree: Added configuration
 - 060-tg-015-github-oauth: Added configuration
 - 044-epic-generacy-vs-code: Added configuration

@@ -5,6 +5,15 @@
 import * as vscode from 'vscode';
 import { getLogger, getConfig, GeneracyError, ErrorCode, withErrorHandling } from '../utils';
 import { getAuthService, AuthTier, type AuthChangeEvent } from '../api/auth';
+import {
+  publishWorkflowCommand,
+  compareWithCloudCommand,
+  viewVersionHistoryCommand,
+  rollbackWorkflowCommand,
+  refreshSyncStatusCommand,
+  registerCloudWorkflowProvider,
+  registerDecorationProvider,
+} from '../views/cloud/publish';
 
 /**
  * Cloud command identifiers
@@ -13,6 +22,11 @@ export const CLOUD_COMMANDS = {
   login: 'generacy.login',
   logout: 'generacy.logout',
   showAccount: 'generacy.showAccount',
+  publishWorkflow: 'generacy.publishWorkflow',
+  compareWithCloud: 'generacy.compareWithCloud',
+  viewVersionHistory: 'generacy.viewVersionHistory',
+  rollbackWorkflow: 'generacy.rollbackWorkflow',
+  refreshSyncStatus: 'generacy.refreshSyncStatus',
 } as const;
 
 /**
@@ -38,13 +52,38 @@ export function registerCloudCommands(context: vscode.ExtensionContext): void {
       id: CLOUD_COMMANDS.showAccount,
       handler: withErrorHandling(handleShowAccount, { showOutput: true }),
     },
+    {
+      id: CLOUD_COMMANDS.publishWorkflow,
+      handler: withErrorHandling(publishWorkflowCommand, { showOutput: true }),
+    },
+    {
+      id: CLOUD_COMMANDS.compareWithCloud,
+      handler: withErrorHandling(compareWithCloudCommand, { showOutput: true }),
+    },
+    {
+      id: CLOUD_COMMANDS.viewVersionHistory,
+      handler: withErrorHandling(viewVersionHistoryCommand, { showOutput: true }),
+    },
+    {
+      id: CLOUD_COMMANDS.rollbackWorkflow,
+      handler: withErrorHandling(rollbackWorkflowCommand, { showOutput: true }),
+    },
+    {
+      id: CLOUD_COMMANDS.refreshSyncStatus,
+      handler: withErrorHandling(refreshSyncStatusCommand, { showOutput: true }),
+    },
   ];
 
-  for (const { id, handler } of commands) {
+  for (const { id, handler} of commands) {
     const disposable = vscode.commands.registerCommand(id, handler);
     context.subscriptions.push(disposable);
     logger.debug(`Registered cloud command: ${id}`);
   }
+
+  // Register workflow publishing providers
+  registerCloudWorkflowProvider(context);
+  registerDecorationProvider(context);
+  logger.info('Workflow publishing providers registered');
 }
 
 /**
