@@ -37,6 +37,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 062-tg-017-queue-tree: Added configuration
 - 060-tg-015-github-oauth: Added configuration
 - 044-epic-generacy-vs-code: Added configuration
 - 041-add-github-app-authentication: Added configuration
