@@ -1,0 +1,562 @@
+{
+  "name": "generacy-extension",
+  "displayName": "Generacy",
+  "description": "Workflow development IDE for local development and cloud orchestration management",
+  "version": "0.1.0",
+  "publisher": "generacy-ai",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/generacy-ai/generacy"
+  },
+  "engines": {
+    "vscode": "^1.108.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Debuggers",
+    "Other"
+  ],
+  "keywords": [
+    "generacy",
+    "workflow",
+    "yaml",
+    "ai",
+    "automation"
+  ],
+  "activationEvents": [
+    "workspaceContains:.generacy/**/*.yaml",
+    "workspaceContains:.generacy/**/*.yml"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "generacy.createWorkflow",
+        "title": "Create Workflow",
+        "category": "Generacy",
+        "icon": "$(add)"
+      },
+      {
+        "command": "generacy.runWorkflow",
+        "title": "Run Workflow",
+        "category": "Generacy",
+        "icon": "$(play)"
+      },
+      {
+        "command": "generacy.runPhase",
+        "title": "Run Phase",
+        "category": "Generacy",
+        "icon": "$(play-circle)"
+      },
+      {
+        "command": "generacy.debugWorkflow",
+        "title": "Debug Workflow",
+        "category": "Generacy",
+        "icon": "$(debug-alt)"
+      },
+      {
+        "command": "generacy.validateWorkflow",
+        "title": "Validate Workflow",
+        "category": "Generacy",
+        "icon": "$(check)"
+      },
+      {
+        "command": "generacy.refreshExplorer",
+        "title": "Refresh Explorer",
+        "category": "Generacy",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.renameWorkflow",
+        "title": "Rename Workflow",
+        "category": "Generacy",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "generacy.deleteWorkflow",
+        "title": "Delete Workflow",
+        "category": "Generacy",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "generacy.duplicateWorkflow",
+        "title": "Duplicate Workflow",
+        "category": "Generacy",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "generacy.openWorkflow",
+        "title": "Open Workflow",
+        "category": "Generacy",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "generacy.revealInExplorer",
+        "title": "Reveal in Explorer",
+        "category": "Generacy",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "generacy.login",
+        "title": "Sign In",
+        "category": "Generacy",
+        "icon": "$(sign-in)"
+      },
+      {
+        "command": "generacy.logout",
+        "title": "Sign Out",
+        "category": "Generacy",
+        "icon": "$(sign-out)"
+      },
+      {
+        "command": "generacy.showAccount",
+        "title": "Show Account",
+        "category": "Generacy",
+        "icon": "$(account)"
+      },
+      {
+        "command": "generacy.publishWorkflow",
+        "title": "Publish Workflow to Cloud",
+        "category": "Generacy",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "generacy.compareWithCloud",
+        "title": "Compare with Cloud Version",
+        "category": "Generacy",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "generacy.viewVersionHistory",
+        "title": "View Version History",
+        "category": "Generacy",
+        "icon": "$(history)"
+      },
+      {
+        "command": "generacy.rollbackWorkflow",
+        "title": "Rollback to Previous Version",
+        "category": "Generacy",
+        "icon": "$(debug-reverse-continue)"
+      },
+      {
+        "command": "generacy.refreshSyncStatus",
+        "title": "Refresh Sync Status",
+        "category": "Generacy",
+        "icon": "$(sync)"
+      },
+      {
+        "command": "generacy.debug.refreshVariables",
+        "title": "Refresh Variables",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.addWatchExpression",
+        "title": "Add Watch Expression",
+        "category": "Generacy Debug",
+        "icon": "$(add)"
+      },
+      {
+        "command": "generacy.debug.editWatchExpression",
+        "title": "Edit Watch Expression",
+        "category": "Generacy Debug",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "generacy.debug.removeWatchExpression",
+        "title": "Remove Watch Expression",
+        "category": "Generacy Debug",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "generacy.debug.clearWatchExpressions",
+        "title": "Clear All Watch Expressions",
+        "category": "Generacy Debug",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "generacy.debug.refreshWatch",
+        "title": "Refresh Watch Expressions",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.replayFromStep",
+        "title": "Replay From Step",
+        "category": "Generacy Debug",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "generacy.debug.saveReplayPoint",
+        "title": "Save Replay Point",
+        "category": "Generacy Debug",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "generacy.debug.refreshHistory",
+        "title": "Refresh History",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.toggleGroupByPhase",
+        "title": "Toggle Group By Phase",
+        "category": "Generacy Debug",
+        "icon": "$(group-by-ref-type)"
+      },
+      {
+        "command": "generacy.debug.clearHistory",
+        "title": "Clear History",
+        "category": "Generacy Debug",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "generacy.debug.refreshErrors",
+        "title": "Refresh Errors",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.clearErrors",
+        "title": "Clear Errors",
+        "category": "Generacy Debug",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "generacy.debug.copyError",
+        "title": "Copy Error Details",
+        "category": "Generacy Debug",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "generacy.debug.showErrorDetails",
+        "title": "Show Error Details",
+        "category": "Generacy Debug",
+        "icon": "$(info)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "generacy",
+          "title": "Generacy",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "generacy": [
+        {
+          "id": "generacy.workflows",
+          "name": "Workflows",
+          "contextualTitle": "Generacy Workflows"
+        },
+        {
+          "id": "generacy.queue",
+          "name": "Queue",
+          "contextualTitle": "Workflow Queue",
+          "when": "generacy.isAuthenticated"
+        }
+      ],
+      "debug": [
+        {
+          "id": "generacy.debugVariables",
+          "name": "Variables",
+          "contextualTitle": "Workflow Variables",
+          "when": "debugType == generacy"
+        },
+        {
+          "id": "generacy.debugWatch",
+          "name": "Watch",
+          "contextualTitle": "Watch Expressions",
+          "when": "debugType == generacy"
+        },
+        {
+          "id": "generacy.debugHistory",
+          "name": "Execution History",
+          "contextualTitle": "Execution History",
+          "when": "debugType == generacy"
+        },
+        {
+          "id": "generacy.debugErrors",
+          "name": "Errors",
+          "contextualTitle": "Error Analysis",
+          "when": "debugType == generacy"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "generacy.createWorkflow",
+          "when": "view == generacy.workflows",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.refreshExplorer",
+          "when": "view == generacy.workflows",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.debug.refreshVariables",
+          "when": "view == generacy.debugVariables",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.addWatchExpression",
+          "when": "view == generacy.debugWatch",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.refreshWatch",
+          "when": "view == generacy.debugWatch",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.debug.clearWatchExpressions",
+          "when": "view == generacy.debugWatch",
+          "group": "navigation@3"
+        },
+        {
+          "command": "generacy.debug.refreshHistory",
+          "when": "view == generacy.debugHistory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.toggleGroupByPhase",
+          "when": "view == generacy.debugHistory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.debug.clearHistory",
+          "when": "view == generacy.debugHistory",
+          "group": "navigation@3"
+        },
+        {
+          "command": "generacy.debug.refreshErrors",
+          "when": "view == generacy.debugErrors",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.clearErrors",
+          "when": "view == generacy.debugErrors",
+          "group": "navigation@2"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "generacy.runWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.debugWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "inline@2"
+        },
+        {
+          "command": "generacy.openWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_open@1"
+        },
+        {
+          "command": "generacy.revealInExplorer",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "1_open@2"
+        },
+        {
+          "command": "generacy.runWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "2_run@1"
+        },
+        {
+          "command": "generacy.debugWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "2_run@2"
+        },
+        {
+          "command": "generacy.validateWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "2_run@3"
+        },
+        {
+          "command": "generacy.renameWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "3_edit@1"
+        },
+        {
+          "command": "generacy.duplicateWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "3_edit@2"
+        },
+        {
+          "command": "generacy.deleteWorkflow",
+          "when": "view == generacy.workflows && viewItem == workflow",
+          "group": "4_delete@1"
+        },
+        {
+          "command": "generacy.debug.editWatchExpression",
+          "when": "view == generacy.debugWatch && viewItem == watchExpression",
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.debug.removeWatchExpression",
+          "when": "view == generacy.debugWatch && viewItem == watchExpression",
+          "group": "inline@2"
+        },
+        {
+          "command": "generacy.debug.copyError",
+          "when": "view == generacy.debugErrors && viewItem == error",
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.debug.showErrorDetails",
+          "when": "view == generacy.debugErrors && viewItem == error",
+          "group": "1_view@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Generacy",
+      "properties": {
+        "generacy.workflowDirectory": {
+          "type": "string",
+          "default": ".generacy",
+          "description": "Directory containing workflow YAML files"
+        },
+        "generacy.defaultTemplate": {
+          "type": "string",
+          "default": "basic",
+          "enum": [
+            "basic",
+            "multi-phase",
+            "with-triggers"
+          ],
+          "description": "Default template for new workflows"
+        },
+        "generacy.cloudEndpoint": {
+          "type": "string",
+          "default": "https://api.generacy.ai",
+          "description": "Generacy cloud API endpoint"
+        },
+        "generacy.telemetry.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable anonymous usage telemetry"
+        },
+        "generacy.publish.autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically sync workflow changes with cloud"
+        },
+        "generacy.publish.confirmBeforePublish": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show confirmation dialog before publishing workflows"
+        },
+        "generacy.publish.requireChangelog": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require changelog message when publishing workflows"
+        },
+        "generacy.publish.syncStatusCacheTTL": {
+          "type": "number",
+          "default": 300000,
+          "description": "Cache TTL for workflow sync status in milliseconds (default: 5 minutes)"
+        }
+      }
+    },
+    "languages": [
+      {
+        "id": "generacy-workflow",
+        "aliases": [
+          "Generacy Workflow",
+          "generacy"
+        ],
+        "extensions": [
+          ".generacy.yaml",
+          ".generacy.yml"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "generacy",
+        "label": "Generacy Workflow",
+        "languages": [
+          "generacy-workflow",
+          "yaml"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "workflow"
+            ],
+            "properties": {
+              "workflow": {
+                "type": "string",
+                "description": "Path to the workflow file to debug"
+              },
+              "dryRun": {
+                "type": "boolean",
+                "default": false,
+                "description": "Run in dry-run mode (validate without executing)"
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables to set during execution"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "generacy",
+            "request": "launch",
+            "name": "Debug Workflow",
+            "workflow": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Generacy: Debug Workflow",
+            "description": "Debug a Generacy workflow file",
+            "body": {
+              "type": "generacy",
+              "request": "launch",
+              "name": "Debug Workflow",
+              "workflow": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.js",
+    "watch": "node esbuild.config.js --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit",
+    "package": "vsce package"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.2.0",
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.108.1",
+    "@vscode/debugprotocol": "^1.65.0",
+    "@vscode/test-electron": "^2.3.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  }
+}

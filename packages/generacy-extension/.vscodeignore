@@ -1,0 +1,56 @@
+# Development files
+.vscode/**
+.vscode-test/**
+src/**
+**/*.ts
+!dist/**
+
+# Test files
+**/__tests__/**
+**/*.test.ts
+**/*.spec.ts
+vitest.config.ts
+
+# Build configuration
+tsconfig.json
+esbuild.config.js
+.eslintrc*
+.prettierrc*
+
+# Documentation (keep README for marketplace)
+CONTRIBUTING.md
+docs/**
+
+# Git
+.git/**
+.gitignore
+.gitattributes
+
+# npm
+node_modules/**
+package-lock.json
+.npmrc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.log
+*.tmp
+.cache/**
+
+# CI/CD
+.github/**
+.travis.yml
+.circleci/**
+
+# IDE
+*.swp
+*.swo
+.idea/**
+*.sublime-*
+
+# Coverage
+coverage/**
+.nyc_output/**

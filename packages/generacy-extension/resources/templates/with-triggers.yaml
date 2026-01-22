@@ -1,0 +1,40 @@
+# Workflow with Triggers Template
+# A workflow configured with webhook and schedule triggers
+#
+# Usage: Configure triggers for your automation needs
+
+name: my-workflow
+version: "1.0.0"
+description: A workflow with trigger configuration
+
+triggers:
+  - type: manual
+    config: {}
+
+  - type: webhook
+    config:
+      path: /api/trigger
+      secret: WEBHOOK_SECRET
+
+  - type: schedule
+    config:
+      cron: "0 0 * * *"
+      timezone: UTC
+
+phases:
+  - name: process
+    description: Main processing phase
+    steps:
+      - name: log-trigger
+        description: Log trigger information
+        run: |
+          echo "Workflow triggered!"
+          echo "Trigger type: $TRIGGER_TYPE"
+
+      - name: execute
+        description: Execute main task
+        run: echo "Processing triggered workflow..."
+
+      - name: report
+        description: Report execution status
+        run: echo "Execution complete"

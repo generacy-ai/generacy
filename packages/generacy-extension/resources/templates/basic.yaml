@@ -1,0 +1,22 @@
+# Basic Workflow Template
+# A simple single-phase workflow for getting started with Generacy
+#
+# Usage: Modify the name and add your own steps
+
+name: my-workflow
+version: "1.0.0"
+description: A basic workflow template
+
+phases:
+  - name: main
+    description: Main execution phase
+    steps:
+      - name: hello
+        description: A simple greeting step
+        run: echo "Hello, Generacy!"
+
+      - name: show-env
+        description: Display environment information
+        run: |
+          echo "Working directory: $(pwd)"
+          echo "User: $(whoami)"
