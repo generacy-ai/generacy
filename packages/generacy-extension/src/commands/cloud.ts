@@ -74,7 +74,7 @@ export function registerCloudCommands(context: vscode.ExtensionContext): void {
     },
   ];
 
-  for (const { id, handler} of commands) {
+  for (const { id, handler } of commands) {
     const disposable = vscode.commands.registerCommand(id, handler);
     context.subscriptions.push(disposable);
     logger.debug(`Registered cloud command: ${id}`);
