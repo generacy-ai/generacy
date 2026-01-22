@@ -126,6 +126,21 @@ vi.mock('vscode', () => {
       })),
       registerFileDecorationProvider: vi.fn(() => ({ dispose: vi.fn() })),
       activeTextEditor: undefined,
+      onDidCloseTerminal: vi.fn(() => ({ dispose: vi.fn() })),
+      createTerminal: vi.fn(() => ({
+        show: vi.fn(),
+        sendText: vi.fn(),
+        dispose: vi.fn(),
+        processId: Promise.resolve(123),
+      })),
+      createStatusBarItem: vi.fn(() => ({
+        show: vi.fn(),
+        hide: vi.fn(),
+        dispose: vi.fn(),
+        text: '',
+        tooltip: '',
+        command: '',
+      })),
     },
     commands: {
       registerCommand: vi.fn((_command: string, _callback: () => void) => ({
@@ -136,6 +151,7 @@ vi.mock('vscode', () => {
     workspace: {
       getConfiguration: vi.fn(() => mockConfiguration),
       onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChangeTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
       workspaceFolders: [{ uri: { fsPath: '/workspace', path: '/workspace', toString: () => 'file:///workspace' } }],
       createFileSystemWatcher: vi.fn(() => ({
         onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
@@ -187,7 +203,95 @@ vi.mock('vscode', () => {
       Workspace: 2,
       WorkspaceFolder: 3,
     },
+    StatusBarAlignment: {
+      Left: 1,
+      Right: 2,
+    },
     Disposable: vi.fn().mockImplementation((fn: () => void) => ({ dispose: fn })),
+    // CodeLens and CodeAction related exports
+    CodeLens: class {
+      constructor(
+        public range: unknown,
+        public command?: unknown
+      ) {}
+    },
+    CodeAction: class {
+      diagnostics?: unknown[];
+      isPreferred?: boolean;
+      edit?: unknown;
+      command?: unknown;
+      constructor(
+        public title: string,
+        public kind?: unknown
+      ) {}
+    },
+    CodeActionKind: {
+      QuickFix: 'quickfix',
+      Refactor: 'refactor',
+      RefactorExtract: 'refactor.extract',
+    },
+    Range: class {
+      constructor(
+        public startLine: number,
+        public startChar: number,
+        public endLine: number,
+        public endChar: number
+      ) {}
+    },
+    Position: class {
+      constructor(
+        public line: number,
+        public character: number
+      ) {}
+    },
+    WorkspaceEdit: class {
+      insert = vi.fn();
+      replace = vi.fn();
+      delete = vi.fn();
+    },
+    languages: {
+      registerCodeLensProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      registerCodeActionsProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      registerCompletionItemProvider: vi.fn(() => ({ dispose: vi.fn() })),
+    },
+    CompletionItemKind: {
+      Text: 0,
+      Method: 1,
+      Function: 2,
+      Constructor: 3,
+      Field: 4,
+      Variable: 5,
+      Class: 6,
+      Interface: 7,
+      Module: 8,
+      Property: 9,
+      Unit: 10,
+      Value: 11,
+      Enum: 12,
+      Keyword: 13,
+      Snippet: 14,
+      Color: 15,
+      File: 16,
+      Reference: 17,
+      Folder: 18,
+      EnumMember: 19,
+      Constant: 20,
+      Struct: 21,
+      Event: 22,
+      Operator: 23,
+      TypeParameter: 24,
+    },
+    CompletionItem: class {
+      label: string;
+      kind?: number;
+      detail?: string;
+      documentation?: string;
+      insertText?: string;
+      constructor(label: string, kind?: number) {
+        this.label = label;
+        this.kind = kind;
+      }
+    },
   };
 });
 
@@ -233,7 +337,9 @@ describe('Generacy Extension', () => {
       extension.activate(mockContext);
 
       const expectedCommands = Object.values(COMMANDS);
-      expect(vscode.commands.registerCommand).toHaveBeenCalledTimes(expectedCommands.length);
+      // At least all COMMANDS should be registered (other modules like status-bar may add more)
+      const registerCommandCalls = (vscode.commands.registerCommand as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(registerCommandCalls).toBeGreaterThanOrEqual(expectedCommands.length);
 
       for (const command of expectedCommands) {
         expect(vscode.commands.registerCommand).toHaveBeenCalledWith(

@@ -29,12 +29,10 @@ export const COMMANDS = {
   deleteWorkflow: 'generacy.deleteWorkflow',
   duplicateWorkflow: 'generacy.duplicateWorkflow',
   runWorkflow: 'generacy.runWorkflow',
+  runPhase: 'generacy.runPhase',
   debugWorkflow: 'generacy.debugWorkflow',
   validateWorkflow: 'generacy.validateWorkflow',
   refreshExplorer: 'generacy.refreshExplorer',
-  renameWorkflow: 'generacy.renameWorkflow',
-  deleteWorkflow: 'generacy.deleteWorkflow',
-  duplicateWorkflow: 'generacy.duplicateWorkflow',
   openWorkflow: 'generacy.openWorkflow',
   revealInExplorer: 'generacy.revealInExplorer',
 } as const;

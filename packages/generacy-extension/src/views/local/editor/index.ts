@@ -1,9 +1,17 @@
 /**
  * Editor features for Generacy workflow YAML files.
- * Provides IntelliSense, diagnostics, hover, and formatting.
+ * Provides CodeLens, Code Actions, IntelliSense, diagnostics, hover, and formatting.
  */
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils';
+
+// CodeLens and Code Action providers
+export {
+  WorkflowCodeLensProvider,
+  WorkflowCodeActionProvider,
+  createWorkflowCodeLensProvider,
+  createWorkflowCodeActionProvider,
+} from './codelens';
 
 // Completion provider
 export { WorkflowCompletionProvider, registerCompletionProvider } from './completion';
