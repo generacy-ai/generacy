@@ -43,6 +43,7 @@ export const COMMANDS = {
 export const VIEWS = {
   workflows: 'generacy.workflows',
   queue: 'generacy.queue',
+  integrations: 'generacy.integrations',
 } as const;
 
 /**
@@ -114,6 +115,8 @@ export const TREE_ITEM_CONTEXT = {
   phase: 'phase',
   step: 'step',
   queueItem: 'queueItem',
+  integration: 'integration',
+  webhook: 'webhook',
 } as const;
 
 /**
