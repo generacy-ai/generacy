@@ -21,6 +21,7 @@ import {
   initializeRunner,
 } from './commands/runner';
 import { initializeExecutionStatusBar } from './providers';
+import { registerDebugAdapter } from './debug';
 
 // Module-level provider reference for command handlers
 let workflowTreeProvider: WorkflowTreeProvider | undefined;
@@ -71,6 +72,10 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize execution status bar
   initializeExecutionStatusBar(context);
   logger.info('Execution status bar initialized');
+
+  // Register debug adapter
+  registerDebugAdapter(context);
+  logger.info('Debug adapter registered');
 
   // Listen for configuration changes
   context.subscriptions.push(
@@ -195,10 +200,40 @@ async function handleRunPhase(arg?: unknown): Promise<void> {
   await runPhase(arg);
 }
 
-async function handleDebugWorkflow(): Promise<void> {
+async function handleDebugWorkflow(arg?: unknown): Promise<void> {
   const logger = getLogger();
   logger.info('Command: Debug Workflow');
-  await vscode.window.showInformationMessage('Debug Workflow - Not yet implemented');
+
+  // Get workflow file to debug
+  let workflowPath: string | undefined;
+
+  if (arg instanceof vscode.Uri) {
+    workflowPath = arg.fsPath;
+  } else if (arg && isWorkflowTreeItem(arg as vscode.TreeItem)) {
+    workflowPath = (arg as WorkflowTreeItem).uri.fsPath;
+  } else {
+    // Try to get from active editor
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) {
+      workflowPath = activeEditor.document.uri.fsPath;
+    }
+  }
+
+  if (!workflowPath) {
+    await vscode.window.showWarningMessage('No workflow file selected to debug');
+    return;
+  }
+
+  // Start debug session
+  const config: vscode.DebugConfiguration = {
+    type: 'generacy',
+    name: 'Debug Workflow',
+    request: 'launch',
+    workflow: workflowPath,
+    stopOnEntry: true,
+  };
+
+  await vscode.debug.startDebugging(undefined, config);
 }
 
 async function handleValidateWorkflow(arg?: unknown): Promise<void> {
