@@ -116,6 +116,36 @@
         "icon": "$(account)"
       },
       {
+        "command": "generacy.publishWorkflow",
+        "title": "Publish Workflow to Cloud",
+        "category": "Generacy",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "generacy.compareWithCloud",
+        "title": "Compare with Cloud Version",
+        "category": "Generacy",
+        "icon": "$(diff)"
+      },
+      {
+        "command": "generacy.viewVersionHistory",
+        "title": "View Version History",
+        "category": "Generacy",
+        "icon": "$(history)"
+      },
+      {
+        "command": "generacy.rollbackWorkflow",
+        "title": "Rollback to Previous Version",
+        "category": "Generacy",
+        "icon": "$(debug-reverse-continue)"
+      },
+      {
+        "command": "generacy.refreshSyncStatus",
+        "title": "Refresh Sync Status",
+        "category": "Generacy",
+        "icon": "$(sync)"
+      },
+      {
         "command": "generacy.debug.refreshVariables",
         "title": "Refresh Variables",
         "category": "Generacy Debug",
@@ -414,6 +444,26 @@
           "type": "boolean",
           "default": false,
           "description": "Enable anonymous usage telemetry"
+        },
+        "generacy.publish.autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically sync workflow changes with cloud"
+        },
+        "generacy.publish.confirmBeforePublish": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show confirmation dialog before publishing workflows"
+        },
+        "generacy.publish.requireChangelog": {
+          "type": "boolean",
+          "default": false,
+          "description": "Require changelog message when publishing workflows"
+        },
+        "generacy.publish.syncStatusCacheTTL": {
+          "type": "number",
+          "default": 300000,
+          "description": "Cache TTL for workflow sync status in milliseconds (default: 5 minutes)"
         }
       }
     },

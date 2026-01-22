@@ -2,7 +2,7 @@
 
 **Input**: Design documents from `/specs/065-tg-020-workflow-publishing/`
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md
-**Status**: Complete
+**Status**: Implementation Complete (Tests Pending - Phase 7)
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -42,14 +42,14 @@
   - Add `invalidate()` method for single workflow
   - Add `invalidateAll()` method for manual refresh
 
-- [ ] T006 Implement sync status determination in `src/views/cloud/publish/status.ts`
+- [X] T006 Implement sync status determination in `src/views/cloud/publish/status.ts`
   - Create `determineSyncStatus()` function
   - Fetch cloud workflow details if exists
   - Compare local content with cloud version content
   - Compare modification timestamps
   - Return appropriate `SyncStatus`
 
-- [ ] T007 Create publish workflow command handler in `src/views/cloud/publish/sync.ts`
+- [X] T007 Create publish workflow command handler in `src/views/cloud/publish/sync.ts`
   - Implement `publishWorkflowCommand()` function
   - Get active workflow file from editor
   - Validate workflow YAML
@@ -65,7 +65,7 @@
 
 ## Phase 3: Diff Comparison View
 
-- [ ] T008 Create cloud workflow content provider in `src/views/cloud/publish/provider.ts`
+- [X] T008 Create cloud workflow content provider in `src/views/cloud/publish/provider.ts`
   - Implement `CloudWorkflowContentProvider` class
   - Implement `provideTextDocumentContent()` method
   - Parse URI to extract workflow name and version
@@ -73,7 +73,7 @@
   - Return content as string
   - Handle errors with clear messages
 
-- [ ] T009 Implement diff comparison view in `src/views/cloud/publish/compare.ts`
+- [X] T009 Implement diff comparison view in `src/views/cloud/publish/compare.ts`
   - Create `showWorkflowDiff()` function
   - Register `CloudWorkflowContentProvider` with 'generacy-cloud' scheme
   - Create cloud URI: `generacy-cloud://workflow/:name/:version`
@@ -83,7 +83,7 @@
 
 ## Phase 4: Version History & Rollback
 
-- [ ] T010 Create version history panel in `src/views/cloud/publish/version.ts`
+- [X] T010 Create version history panel in `src/views/cloud/publish/version.ts`
   - Implement `showVersionHistoryCommand()` function
   - Get active workflow name from editor
   - Fetch versions with `getWorkflowVersions()` API
@@ -95,7 +95,7 @@
   - Handle button click events
   - Sort versions descending (newest first)
 
-- [ ] T011 Implement rollback functionality in `src/views/cloud/publish/version.ts`
+- [X] T011 Implement rollback functionality in `src/views/cloud/publish/version.ts`
   - Create `rollbackWorkflowCommand()` function
   - Show confirmation dialog with version details
   - Fetch target version content with `getWorkflowVersion()`
@@ -106,7 +106,7 @@
 
 ## Phase 5: Sync Status Indicators
 
-- [ ] T012 Create file decoration provider in `src/views/cloud/publish/decorations.ts`
+- [X] T012 Create file decoration provider in `src/views/cloud/publish/decorations.ts`
   - Implement `WorkflowSyncDecorationProvider` class
   - Implement `provideFileDecoration()` method
   - Check if file is workflow (.yaml in .generacy/ directory)
@@ -114,7 +114,7 @@
   - Return `FileDecoration` with badge, color, tooltip
   - Map `SyncStatus` to icons and colors using constants
 
-- [ ] T013 Register decoration provider in extension in `src/views/cloud/publish/sync.ts`
+- [X] T013 Register decoration provider in extension in `src/views/cloud/publish/sync.ts`
   - Create decoration provider instance
   - Register with `vscode.window.registerFileDecorationProvider()`
   - Set up file watcher for .generacy/**/*.yaml files
@@ -123,12 +123,12 @@
 
 ## Phase 6: Command Registration & Module Exports
 
-- [ ] T014 Create publish module index in `src/views/cloud/publish/index.ts`
+- [X] T014 Create publish module index in `src/views/cloud/publish/index.ts`
   - Export all public functions and types
   - Export command handlers
   - Export provider classes
 
-- [ ] T015 Register commands in extension activation in `src/extension.ts`
+- [X] T015 Register commands in extension activation in `src/extension.ts`
   - Register `generacy.publishWorkflow` command
   - Register `generacy.viewVersionHistory` command
   - Register `generacy.compareWithCloud` command
@@ -136,7 +136,7 @@
   - Register `generacy.refreshSyncStatus` command
   - Add all registrations to `context.subscriptions`
 
-- [ ] T016 Update package.json with command contributions
+- [X] T016 Update package.json with command contributions
   - Add command definitions to `contributes.commands`
   - Add activation events: `onCommand:generacy.publishWorkflow`, etc.
   - Add configuration settings:
