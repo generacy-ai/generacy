@@ -273,16 +273,12 @@ export class DebugExecutionState {
   public setVariable(scope: VariableScope, name: string, value: unknown, phaseName?: string, stepName?: string): void {
     if (!this.workflow) return;
 
-    let targetMap: Map<string, unknown>;
-
     switch (scope) {
       case 'environment':
         this.workflow.environment.set(name, String(value));
-        targetMap = this.workflow.environment as unknown as Map<string, unknown>;
         break;
       case 'workflow':
         this.workflow.variables.set(name, value);
-        targetMap = this.workflow.variables;
         break;
       case 'phase': {
         const phase = phaseName
@@ -290,7 +286,6 @@ export class DebugExecutionState {
           : this.getCurrentPhase();
         if (phase) {
           phase.variables.set(name, value);
-          targetMap = phase.variables;
         } else {
           return;
         }
@@ -305,7 +300,6 @@ export class DebugExecutionState {
           : this.getCurrentStep();
         if (step) {
           step.variables.set(name, value);
-          targetMap = step.variables;
         } else {
           return;
         }
