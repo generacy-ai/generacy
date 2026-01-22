@@ -14,10 +14,10 @@
 **Tests**: Integration tests with queue provider
 
 ## Tasks
-- [ ] Implement cancel action with confirmation
-- [ ] Implement retry action for failed items
-- [ ] Add priority adjustment (up/down)
-- [ ] Create "View Details" action showing full queue item info
+- [x] Implement cancel action with confirmation
+- [x] Implement retry action for failed items
+- [x] Add priority adjustment (up/down)
+- [x] Create "View Details" action showing full queue item info
 
 ## Source
 <!-- task-group-id: TG-018 -->

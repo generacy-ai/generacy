@@ -22,3 +22,13 @@ export {
   isQueueFilterGroupItem,
   type QueueExplorerItem,
 } from './tree-item';
+
+// Actions
+export {
+  cancelQueueItem,
+  retryQueueItem,
+  increasePriority,
+  decreasePriority,
+  viewQueueItemDetails,
+  registerQueueActions,
+} from './actions';
