@@ -96,6 +96,96 @@
         "title": "Reveal in Explorer",
         "category": "Generacy",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "generacy.debug.refreshVariables",
+        "title": "Refresh Variables",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.addWatchExpression",
+        "title": "Add Watch Expression",
+        "category": "Generacy Debug",
+        "icon": "$(add)"
+      },
+      {
+        "command": "generacy.debug.editWatchExpression",
+        "title": "Edit Watch Expression",
+        "category": "Generacy Debug",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "generacy.debug.removeWatchExpression",
+        "title": "Remove Watch Expression",
+        "category": "Generacy Debug",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "generacy.debug.clearWatchExpressions",
+        "title": "Clear All Watch Expressions",
+        "category": "Generacy Debug",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "generacy.debug.refreshWatch",
+        "title": "Refresh Watch Expressions",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.replayFromStep",
+        "title": "Replay From Step",
+        "category": "Generacy Debug",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "generacy.debug.saveReplayPoint",
+        "title": "Save Replay Point",
+        "category": "Generacy Debug",
+        "icon": "$(bookmark)"
+      },
+      {
+        "command": "generacy.debug.refreshHistory",
+        "title": "Refresh History",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.toggleGroupByPhase",
+        "title": "Toggle Group By Phase",
+        "category": "Generacy Debug",
+        "icon": "$(group-by-ref-type)"
+      },
+      {
+        "command": "generacy.debug.clearHistory",
+        "title": "Clear History",
+        "category": "Generacy Debug",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "generacy.debug.refreshErrors",
+        "title": "Refresh Errors",
+        "category": "Generacy Debug",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.debug.clearErrors",
+        "title": "Clear Errors",
+        "category": "Generacy Debug",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "generacy.debug.copyError",
+        "title": "Copy Error Details",
+        "category": "Generacy Debug",
+        "icon": "$(copy)"
+      },
+      {
+        "command": "generacy.debug.showErrorDetails",
+        "title": "Show Error Details",
+        "category": "Generacy Debug",
+        "icon": "$(info)"
       }
     ],
     "viewsContainers": {
@@ -120,6 +210,32 @@
           "contextualTitle": "Workflow Queue",
           "when": "generacy.isAuthenticated"
         }
+      ],
+      "debug": [
+        {
+          "id": "generacy.debugVariables",
+          "name": "Variables",
+          "contextualTitle": "Workflow Variables",
+          "when": "debugType == generacy"
+        },
+        {
+          "id": "generacy.debugWatch",
+          "name": "Watch",
+          "contextualTitle": "Watch Expressions",
+          "when": "debugType == generacy"
+        },
+        {
+          "id": "generacy.debugHistory",
+          "name": "Execution History",
+          "contextualTitle": "Execution History",
+          "when": "debugType == generacy"
+        },
+        {
+          "id": "generacy.debugErrors",
+          "name": "Errors",
+          "contextualTitle": "Error Analysis",
+          "when": "debugType == generacy"
+        }
       ]
     },
     "menus": {
@@ -132,6 +248,51 @@
         {
           "command": "generacy.refreshExplorer",
           "when": "view == generacy.workflows",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.debug.refreshVariables",
+          "when": "view == generacy.debugVariables",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.addWatchExpression",
+          "when": "view == generacy.debugWatch",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.refreshWatch",
+          "when": "view == generacy.debugWatch",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.debug.clearWatchExpressions",
+          "when": "view == generacy.debugWatch",
+          "group": "navigation@3"
+        },
+        {
+          "command": "generacy.debug.refreshHistory",
+          "when": "view == generacy.debugHistory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.toggleGroupByPhase",
+          "when": "view == generacy.debugHistory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.debug.clearHistory",
+          "when": "view == generacy.debugHistory",
+          "group": "navigation@3"
+        },
+        {
+          "command": "generacy.debug.refreshErrors",
+          "when": "view == generacy.debugErrors",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.debug.clearErrors",
+          "when": "view == generacy.debugErrors",
           "group": "navigation@2"
         }
       ],
@@ -185,6 +346,26 @@
           "command": "generacy.deleteWorkflow",
           "when": "view == generacy.workflows && viewItem == workflow",
           "group": "4_delete@1"
+        },
+        {
+          "command": "generacy.debug.editWatchExpression",
+          "when": "view == generacy.debugWatch && viewItem == watchExpression",
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.debug.removeWatchExpression",
+          "when": "view == generacy.debugWatch && viewItem == watchExpression",
+          "group": "inline@2"
+        },
+        {
+          "command": "generacy.debug.copyError",
+          "when": "view == generacy.debugErrors && viewItem == error",
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.debug.showErrorDetails",
+          "when": "view == generacy.debugErrors && viewItem == error",
+          "group": "1_view@1"
         }
       ]
     },
