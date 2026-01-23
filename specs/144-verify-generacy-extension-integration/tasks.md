@@ -10,36 +10,36 @@
 
 ## Phase 1: Environment Setup & Connectivity
 
-- [ ] T001 Verify orchestrator starts on localhost:3001 with `pnpm dev` or docker-compose
-- [ ] T002 [P] Confirm extension settings schema includes `generacy.cloudEndpoint` configuration
-- [ ] T003 [P] Verify health endpoint `GET /health` responds with 200 OK
-- [ ] T004 Test extension can reach orchestrator API using configured cloudEndpoint
+- [x] T001 Verify orchestrator starts on localhost:3001 with `pnpm dev` or docker-compose
+- [x] T002 [P] Confirm extension settings schema includes `generacy.cloudEndpoint` configuration
+- [x] T003 [P] Verify health endpoint `GET /health` responds with 200 OK
+- [x] T004 Test extension can reach orchestrator API using configured cloudEndpoint
 
 ## Phase 2: Authentication Verification
 
-- [ ] T010 [AUTH] Generate test API key in orchestrator or configure in-memory store
-- [ ] T011 [AUTH] Verify API key authentication via `X-API-Key` header works
-- [ ] T012 [AUTH] [P] Test invalid API key returns 401 Unauthorized
-- [ ] T013 [AUTH] [P] Verify JWT Bearer token authentication flow works
-- [ ] T014 [AUTH] Test token refresh mechanism if session expires
-- [ ] T015 [AUTH] Verify extension SecretStorage persists tokens across restarts
+- [x] T010 [AUTH] Generate test API key in orchestrator or configure in-memory store
+- [x] T011 [AUTH] Verify API key authentication via `X-API-Key` header works
+- [x] T012 [AUTH] [P] Test invalid API key returns 401 Unauthorized
+- [x] T013 [AUTH] [P] Verify JWT Bearer token authentication flow works
+- [x] T014 [AUTH] Test token refresh mechanism if session expires
+- [x] T015 [AUTH] Verify extension SecretStorage persists tokens across restarts
 
 ## Phase 3: Core API Verification - Workflows
 
-- [ ] T020 [WORKFLOW] `POST /workflows` - Create a new workflow and verify response schema
-- [ ] T021 [WORKFLOW] `GET /workflows` - List workflows and verify Zod schema validation
-- [ ] T022 [WORKFLOW] [P] `GET /workflows/:id` - Get single workflow details
-- [ ] T023 [WORKFLOW] [P] `POST /workflows/:id/pause` - Pause running workflow
-- [ ] T024 [WORKFLOW] [P] `POST /workflows/:id/resume` - Resume paused workflow
-- [ ] T025 [WORKFLOW] Verify workflow status transitions: created → running → paused → completed
+- [x] T020 [WORKFLOW] `POST /workflows` - Create a new workflow and verify response schema
+- [x] T021 [WORKFLOW] `GET /workflows` - List workflows and verify Zod schema validation
+- [x] T022 [WORKFLOW] [P] `GET /workflows/:id` - Get single workflow details
+- [x] T023 [WORKFLOW] [P] `POST /workflows/:id/pause` - Pause running workflow
+- [x] T024 [WORKFLOW] [P] `POST /workflows/:id/resume` - Resume paused workflow
+- [x] T025 [WORKFLOW] Verify workflow status transitions: created → running → paused → completed
 
 ## Phase 4: Core API Verification - Queue
 
-- [ ] T030 [QUEUE] `GET /queue` - List decision queue items with proper filtering
-- [ ] T031 [QUEUE] `GET /queue/:id` - Get single queue item details
-- [ ] T032 [QUEUE] [P] `POST /queue/:id/respond` - Submit decision response
-- [ ] T033 [QUEUE] Verify queue item priority levels: blocking_now, blocking_soon, when_available
-- [ ] T034 [QUEUE] Test queue item schema matches expected format (type, prompt, options)
+- [x] T030 [QUEUE] `GET /queue` - List decision queue items with proper filtering
+- [x] T031 [QUEUE] `GET /queue/:id` - Get single queue item details
+- [x] T032 [QUEUE] [P] `POST /queue/:id/respond` - Submit decision response
+- [x] T033 [QUEUE] Verify queue item priority levels: blocking_now, blocking_soon, when_available
+- [x] T034 [QUEUE] Test queue item schema matches expected format (type, prompt, options)
 
 ## Phase 5: Extension UI Verification (Manual)
 
@@ -52,20 +52,20 @@
 
 ## Phase 6: Error Handling & Edge Cases
 
-- [ ] T050 [P] Test connection failure error handling when orchestrator is not running
-- [ ] T051 [P] Verify timeout handling with appropriate retry logic
-- [ ] T052 [P] Test schema validation error handling for malformed responses
-- [ ] T053 Verify 404 handling for non-existent workflow/queue items
-- [ ] T054 Test rate limiting response handling if implemented
+- [x] T050 [P] Test connection failure error handling when orchestrator is not running
+- [x] T051 [P] Verify timeout handling with appropriate retry logic
+- [x] T052 [P] Test schema validation error handling for malformed responses
+- [x] T053 Verify 404 handling for non-existent workflow/queue items
+- [x] T054 Test rate limiting response handling if implemented
 
 ## Phase 7: Integration Test Suite
 
-- [ ] T060 Create integration test file `tests/integration/extension-orchestrator.test.ts`
-- [ ] T061 [P] Write test: Health check connectivity
-- [ ] T062 [P] Write test: API key authentication flow
-- [ ] T063 [P] Write test: Workflow CRUD operations
-- [ ] T064 [P] Write test: Queue operations
-- [ ] T065 Run full integration test suite and verify all tests pass
+- [x] T060 Create integration test file `tests/integration/extension-orchestrator.test.ts`
+- [x] T061 [P] Write test: Health check connectivity
+- [x] T062 [P] Write test: API key authentication flow
+- [x] T063 [P] Write test: Workflow CRUD operations
+- [x] T064 [P] Write test: Queue operations
+- [x] T065 Run full integration test suite and verify all tests pass
 
 ## Dependencies & Execution Order
 
