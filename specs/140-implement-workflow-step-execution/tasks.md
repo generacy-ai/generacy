@@ -1,0 +1,88 @@
+# Tasks: Workflow Step Execution Engine
+
+**Input**: Design documents from `/specs/140-implement-workflow-step-execution/`
+**Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md
+**Status**: Complete
+
+## Format: `[ID] [P?] [Story] Description`
+- **[P]**: Can run in parallel (different files, no dependencies)
+- **[Story]**: Which user story this task belongs to (US1=Execute Workflow, US2=Debug Workflow)
+
+---
+
+## Phase 1: Core Action Infrastructure
+
+- [X] T001 [US1] Create `actions/types.ts` with ActionType enum, ActionHandler interface, ActionContext, ActionResult, and StepOutput types
+- [X] T002 [US1] Create `actions/base-action.ts` with abstract BaseAction class implementing common functionality (logging, timing, error wrapping)
+- [X] T003 [US1] Create `actions/index.ts` with action registry Map and `getActionHandler(step: WorkflowStep)` factory function
+- [X] T004 [US1] Extend `types.ts` to add parsed action metadata to WorkflowStep (action type detection from `uses` field)
+
+## Phase 2: Variable Interpolation Engine
+
+- [X] T005 [US1] Create `interpolation/context.ts` with ExecutionContext class managing inputs, stepOutputs Map, and env
+- [X] T006 [US1] Create `interpolation/index.ts` with `interpolate(template: string, context: InterpolationContext)` supporting `${inputs.*}`, `${steps.*}`, `${env.*}` patterns
+- [X] T007 [US1] Add deep path resolution for nested JSON access (`${steps.stepId.output.field.nested}`) with fallback to string coercion
+- [X] T008 [P] [US1] Write unit tests for interpolation edge cases (missing paths, non-JSON outputs, nested arrays)
+
+## Phase 3: Action Handlers
+
+- [X] T009 [US1] Create `actions/workspace-prepare.ts` handler for git branch operations using `child_process.execFile`
+- [X] T010 [US1] Create `actions/agent-invoke.ts` handler for Claude Code CLI invocation with `--output-format json` and `--print all`
+- [X] T011 [P] [US1] Create `actions/verification-check.ts` handler for test/lint command execution with exit code handling
+- [X] T012 [P] [US1] Create `actions/pr-create.ts` handler for `gh pr create` CLI command with title, body, base branch
+- [X] T013 [US1] Add CLI availability checks (`checkCLI()` function) with helpful error messages for missing `git`, `claude`, `gh`
+- [X] T014 [P] [US1] Write unit tests for each action handler with mocked child_process
+
+## Phase 4: Retry & Timeout
+
+- [X] T015 [US1] Create `retry/strategies.ts` with constant, linear, and exponential backoff calculation functions
+- [X] T016 [US1] Create `retry/index.ts` with RetryManager class wrapping action execution with configurable retry from workflow YAML
+- [X] T017 [US1] Add timeout enforcement using AbortSignal with configurable per-step timeouts
+- [X] T018 [P] [US1] Write unit tests for retry logic and backoff calculations
+
+## Phase 5: Executor Integration
+
+- [X] T019 [US1] Modify `executor.ts` to replace terminal execution with action handler dispatch via registry
+- [X] T020 [US1] Inject ExecutionContext into executor for variable interpolation before each step
+- [X] T021 [US1] Wire RetryManager into executor for per-step retry based on workflow YAML config
+- [X] T022 [US1] Add granular event emission for action lifecycle (action:start, action:complete, action:error, action:retry)
+
+## Phase 6: Debug Adapter Integration
+
+- [X] T023 [US2] Create `debug-integration.ts` with DebugHooks class implementing beforeStep/afterStep/onError hooks
+- [X] T024 [US2] Add breakpoint checking in beforeStep with pause capability
+- [X] T025 [US2] Add step result inspection API in afterStep for debug adapter
+- [X] T026 [P] [US2] Wire DebugHooks into executor with conditional activation (only when debug session active)
+
+## Phase 7: Integration Testing
+
+- [X] T027 [US1] Write integration test for full 4-step workflow: workspace.prepare → agent.invoke → verification.check → pr.create
+- [X] T028 [US1] Test error propagation and retry behavior across steps
+- [X] T029 [US2] Test debug hooks with mock debug adapter (pause/resume/inspect)
+
+---
+
+## Dependencies & Execution Order
+
+**Phase dependencies (sequential):**
+1. Phase 1 (Infrastructure) → enables all other phases
+2. Phase 2 (Interpolation) → required for Phase 3 (action inputs use interpolation)
+3. Phase 3 (Handlers) → can run in parallel with Phase 4 (Retry)
+4. Phase 4 (Retry) → independent of handlers, can develop concurrently
+5. Phase 5 (Integration) → requires Phases 1-4 complete
+6. Phase 6 (Debug) → can run in parallel with Phase 5
+7. Phase 7 (Testing) → requires all prior phases
+
+**Parallel opportunities within phases:**
+- T008 (interpolation tests) can run parallel after T005-T007
+- T011, T012 (verification, pr handlers) can run parallel with T009, T010
+- T014 (handler tests) can run parallel after handlers complete
+- T018 (retry tests) can run parallel after T015-T017
+- T026 (debug wiring) can run parallel with T023-T025
+
+**Critical path:**
+T001-T004 → T005-T007 → T009-T012 → T019-T022 → T027-T029
+
+---
+
+*Generated by speckit*
