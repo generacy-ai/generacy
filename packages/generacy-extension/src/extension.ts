@@ -20,6 +20,7 @@ import {
   validateWorkflow as runValidateWorkflow,
   initializeRunner,
 } from './commands/runner';
+import { createWorkflow } from './commands/workflow';
 import { initializeExecutionStatusBar } from './providers';
 import { registerDebugAdapter } from './debug';
 import { registerCloudCommands, initializeCloudServices } from './commands/cloud';
@@ -193,9 +194,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
  * Command handlers
  */
 async function handleCreateWorkflow(): Promise<void> {
-  const logger = getLogger();
-  logger.info('Command: Create Workflow');
-  await vscode.window.showInformationMessage('Create Workflow - Not yet implemented');
+  await createWorkflow();
 }
 
 async function handleRunWorkflow(arg?: unknown): Promise<void> {

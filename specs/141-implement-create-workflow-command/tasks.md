@@ -10,13 +10,13 @@
 
 ## Phase 1: Implementation
 
-- [ ] T001 [US1] Add import for `createWorkflow` from `./commands/workflow` in `packages/generacy-extension/src/extension.ts`
-- [ ] T002 [US1] Update `handleCreateWorkflow()` function to call `createWorkflow()` instead of showing placeholder message in `packages/generacy-extension/src/extension.ts:195-199`
+- [x] T001 [US1] Add import for `createWorkflow` from `./commands/workflow` in `packages/generacy-extension/src/extension.ts`
+- [x] T002 [US1] Update `handleCreateWorkflow()` function to call `createWorkflow()` instead of showing placeholder message in `packages/generacy-extension/src/extension.ts:195-199`
 
 ## Phase 2: Verification
 
-- [ ] T003 [US1] Run existing tests to verify implementation: `npm test` in `packages/generacy-extension`
-- [ ] T004 [US1][US2] Manual verification: Test command from VS Code command palette with template selection and file creation
+- [x] T003 [US1] Run existing tests to verify implementation: `npm test` in `packages/generacy-extension`
+- [ ] T004 [US1][US2] [manual] Manual verification: Test command from VS Code command palette with template selection and file creation
 
 ## Dependencies & Execution Order
 
