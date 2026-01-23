@@ -1,6 +1,7 @@
 /**
  * Workflow executor with phase/step iteration.
  * Handles local workflow execution with event emission and result tracking.
+ * Integrates action handlers, variable interpolation, and retry logic.
  */
 import * as vscode from 'vscode';
 import type {
@@ -17,6 +18,24 @@ import type {
 } from './types';
 import { getRunnerOutputChannel } from './output-channel';
 import { getWorkflowTerminal } from './terminal';
+import {
+  getActionHandler,
+  registerBuiltinActions,
+  type ActionContext,
+  type ActionLogger,
+  type StepOutput,
+} from './actions';
+import { ExecutionContext, interpolate, interpolateValue } from './interpolation';
+import { RetryManager, type RetryState } from './retry';
+
+// Ensure built-in actions are registered
+let actionsRegistered = false;
+function ensureActionsRegistered(): void {
+  if (!actionsRegistered) {
+    registerBuiltinActions();
+    actionsRegistered = true;
+  }
+}
 
 /**
  * Workflow executor class
@@ -26,9 +45,11 @@ export class WorkflowExecutor {
   private currentExecution: ExecutionResult | undefined;
   private listeners: Set<ExecutionEventListener> = new Set();
   private cancellationToken: vscode.CancellationTokenSource | undefined;
+  private executionContext: ExecutionContext | undefined;
+  private abortController: AbortController | undefined;
 
   private constructor() {
-    // Private constructor for singleton
+    ensureActionsRegistered();
   }
 
   /**
@@ -63,6 +84,13 @@ export class WorkflowExecutor {
   }
 
   /**
+   * Get the execution context (for accessing step outputs)
+   */
+  public getExecutionContext(): ExecutionContext | undefined {
+    return this.executionContext;
+  }
+
+  /**
    * Add event listener
    */
   public addEventListener(listener: ExecutionEventListener): vscode.Disposable {
@@ -77,7 +105,8 @@ export class WorkflowExecutor {
    */
   public async execute(
     workflow: ExecutableWorkflow,
-    options: ExecutionOptions = { mode: 'normal' }
+    options: ExecutionOptions = { mode: 'normal' },
+    inputs?: Record<string, unknown>
   ): Promise<ExecutionResult> {
     // Check if already running
     if (this.isRunning()) {
@@ -85,7 +114,12 @@ export class WorkflowExecutor {
     }
 
     const outputChannel = getRunnerOutputChannel();
-    // Terminal is accessed via getWorkflowTerminal() when needed in executeStep
+
+    // Initialize execution context for variable interpolation
+    this.executionContext = new ExecutionContext(
+      inputs,
+      { ...workflow.env, ...options.env }
+    );
 
     // Initialize execution result
     this.currentExecution = {
@@ -97,8 +131,14 @@ export class WorkflowExecutor {
       env: { ...workflow.env, ...options.env },
     };
 
-    // Create cancellation token
+    // Create cancellation token and abort controller
     this.cancellationToken = new vscode.CancellationTokenSource();
+    this.abortController = new AbortController();
+
+    // Link VS Code cancellation to AbortController
+    this.cancellationToken.token.onCancellationRequested(() => {
+      this.abortController?.abort();
+    });
 
     // Emit start event
     this.emitEvent({
@@ -137,15 +177,15 @@ export class WorkflowExecutor {
 
         const phase = workflow.phases[i];
         if (!phase) {
-          continue; // Should never happen but satisfy TypeScript
+          continue;
         }
 
         const phaseResult = await this.executePhase(
+          workflow,
           phase,
           i,
           workflow.phases.length,
           options,
-          workflow.name,
           i === startPhaseIndex ? options.startStep : undefined
         );
 
@@ -196,6 +236,7 @@ export class WorkflowExecutor {
     // Cleanup
     this.cancellationToken.dispose();
     this.cancellationToken = undefined;
+    this.abortController = undefined;
 
     return this.currentExecution;
   }
@@ -204,11 +245,11 @@ export class WorkflowExecutor {
    * Execute a single phase
    */
   public async executePhase(
+    workflow: ExecutableWorkflow,
     phase: WorkflowPhase,
     phaseIndex: number,
     totalPhases: number,
     options: ExecutionOptions,
-    workflowName: string,
     startStep?: string
   ): Promise<PhaseResult> {
     const outputChannel = getRunnerOutputChannel();
@@ -226,7 +267,7 @@ export class WorkflowExecutor {
     this.emitEvent({
       type: 'phase:start',
       timestamp: Date.now(),
-      workflowName,
+      workflowName: workflow.name,
       phaseName: phase.name,
       message: `Starting phase: ${phase.name}`,
     });
@@ -262,16 +303,16 @@ export class WorkflowExecutor {
 
         const step = phase.steps[i];
         if (!step) {
-          continue; // Should never happen but satisfy TypeScript
+          continue;
         }
 
         const stepResult = await this.executeStep(
+          workflow,
+          phase,
           step,
           i,
           phase.steps.length,
-          options,
-          workflowName,
-          phase.name
+          options
         );
 
         result.stepResults.push(stepResult);
@@ -293,7 +334,7 @@ export class WorkflowExecutor {
       this.emitEvent({
         type: 'phase:error',
         timestamp: Date.now(),
-        workflowName,
+        workflowName: workflow.name,
         phaseName: phase.name,
         message: error instanceof Error ? error.message : String(error),
       });
@@ -314,7 +355,7 @@ export class WorkflowExecutor {
     this.emitEvent({
       type: result.status === 'completed' ? 'phase:complete' : 'phase:error',
       timestamp: Date.now(),
-      workflowName,
+      workflowName: workflow.name,
       phaseName: phase.name,
       message: `Phase ${result.status}: ${phase.name}`,
       data: result,
@@ -324,22 +365,21 @@ export class WorkflowExecutor {
   }
 
   /**
-   * Execute a single step
+   * Execute a single step using action handlers
    */
   public async executeStep(
+    workflow: ExecutableWorkflow,
+    phase: WorkflowPhase,
     step: WorkflowStep,
     stepIndex: number,
     totalSteps: number,
-    options: ExecutionOptions,
-    workflowName: string,
-    phaseName: string
+    options: ExecutionOptions
   ): Promise<StepResult> {
     const outputChannel = getRunnerOutputChannel();
-    const terminal = getWorkflowTerminal();
 
     const result: StepResult = {
       stepName: step.name,
-      phaseName,
+      phaseName: phase.name,
       status: 'running',
       startTime: Date.now(),
     };
@@ -351,8 +391,8 @@ export class WorkflowExecutor {
     this.emitEvent({
       type: 'step:start',
       timestamp: Date.now(),
-      workflowName,
-      phaseName,
+      workflowName: workflow.name,
+      phaseName: phase.name,
       stepName: step.name,
       message: `Starting step: ${step.name}`,
     });
@@ -369,35 +409,95 @@ export class WorkflowExecutor {
       }
     }
 
+    // For dry-run mode, don't actually execute
+    if (options.mode === 'dry-run') {
+      result.status = 'completed';
+      result.output = `[DRY-RUN] Would execute step: ${step.name}`;
+      result.endTime = Date.now();
+      result.duration = result.endTime - result.startTime;
+      outputChannel.writeStepComplete(step.name, result.duration, true);
+      return result;
+    }
+
     try {
-      // Execute the step
-      const terminalResult = await terminal.executeStepWithCapture(step, {
-        ...options,
-        env: { ...options.env, ...step.env },
-      });
+      // Interpolate step configuration
+      const interpolatedStep = this.interpolateStep(step);
 
-      result.output = terminalResult.output;
-      result.exitCode = terminalResult.exitCode;
-      result.error = terminalResult.error;
+      // Get action handler for this step
+      const handler = getActionHandler(interpolatedStep);
 
-      // Write output
-      if (terminalResult.output) {
-        outputChannel.writeStepOutput(terminalResult.output);
-        this.emitEvent({
-          type: 'step:output',
-          timestamp: Date.now(),
-          workflowName,
-          phaseName,
-          stepName: step.name,
-          message: terminalResult.output,
-        });
-      }
+      if (handler) {
+        // Execute using action handler
+        const actionResult = await this.executeWithActionHandler(
+          workflow,
+          phase,
+          interpolatedStep,
+          handler,
+          options
+        );
 
-      // Determine status
-      if (terminalResult.error || (terminalResult.exitCode !== undefined && terminalResult.exitCode !== 0)) {
-        result.status = 'failed';
+        result.output = typeof actionResult.output === 'string'
+          ? actionResult.output
+          : JSON.stringify(actionResult.output);
+        result.exitCode = actionResult.exitCode;
+        result.error = actionResult.error;
+        result.status = actionResult.success ? 'completed' : 'failed';
+
+        // Store step output for interpolation
+        this.storeStepOutput(step.name, actionResult);
+
+        // Write output
+        if (actionResult.stdout) {
+          outputChannel.writeStepOutput(actionResult.stdout);
+          this.emitEvent({
+            type: 'step:output',
+            timestamp: Date.now(),
+            workflowName: workflow.name,
+            phaseName: phase.name,
+            stepName: step.name,
+            message: actionResult.stdout,
+          });
+        }
       } else {
-        result.status = 'completed';
+        // Fall back to terminal execution for unrecognized actions
+        const terminal = getWorkflowTerminal();
+        const terminalResult = await terminal.executeStepWithCapture(interpolatedStep, {
+          ...options,
+          env: { ...options.env, ...step.env },
+        });
+
+        result.output = terminalResult.output;
+        result.exitCode = terminalResult.exitCode;
+        result.error = terminalResult.error;
+
+        // Store step output
+        this.storeStepOutput(step.name, {
+          success: terminalResult.exitCode === 0,
+          output: terminalResult.output,
+          stdout: terminalResult.output,
+          exitCode: terminalResult.exitCode,
+          duration: 0,
+        });
+
+        // Write output
+        if (terminalResult.output) {
+          outputChannel.writeStepOutput(terminalResult.output);
+          this.emitEvent({
+            type: 'step:output',
+            timestamp: Date.now(),
+            workflowName: workflow.name,
+            phaseName: phase.name,
+            stepName: step.name,
+            message: terminalResult.output,
+          });
+        }
+
+        // Determine status
+        if (terminalResult.error || (terminalResult.exitCode !== undefined && terminalResult.exitCode !== 0)) {
+          result.status = 'failed';
+        } else {
+          result.status = 'completed';
+        }
       }
 
     } catch (error) {
@@ -420,8 +520,8 @@ export class WorkflowExecutor {
     this.emitEvent({
       type: result.status === 'completed' ? 'step:complete' : 'step:error',
       timestamp: Date.now(),
-      workflowName,
-      phaseName,
+      workflowName: workflow.name,
+      phaseName: phase.name,
       stepName: step.name,
       message: `Step ${result.status}: ${step.name}`,
       data: result,
@@ -431,11 +531,191 @@ export class WorkflowExecutor {
   }
 
   /**
+   * Execute step using action handler with retry logic
+   */
+  private async executeWithActionHandler(
+    workflow: ExecutableWorkflow,
+    phase: WorkflowPhase,
+    step: WorkflowStep,
+    handler: ReturnType<typeof getActionHandler>,
+    options: ExecutionOptions
+  ): Promise<{
+    success: boolean;
+    output: unknown;
+    stdout?: string;
+    stderr?: string;
+    error?: string;
+    exitCode?: number;
+    duration: number;
+  }> {
+    if (!handler) {
+      return {
+        success: false,
+        output: null,
+        error: 'No action handler found',
+        duration: 0,
+      };
+    }
+
+    // Create action context
+    const context = this.createActionContext(workflow, phase, step, options);
+
+    // Emit action start event
+    this.emitEvent({
+      type: 'action:start',
+      timestamp: Date.now(),
+      workflowName: workflow.name,
+      phaseName: phase.name,
+      stepName: step.name,
+      message: `Starting action [${handler.type}]`,
+    });
+
+    // Create retry manager with event callback
+    const retryManager = RetryManager.fromStep(step, (state: RetryState, error: Error) => {
+      this.emitEvent({
+        type: 'action:retry',
+        timestamp: Date.now(),
+        workflowName: workflow.name,
+        phaseName: phase.name,
+        stepName: step.name,
+        message: `Retrying action (attempt ${state.attempt + 1}): ${error.message}`,
+        data: state,
+      });
+    });
+
+    // Execute with retry
+    const retryResult = await retryManager.executeWithRetry(handler, step, context);
+
+    // Emit action completion event
+    this.emitEvent({
+      type: retryResult.result.success ? 'action:complete' : 'action:error',
+      timestamp: Date.now(),
+      workflowName: workflow.name,
+      phaseName: phase.name,
+      stepName: step.name,
+      message: retryResult.result.success
+        ? `Action [${handler.type}] completed`
+        : `Action [${handler.type}] failed: ${retryResult.result.error}`,
+      data: {
+        attempts: retryResult.attempts,
+        totalDuration: retryResult.totalDuration,
+      },
+    });
+
+    return retryResult.result;
+  }
+
+  /**
+   * Create action context for step execution
+   */
+  private createActionContext(
+    workflow: ExecutableWorkflow,
+    phase: WorkflowPhase,
+    step: WorkflowStep,
+    options: ExecutionOptions
+  ): ActionContext {
+    const outputChannel = getRunnerOutputChannel();
+
+    // Create logger that writes to output channel
+    const logger: ActionLogger = {
+      info: (msg: string) => outputChannel.info(msg),
+      warn: (msg: string) => outputChannel.warn(msg),
+      error: (msg: string) => outputChannel.error(msg),
+      debug: (msg: string) => outputChannel.debug(msg),
+    };
+
+    return {
+      workflow,
+      phase,
+      step,
+      inputs: this.executionContext?.getInputs() ?? {},
+      stepOutputs: this.executionContext?.getAllStepOutputs() ?? new Map(),
+      env: { ...workflow.env, ...options.env, ...step.env },
+      workdir: options.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd(),
+      signal: this.abortController?.signal ?? new AbortController().signal,
+      logger,
+    };
+  }
+
+  /**
+   * Interpolate variables in step configuration
+   */
+  private interpolateStep(step: WorkflowStep): WorkflowStep {
+    if (!this.executionContext) {
+      return step;
+    }
+
+    const context = this.executionContext.getInterpolationContext();
+
+    // Deep clone and interpolate
+    const interpolated = { ...step };
+
+    if (interpolated.command) {
+      interpolated.command = interpolate(interpolated.command, context);
+    }
+
+    if (interpolated.script) {
+      interpolated.script = interpolate(interpolated.script, context);
+    }
+
+    if (interpolated.with) {
+      interpolated.with = interpolateValue(interpolated.with, context) as Record<string, unknown>;
+    }
+
+    if (interpolated.env) {
+      interpolated.env = interpolateValue(interpolated.env, context) as Record<string, string>;
+    }
+
+    return interpolated;
+  }
+
+  /**
+   * Store step output in execution context
+   */
+  private storeStepOutput(
+    stepId: string,
+    result: {
+      success: boolean;
+      output: unknown;
+      stdout?: string;
+      exitCode?: number;
+    }
+  ): void {
+    if (!this.executionContext) {
+      return;
+    }
+
+    const raw = result.stdout ?? (typeof result.output === 'string' ? result.output : JSON.stringify(result.output));
+
+    // Try to parse output as JSON
+    let parsed: unknown = null;
+    if (typeof result.output === 'object') {
+      parsed = result.output;
+    } else if (typeof result.output === 'string') {
+      try {
+        parsed = JSON.parse(result.output);
+      } catch {
+        parsed = null;
+      }
+    }
+
+    const stepOutput: StepOutput = {
+      raw,
+      parsed,
+      exitCode: result.exitCode ?? (result.success ? 0 : 1),
+      completedAt: new Date(),
+    };
+
+    this.executionContext.setStepOutput(stepId, stepOutput);
+  }
+
+  /**
    * Cancel the current execution
    */
   public cancel(): void {
-    if (this.isRunning() && this.cancellationToken) {
-      this.cancellationToken.cancel();
+    if (this.isRunning()) {
+      this.abortController?.abort();
+      this.cancellationToken?.cancel();
       if (this.currentExecution) {
         this.currentExecution.status = 'cancelled';
       }
@@ -465,6 +745,7 @@ export class WorkflowExecutor {
     this.cancel();
     this.listeners.clear();
     this.currentExecution = undefined;
+    this.executionContext = undefined;
   }
 
   /**
@@ -489,20 +770,37 @@ export class WorkflowExecutor {
   }
 
   /**
-   * Evaluate a condition expression
+   * Evaluate a condition expression using interpolation context
    */
   private async evaluateCondition(
     condition: string,
     options: ExecutionOptions
   ): Promise<boolean> {
-    // Simple condition evaluation
-    // In a full implementation, this would parse and evaluate expressions
-    // For now, support basic environment variable checks
     try {
-      // Replace environment variable references
       let evaluated = condition;
-      for (const [key, value] of Object.entries(options.env || {})) {
-        evaluated = evaluated.replace(new RegExp(`\\$\\{?${key}\\}?`, 'g'), value);
+
+      // Use interpolation context if available
+      if (this.executionContext) {
+        const context = this.executionContext.getInterpolationContext();
+        evaluated = interpolate(condition, context);
+      } else {
+        // Fall back to simple environment variable replacement
+        for (const [key, value] of Object.entries(options.env || {})) {
+          evaluated = evaluated.replace(new RegExp(`\\$\\{?${key}\\}?`, 'g'), value);
+        }
+      }
+
+      // Handle function calls
+      if (evaluated.includes('success()')) {
+        const result = this.executionContext?.getInterpolationContext().functions.success() ?? true;
+        evaluated = evaluated.replace(/success\(\)/g, String(result));
+      }
+      if (evaluated.includes('failure()')) {
+        const result = this.executionContext?.getInterpolationContext().functions.failure() ?? false;
+        evaluated = evaluated.replace(/failure\(\)/g, String(result));
+      }
+      if (evaluated.includes('always()')) {
+        evaluated = evaluated.replace(/always\(\)/g, 'true');
       }
 
       // Simple truthy evaluation
@@ -524,7 +822,6 @@ export class WorkflowExecutor {
    * Check if execution should continue after a failure
    */
   private shouldContinueAfterFailure(_phase: WorkflowPhase): boolean {
-    // Could be extended to check phase-level continueOnError setting
     return false;
   }
 }

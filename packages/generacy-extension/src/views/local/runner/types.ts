@@ -18,17 +18,39 @@ export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipp
 export type ExecutionMode = 'normal' | 'dry-run';
 
 /**
+ * Retry configuration for a step
+ */
+export interface RetryConfig {
+  /** Maximum number of attempts (including first try) */
+  maxAttempts: number;
+  /** Initial delay between retries in milliseconds */
+  delay: number;
+  /** Backoff strategy */
+  backoff: 'constant' | 'linear' | 'exponential';
+  /** Maximum delay cap in milliseconds */
+  maxDelay?: number;
+  /** Jitter factor (0-1) to add randomness */
+  jitter?: number;
+}
+
+/**
  * Step definition from parsed workflow
  */
 export interface WorkflowStep {
   name: string;
   action: string;
+  /** Uses field for specifying action type (e.g., 'workspace.prepare', 'agent.invoke') */
+  uses?: string;
+  /** Input parameters for the action (from 'with' field in YAML) */
+  with?: Record<string, unknown>;
   command?: string;
   script?: string;
   timeout?: number;
   continueOnError?: boolean;
   condition?: string;
   env?: Record<string, string>;
+  /** Retry configuration */
+  retry?: RetryConfig;
 }
 
 /**
@@ -124,7 +146,11 @@ export type ExecutionEventType =
   | 'step:start'
   | 'step:complete'
   | 'step:error'
-  | 'step:output';
+  | 'step:output'
+  | 'action:start'
+  | 'action:complete'
+  | 'action:error'
+  | 'action:retry';
 
 /**
  * Execution event data
