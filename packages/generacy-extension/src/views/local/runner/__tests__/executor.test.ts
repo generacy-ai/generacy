@@ -54,11 +54,12 @@ vi.mock('vscode', () => {
 import { WorkflowExecutor } from '../executor';
 import {
   registerActionHandler,
-  clearActionRegistry,
+  unregisterActionHandler,
   type ActionHandler,
   type ActionContext,
   type ActionResult,
 } from '../actions';
+import { resetDebugHooks } from '../debug-integration';
 
 // Helper to create a mock action handler
 function createMockHandler(
@@ -80,14 +81,18 @@ describe('WorkflowExecutor Integration', () => {
   let executor: WorkflowExecutor;
 
   beforeEach(() => {
+    // Reset executor state but keep built-in handlers
     WorkflowExecutor.resetInstance();
-    clearActionRegistry();
+    resetDebugHooks();
     executor = WorkflowExecutor.getInstance();
+    // Unregister shell handler to allow custom handlers to take precedence
+    // Shell handler is a catch-all that would match any unrecognized action
+    unregisterActionHandler('shell');
   });
 
   afterEach(() => {
     WorkflowExecutor.resetInstance();
-    clearActionRegistry();
+    resetDebugHooks();
   });
 
   describe('Basic Workflow Execution', () => {
@@ -501,6 +506,250 @@ describe('WorkflowExecutor Integration', () => {
       const result = await executor.execute(workflow);
 
       expect(result.phaseResults[0]?.stepResults[0]?.status).toBe('completed');
+    });
+  });
+
+  describe('Workspace Prepare Action', () => {
+    it('should execute workspace.prepare action for branch operations', async () => {
+      let capturedBranch: string | undefined;
+      const handler = createMockHandler('workspace.prepare', async (step) => {
+        capturedBranch = (step.with as Record<string, unknown>)?.['branch'] as string;
+        return {
+          success: true,
+          output: {
+            branch: capturedBranch,
+            previousBranch: 'main',
+            created: true,
+          },
+          duration: 100,
+        };
+      });
+      registerActionHandler(handler);
+
+      const workflow: ExecutableWorkflow = {
+        name: 'workspace-prepare-workflow',
+        phases: [
+          {
+            name: 'setup',
+            steps: [
+              {
+                name: 'prepare-workspace',
+                action: 'workspace.prepare',
+                with: { branch: 'feature/test-branch' },
+              } as WorkflowStep,
+            ],
+          },
+        ],
+      };
+
+      const result = await executor.execute(workflow);
+
+      expect(result.status).toBe('completed');
+      expect(capturedBranch).toBe('feature/test-branch');
+      expect(result.phaseResults[0]?.stepResults[0]?.status).toBe('completed');
+    });
+  });
+
+  describe('Agent Invoke Action', () => {
+    it('should execute agent.invoke action with prompt', async () => {
+      let capturedPrompt: string | undefined;
+      const handler = createMockHandler('agent.invoke', async (step) => {
+        capturedPrompt = (step.with as Record<string, unknown>)?.['prompt'] as string;
+        return {
+          success: true,
+          output: {
+            summary: 'Agent completed task',
+            filesModified: ['src/test.ts'],
+            turns: 3,
+          },
+          duration: 5000,
+        };
+      });
+      registerActionHandler(handler);
+
+      const workflow: ExecutableWorkflow = {
+        name: 'agent-invoke-workflow',
+        phases: [
+          {
+            name: 'implementation',
+            steps: [
+              {
+                name: 'invoke-agent',
+                action: 'agent.invoke',
+                with: {
+                  prompt: 'Implement feature X',
+                  maxTurns: 10,
+                },
+              } as WorkflowStep,
+            ],
+          },
+        ],
+      };
+
+      const result = await executor.execute(workflow);
+
+      expect(result.status).toBe('completed');
+      expect(capturedPrompt).toBe('Implement feature X');
+    });
+
+    it('should capture agent output for subsequent steps', async () => {
+      let step2ReceivedOutput: unknown;
+      const handler = createMockHandler('test-action', async (step, context) => {
+        if (step.name === 'invoke-agent') {
+          return {
+            success: true,
+            output: { summary: 'Task completed', version: '2.0.0' },
+            duration: 100,
+          };
+        }
+        // Step 2 reads output from step 1
+        step2ReceivedOutput = step.with?.['version'];
+        return {
+          success: true,
+          output: 'verified',
+          duration: 100,
+        };
+      });
+      registerActionHandler(handler);
+
+      const workflow: ExecutableWorkflow = {
+        name: 'agent-output-workflow',
+        phases: [
+          {
+            name: 'implementation',
+            steps: [
+              { name: 'invoke-agent', action: 'test-action' },
+              {
+                name: 'verify',
+                action: 'test-action',
+                with: { version: '${steps.invoke-agent.output.version}' },
+              } as WorkflowStep,
+            ],
+          },
+        ],
+      };
+
+      await executor.execute(workflow);
+
+      // Verify that step output was captured and available to subsequent step
+      expect(step2ReceivedOutput).toBe('2.0.0');
+    });
+  });
+
+  describe('Timeout Enforcement', () => {
+    it('should timeout long-running actions', async () => {
+      const handler = createMockHandler('slow-action', async () => {
+        // Simulate a long-running action
+        await new Promise(resolve => setTimeout(resolve, 200));
+        return {
+          success: true,
+          output: 'completed',
+          duration: 200,
+        };
+      });
+      registerActionHandler(handler);
+
+      const workflow: ExecutableWorkflow = {
+        name: 'timeout-workflow',
+        phases: [
+          {
+            name: 'phase1',
+            steps: [
+              {
+                name: 'slow-step',
+                action: 'slow-action',
+                timeout: 50, // 50ms timeout
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = await executor.execute(workflow);
+
+      expect(result.status).toBe('failed');
+      expect(result.phaseResults[0]?.stepResults[0]?.status).toBe('failed');
+      expect(result.phaseResults[0]?.stepResults[0]?.error).toContain('timed out');
+    });
+
+    it('should complete before timeout expires', async () => {
+      const handler = createMockHandler('fast-action', async () => {
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return {
+          success: true,
+          output: 'completed quickly',
+          duration: 10,
+        };
+      });
+      registerActionHandler(handler);
+
+      const workflow: ExecutableWorkflow = {
+        name: 'fast-workflow',
+        phases: [
+          {
+            name: 'phase1',
+            steps: [
+              {
+                name: 'fast-step',
+                action: 'fast-action',
+                timeout: 1000, // 1s timeout - plenty of time
+              },
+            ],
+          },
+        ],
+      };
+
+      const result = await executor.execute(workflow);
+
+      expect(result.status).toBe('completed');
+      expect(result.phaseResults[0]?.stepResults[0]?.status).toBe('completed');
+    });
+  });
+
+  describe('Debug Hook Integration', () => {
+    it('should call debug hooks during execution', async () => {
+      const { getDebugHooks, resetDebugHooks } = await import('../debug-integration');
+
+      // Reset and get fresh hooks
+      resetDebugHooks();
+      const debugHooks = getDebugHooks();
+
+      const beforeStepCalls: string[] = [];
+      const afterStepCalls: string[] = [];
+
+      debugHooks.setCallbacks({
+        onBeforeStep: async (state) => {
+          beforeStepCalls.push(state.step.name);
+        },
+        onAfterStep: (state) => {
+          afterStepCalls.push(state.step.name);
+        },
+      });
+      debugHooks.enable();
+
+      const handler = createMockHandler('test-action');
+      registerActionHandler(handler);
+
+      const workflow: ExecutableWorkflow = {
+        name: 'debug-workflow',
+        phases: [
+          {
+            name: 'phase1',
+            steps: [
+              { name: 'step1', action: 'test-action' },
+              { name: 'step2', action: 'test-action' },
+            ],
+          },
+        ],
+      };
+
+      await executor.execute(workflow);
+
+      expect(beforeStepCalls).toEqual(['step1', 'step2']);
+      expect(afterStepCalls).toEqual(['step1', 'step2']);
+
+      // Cleanup
+      resetDebugHooks();
     });
   });
 });

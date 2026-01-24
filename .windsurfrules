@@ -23,6 +23,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -44,6 +45,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 147-complete-workflow-step-execution: Added configuration
 - 148-complete-create-workflow-command: Added configuration
 - 139-address-debug-adapter-placeholder: Added configuration
 - 144-verify-generacy-extension-integration: Added configuration
