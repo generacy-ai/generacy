@@ -58,14 +58,24 @@ export {
   type JWTPayload,
   type GitHubUser,
   type AuthContext,
-  // WebSocket
-  type Channel,
-  type ClientMessage,
-  type ServerMessage,
-  type WorkflowEventMessage,
-  type QueueUpdateMessage,
-  type AgentStatusMessage,
-  type SubscriptionFilters,
+  // SSE
+  type SSEChannel,
+  type SSEEventType,
+  type SSEEvent,
+  type WorkflowEventData,
+  type WorkflowSSEEvent,
+  type QueueEventData,
+  type QueueSSEEvent,
+  type AgentEventData,
+  type AgentSSEEvent,
+  type ErrorEventData,
+  type ErrorSSEEvent,
+  type SSEFilters,
+  type SSESubscription,
+  type SSEConnection,
+  type SSEConnectionOptions,
+  type SSEStreamConfig,
+  DEFAULT_SSE_CONFIG,
 } from './types/index.js';
 
 // Services
@@ -126,16 +136,28 @@ export {
   type IntegrationRegistry,
 } from './routes/integrations.js';
 
-// WebSocket
+// SSE
 export {
-  setupWebSocketHandler,
-  getConnectionCount,
-  SubscriptionManager,
-  getSubscriptionManager,
-  createWorkflowEventMessage,
-  createQueueUpdateMessage,
-  createAgentStatusMessage,
-} from './websocket/index.js';
+  SSEStream,
+  createSSEStream,
+  parseLastEventId,
+  formatSSEEvent,
+  formatHeartbeat,
+  createWorkflowEvent,
+  createQueueEvent,
+  createAgentEvent,
+  createErrorEvent,
+  createConnectedEvent,
+  SSESubscriptionManager,
+  getSSESubscriptionManager,
+  resetSSESubscriptionManager,
+} from './sse/index.js';
+
+export {
+  setupEventsRoutes,
+  getActiveConnectionCount,
+  closeAllSSEConnections,
+} from './routes/events.js';
 
 // Utils
 export {

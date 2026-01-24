@@ -73,26 +73,44 @@ export {
   type AuthContext,
 } from './api.js';
 
-// WebSocket Types
+// SSE Types
 export {
-  ChannelSchema,
-  type Channel,
-  SubscribeMessageSchema,
-  type SubscribeMessage,
-  UnsubscribeMessageSchema,
-  type UnsubscribeMessage,
-  PingMessageSchema,
-  type PingMessage,
-  ClientMessageSchema,
-  type ClientMessage,
-  WorkflowEventTypeSchema,
-  type WorkflowEventType,
-  type WorkflowEventMessage,
-  type QueueUpdateMessage,
-  type AgentStatusMessage,
-  type PongMessage,
-  type ErrorMessage,
-  type ServerMessage,
-  type SubscriptionFilters,
-  type ClientSubscription,
-} from './websocket.js';
+  // Channel types
+  SSEChannelSchema,
+  type SSEChannel,
+  // Event types
+  SSEEventTypeSchema,
+  type SSEEventType,
+  WorkflowEventTypeSchema as SSEWorkflowEventTypeSchema,
+  type WorkflowEventType as SSEWorkflowEventType,
+  // Event interfaces
+  type SSEEvent,
+  type WorkflowEventData,
+  type WorkflowSSEEvent,
+  type QueueEventData,
+  type QueueSSEEvent,
+  type AgentEventData,
+  type AgentSSEEvent,
+  type ErrorEventData,
+  type ErrorSSEEvent,
+  type ConnectedEventData,
+  type ConnectedSSEEvent,
+  type AnySSEEvent,
+  // Subscription types
+  type SSEFilters,
+  type SSESubscription,
+  // Connection types
+  type SSEConnection,
+  type SSEConnectionOptions,
+  // Configuration
+  type SSEStreamConfig,
+  DEFAULT_SSE_CONFIG,
+  // Validation schemas
+  SSEFiltersSchema,
+  SSEQuerySchema,
+  type SSEQuery,
+  // Utilities
+  parseChannels,
+  type EventIdComponents,
+  parseEventId,
+} from './sse.js';

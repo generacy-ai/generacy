@@ -5,6 +5,7 @@ import { setupWorkflowRoutes } from './workflows.js';
 import { setupQueueRoutes } from './queue.js';
 import { setupAgentRoutes } from './agents.js';
 import { setupIntegrationRoutes, type IntegrationRegistry } from './integrations.js';
+import { setupEventsRoutes } from './events.js';
 import type { WorkflowService } from '../services/workflow-service.js';
 import type { QueueService } from '../services/queue-service.js';
 import type { AgentRegistry } from '../services/agent-registry.js';
@@ -41,6 +42,9 @@ export async function registerRoutes(
   await setupQueueRoutes(server, options.queueService);
   await setupAgentRoutes(server, options.agentRegistry);
   await setupIntegrationRoutes(server, options.integrationRegistry);
+
+  // SSE event routes
+  await setupEventsRoutes(server);
 }
 
 // Re-export route setup functions
@@ -54,3 +58,8 @@ export {
   InMemoryIntegrationRegistry,
   type IntegrationRegistry,
 } from './integrations.js';
+export {
+  setupEventsRoutes,
+  getActiveConnectionCount,
+  closeAllSSEConnections,
+} from './events.js';

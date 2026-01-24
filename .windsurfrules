@@ -45,6 +45,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 150-migrate-orchestrator-from-websocket: Added configuration
 - 147-complete-workflow-step-execution: Added configuration
 - 148-complete-create-workflow-command: Added configuration
 - 139-address-debug-adapter-placeholder: Added configuration

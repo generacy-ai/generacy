@@ -1,7 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import websocket from '@fastify/websocket';
 import jwt from '@fastify/jwt';
 
 import { type OrchestratorConfig, loadConfig, createTestConfig } from './config/index.js';
@@ -10,8 +9,7 @@ import { setupErrorHandler } from './middleware/error-handler.js';
 import { setupRateLimit } from './middleware/rate-limit.js';
 import { requestStartHook, requestEndHook } from './middleware/request-logger.js';
 import { createAuthMiddleware, InMemoryApiKeyStore } from './auth/index.js';
-import { registerRoutes, InMemoryIntegrationRegistry } from './routes/index.js';
-import { setupWebSocketHandler } from './websocket/index.js';
+import { registerRoutes, InMemoryIntegrationRegistry, closeAllSSEConnections } from './routes/index.js';
 import { WorkflowService, InMemoryWorkflowStore } from './services/workflow-service.js';
 import { QueueService, InMemoryQueueStore } from './services/queue-service.js';
 import { AgentRegistry } from './services/agent-registry.js';
@@ -79,12 +77,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     contentSecurityPolicy: false, // Not needed for API
   });
 
-  await server.register(websocket, {
-    options: {
-      maxPayload: 1048576, // 1MB
-    },
-  });
-
   // Register JWT plugin
   await server.register(jwt, {
     secret: config.auth.jwt.secret,
@@ -127,17 +119,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       integrationRegistry,
     });
 
-    // Setup WebSocket handler
-    await setupWebSocketHandler(server);
+    // Note: SSE routes are registered via registerRoutes() -> setupEventsRoutes()
   }
 
-  // Setup graceful shutdown
+  // Setup graceful shutdown with SSE connection cleanup
   setupGracefulShutdown(server, {
     timeout: 30000,
     logger: {
       info: (msg) => server.log.info(msg),
       error: (msg, error) => server.log.error({ err: error }, msg),
     },
+    cleanup: [
+      async () => {
+        // Close all active SSE connections before shutdown
+        closeAllSSEConnections();
+      },
+    ],
   });
 
   return server;
