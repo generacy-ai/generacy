@@ -12,60 +12,60 @@
 
 ### Type Definitions & Core Components
 
-- [ ] T001 [FR-001] Create SSE type definitions in `src/types/sse.ts` - define SSEEventType, SSEEvent, SSEChannel, SSEFilters, SSEConnection, SSEStreamConfig interfaces
-- [ ] T002 [P] [FR-001] Update `src/types/index.ts` to export SSE types (preparation for later removal of websocket types)
+- [X] T001 [FR-001] Create SSE type definitions in `src/types/sse.ts` - define SSEEventType, SSEEvent, SSEChannel, SSEFilters, SSEConnection, SSEStreamConfig interfaces
+- [X] T002 [P] [FR-001] Update `src/types/index.ts` to export SSE types (preparation for later removal of websocket types)
 
 ### SSE Module Core
 
-- [ ] T003 [FR-003] Create event serialization in `src/sse/events.ts` - implement formatSSEEvent(), event ID generation with timestamp/connection/sequence format
-- [ ] T004 [FR-002] Create SSE stream manager in `src/sse/stream.ts` - SSEStream class with createSSEResponse(), heartbeat mechanism, Last-Event-ID support
-- [ ] T005 [FR-001] Adapt subscription logic in `src/sse/subscriptions.ts` - SSESubscriptionManager using ServerResponse instead of WebSocket
-- [ ] T006 Create SSE module index in `src/sse/index.ts` - export all SSE components
+- [X] T003 [FR-003] Create event serialization in `src/sse/events.ts` - implement formatSSEEvent(), event ID generation with timestamp/connection/sequence format
+- [X] T004 [FR-002] Create SSE stream manager in `src/sse/stream.ts` - SSEStream class with createSSEResponse(), heartbeat mechanism, Last-Event-ID support
+- [X] T005 [FR-001] Adapt subscription logic in `src/sse/subscriptions.ts` - SSESubscriptionManager using ServerResponse instead of WebSocket
+- [X] T006 Create SSE module index in `src/sse/index.ts` - export all SSE components
 
 ## Phase 2: Create SSE Endpoints
 
 ### Route Implementation
 
-- [ ] T007 [FR-001] Create events route file `src/routes/events.ts` with three endpoints:
+- [X] T007 [FR-001] Create events route file `src/routes/events.ts` with three endpoints:
   - GET /events - Global event stream (all channels)
   - GET /workflows/:id/events - Workflow-specific events
   - GET /queue/events - Queue events
-- [ ] T008 [P] [FR-001] Update `src/routes/index.ts` to export events routes
-- [ ] T009 [FR-004] Implement authentication in events routes - validate Bearer token before establishing stream, handle auth errors with proper HTTP status codes
+- [X] T008 [P] [FR-001] Update `src/routes/index.ts` to export events routes
+- [X] T009 [FR-004] Implement authentication in events routes - validate Bearer token before establishing stream, handle auth errors with proper HTTP status codes
 
 ### Connection Management
 
-- [ ] T010 [FR-002] Implement connection handling in events routes - track active connections, detect client disconnect, graceful shutdown support
+- [X] T010 [FR-002] Implement connection handling in events routes - track active connections, detect client disconnect, graceful shutdown support
 
 ## Phase 3: Update Server Configuration
 
 ### Server Integration
 
-- [ ] T011 Modify `src/server.ts` to remove @fastify/websocket plugin registration
-- [ ] T012 Modify `src/server.ts` to add SSE routes and pass services to handlers
-- [ ] T013 Update graceful shutdown in `src/server.ts` to close active SSE connections and drain before exit
+- [X] T011 Modify `src/server.ts` to remove @fastify/websocket plugin registration
+- [X] T012 Modify `src/server.ts` to add SSE routes and pass services to handlers
+- [X] T013 Update graceful shutdown in `src/server.ts` to close active SSE connections and drain before exit
 
 ## Phase 4: Remove WebSocket Code
 
 ### WebSocket Cleanup
 
-- [ ] T014 [P] Delete WebSocket module - remove entire `src/websocket/` directory (handler.ts, messages.ts, subscriptions.ts, index.ts)
-- [ ] T015 [P] Delete `src/types/websocket.ts` file
-- [ ] T016 Update `src/types/index.ts` to remove websocket type exports
-- [ ] T017 Update `package.json` - remove @fastify/websocket and @types/ws dependencies
+- [X] T014 [P] Delete WebSocket module - remove entire `src/websocket/` directory (handler.ts, messages.ts, subscriptions.ts, index.ts)
+- [X] T015 [P] Delete `src/types/websocket.ts` file
+- [X] T016 Update `src/types/index.ts` to remove websocket type exports
+- [X] T017 Update `package.json` - remove @fastify/websocket and @types/ws dependencies
 
 ## Phase 5: Testing
 
 ### Unit Tests
 
-- [ ] T018 [FR-005] Create unit tests in `tests/sse/events.test.ts` - test formatSSEEvent(), event ID generation, multi-line data handling
-- [ ] T019 [P] [FR-005] Create unit tests in `tests/sse/stream.test.ts` - test SSEStream class, heartbeat, createSSEResponse()
-- [ ] T020 [P] [FR-005] Create unit tests in `tests/sse/subscriptions.test.ts` - test SSESubscriptionManager, channel filtering
+- [X] T018 [FR-005] Create unit tests in `tests/sse/events.test.ts` - test formatSSEEvent(), event ID generation, multi-line data handling
+- [X] T019 [P] [FR-005] Create unit tests in `tests/sse/stream.test.ts` - test SSEStream class, heartbeat, createSSEResponse()
+- [X] T020 [P] [FR-005] Create unit tests in `tests/sse/subscriptions.test.ts` - test SSESubscriptionManager, channel filtering
 
 ### Integration Tests
 
-- [ ] T021 [FR-005] Create integration tests in `tests/routes/events.test.ts` - test SSE endpoints, authentication, event delivery, Last-Event-ID reconnection
-- [ ] T022 [FR-005] Remove or update any WebSocket-specific tests
+- [X] T021 [FR-005] Create integration tests in `tests/routes/events.test.ts` - test SSE endpoints, authentication, event delivery, Last-Event-ID reconnection
+- [X] T022 [FR-005] Remove or update any WebSocket-specific tests
 
 ## Dependencies & Execution Order
 
