@@ -70,6 +70,9 @@ export class WorkflowDebugRuntime {
   private state: DebugExecutionState;
   private environment: Record<string, string> = {};
   private sourceMap: Map<number, { phase?: string; step?: string }> = new Map();
+  private stepOutTarget: string | undefined;
+  private pauseOnError: boolean = false;
+  private pendingError: { phaseName: string; stepName: string; error: string } | undefined;
 
   constructor() {
     this.state = getDebugExecutionState();
@@ -123,6 +126,54 @@ export class WorkflowDebugRuntime {
       for (const [key, value] of Object.entries(env)) {
         this.state.setVariable('environment', key, value);
       }
+    }
+  }
+
+  /**
+   * Set pause on error option
+   */
+  public setPauseOnError(enabled: boolean): void {
+    this.pauseOnError = enabled;
+  }
+
+  /**
+   * Check if paused on error
+   */
+  public isPausedOnError(): boolean {
+    return this.pendingError !== undefined;
+  }
+
+  /**
+   * Get pending error details
+   */
+  public getPendingError(): { phaseName: string; stepName: string; error: string } | undefined {
+    return this.pendingError;
+  }
+
+  /**
+   * Skip the failed step and continue execution
+   */
+  public skipStep(): void {
+    if (!this.pendingError) {
+      return;
+    }
+
+    const { phaseName, stepName } = this.pendingError;
+
+    // Mark the step as skipped
+    this.state.skipStep(phaseName, stepName, 'Skipped by user');
+
+    // Clear the pending error
+    this.pendingError = undefined;
+
+    // Resume execution
+    this.mode = 'run';
+    this.state.resume();
+    this.emitEvent({ type: 'continued' });
+
+    if (this.pauseResolve) {
+      this.pauseResolve();
+      this.pauseResolve = undefined;
     }
   }
 
@@ -183,17 +234,37 @@ export class WorkflowDebugRuntime {
   }
 
   /**
-   * Step into (same as step next for workflow debugging)
+   * Step into - behaves the same as step next for workflow debugging.
+   * Workflow steps are atomic; there's no nested call hierarchy to step into.
+   * When nested workflow calls are added, this can be enhanced to step into them.
    */
   public stepIn(): void {
     this.stepNext();
   }
 
   /**
-   * Step out (complete current phase)
+   * Step out (complete current phase and pause at next phase boundary)
    */
   public stepOut(): void {
-    // Mark to skip remaining steps in current phase
+    const currentPhase = this.state.getCurrentPhase();
+    if (!currentPhase || !this.workflow) {
+      // No phase to step out of, just continue
+      this.continue();
+      return;
+    }
+
+    // Find the next phase after the current one
+    const currentPhaseIndex = this.workflow.phases.findIndex(p => p.name === currentPhase.name);
+    const nextPhase = this.workflow.phases[currentPhaseIndex + 1];
+
+    if (nextPhase) {
+      // Set the target phase to pause at
+      this.stepOutTarget = nextPhase.name;
+    } else {
+      // No next phase, will complete the workflow
+      this.stepOutTarget = undefined;
+    }
+
     this.mode = 'run';
     this.state.resume();
 
@@ -394,6 +465,26 @@ export class WorkflowDebugRuntime {
 
       this.state.startPhase(phase.name);
 
+      // Check if this is the step-out target phase
+      if (this.stepOutTarget && phase.name === this.stepOutTarget) {
+        this.stepOutTarget = undefined;
+        this.mode = 'pause';
+        this.state.pause();
+        this.emitEvent({
+          type: 'stopped',
+          reason: 'step',
+          phaseName: phase.name,
+          stepName: phase.steps[0]?.name,
+        });
+
+        await this.waitForContinue();
+
+        const afterStepOutState = this.state.getWorkflowState();
+        if (afterStepOutState?.status === 'cancelled') {
+          break;
+        }
+      }
+
       for (let stepIndex = 0; stepIndex < phase.steps.length; stepIndex++) {
         const step = phase.steps[stepIndex];
         if (!step) continue;
@@ -453,26 +544,97 @@ export class WorkflowDebugRuntime {
           this.state.completeStep(phase.name, step.name, success, result.output, result.error, result.exitCode);
 
           if (!success && !step.continueOnError) {
-            this.state.fail(result.error);
-            this.emitEvent({
-              type: 'ended',
-              success: false,
-              reason: result.error,
-            });
-            return;
+            if (this.pauseOnError) {
+              // Pause on error - allow user to skip or abort
+              this.pendingError = { phaseName: phase.name, stepName: step.name, error: result.error ?? 'Step failed' };
+              this.mode = 'pause';
+              this.state.pause();
+              this.emitEvent({
+                type: 'stopped',
+                reason: 'exception',
+                phaseName: phase.name,
+                stepName: step.name,
+              });
+
+              // Wait for user action (skip or abort)
+              await this.waitForContinue();
+
+              const afterErrorState = this.state.getWorkflowState();
+              if (afterErrorState?.status === 'cancelled') {
+                return;
+              }
+
+              // If skipStep was called, pendingError is cleared and we continue
+              // Otherwise, the stop() was called and we return
+              if (this.pendingError) {
+                // User called stop/abort
+                this.state.fail(result.error);
+                this.emitEvent({
+                  type: 'ended',
+                  success: false,
+                  reason: result.error,
+                });
+                return;
+              }
+              // pendingError was cleared by skipStep, continue to next step
+              continue;
+            } else {
+              this.state.fail(result.error);
+              this.emitEvent({
+                type: 'ended',
+                success: false,
+                reason: result.error,
+              });
+              return;
+            }
           }
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           this.state.completeStep(phase.name, step.name, false, undefined, errorMessage);
 
           if (!step.continueOnError) {
-            this.state.fail(errorMessage);
-            this.emitEvent({
-              type: 'ended',
-              success: false,
-              reason: errorMessage,
-            });
-            return;
+            if (this.pauseOnError) {
+              // Pause on error - allow user to skip or abort
+              this.pendingError = { phaseName: phase.name, stepName: step.name, error: errorMessage };
+              this.mode = 'pause';
+              this.state.pause();
+              this.emitEvent({
+                type: 'stopped',
+                reason: 'exception',
+                phaseName: phase.name,
+                stepName: step.name,
+              });
+
+              // Wait for user action (skip or abort)
+              await this.waitForContinue();
+
+              const afterErrorState = this.state.getWorkflowState();
+              if (afterErrorState?.status === 'cancelled') {
+                return;
+              }
+
+              // If skipStep was called, pendingError is cleared and we continue
+              if (this.pendingError) {
+                // User called stop/abort
+                this.state.fail(errorMessage);
+                this.emitEvent({
+                  type: 'ended',
+                  success: false,
+                  reason: errorMessage,
+                });
+                return;
+              }
+              // pendingError was cleared by skipStep, continue to next step
+              continue;
+            } else {
+              this.state.fail(errorMessage);
+              this.emitEvent({
+                type: 'ended',
+                success: false,
+                reason: errorMessage,
+              });
+              return;
+            }
           }
         }
 

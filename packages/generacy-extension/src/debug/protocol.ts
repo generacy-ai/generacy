@@ -18,6 +18,7 @@ export interface LaunchRequestArguments extends DebugProtocol.LaunchRequestArgum
   workflow: string;
   dryRun?: boolean;
   stopOnEntry?: boolean;
+  pauseOnError?: boolean;
   env?: Record<string, string>;
 }
 
@@ -99,7 +100,7 @@ export class ProtocolHandler {
       supportsRestartRequest: true,
       supportsExceptionOptions: false,
       supportsValueFormattingOptions: false,
-      supportsExceptionInfoRequest: false,
+      supportsExceptionInfoRequest: true,
       supportTerminateDebuggee: true,
       supportSuspendDebuggee: false,
       supportsDelayedStackTraceLoading: false,
@@ -133,7 +134,7 @@ export class ProtocolHandler {
    * Handle launch request
    */
   public async handleLaunch(args: LaunchRequestArguments): Promise<void> {
-    const { workflow, stopOnEntry, env } = args;
+    const { workflow, stopOnEntry, pauseOnError, env } = args;
     // Note: dryRun is available via args.dryRun for future implementation
 
     if (!workflow) {
@@ -148,8 +149,20 @@ export class ProtocolHandler {
       this.runtime.setEnvironment(env);
     }
 
+    // Set pause on error option
+    if (pauseOnError !== undefined) {
+      this.runtime.setPauseOnError(pauseOnError);
+    }
+
     // Start execution
     await this.runtime.start(stopOnEntry ?? true);
+  }
+
+  /**
+   * Handle skip step request (custom command for skipping failed steps)
+   */
+  public async handleSkipStep(): Promise<void> {
+    this.runtime.skipStep();
   }
 
   /**
@@ -348,6 +361,34 @@ export class ProtocolHandler {
     return {
       result: result.result,
       variablesReference: result.variablesReference,
+    };
+  }
+
+  /**
+   * Handle exception info request
+   */
+  public async handleExceptionInfo(
+    _args: DebugProtocol.ExceptionInfoArguments
+  ): Promise<DebugProtocol.ExceptionInfoResponse['body']> {
+    const pendingError = this.runtime.getPendingError();
+
+    if (!pendingError) {
+      return {
+        exceptionId: 'none',
+        description: 'No exception',
+        breakMode: 'never',
+      };
+    }
+
+    return {
+      exceptionId: `${pendingError.phaseName}/${pendingError.stepName}`,
+      description: pendingError.error,
+      breakMode: 'always',
+      details: {
+        message: pendingError.error,
+        typeName: 'WorkflowStepError',
+        stackTrace: `Phase: ${pendingError.phaseName}\nStep: ${pendingError.stepName}`,
+      },
     };
   }
 

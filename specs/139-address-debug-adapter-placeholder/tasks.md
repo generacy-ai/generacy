@@ -10,31 +10,31 @@
 
 ## Phase 1: Step-Out Phase Boundary Tracking
 
-- [ ] T001 Add `stepOutTarget` property to `WorkflowRuntime` class in `packages/generacy-extension/src/debug/runtime.ts` to track the target phase for step-out operations
-- [ ] T002 Implement `stepOut()` method in `packages/generacy-extension/src/debug/runtime.ts` to set the target phase and continue execution until phase boundary
-- [ ] T003 Modify execution loop in `runExecution()` method in `packages/generacy-extension/src/debug/runtime.ts` to check for phase boundary and pause when `stepOutTarget` is reached
-- [ ] T004 Add tests for step-out phase boundary behavior in `packages/generacy-extension/src/debug/__tests__/runtime.test.ts`
+- [x] T001 Add `stepOutTarget` property to `WorkflowRuntime` class in `packages/generacy-extension/src/debug/runtime.ts` to track the target phase for step-out operations
+- [x] T002 Implement `stepOut()` method in `packages/generacy-extension/src/debug/runtime.ts` to set the target phase and continue execution until phase boundary
+- [x] T003 Modify execution loop in `runExecution()` method in `packages/generacy-extension/src/debug/runtime.ts` to check for phase boundary and pause when `stepOutTarget` is reached
+- [x] T004 Add tests for step-out phase boundary behavior in `packages/generacy-extension/src/debug/__tests__/runtime.test.ts`
 
 ## Phase 2: Nested Variable Expansion
 
-- [ ] T005 [P] Add `nestedVariableReferences` map to `ExecutionState` class in `packages/generacy-extension/src/debug/state.ts` to track nested object references
-- [ ] T006 [P] Implement `createChildReference()` method in `packages/generacy-extension/src/debug/state.ts` to create proper variable references for nested objects/arrays
-- [ ] T007 Implement `getNestedVariables()` method in `packages/generacy-extension/src/debug/state.ts` to return children of complex values with 1-level depth limit
-- [ ] T008 Add tests for nested variable expansion in `packages/generacy-extension/src/debug/__tests__/state.test.ts`
+- [x] T005 [P] Add `nestedVariableReferences` map to `ExecutionState` class in `packages/generacy-extension/src/debug/state.ts` to track nested object references
+- [x] T006 [P] Implement `createChildReference()` method in `packages/generacy-extension/src/debug/state.ts` to create proper variable references for nested objects/arrays
+- [x] T007 Implement `getNestedVariables()` method in `packages/generacy-extension/src/debug/state.ts` to return children of complex values with 1-level depth limit
+- [x] T008 Add tests for nested variable expansion in `packages/generacy-extension/src/debug/__tests__/state.test.ts`
 
 ## Phase 3: Error Pause Support
 
-- [ ] T009 Add `pauseOnError` launch configuration option to `packages/generacy-extension/src/debug/runtime.ts`
-- [ ] T010 Modify error handling in `runExecution()` to emit stopped event with reason 'exception' when `pauseOnError` is true in `packages/generacy-extension/src/debug/runtime.ts`
-- [ ] T011 Add `skipStep()` method to `WorkflowRuntime` class in `packages/generacy-extension/src/debug/runtime.ts` to skip failed step and continue execution
-- [ ] T012 [P] Update protocol handler in `packages/generacy-extension/src/debug/protocol.ts` to send exception event with skip capability
-- [ ] T013 Add tests for error pause functionality in `packages/generacy-extension/src/debug/__tests__/runtime.test.ts`
+- [x] T009 Add `pauseOnError` launch configuration option to `packages/generacy-extension/src/debug/runtime.ts`
+- [x] T010 Modify error handling in `runExecution()` to emit stopped event with reason 'exception' when `pauseOnError` is true in `packages/generacy-extension/src/debug/runtime.ts`
+- [x] T011 Add `skipStep()` method to `WorkflowRuntime` class in `packages/generacy-extension/src/debug/runtime.ts` to skip failed step and continue execution
+- [x] T012 [P] Update protocol handler in `packages/generacy-extension/src/debug/protocol.ts` to send exception event with skip capability
+- [x] T013 Add tests for error pause functionality in `packages/generacy-extension/src/debug/__tests__/runtime.test.ts`
 
 ## Phase 4: Documentation and Cleanup
 
-- [ ] T014 [P] Update or remove placeholder comments in `runtime.ts` with proper implementation notes
-- [ ] T015 [P] Update placeholder comment in `state.ts:createChildReference()` to document the implementation
-- [ ] T016 Run full test suite to verify existing tests still pass
+- [x] T014 [P] Update or remove placeholder comments in `runtime.ts` with proper implementation notes
+- [x] T015 [P] Update placeholder comment in `state.ts:createChildReference()` to document the implementation
+- [x] T016 Run full test suite to verify existing tests still pass
 
 ## Dependencies & Execution Order
 
