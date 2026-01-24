@@ -98,6 +98,7 @@ export class DebugExecutionState {
 
   private workflow: WorkflowState | undefined;
   private variableReferences: Map<number, { scope: VariableScope; path: string[] }> = new Map();
+  private nestedVariableReferences: Map<number, unknown> = new Map();
   private history: HistoryEntry[] = [];
   private readonly onStateChangeEmitter = new vscode.EventEmitter<WorkflowState | undefined>();
 
@@ -138,6 +139,7 @@ export class DebugExecutionState {
     };
 
     this.variableReferences.clear();
+    this.nestedVariableReferences.clear();
     this.history = [];
     this.emitChange();
   }
@@ -467,6 +469,11 @@ export class DebugExecutionState {
    * Get variables for a variable reference
    */
   public getVariables(variablesReference: number): DebugVariable[] {
+    // Check if this is a nested variable reference first
+    if (this.nestedVariableReferences.has(variablesReference)) {
+      return this.getNestedVariables(variablesReference);
+    }
+
     const refInfo = this.variableReferences.get(variablesReference);
     if (!refInfo || !this.workflow) {
       return [];
@@ -515,6 +522,7 @@ export class DebugExecutionState {
   public reset(): void {
     this.workflow = undefined;
     this.variableReferences.clear();
+    this.nestedVariableReferences.clear();
     this.history = [];
     this.emitChange();
   }
@@ -560,12 +568,64 @@ export class DebugExecutionState {
   }
 
   /**
-   * Create a reference for nested objects
+   * Create a reference for nested objects (one level deep expansion)
    */
-  private createChildReference(_value: unknown): number {
-    // For now, return 0 (no expansion)
-    // Full implementation would track nested objects
-    return 0;
+  private createChildReference(value: unknown): number {
+    if (value === null || value === undefined) {
+      return 0;
+    }
+
+    if (typeof value !== 'object') {
+      return 0;
+    }
+
+    // Create a reference for this nested object
+    const ref = DebugExecutionState.variableReferenceCounter++;
+    this.nestedVariableReferences.set(ref, value);
+    return ref;
+  }
+
+  /**
+   * Get variables for a nested object reference
+   */
+  public getNestedVariables(variablesReference: number): DebugVariable[] {
+    const value = this.nestedVariableReferences.get(variablesReference);
+    if (!value || typeof value !== 'object') {
+      return [];
+    }
+
+    const variables: DebugVariable[] = [];
+
+    if (Array.isArray(value)) {
+      // Handle array - show indexed elements
+      for (let i = 0; i < value.length; i++) {
+        const element = value[i];
+        const isComplex = typeof element === 'object' && element !== null;
+
+        variables.push({
+          name: `[${i}]`,
+          value: this.formatValue(element),
+          type: this.getValueType(element),
+          // Only allow one level of expansion - don't create child references for nested elements
+          variablesReference: 0,
+          evaluateName: `[${i}]`,
+        });
+      }
+    } else {
+      // Handle object - show named properties
+      for (const [key, propValue] of Object.entries(value)) {
+        variables.push({
+          name: key,
+          value: this.formatValue(propValue),
+          type: this.getValueType(propValue),
+          // Only allow one level of expansion - don't create child references for nested properties
+          variablesReference: 0,
+          evaluateName: key,
+        });
+      }
+    }
+
+    return variables;
   }
 
   /**

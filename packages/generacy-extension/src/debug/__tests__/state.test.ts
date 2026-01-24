@@ -426,3 +426,123 @@ describe('DebugExecutionState', () => {
     });
   });
 });
+
+describe('Nested Variable Expansion', () => {
+  let state: DebugExecutionState;
+
+  beforeEach(() => {
+    resetDebugExecutionState();
+    state = getDebugExecutionState();
+    state.initialize('test', '/path/test.yaml', [
+      { name: 'setup', steps: [{ name: 'step1' }] },
+    ]);
+  });
+
+  afterEach(() => {
+    resetDebugExecutionState();
+  });
+
+  it('should create expandable reference for object variables', () => {
+    state.setVariable('workflow', 'config', { host: 'localhost', port: 8080 });
+    const scopes = state.getScopes(1);
+    const workflowScope = scopes.find(s => s.name === 'Workflow');
+
+    const variables = state.getVariables(workflowScope!.variablesReference);
+    const configVar = variables.find(v => v.name === 'config');
+
+    expect(configVar).toBeDefined();
+    expect(configVar?.variablesReference).toBeGreaterThan(0);
+  });
+
+  it('should create expandable reference for array variables', () => {
+    state.setVariable('workflow', 'items', ['a', 'b', 'c']);
+    const scopes = state.getScopes(1);
+    const workflowScope = scopes.find(s => s.name === 'Workflow');
+
+    const variables = state.getVariables(workflowScope!.variablesReference);
+    const itemsVar = variables.find(v => v.name === 'items');
+
+    expect(itemsVar).toBeDefined();
+    expect(itemsVar?.variablesReference).toBeGreaterThan(0);
+  });
+
+  it('should return nested object properties', () => {
+    state.setVariable('workflow', 'config', { host: 'localhost', port: 8080 });
+    const scopes = state.getScopes(1);
+    const workflowScope = scopes.find(s => s.name === 'Workflow');
+
+    const variables = state.getVariables(workflowScope!.variablesReference);
+    const configVar = variables.find(v => v.name === 'config');
+
+    // Get nested variables
+    const nestedVars = state.getVariables(configVar!.variablesReference);
+
+    expect(nestedVars).toHaveLength(2);
+    expect(nestedVars.find(v => v.name === 'host')?.value).toBe('localhost');
+    expect(nestedVars.find(v => v.name === 'port')?.value).toBe('8080');
+  });
+
+  it('should return array elements with indexed names', () => {
+    state.setVariable('workflow', 'items', ['first', 'second', 'third']);
+    const scopes = state.getScopes(1);
+    const workflowScope = scopes.find(s => s.name === 'Workflow');
+
+    const variables = state.getVariables(workflowScope!.variablesReference);
+    const itemsVar = variables.find(v => v.name === 'items');
+
+    // Get nested variables
+    const nestedVars = state.getVariables(itemsVar!.variablesReference);
+
+    expect(nestedVars).toHaveLength(3);
+    expect(nestedVars[0]?.name).toBe('[0]');
+    expect(nestedVars[0]?.value).toBe('first');
+    expect(nestedVars[1]?.name).toBe('[1]');
+    expect(nestedVars[1]?.value).toBe('second');
+    expect(nestedVars[2]?.name).toBe('[2]');
+    expect(nestedVars[2]?.value).toBe('third');
+  });
+
+  it('should not create references for primitive values', () => {
+    state.setVariable('workflow', 'count', 42);
+    state.setVariable('workflow', 'name', 'test');
+    state.setVariable('workflow', 'active', true);
+
+    const scopes = state.getScopes(1);
+    const workflowScope = scopes.find(s => s.name === 'Workflow');
+
+    const variables = state.getVariables(workflowScope!.variablesReference);
+
+    for (const v of variables) {
+      expect(v.variablesReference).toBe(0);
+    }
+  });
+
+  it('should limit expansion to one level deep', () => {
+    state.setVariable('workflow', 'nested', {
+      level1: {
+        level2: { level3: 'deep' },
+      },
+    });
+
+    const scopes = state.getScopes(1);
+    const workflowScope = scopes.find(s => s.name === 'Workflow');
+
+    const variables = state.getVariables(workflowScope!.variablesReference);
+    const nestedVar = variables.find(v => v.name === 'nested');
+
+    // First level should be expandable
+    expect(nestedVar?.variablesReference).toBeGreaterThan(0);
+
+    // Get first level properties
+    const level1Vars = state.getVariables(nestedVar!.variablesReference);
+    const level1Prop = level1Vars.find(v => v.name === 'level1');
+
+    // Second level should NOT be expandable (returns 0 reference)
+    expect(level1Prop?.variablesReference).toBe(0);
+  });
+
+  it('should return empty array for invalid reference', () => {
+    const variables = state.getVariables(99999);
+    expect(variables).toEqual([]);
+  });
+});
