@@ -23,10 +23,12 @@ import {
   registerBuiltinActions,
   type ActionContext,
   type ActionLogger,
+  type ActionResult,
   type StepOutput,
 } from './actions';
 import { ExecutionContext, interpolate, interpolateValue } from './interpolation';
-import { RetryManager, type RetryState } from './retry';
+import { RetryManager, withTimeout, type RetryState } from './retry';
+import { getDebugHooks, DebugHooks, type StepState } from './debug-integration';
 
 // Ensure built-in actions are registered
 let actionsRegistered = false;
@@ -35,6 +37,13 @@ function ensureActionsRegistered(): void {
     registerBuiltinActions();
     actionsRegistered = true;
   }
+}
+
+/**
+ * Reset the actions registration state (for testing)
+ */
+export function resetActionsRegistration(): void {
+  actionsRegistered = false;
 }
 
 /**
@@ -419,6 +428,17 @@ export class WorkflowExecutor {
       return result;
     }
 
+    // Create step state for debug hooks
+    const stepState: StepState = DebugHooks.createStepState(step, phase.name, stepIndex);
+    stepState.startTime = result.startTime;
+
+    // Call debug hook before step execution (may pause at breakpoint)
+    const debugHooks = getDebugHooks();
+    await debugHooks.beforeStep(stepState);
+
+    // Track action result for debug hooks
+    let actionResultForHooks: ActionResult | undefined;
+
     try {
       // Interpolate step configuration
       const interpolatedStep = this.interpolateStep(step);
@@ -435,6 +455,9 @@ export class WorkflowExecutor {
           handler,
           options
         );
+
+        // Store for debug hooks
+        actionResultForHooks = actionResult;
 
         result.output = typeof actionResult.output === 'string'
           ? actionResult.output
@@ -470,14 +493,17 @@ export class WorkflowExecutor {
         result.exitCode = terminalResult.exitCode;
         result.error = terminalResult.error;
 
-        // Store step output
-        this.storeStepOutput(step.name, {
+        // Create action result for debug hooks from terminal result
+        actionResultForHooks = {
           success: terminalResult.exitCode === 0,
           output: terminalResult.output,
           stdout: terminalResult.output,
           exitCode: terminalResult.exitCode,
           duration: 0,
-        });
+        };
+
+        // Store step output
+        this.storeStepOutput(step.name, actionResultForHooks);
 
         // Write output
         if (terminalResult.output) {
@@ -503,11 +529,17 @@ export class WorkflowExecutor {
     } catch (error) {
       result.status = 'failed';
       result.error = error instanceof Error ? error.message : String(error);
+
+      // Call debug hook on error
+      debugHooks.onError(stepState, error instanceof Error ? error : new Error(String(error)));
     }
 
     // Finalize step
     result.endTime = Date.now();
     result.duration = result.endTime - result.startTime;
+
+    // Call debug hook after step execution
+    debugHooks.afterStep(stepState, result, actionResultForHooks);
 
     // Write step completion
     outputChannel.writeStepComplete(
@@ -583,8 +615,16 @@ export class WorkflowExecutor {
       });
     });
 
-    // Execute with retry
-    const retryResult = await retryManager.executeWithRetry(handler, step, context);
+    // Default timeout: 5 minutes (300000ms)
+    const DEFAULT_STEP_TIMEOUT = 300000;
+    const stepTimeout = step.timeout ?? DEFAULT_STEP_TIMEOUT;
+
+    // Execute with retry and timeout wrapper
+    const retryResult = await withTimeout(
+      retryManager.executeWithRetry(handler, step, context),
+      stepTimeout,
+      context.signal
+    );
 
     // Emit action completion event
     this.emitEvent({

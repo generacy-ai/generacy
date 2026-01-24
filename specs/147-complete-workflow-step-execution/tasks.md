@@ -10,19 +10,19 @@
 
 ## Phase 1: Debug Hook Integration
 
-- [ ] T001 [AC6] Wire debug hooks into `executeStep()` - Import `getDebugHooks()` and call `beforeStep()` before action execution in `executor.ts:190-220`
-- [ ] T002 [AC6] Add `afterStep()` hook call after action completes with `StepState` and `ActionResult` in `executor.ts`
-- [ ] T003 [AC4] Add action-level timeout wrapper using `withTimeout()` from `retry/index.ts` around handler.execute() in `executor.ts`
+- [X] T001 [AC6] Wire debug hooks into `executeStep()` - Import `getDebugHooks()` and call `beforeStep()` before action execution in `executor.ts:190-220`
+- [X] T002 [AC6] Add `afterStep()` hook call after action completes with `StepState` and `ActionResult` in `executor.ts`
+- [X] T003 [AC4] Add action-level timeout wrapper using `withTimeout()` from `retry/index.ts` around handler.execute() in `executor.ts`
 
 ## Phase 2: Integration Tests
 
-- [ ] T004 [P] [AC1] Create test file `executor.test.ts` with test setup and mock utilities for action handlers
-- [ ] T005 [P] [AC1] Test `workspace.prepare` action with mock git operations - verify branch creation/checkout
-- [ ] T006 [P] [AC2] Test `agent.invoke` action with mock Claude Code CLI - verify command construction and output parsing
-- [ ] T007 [P] [AC4] Test timeout enforcement at action level - verify long-running actions are terminated
-- [ ] T008 [P] [AC6] Test debug hook pause/resume - verify `beforeStep()` can pause and `resume()` continues execution
-- [ ] T009 [AC3] Test step output capture and interpolation - verify `${steps.id.output}` works across steps
-- [ ] T010 [AC5] Test error handling chain - verify errors propagate correctly and `continueOnError` works
+- [X] T004 [P] [AC1] Create test file `executor.test.ts` with test setup and mock utilities for action handlers
+- [X] T005 [P] [AC1] Test `workspace.prepare` action with mock git operations - verify branch creation/checkout
+- [X] T006 [P] [AC2] Test `agent.invoke` action with mock Claude Code CLI - verify command construction and output parsing
+- [X] T007 [P] [AC4] Test timeout enforcement at action level - verify long-running actions are terminated
+- [X] T008 [P] [AC6] Test debug hook pause/resume - verify `beforeStep()` can pause and `resume()` continues execution
+- [X] T009 [AC3] Test step output capture and interpolation - verify `${steps.id.output}` works across steps
+- [X] T010 [AC5] Test error handling chain - verify errors propagate correctly and `continueOnError` works
 
 ## Phase 3: Manual Validation
 
