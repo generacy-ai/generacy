@@ -1,67 +1,97 @@
 # Feature Specification: Complete create workflow command implementation
 
-**Branch**: `148-complete-create-workflow-command` | **Date**: 2026-01-24 | **Status**: Draft
+**Branch**: `148-complete-create-workflow-command` | **Date**: 2026-01-24 | **Status**: Verified
 
 ## Summary
 
-## Summary
-The "Create Workflow" command is registered in the extension but the implementation is incomplete. Users cannot create new workflows from templates via the command palette.
+The "Create Workflow" command allows users to create new workflow files from templates via the VS Code command palette.
 
 ## Current State
-- Command handler is registered in `package.json` and extension activation
-- Template library exists with starter workflows (basic-development, spec-driven-development, test-driven-development)
-- Workflow Explorer tree view shows templates
 
-## What's Missing
-1. **Template selection UI** - QuickPick or WebView to select from available templates
-2. **Workflow naming** - Prompt for workflow name with validation
-3. **Template expansion** - Copy template to `.generacy/workflows/` with user's name
-4. **File creation** - Write the YAML file to disk
-5. **Open in editor** - Open the new workflow file for editing
+**Implementation Status: COMPLETE**
 
-## Key Files
-- `/packages/generacy-extension/src/commands/` (command handlers)
-- `/packages/generacy-extension/src/views/local/explorer/` (template access)
+The feature is fully implemented and functional:
+
+### Implemented Components
+- **Command handler**: `createWorkflow()` in `/packages/generacy-extension/src/commands/workflow.ts`
+- **Template selection UI**: QuickPick with live YAML preview in side panel (`showTemplateQuickPick`)
+- **Template library**: Three starter templates (basic, multi-phase, with-triggers)
+- **Workflow naming**: Input box with validation (letters/numbers/hyphens/underscores, max 64 chars)
+- **File creation**: Writes YAML to configurable workflow directory
+- **Editor integration**: Opens new file after creation
+- **Explorer refresh**: File watcher auto-refreshes on file creation
+
+### Key Files
+- `/packages/generacy-extension/src/commands/workflow.ts` - Create/rename/delete/duplicate commands
+- `/packages/generacy-extension/src/views/local/explorer/templates.ts` - Template manager and QuickPick UI
+- `/packages/generacy-extension/src/views/local/explorer/provider.ts` - Tree provider with file watcher
+- `/packages/generacy-extension/src/commands/index.ts` - Command registration
 
 ## Acceptance Criteria
-- [ ] Command "Generacy: New Workflow" appears in command palette
-- [ ] User can select from available templates
-- [ ] User can provide a custom workflow name
-- [ ] Workflow file is created in `.generacy/workflows/`
-- [ ] New file opens in editor after creation
-- [ ] Workflow Explorer refreshes to show new workflow
+
+- [x] Command "Generacy: New Workflow" appears in command palette
+- [x] User can select from available templates (Basic, Multi-Phase, With Triggers)
+- [x] User can provide a custom workflow name with validation
+- [x] Workflow file is created in `.generacy/workflows/` (configurable)
+- [x] New file opens in editor after creation
+- [x] Workflow Explorer refreshes to show new workflow (via file watcher)
 
 ## User Stories
 
-### US1: [Primary User Story]
+### US1: Create New Workflow from Template
 
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
+**As a** developer,
+**I want** to create a new workflow file from a template,
+**So that** I can quickly start with a working workflow structure.
 
 **Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
+- [x] Templates show name, description, and preview
+- [x] Workflow name is validated before creation
+- [x] Duplicate names are prevented with clear error message
 
 ## Functional Requirements
 
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
+| ID | Requirement | Priority | Status |
+|----|-------------|----------|--------|
+| FR-001 | Template QuickPick with preview | P1 | ✅ Complete |
+| FR-002 | Workflow name validation | P1 | ✅ Complete |
+| FR-003 | File creation with template expansion | P1 | ✅ Complete |
+| FR-004 | Auto-open in editor | P2 | ✅ Complete |
+| FR-005 | Explorer auto-refresh | P2 | ✅ Complete |
 
-## Success Criteria
+## Implementation Details
 
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
+### Template Selection Flow
+1. User invokes "Generacy: New Workflow" command
+2. QuickPick displays available templates with icons and descriptions
+3. As user navigates, YAML preview shows in adjacent panel
+4. User selects template
 
-## Assumptions
+### Name Input Flow
+1. Input box prompts for workflow name
+2. Validation rules: starts with letter, alphanumeric + hyphens/underscores, max 64 chars
+3. Duplicate detection prevents overwriting existing workflows
 
-- [Assumption 1]
+### File Creation Flow
+1. Workflow directory created if needed
+2. Template content written with name substitution
+3. File opened in editor
+4. Information message confirms creation
+
+## Test Coverage
+
+Existing tests in `/packages/generacy-extension/src/commands/__tests__/workflow.test.ts`:
+- Template selection cancellation
+- Name input validation
+- File creation with correct content
+- Rename, delete, duplicate operations
+- Name validation edge cases
 
 ## Out of Scope
 
-- [Exclusion 1]
+- Custom template creation (use existing templates as starting point)
+- Template import from remote sources
+- Multi-file workflow templates
 
 ---
 
