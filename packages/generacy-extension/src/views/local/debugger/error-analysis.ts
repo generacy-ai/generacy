@@ -1,11 +1,14 @@
 /**
  * Error analysis with stack trace for workflow debugging.
  * Provides detailed error information, stack traces, and suggestions.
+ * Subscribes to real executor events for real-time error categorization.
  */
 import * as vscode from 'vscode';
 import { getDebugExecutionState, type StepState, type PhaseState, type WorkflowState, type HistoryEntry } from '../../../debug';
 import { getDebugSession } from './session';
 import { getLogger } from '../../../utils';
+import { WorkflowExecutor } from '../runner/executor';
+import type { ExecutionEvent, StepResult } from '../runner/types';
 
 /**
  * Error severity levels
@@ -83,6 +86,7 @@ export class ErrorAnalysisManager {
   private readonly onErrorAddedEmitter = new vscode.EventEmitter<AnalyzedError>();
   public readonly onErrorAdded = this.onErrorAddedEmitter.event;
   private errorIdCounter = 0;
+  private executorSubscription: vscode.Disposable | undefined;
 
   private constructor() {
     // Subscribe to state changes to detect errors
@@ -92,6 +96,101 @@ export class ErrorAnalysisManager {
         this.checkForNewErrors(workflowState);
       }
     });
+
+    // Subscribe to executor step:error events directly for real-time error analysis (T014)
+    try {
+      const executor = WorkflowExecutor.getInstance();
+      this.executorSubscription = executor.addEventListener((event: ExecutionEvent) => {
+        if (event.type === 'step:error' && event.phaseName && event.stepName) {
+          const stepResult = event.data as StepResult | undefined;
+          this.handleExecutorStepError(
+            event.phaseName,
+            event.stepName,
+            stepResult?.error ?? event.message ?? 'Unknown error',
+            stepResult?.exitCode
+          );
+        }
+      });
+    } catch {
+      // Executor may not be initialized yet, that's ok
+    }
+  }
+
+  /**
+   * Handle a step error directly from the executor event stream.
+   * Creates an analyzed error if not already tracked.
+   */
+  private handleExecutorStepError(
+    phaseName: string,
+    stepName: string,
+    errorMessage: string,
+    exitCode?: number
+  ): void {
+    const key = `${phaseName}:${stepName}`;
+    if (this.errors.has(key)) {
+      return; // Already tracked
+    }
+
+    const id = `error-${++this.errorIdCounter}`;
+    const category = this.categorizeError(errorMessage, exitCode);
+
+    const error: AnalyzedError = {
+      id,
+      timestamp: Date.now(),
+      message: errorMessage,
+      category,
+      severity: 'error',
+      phaseName,
+      stepName,
+      exitCode,
+      stackTrace: [{
+        index: 0,
+        name: `${stepName} (step)`,
+        phaseName,
+        stepName,
+      }],
+      rawOutput: errorMessage,
+      suggestions: this.generateSuggestionsFromCategory(category),
+    };
+
+    this.errors.set(id, error);
+    this.onErrorAddedEmitter.fire(error);
+  }
+
+  /**
+   * Generate suggestions based on error category
+   */
+  private generateSuggestionsFromCategory(category: ErrorCategory): string[] {
+    const suggestions: string[] = [];
+    switch (category) {
+      case 'timeout':
+        suggestions.push('Increase the step timeout value');
+        suggestions.push('Check if the command is waiting for user input');
+        break;
+      case 'permission':
+        suggestions.push('Check file/directory permissions');
+        suggestions.push('Ensure the user has required access rights');
+        break;
+      case 'network':
+        suggestions.push('Verify network connectivity');
+        suggestions.push('Check if the target service is running');
+        break;
+      case 'configuration':
+        suggestions.push('Verify required files exist');
+        suggestions.push('Check environment variables are set correctly');
+        break;
+      case 'execution':
+        suggestions.push('Check the command output for specific error details');
+        break;
+      case 'validation':
+        suggestions.push('Check input data format');
+        suggestions.push('Verify schema requirements');
+        break;
+      default:
+        suggestions.push('Review the error message for more details');
+    }
+    suggestions.push('Use "Replay From Step" to re-run from a previous point');
+    return suggestions;
   }
 
   /**
@@ -343,6 +442,7 @@ export class ErrorAnalysisManager {
   public dispose(): void {
     this.errors.clear();
     this.onErrorAddedEmitter.dispose();
+    this.executorSubscription?.dispose();
   }
 
   /**

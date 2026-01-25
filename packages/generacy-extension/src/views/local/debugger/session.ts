@@ -1,6 +1,7 @@
 /**
  * Debug session management for Generacy workflow debugging.
  * Handles step-through execution with continue, stepIn, stepOut, stepOver support.
+ * Delegates step execution to WorkflowExecutor for real execution.
  */
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils';
@@ -9,14 +10,20 @@ import {
   type WorkflowBreakpoint,
   type BreakpointLocation,
 } from './breakpoints';
+import { ExecutorEventBridge } from './event-bridge';
 import type {
   ExecutableWorkflow,
   ExecutionOptions,
   WorkflowPhase,
   WorkflowStep,
   StepResult,
+  SingleStepResult,
 } from '../runner/types';
+import { WorkflowExecutor } from '../runner/executor';
+import { getDebugHooks } from '../runner/debug-integration';
+import { getDebugExecutionState } from '../../../debug';
 import { getRunnerOutputChannel } from '../runner/output-channel';
+import { getErrorAnalysisManager } from './error-analysis';
 
 /**
  * Debug session state
@@ -139,6 +146,8 @@ export class DebugSession {
   private cancellationToken: vscode.CancellationTokenSource | undefined;
   private pauseRequested = false;
   private stepResults: StepResult[] = [];
+  private eventBridge: ExecutorEventBridge | undefined;
+  private pauseOnError = true;
 
   private constructor() {
     // Private constructor for singleton
@@ -212,6 +221,7 @@ export class DebugSession {
     this.config = config;
     this.state = 'running';
     this.stepResults = [];
+    this.pauseOnError = (config as DebugSessionConfig & { pauseOnError?: boolean }).pauseOnError ?? true;
     this.context = {
       env: { ...config.workflow.env, ...config.options?.env },
       variables: {},
@@ -223,6 +233,17 @@ export class DebugSession {
 
     // Reset breakpoint hit counts
     getBreakpointManager().resetHitCounts();
+
+    // Initialize event bridge: connect executor events to debug state
+    const executor = WorkflowExecutor.getInstance();
+    const debugState = getDebugExecutionState();
+    this.eventBridge = new ExecutorEventBridge(executor, debugState);
+    this.eventBridge.connect();
+
+    // Wire DebugHooks to use BreakpointManager as source of truth
+    const debugHooks = getDebugHooks();
+    debugHooks.enable();
+    debugHooks.setBreakpointManagerDelegate(getBreakpointManager(), config.uri);
 
     logger.info(`Debug session started: ${config.workflow.name}`);
 
@@ -365,6 +386,17 @@ export class DebugSession {
   public terminate(): void {
     const logger = getLogger();
     logger.info('Debug session terminated');
+
+    // Disconnect event bridge to prevent memory leaks (T008)
+    if (this.eventBridge) {
+      this.eventBridge.disconnect();
+      this.eventBridge = undefined;
+    }
+
+    // Clean up DebugHooks delegate
+    const debugHooks = getDebugHooks();
+    debugHooks.clearBreakpointManagerDelegate();
+    debugHooks.disable();
 
     if (this.cancellationToken) {
       this.cancellationToken.cancel();
@@ -614,7 +646,8 @@ export class DebugSession {
   }
 
   /**
-   * Execute a single step
+   * Execute a single step by delegating to the WorkflowExecutor.
+   * This replaces the previous simulateStepExecution() placeholder.
    */
   private async executeStep(step: WorkflowStep, phaseName: string): Promise<void> {
     const outputChannel = getRunnerOutputChannel();
@@ -635,28 +668,94 @@ export class DebugSession {
     const startTime = Date.now();
 
     try {
-      // Simulate step execution
-      // In a real implementation, this would call the actual executor
-      await this.simulateStepExecution(step);
+      // Delegate to WorkflowExecutor for real step execution
+      const singleStepResult = await this.executeStepViaExecutor(step, phaseName);
 
       const duration = Date.now() - startTime;
-      outputChannel.writeStepComplete(step.name, duration, true);
 
-      // Store step result
-      const result: StepResult = {
-        stepName: step.name,
-        phaseName,
-        status: 'completed',
-        startTime,
-        endTime: Date.now(),
-        duration,
-      };
-      this.stepResults.push(result);
+      if (singleStepResult.skipped) {
+        outputChannel.writeStepComplete(step.name, duration, true);
+        const result: StepResult = {
+          stepName: step.name,
+          phaseName,
+          status: 'skipped',
+          startTime,
+          endTime: Date.now(),
+          duration,
+        };
+        this.stepResults.push(result);
+        return;
+      }
 
-      // Update context
-      if (this.context) {
-        this.context.phaseOutputs[step.name] = { status: 'completed' };
-        this.context.outputs[`${phaseName}.${step.name}`] = { status: 'completed' };
+      if (singleStepResult.success) {
+        outputChannel.writeStepComplete(step.name, duration, true);
+
+        // Store step result
+        const result: StepResult = {
+          stepName: step.name,
+          phaseName,
+          status: 'completed',
+          startTime,
+          endTime: Date.now(),
+          duration,
+          output: typeof singleStepResult.output === 'string'
+            ? singleStepResult.output
+            : singleStepResult.output != null ? JSON.stringify(singleStepResult.output) : undefined,
+          exitCode: singleStepResult.exitCode,
+        };
+        this.stepResults.push(result);
+
+        // Update context with real data from executor
+        this.updateContextFromExecutor(step.name, phaseName, singleStepResult);
+
+      } else {
+        // Step failed
+        const errorMessage = singleStepResult.error?.message ?? 'Step execution failed';
+        outputChannel.writeStepComplete(step.name, duration, false);
+        logger.error(`Step failed: ${step.name}`, { error: errorMessage });
+
+        this.emitEvent({
+          type: 'output',
+          output: `Step failed: ${errorMessage}`,
+        });
+
+        // Store failed result
+        const result: StepResult = {
+          stepName: step.name,
+          phaseName,
+          status: 'failed',
+          startTime,
+          endTime: Date.now(),
+          duration,
+          error: errorMessage,
+          exitCode: singleStepResult.exitCode,
+        };
+        this.stepResults.push(result);
+
+        // Error pause integration (T010): pause on errors if enabled
+        if (this.pauseOnError) {
+          // Feed error to ErrorAnalysisManager for categorization and suggestions
+          try {
+            const errorAnalysis = getErrorAnalysisManager();
+            // Error analysis is handled automatically via state change subscription
+          } catch {
+            // Error analysis not critical, continue
+          }
+
+          // Emit DAP stopped event with 'exception' reason
+          this.state = 'paused';
+          this.emitEvent({
+            type: 'stopped',
+            reason: 'exception',
+            position: this.position,
+            context: this.context,
+          });
+          return; // Pause here — user can Continue, Step Over, or Terminate
+        }
+
+        if (!step.continueOnError) {
+          await this.fail(errorMessage);
+        }
       }
 
     } catch (error) {
@@ -682,6 +781,18 @@ export class DebugSession {
       };
       this.stepResults.push(result);
 
+      // Error pause integration
+      if (this.pauseOnError) {
+        this.state = 'paused';
+        this.emitEvent({
+          type: 'stopped',
+          reason: 'exception',
+          position: this.position,
+          context: this.context,
+        });
+        return;
+      }
+
       if (!step.continueOnError) {
         await this.fail(errorMessage);
       }
@@ -689,13 +800,68 @@ export class DebugSession {
   }
 
   /**
-   * Simulate step execution (placeholder for actual execution)
+   * Delegate step execution to WorkflowExecutor.
+   * Uses the executeSingleStep() API for fine-grained debug control.
    */
-  private async simulateStepExecution(step: WorkflowStep): Promise<void> {
-    // In a full implementation, this would delegate to the WorkflowExecutor
-    // For now, we just simulate with a small delay
-    const timeout = step.timeout ?? 100;
-    await new Promise(resolve => setTimeout(resolve, Math.min(timeout, 1000)));
+  private async executeStepViaExecutor(step: WorkflowStep, phaseName: string): Promise<SingleStepResult> {
+    const executor = WorkflowExecutor.getInstance();
+    const phase = this.config?.workflow.phases[this.position?.phaseIndex ?? 0];
+
+    if (!phase) {
+      return {
+        success: false,
+        output: null,
+        error: new Error(`Phase not found at index ${this.position?.phaseIndex}`),
+        duration: 0,
+        skipped: false,
+      };
+    }
+
+    return executor.executeSingleStep({
+      step,
+      phase,
+      context: executor.getExecutionContext(),
+      phaseIndex: this.position?.phaseIndex ?? 0,
+      stepIndex: this.position?.stepIndex ?? 0,
+    });
+  }
+
+  /**
+   * Update the debug context with real data from executor after step completion
+   */
+  private updateContextFromExecutor(
+    stepName: string,
+    phaseName: string,
+    result: SingleStepResult
+  ): void {
+    if (!this.context) {
+      return;
+    }
+
+    // Update phase outputs with real step output
+    this.context.phaseOutputs[stepName] = {
+      status: result.success ? 'completed' : 'failed',
+      output: result.output,
+      exitCode: result.exitCode,
+    };
+
+    // Update global outputs
+    this.context.outputs[`${phaseName}.${stepName}`] = {
+      status: result.success ? 'completed' : 'failed',
+      output: result.output,
+      exitCode: result.exitCode,
+    };
+
+    // Pull real variables from executor context
+    const executor = WorkflowExecutor.getInstance();
+    const executionContext = executor.getExecutionContext();
+    if (executionContext) {
+      // Update variables scope with workflow-level data
+      const interpCtx = executionContext.getInterpolationContext();
+      if (interpCtx.env) {
+        this.context.env = { ...this.context.env, ...interpCtx.env };
+      }
+    }
   }
 
   /**
@@ -803,6 +969,12 @@ export class DebugSession {
     this.stepStartPosition = undefined;
     this.stepResults = [];
     this.pauseRequested = false;
+    this.pauseOnError = true;
+
+    if (this.eventBridge) {
+      this.eventBridge.disconnect();
+      this.eventBridge = undefined;
+    }
 
     if (this.cancellationToken) {
       this.cancellationToken.dispose();

@@ -1,12 +1,15 @@
 /**
  * Replay controller for workflow debugging.
- * Provides "replay from step" functionality to re-execute from a specific point.
+ * Provides "replay from step" functionality using cached execution results
+ * from the history panel (recorded replay only, per design decision D5).
+ * Does not re-execute steps through the executor — reads from cached history.
  */
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils';
 import { getDebugSession, type DebugSessionConfig, type ExecutionPosition } from './session';
 import { getDebugExecutionState, type HistoryEntry, type WorkflowState } from '../../../debug';
 import type { ExecutableWorkflow, WorkflowPhase, WorkflowStep } from '../runner/types';
+import { WorkflowExecutor } from '../runner/executor';
 
 /**
  * Replay options
@@ -160,11 +163,31 @@ export class ReplayController {
   }
 
   /**
-   * Collect outputs from steps executed before the replay point
+   * Collect outputs from steps executed before the replay point.
+   * Uses cached results from the executor context (recorded replay per D5)
+   * rather than re-executing through the executor.
    */
   private collectOutputsBeforePoint(workflowState: WorkflowState, point: ReplayPoint): Record<string, unknown> {
     const outputs: Record<string, unknown> = {};
 
+    // First, try to collect from executor's cached step outputs
+    const executor = WorkflowExecutor.getInstance();
+    const executionContext = executor.getExecutionContext();
+
+    if (executionContext) {
+      const allStepOutputs = executionContext.getAllStepOutputs();
+      for (const [stepId, stepOutput] of allStepOutputs) {
+        outputs[stepId] = {
+          status: 'completed',
+          raw: stepOutput.raw,
+          parsed: stepOutput.parsed,
+          exitCode: stepOutput.exitCode,
+          completedAt: stepOutput.completedAt,
+        };
+      }
+    }
+
+    // Also collect from workflow state for steps not in the executor context
     for (let phaseIndex = 0; phaseIndex <= point.phaseIndex; phaseIndex++) {
       const phase = workflowState.phases[phaseIndex];
       if (!phase) continue;
@@ -177,13 +200,16 @@ export class ReplayController {
         const step = phase.steps[stepIndex];
         if (step && (step.status === 'completed' || step.status === 'failed')) {
           const key = `${phase.name}.${step.name}`;
-          outputs[key] = {
-            status: step.status,
-            output: step.output,
-            error: step.error,
-            exitCode: step.exitCode,
-            variables: Object.fromEntries(step.variables),
-          };
+          // Only add if not already present from executor context
+          if (!outputs[key]) {
+            outputs[key] = {
+              status: step.status,
+              output: step.output,
+              error: step.error,
+              exitCode: step.exitCode,
+              variables: Object.fromEntries(step.variables),
+            };
+          }
         }
       }
     }

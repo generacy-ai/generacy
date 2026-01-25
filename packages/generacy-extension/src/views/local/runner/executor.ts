@@ -15,6 +15,8 @@ import type {
   StepResult,
   WorkflowPhase,
   WorkflowStep,
+  SingleStepRequest,
+  SingleStepResult,
 } from './types';
 import { getRunnerOutputChannel } from './output-channel';
 import { getWorkflowTerminal } from './terminal';
@@ -248,6 +250,64 @@ export class WorkflowExecutor {
     this.abortController = undefined;
 
     return this.currentExecution;
+  }
+
+  /**
+   * Execute a single step on demand (used by debug session).
+   * Runs one step through the full action handler pipeline without advancing the phase loop.
+   * Respects debug hooks (beforeStep/afterStep) for breakpoint support.
+   */
+  public async executeSingleStep(request: SingleStepRequest): Promise<SingleStepResult> {
+    const startTime = Date.now();
+
+    // Ensure we have an execution context
+    if (!this.executionContext && request.context) {
+      this.executionContext = request.context as ExecutionContext;
+    }
+
+    // Create a temporary abort controller if none exists
+    const hadAbortController = !!this.abortController;
+    if (!this.abortController) {
+      this.abortController = new AbortController();
+    }
+
+    try {
+      // Execute the step through the normal pipeline
+      const stepResult = await this.executeStep(
+        { name: 'debug-workflow', phases: [request.phase] } as ExecutableWorkflow,
+        request.phase,
+        request.step,
+        request.stepIndex,
+        request.phase.steps.length,
+        { mode: 'normal' }
+      );
+
+      const duration = Date.now() - startTime;
+
+      return {
+        success: stepResult.status === 'completed',
+        output: stepResult.output ?? null,
+        error: stepResult.error ? new Error(stepResult.error) : null,
+        duration,
+        skipped: stepResult.status === 'skipped',
+        exitCode: stepResult.exitCode,
+      };
+
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      return {
+        success: false,
+        output: null,
+        error: error instanceof Error ? error : new Error(String(error)),
+        duration,
+        skipped: false,
+      };
+    } finally {
+      // Clean up temporary abort controller
+      if (!hadAbortController) {
+        this.abortController = undefined;
+      }
+    }
   }
 
   /**
