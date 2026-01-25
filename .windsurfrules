@@ -24,6 +24,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -45,6 +46,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 149-complete-debug-adapter-integration: Added configuration
 - 150-migrate-orchestrator-from-websocket: Added configuration
 - 147-complete-workflow-step-execution: Added configuration
 - 148-complete-create-workflow-command: Added configuration
