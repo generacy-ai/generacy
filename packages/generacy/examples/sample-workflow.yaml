@@ -1,0 +1,107 @@
+# Sample Workflow: Build and Test
+# Demonstrates workflow structure with phases, steps, inputs, and retry
+
+name: build-and-test
+description: Build, test, and lint a Node.js project
+
+# Input definitions - can be passed via CLI or programmatically
+inputs:
+  projectDir:
+    type: string
+    required: false
+    default: "."
+    description: Project directory path
+
+  nodeVersion:
+    type: string
+    required: false
+    default: "20"
+    description: Node.js version to use
+
+  skipLint:
+    type: boolean
+    required: false
+    default: false
+    description: Skip linting step
+
+# Workflow phases - executed sequentially
+phases:
+  # Phase 1: Setup
+  - name: setup
+    description: Install dependencies and prepare environment
+    steps:
+      - name: check-node
+        action: shell
+        command: node --version
+        description: Verify Node.js is installed
+
+      - name: install-dependencies
+        action: shell
+        command: npm ci
+        with:
+          workdir: ${inputs.projectDir}
+        timeout: 300000  # 5 minutes
+        retry:
+          maxAttempts: 2
+          backoff: constant
+          delay: 5s
+
+  # Phase 2: Build
+  - name: build
+    description: Compile TypeScript and build the project
+    steps:
+      - name: compile
+        action: shell
+        command: npm run build
+        with:
+          workdir: ${inputs.projectDir}
+        timeout: 180000  # 3 minutes
+
+  # Phase 3: Quality Checks
+  - name: quality
+    description: Run tests and linting
+    steps:
+      - name: run-tests
+        action: verification.check
+        with:
+          command: npm test
+          workdir: ${inputs.projectDir}
+          expectedExitCode: 0
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          delay: 1s
+          maxDelay: 30s
+
+      - name: run-lint
+        action: verification.check
+        condition: ${{ !inputs.skipLint }}
+        with:
+          command: npm run lint
+          workdir: ${inputs.projectDir}
+        continueOnError: true  # Don't fail workflow on lint warnings
+
+  # Phase 4: Report
+  - name: report
+    description: Generate reports and artifacts
+    steps:
+      - name: coverage-summary
+        action: shell
+        command: |
+          if [ -f coverage/lcov.info ]; then
+            echo "Coverage report generated"
+            cat coverage/coverage-summary.json 2>/dev/null || echo "No summary available"
+          else
+            echo "No coverage data found"
+          fi
+        with:
+          workdir: ${inputs.projectDir}
+
+# Metadata
+metadata:
+  version: "1.0.0"
+  author: "Generacy"
+  tags:
+    - nodejs
+    - typescript
+    - ci
