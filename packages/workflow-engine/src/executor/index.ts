@@ -15,13 +15,13 @@ import type {
   PhaseDefinition,
   StepOutput,
   Logger,
+  ActionContext,
+  ActionResult,
 } from '../types/index.js';
 import { createLogger } from '../types/logger.js';
 import {
   getActionHandler,
   registerBuiltinActions,
-  type ActionContext,
-  type ActionResult,
 } from '../actions/index.js';
 import { ExecutionContext, interpolate, interpolateValue } from '../interpolation/index.js';
 import { RetryManager, withTimeout, type RetryState } from '../retry/index.js';

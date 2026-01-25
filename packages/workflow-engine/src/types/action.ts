@@ -2,7 +2,8 @@
  * Action system types.
  * Defines interfaces for action handlers, context, and results.
  */
-import type { ExecutableWorkflow, PhaseDefinition, StepDefinition } from './execution.js';
+import type { ExecutableWorkflow } from './execution.js';
+import type { PhaseDefinition, StepDefinition } from './workflow.js';
 import type { Logger } from './logger.js';
 
 /**

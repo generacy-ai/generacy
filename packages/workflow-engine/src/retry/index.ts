@@ -285,6 +285,9 @@ export function withTimeout<T>(
   });
 }
 
+// Re-export types
+export type { RetryState, RetryResult } from '../types/retry.js';
+
 // Re-export strategies
 export {
   calculateBackoffDelay,

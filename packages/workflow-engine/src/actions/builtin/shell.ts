@@ -8,6 +8,8 @@ import type {
   ActionResult,
   ActionType,
   ValidationResult,
+  ValidationError,
+  ValidationWarning,
   StepDefinition,
 } from '../../types/index.js';
 import { parseActionType } from '../../types/action.js';
@@ -24,8 +26,8 @@ export class ShellAction extends BaseAction {
   }
 
   validate(step: StepDefinition): ValidationResult {
-    const errors = [];
-    const warnings = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationWarning[] = [];
 
     // Get command from step
     const command = step.command ?? step.script;

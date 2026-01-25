@@ -8,6 +8,8 @@ import type {
   ActionResult,
   ActionType,
   ValidationResult,
+  ValidationError,
+  ValidationWarning,
   StepDefinition,
   AgentInvokeInput,
   AgentInvokeOutput,
@@ -26,8 +28,8 @@ export class AgentInvokeAction extends BaseAction {
   }
 
   validate(step: StepDefinition): ValidationResult {
-    const errors = [];
-    const warnings = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationWarning[] = [];
 
     // Check for prompt - use empty context for validation
     const prompt = step.with?.['prompt'];

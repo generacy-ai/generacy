@@ -3,7 +3,7 @@
  * Handles periodic heartbeat to orchestrator.
  */
 import type { OrchestratorClient } from './client.js';
-import type { Heartbeat, HeartbeatResponse } from './types.js';
+import type { Heartbeat, HeartbeatCommand } from './types.js';
 
 /**
  * Heartbeat manager options
@@ -19,7 +19,7 @@ export interface HeartbeatManagerOptions {
   interval?: number;
 
   /** Callback for commands received */
-  onCommand?: (command: HeartbeatResponse['commands'][number]) => void;
+  onCommand?: (command: HeartbeatCommand) => void;
 
   /** Callback for heartbeat errors */
   onError?: (error: Error) => void;
@@ -37,7 +37,7 @@ export class HeartbeatManager {
   private readonly client: OrchestratorClient;
   private readonly workerId: string;
   private readonly interval: number;
-  private readonly onCommand?: (command: HeartbeatResponse['commands'][number]) => void;
+  private readonly onCommand?: (command: HeartbeatCommand) => void;
   private readonly onError?: (error: Error) => void;
 
   private timer: NodeJS.Timeout | null = null;

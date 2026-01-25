@@ -8,6 +8,8 @@ import type {
   ActionResult,
   ActionType,
   ValidationResult,
+  ValidationError,
+  ValidationWarning,
   StepDefinition,
   VerificationCheckInput,
   VerificationCheckOutput,
@@ -26,8 +28,8 @@ export class VerificationCheckAction extends BaseAction {
   }
 
   validate(step: StepDefinition): ValidationResult {
-    const errors = [];
-    const warnings = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationWarning[] = [];
 
     const command = step.with?.['command'] ?? step.command;
 

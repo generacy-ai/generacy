@@ -58,7 +58,7 @@ export class NetworkAgency implements AgencyConnection {
         },
       });
 
-      this.sessionId = response.sessionId;
+      this.sessionId = response['sessionId'] as string | undefined;
       this.connected = true;
       this.logger.info('Agency connected');
     } catch (error) {

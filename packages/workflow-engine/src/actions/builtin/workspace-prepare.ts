@@ -8,6 +8,8 @@ import type {
   ActionResult,
   ActionType,
   ValidationResult,
+  ValidationError,
+  ValidationWarning,
   StepDefinition,
   WorkspacePrepareInput,
   WorkspacePrepareOutput,
@@ -26,8 +28,8 @@ export class WorkspacePrepareAction extends BaseAction {
   }
 
   validate(step: StepDefinition): ValidationResult {
-    const errors = [];
-    const warnings = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationWarning[] = [];
 
     const branch = this.getInput<string>(step, { inputs: {}, stepOutputs: new Map(), env: {}, workdir: '', signal: new AbortController().signal, logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }, workflow: { name: '', phases: [] }, phase: { name: '', steps: [] }, step }, 'branch');
 

@@ -155,6 +155,14 @@ export interface Heartbeat {
 }
 
 /**
+ * Command from orchestrator to worker
+ */
+export interface HeartbeatCommand {
+  type: 'cancel' | 'shutdown' | 'config-update';
+  payload?: Record<string, unknown>;
+}
+
+/**
  * Heartbeat response from orchestrator
  */
 export interface HeartbeatResponse {
@@ -162,10 +170,7 @@ export interface HeartbeatResponse {
   acknowledged: boolean;
 
   /** Commands from orchestrator */
-  commands?: Array<{
-    type: 'cancel' | 'shutdown' | 'config-update';
-    payload?: Record<string, unknown>;
-  }>;
+  commands?: HeartbeatCommand[];
 }
 
 /**

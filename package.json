@@ -1,10 +1,14 @@
 {
   "name": "generacy",
   "version": "0.1.0",
+  "private": true,
   "description": "Message routing system connecting Agency instances with Humancy",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",

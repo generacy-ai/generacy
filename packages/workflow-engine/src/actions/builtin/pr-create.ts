@@ -8,6 +8,8 @@ import type {
   ActionResult,
   ActionType,
   ValidationResult,
+  ValidationError,
+  ValidationWarning,
   StepDefinition,
   PrCreateInput,
   PrCreateOutput,
@@ -26,8 +28,8 @@ export class PrCreateAction extends BaseAction {
   }
 
   validate(step: StepDefinition): ValidationResult {
-    const errors = [];
-    const warnings = [];
+    const errors: ValidationError[] = [];
+    const warnings: ValidationWarning[] = [];
 
     const title = step.with?.['title'];
 

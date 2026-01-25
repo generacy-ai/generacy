@@ -10,6 +10,8 @@ import {
   registerBuiltinActions,
   type ExecutionResult,
   type Logger,
+  type WorkflowDefinition,
+  type PhaseResult,
 } from '@generacy-ai/workflow-engine';
 import type { OrchestratorClient } from './client.js';
 import type { Job, JobResult } from './types.js';
@@ -192,7 +194,7 @@ export class JobHandler {
         definition = job.workflow;
       }
 
-      const workflow = prepareWorkflow(definition);
+      const workflow = prepareWorkflow(definition as WorkflowDefinition);
 
       // Create executor
       const executor = new WorkflowExecutor({
@@ -203,9 +205,9 @@ export class JobHandler {
       const result = await executor.execute(
         workflow,
         {
-          workdir: job.workdir ?? this.workdir,
+          mode: 'normal',
+          cwd: job.workdir ?? this.workdir,
           env: process.env as Record<string, string>,
-          signal: this.abortController.signal,
         },
         job.inputs
       );
@@ -255,23 +257,32 @@ export class JobHandler {
    * Build job result from execution result
    */
   private buildJobResult(job: Job, result: ExecutionResult, startTime: number): JobResult {
+    // Find the first error from failed phases/steps
+    let errorMessage: string | undefined;
+    const failedPhase = result.phaseResults.find((p: PhaseResult) => p.status === 'failed');
+    if (failedPhase) {
+      const failedStep = failedPhase.stepResults.find(s => s.status === 'failed');
+      if (failedStep?.error) {
+        errorMessage = failedStep.error;
+      }
+    }
+
     return {
       jobId: job.id,
       status: result.status === 'completed' ? 'completed' :
               result.status === 'cancelled' ? 'cancelled' : 'failed',
-      outputs: result.outputs,
-      error: result.error,
+      error: errorMessage,
       duration: Date.now() - startTime,
-      phases: result.phases.map(phase => ({
-        name: phase.name,
+      phases: result.phaseResults.map((phase: PhaseResult) => ({
+        name: phase.phaseName,
         status: phase.status,
-        duration: phase.duration,
+        duration: phase.duration ?? 0,
       })),
-      steps: result.phases.flatMap(phase =>
-        phase.steps.map(step => ({
-          name: step.name,
+      steps: result.phaseResults.flatMap((phase: PhaseResult) =>
+        phase.stepResults.map(step => ({
+          name: step.stepName,
           status: step.status,
-          duration: step.duration,
+          duration: step.duration ?? 0,
           error: step.error,
         }))
       ),
