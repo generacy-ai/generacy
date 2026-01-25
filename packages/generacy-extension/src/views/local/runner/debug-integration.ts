@@ -4,6 +4,7 @@
  */
 import type { WorkflowStep, StepResult } from './types';
 import type { ActionResult } from './actions/types';
+import type * as vscode from 'vscode';
 
 /**
  * Breakpoint definition
@@ -35,6 +36,8 @@ export interface StepState {
   phaseName: string;
   /** Step index */
   stepIndex: number;
+  /** Phase index within the workflow */
+  phaseIndex?: number;
   /** Whether step is paused at breakpoint */
   isPaused: boolean;
   /** Execution start time */
@@ -43,6 +46,15 @@ export interface StepState {
   result?: StepResult;
   /** Action result (available after action completes) */
   actionResult?: ActionResult;
+  /** Breakpoint location for matching against BreakpointManager */
+  breakpointLocation?: {
+    type: 'step';
+    phaseName: string;
+    stepName: string;
+    line: number;
+  };
+  /** Execution context reference for variable inspection during debug */
+  executionContext?: unknown;
 }
 
 /**
@@ -65,6 +77,20 @@ export interface DebugHookCallbacks {
  * Debug hooks class for step execution.
  * Integrates with the debug adapter to provide breakpoints and step inspection.
  */
+/**
+ * Interface for breakpoint manager delegation.
+ * Allows DebugHooks to delegate breakpoint matching to the BreakpointManager
+ * without creating a direct import dependency on the debugger module.
+ */
+export interface BreakpointManagerDelegate {
+  shouldStopAt(
+    uri: vscode.Uri,
+    phaseName: string,
+    stepName?: string,
+    context?: Record<string, unknown>
+  ): { id: number; location: { phaseName: string; stepName?: string } } | undefined;
+}
+
 export class DebugHooks {
   private breakpoints: Map<string, Breakpoint> = new Map();
   private callbacks: DebugHookCallbacks;
@@ -73,9 +99,28 @@ export class DebugHooks {
   private resumeResolver: (() => void) | null = null;
   private currentState: StepState | null = null;
   private enabled = false;
+  private breakpointManagerDelegate: BreakpointManagerDelegate | undefined;
+  private workflowUri: vscode.Uri | undefined;
 
   constructor(callbacks: DebugHookCallbacks = {}) {
     this.callbacks = callbacks;
+  }
+
+  /**
+   * Set the breakpoint manager delegate for breakpoint matching.
+   * When set, findMatchingBreakpoint delegates to the BreakpointManager.
+   */
+  setBreakpointManagerDelegate(delegate: BreakpointManagerDelegate, uri: vscode.Uri): void {
+    this.breakpointManagerDelegate = delegate;
+    this.workflowUri = uri;
+  }
+
+  /**
+   * Clear the breakpoint manager delegate
+   */
+  clearBreakpointManagerDelegate(): void {
+    this.breakpointManagerDelegate = undefined;
+    this.workflowUri = undefined;
   }
 
   /**
@@ -256,9 +301,32 @@ export class DebugHooks {
   }
 
   /**
-   * Find a matching breakpoint for the current step
+   * Find a matching breakpoint for the current step.
+   * Delegates to BreakpointManager when available (preferred),
+   * falls back to local breakpoint list.
    */
   private findMatchingBreakpoint(state: StepState): Breakpoint | undefined {
+    // Delegate to BreakpointManager if available (source of truth per D5)
+    if (this.breakpointManagerDelegate && this.workflowUri) {
+      const match = this.breakpointManagerDelegate.shouldStopAt(
+        this.workflowUri,
+        state.phaseName,
+        state.step.name,
+        state.executionContext as Record<string, unknown> | undefined
+      );
+      if (match) {
+        // Convert BreakpointManager result to local Breakpoint format
+        return {
+          id: String(match.id),
+          phaseName: match.location.phaseName,
+          stepName: match.location.stepName ?? state.step.name,
+          enabled: true,
+        };
+      }
+      return undefined;
+    }
+
+    // Fall back to local breakpoint list
     for (const bp of this.breakpoints.values()) {
       if (!bp.enabled) {
         continue;

@@ -169,3 +169,38 @@ export interface ExecutionEvent {
  * Execution event listener
  */
 export type ExecutionEventListener = (event: ExecutionEvent) => void;
+
+/**
+ * Request for executing a single step via the debug adapter.
+ * Used by DebugSession to delegate individual step execution to WorkflowExecutor.
+ */
+export interface SingleStepRequest {
+  /** The step to execute */
+  step: WorkflowStep;
+  /** The phase containing the step */
+  phase: WorkflowPhase;
+  /** Execution context for variable interpolation and output storage */
+  context: unknown; // ExecutionContext (avoid circular import)
+  /** Index of the phase in the workflow */
+  phaseIndex: number;
+  /** Index of the step within the phase */
+  stepIndex: number;
+}
+
+/**
+ * Result from executing a single step via the debug adapter.
+ */
+export interface SingleStepResult {
+  /** Whether the step completed successfully */
+  success: boolean;
+  /** Step output (structured or string) */
+  output: unknown | null;
+  /** Error if step failed */
+  error: Error | null;
+  /** Execution duration in milliseconds */
+  duration: number;
+  /** Whether the step was skipped (e.g., condition not met) */
+  skipped: boolean;
+  /** Exit code from the action handler */
+  exitCode?: number;
+}

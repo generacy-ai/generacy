@@ -1,10 +1,13 @@
 /**
  * Execution history panel for workflow debugging.
  * Shows a timeline of execution events with the ability to inspect past states.
+ * Subscribes to real executor events via the event bridge for real-time updates.
  */
 import * as vscode from 'vscode';
 import { getDebugExecutionState, type HistoryEntry, type WorkflowState } from '../../../debug';
 import { getDebugSession } from './session';
+import { WorkflowExecutor } from '../runner/executor';
+import type { ExecutionEvent } from '../runner/types';
 
 /**
  * History entry with computed display info
@@ -146,6 +149,7 @@ export class ExecutionHistoryProvider implements vscode.TreeDataProvider<History
   public readonly onDidChangeTreeData = this.onDidChangeTreeDataEmitter.event;
 
   private stateSubscription: vscode.Disposable | undefined;
+  private executorSubscription: vscode.Disposable | undefined;
   private groupByPhase = true;
   private showVariables = true;
   private showOutputs = true;
@@ -155,6 +159,26 @@ export class ExecutionHistoryProvider implements vscode.TreeDataProvider<History
     this.stateSubscription = state.onStateChange(() => {
       this.refresh();
     });
+
+    // Subscribe to executor events directly for real-time history updates (T013)
+    // The event bridge updates DebugExecutionState, which records history entries.
+    // This direct subscription ensures the tree view refreshes on executor events.
+    try {
+      const executor = WorkflowExecutor.getInstance();
+      this.executorSubscription = executor.addEventListener((event: ExecutionEvent) => {
+        if (
+          event.type === 'step:start' ||
+          event.type === 'step:complete' ||
+          event.type === 'step:error' ||
+          event.type === 'phase:start' ||
+          event.type === 'phase:complete'
+        ) {
+          this.refresh();
+        }
+      });
+    } catch {
+      // Executor may not be initialized yet, that's ok
+    }
   }
 
   /**
@@ -292,6 +316,7 @@ export class ExecutionHistoryProvider implements vscode.TreeDataProvider<History
   public dispose(): void {
     this.onDidChangeTreeDataEmitter.dispose();
     this.stateSubscription?.dispose();
+    this.executorSubscription?.dispose();
   }
 }
 

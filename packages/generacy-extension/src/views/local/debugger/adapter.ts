@@ -19,6 +19,7 @@ import {
   type ExecutionPosition,
 } from './session';
 import type { ExecutableWorkflow } from '../runner/types';
+import { WorkflowExecutor } from '../runner/executor';
 
 /**
  * DAP Messages - simplified interfaces matching Debug Adapter Protocol
@@ -73,6 +74,8 @@ export interface LaunchRequestArguments {
   stopOnEntry?: boolean;
   /** Working directory */
   cwd?: string;
+  /** Pause on step errors (default: true, opt-out per design decision D3) */
+  pauseOnError?: boolean;
 }
 
 /**
@@ -474,58 +477,139 @@ export class WorkflowDebugAdapter implements vscode.DebugAdapter {
   }
 
   /**
-   * Handle scopes request
+   * Handle scopes request.
+   * Returns three scopes per the variable scope model (data-model.md):
+   * - Inputs: Current step's `with` parameters after interpolation + env
+   * - Outputs: Current step's output and previous step outputs
+   * - Workflow: Global workflow-level variables and environment
    */
   private async handleScopes(seq: number, _args: { frameId: number }): Promise<void> {
-    const session = getDebugSession();
-    const scopes = session.getScopes();
-
-    const dapScopes: DAPScope[] = scopes.map(scope => ({
-      name: scope.name,
-      variablesReference: scope.variablesReference,
-      expensive: false,
-    }));
+    const dapScopes: DAPScope[] = [
+      { name: 'Inputs', variablesReference: 1, expensive: false },
+      { name: 'Outputs', variablesReference: 2, expensive: false },
+      { name: 'Workflow', variablesReference: 3, expensive: false },
+    ];
 
     this.sendResponse(seq, 'scopes', { scopes: dapScopes });
   }
 
   /**
-   * Handle variables request
+   * Handle variables request.
+   * Populates variables from real executor state:
+   * - Ref 1 (Inputs): Step `with` parameters after interpolation + step env
+   * - Ref 2 (Outputs): Step outputs from ExecutionContext.stepOutputs
+   * - Ref 3 (Workflow): Global workflow variables and environment
    */
   private async handleVariables(
     seq: number,
     args: { variablesReference: number }
   ): Promise<void> {
     const session = getDebugSession();
-    let scopeName: 'env' | 'variables' | 'outputs' | 'phaseOutputs';
+    const executor = WorkflowExecutor.getInstance();
+    const executionContext = executor.getExecutionContext();
+
+    let dapVariables: DAPVariable[] = [];
 
     switch (args.variablesReference) {
-      case 1:
-        scopeName = 'env';
+      case 1: {
+        // Inputs scope: current step's `with` parameters + env
+        const position = session.getPosition();
+        if (position && !position.atPhaseStart) {
+          const context = session.getContext();
+          // Get step `with` parameters from the debug context
+          const phase = session.getStackTrace();
+          // Use session context for input variables
+          if (context?.env) {
+            dapVariables = Object.entries(context.env).map(([name, value]) =>
+              this.toDAPVariable(name, value)
+            );
+          }
+          // Also add inputs from executor context
+          if (executionContext) {
+            const inputs = executionContext.getInputs();
+            for (const [name, value] of Object.entries(inputs)) {
+              dapVariables.push(this.toDAPVariable(name, value));
+            }
+          }
+        }
         break;
-      case 2:
-        scopeName = 'variables';
+      }
+
+      case 2: {
+        // Outputs scope: step outputs from ExecutionContext
+        if (executionContext) {
+          const allOutputs = executionContext.getAllStepOutputs();
+          for (const [stepId, output] of allOutputs) {
+            dapVariables.push(this.toDAPVariable(stepId, {
+              raw: output.raw,
+              parsed: output.parsed,
+              exitCode: output.exitCode,
+            }));
+          }
+        } else {
+          // Fall back to session context
+          const vars = session.getVariables('outputs');
+          dapVariables = Object.entries(vars).map(([name, value]) =>
+            this.toDAPVariable(name, value)
+          );
+        }
         break;
-      case 3:
-        scopeName = 'outputs';
+      }
+
+      case 3: {
+        // Workflow scope: global environment and variables
+        const context = session.getContext();
+        if (context) {
+          // Environment variables
+          for (const [name, value] of Object.entries(context.env)) {
+            dapVariables.push(this.toDAPVariable(`env.${name}`, value));
+          }
+          // Workflow-level variables
+          for (const [name, value] of Object.entries(context.variables)) {
+            dapVariables.push(this.toDAPVariable(name, value));
+          }
+        }
+        // Add execution metadata
+        const position = session.getPosition();
+        if (position) {
+          dapVariables.push(this.toDAPVariable('_phase', position.phaseName));
+          dapVariables.push(this.toDAPVariable('_step', position.stepName ?? '(none)'));
+          dapVariables.push(this.toDAPVariable('_status', session.getState()));
+        }
         break;
-      case 4:
-        scopeName = 'phaseOutputs';
-        break;
+      }
+
       default:
         this.sendResponse(seq, 'variables', { variables: [] });
         return;
     }
 
-    const vars = session.getVariables(scopeName);
-    const dapVariables: DAPVariable[] = Object.entries(vars).map(([name, value]) => ({
-      name,
-      value: typeof value === 'string' ? value : JSON.stringify(value),
-      type: typeof value,
-      variablesReference: 0,
-    }));
-
     this.sendResponse(seq, 'variables', { variables: dapVariables });
+  }
+
+  /**
+   * Convert a value to a DAP Variable object with proper type detection
+   */
+  private toDAPVariable(name: string, value: unknown): DAPVariable {
+    if (value === null || value === undefined) {
+      return { name, value: String(value), type: 'null', variablesReference: 0 };
+    }
+    if (typeof value === 'string') {
+      return { name, value, type: 'string', variablesReference: 0 };
+    }
+    if (typeof value === 'number') {
+      return { name, value: String(value), type: 'number', variablesReference: 0 };
+    }
+    if (typeof value === 'boolean') {
+      return { name, value: String(value), type: 'boolean', variablesReference: 0 };
+    }
+    // Object or array — display as JSON
+    return {
+      name,
+      value: JSON.stringify(value),
+      type: Array.isArray(value) ? 'array' : 'object',
+      variablesReference: 0,
+    };
   }
 
   /**
