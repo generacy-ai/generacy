@@ -10,35 +10,35 @@
 
 ## Phase 1: Core Infrastructure
 
-- [ ] T001 [US1] Create worker registry module `packages/generacy/src/orchestrator/worker-registry.ts` with `WorkerRegistry` interface
-- [ ] T002 [P] [US3] Create job queue interface and in-memory implementation `packages/generacy/src/orchestrator/job-queue.ts`
-- [ ] T003 Create HTTP router utility for path matching with parameter extraction in `packages/generacy/src/orchestrator/router.ts`
+- [X] T001 [US1] Create worker registry module `packages/generacy/src/orchestrator/worker-registry.ts` with `WorkerRegistry` interface
+- [X] T002 [P] [US3] Create job queue interface and in-memory implementation `packages/generacy/src/orchestrator/job-queue.ts`
+- [X] T003 Create HTTP router utility for path matching with parameter extraction in `packages/generacy/src/orchestrator/router.ts`
 
 ## Phase 2: Server Implementation
 
-- [ ] T004 [US1] Implement orchestrator HTTP server `packages/generacy/src/orchestrator/server.ts` with route handling
-- [ ] T005 [US1] [US2] Implement worker registration endpoint `POST /api/workers/register`
-- [ ] T006 [US2] Implement worker unregistration endpoint `DELETE /api/workers/:id`
-- [ ] T007 [US2] Implement heartbeat endpoint `POST /api/workers/:id/heartbeat`
-- [ ] T008 [US3] Implement job poll endpoint `GET /api/jobs/poll`
-- [ ] T009 [US3] Implement job status update endpoint `PUT /api/jobs/:id/status`
-- [ ] T010 [US3] Implement job result endpoint `POST /api/jobs/:id/result`
-- [ ] T011 [US3] Implement get job endpoint `GET /api/jobs/:id`
-- [ ] T012 [US3] Implement cancel job endpoint `POST /api/jobs/:id/cancel`
-- [ ] T013 [US1] Implement health check endpoint `GET /api/health`
+- [X] T004 [US1] Implement orchestrator HTTP server `packages/generacy/src/orchestrator/server.ts` with route handling
+- [X] T005 [US1] [US2] Implement worker registration endpoint `POST /api/workers/register`
+- [X] T006 [US2] Implement worker unregistration endpoint `DELETE /api/workers/:id`
+- [X] T007 [US2] Implement heartbeat endpoint `POST /api/workers/:id/heartbeat`
+- [X] T008 [US3] Implement job poll endpoint `GET /api/jobs/poll`
+- [X] T009 [US3] Implement job status update endpoint `PUT /api/jobs/:id/status`
+- [X] T010 [US3] Implement job result endpoint `POST /api/jobs/:id/result`
+- [X] T011 [US3] Implement get job endpoint `GET /api/jobs/:id`
+- [X] T012 [US3] Implement cancel job endpoint `POST /api/jobs/:id/cancel`
+- [X] T013 [US1] Implement health check endpoint `GET /api/health`
 
 ## Phase 3: CLI Command
 
-- [ ] T014 [US1] Create orchestrator CLI command `packages/generacy/src/cli/commands/orchestrator.ts` with options parsing
-- [ ] T015 [US1] Register orchestrator command in CLI index `packages/generacy/src/cli/index.ts`
-- [ ] T016 [US1] Add graceful shutdown handling with signal handlers (SIGTERM, SIGINT)
+- [X] T014 [US1] Create orchestrator CLI command `packages/generacy/src/cli/commands/orchestrator.ts` with options parsing
+- [X] T015 [US1] Register orchestrator command in CLI index `packages/generacy/src/cli/index.ts`
+- [X] T016 [US1] Add graceful shutdown handling with signal handlers (SIGTERM, SIGINT)
 
 ## Phase 4: Testing
 
-- [ ] T017 [P] Write unit tests for WorkerRegistry `packages/generacy/src/orchestrator/__tests__/worker-registry.test.ts`
-- [ ] T018 [P] Write unit tests for JobQueue (in-memory) `packages/generacy/src/orchestrator/__tests__/job-queue.test.ts`
-- [ ] T019 [P] Write unit tests for HTTP router `packages/generacy/src/orchestrator/__tests__/router.test.ts`
-- [ ] T020 Write integration tests for orchestrator server API endpoints `packages/generacy/src/orchestrator/__tests__/server.test.ts`
+- [X] T017 [P] Write unit tests for WorkerRegistry `packages/generacy/src/orchestrator/__tests__/worker-registry.test.ts`
+- [X] T018 [P] Write unit tests for JobQueue (in-memory) `packages/generacy/src/orchestrator/__tests__/job-queue.test.ts`
+- [X] T019 [P] Write unit tests for HTTP router `packages/generacy/src/orchestrator/__tests__/router.test.ts`
+- [X] T020 Write integration tests for orchestrator server API endpoints `packages/generacy/src/orchestrator/__tests__/server.test.ts`
 
 ## Phase 5: Optional Enhancements
 
