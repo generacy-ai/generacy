@@ -11,7 +11,7 @@ Questions and answers to clarify the feature specification.
 - A: Reuse `packages/orchestrator/` - Add worker routes to existing Fastify server and create CLI command that wraps it
 - B: New implementation - Create separate server in `packages/generacy/` focused only on worker coordination (no cloud features)
 
-**Answer**: *Pending*
+**Answer**: B - Create a new separate server implementation in `packages/generacy/src/orchestrator/server.ts` focused only on worker coordination (no cloud features). This keeps concerns separated and avoids coupling with the cloud workflow management in `packages/orchestrator/`.
 
 ### Q2: API Route Prefix
 **Context**: The existing `OrchestratorClient` in `packages/generacy/src/orchestrator/client.ts` uses `/api/*` prefixed routes (e.g., `/api/workers/register`). The issue spec lists routes without prefix (e.g., `/workers/register`).
@@ -20,7 +20,7 @@ Questions and answers to clarify the feature specification.
 - A: Use `/api/*` prefix - Match existing client implementation (e.g., `/api/workers/register`)
 - B: No prefix - Update the OrchestratorClient to use non-prefixed routes
 
-**Answer**: *Pending*
+**Answer**: A - Use `/api/*` prefix to match the existing `OrchestratorClient` implementation. Routes will be `/api/workers/register`, `/api/workers/:id/heartbeat`, etc.
 
 ### Q3: Redis Requirement
 **Context**: The spec mentions 'Manages job queue using Redis' but doesn't specify whether Redis is required or optional. In devcontainer environments, Redis may not always be available.
@@ -29,7 +29,7 @@ Questions and answers to clarify the feature specification.
 - A: Redis required - Orchestrator fails to start without Redis connection
 - B: Optional with fallback - Use in-memory queue when Redis unavailable (with warning)
 
-**Answer**: *Pending*
+**Answer**: B - Optional with fallback. Use in-memory queue when Redis is unavailable, with a warning log that Redis is recommended for production. This simplifies local development and devcontainer usage.
 
 ### Q4: Worker Authentication
 **Context**: The existing cloud orchestrator uses API keys and JWT tokens for authentication. The `OrchestratorClient` supports an `authToken` option but the issue doesn't specify auth requirements for workers.
@@ -38,5 +38,5 @@ Questions and answers to clarify the feature specification.
 - A: Authenticated - Workers must provide a token (ORCHESTRATOR_TOKEN env var already supported)
 - B: Unauthenticated - Trust workers on internal network (simpler for devcontainer setup)
 
-**Answer**: *Pending*
+**Answer**: B - Unauthenticated by default for internal/trusted network usage. Optionally honor `ORCHESTRATOR_TOKEN` if provided for environments that need authentication, but don't require it.
 
