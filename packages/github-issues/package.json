@@ -52,12 +52,6 @@
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },
-  "peerDependencies": {
-    "@generacy-ai/core": ">=0.1.0"
-  },
-  "peerDependenciesMeta": {
-    "@generacy-ai/core": {
-      "optional": true
-    }
-  }
+  "peerDependencies": {},
+  "peerDependenciesMeta": {}
 }

@@ -34,7 +34,7 @@
   "author": "Generacy AI",
   "license": "MIT",
   "dependencies": {
-    "@generacy-ai/workflow-engine": "*",
+    "@generacy-ai/workflow-engine": "workspace:*",
     "commander": "^12.0.0",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0"
