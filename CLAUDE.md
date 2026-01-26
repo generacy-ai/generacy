@@ -26,6 +26,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -47,6 +48,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 159-implement-orchestrator-server-command: Added configuration
 - 155-create-generacy-ai-generacy: Added configuration
 - 149-complete-debug-adapter-integration: Added configuration
 - 150-migrate-orchestrator-from-websocket: Added configuration

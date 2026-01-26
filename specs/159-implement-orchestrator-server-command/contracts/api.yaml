@@ -1,0 +1,481 @@
+openapi: 3.0.3
+info:
+  title: Generacy Orchestrator API
+  version: 1.0.0
+  description: Worker coordination API for the Generacy orchestrator server
+
+servers:
+  - url: http://localhost:3100
+    description: Local development server
+
+paths:
+  /api/health:
+    get:
+      summary: Health check
+      operationId: healthCheck
+      tags: [Health]
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/workers/register:
+    post:
+      summary: Register a worker
+      operationId: registerWorker
+      tags: [Workers]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkerRegistration'
+      responses:
+        '200':
+          description: Worker registered successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workerId:
+                    type: string
+                required: [workerId]
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Worker ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/workers/{workerId}:
+    delete:
+      summary: Unregister a worker
+      operationId: unregisterWorker
+      tags: [Workers]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workerId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Worker unregistered
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/WorkerNotFound'
+
+  /api/workers/{workerId}/heartbeat:
+    post:
+      summary: Send worker heartbeat
+      operationId: workerHeartbeat
+      tags: [Workers]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workerId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Heartbeat'
+      responses:
+        '200':
+          description: Heartbeat acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HeartbeatResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/WorkerNotFound'
+
+  /api/jobs/poll:
+    get:
+      summary: Poll for available jobs
+      operationId: pollJobs
+      tags: [Jobs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: workerId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: capabilities
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated list of capabilities
+      responses:
+        '200':
+          description: Poll result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/WorkerNotFound'
+
+  /api/jobs/{jobId}:
+    get:
+      summary: Get job details
+      operationId: getJob
+      tags: [Jobs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Job'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}/status:
+    put:
+      summary: Update job status
+      operationId: updateJobStatus
+      tags: [Jobs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status:
+                  $ref: '#/components/schemas/JobStatus'
+                startedAt:
+                  type: string
+                  format: date-time
+                metadata:
+                  type: object
+              required: [status]
+      responses:
+        '204':
+          description: Status updated
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}/result:
+    post:
+      summary: Report job result
+      operationId: reportJobResult
+      tags: [Jobs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JobResult'
+      responses:
+        '204':
+          description: Result recorded
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+  /api/jobs/{jobId}/cancel:
+    post:
+      summary: Cancel a job
+      operationId: cancelJob
+      tags: [Jobs]
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason:
+                  type: string
+      responses:
+        '204':
+          description: Job cancelled
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/JobNotFound'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Optional authentication via ORCHESTRATOR_TOKEN
+
+  schemas:
+    WorkerRegistration:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Client-provided ID (auto-generated if not provided)
+        name:
+          type: string
+        capabilities:
+          type: array
+          items:
+            type: string
+          default: ['*']
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          default: 1
+        healthEndpoint:
+          type: string
+          format: uri
+        metadata:
+          type: object
+      required: [name]
+
+    Heartbeat:
+      type: object
+      properties:
+        workerId:
+          type: string
+        status:
+          type: string
+          enum: [idle, busy, stopping]
+        currentJob:
+          type: object
+          properties:
+            id:
+              type: string
+            progress:
+              type: number
+              minimum: 0
+              maximum: 100
+            currentStep:
+              type: string
+        metrics:
+          type: object
+          properties:
+            memoryUsage:
+              type: number
+            uptime:
+              type: number
+      required: [workerId, status]
+
+    HeartbeatResponse:
+      type: object
+      properties:
+        acknowledged:
+          type: boolean
+        command:
+          type: string
+          enum: [cancel, shutdown, config-update]
+        config:
+          type: object
+          properties:
+            pollInterval:
+              type: number
+            heartbeatInterval:
+              type: number
+      required: [acknowledged]
+
+    Job:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        status:
+          $ref: '#/components/schemas/JobStatus'
+        priority:
+          type: integer
+          default: 0
+        workflow:
+          oneOf:
+            - type: string
+            - type: object
+        inputs:
+          type: object
+        workdir:
+          type: string
+        timeout:
+          type: integer
+        retries:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        assignedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        assignedWorker:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+      required: [id, name, status, workflow]
+
+    JobStatus:
+      type: string
+      enum: [pending, assigned, running, completed, failed, cancelled]
+
+    JobResult:
+      type: object
+      properties:
+        jobId:
+          type: string
+        status:
+          type: string
+          enum: [completed, failed, cancelled]
+        outputs:
+          type: object
+        error:
+          $ref: '#/components/schemas/JobError'
+        duration:
+          type: integer
+        metrics:
+          type: object
+          properties:
+            stepsExecuted:
+              type: number
+            stepsSucceeded:
+              type: number
+            stepsFailed:
+              type: number
+      required: [jobId, status]
+
+    JobError:
+      type: object
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        details:
+          type: object
+      required: [code, message]
+
+    PollResponse:
+      type: object
+      properties:
+        job:
+          $ref: '#/components/schemas/Job'
+        retryAfter:
+          type: integer
+          description: Seconds until next poll when no job available
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [healthy, unhealthy]
+        workers:
+          type: integer
+        pendingJobs:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+      required: [status, workers, pendingJobs, timestamp]
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+          required: [code, message]
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    WorkerNotFound:
+      description: Worker not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    JobNotFound:
+      description: Job not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+security:
+  - {}
+  - bearerAuth: []
