@@ -6,6 +6,7 @@ import { Command } from 'commander';
 import { runCommand } from './commands/run.js';
 import { workerCommand } from './commands/worker.js';
 import { agentCommand } from './commands/agent.js';
+import { orchestratorCommand } from './commands/orchestrator.js';
 import { createLogger, setLogger } from './utils/logger.js';
 import type { LogLevel } from './utils/logger.js';
 
@@ -37,6 +38,7 @@ export function createProgram(): Command {
   program.addCommand(runCommand());
   program.addCommand(workerCommand());
   program.addCommand(agentCommand());
+  program.addCommand(orchestratorCommand());
 
   return program;
 }
