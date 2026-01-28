@@ -1,9 +1,10 @@
 {
   "mcpServers": {
-    "context7": {
+    "agency": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp@latest"]
+      "command": "node",
+      "args": ["/workspaces/agency/packages/agency/dist/cli.js"],
+      "cwd": "/workspaces/generacy"
     },
     "playwright": {
       "type": "stdio",

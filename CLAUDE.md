@@ -1,84 +1,31 @@
-# Claude Code Development Guidelines
+# Generacy
 
-Auto-generated from all feature plans.
+Frontend application for Generacy.
 
-## Active Technologies
+## Development
 
-<!-- AUTO-GENERATED: Do not edit manually -->
-<!-- TECHNOLOGIES START -->
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-<!-- TECHNOLOGIES END -->
-
-## Project Structure
-
-```text
-src/
-tests/
+```bash
+pnpm install
+pnpm dev
 ```
 
-## Commands
+## MCP Testing Tools
 
-npm test && npm run lint
+For browser automation and UI testing, see:
+[/workspaces/triad-development/docs/MCP_TESTING_TOOLS.md](/workspaces/triad-development/docs/MCP_TESTING_TOOLS.md)
 
-## Code Style
+Use Playwright MCP to automate testing of the frontend:
+1. Start the dev server
+2. Use `browser_navigate` to open the app
+3. Use `browser_snapshot` to inspect elements
+4. Use `browser_click`, `browser_type`, etc. to interact
 
-Follow standard conventions
+## Development Stack
 
-## Recent Changes
+For Firebase emulators (required for backend):
+```bash
+/workspaces/triad-development/scripts/stack start
+source /workspaces/triad-development/scripts/stack-env.sh
+```
 
-<!-- AUTO-GENERATED: Do not edit manually -->
-<!-- CHANGES START -->
-- 159-implement-orchestrator-server-command: Added configuration
-- 155-create-generacy-ai-generacy: Added configuration
-- 149-complete-debug-adapter-integration: Added configuration
-- 150-migrate-orchestrator-from-websocket: Added configuration
-- 147-complete-workflow-step-execution: Added configuration
-- 148-complete-create-workflow-command: Added configuration
-- 139-address-debug-adapter-placeholder: Added configuration
-- 144-verify-generacy-extension-integration: Added configuration
-- 141-implement-create-workflow-command: Added configuration
-- 140-implement-workflow-step-execution: Added configuration
-- 067-tg-022-p-documentation: Added configuration
-- 066-tg-021-error-handling: Added configuration
-- 065-tg-020-workflow-publishing: Added configuration
-- 062-tg-017-queue-tree: Added configuration
-- 060-tg-015-github-oauth: Added configuration
-- 044-epic-generacy-vs-code: Added configuration
-- 041-add-github-app-authentication: Added configuration
-- 018-documentation-site-developer-guides: Added configuration
-- 013-plugin-generacy-ai-generacy: Added configuration
-- 012-plugin-generacy-ai-generacy: Added configuration
-- 010-docker-compose-local-development: Added configuration
-- 009-worker-service: Added configuration
-- 008-orchestrator-service: Added configuration
-- 023-attribution-calculation-engine: Added configuration
-- 022-learning-loop-processor: Added configuration
-- 006-job-scheduler-queue-system: Added configuration
-- 021-prot-u00e9g-u00e9-recommendation: Added configuration
-- 020-baseline-recommendation-generator: Added configuration
-- 004-agent-invocation-abstraction: Added configuration
-- 005-message-router-channel-system: Added configuration
-- 024-knowledge-store-management: Added configuration
-- 003-workflow-engine-implementation: Added configuration
-- 001-bootstrap-claude-md-speckit: Added configuration
-<!-- CHANGES END -->
+See [/workspaces/triad-development/docs/DEVELOPMENT_STACK.md](/workspaces/triad-development/docs/DEVELOPMENT_STACK.md)
