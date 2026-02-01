@@ -10,34 +10,34 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Create `workflows/` directory structure if not exists
-- [ ] T002 [P] Create `docs/workflows/` directory structure if not exists
+- [X] T001 Create `workflows/` directory structure if not exists
+- [X] T002 [P] Create `docs/workflows/` directory structure if not exists
 
 ## Phase 2: Workflow Implementation
 
-- [ ] T010 Create `workflows/tasks-to-issues.yaml` with workflow metadata (name, description)
-- [ ] T011 Define workflow inputs section (feature_dir, grouping, provider, dry_run)
-- [ ] T012 Implement `parse_tasks` step using `spec_kit.get_paths` action
-- [ ] T013 Implement `validate_tasks` step using `agent.invoke` action for dependency validation
-- [ ] T014 Implement `preview` step using `spec_kit.tasks_to_issues` with `dry_run: true`
-- [ ] T015 Implement `review` step using `humancy.request_review` action (no timeout)
-- [ ] T016 Implement `create` step with conditional execution (`if: approved && !dry_run`)
-- [ ] T017 Define workflow outputs section (issues array with id, url, title, provider)
+- [X] T010 Create `workflows/tasks-to-issues.yaml` with workflow metadata (name, description)
+- [X] T011 Define workflow inputs section (feature_dir, grouping, provider, dry_run)
+- [X] T012 Implement `parse_tasks` step using `spec_kit.get_paths` action
+- [X] T013 Implement `validate_tasks` step using `agent.invoke` action for dependency validation
+- [X] T014 Implement `preview` step using `spec_kit.tasks_to_issues` with `dry_run: true`
+- [X] T015 Implement `review` step using `humancy.request_review` action (no timeout)
+- [X] T016 Implement `create` step with conditional execution (`if: approved && !dry_run`)
+- [X] T017 Define workflow outputs section (issues array with id, url, title, provider)
 
 ## Phase 3: Documentation
 
-- [ ] T020 Create `docs/workflows/tasks-to-issues.md` documentation file
-- [ ] T021 Document workflow inputs with descriptions and defaults
-- [ ] T022 [P] Document workflow triggers (manual, workflow step, event)
-- [ ] T023 [P] Document output format and provider-specific mappings
-- [ ] T024 Add usage examples showing common invocation patterns
+- [X] T020 Create `docs/workflows/tasks-to-issues.md` documentation file
+- [X] T021 Document workflow inputs with descriptions and defaults
+- [X] T022 [P] Document workflow triggers (manual, workflow step, event)
+- [X] T023 [P] Document output format and provider-specific mappings
+- [X] T024 Add usage examples showing common invocation patterns
 
 ## Phase 4: Validation
 
-- [ ] T030 Validate YAML syntax is correct and parseable
-- [ ] T031 [P] Verify all step references are valid (no undefined outputs)
-- [ ] T032 [P] Confirm Humancy integration matches plugin API
-- [ ] T033 Review documentation for completeness against spec acceptance criteria
+- [X] T030 Validate YAML syntax is correct and parseable
+- [X] T031 [P] Verify all step references are valid (no undefined outputs)
+- [X] T032 [P] Confirm Humancy integration matches plugin API
+- [X] T033 Review documentation for completeness against spec acceptance criteria
 
 ## Dependencies & Execution Order
 

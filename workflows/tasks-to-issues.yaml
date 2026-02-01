@@ -1,0 +1,112 @@
+# Tasks to Issues Workflow
+# Converts tasks.md into backlog tickets with human review
+#
+# Usage:
+#   generacy workflow run tasks-to-issues --feature-dir specs/my-feature/
+#
+# See docs/workflows/tasks-to-issues.md for full documentation
+
+name: Tasks to Issues
+description: Convert tasks.md into backlog tickets with human review checkpoint
+
+inputs:
+  feature_dir:
+    description: Feature directory containing tasks.md
+    type: string
+    required: true
+
+  grouping:
+    description: Grouping strategy for tasks into issues
+    type: string
+    enum: [per-task, per-story, per-phase]
+    default: per-task
+
+  provider:
+    description: Backlog provider override (auto-detected if not specified)
+    type: string
+    enum: [github, jira, shortcut, local]
+
+  dry_run:
+    description: Preview only, do not create issues
+    type: boolean
+    default: false
+
+steps:
+  - id: parse_tasks
+    name: Parse tasks.md
+    description: Resolve file paths from feature directory
+    action: spec_kit.get_paths
+    with:
+      feature_dir: ${{ inputs.feature_dir }}
+
+  - id: validate_tasks
+    name: Validate task dependencies
+    description: Check for circular dependencies and missing references
+    action: agent.invoke
+    with:
+      prompt: |
+        Read and validate tasks.md at ${{ steps.parse_tasks.outputs.tasksFile }}.
+
+        Check for:
+        1. Circular dependencies (A depends on B, B depends on A)
+        2. Missing references (task depends on non-existent task)
+        3. Self-references (task depends on itself)
+
+        Return a validation result with:
+        - isValid: boolean
+        - errors: array of { taskId, errorType, details }
+
+        If validation fails, stop the workflow with the error details.
+
+  - id: preview
+    name: Generate issue preview
+    description: Create dry-run preview of issues to be created
+    action: spec_kit.tasks_to_issues
+    with:
+      feature_dir: ${{ inputs.feature_dir }}
+      grouping: ${{ inputs.grouping }}
+      dry_run: true
+
+  - id: review
+    name: Human review checkpoint
+    description: Wait for human approval before creating issues
+    action: humancy.request_review
+    with:
+      artifact: |
+        ## Issues to Create
+
+        ${{ steps.preview.outputs.summary }}
+
+        **Total issues**: ${{ steps.preview.outputs.issueCount }}
+        **Grouping strategy**: ${{ inputs.grouping }}
+        **Provider**: ${{ inputs.provider || 'auto-detect' }}
+      context: |
+        Review the planned issues before creation.
+
+        Check that:
+        - Issue titles are clear and actionable
+        - Issue bodies contain sufficient context
+        - Grouping makes sense for the project
+        - No sensitive information is exposed
+
+        Approve to create the issues, or reject to cancel.
+
+  - id: create
+    name: Create issues
+    description: Create issues in the backlog provider
+    if: ${{ steps.review.approved && !inputs.dry_run }}
+    action: spec_kit.tasks_to_issues
+    with:
+      feature_dir: ${{ inputs.feature_dir }}
+      grouping: ${{ inputs.grouping }}
+      dry_run: false
+
+outputs:
+  issues:
+    description: Array of created issue details
+    value: ${{ steps.create.outputs.issues }}
+    # Each issue contains:
+    #   - id: Issue identifier (number for GitHub, key for Jira)
+    #   - url: Full URL to the issue
+    #   - title: Issue title
+    #   - provider: Provider type used (github, jira, shortcut, local)
