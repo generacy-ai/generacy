@@ -10,36 +10,36 @@
 
 ## Phase 1: Filesystem Store Implementation
 
-- [ ] T001 Create `packages/workflow-engine/src/store/filesystem-store.ts` with WorkflowStore interface implementation
-- [ ] T002 [P] Add WorkflowState, PendingReview, StepOutput type definitions to `packages/workflow-engine/src/types/store.ts`
-- [ ] T003 Implement state validation (version check, schema validation) in filesystem-store.ts
-- [ ] T004 Add filesystem-store export to `packages/workflow-engine/src/store/index.ts`
-- [ ] T005 Write unit tests for filesystem-store in `packages/workflow-engine/src/store/filesystem-store.test.ts`
+- [x] T001 Create `packages/workflow-engine/src/store/filesystem-store.ts` with WorkflowStore interface implementation
+- [x] T002 [P] Add WorkflowState, PendingReview, StepOutput type definitions to `packages/workflow-engine/src/types/store.ts`
+- [x] T003 Implement state validation (version check, schema validation) in filesystem-store.ts
+- [x] T004 Add filesystem-store export to `packages/workflow-engine/src/store/index.ts`
+- [x] T005 Write unit tests for filesystem-store in `packages/workflow-engine/src/store/filesystem-store.test.ts`
 
 ## Phase 2: HumancyReviewAction Implementation
 
-- [ ] T010 [AC1] Create `packages/workflow-engine/src/actions/humancy-review.ts` with HumancyReviewAction class extending BaseAction
-- [ ] T011 [P] Add HumancyReviewInput, HumancyReviewOutput type definitions to action file or types directory
-- [ ] T012 [AC1] Implement canHandle() for 'humancy.request_review' action type
-- [ ] T013 [AC1] Implement validate() to check artifact/context requirements
-- [ ] T014 [AC2][AC3] Implement executeInternal() with state persistence and HumanHandler integration
-- [ ] T015 [AC4] Handle approval/rejection responses, return HumancyReviewOutput
-- [ ] T016 [AC6] Add error handling for timeout and failure scenarios
+- [x] T010 [AC1] Create `packages/workflow-engine/src/actions/humancy-review.ts` with HumancyReviewAction class extending BaseAction
+- [x] T011 [P] Add HumancyReviewInput, HumancyReviewOutput type definitions to action file or types directory
+- [x] T012 [AC1] Implement canHandle() for 'humancy.request_review' action type
+- [x] T013 [AC1] Implement validate() to check artifact/context requirements
+- [x] T014 [AC2][AC3] Implement executeInternal() with state persistence and HumanHandler integration
+- [x] T015 [AC4] Handle approval/rejection responses, return HumancyReviewOutput
+- [x] T016 [AC6] Add error handling for timeout and failure scenarios
 
 ## Phase 3: Action Registration and Integration
 
-- [ ] T020 [AC2] Register HumancyReviewAction in `packages/workflow-engine/src/actions/index.ts`
-- [ ] T021 [P] Add 'humancy.request_review' to ActionType union in type definitions
-- [ ] T022 [AC5] Implement workflow resume logic - detect pending state on executor start
-- [ ] T023 [AC5] Add resume entry point to workflow executor for continuing from checkpoint
+- [x] T020 [AC2] Register HumancyReviewAction in `packages/workflow-engine/src/actions/index.ts`
+- [x] T021 [P] Add 'humancy.request_review' to ActionType union in type definitions
+- [x] T022 [AC5] Implement workflow resume logic - detect pending state on executor start
+- [x] T023 [AC5] Add resume entry point to workflow executor for continuing from checkpoint
 
 ## Phase 4: Testing and Validation
 
-- [ ] T030 Write unit tests for HumancyReviewAction in `packages/workflow-engine/src/actions/humancy-review.test.ts`
-- [ ] T031 [P] Write integration test with mock HumanHandler in `packages/workflow-engine/src/actions/humancy-review.integration.test.ts`
-- [ ] T032 Test state persistence across action execution (save checkpoint, resume)
-- [ ] T033 [AC6] Test error scenarios: timeout, invalid input, HumanHandler failure
-- [ ] T034 Verify conditional step execution works with `${steps.review.approved}` syntax
+- [x] T030 Write unit tests for HumancyReviewAction in `packages/workflow-engine/src/actions/humancy-review.test.ts`
+- [x] T031 [P] Write integration test with mock HumanHandler in `packages/workflow-engine/src/actions/humancy-review.integration.test.ts`
+- [x] T032 Test state persistence across action execution (save checkpoint, resume)
+- [x] T033 [AC6] Test error scenarios: timeout, invalid input, HumanHandler failure
+- [x] T034 Verify conditional step execution works with `${steps.review.approved}` syntax
 
 ## Dependencies & Execution Order
 
