@@ -10,11 +10,12 @@ import type { Logger } from './logger.js';
  * Action types supported by the workflow engine
  */
 export type ActionType =
-  | 'workspace.prepare'   // Git branch operations
-  | 'agent.invoke'        // Claude Code CLI invocation
-  | 'verification.check'  // Test/lint execution
-  | 'pr.create'           // GitHub PR creation
-  | 'shell';              // Generic shell command (fallback)
+  | 'workspace.prepare'        // Git branch operations
+  | 'agent.invoke'             // Claude Code CLI invocation
+  | 'verification.check'       // Test/lint execution
+  | 'pr.create'                // GitHub PR creation
+  | 'shell'                    // Generic shell command (fallback)
+  | 'humancy.request_review';  // Human review checkpoint
 
 /**
  * Step output stored for variable interpolation
@@ -260,6 +261,79 @@ export interface PrCreateOutput {
 }
 
 /**
+ * Urgency levels for human review requests
+ */
+export type HumancyUrgency = 'low' | 'normal' | 'blocking_soon' | 'blocking_now';
+
+/**
+ * Input for humancy.request_review action
+ */
+export interface HumancyReviewInput {
+  /**
+   * Content or file path to present for review.
+   * Supports variable interpolation: ${steps.preview.output.summary}
+   */
+  artifact: string;
+
+  /**
+   * Review instructions and context for the human reviewer.
+   * Describes what to check and why approval is needed.
+   */
+  context: string;
+
+  /**
+   * Review urgency level.
+   * - 'low': No time pressure, can wait days
+   * - 'normal': Default, expect response within hours
+   * - 'blocking_soon': Blocking workflow, need response soon
+   * - 'blocking_now': Critical, immediate attention needed
+   * @default 'normal'
+   */
+  urgency?: HumancyUrgency;
+
+  /**
+   * Timeout in milliseconds for waiting on human response.
+   * After timeout, action fails with timeout reason.
+   * @default 86400000 (24 hours)
+   */
+  timeout?: number;
+}
+
+/**
+ * Output from humancy.request_review action
+ */
+export interface HumancyReviewOutput {
+  /**
+   * Whether the human approved the review.
+   * Used in conditional step execution: ${steps.review.approved}
+   */
+  approved: boolean;
+
+  /**
+   * Optional comments from the reviewer.
+   * Present when rejection requires explanation.
+   */
+  comments?: string;
+
+  /**
+   * Identifier of the user who responded.
+   * From Humancy user profile.
+   */
+  respondedBy?: string;
+
+  /**
+   * ISO timestamp when response was received.
+   */
+  respondedAt?: string;
+
+  /**
+   * Unique ID of the review request.
+   * Can be used for audit/tracking.
+   */
+  reviewId: string;
+}
+
+/**
  * Parse action type from a workflow step's 'uses' or 'action' field
  * @param step The workflow step to parse
  * @returns The detected action type, or 'shell' as fallback
@@ -281,6 +355,9 @@ export function parseActionType(step: StepDefinition): ActionType {
     if (uses.includes('pr.create') || uses.includes('pr/create') || uses.includes('pull-request')) {
       return 'pr.create';
     }
+    if (uses.includes('humancy.request_review') || uses.includes('humancy/request_review') || uses.includes('humancy')) {
+      return 'humancy.request_review';
+    }
   }
 
   // Check 'action' field as fallback
@@ -297,6 +374,9 @@ export function parseActionType(step: StepDefinition): ActionType {
     }
     if (action === 'pr.create' || action === 'pr-create') {
       return 'pr.create';
+    }
+    if (action === 'humancy.request_review' || action === 'humancy-request-review') {
+      return 'humancy.request_review';
     }
     if (action === 'shell' || action === 'run') {
       return 'shell';

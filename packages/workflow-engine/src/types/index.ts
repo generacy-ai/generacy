@@ -46,6 +46,9 @@ export type {
   VerificationCheckOutput,
   PrCreateInput,
   PrCreateOutput,
+  HumancyUrgency,
+  HumancyReviewInput,
+  HumancyReviewOutput,
 } from './action.js';
 export { parseActionType } from './action.js';
 
@@ -62,3 +65,12 @@ export type {
   ExecutionEvent,
   ExecutionEventListener,
 } from './events.js';
+
+// Store types
+export type {
+  WorkflowState,
+  WorkflowStore,
+  PendingReview,
+  StepOutputData,
+  StateValidationResult,
+} from './store.js';

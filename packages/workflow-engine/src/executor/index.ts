@@ -17,6 +17,8 @@ import type {
   Logger,
   ActionContext,
   ActionResult,
+  WorkflowState,
+  WorkflowStore,
 } from '../types/index.js';
 import { createLogger } from '../types/logger.js';
 import {
@@ -26,6 +28,7 @@ import {
 import { ExecutionContext, interpolate, interpolateValue } from '../interpolation/index.js';
 import { RetryManager, withTimeout, type RetryState } from '../retry/index.js';
 import { ExecutionEventEmitter } from './events.js';
+import { FilesystemWorkflowStore } from '../store/filesystem-store.js';
 
 // Ensure built-in actions are registered
 let actionsRegistered = false;
@@ -44,11 +47,26 @@ export function resetActionsRegistration(): void {
 }
 
 /**
+ * Resume options for continuing a paused workflow
+ */
+export interface ResumeOptions {
+  /** The decision response for the pending review */
+  decision?: {
+    approved: boolean;
+    comments?: string;
+    respondedBy: string;
+    respondedAt: string;
+  };
+}
+
+/**
  * Executor options
  */
 export interface ExecutorOptions {
   /** Logger for execution output */
   logger?: Logger;
+  /** Workflow store for state persistence */
+  store?: WorkflowStore;
 }
 
 /**
@@ -60,10 +78,12 @@ export class WorkflowExecutor {
   private executionContext: ExecutionContext | undefined;
   private abortController: AbortController | undefined;
   private logger: Logger;
+  private store: WorkflowStore;
 
   constructor(options: ExecutorOptions = {}) {
     ensureActionsRegistered();
     this.logger = options.logger ?? createLogger('WorkflowExecutor');
+    this.store = options.store ?? new FilesystemWorkflowStore();
   }
 
   /**
@@ -648,6 +668,164 @@ export class WorkflowExecutor {
     env?: Record<string, string>
   ): Promise<ExecutionResult> {
     return this.execute(workflow, { mode: 'dry-run', env });
+  }
+
+  /**
+   * Check if there's a pending workflow state that can be resumed
+   */
+  public async hasPendingState(workflowId: string): Promise<boolean> {
+    const state = await this.store.load(workflowId);
+    return state !== null && state.pendingReview !== undefined;
+  }
+
+  /**
+   * Get all pending workflow states
+   */
+  public async listPendingWorkflows(): Promise<WorkflowState[]> {
+    return this.store.listPending();
+  }
+
+  /**
+   * Load a saved workflow state
+   */
+  public async loadWorkflowState(workflowId: string): Promise<WorkflowState | null> {
+    return this.store.load(workflowId);
+  }
+
+  /**
+   * Resume a paused workflow from saved state.
+   * Call this after receiving a human review decision.
+   *
+   * @param workflow The workflow definition (must match the saved state)
+   * @param workflowId The workflow ID to resume
+   * @param resumeOptions Options containing the human decision
+   * @param executionOptions Standard execution options
+   * @returns The execution result
+   */
+  public async resume(
+    workflow: ExecutableWorkflow,
+    workflowId: string,
+    resumeOptions: ResumeOptions,
+    executionOptions: ExecutionOptions = { mode: 'normal' }
+  ): Promise<ExecutionResult> {
+    // Load saved state
+    const savedState = await this.store.load(workflowId);
+    if (!savedState) {
+      throw new Error(`No saved workflow state found for ID: ${workflowId}`);
+    }
+
+    if (!savedState.pendingReview) {
+      throw new Error(`Workflow ${workflowId} does not have a pending review`);
+    }
+
+    this.logger.info(`Resuming workflow ${workflowId} from phase: ${savedState.currentPhase}, step: ${savedState.currentStep}`);
+
+    // Initialize execution context with saved state
+    this.executionContext = new ExecutionContext(
+      savedState.inputs,
+      { ...workflow.env, ...executionOptions.env }
+    );
+
+    // Restore step outputs from saved state
+    for (const [stepId, outputData] of Object.entries(savedState.stepOutputs)) {
+      const stepOutput: StepOutput = {
+        raw: outputData.raw,
+        parsed: outputData.parsed,
+        exitCode: outputData.exitCode,
+        completedAt: new Date(outputData.completedAt),
+      };
+      this.executionContext.setStepOutput(stepId, stepOutput);
+    }
+
+    // If we have a decision, inject it into the context for the review step
+    if (resumeOptions.decision) {
+      const reviewOutput: StepOutput = {
+        raw: JSON.stringify(resumeOptions.decision),
+        parsed: {
+          approved: resumeOptions.decision.approved,
+          comments: resumeOptions.decision.comments,
+          respondedBy: resumeOptions.decision.respondedBy,
+          respondedAt: resumeOptions.decision.respondedAt,
+          reviewId: savedState.pendingReview.reviewId,
+        },
+        exitCode: 0,
+        completedAt: new Date(),
+      };
+      this.executionContext.setStepOutput(savedState.currentStep, reviewOutput);
+    }
+
+    // Clear the pending state
+    await this.store.delete(workflowId);
+
+    // Find the next step after the review step
+    let nextPhaseIndex = -1;
+    let nextStepIndex = -1;
+    let foundCurrentStep = false;
+
+    for (let pi = 0; pi < workflow.phases.length; pi++) {
+      const phase = workflow.phases[pi];
+      if (!phase) continue;
+
+      const isCurrentPhase = phase.name === savedState.currentPhase;
+
+      for (let si = 0; si < phase.steps.length; si++) {
+        const step = phase.steps[si];
+        if (!step) continue;
+
+        const isCurrentStep = step.name === savedState.currentStep;
+
+        if (isCurrentPhase && isCurrentStep) {
+          foundCurrentStep = true;
+          // The next step is after this one
+          if (si + 1 < phase.steps.length) {
+            nextPhaseIndex = pi;
+            nextStepIndex = si + 1;
+          } else if (pi + 1 < workflow.phases.length) {
+            nextPhaseIndex = pi + 1;
+            nextStepIndex = 0;
+          }
+          break;
+        }
+      }
+
+      if (foundCurrentStep) break;
+    }
+
+    if (!foundCurrentStep) {
+      throw new Error(`Could not find current step ${savedState.currentStep} in workflow`);
+    }
+
+    // If there's no next step, workflow is complete
+    if (nextPhaseIndex < 0) {
+      this.logger.info('Workflow completed (no more steps after review)');
+      return {
+        workflowName: workflow.name,
+        status: 'completed',
+        mode: executionOptions.mode,
+        startTime: Date.now(),
+        endTime: Date.now(),
+        duration: 0,
+        phaseResults: [],
+        env: { ...workflow.env, ...executionOptions.env },
+      };
+    }
+
+    // Resume execution from the next step
+    const nextPhase = workflow.phases[nextPhaseIndex];
+    const nextStep = nextPhase?.steps[nextStepIndex];
+
+    this.logger.info(`Continuing from phase: ${nextPhase?.name}, step: ${nextStep?.name}`);
+
+    // Execute from the resume point
+    return this.execute(
+      workflow,
+      {
+        ...executionOptions,
+        startPhase: nextPhase?.name,
+        startStep: nextStep?.name,
+      },
+      savedState.inputs
+    );
   }
 
   /**
