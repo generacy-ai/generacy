@@ -36,9 +36,10 @@ inputs:
     enum: [per-task, per-story, per-phase]
     default: per-task
   provider:
-    description: Backlog provider override
+    description: Backlog provider override (auto-detected from repo config if not specified)
     type: string
     enum: [github, jira, shortcut, local]
+    # Auto-detection: .github presence implies GitHub (Q3)
   dry_run:
     description: Preview only
     type: boolean
@@ -75,6 +76,7 @@ steps:
         ## Issues to Create
         ${{ steps.preview.outputs.summary }}
       context: Review the planned issues before creation
+      # No timeout - workflow waits indefinitely for human approval (Q1)
 
   - id: create
     name: Create issues
@@ -84,11 +86,13 @@ steps:
       feature_dir: ${{ inputs.feature_dir }}
       grouping: ${{ inputs.grouping }}
       dry_run: false
+      include_feature_path: true  # Link back to source spec (Q4)
 
 outputs:
   issues:
-    description: Created issue details
+    description: Created issue details (ID, URL, title, provider type)
     value: ${{ steps.create.outputs.issues }}
+    # Standard output format: ID, URL, title, and provider type (Q5)
 ```
 
 ## Triggers
@@ -130,9 +134,19 @@ The workflow can be triggered by:
 |----|--------|--------|-------------|
 | SC-001 | [Metric] | [Target] | [How to measure] |
 
+## Design Decisions (from Clarifications)
+
+1. **Humancy Review Timeout**: No timeout - workflow waits indefinitely for human approval
+2. **Error Handling**: Fail fast - any step failure stops the entire workflow
+3. **Provider Auto-Detection**: Detect from repository configuration (e.g., .github presence implies GitHub)
+4. **Issue Linking**: Add feature directory path in issue body to link back to source spec
+5. **Output Format**: Standard fields - ID, URL, title, and provider type
+
 ## Assumptions
 
-- [Assumption 1]
+- Repository configuration can be reliably detected for provider auto-detection
+- Human reviewers will respond to review requests (no timeout needed)
+- Downstream consumers can work with standard output format
 
 ## Out of Scope
 

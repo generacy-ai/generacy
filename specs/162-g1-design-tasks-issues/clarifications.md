@@ -13,7 +13,7 @@ Questions and answers to clarify the feature specification.
 - C: Configurable timeout with auto-approve (for low-risk workflows)
 - D: Configurable timeout that escalates to another reviewer
 
-**Answer**: *Pending*
+**Answer**: A - No timeout - workflow waits indefinitely for human approval
 
 ### Q2: Error Handling Strategy
 **Context**: The workflow has multiple steps that could fail (parse, validate, preview, create). The spec doesn't define how errors should be handled, which affects reliability and user experience.
@@ -23,7 +23,7 @@ Questions and answers to clarify the feature specification.
 - B: Retry with backoff - attempt each step up to N times before failing
 - C: Partial completion - continue with remaining tasks if some fail
 
-**Answer**: *Pending*
+**Answer**: A - Fail fast - any step failure stops the entire workflow
 
 ### Q3: Provider Auto-Detection
 **Context**: The provider input is optional and can be github, jira, shortcut, or local. The spec doesn't clarify how the provider is determined if not explicitly specified.
@@ -34,7 +34,7 @@ Questions and answers to clarify the feature specification.
 - C: Use a global Generacy configuration setting
 - D: Default to 'local' if no provider detected
 
-**Answer**: *Pending*
+**Answer**: A - Detect from repository configuration (e.g., .github presence implies GitHub)
 
 ### Q4: Issue Linking
 **Context**: The workflow creates issues but doesn't specify how those issues should link back to the source spec or parent epic mentioned in the spec.
@@ -45,7 +45,7 @@ Questions and answers to clarify the feature specification.
 - C: Both - include path and create relationship links
 - D: No automatic linking - keep issues independent
 
-**Answer**: *Pending*
+**Answer**: A - Add feature directory path in issue body
 
 ### Q5: Workflow Output Format
 **Context**: The outputs section mentions 'created issue details' but doesn't specify the exact format, which affects downstream workflow consumers.
@@ -56,5 +56,5 @@ Questions and answers to clarify the feature specification.
 - C: Comprehensive: All fields plus original task mapping
 - D: Provider-specific: Different fields based on the backlog system
 
-**Answer**: *Pending*
+**Answer**: B - Standard: ID, URL, title, and provider type
 
