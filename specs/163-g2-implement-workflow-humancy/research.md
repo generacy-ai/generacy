@@ -1,0 +1,175 @@
+# Research: G2 - Implement Workflow with Humancy Checkpoints
+
+## Technology Decisions
+
+### 1. Action Handler Pattern
+
+**Decision**: Extend `BaseAction` class for the new `humancy.request_review` action
+
+**Rationale**:
+- Consistent with existing actions (`agent.invoke`, `workspace.prepare`, etc.)
+- Leverages built-in utilities: `getInput()`, `successResult()`, `failureResult()`
+- Automatic registration via action registry
+- Built-in validation support
+
+**Alternatives Considered**:
+- Custom handler outside action system - Rejected: Would bypass executor lifecycle events
+- Middleware pattern - Rejected: Overkill for single action type
+
+### 2. State Persistence
+
+**Decision**: Filesystem-based persistence in `.generacy/workflow-state.json`
+
+**Rationale**:
+- Simple to implement and debug
+- Project-local (doesn't require external services)
+- Human-readable for troubleshooting
+- Git-ignorable (add to .gitignore)
+
+**Alternatives Considered**:
+- Redis: Already used for messages, but adds complexity for local-only workflows
+- GitHub issue metadata: Limited size, visible in UI (may be confusing)
+- SQLite: Overhead for simple key-value state
+
+### 3. Communication with HumanHandler
+
+**Decision**: Direct integration with existing `HumanHandler.requestDecision()`
+
+**Rationale**:
+- Reuses proven correlation/timeout logic
+- Consistent message format across human decision types
+- Supports both VS Code and cloud transports
+
+**Implementation Pattern**:
+```typescript
+// In HumancyReviewAction
+const handler = new HumanHandler(messageRouter);
+const result = await handler.requestDecision({
+  type: 'review',
+  title: `Review: ${step.name}`,
+  description: context,
+  options: [
+    { id: 'approve', label: 'Approve' },
+    { id: 'reject', label: 'Reject', requiresComment: true }
+  ],
+  workflowId,
+  stepId: step.id,
+  urgency
+});
+```
+
+### 4. Rollback Strategy
+
+**Decision**: Preserve-and-report (no automatic deletion)
+
+**Rationale**:
+- Avoids accidental data loss
+- Allows manual review of partial state
+- Predictable behavior
+- User can manually clean up if needed
+
+**Implementation**:
+- Track created resources in step outputs
+- On failure, log list of created resources
+- Return failure result with partial success details
+
+## Implementation Patterns
+
+### Action Handler Structure
+
+```typescript
+export class HumancyReviewAction extends BaseAction {
+  readonly type: ActionType = 'humancy.request_review';
+
+  canHandle(step: WorkflowStep): boolean {
+    return parseActionType(step) === 'humancy.request_review';
+  }
+
+  validate(step: WorkflowStep): ValidationResult {
+    const artifact = this.getInput(step, 'artifact');
+    const context = this.getInput(step, 'context');
+
+    if (!artifact && !context) {
+      return { valid: false, errors: ['artifact or context required'] };
+    }
+    return { valid: true };
+  }
+
+  protected async executeInternal(
+    step: WorkflowStep,
+    context: ActionContext
+  ): Promise<ActionResult> {
+    // 1. Interpolate inputs
+    // 2. Save state checkpoint
+    // 3. Request human decision
+    // 4. Return result with approval status
+  }
+}
+```
+
+### State File Format
+
+```json
+{
+  "version": "1.0",
+  "workflowId": "wf_abc123",
+  "workflowFile": "workflows/tasks-to-issues.yaml",
+  "currentPhase": "review",
+  "currentStep": "human_review",
+  "inputs": {
+    "feature_dir": "specs/123-feature"
+  },
+  "stepOutputs": {
+    "parse_tasks": { "raw": "...", "parsed": {...}, "exitCode": 0 },
+    "preview": { "raw": "...", "parsed": {...}, "exitCode": 0 }
+  },
+  "pendingReview": {
+    "reviewId": "rev_xyz789",
+    "artifact": "Preview shows 5 issues will be created...",
+    "requestedAt": "2024-01-15T10:30:00Z"
+  },
+  "startedAt": "2024-01-15T10:25:00Z",
+  "updatedAt": "2024-01-15T10:30:00Z"
+}
+```
+
+## Key Sources and References
+
+### Internal Codebase
+
+1. **Workflow Executor**: `packages/workflow-engine/src/executor/index.ts`
+   - Phase/step iteration pattern
+   - Context management
+   - Event emission
+
+2. **Base Action**: `packages/workflow-engine/src/actions/base-action.ts`
+   - Abstract class to extend
+   - Utility methods for input handling
+
+3. **Human Handler**: `src/worker/handlers/human-handler.ts`
+   - Decision request/response pattern
+   - Correlation management
+   - Timeout handling
+
+4. **Tasks-to-Issues YAML**: `workflows/tasks-to-issues.yaml`
+   - Target workflow to support
+   - Shows expected step configuration
+
+### External References
+
+- Workflow patterns: GitHub Actions, Temporal.io
+- Human-in-the-loop: Apache Airflow pause/resume, Prefect approvals
+
+## Open Questions (Resolved)
+
+| Question | Resolution |
+|----------|------------|
+| Build vs extend workflow runner? | Extend existing (Q1: A) |
+| Humancy API status? | Exists, needs review action extension (Q2: B) |
+| Rollback behavior? | Preserve and report (Q3: B) |
+| State storage? | Filesystem (Q4: A) |
+| YAML source? | Exists from G1 (Q5: A) |
+
+---
+
+*Generated by speckit*
