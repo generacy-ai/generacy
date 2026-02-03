@@ -12,7 +12,7 @@ pnpm dev
 ## MCP Testing Tools
 
 For browser automation and UI testing, see:
-[/workspaces/triad-development/docs/MCP_TESTING_TOOLS.md](/workspaces/triad-development/docs/MCP_TESTING_TOOLS.md)
+[/workspaces/tetrad-development/docs/MCP_TESTING_TOOLS.md](/workspaces/tetrad-development/docs/MCP_TESTING_TOOLS.md)
 
 Use Playwright MCP to automate testing of the frontend:
 1. Start the dev server
@@ -24,8 +24,8 @@ Use Playwright MCP to automate testing of the frontend:
 
 For Firebase emulators (required for backend):
 ```bash
-/workspaces/triad-development/scripts/stack start
-source /workspaces/triad-development/scripts/stack-env.sh
+/workspaces/tetrad-development/scripts/stack start
+source /workspaces/tetrad-development/scripts/stack-env.sh
 ```
 
-See [/workspaces/triad-development/docs/DEVELOPMENT_STACK.md](/workspaces/triad-development/docs/DEVELOPMENT_STACK.md)
+See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md)
