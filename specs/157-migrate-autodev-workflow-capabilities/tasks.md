@@ -24,15 +24,15 @@
 ## Phase 2: Core GitHub Actions
 
 - [x] T007 [US1] Implement `github.preflight` action at `packages/workflow-engine/src/actions/github/preflight.ts` - validate environment, parse issue URL, detect branch, analyze labels
-- [ ] T008 [P] [US1] Write tests for `github.preflight` at `packages/workflow-engine/tests/actions/github/preflight.test.ts`
+- [x] T008 [P] [US1] Write tests for `github.preflight` at `packages/workflow-engine/tests/actions/github/preflight.test.ts`
 - [x] T009 [US1] Implement `github.get_context` action at `packages/workflow-engine/src/actions/github/get-context.ts` - retrieve spec, plan, tasks artifacts
-- [ ] T010 [P] [US1] Write tests for `github.get_context` at `packages/workflow-engine/tests/actions/github/get-context.test.ts`
+- [x] T010 [P] [US1] Write tests for `github.get_context` at `packages/workflow-engine/tests/actions/github/get-context.test.ts`
 - [x] T011 [US1] Implement `github.review_changes` action at `packages/workflow-engine/src/actions/github/review-changes.ts` - review uncommitted changes
-- [ ] T012 [P] [US1] Write tests for `github.review_changes` at `packages/workflow-engine/tests/actions/github/review-changes.test.ts`
+- [x] T012 [P] [US1] Write tests for `github.review_changes` at `packages/workflow-engine/tests/actions/github/review-changes.test.ts`
 - [x] T013 [US1] Implement `github.commit_and_push` action at `packages/workflow-engine/src/actions/github/commit-and-push.ts` - commit with issue reference, push
-- [ ] T014 [P] [US1] Write tests for `github.commit_and_push` at `packages/workflow-engine/tests/actions/github/commit-and-push.test.ts`
+- [x] T014 [P] [US1] Write tests for `github.commit_and_push` at `packages/workflow-engine/tests/actions/github/commit-and-push.test.ts`
 - [x] T015 [US1] Implement `github.merge_from_base` action at `packages/workflow-engine/src/actions/github/merge-from-base.ts` - merge base branch with conflict detection
-- [ ] T016 [P] [US1] Write tests for `github.merge_from_base` at `packages/workflow-engine/tests/actions/github/merge-from-base.test.ts`
+- [x] T016 [P] [US1] Write tests for `github.merge_from_base` at `packages/workflow-engine/tests/actions/github/merge-from-base.test.ts`
 - [x] T017 [US1] Create GitHub namespace registration at `packages/workflow-engine/src/actions/github/index.ts` exporting all github.* actions
 
 ---
@@ -40,17 +40,17 @@
 ## Phase 3: PR Management Actions
 
 - [x] T018 [US1] Implement `github.create_draft_pr` action at `packages/workflow-engine/src/actions/github/create-draft-pr.ts` - create draft PR linked to issue
-- [ ] T019 [P] [US1] Write tests for `github.create_draft_pr` at `packages/workflow-engine/tests/actions/github/create-draft-pr.test.ts`
+- [x] T019 [P] [US1] Write tests for `github.create_draft_pr` at `packages/workflow-engine/tests/actions/github/create-draft-pr.test.ts`
 - [x] T020 [US1] Implement `github.mark_pr_ready` action at `packages/workflow-engine/src/actions/github/mark-pr-ready.ts` - convert draft to ready
-- [ ] T021 [P] [US1] Write tests for `github.mark_pr_ready` at `packages/workflow-engine/tests/actions/github/mark-pr-ready.test.ts`
+- [x] T021 [P] [US1] Write tests for `github.mark_pr_ready` at `packages/workflow-engine/tests/actions/github/mark-pr-ready.test.ts`
 - [x] T022 [US1] Implement `github.update_pr` action at `packages/workflow-engine/src/actions/github/update-pr.ts` - update PR description with phase status
-- [ ] T023 [P] [US1] Write tests for `github.update_pr` at `packages/workflow-engine/tests/actions/github/update-pr.test.ts`
+- [x] T023 [P] [US1] Write tests for `github.update_pr` at `packages/workflow-engine/tests/actions/github/update-pr.test.ts`
 - [x] T024 [US1] Implement `github.read_pr_feedback` action at `packages/workflow-engine/src/actions/github/read-pr-feedback.ts` - get unresolved comments
-- [ ] T025 [P] [US1] Write tests for `github.read_pr_feedback` at `packages/workflow-engine/tests/actions/github/read-pr-feedback.test.ts`
+- [x] T025 [P] [US1] Write tests for `github.read_pr_feedback` at `packages/workflow-engine/tests/actions/github/read-pr-feedback.test.ts`
 - [x] T026 [US1] Implement `github.respond_pr_feedback` action at `packages/workflow-engine/src/actions/github/respond-pr-feedback.ts` - post responses
-- [ ] T027 [P] [US1] Write tests for `github.respond_pr_feedback` at `packages/workflow-engine/tests/actions/github/respond-pr-feedback.test.ts`
+- [x] T027 [P] [US1] Write tests for `github.respond_pr_feedback` at `packages/workflow-engine/tests/actions/github/respond-pr-feedback.test.ts`
 - [x] T028 [US1] Implement `github.add_comment` action at `packages/workflow-engine/src/actions/github/add-comment.ts` - add issue comment
-- [ ] T029 [P] [US1] Write tests for `github.add_comment` at `packages/workflow-engine/tests/actions/github/add-comment.test.ts`
+- [x] T029 [P] [US1] Write tests for `github.add_comment` at `packages/workflow-engine/tests/actions/github/add-comment.test.ts`
 - [x] T030 [US1] Update `packages/workflow-engine/src/actions/github/index.ts` with PR management actions
 
 ---
@@ -59,11 +59,11 @@
 
 - [x] T031 [US2] Create workflow types at `packages/workflow-engine/src/types/github.ts` with CorePhase, ReviewGate, StageProgress, WorkflowStage interfaces (merged with github.ts)
 - [x] T032 [US2] Implement `workflow.update_phase` action at `packages/workflow-engine/src/actions/workflow/update-phase.ts` - manage phase labels
-- [ ] T033 [P] [US2] Write tests for `workflow.update_phase` at `packages/workflow-engine/tests/actions/workflow/update-phase.test.ts`
+- [x] T033 [P] [US2] Write tests for `workflow.update_phase` at `packages/workflow-engine/tests/actions/workflow/update-phase.test.ts`
 - [x] T034 [US2] Implement `workflow.check_gate` action at `packages/workflow-engine/src/actions/workflow/check-gate.ts` - check review gate status
-- [ ] T035 [P] [US2] Write tests for `workflow.check_gate` at `packages/workflow-engine/tests/actions/workflow/check-gate.test.ts`
+- [x] T035 [P] [US2] Write tests for `workflow.check_gate` at `packages/workflow-engine/tests/actions/workflow/check-gate.test.ts`
 - [x] T036 [US2] Implement `workflow.update_stage` action at `packages/workflow-engine/src/actions/workflow/update-stage.ts` - update stage comment with HTML templates
-- [ ] T037 [P] [US2] Write tests for `workflow.update_stage` at `packages/workflow-engine/tests/actions/workflow/update-stage.test.ts`
+- [x] T037 [P] [US2] Write tests for `workflow.update_stage` at `packages/workflow-engine/tests/actions/workflow/update-stage.test.ts`
 - [x] T038 [US2] Create workflow namespace registration at `packages/workflow-engine/src/actions/workflow/index.ts` exporting all workflow.* actions
 
 ---
@@ -71,17 +71,17 @@
 ## Phase 5: Epic Management Actions
 
 - [x] T039 [US2] Implement `epic.post_tasks_summary` action at `packages/workflow-engine/src/actions/epic/post-tasks-summary.ts` - post task summary for review
-- [ ] T040 [P] [US2] Write tests for `epic.post_tasks_summary` at `packages/workflow-engine/tests/actions/epic/post-tasks-summary.test.ts`
+- [x] T040 [P] [US2] Write tests for `epic.post_tasks_summary` at `packages/workflow-engine/tests/actions/epic/post-tasks-summary.test.ts`
 - [x] T041 [US2] Implement `epic.check_completion` action at `packages/workflow-engine/src/actions/epic/check-completion.ts` - check child issue status
-- [ ] T042 [P] [US2] Write tests for `epic.check_completion` at `packages/workflow-engine/tests/actions/epic/check-completion.test.ts`
+- [x] T042 [P] [US2] Write tests for `epic.check_completion` at `packages/workflow-engine/tests/actions/epic/check-completion.test.ts`
 - [x] T043 [US2] Implement `epic.update_status` action at `packages/workflow-engine/src/actions/epic/update-status.ts` - update progress comment
-- [ ] T044 [P] [US2] Write tests for `epic.update_status` at `packages/workflow-engine/tests/actions/epic/update-status.test.ts`
+- [x] T044 [P] [US2] Write tests for `epic.update_status` at `packages/workflow-engine/tests/actions/epic/update-status.test.ts`
 - [x] T045 [US2] Implement `epic.create_pr` action at `packages/workflow-engine/src/actions/epic/create-pr.ts` - create rollup PR
-- [ ] T046 [P] [US2] Write tests for `epic.create_pr` at `packages/workflow-engine/tests/actions/epic/create-pr.test.ts`
+- [x] T046 [P] [US2] Write tests for `epic.create_pr` at `packages/workflow-engine/tests/actions/epic/create-pr.test.ts`
 - [x] T047 [US2] Implement `epic.close` action at `packages/workflow-engine/src/actions/epic/close.ts` - close epic after merge
-- [ ] T048 [P] [US2] Write tests for `epic.close` at `packages/workflow-engine/tests/actions/epic/close.test.ts`
+- [x] T048 [P] [US2] Write tests for `epic.close` at `packages/workflow-engine/tests/actions/epic/close.test.ts`
 - [x] T049 [US2] Implement `epic.dispatch_children` action at `packages/workflow-engine/src/actions/epic/dispatch-children.ts` - send to orchestrator queue
-- [ ] T050 [P] [US2] Write tests for `epic.dispatch_children` at `packages/workflow-engine/tests/actions/epic/dispatch-children.test.ts`
+- [x] T050 [P] [US2] Write tests for `epic.dispatch_children` at `packages/workflow-engine/tests/actions/epic/dispatch-children.test.ts`
 - [x] T051 [US2] Create epic namespace registration at `packages/workflow-engine/src/actions/epic/index.ts` exporting all epic.* actions
 
 ---
@@ -89,10 +89,10 @@
 ## Phase 6: Infrastructure & Integration
 
 - [x] T052 [US1] Implement `github.sync_labels` action at `packages/workflow-engine/src/actions/github/sync-labels.ts` - create/update GitHub labels
-- [ ] T053 [P] [US1] Write tests for `github.sync_labels` at `packages/workflow-engine/tests/actions/github/sync-labels.test.ts`
+- [x] T053 [P] [US1] Write tests for `github.sync_labels` at `packages/workflow-engine/tests/actions/github/sync-labels.test.ts`
 - [x] T054 [US1] Update `packages/workflow-engine/src/actions/index.ts` to register github, workflow, and epic namespaces
-- [ ] T055 [US1] Create integration tests at `packages/workflow-engine/tests/integration/github-workflow.test.ts` testing full workflow scenarios
-- [ ] T056 [US1] Update `packages/workflow-engine/package.json` to add optional `@octokit/rest` peer dependency for future GitHub App support
+- [x] T055 [US1] Create integration tests at `packages/workflow-engine/tests/integration/github-workflow.test.ts` testing full workflow scenarios
+- [x] T056 [US1] Update `packages/workflow-engine/package.json` to add optional `@octokit/rest` peer dependency for future GitHub App support
 
 ---
 

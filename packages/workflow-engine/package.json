@@ -33,6 +33,14 @@
     "yaml": "^2.4.0",
     "zod": "^3.23.0"
   },
+  "peerDependencies": {
+    "@octokit/rest": "^20.0.0 || ^21.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@octokit/rest": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/uuid": "^9.0.0",
