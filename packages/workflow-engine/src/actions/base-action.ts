@@ -6,7 +6,7 @@ import type {
   ActionHandler,
   ActionContext,
   ActionResult,
-  ActionType,
+  ActionIdentifier,
   ValidationResult,
   StepDefinition,
 } from '../types/index.js';
@@ -16,7 +16,7 @@ import type {
  * Provides common functionality like timing, logging, and error handling.
  */
 export abstract class BaseAction implements ActionHandler {
-  abstract readonly type: ActionType;
+  abstract readonly type: ActionIdentifier;
 
   /**
    * Check if this handler can process the given step
