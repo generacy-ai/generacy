@@ -29,6 +29,7 @@ Auto-generated from all feature plans.
 
 
 
+
 <!-- TECHNOLOGIES END -->
 
 ## Project Structure
@@ -50,6 +51,7 @@ Follow standard conventions
 
 <!-- AUTO-GENERATED: Do not edit manually -->
 <!-- CHANGES START -->
+- 156-define-speckit-generacy-workflow: Added configuration
 - 163-g2-implement-workflow-humancy: Added configuration
 - 162-g1-design-tasks-issues: Added configuration
 - 159-implement-orchestrator-server-command: Added configuration
