@@ -61,6 +61,12 @@ export interface StepDefinition {
   env?: Record<string, string>;
   /** Retry configuration */
   retry?: RetryConfig;
+  /**
+   * Gate for review checkpoint.
+   * When set, workflow pauses for human approval after step completes.
+   * Values like 'spec-review', 'clarification-review', 'plan-review', etc.
+   */
+  gate?: string;
 }
 
 /**

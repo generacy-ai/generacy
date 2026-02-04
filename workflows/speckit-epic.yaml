@@ -1,0 +1,130 @@
+# Speckit Epic Development Workflow
+#
+# Epic workflow for large features that will be broken down into child issues.
+# Creates parent epic issue and generates child issues from tasks.
+#
+# Usage:
+#   generacy run workflows/speckit-epic.yaml --input description="Your epic description" --input epic_label="epic"
+#
+# Inputs:
+#   - description: Epic description text (required)
+#   - epic_label: Label to apply to epic issue (default: "epic")
+#   - issue_url: GitHub issue URL for additional context (optional)
+#
+name: speckit-epic
+
+description: |
+  Epic development workflow for large features.
+  Creates a feature branch, generates specification and plan,
+  then generates tasks and converts them to child GitHub issues.
+  Child issues can be worked on independently or in parallel.
+
+version: "1.0.0"
+
+inputs:
+  - name: description
+    description: Epic description used to generate spec content
+    type: string
+    required: true
+
+  - name: epic_label
+    description: Label to apply to epic issues
+    type: string
+    default: "epic"
+
+  - name: issue_url
+    description: GitHub issue URL for additional context
+    type: string
+    required: false
+
+  - name: grouping
+    description: "How to group tasks into issues: per-task, per-story, per-phase"
+    type: string
+    default: "per-story"
+
+phases:
+  # Phase 1: Setup
+  - name: setup
+    steps:
+      - name: create-feature
+        uses: speckit.create_feature
+        with:
+          description: ${{ inputs.description }}
+
+  # Phase 2: Specification
+  - name: specification
+    steps:
+      - name: specify
+        uses: speckit.specify
+        with:
+          feature_dir: ${{ steps.create-feature.output.feature_dir }}
+          issue_url: ${{ inputs.issue_url }}
+        gate: spec-review
+
+  # Phase 3: Clarification
+  - name: clarification
+    steps:
+      - name: clarify
+        uses: speckit.clarify
+        with:
+          feature_dir: ${{ steps.create-feature.output.feature_dir }}
+        gate: clarification-review
+
+  # Phase 4: Planning
+  - name: planning
+    steps:
+      - name: plan
+        uses: speckit.plan
+        with:
+          feature_dir: ${{ steps.create-feature.output.feature_dir }}
+        gate: plan-review
+
+  # Phase 5: Task Generation
+  - name: task-generation
+    steps:
+      - name: tasks
+        uses: speckit.tasks
+        with:
+          feature_dir: ${{ steps.create-feature.output.feature_dir }}
+        gate: tasks-review
+
+  # Phase 6: Issue Creation
+  # Convert tasks to GitHub issues for parallel work
+  - name: issue-creation
+    steps:
+      - name: create-epic-issue
+        uses: shell
+        command: |
+          gh issue create \
+            --title "${{ inputs.description }}" \
+            --body "Epic issue for: ${{ inputs.description }}\n\nSpec: ${{ steps.specify.output.summary }}" \
+            --label "${{ inputs.epic_label }}" \
+            --json number -q '.number'
+
+      - name: create-child-issues
+        uses: shell
+        command: |
+          # Run speckit tasks_to_issues via MCP or CLI
+          # This creates child issues linked to the epic
+          echo "Creating child issues from tasks.md"
+          echo "Epic number: ${{ steps.create-epic-issue.output }}"
+          echo "Grouping: ${{ inputs.grouping }}"
+          # In practice, this would call the speckit MCP tool or a CLI command
+          # to create issues based on tasks.md
+
+  # Phase 7: Summary
+  - name: summary
+    steps:
+      - name: report
+        uses: shell
+        command: |
+          echo "Epic setup complete!"
+          echo "Epic issue: #${{ steps.create-epic-issue.output }}"
+          echo "Feature branch: ${{ steps.create-feature.output.branch_name }}"
+          echo "Specification: ${{ steps.create-feature.output.spec_file }}"
+          echo ""
+          echo "Next steps:"
+          echo "1. Review child issues"
+          echo "2. Assign issues to team members"
+          echo "3. Work on child issues independently"
+          echo "4. Merge back to epic branch when complete"

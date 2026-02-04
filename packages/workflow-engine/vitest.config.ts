@@ -5,6 +5,7 @@ export default defineConfig({
     include: [
       'src/**/__tests__/*.test.ts',
       'src/**/*.test.ts',
+      'tests/**/*.test.ts',
     ],
     exclude: ['**/node_modules/**', '**/dist/**'],
     environment: 'node',

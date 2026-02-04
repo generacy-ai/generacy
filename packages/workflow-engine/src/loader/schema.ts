@@ -40,6 +40,7 @@ export const StepDefinitionSchema = z.object({
   condition: z.string().optional(),
   env: z.record(z.string()).optional(),
   retry: RetryConfigSchema.optional(),
+  gate: z.string().optional(),
 });
 
 /**
