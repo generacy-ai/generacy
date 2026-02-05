@@ -15,7 +15,8 @@ export type ActionType =
   | 'verification.check'       // Test/lint execution
   | 'pr.create'                // GitHub PR creation
   | 'shell'                    // Generic shell command (fallback)
-  | 'humancy.request_review';  // Human review checkpoint
+  | 'humancy.request_review'   // Human review checkpoint
+  | 'speckit';                 // Speckit workflow operations
 
 /**
  * Step output stored for variable interpolation
@@ -358,6 +359,10 @@ export function parseActionType(step: StepDefinition): ActionType {
     if (uses.includes('humancy.request_review') || uses.includes('humancy/request_review') || uses.includes('humancy')) {
       return 'humancy.request_review';
     }
+    // Check for speckit actions (speckit.* or speckit/*)
+    if (uses.startsWith('speckit.') || uses.startsWith('speckit/')) {
+      return 'speckit';
+    }
   }
 
   // Check 'action' field as fallback
@@ -380,6 +385,10 @@ export function parseActionType(step: StepDefinition): ActionType {
     }
     if (action === 'shell' || action === 'run') {
       return 'shell';
+    }
+    // Check for speckit actions (speckit.* or speckit/*)
+    if (action.startsWith('speckit.') || action.startsWith('speckit/')) {
+      return 'speckit';
     }
   }
 

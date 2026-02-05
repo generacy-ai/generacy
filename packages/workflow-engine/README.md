@@ -175,6 +175,61 @@ retry:
 - **agent.invoke**: Invoke Claude CLI for AI tasks
 - **verification.check**: Run tests and linting
 - **github.pr-create**: Create GitHub pull requests
+- **speckit.\***: Spec-driven development methodology operations
+
+### Speckit Actions
+
+The speckit action handler implements a spec-driven development methodology with the following operations:
+
+**Deterministic Operations** (direct library calls):
+- `speckit.create_feature` - Create feature branch and initialize spec directory
+- `speckit.get_paths` - Get feature directory paths from branch name
+- `speckit.check_prereqs` - Validate required spec files exist
+- `speckit.copy_template` - Copy template files to feature directory
+
+**AI-Dependent Operations** (agent delegation via Claude CLI):
+- `speckit.specify` - Generate spec.md from feature description
+- `speckit.clarify` - Generate clarification questions and post to issue
+- `speckit.plan` - Generate implementation plan from spec
+- `speckit.tasks` - Generate task list from plan
+- `speckit.implement` - Execute tasks with progress tracking
+
+**Example usage:**
+
+```yaml
+phases:
+  - name: setup
+    steps:
+      - name: create-feature
+        uses: speckit.create_feature
+        with:
+          description: "Add user authentication"
+
+  - name: specification
+    steps:
+      - name: specify
+        uses: speckit.specify
+        with:
+          feature_dir: ${{ steps.create-feature.output.feature_dir }}
+        gate: spec-review  # Optional review checkpoint
+
+  - name: planning
+    steps:
+      - name: plan
+        uses: speckit.plan
+        with:
+          feature_dir: ${{ steps.create-feature.output.feature_dir }}
+        gate: plan-review
+```
+
+**Gate Configuration:**
+
+Steps can include a `gate` field to pause workflow for human review:
+- `spec-review` - Review specification before proceeding
+- `plan-review` - Review implementation plan
+- `tasks-review` - Review task breakdown
+
+See `workflows/speckit-feature.yaml` for a complete example workflow.
 
 ## API Reference
 
