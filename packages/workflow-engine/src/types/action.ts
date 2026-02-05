@@ -7,9 +7,10 @@ import type { PhaseDefinition, StepDefinition } from './workflow.js';
 import type { Logger } from './logger.js';
 
 /**
- * Action types supported by the workflow engine
+ * Built-in action types supported by the workflow engine.
+ * These are the core actions that are always available.
  */
-export type ActionType =
+export type BuiltinActionType =
   | 'workspace.prepare'        // Git branch operations
   | 'agent.invoke'             // Claude Code CLI invocation
   | 'verification.check'       // Test/lint execution
@@ -17,6 +18,70 @@ export type ActionType =
   | 'shell'                    // Generic shell command (fallback)
   | 'humancy.request_review'   // Human review checkpoint
   | 'speckit';                 // Speckit workflow operations
+
+/**
+ * GitHub action namespace types
+ */
+export type GitHubActionType =
+  | 'github.preflight'
+  | 'github.get_context'
+  | 'github.review_changes'
+  | 'github.commit_and_push'
+  | 'github.merge_from_base'
+  | 'github.create_draft_pr'
+  | 'github.mark_pr_ready'
+  | 'github.update_pr'
+  | 'github.read_pr_feedback'
+  | 'github.respond_pr_feedback'
+  | 'github.add_comment'
+  | 'github.sync_labels';
+
+/**
+ * Workflow action namespace types
+ */
+export type WorkflowActionType =
+  | 'workflow.update_phase'
+  | 'workflow.check_gate'
+  | 'workflow.update_stage';
+
+/**
+ * Epic action namespace types
+ */
+export type EpicActionType =
+  | 'epic.post_tasks_summary'
+  | 'epic.check_completion'
+  | 'epic.update_status'
+  | 'epic.create_pr'
+  | 'epic.close'
+  | 'epic.dispatch_children';
+
+/**
+ * All known action types (built-in + namespaced).
+ * Use ActionIdentifier for dynamic/custom actions.
+ */
+export type ActionType =
+  | BuiltinActionType
+  | GitHubActionType
+  | WorkflowActionType
+  | EpicActionType;
+
+/**
+ * Action identifier - can be any namespaced string (e.g., 'github.preflight', 'custom.action')
+ * This allows for extensibility beyond the predefined types.
+ */
+export type ActionIdentifier = string;
+
+/**
+ * Action namespace definition for plugin registration
+ */
+export interface ActionNamespace {
+  /** Namespace name (e.g., 'github', 'workflow', 'epic') */
+  namespace: string;
+  /** Description of the namespace */
+  description?: string;
+  /** Action handlers in this namespace */
+  handlers: ActionHandler[];
+}
 
 /**
  * Step output stored for variable interpolation
@@ -113,8 +178,8 @@ export interface ValidationResult {
  * Defines the contract for all action implementations
  */
 export interface ActionHandler {
-  /** The action type this handler processes */
-  readonly type: ActionType;
+  /** The action type this handler processes (can be namespaced) */
+  readonly type: ActionIdentifier;
 
   /**
    * Check if this handler can process the given step
@@ -335,6 +400,31 @@ export interface HumancyReviewOutput {
 }
 
 /**
+ * Check if an action identifier is a namespaced action
+ * @param identifier The action identifier to check
+ * @returns true if the identifier contains a namespace (e.g., 'github.preflight')
+ */
+export function isNamespacedAction(identifier: string): boolean {
+  return identifier.includes('.') && !identifier.startsWith('.');
+}
+
+/**
+ * Parse namespace and action name from an identifier
+ * @param identifier The action identifier (e.g., 'github.preflight')
+ * @returns Object with namespace and name, or null if not namespaced
+ */
+export function parseNamespacedAction(identifier: string): { namespace: string; name: string } | null {
+  if (!isNamespacedAction(identifier)) {
+    return null;
+  }
+  const dotIndex = identifier.indexOf('.');
+  return {
+    namespace: identifier.substring(0, dotIndex),
+    name: identifier.substring(dotIndex + 1),
+  };
+}
+
+/**
  * Parse action type from a workflow step's 'uses' or 'action' field
  * @param step The workflow step to parse
  * @returns The detected action type, or 'shell' as fallback
@@ -343,6 +433,12 @@ export function parseActionType(step: StepDefinition): ActionType {
   // Check 'uses' field first (preferred for action specification)
   const uses = step.uses;
   if (uses) {
+    // Check for namespaced actions first (e.g., 'github.preflight', 'workflow.update_phase')
+    if (isNamespacedAction(uses)) {
+      // Return the namespaced action directly if it's a known type
+      return uses as ActionType;
+    }
+
     // Map uses values to action types
     if (uses.includes('workspace.prepare') || uses.includes('workspace/prepare')) {
       return 'workspace.prepare';
@@ -368,6 +464,11 @@ export function parseActionType(step: StepDefinition): ActionType {
   // Check 'action' field as fallback
   const action = step.action;
   if (action) {
+    // Check for namespaced actions (e.g., 'github.preflight')
+    if (isNamespacedAction(action)) {
+      return action as ActionType;
+    }
+
     if (action === 'workspace.prepare' || action === 'workspace-prepare') {
       return 'workspace.prepare';
     }
