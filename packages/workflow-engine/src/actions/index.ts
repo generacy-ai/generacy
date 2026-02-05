@@ -216,6 +216,7 @@ import { VerificationCheckAction } from './builtin/verification-check.js';
 import { PrCreateAction } from './builtin/pr-create.js';
 import { ShellAction } from './builtin/shell.js';
 import { HumancyReviewAction } from './builtin/humancy-review.js';
+import { SpecKitAction } from './builtin/speckit/index.js';
 
 // Namespace imports
 import { githubNamespace } from './github/index.js';
@@ -233,6 +234,7 @@ export function registerBuiltinActions(): void {
   registerActionHandler(new PrCreateAction());
   registerActionHandler(new ShellAction());
   registerActionHandler(new HumancyReviewAction());
+  registerActionHandler(new SpecKitAction());
 
   // Register namespaced action handlers
   registerNamespace(githubNamespace);
@@ -250,6 +252,8 @@ export { VerificationCheckAction } from './builtin/verification-check.js';
 export { PrCreateAction } from './builtin/pr-create.js';
 export { ShellAction } from './builtin/shell.js';
 export { HumancyReviewAction, type HumanDecisionHandler } from './builtin/humancy-review.js';
+export { SpecKitAction } from './builtin/speckit/index.js';
+export * from './builtin/speckit/types.js';
 
 // Re-export CLI utilities
 export {

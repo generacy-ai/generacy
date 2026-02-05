@@ -159,3 +159,13 @@ export type {
   StepOutputData,
   StateValidationResult,
 } from './store.js';
+
+// Gate types
+export type {
+  GateType,
+  GateConfig,
+  GateContext,
+  GateResult,
+  GateHandler,
+} from './gate.js';
+export { DefaultGateHandler, parseGateConfig } from './gate.js';
