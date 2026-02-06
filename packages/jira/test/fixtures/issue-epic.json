@@ -1,0 +1,75 @@
+{
+  "id": "10000",
+  "key": "PROJ-100",
+  "self": "https://company.atlassian.net/rest/api/3/issue/10000",
+  "fields": {
+    "summary": "User Management Epic",
+    "description": {
+      "version": 1,
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Epic for all user management features including authentication, authorization, and profile management."
+            }
+          ]
+        }
+      ]
+    },
+    "status": {
+      "id": "1",
+      "name": "To Do",
+      "description": "The issue has not been started",
+      "statusCategory": {
+        "id": 2,
+        "key": "new",
+        "name": "To Do",
+        "colorName": "blue-gray"
+      }
+    },
+    "issuetype": {
+      "id": "10000",
+      "name": "Epic",
+      "description": "An epic is a large body of work",
+      "iconUrl": "https://company.atlassian.net/secure/viewavatar?size=medium&avatarId=10307",
+      "subtask": false,
+      "hierarchyLevel": 1
+    },
+    "priority": {
+      "id": "2",
+      "name": "High",
+      "iconUrl": "https://company.atlassian.net/images/icons/priorities/high.svg"
+    },
+    "reporter": {
+      "accountId": "5b10a2844c20165700ede21g",
+      "displayName": "John Doe",
+      "emailAddress": "john.doe@company.com",
+      "avatarUrls": {
+        "16x16": "https://avatar-management.atlassian.com/16x16",
+        "24x24": "https://avatar-management.atlassian.com/24x24",
+        "32x32": "https://avatar-management.atlassian.com/32x32",
+        "48x48": "https://avatar-management.atlassian.com/48x48"
+      },
+      "active": true
+    },
+    "assignee": null,
+    "project": {
+      "id": "10000",
+      "key": "PROJ",
+      "name": "My Project",
+      "self": "https://company.atlassian.net/rest/api/3/project/10000"
+    },
+    "parent": null,
+    "subtasks": [],
+    "issuelinks": [],
+    "created": "2024-01-01T09:00:00.000+0000",
+    "updated": "2024-01-10T11:30:00.000+0000",
+    "duedate": null,
+    "labels": ["epic", "user-management"],
+    "components": [],
+    "customfield_10011": "User Management"
+  }
+}

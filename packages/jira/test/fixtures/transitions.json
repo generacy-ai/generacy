@@ -1,0 +1,83 @@
+{
+  "expand": "transitions",
+  "transitions": [
+    {
+      "id": "11",
+      "name": "Start Progress",
+      "to": {
+        "id": "3",
+        "name": "In Progress",
+        "description": "This issue is being actively worked on",
+        "statusCategory": {
+          "id": 4,
+          "key": "indeterminate",
+          "name": "In Progress",
+          "colorName": "yellow"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": false,
+      "isInitial": false,
+      "isConditional": false
+    },
+    {
+      "id": "21",
+      "name": "Done",
+      "to": {
+        "id": "10001",
+        "name": "Done",
+        "description": "This issue has been completed",
+        "statusCategory": {
+          "id": 3,
+          "key": "done",
+          "name": "Done",
+          "colorName": "green"
+        }
+      },
+      "hasScreen": true,
+      "isGlobal": true,
+      "isInitial": false,
+      "isConditional": false,
+      "fields": {
+        "resolution": {
+          "required": true,
+          "schema": {
+            "type": "resolution",
+            "system": "resolution"
+          },
+          "name": "Resolution",
+          "operations": ["set"],
+          "allowedValues": [
+            {
+              "id": "10000",
+              "name": "Done"
+            },
+            {
+              "id": "10001",
+              "name": "Won't Do"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "31",
+      "name": "Backlog",
+      "to": {
+        "id": "1",
+        "name": "To Do",
+        "description": "The issue has not been started",
+        "statusCategory": {
+          "id": 2,
+          "key": "new",
+          "name": "To Do",
+          "colorName": "blue-gray"
+        }
+      },
+      "hasScreen": false,
+      "isGlobal": true,
+      "isInitial": false,
+      "isConditional": false
+    }
+  ]
+}
