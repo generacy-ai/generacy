@@ -12,82 +12,82 @@
 
 ## Phase 1: Project Setup
 
-- [ ] T001 Create package directory structure `packages/github-actions/`
-- [ ] T002 [P] Create `package.json` with dependencies (@octokit/rest, @octokit/types, zod)
-- [ ] T003 [P] Create `tsconfig.json` extending workspace config
-- [ ] T004 [P] Create `vitest.config.ts` for test runner
+- [x] T001 Create package directory structure `packages/github-actions/`
+- [x] T002 [P] Create `package.json` with dependencies (@octokit/rest, @octokit/types, zod)
+- [x] T003 [P] Create `tsconfig.json` extending workspace config
+- [x] T004 [P] Create `vitest.config.ts` for test runner
 
 ---
 
 ## Phase 2: Core Types & Configuration
 
-- [ ] T010 [US1] Create `src/types/config.ts` with GitHubActionsConfig interface and Zod schema
-- [ ] T011 [P] [US2] Create `src/types/workflows.ts` with WorkflowRun, WorkflowStatus, WorkflowConclusion types
-- [ ] T012 [P] [US2] Create `src/types/jobs.ts` with Job, Step, JobStatus, StepStatus types
-- [ ] T013 [P] [US2] Create `src/types/artifacts.ts` with Artifact type
-- [ ] T014 [P] [US2] Create `src/types/check-runs.ts` with CheckRun, CheckOutput, CheckAnnotation types
-- [ ] T015 [P] [US2] Create `src/types/events.ts` with WorkflowCompletedEvent, WorkflowFailedEvent, CheckRunCompletedEvent types
-- [ ] T016 Create `src/types/index.ts` barrel export for all types
-- [ ] T017 Create `src/utils/errors.ts` with custom error classes (GitHubActionsError, RateLimitError, WorkflowNotFoundError)
-- [ ] T018 [P] Create `src/utils/validation.ts` with input validation helpers
+- [x] T010 [US1] Create `src/types/config.ts` with GitHubActionsConfig interface and Zod schema
+- [x] T011 [P] [US2] Create `src/types/workflows.ts` with WorkflowRun, WorkflowStatus, WorkflowConclusion types
+- [x] T012 [P] [US2] Create `src/types/jobs.ts` with Job, Step, JobStatus, StepStatus types
+- [x] T013 [P] [US2] Create `src/types/artifacts.ts` with Artifact type
+- [x] T014 [P] [US2] Create `src/types/check-runs.ts` with CheckRun, CheckOutput, CheckAnnotation types
+- [x] T015 [P] [US2] Create `src/types/events.ts` with WorkflowCompletedEvent, WorkflowFailedEvent, CheckRunCompletedEvent types
+- [x] T016 Create `src/types/index.ts` barrel export for all types
+- [x] T017 Create `src/utils/errors.ts` with custom error classes (GitHubActionsError, RateLimitError, WorkflowNotFoundError)
+- [x] T018 [P] Create `src/utils/validation.ts` with input validation helpers
 
 ---
 
 ## Phase 3: GitHub API Client
 
-- [ ] T020 Create `src/client.ts` with GitHubClient wrapper using @octokit/rest
-- [ ] T021 Write tests `__tests__/client.test.ts` for client initialization and error handling
+- [x] T020 Create `src/client.ts` with GitHubClient wrapper using @octokit/rest
+- [x] T021 Write tests `__tests__/client.test.ts` for client initialization and error handling
 
 ---
 
 ## Phase 4: Operations Layer
 
-- [ ] T030 [US1] Create `src/operations/workflows.ts` with triggerWorkflow, triggerWorkflowDispatch
-- [ ] T031 [US1] Write tests `__tests__/operations/workflows.test.ts`
-- [ ] T032 [P] [US2] Create `src/operations/runs.ts` with getWorkflowRun, listWorkflowRuns, cancelWorkflowRun, rerunWorkflowRun
-- [ ] T033 [P] [US2] Write tests `__tests__/operations/runs.test.ts`
-- [ ] T034 [P] [US2] Create `src/operations/jobs.ts` with getJobs, getJobLogs
-- [ ] T035 [P] [US2] Write tests `__tests__/operations/jobs.test.ts`
-- [ ] T036 [P] [US2] Create `src/operations/artifacts.ts` with listArtifacts, downloadArtifact
-- [ ] T037 [P] [US2] Write tests `__tests__/operations/artifacts.test.ts`
-- [ ] T038 [US2] Create `src/operations/check-runs.ts` with createCheckRun, updateCheckRun
-- [ ] T039 [US2] Write tests `__tests__/operations/check-runs.test.ts`
+- [x] T030 [US1] Create `src/operations/workflows.ts` with triggerWorkflow, triggerWorkflowDispatch
+- [x] T031 [US1] Write tests `__tests__/operations/workflows.test.ts`
+- [x] T032 [P] [US2] Create `src/operations/runs.ts` with getWorkflowRun, listWorkflowRuns, cancelWorkflowRun, rerunWorkflowRun
+- [x] T033 [P] [US2] Write tests `__tests__/operations/runs.test.ts`
+- [x] T034 [P] [US2] Create `src/operations/jobs.ts` with getJobs, getJobLogs
+- [x] T035 [P] [US2] Write tests `__tests__/operations/jobs.test.ts`
+- [x] T036 [P] [US2] Create `src/operations/artifacts.ts` with listArtifacts, downloadArtifact
+- [x] T037 [P] [US2] Write tests `__tests__/operations/artifacts.test.ts`
+- [x] T038 [US2] Create `src/operations/check-runs.ts` with createCheckRun, updateCheckRun
+- [x] T039 [US2] Write tests `__tests__/operations/check-runs.test.ts`
 
 ---
 
 ## Phase 5: Polling Infrastructure
 
-- [ ] T040 [US2] Create `src/polling/types.ts` with PollingConfig interface
-- [ ] T041 [US2] Create `src/polling/status-poller.ts` with StatusPoller class (poll loop, exponential backoff, terminal state detection)
-- [ ] T042 [US2] Write tests `__tests__/polling/status-poller.test.ts`
+- [x] T040 [US2] Create `src/polling/types.ts` with PollingConfig interface
+- [x] T041 [US2] Create `src/polling/status-poller.ts` with StatusPoller class (poll loop, exponential backoff, terminal state detection)
+- [x] T042 [US2] Write tests `__tests__/polling/status-poller.test.ts`
 
 ---
 
 ## Phase 6: Event Emission
 
-- [ ] T050 [US2] [US3] Create `src/events/types.ts` with EventBus interface definition (facet contract)
-- [ ] T051 [US2] [US3] Create `src/events/emitter.ts` with event emission logic integrating with EventBus facet
-- [ ] T052 [US2] [US3] Write tests `__tests__/events/emitter.test.ts`
+- [x] T050 [US2] [US3] Create `src/events/types.ts` with EventBus interface definition (facet contract)
+- [x] T051 [US2] [US3] Create `src/events/emitter.ts` with event emission logic integrating with EventBus facet
+- [x] T052 [US2] [US3] Write tests `__tests__/events/emitter.test.ts`
 
 ---
 
 ## Phase 7: Plugin Assembly
 
-- [ ] T060 Create `src/plugin.ts` with GitHubActionsPlugin class combining all operations
-- [ ] T061 Create plugin manifest with facet declarations (provides: GitHubActions, requires: EventBus, optional: IssueTracker)
-- [ ] T062 Write tests `__tests__/plugin.test.ts` for plugin initialization and facet injection
-- [ ] T063 Create `src/index.ts` with public exports
+- [x] T060 Create `src/plugin.ts` with GitHubActionsPlugin class combining all operations
+- [x] T061 Create plugin manifest with facet declarations (provides: GitHubActions, requires: EventBus, optional: IssueTracker)
+- [x] T062 Write tests `__tests__/plugin.test.ts` for plugin initialization and facet injection
+- [x] T063 Create `src/index.ts` with public exports
 
 ---
 
 ## Phase 8: Integration & Polish
 
-- [ ] T070 [US3] Add optional IssueTracker facet integration in plugin.ts (comment on issues when workflows complete)
-- [ ] T071 [US3] Write tests for IssueTracker integration
-- [ ] T072 Add JSDoc documentation to all public exports
-- [ ] T073 Update workspace `pnpm-workspace.yaml` to include new package
-- [ ] T074 Run full test suite and fix any issues
-- [ ] T075 Verify build succeeds with `pnpm build`
+- [x] T070 [US3] Add optional IssueTracker facet integration in plugin.ts (comment on issues when workflows complete)
+- [x] T071 [US3] Write tests for IssueTracker integration
+- [x] T072 Add JSDoc documentation to all public exports
+- [x] T073 Update workspace `pnpm-workspace.yaml` to include new package
+- [x] T074 Run full test suite and fix any issues
+- [x] T075 Verify build succeeds with `pnpm build`
 
 ---
 
