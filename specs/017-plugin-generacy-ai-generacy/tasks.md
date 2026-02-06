@@ -12,93 +12,93 @@
 
 ## Phase 1: Setup & Foundation
 
-- [ ] T001 Create package structure `packages/generacy-plugin-cloud-build/` with package.json
-- [ ] T002 [P] Configure tsconfig.json with strict mode and ESM output
-- [ ] T003 [P] Configure vitest.config.ts for unit and integration tests
-- [ ] T004 Create src/errors.ts with CloudBuildError base class and error subclasses (AuthError, NotFoundError, RateLimitError, TimeoutError)
-- [ ] T005 [P] Create src/types/builds.ts with Build, BuildStatus, BuildStep, BuildResults, BuildSource types from data-model.md
-- [ ] T006 [P] Create src/types/triggers.ts with BuildTrigger, TriggerConfig, GitHubConfig types from data-model.md
-- [ ] T007 [P] Create src/types/artifacts.ts with Artifact, ArtifactsConfig types from data-model.md
-- [ ] T008 [P] Create src/types/logs.ts with LogEntry, LogSeverity types from data-model.md
-- [ ] T009 Create src/config/types.ts with CloudBuildConfig, RetryConfig interfaces
-- [ ] T010 Create src/config/schema.ts with Zod validation schema (CloudBuildConfigSchema) per plan.md
+- [x] T001 Create package structure `packages/generacy-plugin-cloud-build/` with package.json
+- [x] T002 [P] Configure tsconfig.json with strict mode and ESM output
+- [x] T003 [P] Configure vitest.config.ts for unit and integration tests
+- [x] T004 Create src/errors.ts with CloudBuildError base class and error subclasses (AuthError, NotFoundError, RateLimitError, TimeoutError)
+- [x] T005 [P] Create src/types/builds.ts with Build, BuildStatus, BuildStep, BuildResults, BuildSource types from data-model.md
+- [x] T006 [P] Create src/types/triggers.ts with BuildTrigger, TriggerConfig, GitHubConfig types from data-model.md
+- [x] T007 [P] Create src/types/artifacts.ts with Artifact, ArtifactsConfig types from data-model.md
+- [x] T008 [P] Create src/types/logs.ts with LogEntry, LogSeverity types from data-model.md
+- [x] T009 Create src/config/types.ts with CloudBuildConfig, RetryConfig interfaces
+- [x] T010 Create src/config/schema.ts with Zod validation schema (CloudBuildConfigSchema) per plan.md
 
 ---
 
 ## Phase 2: Authentication & Client
 
-- [ ] T011 Create src/auth/types.ts with AuthProvider interface and AuthOptions type
-- [ ] T012 Create src/auth/auth-provider.ts implementing auth priority: serviceAccountKey > ADC fallback
-- [ ] T013 Create src/utils/retry.ts with exponential backoff + jitter (initialDelay: 1000ms, maxDelay: 30000ms, maxAttempts: 3)
-- [ ] T014 [P] Create src/utils/validation.ts with input validators using Zod schemas
-- [ ] T015 Create src/client.ts wrapping @google-cloud/cloudbuild with auth integration and error handling
-- [ ] T016 Write tests/unit/auth.test.ts for auth provider (serviceAccountKey, ADC fallback, error cases)
-- [ ] T017 [P] Write tests/unit/retry.test.ts for retry logic (backoff timing, jitter, max attempts)
+- [x] T011 Create src/auth/types.ts with AuthProvider interface and AuthOptions type
+- [x] T012 Create src/auth/auth-provider.ts implementing auth priority: serviceAccountKey > ADC fallback
+- [x] T013 Create src/utils/retry.ts with exponential backoff + jitter (initialDelay: 1000ms, maxDelay: 30000ms, maxAttempts: 3)
+- [x] T014 [P] Create src/utils/validation.ts with input validators using Zod schemas
+- [x] T015 Create src/client.ts wrapping @google-cloud/cloudbuild with auth integration and error handling
+- [x] T016 Write tests/unit/auth.test.ts for auth provider (serviceAccountKey, ADC fallback, error cases)
+- [x] T017 [P] Write tests/unit/retry.test.ts for retry logic (backoff timing, jitter, max attempts)
 
 ---
 
 ## Phase 3: Build Operations
 
-- [ ] T018 Create src/operations/builds.ts with BuildOperations class
-- [ ] T019 Implement triggerBuild(triggerId, source?) in builds.ts - trigger build from existing trigger
-- [ ] T020 Implement runBuild(config) in builds.ts - run build from inline config
-- [ ] T021 Implement getBuild(buildId) in builds.ts - fetch single build status
-- [ ] T022 Implement listBuilds(filter?) in builds.ts with PaginatedResult return type
-- [ ] T023 Implement cancelBuild(buildId) in builds.ts
-- [ ] T024 Implement retryBuild(buildId) in builds.ts
-- [ ] T025 Add private mapBuild() helper to transform Google Cloud types to plugin types
-- [ ] T026 Write tests/unit/builds.test.ts with mocked client for all build operations
+- [x] T018 Create src/operations/builds.ts with BuildOperations class
+- [x] T019 Implement triggerBuild(triggerId, source?) in builds.ts - trigger build from existing trigger
+- [x] T020 Implement runBuild(config) in builds.ts - run build from inline config
+- [x] T021 Implement getBuild(buildId) in builds.ts - fetch single build status
+- [x] T022 Implement listBuilds(filter?) in builds.ts with PaginatedResult return type
+- [x] T023 Implement cancelBuild(buildId) in builds.ts
+- [x] T024 Implement retryBuild(buildId) in builds.ts
+- [x] T025 Add private mapBuild() helper to transform Google Cloud types to plugin types
+- [x] T026 Write tests/unit/builds.test.ts with mocked client for all build operations
 
 ---
 
 ## Phase 4: Log Streaming
 
-- [ ] T027 Create src/streaming/types.ts with LogStreamOptions interface
-- [ ] T028 Create src/streaming/log-stream.ts with LogStream class
-- [ ] T029 Implement streamLogs(buildId) as AsyncIterable<LogEntry> with polling in log-stream.ts
-- [ ] T030 Add automatic stream completion when build finishes
-- [ ] T031 Create src/operations/logs.ts integrating LogStream with configurable polling interval
-- [ ] T032 Write tests/unit/logs.test.ts testing async iteration, polling, and stream completion
+- [x] T027 Create src/streaming/types.ts with LogStreamOptions interface
+- [x] T028 Create src/streaming/log-stream.ts with LogStream class
+- [x] T029 Implement streamLogs(buildId) as AsyncIterable<LogEntry> with polling in log-stream.ts
+- [x] T030 Add automatic stream completion when build finishes
+- [x] T031 Create src/operations/logs.ts integrating LogStream with configurable polling interval
+- [x] T032 Write tests/unit/logs.test.ts testing async iteration, polling, and stream completion
 
 ---
 
 ## Phase 5: Artifact Access
 
-- [ ] T033 Create src/operations/artifacts.ts with ArtifactOperations class
-- [ ] T034 Implement listArtifacts(buildId) in artifacts.ts using @google-cloud/storage
-- [ ] T035 Implement getArtifact(buildId, path) returning Buffer (with 100MB size check)
-- [ ] T036 Implement getArtifactStream(buildId, path) returning ReadableStream for large files
-- [ ] T037 Write tests/unit/artifacts.test.ts with mocked storage client
+- [x] T033 Create src/operations/artifacts.ts with ArtifactOperations class
+- [x] T034 Implement listArtifacts(buildId) in artifacts.ts using @google-cloud/storage
+- [x] T035 Implement getArtifact(buildId, path) returning Buffer (with 100MB size check)
+- [x] T036 Implement getArtifactStream(buildId, path) returning ReadableStream for large files
+- [x] T037 Write tests/unit/artifacts.test.ts with mocked storage client
 
 ---
 
 ## Phase 6: Trigger Management
 
-- [ ] T038 Create src/operations/triggers.ts with TriggerOperations class
-- [ ] T039 Implement listTriggers() in triggers.ts
-- [ ] T040 Implement createTrigger(config) in triggers.ts with input validation
-- [ ] T041 Implement updateTrigger(triggerId, config) in triggers.ts
-- [ ] T042 Implement deleteTrigger(triggerId) in triggers.ts
-- [ ] T043 Write tests/unit/triggers.test.ts with mocked client for CRUD operations
+- [x] T038 Create src/operations/triggers.ts with TriggerOperations class
+- [x] T039 Implement listTriggers() in triggers.ts
+- [x] T040 Implement createTrigger(config) in triggers.ts with input validation
+- [x] T041 Implement updateTrigger(triggerId, config) in triggers.ts
+- [x] T042 Implement deleteTrigger(triggerId) in triggers.ts
+- [x] T043 Write tests/unit/triggers.test.ts with mocked client for CRUD operations
 
 ---
 
 ## Phase 7: Plugin Integration
 
-- [ ] T044 Create src/plugin.ts with CloudBuildPlugin class aggregating all operations
-- [ ] T045 Wire up BuildOperations, LogOperations, ArtifactOperations, TriggerOperations in plugin.ts
-- [ ] T046 Add pino logger integration with secret redaction for serviceAccountKey
-- [ ] T047 Create src/index.ts with public exports (plugin, types, errors, schemas)
-- [ ] T048 Write tests/integration/plugin.test.ts testing full plugin initialization and operation wiring
+- [x] T044 Create src/plugin.ts with CloudBuildPlugin class aggregating all operations
+- [x] T045 Wire up BuildOperations, LogOperations, ArtifactOperations, TriggerOperations in plugin.ts
+- [x] T046 Add pino logger integration with secret redaction for serviceAccountKey
+- [x] T047 Create src/index.ts with public exports (plugin, types, errors, schemas)
+- [x] T048 Write tests/integration/plugin.test.ts testing full plugin initialization and operation wiring
 
 ---
 
 ## Phase 8: Documentation & Polish
 
-- [ ] T049 Add JSDoc comments to all public interfaces and methods
-- [ ] T050 [P] Create README.md with installation, configuration, and usage examples
-- [ ] T051 [P] Validate all acceptance criteria from spec.md (trigger builds, monitoring, logs, artifacts, secrets)
-- [ ] T052 Run full test suite and fix any failing tests
+- [x] T049 Add JSDoc comments to all public interfaces and methods
+- [x] T050 [P] Create README.md with installation, configuration, and usage examples
+- [x] T051 [P] Validate all acceptance criteria from spec.md (trigger builds, monitoring, logs, artifacts, secrets)
+- [x] T052 Run full test suite and fix any failing tests
 
 ---
 
