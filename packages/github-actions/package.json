@@ -1,0 +1,57 @@
+{
+  "name": "@generacy-ai/generacy-plugin-github-actions",
+  "version": "0.1.0",
+  "description": "GitHub Actions integration plugin for Generacy",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "keywords": [
+    "generacy",
+    "github",
+    "actions",
+    "ci",
+    "cd",
+    "plugin",
+    "automation"
+  ],
+  "author": "Generacy AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/github-actions"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@octokit/rest": "^21.0.2",
+    "@octokit/types": "^13.6.2",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "peerDependencies": {},
+  "peerDependenciesMeta": {}
+}

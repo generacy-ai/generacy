@@ -1,0 +1,100 @@
+{
+  "id": "10001",
+  "key": "PROJ-123",
+  "self": "https://company.atlassian.net/rest/api/3/issue/10001",
+  "fields": {
+    "summary": "Implement user authentication",
+    "description": {
+      "version": 1,
+      "type": "doc",
+      "content": [
+        {
+          "type": "paragraph",
+          "content": [
+            {
+              "type": "text",
+              "text": "Add OAuth 2.0 authentication flow for users."
+            }
+          ]
+        }
+      ]
+    },
+    "status": {
+      "id": "3",
+      "name": "In Progress",
+      "description": "This issue is being actively worked on",
+      "statusCategory": {
+        "id": 4,
+        "key": "indeterminate",
+        "name": "In Progress",
+        "colorName": "yellow"
+      }
+    },
+    "issuetype": {
+      "id": "10001",
+      "name": "Story",
+      "description": "A user story",
+      "iconUrl": "https://company.atlassian.net/secure/viewavatar?size=medium&avatarId=10315",
+      "subtask": false,
+      "hierarchyLevel": 0
+    },
+    "priority": {
+      "id": "3",
+      "name": "Medium",
+      "iconUrl": "https://company.atlassian.net/images/icons/priorities/medium.svg"
+    },
+    "reporter": {
+      "accountId": "5b10a2844c20165700ede21g",
+      "displayName": "John Doe",
+      "emailAddress": "john.doe@company.com",
+      "avatarUrls": {
+        "16x16": "https://avatar-management.atlassian.com/16x16",
+        "24x24": "https://avatar-management.atlassian.com/24x24",
+        "32x32": "https://avatar-management.atlassian.com/32x32",
+        "48x48": "https://avatar-management.atlassian.com/48x48"
+      },
+      "active": true
+    },
+    "assignee": {
+      "accountId": "5b10a2844c20165700ede21h",
+      "displayName": "Jane Smith",
+      "emailAddress": "jane.smith@company.com",
+      "avatarUrls": {
+        "16x16": "https://avatar-management.atlassian.com/16x16",
+        "24x24": "https://avatar-management.atlassian.com/24x24",
+        "32x32": "https://avatar-management.atlassian.com/32x32",
+        "48x48": "https://avatar-management.atlassian.com/48x48"
+      },
+      "active": true
+    },
+    "project": {
+      "id": "10000",
+      "key": "PROJ",
+      "name": "My Project",
+      "self": "https://company.atlassian.net/rest/api/3/project/10000"
+    },
+    "parent": null,
+    "subtasks": [],
+    "issuelinks": [],
+    "created": "2024-01-15T10:30:00.000+0000",
+    "updated": "2024-01-20T14:45:00.000+0000",
+    "duedate": "2024-02-01",
+    "labels": ["backend", "authentication"],
+    "components": [
+      {
+        "id": "10001",
+        "name": "API",
+        "description": "Backend API components"
+      }
+    ],
+    "customfield_10016": 5,
+    "customfield_10020": [
+      {
+        "id": 1,
+        "self": "https://company.atlassian.net/rest/agile/1.0/sprint/1",
+        "state": "active",
+        "name": "Sprint 1"
+      }
+    ]
+  }
+}
