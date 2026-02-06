@@ -1,0 +1,74 @@
+{
+  "webhookEvent": "jira:issue_updated",
+  "timestamp": 1705764300000,
+  "user": {
+    "accountId": "5b10a2844c20165700ede21h",
+    "displayName": "Jane Smith",
+    "emailAddress": "jane.smith@company.com",
+    "avatarUrls": {
+      "16x16": "https://avatar-management.atlassian.com/16x16",
+      "24x24": "https://avatar-management.atlassian.com/24x24",
+      "32x32": "https://avatar-management.atlassian.com/32x32",
+      "48x48": "https://avatar-management.atlassian.com/48x48"
+    },
+    "active": true
+  },
+  "issue": {
+    "id": "10001",
+    "key": "PROJ-123",
+    "self": "https://company.atlassian.net/rest/api/3/issue/10001",
+    "fields": {
+      "summary": "Implement user authentication",
+      "status": {
+        "id": "3",
+        "name": "In Progress",
+        "statusCategory": {
+          "id": 4,
+          "key": "indeterminate",
+          "name": "In Progress",
+          "colorName": "yellow"
+        }
+      },
+      "issuetype": {
+        "id": "10001",
+        "name": "Story"
+      },
+      "priority": {
+        "id": "3",
+        "name": "Medium"
+      },
+      "assignee": {
+        "accountId": "5b10a2844c20165700ede21h",
+        "displayName": "Jane Smith"
+      },
+      "project": {
+        "id": "10000",
+        "key": "PROJ",
+        "name": "My Project"
+      }
+    }
+  },
+  "changelog": {
+    "id": "10000",
+    "items": [
+      {
+        "field": "status",
+        "fieldtype": "jira",
+        "fieldId": "status",
+        "from": "1",
+        "fromString": "To Do",
+        "to": "3",
+        "toString": "In Progress"
+      },
+      {
+        "field": "assignee",
+        "fieldtype": "jira",
+        "fieldId": "assignee",
+        "from": null,
+        "fromString": null,
+        "to": "5b10a2844c20165700ede21h",
+        "toString": "Jane Smith"
+      }
+    ]
+  }
+}
