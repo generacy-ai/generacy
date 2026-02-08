@@ -1,0 +1,136 @@
+# Tasks: Wire Generacy Plugins to Extend Latency Base Classes
+
+**Input**: Design documents from `/specs/173-wire-generacy-plugins-extend/`
+**Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md
+**Status**: Complete
+
+## Format: `[ID] [P?] [Story] Description`
+- **[P]**: Can run in parallel (different files, no dependencies)
+- **[Story]**: Which user story this task belongs to (US1 = plugin standardization)
+
+---
+
+## Phase 1: Setup & Validation
+
+- [ ] T001 Verify Latency packages exist in workspace (`@generacy-ai/latency-plugin-dev-agent`, `@generacy-ai/latency-plugin-ci-cd`, `@generacy-ai/latency-plugin-issue-tracker`)
+- [ ] T002 Run `pnpm install` to ensure workspace is in sync
+
+---
+
+## Phase 2: Dev Agent Plugins
+
+### generacy-plugin-copilot
+
+- [ ] T010 [P] [US1] Add `"@generacy-ai/latency-plugin-dev-agent": "workspace:*"` to `packages/generacy-plugin-copilot/package.json`
+- [ ] T011 [P] [US1] Update `packages/generacy-plugin-copilot/src/plugin/copilot-plugin.ts` to extend `AbstractDevAgentPlugin`
+- [ ] T012 [P] [US1] Implement `doInvoke()` method in CopilotPlugin
+- [ ] T013 [P] [US1] Implement `doInvokeStream()` method in CopilotPlugin
+- [ ] T014 [P] [US1] Implement `doGetCapabilities()` method in CopilotPlugin
+- [ ] T015 [P] [US1] Remove redundant interface implementations from CopilotPlugin
+- [ ] T016 [US1] Run tests for generacy-plugin-copilot: `pnpm --filter @generacy-ai/generacy-plugin-copilot test`
+
+### generacy-plugin-claude-code
+
+- [ ] T020 [P] [US1] Add `"@generacy-ai/latency-plugin-dev-agent": "workspace:*"` to `packages/generacy-plugin-claude-code/package.json`
+- [ ] T021 [P] [US1] Update `packages/generacy-plugin-claude-code/src/plugin/claude-code-plugin.ts` to extend `AbstractDevAgentPlugin`
+- [ ] T022 [P] [US1] Implement `doInvoke()` method in ClaudeCodePlugin
+- [ ] T023 [P] [US1] Implement `doInvokeStream()` method in ClaudeCodePlugin
+- [ ] T024 [P] [US1] Implement `doGetCapabilities()` method in ClaudeCodePlugin
+- [ ] T025 [P] [US1] Remove redundant interface implementations from ClaudeCodePlugin
+- [ ] T026 [US1] Run tests for generacy-plugin-claude-code: `pnpm --filter @generacy-ai/generacy-plugin-claude-code test`
+
+---
+
+## Phase 3: CI/CD Plugins
+
+### generacy-plugin-cloud-build
+
+- [ ] T030 [P] [US1] Add `"@generacy-ai/latency-plugin-ci-cd": "workspace:*"` to `packages/generacy-plugin-cloud-build/package.json`
+- [ ] T031 [P] [US1] Update `packages/generacy-plugin-cloud-build/src/plugin.ts` to extend `AbstractCICDPlugin`
+- [ ] T032 [P] [US1] Implement `doTrigger()` method in CloudBuildPlugin
+- [ ] T033 [P] [US1] Implement `doGetStatus()` method in CloudBuildPlugin
+- [ ] T034 [P] [US1] Implement `doCancel()` method in CloudBuildPlugin
+- [ ] T035 [P] [US1] Implement `doListPipelines()` method in CloudBuildPlugin
+- [ ] T036 [P] [US1] Remove redundant interface implementations from CloudBuildPlugin
+- [ ] T037 [US1] Run tests for generacy-plugin-cloud-build: `pnpm --filter @generacy-ai/generacy-plugin-cloud-build test`
+
+### github-actions
+
+- [ ] T040 [P] [US1] Add `"@generacy-ai/latency-plugin-ci-cd": "workspace:*"` to `packages/github-actions/package.json`
+- [ ] T041 [P] [US1] Update `packages/github-actions/src/plugin.ts` to extend `AbstractCICDPlugin`
+- [ ] T042 [P] [US1] Implement `doTrigger()` method in GitHubActionsPlugin
+- [ ] T043 [P] [US1] Implement `doGetStatus()` method in GitHubActionsPlugin
+- [ ] T044 [P] [US1] Implement `doCancel()` method in GitHubActionsPlugin
+- [ ] T045 [P] [US1] Implement `doListPipelines()` method in GitHubActionsPlugin
+- [ ] T046 [P] [US1] Remove local `IssueTracker` interface redefinition from `packages/github-actions/src/plugin.ts`
+- [ ] T047 [P] [US1] Remove redundant interface implementations from GitHubActionsPlugin
+- [ ] T048 [US1] Run tests for github-actions: `pnpm --filter @generacy-ai/generacy-plugin-github-actions test`
+
+---
+
+## Phase 4: Issue Tracker Plugins
+
+### github-issues
+
+- [ ] T050 [P] [US1] Add `"@generacy-ai/latency-plugin-issue-tracker": "workspace:*"` to `packages/github-issues/package.json`
+- [ ] T051 [P] [US1] Update `packages/github-issues/src/plugin.ts` to extend `AbstractIssueTrackerPlugin`
+- [ ] T052 [P] [US1] Implement `fetchIssue()` method in GitHubIssuesPlugin
+- [ ] T053 [P] [US1] Implement `doCreateIssue()` method in GitHubIssuesPlugin
+- [ ] T054 [P] [US1] Implement `doUpdateIssue()` method in GitHubIssuesPlugin
+- [ ] T055 [P] [US1] Implement `doListIssues()` method in GitHubIssuesPlugin
+- [ ] T056 [P] [US1] Implement `doAddComment()` method in GitHubIssuesPlugin
+- [ ] T057 [P] [US1] Remove redundant interface implementations from GitHubIssuesPlugin
+- [ ] T058 [US1] Run tests for github-issues: `pnpm --filter @generacy-ai/generacy-plugin-github-issues test`
+
+### jira
+
+- [ ] T060 [P] [US1] Add `"@generacy-ai/latency-plugin-issue-tracker": "workspace:*"` to `packages/jira/package.json`
+- [ ] T061 [P] [US1] Update `packages/jira/src/plugin.ts` to extend `AbstractIssueTrackerPlugin`
+- [ ] T062 [P] [US1] Implement `fetchIssue()` method in JiraPlugin
+- [ ] T063 [P] [US1] Implement `doCreateIssue()` method in JiraPlugin
+- [ ] T064 [P] [US1] Implement `doUpdateIssue()` method in JiraPlugin
+- [ ] T065 [P] [US1] Implement `doListIssues()` method in JiraPlugin
+- [ ] T066 [P] [US1] Implement `doAddComment()` method in JiraPlugin
+- [ ] T067 [P] [US1] Remove redundant interface implementations from JiraPlugin
+- [ ] T068 [US1] Run tests for jira: `pnpm --filter @generacy-ai/generacy-plugin-jira test`
+
+---
+
+## Phase 5: Integration & Verification
+
+- [ ] T070 Run `pnpm install` to link new workspace dependencies
+- [ ] T071 Run `pnpm build` for all affected packages
+- [ ] T072 Run full test suite: `pnpm test`
+- [ ] T073 Verify no local interface redefinitions remain (search for `interface IssueTracker` in generacy packages)
+- [ ] T074 Verify all plugins properly extend their base classes
+
+---
+
+## Dependencies & Execution Order
+
+### Phase Dependencies
+- **Phase 1** (Setup): Must complete before any plugin work
+- **Phases 2-4** (Plugin refactoring): Can run in parallel after Phase 1
+- **Phase 5** (Integration): Must wait for all plugin phases to complete
+
+### Intra-Phase Dependencies
+Within each plugin:
+1. `package.json` update (T0x0) must precede class refactoring
+2. Class declaration change (T0x1) must precede method implementations
+3. Method implementations (T0x2-T0x6) can run in parallel
+4. Interface cleanup (T0x7) can run after class changes
+5. Tests (T0x8) must run last for each plugin
+
+### Parallel Opportunities
+- All 6 plugins can be refactored in parallel (Phases 2-4)
+- Within each plugin, method implementations marked `[P]` can be parallelized
+- `package.json` updates across plugins are independent
+- Test runs should be sequential to avoid resource contention
+
+### Estimated Task Count
+- Setup: 2 tasks
+- Dev Agent Plugins: 14 tasks (7 per plugin)
+- CI/CD Plugins: 17 tasks (8-9 per plugin)
+- Issue Tracker Plugins: 18 tasks (9 per plugin)
+- Integration: 5 tasks
+- **Total: 56 tasks**
