@@ -127,7 +127,7 @@ describe('JiraPlugin', () => {
     });
 
     it('should create an issue', async () => {
-      const issue = await plugin.createIssue({
+      const issue = await plugin.createJiraIssue({
         projectKey: 'TEST',
         summary: 'Test Issue',
         issueType: 'Story',
@@ -137,14 +137,14 @@ describe('JiraPlugin', () => {
     });
 
     it('should get an issue', async () => {
-      const issue = await plugin.getIssue('TEST-1');
+      const issue = await plugin.getJiraIssue('TEST-1');
 
       expect(issue.key).toBe('TEST-1');
       expect(issue.summary).toBe('Test Issue');
     });
 
     it('should update an issue', async () => {
-      const issue = await plugin.updateIssue('TEST-1', {
+      const issue = await plugin.updateJiraIssue('TEST-1', {
         summary: 'Updated Summary',
       });
 
@@ -168,7 +168,7 @@ describe('JiraPlugin', () => {
     });
 
     it('should search issues', async () => {
-      const results = await plugin.searchIssuesAll('project = TEST');
+      const results = await plugin.searchJiraIssuesAll('project = TEST');
       expect(results).toEqual([]);
     });
 
@@ -186,7 +186,7 @@ describe('JiraPlugin', () => {
     });
 
     it('should add a comment', async () => {
-      const comment = await plugin.addComment('TEST-1', 'Test comment');
+      const comment = await plugin.addJiraComment('TEST-1', 'Test comment');
       expect(comment.id).toBe('1');
     });
 

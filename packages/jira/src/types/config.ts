@@ -36,6 +36,9 @@ export interface JiraConfig {
 
   /** Timeout for API requests (ms) */
   timeout?: number;
+
+  /** Cache TTL in milliseconds for issue caching (default: 60000) */
+  cacheTimeout?: number;
 }
 
 /**
@@ -69,6 +72,7 @@ export const JiraConfigSchema = z.object({
   workflowMapping: WorkflowMappingSchema.optional(),
   webhookSecret: z.string().optional(),
   timeout: z.number().positive().optional(),
+  cacheTimeout: z.number().positive().optional(),
 });
 
 export type ValidatedJiraConfig = z.infer<typeof JiraConfigSchema>;

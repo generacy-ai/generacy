@@ -12,8 +12,8 @@
 
 ## Phase 1: Setup & Validation
 
-- [ ] T001 Verify Latency packages exist in workspace (`@generacy-ai/latency-plugin-dev-agent`, `@generacy-ai/latency-plugin-ci-cd`, `@generacy-ai/latency-plugin-issue-tracker`)
-- [ ] T002 Run `pnpm install` to ensure workspace is in sync
+- [X] T001 Verify Latency packages exist in workspace (`@generacy-ai/latency-plugin-dev-agent`, `@generacy-ai/latency-plugin-ci-cd`, `@generacy-ai/latency-plugin-issue-tracker`)
+- [X] T002 Run `pnpm install` to ensure workspace is in sync
 
 ---
 
@@ -72,27 +72,27 @@
 
 ### github-issues
 
-- [ ] T050 [P] [US1] Add `"@generacy-ai/latency-plugin-issue-tracker": "workspace:*"` to `packages/github-issues/package.json`
-- [ ] T051 [P] [US1] Update `packages/github-issues/src/plugin.ts` to extend `AbstractIssueTrackerPlugin`
-- [ ] T052 [P] [US1] Implement `fetchIssue()` method in GitHubIssuesPlugin
-- [ ] T053 [P] [US1] Implement `doCreateIssue()` method in GitHubIssuesPlugin
-- [ ] T054 [P] [US1] Implement `doUpdateIssue()` method in GitHubIssuesPlugin
-- [ ] T055 [P] [US1] Implement `doListIssues()` method in GitHubIssuesPlugin
-- [ ] T056 [P] [US1] Implement `doAddComment()` method in GitHubIssuesPlugin
-- [ ] T057 [P] [US1] Remove redundant interface implementations from GitHubIssuesPlugin
-- [ ] T058 [US1] Run tests for github-issues: `pnpm --filter @generacy-ai/generacy-plugin-github-issues test`
+- [X] T050 [P] [US1] Add `"@generacy-ai/latency-plugin-issue-tracker": "workspace:*"` to `packages/github-issues/package.json`
+- [X] T051 [P] [US1] Update `packages/github-issues/src/plugin.ts` to extend `AbstractIssueTrackerPlugin`
+- [X] T052 [P] [US1] Implement `fetchIssue()` method in GitHubIssuesPlugin
+- [X] T053 [P] [US1] Implement `doCreateIssue()` method in GitHubIssuesPlugin
+- [X] T054 [P] [US1] Implement `doUpdateIssue()` method in GitHubIssuesPlugin
+- [X] T055 [P] [US1] Implement `doListIssues()` method in GitHubIssuesPlugin
+- [X] T056 [P] [US1] Implement `doAddComment()` method in GitHubIssuesPlugin
+- [X] T057 [P] [US1] Remove redundant interface implementations from GitHubIssuesPlugin
+- [X] T058 [US1] Run tests for github-issues: `pnpm --filter @generacy-ai/generacy-plugin-github-issues test`
 
 ### jira
 
-- [ ] T060 [P] [US1] Add `"@generacy-ai/latency-plugin-issue-tracker": "workspace:*"` to `packages/jira/package.json`
-- [ ] T061 [P] [US1] Update `packages/jira/src/plugin.ts` to extend `AbstractIssueTrackerPlugin`
-- [ ] T062 [P] [US1] Implement `fetchIssue()` method in JiraPlugin
-- [ ] T063 [P] [US1] Implement `doCreateIssue()` method in JiraPlugin
-- [ ] T064 [P] [US1] Implement `doUpdateIssue()` method in JiraPlugin
-- [ ] T065 [P] [US1] Implement `doListIssues()` method in JiraPlugin
-- [ ] T066 [P] [US1] Implement `doAddComment()` method in JiraPlugin
-- [ ] T067 [P] [US1] Remove redundant interface implementations from JiraPlugin
-- [ ] T068 [US1] Run tests for jira: `pnpm --filter @generacy-ai/generacy-plugin-jira test`
+- [X] T060 [P] [US1] Add `"@generacy-ai/latency-plugin-issue-tracker": "workspace:*"` to `packages/jira/package.json`
+- [X] T061 [P] [US1] Update `packages/jira/src/plugin.ts` to extend `AbstractIssueTrackerPlugin`
+- [X] T062 [P] [US1] Implement `fetchIssue()` method in JiraPlugin
+- [X] T063 [P] [US1] Implement `doCreateIssue()` method in JiraPlugin
+- [X] T064 [P] [US1] Implement `doUpdateIssue()` method in JiraPlugin
+- [X] T065 [P] [US1] Implement `doListIssues()` method in JiraPlugin
+- [X] T066 [P] [US1] Implement `doAddComment()` method in JiraPlugin
+- [X] T067 [P] [US1] Remove redundant interface implementations from JiraPlugin
+- [X] T068 [US1] Run tests for jira: `pnpm --filter @generacy-ai/generacy-plugin-jira test`
 
 ---
 

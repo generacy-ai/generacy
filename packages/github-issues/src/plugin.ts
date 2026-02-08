@@ -1,4 +1,13 @@
 import type {
+  Issue as LatencyIssue,
+  IssueSpec as LatencyIssueSpec,
+  IssueUpdate as LatencyIssueUpdate,
+  IssueQuery as LatencyIssueQuery,
+  Comment as LatencyComment,
+  PaginatedResult,
+} from '@generacy-ai/latency';
+import { AbstractIssueTrackerPlugin } from '@generacy-ai/latency-plugin-issue-tracker';
+import type {
   GitHubIssuesConfig,
   Issue,
   CreateIssueParams,
@@ -20,27 +29,31 @@ import { WebhookHandler, createWebhookHandler, type WebhookHandlerConfig } from 
 /**
  * GitHub Issues Plugin for Generacy
  *
+ * Extends AbstractIssueTrackerPlugin to provide the standard IssueTracker interface
+ * while also exposing GitHub-specific functionality.
+ *
  * Provides programmatic access to GitHub Issues functionality including:
- * - Issue CRUD operations
+ * - Issue CRUD operations (via IssueTracker interface)
  * - Label management
  * - Comment handling
  * - PR linking
  * - Webhook event processing
  */
-export class GitHubIssuesPlugin {
+export class GitHubIssuesPlugin extends AbstractIssueTrackerPlugin {
   private readonly client: GitHubClient;
-  private readonly issues: IssueOperations;
-  private readonly labels: LabelOperations;
-  private readonly comments: CommentOperations;
-  private readonly pullRequests: PullRequestOperations;
+  private readonly issueOps: IssueOperations;
+  private readonly labelOps: LabelOperations;
+  private readonly commentOps: CommentOperations;
+  private readonly pullRequestOps: PullRequestOperations;
   private readonly webhookHandler: WebhookHandler;
 
   constructor(config: GitHubIssuesConfig) {
+    super({ cacheTimeout: config.cacheTimeout ?? 60000 });
     this.client = createClient(config);
-    this.issues = createIssueOperations(this.client);
-    this.labels = createLabelOperations(this.client);
-    this.comments = createCommentOperations(this.client);
-    this.pullRequests = createPullRequestOperations(this.client);
+    this.issueOps = createIssueOperations(this.client);
+    this.labelOps = createLabelOperations(this.client);
+    this.commentOps = createCommentOperations(this.client);
+    this.pullRequestOps = createPullRequestOperations(this.client);
 
     const webhookConfig: WebhookHandlerConfig = {
       webhookSecret: config.webhookSecret,
@@ -50,48 +63,127 @@ export class GitHubIssuesPlugin {
     this.webhookHandler = createWebhookHandler(webhookConfig);
   }
 
-  // ==================== Issue Operations ====================
+  // ==========================================================================
+  // AbstractIssueTrackerPlugin abstract method implementations
+  // ==========================================================================
 
   /**
-   * Create a new issue
+   * Fetch a single issue from GitHub (implements abstract method)
    */
-  async createIssue(params: CreateIssueParams): Promise<Issue> {
-    return this.issues.create(params);
+  protected async fetchIssue(id: string): Promise<LatencyIssue> {
+    const issueNumber = this.parseIssueNumber(id);
+    const issue = await this.issueOps.get(issueNumber);
+    return this.mapToLatencyIssue(issue);
   }
 
   /**
-   * Get an issue by number
+   * Create a new issue in GitHub (implements abstract method)
    */
-  async getIssue(number: number): Promise<Issue> {
-    return this.issues.get(number);
+  protected async doCreateIssue(spec: LatencyIssueSpec): Promise<LatencyIssue> {
+    const params: CreateIssueParams = {
+      title: spec.title,
+      body: spec.body,
+      labels: spec.labels,
+      assignees: spec.assignees,
+    };
+    const issue = await this.issueOps.create(params);
+    return this.mapToLatencyIssue(issue);
   }
 
   /**
-   * Update an issue
+   * Update an existing issue (implements abstract method)
    */
-  async updateIssue(number: number, params: UpdateIssueParams): Promise<Issue> {
-    return this.issues.update(number, params);
+  protected async doUpdateIssue(id: string, update: LatencyIssueUpdate): Promise<LatencyIssue> {
+    const issueNumber = this.parseIssueNumber(id);
+    const params: UpdateIssueParams = {
+      title: update.title,
+      body: update.body,
+      state: update.state,
+      labels: update.labels,
+      assignees: update.assignees,
+    };
+    const issue = await this.issueOps.update(issueNumber, params);
+    return this.mapToLatencyIssue(issue);
+  }
+
+  /**
+   * List issues matching the query (implements abstract method)
+   */
+  protected async doListIssues(query: LatencyIssueQuery): Promise<PaginatedResult<LatencyIssue>> {
+    const filter: IssueFilter = {
+      state: query.state,
+      labels: query.labels,
+      assignee: query.assignee,
+    };
+
+    const issues = await this.issueOps.list(filter);
+    const latencyIssues = issues.map((issue) => this.mapToLatencyIssue(issue));
+
+    // Apply pagination manually since the underlying operation returns all
+    const offset = query.offset ?? 0;
+    const limit = query.limit ?? 30;
+    const paginatedItems = latencyIssues.slice(offset, offset + limit);
+
+    return {
+      items: paginatedItems,
+      total: latencyIssues.length,
+      hasMore: offset + limit < latencyIssues.length,
+    };
+  }
+
+  /**
+   * Add a comment to an issue (implements abstract method)
+   */
+  protected async doAddComment(issueId: string, comment: string): Promise<LatencyComment> {
+    const issueNumber = this.parseIssueNumber(issueId);
+    const ghComment = await this.commentOps.add(issueNumber, comment);
+    return this.mapToLatencyComment(ghComment);
+  }
+
+  // ==========================================================================
+  // GitHub-specific public API (for backwards compatibility)
+  // ==========================================================================
+
+  /**
+   * Create a new issue (GitHub-specific version with full return type)
+   */
+  async createGitHubIssue(params: CreateIssueParams): Promise<Issue> {
+    return this.issueOps.create(params);
+  }
+
+  /**
+   * Get an issue by number (GitHub-specific version with full return type)
+   */
+  async getGitHubIssue(number: number): Promise<Issue> {
+    return this.issueOps.get(number);
+  }
+
+  /**
+   * Update an issue (GitHub-specific version)
+   */
+  async updateGitHubIssue(number: number, params: UpdateIssueParams): Promise<Issue> {
+    return this.issueOps.update(number, params);
   }
 
   /**
    * Close an issue
    */
   async closeIssue(number: number): Promise<void> {
-    return this.issues.close(number);
+    return this.issueOps.close(number);
   }
 
   /**
    * Search issues using GitHub search syntax
    */
   async searchIssues(query: string): Promise<Issue[]> {
-    return this.issues.search(query);
+    return this.issueOps.search(query);
   }
 
   /**
-   * List issues with optional filtering
+   * List issues with optional filtering (GitHub-specific version)
    */
-  async listIssues(filter?: IssueFilter): Promise<Issue[]> {
-    return this.issues.list(filter);
+  async listGitHubIssues(filter?: IssueFilter): Promise<Issue[]> {
+    return this.issueOps.list(filter);
   }
 
   // ==================== Label Operations ====================
@@ -100,58 +192,58 @@ export class GitHubIssuesPlugin {
    * Add labels to an issue
    */
   async addLabels(issueNumber: number, labels: string[]): Promise<void> {
-    await this.labels.add(issueNumber, labels);
+    await this.labelOps.add(issueNumber, labels);
   }
 
   /**
    * Remove labels from an issue
    */
   async removeLabels(issueNumber: number, labels: string[]): Promise<void> {
-    await this.labels.removeMany(issueNumber, labels);
+    await this.labelOps.removeMany(issueNumber, labels);
   }
 
   /**
    * Set labels on an issue (replaces existing)
    */
   async setLabels(issueNumber: number, labels: string[]): Promise<Label[]> {
-    return this.labels.set(issueNumber, labels);
+    return this.labelOps.set(issueNumber, labels);
   }
 
   /**
    * List labels on an issue
    */
   async listLabels(issueNumber: number): Promise<Label[]> {
-    return this.labels.list(issueNumber);
+    return this.labelOps.list(issueNumber);
   }
 
-  // ==================== Comment Operations ====================
+  // ==================== Comment Operations (GitHub-specific) ====================
 
   /**
-   * Add a comment to an issue
+   * Add a comment to an issue (GitHub-specific version with full return type)
    */
-  async addComment(issueNumber: number, body: string): Promise<Comment> {
-    return this.comments.add(issueNumber, body);
+  async addGitHubComment(issueNumber: number, body: string): Promise<Comment> {
+    return this.commentOps.add(issueNumber, body);
   }
 
   /**
    * List comments on an issue
    */
   async listComments(issueNumber: number): Promise<Comment[]> {
-    return this.comments.list(issueNumber);
+    return this.commentOps.list(issueNumber);
   }
 
   /**
    * Update a comment
    */
   async updateComment(commentId: number, body: string): Promise<Comment> {
-    return this.comments.update(commentId, body);
+    return this.commentOps.update(commentId, body);
   }
 
   /**
    * Delete a comment
    */
   async deleteComment(commentId: number): Promise<void> {
-    return this.comments.delete(commentId);
+    return this.commentOps.delete(commentId);
   }
 
   // ==================== Pull Request Operations ====================
@@ -160,14 +252,14 @@ export class GitHubIssuesPlugin {
    * Link a pull request to an issue
    */
   async linkPullRequest(issueNumber: number, prNumber: number): Promise<void> {
-    return this.pullRequests.linkToIssue(prNumber, issueNumber);
+    return this.pullRequestOps.linkToIssue(prNumber, issueNumber);
   }
 
   /**
    * Get pull requests linked to an issue
    */
   async getLinkedPRs(issueNumber: number): Promise<PullRequest[]> {
-    return this.pullRequests.getLinkedToIssue(issueNumber);
+    return this.pullRequestOps.getLinkedToIssue(issueNumber);
   }
 
   // ==================== Webhook Operations ====================
@@ -237,10 +329,10 @@ export class GitHubIssuesPlugin {
     pullRequests: PullRequestOperations;
   } {
     return {
-      issues: this.issues,
-      labels: this.labels,
-      comments: this.comments,
-      pullRequests: this.pullRequests,
+      issues: this.issueOps,
+      labels: this.labelOps,
+      comments: this.commentOps,
+      pullRequests: this.pullRequestOps,
     };
   }
 
@@ -249,6 +341,49 @@ export class GitHubIssuesPlugin {
    */
   get webhook(): WebhookHandler {
     return this.webhookHandler;
+  }
+
+  // ==========================================================================
+  // Private helper methods
+  // ==========================================================================
+
+  /**
+   * Parse an issue ID string to a number
+   */
+  private parseIssueNumber(id: string): number {
+    const num = parseInt(id, 10);
+    if (isNaN(num) || num <= 0) {
+      throw new Error(`Invalid issue number: ${id}`);
+    }
+    return num;
+  }
+
+  /**
+   * Map a GitHub Issue to the Latency Issue type
+   */
+  private mapToLatencyIssue(issue: Issue): LatencyIssue {
+    return {
+      id: String(issue.number),
+      title: issue.title,
+      body: issue.body ?? '',
+      state: issue.state,
+      labels: issue.labels.map((label) => label.name),
+      assignees: issue.assignees.map((user) => user.login),
+      createdAt: new Date(issue.createdAt),
+      updatedAt: new Date(issue.updatedAt),
+    };
+  }
+
+  /**
+   * Map a GitHub Comment to the Latency Comment type
+   */
+  private mapToLatencyComment(comment: Comment): LatencyComment {
+    return {
+      id: String(comment.id),
+      body: comment.body,
+      author: comment.author.login,
+      createdAt: new Date(comment.createdAt),
+    };
   }
 }
 

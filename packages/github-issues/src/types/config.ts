@@ -28,6 +28,9 @@ export interface GitHubIssuesConfig {
 
   /** GitHub Enterprise base URL */
   baseUrl?: string;
+
+  /** Cache TTL in milliseconds for issue caching (default: 60000) */
+  cacheTimeout?: number;
 }
 
 /**
@@ -43,6 +46,7 @@ export const GitHubIssuesConfigSchema = z
     agentAccount: z.string().optional(),
     triggerLabels: z.array(z.string()).optional(),
     baseUrl: z.string().url('Invalid base URL').optional(),
+    cacheTimeout: z.number().positive().optional(),
   })
   .refine((data) => data.token !== undefined || data.app !== undefined, {
     message: 'Either token or app configuration is required',
