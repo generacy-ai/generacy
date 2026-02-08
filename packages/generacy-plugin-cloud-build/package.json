@@ -20,6 +20,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@generacy-ai/latency": "workspace:*",
+    "@generacy-ai/latency-plugin-ci-cd": "workspace:*",
     "@google-cloud/cloudbuild": "^4.7.0",
     "@google-cloud/storage": "^7.14.0",
     "pino": "^9.0.0",

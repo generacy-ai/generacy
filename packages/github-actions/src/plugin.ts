@@ -1,5 +1,13 @@
+import type {
+  Pipeline,
+  PipelineRun,
+  PipelineStatus,
+  TriggerOptions,
+  IssueTracker,
+} from '@generacy-ai/latency';
+import { AbstractCICDPlugin } from '@generacy-ai/latency-plugin-ci-cd';
 import type { GitHubActionsConfig } from './types/config.js';
-import type { WorkflowRun, TriggerWorkflowParams } from './types/workflows.js';
+import type { WorkflowRun, TriggerWorkflowParams, Workflow } from './types/workflows.js';
 import type { Job } from './types/jobs.js';
 import type { Artifact } from './types/artifacts.js';
 import type { CheckRun, CreateCheckRunParams, UpdateCheckRunParams } from './types/check-runs.js';
@@ -8,7 +16,7 @@ import type { EventBus } from './events/types.js';
 
 import { GitHubClient, createClient } from './client.js';
 import { parseConfig } from './types/config.js';
-import { triggerWorkflow, triggerWorkflowDispatch, getWorkflowId } from './operations/workflows.js';
+import { triggerWorkflow, triggerWorkflowDispatch, getWorkflowId, listWorkflows } from './operations/workflows.js';
 import {
   getWorkflowRun,
   listWorkflowRuns,
@@ -35,22 +43,12 @@ import { StatusPoller, createStatusPoller, pollUntilComplete, waitForRun } from 
 import { WorkflowEventEmitter, createEventEmitter } from './events/emitter.js';
 
 /**
- * IssueTracker facet interface (optional integration)
- */
-export interface IssueTracker {
-  /**
-   * Add a comment to an issue
-   */
-  addComment(issueNumber: number, body: string): Promise<void>;
-}
-
-/**
  * Plugin manifest declaration
  */
 export const PLUGIN_MANIFEST = {
   name: '@generacy-ai/generacy-plugin-github-actions',
   version: '0.1.0',
-  provides: ['GitHubActions'],
+  provides: ['GitHubActions', 'CICDPipeline'],
   requires: [
     { facet: 'EventBus', optional: false },
   ],
@@ -62,15 +60,18 @@ export const PLUGIN_MANIFEST = {
 /**
  * GitHubActionsPlugin - Main plugin class
  *
- * Provides programmatic access to GitHub Actions workflows.
+ * Extends AbstractCICDPlugin to provide the standard CICDPipeline interface
+ * (triggerPipeline, getPipelineStatus, cancelPipeline, listPipelines) while
+ * also exposing GitHub Actions-specific functionality.
  */
-export class GitHubActionsPlugin {
+export class GitHubActionsPlugin extends AbstractCICDPlugin {
   private readonly client: GitHubClient;
   private readonly config: GitHubActionsConfig;
   private readonly eventEmitter: WorkflowEventEmitter | null;
   private issueTracker: IssueTracker | null = null;
 
   constructor(config: GitHubActionsConfig, eventBus?: EventBus) {
+    super();
     this.config = parseConfig(config);
     this.client = createClient(this.config);
     this.eventEmitter = eventBus ? createEventEmitter(eventBus) : null;
@@ -83,9 +84,58 @@ export class GitHubActionsPlugin {
     this.issueTracker = tracker;
   }
 
-  // ============================================
-  // Workflow Triggering
-  // ============================================
+  // ==========================================================================
+  // AbstractCICDPlugin abstract method implementations
+  // ==========================================================================
+
+  /**
+   * Trigger a pipeline run (implements abstract method).
+   *
+   * Maps to GitHub Actions workflow dispatch.
+   */
+  protected async doTrigger(pipelineId: string, options?: TriggerOptions): Promise<PipelineRun> {
+    const ref = options?.branch ?? 'main';
+    const run = await triggerWorkflowDispatch(
+      this.client,
+      pipelineId,
+      ref,
+      options?.parameters
+    );
+    return this.mapWorkflowRunToPipelineRun(run);
+  }
+
+  /**
+   * Get pipeline run status (implements abstract method).
+   *
+   * Maps to getWorkflowRun.
+   */
+  protected async doGetStatus(runId: string): Promise<PipelineRun> {
+    const run = await getWorkflowRun(this.client, parseInt(runId, 10));
+    return this.mapWorkflowRunToPipelineRun(run);
+  }
+
+  /**
+   * Cancel a pipeline run (implements abstract method).
+   *
+   * Maps to cancelWorkflowRun.
+   */
+  protected async doCancel(runId: string): Promise<void> {
+    await cancelWorkflowRun(this.client, parseInt(runId, 10));
+  }
+
+  /**
+   * List available pipelines (implements abstract method).
+   *
+   * Maps to listWorkflows.
+   */
+  protected async doListPipelines(): Promise<Pipeline[]> {
+    const workflows = await listWorkflows(this.client);
+    return workflows.map((workflow) => this.mapWorkflowToPipeline(workflow));
+  }
+
+  // ==========================================================================
+  // GitHub Actions-specific public API (for backwards compatibility)
+  // ==========================================================================
 
   /**
    * Trigger a workflow by filename or ID
@@ -425,7 +475,7 @@ export class GitHubActionsPlugin {
 
 [View workflow run](${run.html_url})`;
 
-    await this.issueTracker.addComment(issueNumber, comment);
+    await this.issueTracker.addComment(String(issueNumber), comment);
   }
 
   /**
@@ -459,7 +509,7 @@ ${jobDetails || 'No job details available'}
 
 [View workflow run](${run.html_url})`;
 
-    await this.issueTracker.addComment(issueNumber, comment);
+    await this.issueTracker.addComment(String(issueNumber), comment);
   }
 
   // ============================================
@@ -520,6 +570,64 @@ ${jobDetails || 'No job details available'}
       return `${minutes}m ${seconds % 60}s`;
     }
     return `${seconds}s`;
+  }
+
+  /**
+   * Map a GitHub Actions WorkflowRun to a Latency PipelineRun.
+   */
+  private mapWorkflowRunToPipelineRun(run: WorkflowRun): PipelineRun {
+    return {
+      id: String(run.id),
+      pipelineId: run.workflow_id ? String(run.workflow_id) : run.path ?? 'unknown',
+      status: this.mapWorkflowStatus(run.status, run.conclusion),
+      createdAt: new Date(run.created_at),
+      startedAt: run.run_started_at ? new Date(run.run_started_at) : undefined,
+      completedAt: run.status === 'completed' ? new Date(run.updated_at) : undefined,
+      logsUrl: run.html_url,
+    };
+  }
+
+  /**
+   * Map GitHub Actions workflow status to Latency PipelineStatus.
+   */
+  private mapWorkflowStatus(
+    status: WorkflowRun['status'],
+    conclusion: WorkflowRun['conclusion']
+  ): PipelineStatus {
+    if (status === 'completed') {
+      switch (conclusion) {
+        case 'success':
+          return 'completed';
+        case 'failure':
+        case 'timed_out':
+          return 'failed';
+        case 'cancelled':
+        case 'skipped':
+          return 'cancelled';
+        default:
+          return 'failed';
+      }
+    }
+
+    // Non-completed status
+    if (status === 'in_progress') {
+      return 'running';
+    }
+
+    // queued, requested, waiting, pending, etc.
+    return 'pending';
+  }
+
+  /**
+   * Map a GitHub Actions Workflow to a Latency Pipeline.
+   */
+  private mapWorkflowToPipeline(workflow: Workflow): Pipeline {
+    return {
+      id: String(workflow.id),
+      name: workflow.name,
+      description: workflow.path,
+      defaultBranch: undefined, // Workflows don't have a default branch concept
+    };
   }
 }
 

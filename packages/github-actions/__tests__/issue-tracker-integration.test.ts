@@ -86,11 +86,11 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowStatusToIssue(42, run);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining(':white_check_mark:')
       );
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('.github/workflows/ci.yml')
       );
     });
@@ -102,7 +102,7 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowStatusToIssue(42, run);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining(':x:')
       );
     });
@@ -114,7 +114,7 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowStatusToIssue(42, run);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('https://github.com/owner/repo/actions/runs/123')
       );
     });
@@ -126,11 +126,11 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowStatusToIssue(42, run);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('main')
       );
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('abc123d')
       );
     });
@@ -154,15 +154,15 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowFailureToIssue(42, run, failedJobs);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('Workflow failed')
       );
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('build')
       );
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('test')
       );
     });
@@ -174,7 +174,7 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowFailureToIssue(42, run, []);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('No job details available')
       );
     });
@@ -197,7 +197,7 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowStatusToIssue(42, run);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining(emoji)
       );
     });
@@ -212,7 +212,7 @@ describe('IssueTracker Integration', () => {
       await plugin.postWorkflowStatusToIssue(42, run);
 
       expect(mockIssueTracker.addComment).toHaveBeenCalledWith(
-        42,
+        '42',
         expect.stringContaining('1m 0s')
       );
     });

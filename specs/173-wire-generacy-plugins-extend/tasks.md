@@ -21,23 +21,23 @@
 
 ### generacy-plugin-copilot
 
-- [ ] T010 [P] [US1] Add `"@generacy-ai/latency-plugin-dev-agent": "workspace:*"` to `packages/generacy-plugin-copilot/package.json`
-- [ ] T011 [P] [US1] Update `packages/generacy-plugin-copilot/src/plugin/copilot-plugin.ts` to extend `AbstractDevAgentPlugin`
-- [ ] T012 [P] [US1] Implement `doInvoke()` method in CopilotPlugin
-- [ ] T013 [P] [US1] Implement `doInvokeStream()` method in CopilotPlugin
-- [ ] T014 [P] [US1] Implement `doGetCapabilities()` method in CopilotPlugin
-- [ ] T015 [P] [US1] Remove redundant interface implementations from CopilotPlugin
-- [ ] T016 [US1] Run tests for generacy-plugin-copilot: `pnpm --filter @generacy-ai/generacy-plugin-copilot test`
+- [X] T010 [P] [US1] Add `"@generacy-ai/latency-plugin-dev-agent": "workspace:*"` to `packages/generacy-plugin-copilot/package.json`
+- [X] T011 [P] [US1] Update `packages/generacy-plugin-copilot/src/plugin/copilot-plugin.ts` to extend `AbstractDevAgentPlugin`
+- [X] T012 [P] [US1] Implement `doInvoke()` method in CopilotPlugin
+- [X] T013 [P] [US1] Implement `doInvokeStream()` method in CopilotPlugin
+- [X] T014 [P] [US1] Implement `doGetCapabilities()` method in CopilotPlugin
+- [X] T015 [P] [US1] Remove redundant interface implementations from CopilotPlugin
+- [X] T016 [US1] Run tests for generacy-plugin-copilot: `pnpm --filter @generacy-ai/generacy-plugin-copilot test`
 
 ### generacy-plugin-claude-code
 
-- [ ] T020 [P] [US1] Add `"@generacy-ai/latency-plugin-dev-agent": "workspace:*"` to `packages/generacy-plugin-claude-code/package.json`
-- [ ] T021 [P] [US1] Update `packages/generacy-plugin-claude-code/src/plugin/claude-code-plugin.ts` to extend `AbstractDevAgentPlugin`
-- [ ] T022 [P] [US1] Implement `doInvoke()` method in ClaudeCodePlugin
-- [ ] T023 [P] [US1] Implement `doInvokeStream()` method in ClaudeCodePlugin
-- [ ] T024 [P] [US1] Implement `doGetCapabilities()` method in ClaudeCodePlugin
-- [ ] T025 [P] [US1] Remove redundant interface implementations from ClaudeCodePlugin
-- [ ] T026 [US1] Run tests for generacy-plugin-claude-code: `pnpm --filter @generacy-ai/generacy-plugin-claude-code test`
+- [X] T020 [P] [US1] Add `"@generacy-ai/latency-plugin-dev-agent": "workspace:*"` to `packages/generacy-plugin-claude-code/package.json`
+- [X] T021 [P] [US1] Update `packages/generacy-plugin-claude-code/src/plugin/claude-code-plugin.ts` to extend `AbstractDevAgentPlugin`
+- [X] T022 [P] [US1] Implement `doInvoke()` method in ClaudeCodePlugin
+- [X] T023 [P] [US1] Implement `doInvokeStream()` method in ClaudeCodePlugin
+- [X] T024 [P] [US1] Implement `doGetCapabilities()` method in ClaudeCodePlugin
+- [X] T025 [P] [US1] Remove redundant interface implementations from ClaudeCodePlugin
+- [X] T026 [US1] Run tests for generacy-plugin-claude-code: `pnpm --filter @generacy-ai/generacy-plugin-claude-code test`
 
 ---
 
@@ -45,26 +45,26 @@
 
 ### generacy-plugin-cloud-build
 
-- [ ] T030 [P] [US1] Add `"@generacy-ai/latency-plugin-ci-cd": "workspace:*"` to `packages/generacy-plugin-cloud-build/package.json`
-- [ ] T031 [P] [US1] Update `packages/generacy-plugin-cloud-build/src/plugin.ts` to extend `AbstractCICDPlugin`
-- [ ] T032 [P] [US1] Implement `doTrigger()` method in CloudBuildPlugin
-- [ ] T033 [P] [US1] Implement `doGetStatus()` method in CloudBuildPlugin
-- [ ] T034 [P] [US1] Implement `doCancel()` method in CloudBuildPlugin
-- [ ] T035 [P] [US1] Implement `doListPipelines()` method in CloudBuildPlugin
-- [ ] T036 [P] [US1] Remove redundant interface implementations from CloudBuildPlugin
-- [ ] T037 [US1] Run tests for generacy-plugin-cloud-build: `pnpm --filter @generacy-ai/generacy-plugin-cloud-build test`
+- [X] T030 [P] [US1] Add `"@generacy-ai/latency-plugin-ci-cd": "workspace:*"` to `packages/generacy-plugin-cloud-build/package.json`
+- [X] T031 [P] [US1] Update `packages/generacy-plugin-cloud-build/src/plugin.ts` to extend `AbstractCICDPlugin`
+- [X] T032 [P] [US1] Implement `doTrigger()` method in CloudBuildPlugin
+- [X] T033 [P] [US1] Implement `doGetStatus()` method in CloudBuildPlugin
+- [X] T034 [P] [US1] Implement `doCancel()` method in CloudBuildPlugin
+- [X] T035 [P] [US1] Implement `doListPipelines()` method in CloudBuildPlugin
+- [X] T036 [P] [US1] Remove redundant interface implementations from CloudBuildPlugin
+- [X] T037 [US1] Run tests for generacy-plugin-cloud-build: `pnpm --filter @generacy-ai/generacy-plugin-cloud-build test`
 
 ### github-actions
 
-- [ ] T040 [P] [US1] Add `"@generacy-ai/latency-plugin-ci-cd": "workspace:*"` to `packages/github-actions/package.json`
-- [ ] T041 [P] [US1] Update `packages/github-actions/src/plugin.ts` to extend `AbstractCICDPlugin`
-- [ ] T042 [P] [US1] Implement `doTrigger()` method in GitHubActionsPlugin
-- [ ] T043 [P] [US1] Implement `doGetStatus()` method in GitHubActionsPlugin
-- [ ] T044 [P] [US1] Implement `doCancel()` method in GitHubActionsPlugin
-- [ ] T045 [P] [US1] Implement `doListPipelines()` method in GitHubActionsPlugin
-- [ ] T046 [P] [US1] Remove local `IssueTracker` interface redefinition from `packages/github-actions/src/plugin.ts`
-- [ ] T047 [P] [US1] Remove redundant interface implementations from GitHubActionsPlugin
-- [ ] T048 [US1] Run tests for github-actions: `pnpm --filter @generacy-ai/generacy-plugin-github-actions test`
+- [X] T040 [P] [US1] Add `"@generacy-ai/latency-plugin-ci-cd": "workspace:*"` to `packages/github-actions/package.json`
+- [X] T041 [P] [US1] Update `packages/github-actions/src/plugin.ts` to extend `AbstractCICDPlugin`
+- [X] T042 [P] [US1] Implement `doTrigger()` method in GitHubActionsPlugin
+- [X] T043 [P] [US1] Implement `doGetStatus()` method in GitHubActionsPlugin
+- [X] T044 [P] [US1] Implement `doCancel()` method in GitHubActionsPlugin
+- [X] T045 [P] [US1] Implement `doListPipelines()` method in GitHubActionsPlugin
+- [X] T046 [P] [US1] Remove local `IssueTracker` interface redefinition from `packages/github-actions/src/plugin.ts`
+- [X] T047 [P] [US1] Remove redundant interface implementations from GitHubActionsPlugin
+- [X] T048 [US1] Run tests for github-actions: `pnpm --filter @generacy-ai/generacy-plugin-github-actions test`
 
 ---
 
@@ -98,11 +98,11 @@
 
 ## Phase 5: Integration & Verification
 
-- [ ] T070 Run `pnpm install` to link new workspace dependencies
-- [ ] T071 Run `pnpm build` for all affected packages
-- [ ] T072 Run full test suite: `pnpm test`
-- [ ] T073 Verify no local interface redefinitions remain (search for `interface IssueTracker` in generacy packages)
-- [ ] T074 Verify all plugins properly extend their base classes
+- [X] T070 Run `pnpm install` to link new workspace dependencies
+- [X] T071 Run `pnpm build` for all affected packages
+- [X] T072 Run full test suite: `pnpm test`
+- [X] T073 Verify no local interface redefinitions remain (search for `interface IssueTracker` in generacy packages)
+- [X] T074 Verify all plugins properly extend their base classes
 
 ---
 

@@ -1,5 +1,5 @@
 import type { GitHubClient } from '../client.js';
-import type { WorkflowRun, TriggerWorkflowParams } from '../types/workflows.js';
+import type { WorkflowRun, TriggerWorkflowParams, Workflow } from '../types/workflows.js';
 import { WorkflowNotFoundError } from '../utils/errors.js';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -9,6 +9,7 @@ import { WorkflowNotFoundError } from '../utils/errors.js';
 function mapWorkflowRun(run: any): WorkflowRun {
   return {
     id: run.id,
+    workflow_id: run.workflow_id,
     name: run.name ?? '',
     path: run.path ?? '',
     head_branch: run.head_branch ?? '',
@@ -145,4 +146,33 @@ export async function getWorkflowId(
   }
 
   return workflow.id;
+}
+
+/**
+ * List all workflows in the repository
+ *
+ * @param client - GitHub API client
+ * @returns Array of workflows
+ */
+export async function listWorkflows(client: GitHubClient): Promise<Workflow[]> {
+  const owner = client.getOwner();
+  const repo = client.getRepo();
+
+  const result = await client.request((octokit) =>
+    octokit.rest.actions.listRepoWorkflows({
+      owner,
+      repo,
+    })
+  );
+
+  return result.workflows.map((w) => ({
+    id: w.id,
+    name: w.name,
+    path: w.path,
+    state: w.state as Workflow['state'],
+    created_at: w.created_at,
+    updated_at: w.updated_at,
+    html_url: w.html_url,
+    badge_url: w.badge_url,
+  }));
 }

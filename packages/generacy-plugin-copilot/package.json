@@ -20,6 +20,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@generacy-ai/latency": "workspace:*",
+    "@generacy-ai/latency-plugin-dev-agent": "workspace:*",
     "@octokit/rest": "^21.0.2",
     "pino": "^9.0.0",
     "zod": "^3.23.0"
