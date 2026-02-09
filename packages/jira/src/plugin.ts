@@ -1,4 +1,13 @@
 import type {
+  Issue as LatencyIssue,
+  IssueSpec as LatencyIssueSpec,
+  IssueUpdate as LatencyIssueUpdate,
+  IssueQuery as LatencyIssueQuery,
+  Comment as LatencyComment,
+  PaginatedResult,
+} from '@generacy-ai/latency';
+import { AbstractIssueTrackerPlugin } from '@generacy-ai/latency-plugin-issue-tracker';
+import type {
   JiraConfig,
   JiraIssue,
   CreateJiraIssueParams,
@@ -30,15 +39,18 @@ import type { JiraWebhookEvent, WebhookAction } from './webhooks/types.js';
 /**
  * Jira Plugin for Generacy
  *
+ * Extends AbstractIssueTrackerPlugin to provide the standard IssueTracker interface
+ * while also exposing Jira-specific functionality.
+ *
  * Provides programmatic access to Jira functionality including:
- * - Issue CRUD operations
+ * - Issue CRUD operations (via IssueTracker interface)
  * - JQL search with async iteration
  * - Workflow transitions
  * - Custom field management
  * - Sprint operations
  * - Webhook event processing
  */
-export class JiraPlugin {
+export class JiraPlugin extends AbstractIssueTrackerPlugin {
   private readonly client: JiraClient;
   private readonly issueOps: IssueOperations;
   private readonly searchOps: SearchOperations;
@@ -47,9 +59,12 @@ export class JiraPlugin {
   private readonly customFieldOps: CustomFieldOperations;
   private readonly sprintOps: SprintOperations;
   private readonly webhookHandler: JiraWebhookHandler;
+  private readonly defaultProjectKey?: string;
 
   constructor(config: JiraConfig) {
+    super({ cacheTimeout: config.cacheTimeout ?? 60000 });
     this.client = createClient(config);
+    this.defaultProjectKey = config.projectKey;
     this.issueOps = createIssueOperations(this.client);
     this.searchOps = createSearchOperations(this.client);
     this.commentOps = createCommentOperations(this.client);
@@ -63,26 +78,130 @@ export class JiraPlugin {
     this.webhookHandler = createWebhookHandler(webhookConfig);
   }
 
-  // ==================== Issue Operations ====================
+  // ==========================================================================
+  // AbstractIssueTrackerPlugin abstract method implementations
+  // ==========================================================================
 
   /**
-   * Create a new issue
+   * Fetch a single issue from Jira (implements abstract method)
    */
-  async createIssue(params: CreateJiraIssueParams): Promise<JiraIssue> {
+  protected async fetchIssue(id: string): Promise<LatencyIssue> {
+    const issue = await this.issueOps.get(id);
+    return this.mapToLatencyIssue(issue);
+  }
+
+  /**
+   * Create a new issue in Jira (implements abstract method)
+   */
+  protected async doCreateIssue(spec: LatencyIssueSpec): Promise<LatencyIssue> {
+    if (!this.defaultProjectKey) {
+      throw new Error('projectKey is required to create issues');
+    }
+    const params: CreateJiraIssueParams = {
+      projectKey: this.defaultProjectKey,
+      summary: spec.title,
+      description: spec.body,
+      issueType: 'Task', // Default issue type
+      labels: spec.labels,
+      assignee: spec.assignees?.[0],
+    };
+    const issue = await this.issueOps.create(params);
+    return this.mapToLatencyIssue(issue);
+  }
+
+  /**
+   * Update an existing issue (implements abstract method)
+   */
+  protected async doUpdateIssue(id: string, update: LatencyIssueUpdate): Promise<LatencyIssue> {
+    const params: UpdateJiraIssueParams = {
+      summary: update.title,
+      description: update.body,
+      labels: update.labels,
+      assignee: update.assignees?.[0] ?? null,
+    };
+
+    // Handle state changes via transitions
+    if (update.state) {
+      const targetStatus = update.state === 'closed' ? 'Done' : 'To Do';
+      try {
+        await this.transitionOps.transitionToStatus(id, targetStatus);
+      } catch {
+        // Transition may not be available - continue with other updates
+      }
+    }
+
+    const issue = await this.issueOps.update(id, params);
+    return this.mapToLatencyIssue(issue);
+  }
+
+  /**
+   * List issues matching the query (implements abstract method)
+   */
+  protected async doListIssues(query: LatencyIssueQuery): Promise<PaginatedResult<LatencyIssue>> {
+    const jqlParts: string[] = [];
+
+    if (query.state && query.state !== 'all') {
+      jqlParts.push(
+        query.state === 'closed'
+          ? 'statusCategory = Done'
+          : 'statusCategory != Done'
+      );
+    }
+    if (query.labels && query.labels.length > 0) {
+      const labelClauses = query.labels.map((l) => `labels = "${l}"`);
+      jqlParts.push(`(${labelClauses.join(' AND ')})`);
+    }
+    if (query.assignee) {
+      jqlParts.push(`assignee = "${query.assignee}"`);
+    }
+
+    const jql = jqlParts.length > 0 ? jqlParts.join(' AND ') : 'ORDER BY created DESC';
+
+    const options: SearchOptions = {
+      pageSize: query.limit ?? 30,
+      startAt: query.offset ?? 0,
+    };
+
+    const issues = await this.searchOps.searchAll(jql, options);
+    const latencyIssues = issues.map((issue) => this.mapToLatencyIssue(issue));
+
+    return {
+      items: latencyIssues,
+      total: latencyIssues.length,
+      hasMore: issues.length === (query.limit ?? 30),
+    };
+  }
+
+  /**
+   * Add a comment to an issue (implements abstract method)
+   */
+  protected async doAddComment(issueId: string, comment: string): Promise<LatencyComment> {
+    const jiraComment = await this.commentOps.add(issueId, comment);
+    return this.mapToLatencyComment(jiraComment);
+  }
+
+  // ==========================================================================
+  // Jira-specific public API (for backwards compatibility)
+  // ==========================================================================
+
+  /**
+   * Create a new issue (Jira-specific version with full return type)
+   */
+  async createJiraIssue(params: CreateJiraIssueParams): Promise<JiraIssue> {
     return this.issueOps.create(params);
   }
 
   /**
-   * Get an issue by key or ID
+   * Get an issue by key or ID (Jira-specific version with full return type)
    */
-  async getIssue(keyOrId: string): Promise<JiraIssue> {
+  async getJiraIssue(keyOrId: string): Promise<JiraIssue> {
     return this.issueOps.get(keyOrId);
   }
 
   /**
-   * Update an issue
+   * Update an issue (Jira-specific version)
    */
-  async updateIssue(keyOrId: string, params: UpdateJiraIssueParams): Promise<JiraIssue> {
+  async updateJiraIssue(keyOrId: string, params: UpdateJiraIssueParams): Promise<JiraIssue> {
     return this.issueOps.update(keyOrId, params);
   }
 
@@ -105,14 +224,14 @@ export class JiraPlugin {
   /**
    * Search issues using JQL (returns async iterator)
    */
-  searchIssues(jql: string, options?: SearchOptions): AsyncGenerator<JiraIssue> {
+  searchJiraIssues(jql: string, options?: SearchOptions): AsyncGenerator<JiraIssue> {
     return this.searchOps.search(jql, options);
   }
 
   /**
    * Search issues and return all results as array
    */
-  async searchIssuesAll(jql: string, options?: SearchOptions): Promise<JiraIssue[]> {
+  async searchJiraIssuesAll(jql: string, options?: SearchOptions): Promise<JiraIssue[]> {
     return this.searchOps.searchAll(jql, options);
   }
 
@@ -123,14 +242,14 @@ export class JiraPlugin {
     return this.searchOps.count(jql);
   }
 
-  // ==================== Comment Operations ====================
+  // ==================== Comment Operations (Jira-specific) ====================
 
   /**
-   * Add a comment to an issue
+   * Add a comment to an issue (Jira-specific version with full return type)
    */
-  async addComment(issueKey: string, body: string | AdfDocument): Promise<JiraComment>;
-  async addComment(issueKey: string, params: AddCommentParams): Promise<JiraComment>;
-  async addComment(
+  async addJiraComment(issueKey: string, body: string | AdfDocument): Promise<JiraComment>;
+  async addJiraComment(issueKey: string, params: AddCommentParams): Promise<JiraComment>;
+  async addJiraComment(
     issueKey: string,
     bodyOrParams: string | AdfDocument | AddCommentParams
   ): Promise<JiraComment> {
@@ -329,6 +448,63 @@ export class JiraPlugin {
    */
   get webhook(): JiraWebhookHandler {
     return this.webhookHandler;
+  }
+
+  // ==========================================================================
+  // Private helper methods
+  // ==========================================================================
+
+  /**
+   * Map a Jira Issue to the Latency Issue type
+   */
+  private mapToLatencyIssue(issue: JiraIssue): LatencyIssue {
+    const isClosed = issue.status.statusCategory.key === 'done';
+    return {
+      id: issue.key,
+      title: issue.summary,
+      body: this.adfToString(issue.description),
+      state: isClosed ? 'closed' : 'open',
+      labels: issue.labels,
+      assignees: issue.assignee ? [issue.assignee.displayName] : [],
+      createdAt: new Date(issue.created),
+      updatedAt: new Date(issue.updated),
+    };
+  }
+
+  /**
+   * Map a Jira Comment to the Latency Comment type
+   */
+  private mapToLatencyComment(comment: JiraComment): LatencyComment {
+    return {
+      id: comment.id,
+      body: this.adfToString(comment.body),
+      author: comment.author.displayName,
+      createdAt: new Date(comment.created),
+    };
+  }
+
+  /**
+   * Convert ADF document to plain string
+   */
+  private adfToString(adf: AdfDocument | string | null): string {
+    if (!adf) return '';
+    if (typeof adf === 'string') return adf;
+
+    // Simple ADF to string conversion - extract text content
+    const extractText = (nodes: unknown[]): string => {
+      return nodes.map((node: unknown) => {
+        const n = node as { type?: string; text?: string; content?: unknown[] };
+        if (n.type === 'text' && n.text) {
+          return n.text;
+        }
+        if (n.content && Array.isArray(n.content)) {
+          return extractText(n.content);
+        }
+        return '';
+      }).join('');
+    };
+
+    return extractText(adf.content);
   }
 }
 

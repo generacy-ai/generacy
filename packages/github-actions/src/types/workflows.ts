@@ -31,11 +31,35 @@ export type WorkflowConclusion =
   | null;
 
 /**
+ * Represents a GitHub Actions workflow definition
+ */
+export interface Workflow {
+  /** Unique workflow ID */
+  id: number;
+  /** Workflow name */
+  name: string;
+  /** Workflow filename path */
+  path: string;
+  /** Workflow state */
+  state: 'active' | 'deleted' | 'disabled_fork' | 'disabled_inactivity' | 'disabled_manually';
+  /** Created timestamp */
+  created_at: string;
+  /** Updated timestamp */
+  updated_at: string;
+  /** Workflow URL */
+  html_url: string;
+  /** Badge URL */
+  badge_url: string;
+}
+
+/**
  * Represents a GitHub Actions workflow run
  */
 export interface WorkflowRun {
   /** Unique run ID */
   id: number;
+  /** Workflow ID */
+  workflow_id?: number;
   /** Workflow name */
   name: string;
   /** Workflow filename */

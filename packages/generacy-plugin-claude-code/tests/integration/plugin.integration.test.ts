@@ -172,7 +172,7 @@ describe('ClaudeCodePlugin Unit Tests (No Docker)', () => {
     });
 
     expect(plugin).toBeDefined();
-    expect(plugin.isDisposed()).toBe(false);
+    expect(plugin.isPluginDisposed()).toBe(false);
   });
 
   it('should accept custom docker options', () => {

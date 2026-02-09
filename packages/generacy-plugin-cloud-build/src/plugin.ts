@@ -1,14 +1,24 @@
 /**
  * Main Cloud Build Plugin class.
  *
+ * Extends AbstractCICDPlugin to provide the standard CICDPipeline interface
+ * while also exposing Cloud Build-specific functionality.
+ *
  * Aggregates all operations into a unified plugin interface:
- * - Build operations
+ * - Build operations (via CICDPipeline interface)
  * - Log streaming
  * - Artifact access
  * - Trigger management
  */
 
 import pino, { type Logger } from 'pino';
+import type {
+  Pipeline,
+  PipelineRun,
+  PipelineStatus,
+  TriggerOptions,
+} from '@generacy-ai/latency';
+import { AbstractCICDPlugin } from '@generacy-ai/latency-plugin-ci-cd';
 import type {
   Build,
   BuildConfig,
@@ -56,7 +66,15 @@ export interface CloudBuildPluginInterface {
   deleteTrigger(triggerId: string): Promise<void>;
 }
 
-export class CloudBuildPlugin implements CloudBuildPluginInterface {
+/**
+ * Google Cloud Build Plugin for Generacy.
+ *
+ * Extends AbstractCICDPlugin to provide the standard CICDPipeline interface
+ * (triggerPipeline, getPipelineStatus, cancelPipeline, listPipelines) while
+ * also exposing Cloud Build-specific operations like log streaming, artifact
+ * access, and trigger management.
+ */
+export class CloudBuildPlugin extends AbstractCICDPlugin implements CloudBuildPluginInterface {
   private readonly config: CloudBuildConfig;
   private readonly logger: Logger;
   private readonly buildOps: BuildOperations;
@@ -65,6 +83,8 @@ export class CloudBuildPlugin implements CloudBuildPluginInterface {
   private readonly triggerOps: TriggerOperations;
 
   constructor(configInput: CloudBuildConfigInput, options: CloudBuildPluginOptions = {}) {
+    super();
+
     // Parse and validate configuration
     this.config = parseConfig(configInput);
 
@@ -90,9 +110,62 @@ export class CloudBuildPlugin implements CloudBuildPluginInterface {
     this.logger.debug({ projectId: this.config.projectId }, 'Cloud Build plugin initialized');
   }
 
-  // ============================================================================
-  // Build Operations
-  // ============================================================================
+  // ==========================================================================
+  // AbstractCICDPlugin abstract method implementations
+  // ==========================================================================
+
+  /**
+   * Trigger a pipeline run (implements abstract method).
+   *
+   * Maps to Cloud Build's trigger mechanism.
+   */
+  protected async doTrigger(pipelineId: string, options?: TriggerOptions): Promise<PipelineRun> {
+    this.logger.debug({ pipelineId, options }, 'Triggering pipeline via CICDPipeline interface');
+
+    // Note: Branch is passed but requires repoName for full RepoSource
+    // Cloud Build triggers typically already have repo config, so we pass undefined
+    const build = await this.buildOps.triggerBuild(pipelineId, undefined);
+    return this.mapBuildToPipelineRun(build);
+  }
+
+  /**
+   * Get pipeline run status (implements abstract method).
+   *
+   * Maps to Cloud Build's getBuild.
+   */
+  protected async doGetStatus(runId: string): Promise<PipelineRun> {
+    this.logger.debug({ runId }, 'Getting pipeline status via CICDPipeline interface');
+
+    const build = await this.buildOps.getBuild(runId);
+    return this.mapBuildToPipelineRun(build);
+  }
+
+  /**
+   * Cancel a pipeline run (implements abstract method).
+   *
+   * Maps to Cloud Build's cancelBuild.
+   */
+  protected async doCancel(runId: string): Promise<void> {
+    this.logger.debug({ runId }, 'Cancelling pipeline via CICDPipeline interface');
+
+    await this.buildOps.cancelBuild(runId);
+  }
+
+  /**
+   * List available pipelines (implements abstract method).
+   *
+   * Maps to Cloud Build's listTriggers.
+   */
+  protected async doListPipelines(): Promise<Pipeline[]> {
+    this.logger.debug('Listing pipelines via CICDPipeline interface');
+
+    const triggers = await this.triggerOps.listTriggers();
+    return triggers.map((trigger) => this.mapTriggerToPipeline(trigger));
+  }
+
+  // ==========================================================================
+  // Cloud Build-specific public API (for backwards compatibility)
+  // ==========================================================================
 
   /**
    * Trigger a build from an existing trigger.
@@ -228,5 +301,56 @@ export class CloudBuildPlugin implements CloudBuildPluginInterface {
         censor: '[REDACTED]',
       },
     });
+  }
+
+  /**
+   * Map a Cloud Build Build to a Latency PipelineRun.
+   */
+  private mapBuildToPipelineRun(build: Build): PipelineRun {
+    return {
+      id: build.id,
+      pipelineId: build.buildTriggerId ?? 'inline',
+      status: this.mapBuildStatus(build.status),
+      createdAt: new Date(build.createTime),
+      startedAt: build.startTime ? new Date(build.startTime) : undefined,
+      completedAt: build.finishTime ? new Date(build.finishTime) : undefined,
+      logsUrl: build.logUrl,
+    };
+  }
+
+  /**
+   * Map a Cloud Build status to a Latency PipelineStatus.
+   */
+  private mapBuildStatus(status: Build['status']): PipelineStatus {
+    switch (status) {
+      case 'QUEUED':
+      case 'PENDING':
+        return 'pending';
+      case 'WORKING':
+        return 'running';
+      case 'SUCCESS':
+        return 'completed';
+      case 'FAILURE':
+      case 'INTERNAL_ERROR':
+      case 'TIMEOUT':
+      case 'EXPIRED':
+        return 'failed';
+      case 'CANCELLED':
+        return 'cancelled';
+      default:
+        return 'pending';
+    }
+  }
+
+  /**
+   * Map a Cloud Build Trigger to a Latency Pipeline.
+   */
+  private mapTriggerToPipeline(trigger: BuildTrigger): Pipeline {
+    return {
+      id: trigger.id,
+      name: trigger.name ?? trigger.id,
+      description: trigger.description,
+      defaultBranch: trigger.triggerTemplate?.branchName,
+    };
   }
 }

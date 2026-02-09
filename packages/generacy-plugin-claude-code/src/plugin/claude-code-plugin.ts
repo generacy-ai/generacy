@@ -1,12 +1,22 @@
 /**
  * @generacy-ai/generacy-plugin-claude-code
  *
- * Main plugin class that wires all components together.
+ * Main plugin class extending AbstractDevAgentPlugin for Claude Code agent invocation.
  */
 
 import Docker from 'dockerode';
 import pino from 'pino';
 import type { Logger } from 'pino';
+import type {
+  AgentResult,
+  AgentCapabilities,
+  StreamChunk,
+} from '@generacy-ai/latency';
+import { FacetError } from '@generacy-ai/latency';
+import {
+  AbstractDevAgentPlugin,
+  type InternalInvokeOptions,
+} from '@generacy-ai/latency-plugin-dev-agent';
 
 import {
   SessionInvalidStateError,
@@ -14,10 +24,9 @@ import {
 } from '../errors.js';
 import type {
   Session as SessionInterface,
-  ClaudeCodePluginInterface,
   ContainerConfig,
   InvokeParams,
-  InvokeOptions,
+  InvokeOptions as ClaudeInvokeOptions,
   InvocationResult,
   OutputChunk,
 } from '../types.js';
@@ -48,27 +57,35 @@ export interface ClaudeCodePluginOptions {
   defaultContainerConfig?: Partial<ContainerConfig>;
 
   /** Default invocation options */
-  defaultInvokeOptions?: InvokeOptions;
+  defaultInvokeOptions?: ClaudeInvokeOptions;
+
+  /** Default timeout for DevAgent invoke operations */
+  defaultTimeoutMs?: number;
 }
 
 /**
  * ClaudeCodePlugin - Main plugin class for Claude Code agent invocation.
  *
+ * Extends AbstractDevAgentPlugin to provide the standard DevAgent interface
+ * while also exposing Docker container session management functionality.
+ *
  * Provides a thin interface for invoking Claude Code agents in isolated
  * Docker containers, with session management, output streaming, and
  * integration with the Humancy decision framework.
  */
-export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
+export class ClaudeCodePlugin extends AbstractDevAgentPlugin {
   private readonly docker: Docker;
   private readonly logger: Logger;
   private readonly containerManager: ContainerManager;
   private readonly sessionManager: SessionManager;
   private readonly invoker: Invoker;
   private readonly defaultContainerConfig: Partial<ContainerConfig>;
-  private readonly defaultInvokeOptions: InvokeOptions;
+  private readonly defaultClaudeInvokeOptions: ClaudeInvokeOptions;
   private disposed = false;
 
   constructor(options: ClaudeCodePluginOptions = {}) {
+    super({ defaultTimeoutMs: options.defaultTimeoutMs ?? 300_000 }); // 5 minute default for container operations
+
     // Initialize Docker client
     this.docker = options.docker instanceof Docker
       ? options.docker
@@ -99,16 +116,129 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
 
     // Store defaults
     this.defaultContainerConfig = options.defaultContainerConfig ?? {};
-    this.defaultInvokeOptions = options.defaultInvokeOptions ?? {};
+    this.defaultClaudeInvokeOptions = options.defaultInvokeOptions ?? {};
 
     this.logger.info('ClaudeCodePlugin initialized');
   }
+
+  // ==========================================================================
+  // AbstractDevAgentPlugin abstract method implementations
+  // ==========================================================================
+
+  /**
+   * Invoke Claude Code with a prompt (implements abstract method).
+   *
+   * Creates an ephemeral Docker container session, runs the prompt,
+   * and returns the complete result.
+   */
+  protected async doInvoke(
+    prompt: string,
+    options: InternalInvokeOptions,
+  ): Promise<AgentResult> {
+    this.ensureNotDisposed();
+
+    this.logger.debug({ invocationId: options.invocationId }, 'Starting Claude Code invocation via DevAgent interface');
+
+    // Create ephemeral session
+    const config = await this.createEphemeralContainerConfig();
+    const session = await this.startSessionInternal(config);
+
+    try {
+      // Merge options
+      const invokeOptions: ClaudeInvokeOptions = {
+        ...this.defaultClaudeInvokeOptions,
+        ...session.defaultOptions,
+        timeout: options.timeoutMs,
+        mode: options.metadata?.mode as string | undefined,
+      };
+
+      // Execute invocation
+      const result = await this.invoker.invoke(session, prompt, invokeOptions);
+
+      return {
+        output: result.summary ?? '',
+        invocationId: options.invocationId,
+      };
+    } finally {
+      // Cleanup ephemeral session
+      await this.endSession(session.id);
+    }
+  }
+
+  /**
+   * Stream Claude Code output (implements abstract method).
+   *
+   * Creates an ephemeral Docker container session and yields output chunks.
+   */
+  protected async *doInvokeStream(
+    prompt: string,
+    options: InternalInvokeOptions,
+  ): AsyncIterableIterator<StreamChunk> {
+    this.ensureNotDisposed();
+
+    this.logger.debug({ invocationId: options.invocationId }, 'Starting Claude Code stream via DevAgent interface');
+
+    // Create ephemeral session
+    const config = await this.createEphemeralContainerConfig();
+    const session = await this.startSessionInternal(config);
+
+    try {
+      // Merge options
+      const invokeOptions: ClaudeInvokeOptions = {
+        ...this.defaultClaudeInvokeOptions,
+        ...session.defaultOptions,
+        timeout: options.timeoutMs,
+        mode: options.metadata?.mode as string | undefined,
+      };
+
+      // Start invocation (non-blocking)
+      this.invoker.invoke(session, prompt, invokeOptions).catch((error) => {
+        this.logger.error({ error, sessionId: session.id }, 'Invocation error during stream');
+      });
+
+      // Stream output chunks
+      const outputStream = await this.getSessionOutputStream(session.id);
+
+      for await (const chunk of outputStream) {
+        if (options.signal.aborted) {
+          break;
+        }
+
+        yield {
+          text: String(chunk.data ?? ''),
+          metadata: {
+            type: chunk.type,
+            timestamp: chunk.timestamp?.toISOString(),
+            ...(chunk.data ? { data: chunk.data } : {}),
+          },
+        };
+      }
+    } finally {
+      // Cleanup ephemeral session
+      await this.endSession(session.id);
+    }
+  }
+
+  /**
+   * Return Claude Code capabilities (implements abstract method).
+   */
+  protected async doGetCapabilities(): Promise<AgentCapabilities> {
+    return {
+      streaming: true,
+      cancellation: true,
+      models: ['claude-code-docker'],
+    };
+  }
+
+  // ==========================================================================
+  // Claude Code-specific public API (for backwards compatibility)
+  // ==========================================================================
 
   /**
    * Invoke Claude Code with parameters.
    * Creates an ephemeral session if no sessionId provided.
    */
-  async invoke(params: InvokeParams): Promise<InvocationResult> {
+  async invokeWithParams(params: InvokeParams): Promise<InvocationResult> {
     this.ensureNotDisposed();
 
     // Validate params
@@ -134,8 +264,8 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
 
     try {
       // Merge options
-      const options: InvokeOptions = {
-        ...this.defaultInvokeOptions,
+      const options: ClaudeInvokeOptions = {
+        ...this.defaultClaudeInvokeOptions,
         ...session.defaultOptions,
         ...validated.options,
       };
@@ -157,9 +287,9 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
    */
   async invokeWithPrompt(
     prompt: string,
-    options?: InvokeOptions
+    options?: ClaudeInvokeOptions
   ): Promise<InvocationResult> {
-    return this.invoke({ prompt, options });
+    return this.invokeWithParams({ prompt, options });
   }
 
   /**
@@ -196,8 +326,8 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
     }
 
     // Execute invocation
-    const options: InvokeOptions = {
-      ...this.defaultInvokeOptions,
+    const options: ClaudeInvokeOptions = {
+      ...this.defaultClaudeInvokeOptions,
       ...session.defaultOptions,
     };
 
@@ -242,42 +372,8 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
   async *streamOutput(sessionId: string): AsyncIterable<OutputChunk> {
     this.ensureNotDisposed();
 
-    const session = this.sessionManager.get(sessionId);
-
-    if (!session.hasRunningContainer()) {
-      throw new SessionInvalidStateError(
-        sessionId,
-        session.status,
-        ['running', 'executing'],
-        'stream output'
-      );
-    }
-
-    this.logger.debug({ sessionId }, 'Streaming output');
-
-    // Get container streams
-    const streams = await this.containerManager.attach(sessionId);
-
-    // Create output stream
-    const outputStream = createOutputStream(
-      streams.stdout as any,
-      streams.stderr as any
-    );
-
-    // Yield chunks
-    for await (const chunk of outputStream) {
+    for await (const chunk of this.getSessionOutputStream(sessionId)) {
       yield chunk;
-
-      // Handle question detection
-      if (chunk.type === 'question') {
-        const question = chunk.data as {
-          question: string;
-          urgency: 'blocking_now' | 'blocking_soon' | 'when_available';
-          choices?: string[];
-          askedAt: Date;
-        };
-        session.onQuestionReceived(question);
-      }
     }
   }
 
@@ -369,7 +465,7 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
   /**
    * Check if the plugin is disposed.
    */
-  isDisposed(): boolean {
+  isPluginDisposed(): boolean {
     return this.disposed;
   }
 
@@ -384,7 +480,7 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
     // Create session
     const session = this.sessionManager.create({
       containerConfig: config,
-      defaultOptions: { ...this.defaultInvokeOptions },
+      defaultOptions: { ...this.defaultClaudeInvokeOptions },
     });
 
     try {
@@ -432,11 +528,54 @@ export class ClaudeCodePlugin implements ClaudeCodePluginInterface {
   }
 
   /**
+   * Get output stream for a session.
+   */
+  private async *getSessionOutputStream(sessionId: string): AsyncIterable<OutputChunk> {
+    const session = this.sessionManager.get(sessionId);
+
+    if (!session.hasRunningContainer()) {
+      throw new SessionInvalidStateError(
+        sessionId,
+        session.status,
+        ['running', 'executing'],
+        'stream output'
+      );
+    }
+
+    this.logger.debug({ sessionId }, 'Streaming output');
+
+    // Get container streams
+    const streams = await this.containerManager.attach(sessionId);
+
+    // Create output stream
+    const outputStream = createOutputStream(
+      streams.stdout as any,
+      streams.stderr as any
+    );
+
+    // Yield chunks
+    for await (const chunk of outputStream) {
+      yield chunk;
+
+      // Handle question detection
+      if (chunk.type === 'question') {
+        const question = chunk.data as {
+          question: string;
+          urgency: 'blocking_now' | 'blocking_soon' | 'when_available';
+          choices?: string[];
+          askedAt: Date;
+        };
+        session.onQuestionReceived(question);
+      }
+    }
+  }
+
+  /**
    * Ensure the plugin is not disposed.
    */
   private ensureNotDisposed(): void {
     if (this.disposed) {
-      throw new Error('Plugin has been disposed');
+      throw new FacetError('Plugin has been disposed', 'VALIDATION');
     }
   }
 }

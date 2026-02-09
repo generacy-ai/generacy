@@ -3,8 +3,10 @@ export {
   GitHubActionsPlugin,
   createGitHubActionsPlugin,
   PLUGIN_MANIFEST,
-  type IssueTracker,
 } from './plugin.js';
+
+// Re-export IssueTracker from Latency for convenience
+export type { IssueTracker } from '@generacy-ai/latency';
 
 // Configuration types
 export {

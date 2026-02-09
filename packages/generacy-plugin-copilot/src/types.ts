@@ -134,6 +134,8 @@ export interface CopilotPluginOptions {
   logger?: Logger;
   polling?: Partial<PollingConfig>;
   workspaceDefaults?: WorkspaceOptions;
+  /** Default timeout for DevAgent invoke operations (in milliseconds) */
+  defaultTimeoutMs?: number;
 }
 
 // =============================================================================
