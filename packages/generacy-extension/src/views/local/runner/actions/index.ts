@@ -98,6 +98,7 @@ import { AgentInvokeAction } from './agent-invoke';
 import { VerificationCheckAction } from './verification-check';
 import { PrCreateAction } from './pr-create';
 import { ShellAction } from './shell';
+import { SpecKitAction } from './speckit';
 
 /**
  * Register all built-in action handlers
@@ -108,6 +109,7 @@ export function registerBuiltinActions(): void {
   registerActionHandler(new VerificationCheckAction());
   registerActionHandler(new PrCreateAction());
   registerActionHandler(new ShellAction());
+  registerActionHandler(new SpecKitAction());
 }
 
 // Re-export types and utilities
@@ -137,6 +139,7 @@ export { AgentInvokeAction } from './agent-invoke';
 export { VerificationCheckAction } from './verification-check';
 export { PrCreateAction } from './pr-create';
 export { ShellAction } from './shell';
+export { SpecKitAction } from './speckit';
 
 // Re-export CLI utilities
 export {

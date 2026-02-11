@@ -5,6 +5,8 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as yaml from 'yaml';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { getConfig, getLogger, GeneracyError, ErrorCode } from '../utils';
 import { WORKFLOW_EXTENSIONS } from '../constants';
 import {
@@ -16,6 +18,8 @@ import {
   type ExecutionOptions,
   type ExecutionMode,
 } from '../views/local/runner';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Parse a workflow YAML file into an executable workflow
@@ -41,6 +45,7 @@ async function parseWorkflowFile(uri: vscode.Uri): Promise<ExecutableWorkflow> {
       phases: [],
       env: parsed.env || {},
       timeout: parsed.timeout,
+      inputs: parsed.inputs,
     };
 
     // Parse phases
@@ -66,6 +71,8 @@ async function parseWorkflowFile(uri: vscode.Uri): Promise<ExecutableWorkflow> {
             phaseData.steps.push({
               name: step.name || 'unnamed',
               action: step.action || 'shell',
+              uses: step.uses,
+              with: step.with,
               command: step.command,
               script: step.script,
               timeout: step.timeout,
@@ -153,6 +160,118 @@ async function getWorkflowUri(arg?: unknown): Promise<vscode.Uri | undefined> {
 }
 
 /**
+ * Fetch GitHub issue details via `gh` CLI.
+ * Returns null if the issue cannot be fetched.
+ */
+async function fetchGitHubIssue(
+  input: string,
+  cwd?: string
+): Promise<{ number: number; title: string; body: string; url: string } | null> {
+  try {
+    // Parse issue URL: https://github.com/owner/repo/issues/123
+    const urlMatch = input.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+    // Or just a plain number: 123 or #123
+    const numberMatch = input.match(/^#?(\d+)$/);
+
+    const args = ['issue', 'view', '--json', 'number,title,body,url'];
+
+    if (urlMatch) {
+      args.push(urlMatch[3]!, '--repo', `${urlMatch[1]}/${urlMatch[2]}`);
+    } else if (numberMatch) {
+      args.push(numberMatch[1]!);
+    } else {
+      return null; // Not an issue reference
+    }
+
+    const { stdout } = await execFileAsync('gh', args, {
+      cwd,
+      timeout: 15000,
+    });
+
+    const data = JSON.parse(stdout);
+    return {
+      number: data.number,
+      title: data.title,
+      body: data.body || '',
+      url: data.url,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Smart input collection for speckit workflows.
+ * Accepts an issue URL, issue number, or plain description in a single prompt.
+ * When an issue is detected, auto-populates description and issue_url.
+ */
+async function collectSpeckitInputs(
+  workflowName: string,
+  logger: ReturnType<typeof getLogger>
+): Promise<Record<string, unknown> | null> {
+  const value = await vscode.window.showInputBox({
+    title: `${workflowName}`,
+    prompt: 'Enter a GitHub issue URL, issue number (#123), or feature description',
+    placeHolder: 'https://github.com/org/repo/issues/123 or #2 or "Add dark mode"',
+    ignoreFocusOut: true,
+  });
+
+  if (value === undefined) {
+    logger.info('Run cancelled - user cancelled input');
+    return null;
+  }
+
+  if (!value.trim()) {
+    vscode.window.showErrorMessage('A description or issue reference is required.');
+    return null;
+  }
+
+  const inputs: Record<string, unknown> = {};
+  const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+  // Check if it looks like an issue reference
+  const isIssueRef = value.match(/github\.com\/.*\/issues\/\d+/) || value.match(/^#?\d+$/);
+
+  if (isIssueRef) {
+    const issue = await fetchGitHubIssue(value.trim(), cwd);
+    if (issue) {
+      inputs['description'] = issue.title;
+      inputs['issue_url'] = issue.url;
+      logger.info(`Resolved issue #${issue.number}: ${issue.title}`);
+      vscode.window.showInformationMessage(
+        `Resolved issue #${issue.number}: ${issue.title}`
+      );
+    } else {
+      vscode.window.showWarningMessage(
+        `Could not fetch issue "${value}". Using as description instead.`
+      );
+      inputs['description'] = value.trim();
+    }
+  } else {
+    inputs['description'] = value.trim();
+  }
+
+  // Optionally ask for short_name
+  const shortName = await vscode.window.showInputBox({
+    title: `${workflowName}: branch name`,
+    prompt: 'Optional short name for the branch (e.g., "dark-mode")',
+    placeHolder: '(optional, press Enter to skip)',
+    ignoreFocusOut: true,
+  });
+
+  if (shortName === undefined) {
+    logger.info('Run cancelled - user cancelled input');
+    return null;
+  }
+
+  if (shortName) {
+    inputs['short_name'] = shortName;
+  }
+
+  return inputs;
+}
+
+/**
  * Run a workflow command handler
  */
 export async function runWorkflow(arg?: unknown): Promise<void> {
@@ -189,6 +308,40 @@ export async function runWorkflow(arg?: unknown): Promise<void> {
       return;
     } else {
       return;
+    }
+  }
+
+  // Collect workflow inputs - smart issue-aware collection for speckit workflows
+  const workflowInputs: Record<string, unknown> = {};
+  const inputNames = (workflow.inputs || []).map(i => i.name);
+  const isSpeckitWorkflow = inputNames.includes('description') &&
+    (inputNames.includes('issue_url') || inputNames.includes('issue_number'));
+
+  if (isSpeckitWorkflow) {
+    // Smart single-prompt for speckit workflows
+    const inputResult = await collectSpeckitInputs(workflow.name, logger);
+    if (!inputResult) return; // cancelled
+    Object.assign(workflowInputs, inputResult);
+  } else if (workflow.inputs && workflow.inputs.length > 0) {
+    // Generic input collection for non-speckit workflows
+    for (const input of workflow.inputs) {
+      const defaultValue = input.default !== undefined ? String(input.default) : undefined;
+      const value = await vscode.window.showInputBox({
+        title: `${workflow.name}: ${input.name}`,
+        prompt: input.description || `Enter value for "${input.name}"`,
+        value: defaultValue,
+        placeHolder: input.required ? '(required)' : '(optional)',
+        ignoreFocusOut: true,
+      });
+
+      if (value === undefined) {
+        logger.info('Run cancelled - user cancelled input');
+        return;
+      }
+
+      if (value || input.required) {
+        workflowInputs[input.name] = value || defaultValue || '';
+      }
     }
   }
 
@@ -254,7 +407,7 @@ export async function runWorkflow(arg?: unknown): Promise<void> {
       });
 
       // Execute workflow
-      const result = await executor.execute(workflow, options);
+      const result = await executor.execute(workflow, options, workflowInputs);
 
       // Show result notification
       if (result.status === 'completed') {

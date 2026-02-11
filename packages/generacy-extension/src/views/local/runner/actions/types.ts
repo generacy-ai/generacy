@@ -12,6 +12,7 @@ export type ActionType =
   | 'agent.invoke'        // Claude Code CLI invocation
   | 'verification.check'  // Test/lint execution
   | 'pr.create'           // GitHub PR creation
+  | 'speckit'             // Speckit workflow operations
   | 'shell';              // Generic shell command (fallback)
 
 /**
@@ -288,6 +289,9 @@ export function parseActionType(step: WorkflowStep): ActionType {
     }
     if (uses.includes('pr.create') || uses.includes('pr/create') || uses.includes('pull-request')) {
       return 'pr.create';
+    }
+    if (uses.startsWith('speckit.') || uses.startsWith('speckit/')) {
+      return 'speckit';
     }
   }
 

@@ -246,6 +246,150 @@ export async function executeShellCommand(
 }
 
 /**
+ * Result from a Claude CLI session
+ */
+export interface ClaudeSessionResult extends CommandResult {
+  /** Captured session ID for resumption */
+  sessionId?: string;
+  /** Detected phases during execution */
+  detectedPhases: string[];
+}
+
+/**
+ * Options for Claude CLI session execution
+ */
+export interface ClaudeSessionOptions extends CommandOptions {
+  /** Session ID to resume (for multi-step workflows) */
+  resumeSessionId?: string;
+  /** Callback when a phase change is detected */
+  phaseCallback?: (phase: string) => void;
+  /** Callback for streaming stdout progress */
+  progressCallback?: (text: string) => void;
+}
+
+/**
+ * Execute a Claude Code CLI session using the correct invocation pattern.
+ * Uses --dangerously-skip-permissions with skill as positional argument.
+ * Captures session ID from stdout and detects phase changes.
+ *
+ * @param skillCommand The skill to invoke (e.g., "/speckit:specify")
+ * @param options Session execution options
+ * @returns Claude session result with session ID and phases
+ */
+export async function executeClaudeSession(
+  skillCommand: string,
+  options: ClaudeSessionOptions = {}
+): Promise<ClaudeSessionResult> {
+  const { cwd, env, timeout, signal, resumeSessionId, phaseCallback, progressCallback } = options;
+
+  const args = ['--dangerously-skip-permissions'];
+
+  // Add session resumption if available
+  if (resumeSessionId) {
+    args.push('--resume', resumeSessionId);
+  }
+
+  // Skill command is the positional argument
+  args.push(skillCommand);
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn('claude', args, {
+      cwd,
+      env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      signal,
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let killed = false;
+    let capturedSessionId: string | undefined;
+    const detectedPhases: string[] = [];
+
+    // Session ID regex - matches UUID format from Claude output
+    const sessionIdRegex = /(?:"sessionId"|Session)[":\s]+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
+
+    // Phase detection regex - matches <command-message>speckit:plan is running…</command-message>
+    const phaseRegex = /<command-message>(speckit|autodev):(\w+) is running/;
+
+    // Handle timeout
+    let timeoutId: NodeJS.Timeout | undefined;
+    if (timeout && timeout > 0) {
+      timeoutId = setTimeout(() => {
+        killed = true;
+        proc.kill('SIGTERM');
+      }, timeout);
+    }
+
+    proc.stdout?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      stdout += text;
+
+      // Try to capture session ID
+      if (!capturedSessionId) {
+        const sessionMatch = text.match(sessionIdRegex);
+        if (sessionMatch) {
+          capturedSessionId = sessionMatch[1];
+        }
+      }
+
+      // Detect phase changes
+      const phaseMatch = text.match(phaseRegex);
+      if (phaseMatch && phaseCallback) {
+        const phase = `${phaseMatch[1]}:${phaseMatch[2]}`;
+        detectedPhases.push(phase);
+        try {
+          phaseCallback(phase);
+        } catch {
+          // Non-blocking - phase update failures should not affect execution
+        }
+      }
+
+      // Stream progress
+      if (progressCallback) {
+        try {
+          progressCallback(text);
+        } catch {
+          // Non-blocking
+        }
+      }
+    });
+
+    proc.stderr?.on('data', (data: Buffer) => {
+      stderr += data.toString();
+    });
+
+    proc.on('error', (error) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      reject(error);
+    });
+
+    proc.on('close', (code) => {
+      if (timeoutId) clearTimeout(timeoutId);
+
+      if (killed) {
+        resolve({
+          exitCode: 124,
+          stdout,
+          stderr: stderr + '\nProcess killed due to timeout',
+          sessionId: capturedSessionId,
+          detectedPhases,
+        });
+        return;
+      }
+
+      resolve({
+        exitCode: code ?? 0,
+        stdout,
+        stderr,
+        sessionId: capturedSessionId,
+        detectedPhases,
+      });
+    });
+  });
+}
+
+/**
  * Parse JSON output safely, returning null if parsing fails
  */
 export function parseJSONSafe(output: string): unknown | null {

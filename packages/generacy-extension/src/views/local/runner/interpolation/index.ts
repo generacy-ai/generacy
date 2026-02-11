@@ -30,9 +30,11 @@ export interface InterpolateOptions {
 
 /**
  * Regular expression for matching variable expressions
- * Matches ${...} patterns
+ * Matches ${{ ... }} (GitHub Actions style) and ${...} patterns
+ * Double-brace pattern is checked first for priority
  */
-const VARIABLE_PATTERN = /\$\{([^}]+)\}/g;
+const DOUBLE_BRACE_PATTERN = /\$\{\{\s*([^}]+?)\s*\}\}/g;
+const SINGLE_BRACE_PATTERN = /\$\{([^}]+)\}/g;
 
 /**
  * Parse a variable reference from an expression
@@ -227,7 +229,7 @@ export function interpolate(
 ): string {
   const { strict = false, defaultValue = '', coerceToString = true } = options;
 
-  return template.replace(VARIABLE_PATTERN, (match, expression: string) => {
+  const replaceVar = (match: string, expression: string): string => {
     const ref = parseVariableReference(expression);
     const value = resolveVariableReference(ref, context);
 
@@ -249,7 +251,12 @@ export function interpolate(
 
     // Return the original match if can't coerce
     return match;
-  });
+  };
+
+  // First replace ${{ ... }} (double-brace), then ${ ... } (single-brace)
+  let result = template.replace(DOUBLE_BRACE_PATTERN, replaceVar);
+  result = result.replace(SINGLE_BRACE_PATTERN, replaceVar);
+  return result;
 }
 
 /**
@@ -294,12 +301,17 @@ export function extractVariableReferences(template: string): VariableReference[]
   const refs: VariableReference[] = [];
   let match;
 
-  while ((match = VARIABLE_PATTERN.exec(template)) !== null) {
+  // Check double-brace first
+  while ((match = DOUBLE_BRACE_PATTERN.exec(template)) !== null) {
     refs.push(parseVariableReference(match[1]!));
   }
+  DOUBLE_BRACE_PATTERN.lastIndex = 0;
 
-  // Reset lastIndex for subsequent calls
-  VARIABLE_PATTERN.lastIndex = 0;
+  // Then single-brace
+  while ((match = SINGLE_BRACE_PATTERN.exec(template)) !== null) {
+    refs.push(parseVariableReference(match[1]!));
+  }
+  SINGLE_BRACE_PATTERN.lastIndex = 0;
 
   return refs;
 }
@@ -310,10 +322,15 @@ export function extractVariableReferences(template: string): VariableReference[]
  * @returns true if template contains ${...} patterns
  */
 export function hasVariables(template: string): boolean {
-  VARIABLE_PATTERN.lastIndex = 0;
-  const result = VARIABLE_PATTERN.test(template);
-  VARIABLE_PATTERN.lastIndex = 0;
-  return result;
+  DOUBLE_BRACE_PATTERN.lastIndex = 0;
+  const hasDouble = DOUBLE_BRACE_PATTERN.test(template);
+  DOUBLE_BRACE_PATTERN.lastIndex = 0;
+  if (hasDouble) return true;
+
+  SINGLE_BRACE_PATTERN.lastIndex = 0;
+  const hasSingle = SINGLE_BRACE_PATTERN.test(template);
+  SINGLE_BRACE_PATTERN.lastIndex = 0;
+  return hasSingle;
 }
 
 // Re-export context

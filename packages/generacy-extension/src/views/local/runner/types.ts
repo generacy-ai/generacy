@@ -63,6 +63,17 @@ export interface WorkflowPhase {
 }
 
 /**
+ * Workflow input definition
+ */
+export interface WorkflowInput {
+  name: string;
+  description?: string;
+  type?: string;
+  required?: boolean;
+  default?: unknown;
+}
+
+/**
  * Parsed workflow structure for execution
  */
 export interface ExecutableWorkflow {
@@ -71,6 +82,7 @@ export interface ExecutableWorkflow {
   phases: WorkflowPhase[];
   env?: Record<string, string>;
   timeout?: number;
+  inputs?: WorkflowInput[];
 }
 
 /**
