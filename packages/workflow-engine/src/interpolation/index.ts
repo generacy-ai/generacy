@@ -30,9 +30,10 @@ export interface InterpolateOptions {
 
 /**
  * Regular expression for matching variable expressions
- * Matches ${...} patterns
+ * Matches both ${{ ... }} (double-brace, GitHub Actions style) and ${...} (single-brace) patterns.
+ * Double-brace is checked first so ${{ expr }} doesn't partially match as ${ expr }.
  */
-const VARIABLE_PATTERN = /\$\{([^}]+)\}/g;
+const VARIABLE_PATTERN = /\$\{\{\s*([^}]+?)\s*\}\}|\$\{([^}]+)\}/g;
 
 /**
  * Parse a variable reference from an expression
@@ -227,7 +228,8 @@ export function interpolate(
 ): string {
   const { strict = false, defaultValue = '', coerceToString = true } = options;
 
-  return template.replace(VARIABLE_PATTERN, (match, expression: string) => {
+  return template.replace(VARIABLE_PATTERN, (match, doubleBrace: string | undefined, singleBrace: string | undefined) => {
+    const expression = (doubleBrace ?? singleBrace ?? '').trim();
     const ref = parseVariableReference(expression);
     const value = resolveVariableReference(ref, context);
 
@@ -295,7 +297,8 @@ export function extractVariableReferences(template: string): VariableReference[]
   let match;
 
   while ((match = VARIABLE_PATTERN.exec(template)) !== null) {
-    refs.push(parseVariableReference(match[1]!));
+    const expression = (match[1] ?? match[2] ?? '').trim();
+    refs.push(parseVariableReference(expression));
   }
 
   // Reset lastIndex for subsequent calls
