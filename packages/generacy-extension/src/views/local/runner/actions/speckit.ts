@@ -120,28 +120,36 @@ export class SpecKitAction extends BaseAction {
   ): Promise<Omit<ActionResult, 'duration'>> {
     const description = String(inputs['description'] || 'New feature');
     const shortName = inputs['short_name'] ? String(inputs['short_name']) : undefined;
+    const explicitNumber = inputs['number'] ? Number(inputs['number']) : undefined;
     const cwd = context.workdir;
 
     try {
-      // Find next feature number from specs/ directory
       const specsDir = `${cwd}/specs`;
-      let nextNum = 1;
+      let featureNum: number;
 
-      try {
-        const lsResult = await executeShellCommand(`ls -1 "${specsDir}" 2>/dev/null || echo ""`, { cwd });
-        const entries = lsResult.stdout.trim().split('\n').filter(Boolean);
-        for (const entry of entries) {
-          const match = entry.match(/^(\d{3})-/);
-          if (match) {
-            const num = parseInt(match[1], 10);
-            if (num >= nextNum) nextNum = num + 1;
+      if (explicitNumber && !isNaN(explicitNumber)) {
+        // Use the issue number directly as the feature number
+        featureNum = explicitNumber;
+        context.logger.info(`Using issue number ${featureNum} as feature number`);
+      } else {
+        // Find next feature number from specs/ directory
+        featureNum = 1;
+        try {
+          const lsResult = await executeShellCommand(`ls -1 "${specsDir}" 2>/dev/null || echo ""`, { cwd });
+          const entries = lsResult.stdout.trim().split('\n').filter(Boolean);
+          for (const entry of entries) {
+            const match = entry.match(/^(\d{3})-/);
+            if (match) {
+              const num = parseInt(match[1], 10);
+              if (num >= featureNum) featureNum = num + 1;
+            }
           }
+        } catch {
+          // specs dir doesn't exist yet, start at 1
         }
-      } catch {
-        // specs dir doesn't exist yet, start at 1
       }
 
-      const paddedNum = String(nextNum).padStart(3, '0');
+      const paddedNum = String(featureNum).padStart(3, '0');
 
       // Generate slug from description or use short_name
       const slug = shortName || this.generateSlug(description);

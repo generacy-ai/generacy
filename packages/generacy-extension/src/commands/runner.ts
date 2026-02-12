@@ -237,6 +237,7 @@ async function collectSpeckitInputs(
     if (issue) {
       inputs['description'] = issue.title;
       inputs['issue_url'] = issue.url;
+      inputs['issue_number'] = issue.number;
       logger.info(`Resolved issue #${issue.number}: ${issue.title}`);
       vscode.window.showInformationMessage(
         `Resolved issue #${issue.number}: ${issue.title}`
