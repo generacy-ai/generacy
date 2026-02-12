@@ -9,6 +9,7 @@ import { getLogger, createWorkflowLogger } from '../utils/logger.js';
 import { createConfig } from '../utils/config.js';
 import {
   OrchestratorClient,
+  OrchestratorClientError,
   HeartbeatManager,
   JobHandler,
   type WorkerRegistration,
@@ -75,9 +76,31 @@ export function workerCommand(): Command {
         await client.register(registration);
         logger.info({ workerId }, 'Worker registered with orchestrator');
       } catch (error) {
-        logger.error({ error }, 'Failed to register worker');
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error({ error: msg }, 'Failed to register worker');
         process.exit(1);
       }
+
+      // Re-registration helper for when the orchestrator drops us
+      let isReregistering = false;
+      const reregister = async () => {
+        if (isReregistering) return;
+        isReregistering = true;
+        try {
+          logger.info({ workerId }, 'Worker not found in orchestrator, re-registering...');
+          await client.register(registration);
+          logger.info({ workerId }, 'Worker re-registered with orchestrator');
+        } catch (regError) {
+          const msg = regError instanceof Error ? regError.message : String(regError);
+          logger.error({ error: msg }, 'Re-registration failed');
+        } finally {
+          isReregistering = false;
+        }
+      };
+
+      // Helper to detect WORKER_NOT_FOUND errors
+      const isWorkerNotFound = (error: Error): boolean =>
+        error instanceof OrchestratorClientError && error.code === 'WORKER_NOT_FOUND';
 
       // Create heartbeat manager
       const heartbeatManager = new HeartbeatManager({
@@ -96,6 +119,9 @@ export function workerCommand(): Command {
         },
         onError: (error) => {
           logger.warn({ error: error.message }, 'Heartbeat failed');
+          if (isWorkerNotFound(error)) {
+            reregister();
+          }
         },
       });
 
@@ -120,6 +146,9 @@ export function workerCommand(): Command {
         },
         onError: (error, job) => {
           logger.error({ error: error.message, jobId: job?.id }, 'Job error');
+          if (isWorkerNotFound(error)) {
+            reregister();
+          }
         },
       });
 

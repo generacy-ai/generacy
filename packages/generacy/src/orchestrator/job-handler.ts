@@ -2,6 +2,8 @@
  * Job handler.
  * Handles job polling, execution, and result reporting.
  */
+import { existsSync } from 'node:fs';
+import { resolve, isAbsolute } from 'node:path';
 import {
   loadWorkflowFromString,
   loadWorkflow,
@@ -187,7 +189,8 @@ export class JobHandler {
         if (job.workflow.includes('\n') || job.workflow.startsWith('name:')) {
           definition = await loadWorkflowFromString(job.workflow);
         } else {
-          definition = await loadWorkflow(job.workflow);
+          const resolvedPath = this.resolveWorkflowPath(job.workflow, job.workdir);
+          definition = await loadWorkflow(resolvedPath);
         }
       } else {
         // Already a workflow object
@@ -251,6 +254,37 @@ export class JobHandler {
         this.pollTimer = setTimeout(() => this.poll(), this.pollInterval);
       }
     }
+  }
+
+  /**
+   * Resolve a workflow name or path to an absolute file path.
+   * Searches: absolute path, relative to workdir, .generacy/ directories.
+   */
+  private resolveWorkflowPath(workflow: string, jobWorkdir?: string): string {
+    // If already absolute and exists, use directly
+    if (isAbsolute(workflow) && existsSync(workflow)) {
+      return workflow;
+    }
+
+    const searchDirs = [
+      jobWorkdir ?? this.workdir,
+      '/workspaces/tetrad-development',
+    ];
+
+    for (const dir of searchDirs) {
+      // Try as-is relative to dir
+      const direct = resolve(dir, workflow);
+      if (existsSync(direct)) return direct;
+
+      // Try in .generacy/ subdirectory
+      for (const ext of ['', '.yaml', '.yml']) {
+        const candidate = resolve(dir, '.generacy', `${workflow}${ext}`);
+        if (existsSync(candidate)) return candidate;
+      }
+    }
+
+    // Fallback: return original string (will produce a clear "file not found" error)
+    return workflow;
   }
 
   /**
