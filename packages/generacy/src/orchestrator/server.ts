@@ -137,6 +137,7 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
   const registerRoute = pathToRegex('/api/workers/register');
   const unregisterRoute = pathToRegex('/api/workers/:workerId');
   const heartbeatRoute = pathToRegex('/api/workers/:workerId/heartbeat');
+  const submitJobRoute = pathToRegex('/api/jobs');
   const pollRoute = pathToRegex('/api/jobs/poll');
   const getJobRoute = pathToRegex('/api/jobs/:jobId');
   const statusRoute = pathToRegex('/api/jobs/:jobId/status');
@@ -148,6 +149,7 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
     { method: 'POST', pattern: registerRoute.regex, handler: 'registerWorker', paramNames: registerRoute.paramNames },
     { method: 'DELETE', pattern: unregisterRoute.regex, handler: 'unregisterWorker', paramNames: unregisterRoute.paramNames },
     { method: 'POST', pattern: heartbeatRoute.regex, handler: 'handleHeartbeat', paramNames: heartbeatRoute.paramNames },
+    { method: 'POST', pattern: submitJobRoute.regex, handler: 'submitJob', paramNames: submitJobRoute.paramNames },
     { method: 'GET', pattern: pollRoute.regex, handler: 'pollJob', paramNames: pollRoute.paramNames },
     { method: 'GET', pattern: getJobRoute.regex, handler: 'getJob', paramNames: getJobRoute.paramNames },
     { method: 'PUT', pattern: statusRoute.regex, handler: 'updateJobStatus', paramNames: statusRoute.paramNames },
@@ -171,6 +173,46 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
         unhealthyWorkers: workerCounts.unhealthy,
         timestamp: new Date().toISOString(),
       });
+    },
+
+    /**
+     * POST /api/jobs - Submit a new job
+     */
+    async submitJob(req: IncomingMessage, res: ServerResponse) {
+      try {
+        const body = await parseJsonBody<Omit<Job, 'id' | 'status' | 'createdAt'>>(req);
+
+        if (!body.name) {
+          sendError(res, 400, 'INVALID_REQUEST', 'Missing required field: name');
+          return;
+        }
+
+        if (!body.workflow) {
+          sendError(res, 400, 'INVALID_REQUEST', 'Missing required field: workflow');
+          return;
+        }
+
+        const job: Job = {
+          ...body,
+          id: randomUUID(),
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+          priority: body.priority ?? ('normal' as JobPriority),
+          inputs: body.inputs ?? {},
+        };
+
+        await jobQueue.enqueue(job);
+        logger.info('Job submitted via API', { jobId: job.id, name: job.name });
+
+        sendJson(res, 201, { jobId: job.id, status: job.status });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'Invalid JSON') {
+          sendError(res, 400, 'INVALID_REQUEST', 'Invalid JSON in request body');
+        } else {
+          logger.error('Error submitting job', { error: String(error) });
+          sendError(res, 500, 'INTERNAL_ERROR', 'Failed to submit job');
+        }
+      }
     },
 
     /**

@@ -35,6 +35,7 @@ export const COMMANDS = {
   refreshExplorer: 'generacy.refreshExplorer',
   openWorkflow: 'generacy.openWorkflow',
   revealInExplorer: 'generacy.revealInExplorer',
+  submitJob: 'generacy.submitJob',
 } as const;
 
 /**

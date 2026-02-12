@@ -63,6 +63,12 @@
         "icon": "$(check)"
       },
       {
+        "command": "generacy.submitJob",
+        "title": "Submit Job to Orchestrator",
+        "category": "Generacy",
+        "icon": "$(cloud-upload)"
+      },
+      {
         "command": "generacy.refreshExplorer",
         "title": "Refresh Explorer",
         "category": "Generacy",

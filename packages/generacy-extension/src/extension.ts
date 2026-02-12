@@ -166,6 +166,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
       id: COMMANDS.revealInExplorer,
       handler: withErrorHandling(handleRevealInExplorer, { showOutput: true }),
     },
+    {
+      id: COMMANDS.submitJob,
+      handler: withErrorHandling(handleSubmitJob, { showOutput: true }),
+    },
   ];
 
   for (const { id, handler } of commands) {
@@ -436,6 +440,154 @@ async function handleRevealInExplorer(arg?: unknown): Promise<void> {
   }
 
   await vscode.commands.executeCommand('revealInExplorer', item.uri);
+}
+
+/**
+ * Submit a job to the orchestrator via command palette.
+ * Prompts for a GitHub issue URL/number, resolves it, and POSTs to the orchestrator.
+ */
+async function handleSubmitJob(): Promise<void> {
+  const logger = getLogger();
+  logger.info('Command: Submit Job');
+
+  // Prompt for issue URL/number or description
+  const value = await vscode.window.showInputBox({
+    title: 'Submit Job to Orchestrator',
+    prompt: 'Enter a GitHub issue URL, issue number (#123), or job description',
+    placeHolder: 'https://github.com/org/repo/issues/123 or #61 or "Fix login bug"',
+    ignoreFocusOut: true,
+  });
+
+  if (value === undefined || !value.trim()) {
+    return;
+  }
+
+  // Try to resolve as GitHub issue
+  let jobName = value.trim();
+  let issueUrl: string | undefined;
+  let issueNumber: number | undefined;
+  let issueBody: string | undefined;
+
+  const isIssueRef = value.match(/github\.com\/.*\/issues\/\d+/) || value.match(/^#?\d+$/);
+  if (isIssueRef) {
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    try {
+      const { execFile } = await import('child_process');
+      const { promisify } = await import('util');
+      const execFileAsync = promisify(execFile);
+
+      const urlMatch = value.match(/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
+      const numberMatch = value.match(/^#?(\d+)$/);
+
+      const args = ['issue', 'view', '--json', 'number,title,body,url'];
+      if (urlMatch) {
+        args.push(urlMatch[3]!, '--repo', `${urlMatch[1]}/${urlMatch[2]}`);
+      } else if (numberMatch) {
+        args.push(numberMatch[1]!);
+      }
+
+      const { stdout } = await execFileAsync('gh', args, { cwd, timeout: 15000 });
+      const issue = JSON.parse(stdout);
+      jobName = issue.title;
+      issueUrl = issue.url;
+      issueNumber = issue.number;
+      issueBody = issue.body || '';
+      logger.info(`Resolved issue #${issue.number}: ${issue.title}`);
+    } catch {
+      vscode.window.showWarningMessage(`Could not fetch issue "${value}". Using as description.`);
+    }
+  }
+
+  // Select workflow type
+  const workflowType = await vscode.window.showQuickPick(
+    [
+      { label: 'speckit-feature', description: 'Full spec-driven feature development' },
+      { label: 'speckit-bugfix', description: 'Bug fix workflow' },
+      { label: 'custom', description: 'Custom workflow name' },
+    ],
+    { title: 'Select workflow type', placeHolder: 'Which workflow should run?' }
+  );
+
+  if (!workflowType) {
+    return;
+  }
+
+  let workflow = workflowType.label;
+  if (workflow === 'custom') {
+    const customName = await vscode.window.showInputBox({
+      prompt: 'Enter workflow name',
+      placeHolder: 'my-workflow',
+    });
+    if (!customName) return;
+    workflow = customName;
+  }
+
+  // Get orchestrator URL from config or default
+  const config = getConfig();
+  const orchestratorUrl = config.get('orchestratorUrl') || 'http://localhost:3100';
+
+  // Build job payload
+  const jobPayload = {
+    name: jobName,
+    workflow,
+    priority: 'normal',
+    inputs: {
+      description: jobName,
+      ...(issueUrl && { issue_url: issueUrl }),
+      ...(issueNumber && { issue_number: issueNumber }),
+      ...(issueBody && { issue_body: issueBody }),
+    },
+    metadata: {
+      source: 'vscode-extension',
+      submittedAt: new Date().toISOString(),
+    },
+  };
+
+  // Submit to orchestrator
+  try {
+    const http = await import('http');
+    const url = new URL('/api/jobs', orchestratorUrl);
+
+    const result = await new Promise<{ jobId: string; status: string }>((resolve, reject) => {
+      const body = JSON.stringify(jobPayload);
+      const req = http.request(
+        {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': Buffer.byteLength(body),
+          },
+        },
+        (res) => {
+          let data = '';
+          res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+          res.on('end', () => {
+            if (res.statusCode === 201) {
+              resolve(JSON.parse(data));
+            } else {
+              reject(new Error(`Orchestrator returned ${res.statusCode}: ${data}`));
+            }
+          });
+        }
+      );
+      req.on('error', reject);
+      req.write(body);
+      req.end();
+    });
+
+    const issueLabel = issueNumber ? ` (issue #${issueNumber})` : '';
+    vscode.window.showInformationMessage(
+      `Job submitted${issueLabel}: ${result.jobId.substring(0, 8)}... [${result.status}]`
+    );
+    logger.info('Job submitted to orchestrator', { jobId: result.jobId, name: jobName });
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    vscode.window.showErrorMessage(`Failed to submit job: ${msg}`);
+    throw new GeneracyError(ErrorCode.ApiConnectionError, `Failed to submit job: ${msg}`);
+  }
 }
 
 /**
