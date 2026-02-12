@@ -2,6 +2,7 @@
  * Heartbeat manager.
  * Handles periodic heartbeat to orchestrator.
  */
+import { totalmem } from 'os';
 import type { OrchestratorClient } from './client.js';
 import type { Heartbeat, HeartbeatCommand } from './types.js';
 
@@ -145,7 +146,7 @@ export class HeartbeatManager {
   private collectMetrics(): Heartbeat['metrics'] {
     // Get memory usage
     const memUsage = process.memoryUsage();
-    const totalMem = require('os').totalmem?.() ?? 0;
+    const totalMem = totalmem?.() ?? 0;
     const memoryUsage = totalMem > 0 ? (memUsage.rss / totalMem) * 100 : 0;
 
     return {
