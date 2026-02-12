@@ -73,7 +73,8 @@ export class SpecKitAction extends BaseAction {
    * Check if this handler can process the given step
    */
   canHandle(step: StepDefinition): boolean {
-    return parseActionType(step) === 'speckit';
+    const uses = step.uses || step.action || '';
+    return uses.startsWith('speckit.') || uses.startsWith('speckit/');
   }
 
   /**
