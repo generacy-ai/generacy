@@ -197,7 +197,7 @@ export class JobHandler {
         definition = job.workflow;
       }
 
-      const workflow = prepareWorkflow(definition as WorkflowDefinition);
+      const workflow = prepareWorkflow(definition as WorkflowDefinition, job.inputs);
 
       // Create executor
       const executor = new WorkflowExecutor({
