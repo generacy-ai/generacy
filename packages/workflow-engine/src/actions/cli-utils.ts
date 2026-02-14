@@ -187,6 +187,7 @@ export async function executeShellCommand(
     const proc = spawn(command, [], {
       cwd,
       env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
       shell: true,
       signal,
     });
