@@ -15,7 +15,7 @@ import type {
   PrCreateOutput,
 } from '../../types/index.js';
 import { parseActionType } from '../../types/action.js';
-import { executeCommand, extractJSON } from '../cli-utils.js';
+import { executeCommand } from '../cli-utils.js';
 
 /**
  * Action handler for GitHub PR creation
@@ -93,9 +93,6 @@ export class PrCreateAction extends BaseAction {
         }
       }
 
-      // Add JSON output
-      args.push('--json', 'number,url,state,headRefName,baseRefName');
-
       // Execute gh pr create
       const result = await executeCommand('gh', args, {
         cwd: context.workdir,
@@ -116,41 +113,21 @@ export class PrCreateAction extends BaseAction {
         );
       }
 
-      // Parse JSON output
-      const parsedOutput = extractJSON(result.stdout);
-
-      if (!parsedOutput || typeof parsedOutput !== 'object') {
-        // Fallback: try to extract PR URL from output
-        const urlMatch = result.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
-        if (urlMatch) {
-          const prOutput: PrCreateOutput = {
-            number: parseInt(urlMatch[1]!, 10),
-            url: urlMatch[0]!,
-            state: input.draft ? 'draft' : 'open',
-            headBranch: '',
-            baseBranch: input.base ?? 'main',
-          };
-
-          return this.successResult(prOutput, {
-            exitCode: result.exitCode,
-            stdout: result.stdout,
-            stderr: result.stderr,
-          });
-        }
-
+      // Parse PR URL from output (gh pr create outputs the URL to stdout)
+      const urlMatch = result.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
+      if (!urlMatch) {
         return this.failureResult('Failed to parse PR creation output', {
           stdout: result.stdout,
           stderr: result.stderr,
         });
       }
 
-      const parsed = parsedOutput as Record<string, unknown>;
       const prOutput: PrCreateOutput = {
-        number: parsed['number'] as number,
-        url: parsed['url'] as string,
-        state: (parsed['state'] as string)?.toLowerCase() === 'draft' ? 'draft' : 'open',
-        headBranch: parsed['headRefName'] as string,
-        baseBranch: parsed['baseRefName'] as string,
+        number: parseInt(urlMatch[1]!, 10),
+        url: urlMatch[0]!,
+        state: input.draft ? 'draft' : 'open',
+        headBranch: '',
+        baseBranch: input.base ?? 'main',
       };
 
       context.logger.info(`PR created: ${prOutput.url}`);
