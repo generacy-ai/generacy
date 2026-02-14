@@ -234,7 +234,7 @@ export async function executeImplement(
     const prompt = buildTaskPrompt(task, input.feature_dir, specContent, planContent);
 
     try {
-      const result = await executeCommand('claude', ['-p', prompt, '--output-format', 'json'], {
+      const result = await executeCommand('claude', ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'], {
         cwd: input.feature_dir,
         timeout,
         signal: context.signal,

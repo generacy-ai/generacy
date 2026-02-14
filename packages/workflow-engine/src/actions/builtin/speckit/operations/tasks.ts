@@ -173,8 +173,8 @@ export async function executeTasks(
   const prompt = buildTasksPrompt(input.feature_dir, specContent, planContent);
 
   try {
-    // Invoke Claude agent
-    const args: string[] = ['-p', prompt, '--output-format', 'json'];
+    // Invoke Claude agent (--dangerously-skip-permissions for automated workflows)
+    const args: string[] = ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'];
     const timeout = (input.timeout ?? 300) * 1000;
 
     const result = await executeCommand('claude', args, {
