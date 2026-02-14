@@ -112,6 +112,7 @@ export async function executeCommand(
     const proc = spawn(command, args, {
       cwd,
       env: { ...process.env, ...env },
+      stdio: ['ignore', 'pipe', 'pipe'],
       signal,
     });
 
