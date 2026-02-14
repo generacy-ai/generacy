@@ -467,6 +467,7 @@ async function handleSubmitJob(): Promise<void> {
   let issueUrl: string | undefined;
   let issueNumber: number | undefined;
   let issueBody: string | undefined;
+  let repoName: string | undefined;
 
   const isIssueRef = value.match(/github\.com\/.*\/issues\/\d+/) || value.match(/^#?\d+$/);
   if (isIssueRef) {
@@ -482,6 +483,7 @@ async function handleSubmitJob(): Promise<void> {
       const args = ['issue', 'view', '--json', 'number,title,body,url'];
       if (urlMatch) {
         args.push(urlMatch[3]!, '--repo', `${urlMatch[1]}/${urlMatch[2]}`);
+        repoName = urlMatch[2];
       } else if (numberMatch) {
         args.push(numberMatch[1]!);
       }
@@ -493,8 +495,23 @@ async function handleSubmitJob(): Promise<void> {
       issueNumber = issue.number;
       issueBody = issue.body || '';
       logger.info(`Resolved issue #${issue.number}: ${issue.title}`);
+
+      // Extract repo name from resolved issue URL if not already set
+      if (!repoName && issueUrl) {
+        const resolvedMatch = issueUrl.match(/github\.com\/[^/]+\/([^/]+)/);
+        if (resolvedMatch) repoName = resolvedMatch[1];
+      }
     } catch {
       vscode.window.showWarningMessage(`Could not fetch issue "${value}". Using as description.`);
+    }
+  }
+
+  // Fall back to workspace folder name for repo
+  if (!repoName) {
+    const wsFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (wsFolder) {
+      const { basename } = await import('path');
+      repoName = basename(wsFolder);
     }
   }
 
@@ -531,6 +548,7 @@ async function handleSubmitJob(): Promise<void> {
     name: jobName,
     workflow,
     priority: 'normal',
+    ...(repoName && { workdir: `/workspaces/${repoName}` }),
     inputs: {
       description: jobName,
       ...(issueUrl && { issue_url: issueUrl }),
