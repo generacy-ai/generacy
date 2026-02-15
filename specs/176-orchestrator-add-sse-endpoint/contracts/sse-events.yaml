@@ -1,0 +1,280 @@
+# SSE Events API Contract
+# Feature: 176-orchestrator-add-sse-endpoint
+
+openapi: 3.0.3
+info:
+  title: Orchestrator SSE Events API
+  version: 1.0.0
+  description: Server-Sent Events endpoints for real-time job event streaming
+
+paths:
+  /api/jobs/{jobId}/events:
+    get:
+      operationId: subscribeJobEvents
+      summary: Subscribe to SSE stream for a single job's events
+      description: |
+        Returns a Server-Sent Events stream for the specified job.
+        Events are delivered in real-time as they are published by workers.
+        Supports reconnection via Last-Event-ID header.
+        Stream auto-closes when the job reaches a terminal state (completed, failed, cancelled).
+        If the job is already in a terminal state and the buffer still exists (within grace period),
+        all buffered events are replayed and the stream is closed.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The job ID to subscribe to
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SSE event stream
+          headers:
+            Content-Type:
+              schema:
+                type: string
+                enum: ["text/event-stream"]
+            Cache-Control:
+              schema:
+                type: string
+                enum: ["no-cache"]
+            Connection:
+              schema:
+                type: string
+                enum: ["keep-alive"]
+            X-Accel-Buffering:
+              schema:
+                type: string
+                enum: ["no"]
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SSEStream"
+              examples:
+                stepComplete:
+                  summary: Step completion event
+                  value: |
+                    event: step:complete
+                    id: 5
+                    data: {"id":"5","type":"step:complete","timestamp":1708012800000,"jobId":"abc-123","data":{"phaseName":"specification","stepName":"specify","duration":199317,"status":"completed"}}
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/JobNotFound"
+
+    post:
+      operationId: publishEvent
+      summary: Publish an event for a job
+      description: |
+        Workers post events to this endpoint during job execution.
+        Events are buffered in the job's ring buffer and broadcast to all SSE subscribers.
+        Returns 404 if the job does not exist.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishEventRequest"
+            examples:
+              stepStart:
+                summary: Step started event
+                value:
+                  type: "step:start"
+                  data:
+                    phaseName: "specification"
+                    stepName: "specify"
+                    stepIndex: 0
+              stepOutput:
+                summary: Step output event
+                value:
+                  type: "step:output"
+                  data:
+                    phaseName: "specification"
+                    stepName: "specify"
+                    output: "Processing file 42/100..."
+                    stream: "stdout"
+      responses:
+        "201":
+          description: Event published successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [eventId]
+                properties:
+                  eventId:
+                    type: string
+                    description: The assigned event ID
+                    example: "12"
+        "400":
+          description: Invalid request (missing type or data)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error:
+                  code: INVALID_REQUEST
+                  message: "Missing required field: type"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/JobNotFound"
+
+  /api/events:
+    get:
+      operationId: subscribeAllEvents
+      summary: Subscribe to SSE stream for all jobs with optional filters
+      description: |
+        Returns a Server-Sent Events stream for events across all jobs.
+        Supports filtering by job tags, workflow name, and job status.
+        Multiple filters combine with AND logic.
+        New jobs automatically appear in the stream without reconnection.
+        Supports reconnection via Last-Event-ID header.
+      parameters:
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated list of job tags to filter by (OR within tags, AND with other filters)
+          example: "ml,training"
+        - name: workflow
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Workflow name to filter by
+          example: "ci-pipeline"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Comma-separated list of job statuses to filter by
+          example: "running,assigned"
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/SSEStream"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Same Bearer token as other orchestrator endpoints
+
+  schemas:
+    JobEventType:
+      type: string
+      enum:
+        - "job:status"
+        - "phase:start"
+        - "phase:complete"
+        - "step:start"
+        - "step:complete"
+        - "step:output"
+        - "action:error"
+        - "log:append"
+
+    JobEvent:
+      type: object
+      required: [id, type, timestamp, jobId, data]
+      properties:
+        id:
+          type: string
+          description: Monotonic counter per job
+          example: "42"
+        type:
+          $ref: "#/components/schemas/JobEventType"
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds
+          example: 1708012800000
+        jobId:
+          type: string
+          description: Associated job ID
+          example: "abc-123"
+        data:
+          type: object
+          additionalProperties: true
+          description: Type-specific payload
+
+    PublishEventRequest:
+      type: object
+      required: [type, data]
+      properties:
+        type:
+          $ref: "#/components/schemas/JobEventType"
+        data:
+          type: object
+          additionalProperties: true
+          description: Event-specific payload
+
+    SSEStream:
+      type: string
+      description: |
+        Server-Sent Events stream. Each event has the format:
+
+            event: {type}
+            id: {counter}
+            data: {JSON-encoded JobEvent}
+
+        Heartbeat pings sent every 30 seconds:
+
+            : ping
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+
+  responses:
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: Authentication required
+
+    JobNotFound:
+      description: Job not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error:
+              code: JOB_NOT_FOUND
+              message: "Job with ID abc-123 not found"
