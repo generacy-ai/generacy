@@ -1,4 +1,5 @@
 import type {
+  CreateDecisionRequest,
   DecisionQueueItem,
   DecisionResponse,
   DecisionResponseRequest,
@@ -14,6 +15,7 @@ import { Errors } from '../middleware/error-handler.js';
 export interface MessageRouter {
   getQueue(query?: QueueQuery): Promise<DecisionQueueItem[]>;
   getDecision(id: string): Promise<DecisionQueueItem | null>;
+  createDecision(request: CreateDecisionRequest): Promise<DecisionQueueItem>;
   respondToDecision(id: string, response: DecisionResponseRequest, respondedBy: string): Promise<DecisionResponse>;
 }
 
@@ -55,6 +57,24 @@ export class InMemoryQueueStore implements MessageRouter {
 
   async getDecision(id: string): Promise<DecisionQueueItem | null> {
     return this.queue.get(id) ?? null;
+  }
+
+  async createDecision(request: CreateDecisionRequest): Promise<DecisionQueueItem> {
+    const item: DecisionQueueItem = {
+      id: crypto.randomUUID(),
+      workflowId: request.workflowId,
+      stepId: request.stepId,
+      type: request.type,
+      prompt: request.prompt,
+      options: request.options,
+      context: request.context,
+      priority: request.priority,
+      createdAt: new Date().toISOString(),
+      expiresAt: request.expiresAt ?? null,
+    };
+
+    this.queue.set(item.id, item);
+    return item;
   }
 
   async respondToDecision(
@@ -125,6 +145,13 @@ export class QueueService {
    */
   async getQueue(query?: QueueQuery): Promise<DecisionQueueItem[]> {
     return this.router.getQueue(query);
+  }
+
+  /**
+   * Create a new decision in the queue
+   */
+  async createDecision(request: CreateDecisionRequest): Promise<DecisionQueueItem> {
+    return this.router.createDecision(request);
   }
 
   /**

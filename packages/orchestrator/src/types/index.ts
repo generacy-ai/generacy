@@ -33,6 +33,8 @@ export {
   type DecisionOption,
   DecisionQueueItemSchema,
   type DecisionQueueItem,
+  CreateDecisionRequestSchema,
+  type CreateDecisionRequest,
   DecisionResponseRequestSchema,
   type DecisionResponseRequest,
   DecisionResponseSchema,

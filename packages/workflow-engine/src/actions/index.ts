@@ -252,6 +252,8 @@ export { VerificationCheckAction } from './builtin/verification-check.js';
 export { PrCreateAction } from './builtin/pr-create.js';
 export { ShellAction } from './builtin/shell.js';
 export { HumancyReviewAction, type HumanDecisionHandler } from './builtin/humancy-review.js';
+export { HumancyApiDecisionHandler, type HumancyApiHandlerConfig } from './builtin/humancy-api-handler.js';
+export { CorrelationTimeoutError } from '../errors/correlation-timeout.js';
 export { SpecKitAction } from './builtin/speckit/index.js';
 export * from './builtin/speckit/types.js';
 

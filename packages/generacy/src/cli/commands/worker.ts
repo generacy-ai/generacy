@@ -14,6 +14,7 @@ import {
   JobHandler,
   type WorkerRegistration,
 } from '../../orchestrator/index.js';
+import { HumancyApiDecisionHandler, type HumanDecisionHandler } from '@generacy-ai/workflow-engine';
 import { createHealthServer } from '../../health/server.js';
 
 /**
@@ -125,6 +126,21 @@ export function workerCommand(): Command {
         },
       });
 
+      // Create Humancy API decision handler if configured
+      const humancyApiUrl = process.env['HUMANCY_API_URL'];
+      let humanDecisionHandler: HumanDecisionHandler | undefined;
+      if (humancyApiUrl) {
+        const humancyAgentId = process.env['HUMANCY_AGENT_ID'] ?? workerId;
+        const humancyAuthToken = process.env['HUMANCY_AUTH_TOKEN'] ?? process.env['ORCHESTRATOR_TOKEN'];
+        humanDecisionHandler = new HumancyApiDecisionHandler({
+          apiUrl: humancyApiUrl,
+          agentId: humancyAgentId,
+          authToken: humancyAuthToken,
+          fallbackToSimulation: true,
+        });
+        logger.info({ humancyApiUrl, humancyAgentId }, 'Humancy API decision handler configured');
+      }
+
       // Create job handler
       const workflowLogger = createWorkflowLogger(logger);
       const jobHandler = new JobHandler({
@@ -134,6 +150,7 @@ export function workerCommand(): Command {
         logger: workflowLogger,
         workdir: config.workdir,
         capabilities,
+        humanDecisionHandler,
         onJobStart: (job) => {
           logger.info({ jobId: job.id, jobName: job.name }, 'Job started');
           heartbeatManager.setStatus('busy');
