@@ -72,14 +72,14 @@ export function runCommand(): Command {
         const definition = await loadWorkflow(resolvedPath);
         logger.info({ name: definition.name }, 'Workflow loaded');
 
-        // Prepare workflow for execution
-        const workflow = prepareWorkflow(definition);
-
         // Parse inputs
         const inputs = parseInputs(options.input || []);
         if (Object.keys(inputs).length > 0) {
           logger.info({ inputs: Object.keys(inputs) }, 'Parsed inputs');
         }
+
+        // Prepare workflow for execution
+        const workflow = prepareWorkflow(definition, inputs);
 
         // Register builtin actions
         registerBuiltinActions();
