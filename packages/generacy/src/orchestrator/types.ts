@@ -197,3 +197,50 @@ export interface OrchestratorError {
   /** Additional details */
   details?: Record<string, unknown>;
 }
+
+/**
+ * SSE event types emitted by the orchestrator
+ */
+export type JobEventType =
+  | 'job:status'
+  | 'phase:start'
+  | 'phase:complete'
+  | 'step:start'
+  | 'step:complete'
+  | 'step:output'
+  | 'action:error'
+  | 'log:append';
+
+/**
+ * A single SSE event for a job
+ */
+export interface JobEvent {
+  /** Monotonic counter ID (per-job) */
+  id: string;
+
+  /** Event type */
+  type: JobEventType;
+
+  /** Unix epoch milliseconds */
+  timestamp: number;
+
+  /** Job this event belongs to */
+  jobId: string;
+
+  /** Event payload */
+  data: Record<string, unknown>;
+}
+
+/**
+ * Filters for the global SSE event stream
+ */
+export interface EventFilters {
+  /** Only include events for jobs with at least one matching tag */
+  tags?: string[];
+
+  /** Only include events for jobs with this workflow */
+  workflow?: string;
+
+  /** Only include events for jobs in one of these statuses */
+  status?: JobStatus[];
+}

@@ -28,6 +28,9 @@ export type { JobQueue } from './job-queue.js';
 export { createOrchestratorServer } from './server.js';
 export type { OrchestratorServer, OrchestratorServerOptions } from './server.js';
 
+export { EventBus } from './event-bus.js';
+export type { EventBusOptions } from './event-bus.js';
+
 export type {
   Job,
   JobStatus,
@@ -38,4 +41,7 @@ export type {
   HeartbeatResponse,
   PollResponse,
   OrchestratorError,
+  JobEventType,
+  JobEvent,
+  EventFilters,
 } from './types.js';

@@ -4,7 +4,10 @@
  */
 import type {
   Job,
+  JobEvent,
   JobResult,
+  JobEventType,
+  EventFilters,
   WorkerRegistration,
   Heartbeat,
   HeartbeatResponse,
@@ -167,6 +170,191 @@ export class OrchestratorClient {
    */
   async cancelJob(jobId: string, reason?: string): Promise<void> {
     await this.request('POST', `/api/jobs/${jobId}/cancel`, { reason });
+  }
+
+  /**
+   * Publish an event for a job
+   */
+  async publishEvent(
+    jobId: string,
+    event: { type: JobEventType; data: Record<string, unknown>; timestamp?: number },
+  ): Promise<{ eventId: string }> {
+    return this.request('POST', `/api/jobs/${jobId}/events`, event);
+  }
+
+  /**
+   * Subscribe to SSE events for a specific job.
+   * Returns an AsyncIterable that yields parsed JobEvent objects.
+   * The stream can be cancelled via AbortSignal or by breaking out of the for-await loop.
+   */
+  async *subscribeEvents(
+    jobId: string,
+    options?: { lastEventId?: string; signal?: AbortSignal },
+  ): AsyncGenerator<JobEvent, void, undefined> {
+    const url = `${this.baseUrl}/api/jobs/${jobId}/events`;
+    const headers: Record<string, string> = {
+      ...this.customHeaders,
+    };
+
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
+    if (options?.lastEventId) {
+      headers['Last-Event-ID'] = options.lastEventId;
+    }
+
+    const response = await fetch(url, {
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!response.ok) {
+      let errorData: OrchestratorError;
+      try {
+        errorData = await response.json() as OrchestratorError;
+      } catch {
+        errorData = {
+          code: 'UNKNOWN_ERROR',
+          message: response.statusText,
+        };
+      }
+      throw new OrchestratorClientError(
+        errorData.message,
+        errorData.code,
+        response.status,
+        errorData.details,
+      );
+    }
+
+    yield* this.parseSSEStream(response, options?.signal);
+  }
+
+  /**
+   * Subscribe to SSE events for all jobs, optionally filtered.
+   * Returns an AsyncIterable that yields parsed JobEvent objects.
+   * The stream can be cancelled via AbortSignal or by breaking out of the for-await loop.
+   */
+  async *subscribeAllEvents(
+    options?: { filters?: EventFilters; lastEventId?: string; signal?: AbortSignal },
+  ): AsyncGenerator<JobEvent, void, undefined> {
+    // Build query string from filters
+    const params = new URLSearchParams();
+    if (options?.filters?.tags && options.filters.tags.length > 0) {
+      params.set('tags', options.filters.tags.join(','));
+    }
+    if (options?.filters?.workflow) {
+      params.set('workflow', options.filters.workflow);
+    }
+    if (options?.filters?.status && options.filters.status.length > 0) {
+      params.set('status', options.filters.status.join(','));
+    }
+
+    const queryString = params.toString();
+    const url = `${this.baseUrl}/api/events${queryString ? `?${queryString}` : ''}`;
+
+    const headers: Record<string, string> = {
+      ...this.customHeaders,
+    };
+
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
+    if (options?.lastEventId) {
+      headers['Last-Event-ID'] = options.lastEventId;
+    }
+
+    const response = await fetch(url, {
+      headers,
+      signal: options?.signal,
+    });
+
+    if (!response.ok) {
+      let errorData: OrchestratorError;
+      try {
+        errorData = await response.json() as OrchestratorError;
+      } catch {
+        errorData = {
+          code: 'UNKNOWN_ERROR',
+          message: response.statusText,
+        };
+      }
+      throw new OrchestratorClientError(
+        errorData.message,
+        errorData.code,
+        response.status,
+        errorData.details,
+      );
+    }
+
+    yield* this.parseSSEStream(response, options?.signal);
+  }
+
+  /**
+   * Parse an SSE response stream into JobEvent objects.
+   * Handles `event:`, `id:`, `data:` fields and skips comment lines (heartbeats).
+   */
+  private async *parseSSEStream(
+    response: Response,
+    signal?: AbortSignal,
+  ): AsyncGenerator<JobEvent, void, undefined> {
+    const body = response.body;
+    if (!body) return;
+
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+
+    let buffer = '';
+    let currentData = '';
+    // event and id fields tracked for completeness but data carries the full JobEvent
+    let _currentEvent = '';
+    let _currentId = '';
+
+    try {
+      while (true) {
+        if (signal?.aborted) break;
+
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+
+        // Process complete lines
+        const lines = buffer.split('\n');
+        // Keep the last potentially incomplete line in the buffer
+        buffer = lines.pop() ?? '';
+
+        for (const line of lines) {
+          if (line === '') {
+            // Empty line = end of event block — dispatch if we have data
+            if (currentData) {
+              try {
+                const event = JSON.parse(currentData) as JobEvent;
+                yield event;
+              } catch {
+                // Malformed data, skip
+              }
+            }
+            // Reset fields for next event
+            currentData = '';
+            _currentEvent = '';
+            _currentId = '';
+          } else if (line.startsWith(':')) {
+            // Comment line (e.g. heartbeat `: ping`) — skip
+          } else if (line.startsWith('data:')) {
+            currentData = line.slice(5).trimStart();
+          } else if (line.startsWith('event:')) {
+            _currentEvent = line.slice(6).trimStart();
+          } else if (line.startsWith('id:')) {
+            _currentId = line.slice(3).trimStart();
+          }
+          // Other fields (retry:, etc.) are ignored
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
   }
 }
 
