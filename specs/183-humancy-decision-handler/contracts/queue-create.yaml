@@ -1,0 +1,229 @@
+# API Contract: POST /queue — Create Decision
+# Part of: 183-humancy-decision-handler
+# Date: 2026-02-15
+
+openapi: "3.0.3"
+
+info:
+  title: Orchestrator Queue API — Create Decision
+  version: "1.0.0"
+
+paths:
+  /queue:
+    post:
+      summary: Create a decision in the queue
+      description: |
+        Creates a new decision queue item for human review.
+        Called by the workflow engine's HumancyApiDecisionHandler when a
+        workflow step requires human-in-the-loop review.
+      tags:
+        - Queue
+      security:
+        - BearerAuth: []
+        - ApiKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDecisionRequest"
+            examples:
+              review-decision:
+                summary: Standard review decision
+                value:
+                  workflowId: "wf_my_workflow_a1b2c3d4"
+                  stepId: "review-content"
+                  type: "review"
+                  prompt: "Review: review-content"
+                  options:
+                    - id: "approve"
+                      label: "Approve"
+                    - id: "reject"
+                      label: "Reject"
+                      description: "Comment required"
+                  context:
+                    description: "Please review the generated content for accuracy."
+                    artifact: "Generated blog post about TypeScript patterns..."
+                  priority: "when_available"
+                  expiresAt: "2026-02-16T20:18:00.000Z"
+                  agentId: "worker-host1"
+      responses:
+        "201":
+          description: Decision created successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecisionQueueItem"
+              example:
+                id: "550e8400-e29b-41d4-a716-446655440000"
+                workflowId: "wf_my_workflow_a1b2c3d4"
+                stepId: "review-content"
+                type: "review"
+                prompt: "Review: review-content"
+                options:
+                  - id: "approve"
+                    label: "Approve"
+                  - id: "reject"
+                    label: "Reject"
+                    description: "Comment required"
+                context:
+                  description: "Please review the generated content for accuracy."
+                  artifact: "Generated blog post about TypeScript patterns..."
+                priority: "when_available"
+                createdAt: "2026-02-15T20:13:00.000Z"
+                expiresAt: "2026-02-16T20:18:00.000Z"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+              example:
+                type: "https://api.generacy.ai/problems/validation-error"
+                title: "Validation Error"
+                status: 400
+                detail: "Invalid request body"
+                errors:
+                  - path: ["prompt"]
+                    message: "String must contain at least 1 character(s)"
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "403":
+          description: Insufficient permissions (requires queue:write scope)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    CreateDecisionRequest:
+      type: object
+      required:
+        - workflowId
+        - stepId
+        - type
+        - prompt
+      properties:
+        workflowId:
+          type: string
+          minLength: 1
+          description: Workflow ID (any string format — not restricted to UUID)
+          example: "wf_my_workflow_a1b2c3d4"
+        stepId:
+          type: string
+          minLength: 1
+          description: Step identifier within the workflow
+          example: "review-content"
+        type:
+          type: string
+          enum: [approval, choice, input, review]
+          description: Decision type
+          example: "review"
+        prompt:
+          type: string
+          minLength: 1
+          description: Human-readable prompt/title for the decision
+          example: "Review: review-content"
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionOption"
+          description: Available response options
+        context:
+          type: object
+          additionalProperties: true
+          default: {}
+          description: Arbitrary context data (description, artifact, etc.)
+        priority:
+          type: string
+          enum: [blocking_now, blocking_soon, when_available]
+          default: when_available
+          description: Decision priority level
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: Expiration timestamp (null = never expires)
+        agentId:
+          type: string
+          description: ID of the agent/worker creating the decision
+
+    DecisionQueueItem:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Server-generated unique decision ID
+        workflowId:
+          type: string
+        stepId:
+          type: string
+        type:
+          type: string
+          enum: [approval, choice, input, review]
+        prompt:
+          type: string
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/DecisionOption"
+        context:
+          type: object
+          additionalProperties: true
+        priority:
+          type: string
+          enum: [blocking_now, blocking_soon, when_available]
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    DecisionOption:
+      type: object
+      required:
+        - id
+        - label
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+
+    ProblemDetails:
+      type: object
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        traceId:
+          type: string
+        errors:
+          type: array
+          items:
+            type: object
