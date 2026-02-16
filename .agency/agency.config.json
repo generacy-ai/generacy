@@ -1,0 +1,12 @@
+{
+  "version": "1.0.0",
+  "plugins": [],
+  "modes": [
+    {
+      "id": "default",
+      "name": "Default",
+      "tools": []
+    }
+  ],
+  "containers": []
+}
