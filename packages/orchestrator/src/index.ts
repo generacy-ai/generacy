@@ -36,6 +36,7 @@ export {
   type DecisionPriority,
   type DecisionOption,
   type DecisionQueueItem,
+  type CreateDecisionRequest,
   type DecisionResponseRequest,
   type DecisionResponse,
   type QueueQuery,

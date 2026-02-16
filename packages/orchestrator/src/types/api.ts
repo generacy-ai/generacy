@@ -91,7 +91,7 @@ export type DecisionOption = z.infer<typeof DecisionOptionSchema>;
 
 export const DecisionQueueItemSchema = z.object({
   id: z.string().uuid(),
-  workflowId: z.string().uuid(),
+  workflowId: z.string().min(1),
   stepId: z.string(),
   type: DecisionTypeSchema,
   prompt: z.string(),
@@ -102,6 +102,19 @@ export const DecisionQueueItemSchema = z.object({
   expiresAt: z.string().datetime().nullable().optional(),
 });
 export type DecisionQueueItem = z.infer<typeof DecisionQueueItemSchema>;
+
+export const CreateDecisionRequestSchema = z.object({
+  workflowId: z.string().min(1),
+  stepId: z.string().min(1),
+  type: DecisionTypeSchema,
+  prompt: z.string().min(1),
+  options: z.array(DecisionOptionSchema).optional(),
+  context: z.record(z.unknown()).default({}),
+  priority: DecisionPrioritySchema.default('when_available'),
+  expiresAt: z.string().datetime().nullable().optional(),
+  agentId: z.string().optional(),
+});
+export type CreateDecisionRequest = z.infer<typeof CreateDecisionRequestSchema>;
 
 export const DecisionResponseRequestSchema = z.object({
   response: z.union([z.string(), z.boolean(), z.array(z.string())]),
@@ -120,7 +133,7 @@ export type DecisionResponse = z.infer<typeof DecisionResponseSchema>;
 
 export const QueueQuerySchema = z.object({
   priority: DecisionPrioritySchema.optional(),
-  workflowId: z.string().uuid().optional(),
+  workflowId: z.string().optional(),
 });
 export type QueueQuery = z.infer<typeof QueueQuerySchema>;
 

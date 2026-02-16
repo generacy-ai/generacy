@@ -10,7 +10,7 @@ import type {
   ErrorSSEEvent,
   ConnectedSSEEvent,
 } from '../types/sse.js';
-import type { DecisionQueueItem, ConnectedAgent } from '../types/api.js';
+import type { DecisionQueueItem, DecisionResponse, ConnectedAgent } from '../types/api.js';
 import { ErrorTypes } from '../types/problem-details.js';
 
 /**
@@ -93,7 +93,8 @@ export function createQueueEvent(
   items: DecisionQueueItem[],
   queueSize: number,
   connectionId: string,
-  sequence: number
+  sequence: number,
+  response?: DecisionResponse
 ): QueueSSEEvent {
   const event: QueueSSEEvent['event'] =
     action === 'added'
@@ -110,6 +111,7 @@ export function createQueueEvent(
       items,
       item: items[0],
       queueSize,
+      ...(response && { response }),
     },
     timestamp: new Date().toISOString(),
   };

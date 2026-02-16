@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { ServerResponse, IncomingMessage } from 'http';
-import type { DecisionQueueItem, ConnectedAgent } from './api.js';
+import type { DecisionQueueItem, DecisionResponse, ConnectedAgent } from './api.js';
 
 // ============================================================================
 // Channel Types (shared with WebSocket, will be sole source after migration)
@@ -103,6 +103,8 @@ export interface QueueEventData {
   item?: DecisionQueueItem;
   items?: DecisionQueueItem[];
   queueSize: number;
+  /** Included on 'removed' events when a decision has been responded to */
+  response?: DecisionResponse;
 }
 
 /**
@@ -275,7 +277,7 @@ export const DEFAULT_SSE_CONFIG: SSEStreamConfig = {
  */
 export const SSEFiltersSchema = z
   .object({
-    workflowId: z.string().uuid().optional(),
+    workflowId: z.string().optional(),
     tags: z.array(z.string()).optional(),
   })
   .optional();
@@ -285,7 +287,7 @@ export const SSEFiltersSchema = z
  */
 export const SSEQuerySchema = z.object({
   channels: z.string().optional(), // comma-separated
-  workflowId: z.string().uuid().optional(),
+  workflowId: z.string().optional(),
 });
 export type SSEQuery = z.infer<typeof SSEQuerySchema>;
 

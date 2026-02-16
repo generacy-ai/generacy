@@ -10,6 +10,9 @@ import {
   prepareWorkflow,
   WorkflowExecutor,
   registerBuiltinActions,
+  getActionHandlerByType,
+  HumancyReviewAction,
+  type HumanDecisionHandler,
   type ExecutionResult,
   type Logger,
   type WorkflowDefinition,
@@ -48,6 +51,9 @@ export interface JobHandlerOptions {
 
   /** Callback for errors */
   onError?: (error: Error, job?: Job) => void;
+
+  /** Human decision handler for real human-in-the-loop review */
+  humanDecisionHandler?: HumanDecisionHandler;
 }
 
 /**
@@ -83,6 +89,14 @@ export class JobHandler {
 
     // Register builtin actions
     registerBuiltinActions();
+
+    // Inject human decision handler if provided
+    if (options.humanDecisionHandler) {
+      const reviewAction = getActionHandlerByType('humancy.request_review');
+      if (reviewAction) {
+        (reviewAction as HumancyReviewAction).setHumanHandler(options.humanDecisionHandler);
+      }
+    }
   }
 
   /**
