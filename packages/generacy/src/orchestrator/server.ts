@@ -8,15 +8,18 @@ import type {
   Job,
   JobStatus,
   JobResult,
+  JobEventType,
   WorkerRegistration,
   Heartbeat,
   HeartbeatResponse,
   PollResponse,
   JobPriority,
+  EventFilters,
 } from './types.js';
 import { WorkerRegistry } from './worker-registry.js';
 import { InMemoryJobQueue, type JobQueue } from './job-queue.js';
 import { createRouter, pathToRegex, parseJsonBody, sendJson, sendError } from './router.js';
+import { EventBus } from './event-bus.js';
 
 /**
  * Orchestrator server options
@@ -36,6 +39,15 @@ export interface OrchestratorServerOptions {
 
   /** Authentication token (if not set, auth is disabled) */
   authToken?: string;
+
+  /** SSE event buffer size per job (default: 1000) */
+  eventBufferSize?: number;
+
+  /** Grace period in ms before cleaning up terminal job buffers (default: 300000) */
+  eventGracePeriod?: number;
+
+  /** SSE heartbeat interval in ms (default: 30000) */
+  sseHeartbeatInterval?: number;
 
   /** Logger instance */
   logger?: {
@@ -84,6 +96,9 @@ export interface OrchestratorServer {
 
   /** Get the job queue */
   getJobQueue(): JobQueue;
+
+  /** Get the event bus */
+  getEventBus(): EventBus;
 }
 
 /**
@@ -95,6 +110,9 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
     host = '0.0.0.0',
     workerTimeout = 60000,
     authToken = process.env['ORCHESTRATOR_TOKEN'],
+    eventBufferSize = 1000,
+    eventGracePeriod = 300000,
+    sseHeartbeatInterval = 30000,
     logger = defaultLogger,
   } = options;
 
@@ -110,6 +128,14 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
   });
 
   const jobQueue = options.jobQueue ?? new InMemoryJobQueue();
+
+  const eventBus = new EventBus({
+    bufferSize: eventBufferSize,
+    gracePeriod: eventGracePeriod,
+    heartbeatInterval: sseHeartbeatInterval,
+    jobQueue,
+    logger,
+  });
 
   // Start periodic timeout check
   let timeoutInterval: ReturnType<typeof setInterval> | null = null;
@@ -143,6 +169,8 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
   const statusRoute = pathToRegex('/api/jobs/:jobId/status');
   const resultRoute = pathToRegex('/api/jobs/:jobId/result');
   const cancelRoute = pathToRegex('/api/jobs/:jobId/cancel');
+  const jobEventsRoute = pathToRegex('/api/jobs/:jobId/events');
+  const globalEventsRoute = pathToRegex('/api/events');
 
   const router = createRouter([
     { method: 'GET', pattern: healthRoute.regex, handler: 'healthCheck', paramNames: healthRoute.paramNames },
@@ -151,6 +179,9 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
     { method: 'POST', pattern: heartbeatRoute.regex, handler: 'handleHeartbeat', paramNames: heartbeatRoute.paramNames },
     { method: 'POST', pattern: submitJobRoute.regex, handler: 'submitJob', paramNames: submitJobRoute.paramNames },
     { method: 'GET', pattern: pollRoute.regex, handler: 'pollJob', paramNames: pollRoute.paramNames },
+    { method: 'GET', pattern: globalEventsRoute.regex, handler: 'subscribeAllEvents', paramNames: globalEventsRoute.paramNames },
+    { method: 'GET', pattern: jobEventsRoute.regex, handler: 'subscribeJobEvents', paramNames: jobEventsRoute.paramNames },
+    { method: 'POST', pattern: jobEventsRoute.regex, handler: 'publishEvent', paramNames: jobEventsRoute.paramNames },
     { method: 'GET', pattern: getJobRoute.regex, handler: 'getJob', paramNames: getJobRoute.paramNames },
     { method: 'PUT', pattern: statusRoute.regex, handler: 'updateJobStatus', paramNames: statusRoute.paramNames },
     { method: 'POST', pattern: resultRoute.regex, handler: 'reportResult', paramNames: resultRoute.paramNames },
@@ -367,6 +398,164 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
     },
 
     /**
+     * GET /api/jobs/:jobId/events - Subscribe to SSE stream for a single job's events
+     */
+    async subscribeJobEvents(req: IncomingMessage, res: ServerResponse, params: Record<string, string>) {
+      const { jobId } = params;
+
+      if (!jobId) {
+        sendError(res, 400, 'INVALID_REQUEST', 'Missing jobId parameter');
+        return;
+      }
+
+      const job = await jobQueue.getJob(jobId);
+      if (!job) {
+        sendError(res, 404, 'JOB_NOT_FOUND', `Job with ID ${jobId} not found`);
+        return;
+      }
+
+      const terminalStates: JobStatus[] = ['completed', 'failed', 'cancelled'];
+
+      // If job is in terminal state, replay buffered events and close
+      if (terminalStates.includes(job.status)) {
+        const bufferedEvents = eventBus.getBufferedEvents(jobId);
+        if (bufferedEvents.length === 0) {
+          sendError(res, 404, 'JOB_EVENTS_NOT_FOUND', `No buffered events for terminal job ${jobId}`);
+          return;
+        }
+
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        });
+        res.flushHeaders();
+
+        for (const event of bufferedEvents) {
+          res.write(`event: ${event.type}\nid: ${event.id}\ndata: ${JSON.stringify(event)}\n\n`);
+        }
+        res.end();
+        return;
+      }
+
+      // Set SSE response headers for live stream
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.flushHeaders();
+
+      // Parse Last-Event-ID for reconnection support
+      const lastEventId = req.headers['last-event-id'] as string | undefined;
+
+      // Subscribe to the event bus (handles replay and live events)
+      eventBus.subscribe(jobId, res, lastEventId);
+    },
+
+    /**
+     * GET /api/events - Subscribe to SSE stream for all jobs (with optional filters)
+     */
+    async subscribeAllEvents(req: IncomingMessage, res: ServerResponse) {
+      const url = new URL(req.url!, `http://${req.headers.host}`);
+
+      // Parse filter query parameters
+      const tagsParam = url.searchParams.get('tags');
+      const workflowParam = url.searchParams.get('workflow');
+      const statusParam = url.searchParams.get('status');
+
+      const filters: EventFilters = {};
+      if (tagsParam) {
+        filters.tags = tagsParam.split(',').map((t) => t.trim()).filter(Boolean);
+      }
+      if (workflowParam) {
+        filters.workflow = workflowParam;
+      }
+      if (statusParam) {
+        filters.status = statusParam.split(',').map((s) => s.trim()).filter(Boolean) as JobStatus[];
+      }
+
+      // Set SSE response headers
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.flushHeaders();
+
+      // Parse Last-Event-ID for reconnection support
+      const lastEventId = req.headers['last-event-id'] as string | undefined;
+
+      // Subscribe to the event bus (handles replay and live events)
+      await eventBus.subscribeAll(res, filters, lastEventId);
+    },
+
+    /**
+     * POST /api/jobs/:jobId/events - Publish an event for a job
+     */
+    async publishEvent(req: IncomingMessage, res: ServerResponse, params: Record<string, string>) {
+      const { jobId } = params;
+
+      if (!jobId) {
+        sendError(res, 400, 'INVALID_REQUEST', 'Missing jobId parameter');
+        return;
+      }
+
+      try {
+        const job = await jobQueue.getJob(jobId);
+        if (!job) {
+          sendError(res, 404, 'JOB_NOT_FOUND', `Job with ID ${jobId} not found`);
+          return;
+        }
+
+        const body = await parseJsonBody<{ type: string; data: unknown; timestamp?: number }>(req);
+
+        // Validate type field
+        const validEventTypes: JobEventType[] = [
+          'job:status', 'phase:start', 'phase:complete',
+          'step:start', 'step:complete', 'step:output',
+          'action:error', 'log:append',
+        ];
+        if (!body.type || !validEventTypes.includes(body.type as JobEventType)) {
+          sendError(res, 400, 'INVALID_REQUEST', 'Missing or invalid field: type');
+          return;
+        }
+
+        // Validate data field
+        if (!body.data || typeof body.data !== 'object' || Array.isArray(body.data)) {
+          sendError(res, 400, 'INVALID_REQUEST', 'Missing or invalid field: data');
+          return;
+        }
+
+        const publishedEvent = await eventBus.publish(jobId, {
+          type: body.type as JobEventType,
+          timestamp: body.timestamp ?? Date.now(),
+          jobId,
+          data: body.data as Record<string, unknown>,
+        });
+
+        // Handle terminal status events
+        const terminalStatuses: JobStatus[] = ['completed', 'failed', 'cancelled'];
+        if (body.type === 'job:status' && terminalStatuses.includes((body.data as Record<string, unknown>).status as JobStatus)) {
+          eventBus.closeJobSubscribers(jobId);
+          eventBus.scheduleCleanup(jobId);
+        }
+
+        sendJson(res, 201, { eventId: publishedEvent.id });
+      } catch (error) {
+        if (error instanceof Error && error.message === 'Invalid JSON') {
+          sendError(res, 400, 'INVALID_REQUEST', 'Invalid JSON in request body');
+        } else {
+          logger.error('Error publishing event', { error: String(error), jobId });
+          sendError(res, 500, 'INTERNAL_ERROR', 'Failed to publish event');
+        }
+      }
+    },
+
+    /**
      * PUT /api/jobs/:jobId/status - Update job status
      */
     async updateJobStatus(req: IncomingMessage, res: ServerResponse, params: Record<string, string>) {
@@ -391,8 +580,24 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
           return;
         }
 
+        const previousStatus = job.status;
         await jobQueue.updateStatus(jobId, body.status, body.metadata);
         logger.info('Job status updated', { jobId, status: body.status });
+
+        // Auto-publish job:status event
+        await eventBus.publish(jobId, {
+          type: 'job:status',
+          timestamp: Date.now(),
+          jobId,
+          data: { status: body.status, previousStatus },
+        });
+
+        // Handle terminal status
+        const terminalStatuses: JobStatus[] = ['completed', 'failed', 'cancelled'];
+        if (terminalStatuses.includes(body.status)) {
+          eventBus.closeJobSubscribers(jobId);
+          eventBus.scheduleCleanup(jobId);
+        }
 
         res.writeHead(204);
         res.end();
@@ -476,8 +681,20 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
           workerRegistry.unassignJob(job.workerId, jobId);
         }
 
+        const previousStatus = job.status;
         await jobQueue.cancelJob(jobId, body.reason);
         logger.info('Job cancelled', { jobId, reason: body.reason });
+
+        // Auto-publish job:status event for cancellation
+        await eventBus.publish(jobId, {
+          type: 'job:status',
+          timestamp: Date.now(),
+          jobId,
+          data: { status: 'cancelled', previousStatus, reason: body.reason },
+        });
+
+        eventBus.closeJobSubscribers(jobId);
+        eventBus.scheduleCleanup(jobId);
 
         res.writeHead(204);
         res.end();
@@ -549,6 +766,9 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
             }
           }, workerTimeout / 2);
 
+          // Start SSE heartbeat
+          eventBus.startHeartbeat();
+
           resolve();
         });
       });
@@ -559,6 +779,8 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
         clearInterval(timeoutInterval);
         timeoutInterval = null;
       }
+
+      eventBus.destroy();
 
       return new Promise((resolve, reject) => {
         server.close((err) => {
@@ -601,6 +823,10 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
 
     getJobQueue(): JobQueue {
       return jobQueue;
+    },
+
+    getEventBus(): EventBus {
+      return eventBus;
     },
   };
 }
