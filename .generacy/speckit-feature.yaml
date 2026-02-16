@@ -81,6 +81,8 @@ phases:
         with:
           title: "feat: ${{ inputs.description }}"
           body: |
+            Closes #${{ inputs.issue_number }}
+
             ## Summary
             ${{ steps.specify.output.summary }}
 
