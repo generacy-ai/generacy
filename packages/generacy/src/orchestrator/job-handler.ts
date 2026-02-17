@@ -10,7 +10,6 @@ import {
   loadWorkflow,
   prepareWorkflow,
   WorkflowExecutor,
-  registerBuiltinActions,
   getActionHandlerByType,
   HumancyReviewAction,
   type HumanDecisionHandler,
@@ -76,6 +75,7 @@ export class JobHandler {
   private abortController: AbortController | null = null;
   private isRunning = false;
   private shouldStop = false;
+  private readonly humanDecisionHandler?: HumanDecisionHandler;
 
   constructor(options: JobHandlerOptions) {
     this.client = options.client;
@@ -87,17 +87,7 @@ export class JobHandler {
     this.onJobStart = options.onJobStart;
     this.onJobComplete = options.onJobComplete;
     this.onError = options.onError;
-
-    // Register builtin actions
-    registerBuiltinActions();
-
-    // Inject human decision handler if provided
-    if (options.humanDecisionHandler) {
-      const reviewAction = getActionHandlerByType('humancy.request_review');
-      if (reviewAction) {
-        (reviewAction as HumancyReviewAction).setHumanHandler(options.humanDecisionHandler);
-      }
-    }
+    this.humanDecisionHandler = options.humanDecisionHandler;
   }
 
   /**
@@ -225,10 +215,19 @@ export class JobHandler {
 
       const workflow = prepareWorkflow(definition as WorkflowDefinition, job.inputs);
 
-      // Create executor
+      // Create executor (this also registers builtin actions)
       const executor = new WorkflowExecutor({
         logger: this.logger,
       });
+
+      // Inject human decision handler AFTER executor creation, since the executor's
+      // ensureActionsRegistered() may re-register action handlers
+      if (this.humanDecisionHandler) {
+        const reviewAction = getActionHandlerByType('humancy.request_review');
+        if (reviewAction) {
+          (reviewAction as HumancyReviewAction).setHumanHandler(this.humanDecisionHandler);
+        }
+      }
 
       // Execute workflow
       const result = await executor.execute(
