@@ -27,7 +27,9 @@ export async function executeCreateFeature(
       logger.info(`Branched from epic: ${result.parent_epic_branch}`);
     }
   } else {
-    logger.error('Failed to create feature');
+    logger.error(`Failed to create feature: branch=${result.branch_name || '(empty)'}, ` +
+      `featureDir=${result.feature_dir || '(empty)'}, num=${result.feature_num || '(empty)'}, ` +
+      `cwd=${input.cwd || '(default)'}`);
   }
 
   return result;

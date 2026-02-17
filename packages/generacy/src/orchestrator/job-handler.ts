@@ -4,6 +4,7 @@
  */
 import { existsSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
+import { execSync } from 'node:child_process';
 import {
   loadWorkflowFromString,
   loadWorkflow,
@@ -186,6 +187,17 @@ export class JobHandler {
     this.currentJob = job;
     this.abortController = new AbortController();
     const startTime = Date.now();
+    const jobWorkdir = job.workdir ?? this.workdir;
+
+    // Record the current branch so we can restore it after the job
+    let originalBranch: string | undefined;
+    try {
+      originalBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+        cwd: jobWorkdir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim() || undefined;
+    } catch {
+      // Not a git repo or git not available - skip branch tracking
+    }
 
     this.logger.info(`Starting job: ${job.id} (${job.name})`);
     this.onJobStart?.(job);
@@ -260,6 +272,23 @@ export class JobHandler {
 
       this.onJobComplete?.(job, failureResult);
     } finally {
+      // Restore the original branch so the repo is clean for the next job
+      if (originalBranch) {
+        try {
+          const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+            cwd: jobWorkdir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'],
+          }).trim();
+          if (currentBranch !== originalBranch) {
+            this.logger.info(`Restoring branch: ${originalBranch}`);
+            execSync(`git checkout --force ${originalBranch}`, {
+              cwd: jobWorkdir, stdio: ['pipe', 'pipe', 'pipe'],
+            });
+          }
+        } catch (restoreError) {
+          this.logger.warn(`Failed to restore branch ${originalBranch}: ${restoreError}`);
+        }
+      }
+
       this.currentJob = null;
       this.abortController = null;
 
