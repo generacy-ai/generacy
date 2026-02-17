@@ -2,10 +2,10 @@
  * Unit tests for HumancyApiDecisionHandler.
  *
  * T020: Request-to-payload mapping — verifies ReviewDecisionRequest fields are
- * correctly mapped to the orchestrator's CreateDecisionPayload on POST /queue.
+ * correctly mapped to the Humancy Cloud API's CreateDecisionInput on POST /decisions.
  *
- * T021: Response mapping — verifies DecisionResponse from the orchestrator is
- * correctly mapped back to ReviewDecisionResponse for the workflow engine.
+ * T021: Response mapping — verifies decision:resolved SSE events from the
+ * Humancy Cloud API are correctly mapped back to ReviewDecisionResponse.
  *
  * Strategy: mock global.fetch to capture the POST body and return controlled
  * SSE streams, then assert on mapped payloads and return values.
@@ -46,35 +46,53 @@ const defaultConfig: HumancyApiHandlerConfig = {
   maxReconnectAttempts: 0,
 };
 
-/** Default DecisionResponse shape used when no override is provided. */
-const defaultDecisionResponse = {
-  id: 'dec-uuid-123',
-  response: true as string | boolean | string[],
-  comment: 'Looks good',
-  respondedBy: 'reviewer-1',
+/**
+ * Default Humancy Cloud API decision response shape.
+ * Matches decisionResponseSchema from @humancy-cloud/db.
+ */
+const defaultDecisionResponse: {
+  selectedOptionId?: string;
+  customResponse?: string;
+  respondedAt: string;
+} = {
+  selectedOptionId: 'approve',
   respondedAt: '2026-02-15T10:00:00.000Z',
 };
 
 /**
- * Creates a ReadableStream that emits SSE data for a queue:item:removed event
+ * Creates a ReadableStream that emits SSE data for a decision:resolved event
  * matching the given decisionId.
  *
+ * Humancy Cloud API SSE event format:
+ *   event: decision:resolved
+ *   id: evt_<timestamp>_<random>
+ *   data: { id, type, urgency, status, response: { selectedOptionId?, customResponse?, respondedAt } }
+ *
  * @param decisionId  The decision ID to include in the event data.
- * @param responseOverrides  Optional overrides for the DecisionResponse fields.
+ * @param responseOverrides  Optional overrides for the response fields.
  */
 function createSSEStream(
   decisionId: string,
   responseOverrides?: Partial<typeof defaultDecisionResponse>,
 ): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
-  const response = { ...defaultDecisionResponse, id: decisionId, ...responseOverrides };
+  const response = { ...defaultDecisionResponse, ...responseOverrides };
+  // Remove undefined values from response
+  const cleanResponse: Record<string, unknown> = { respondedAt: response.respondedAt };
+  if (response.selectedOptionId !== undefined) {
+    cleanResponse.selectedOptionId = response.selectedOptionId;
+  }
+  if (response.customResponse !== undefined) {
+    cleanResponse.customResponse = response.customResponse;
+  }
   const eventData = JSON.stringify({
-    action: 'removed',
-    item: { id: decisionId },
-    queueSize: 0,
-    response,
+    id: decisionId,
+    type: 'decision',
+    urgency: 'when_available',
+    status: 'responded',
+    response: cleanResponse,
   });
-  const sseText = `event: queue:item:removed\ndata: ${eventData}\nid: evt_1\n\n`;
+  const sseText = `event: decision:resolved\ndata: ${eventData}\nid: evt_1\n\n`;
 
   return new ReadableStream({
     start(controller) {
@@ -86,12 +104,12 @@ function createSSEStream(
 
 /**
  * Sets up global.fetch mock that:
- * 1. Captures the POST /queue request body
- * 2. Returns a created DecisionQueueItem with a predictable ID
- * 3. Returns an SSE stream for GET /events that resolves the decision
+ * 1. Captures the POST /decisions request body
+ * 2. Returns a created decision with a predictable ID
+ * 3. Returns an SSE stream for GET /decisions/events that resolves the decision
  *
  * @param decisionId        Predictable decision ID for the created item.
- * @param responseOverrides Optional overrides for the DecisionResponse in the SSE event.
+ * @param responseOverrides Optional overrides for the decision response in the SSE event.
  *
  * Returns the captured POST body for assertion.
  */
@@ -104,17 +122,17 @@ function setupFetchMock(
   const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
     const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-    // POST /queue — create decision
-    if (urlStr.includes('/queue') && init?.method === 'POST') {
+    // POST /decisions — create decision (but not /decisions/events)
+    if (init?.method === 'POST' && urlStr.includes('/decisions') && !urlStr.includes('/decisions/events')) {
       capturedPayload = JSON.parse(init.body as string);
       return new Response(
-        JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
+        JSON.stringify({ id: decisionId, status: 'pending', createdAt: '2026-02-15T09:00:00.000Z' }),
         { status: 201, headers: { 'Content-Type': 'application/json' } },
       );
     }
 
-    // GET /events — SSE stream
-    if (urlStr.includes('/events')) {
+    // GET /decisions/events — SSE stream
+    if (urlStr.includes('/decisions/events')) {
       return new Response(createSSEStream(decisionId, responseOverrides), {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
@@ -152,78 +170,82 @@ describe('HumancyApiDecisionHandler — request-to-payload mapping (T020)', () =
   // Field mapping tests
   // -----------------------------------------------------------------------
 
-  it('maps title to prompt', async () => {
+  it('maps title to question', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ title: 'Review: deploy step' });
 
     await handler.requestDecision(request, 30_000);
 
-    expect(getPayload()?.prompt).toBe('Review: deploy step');
+    expect(getPayload()?.question).toBe('Review: deploy step');
   });
 
-  it('maps description to context.description', async () => {
+  it('maps description into context string', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ description: 'Check the deployment plan carefully' });
 
     await handler.requestDecision(request, 30_000);
 
-    const ctx = getPayload()?.context as Record<string, unknown>;
-    expect(ctx.description).toBe('Check the deployment plan carefully');
+    const ctx = getPayload()?.context as string;
+    expect(ctx).toContain('Check the deployment plan carefully');
   });
 
-  it('maps artifact to context.artifact', async () => {
+  it('maps artifact into context string', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ artifact: '--- a/file.ts\n+++ b/file.ts' });
 
     await handler.requestDecision(request, 30_000);
 
-    const ctx = getPayload()?.context as Record<string, unknown>;
-    expect(ctx.artifact).toBe('--- a/file.ts\n+++ b/file.ts');
+    const ctx = getPayload()?.context as string;
+    expect(ctx).toContain('--- a/file.ts\n+++ b/file.ts');
   });
 
-  it('omits context.description when description is empty', async () => {
+  it('excludes empty description from context string', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ description: '' });
 
     await handler.requestDecision(request, 30_000);
 
-    const ctx = getPayload()?.context as Record<string, unknown>;
-    expect(ctx).not.toHaveProperty('description');
+    const ctx = getPayload()?.context as string;
+    // Should not contain the default description, but still has workflow metadata
+    expect(ctx).not.toContain('Please review');
+    expect(ctx).toContain('[workflow=');
   });
 
-  it('omits context.artifact when artifact is undefined', async () => {
+  it('excludes artifact from context when artifact is undefined', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ artifact: undefined });
 
     await handler.requestDecision(request, 30_000);
 
-    const ctx = getPayload()?.context as Record<string, unknown>;
-    expect(ctx).not.toHaveProperty('artifact');
+    const ctx = getPayload()?.context as string;
+    expect(ctx).not.toContain('Artifact:');
   });
 
-  it('maps workflowId directly', async () => {
+  it('includes workflowId in context string', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ workflowId: 'wf_my_workflow_abc123' });
 
     await handler.requestDecision(request, 30_000);
 
-    expect(getPayload()?.workflowId).toBe('wf_my_workflow_abc123');
+    const ctx = getPayload()?.context as string;
+    expect(ctx).toContain('workflow=wf_my_workflow_abc123');
   });
 
-  it('maps stepId directly', async () => {
+  it('includes stepId in context string', async () => {
     const { getPayload } = setupFetchMock();
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     const request = makeRequest({ stepId: 'step-review-code' });
 
     await handler.requestDecision(request, 30_000);
 
-    expect(getPayload()?.stepId).toBe('step-review-code');
+    const ctx = getPayload()?.context as string;
+    expect(ctx).toContain('step=step-review-code');
   });
 
   it('sets type to review', async () => {
@@ -239,41 +261,41 @@ describe('HumancyApiDecisionHandler — request-to-payload mapping (T020)', () =
   // Urgency → Priority mapping
   // -----------------------------------------------------------------------
 
-  describe('urgency → priority mapping', () => {
-    it('maps urgency "low" to priority "when_available"', async () => {
+  describe('urgency mapping', () => {
+    it('maps urgency "low" to "when_available"', async () => {
       const { getPayload } = setupFetchMock();
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
       await handler.requestDecision(makeRequest({ urgency: 'low' }), 30_000);
 
-      expect(getPayload()?.priority).toBe('when_available');
+      expect(getPayload()?.urgency).toBe('when_available');
     });
 
-    it('maps urgency "normal" to priority "when_available"', async () => {
+    it('maps urgency "normal" to "when_available"', async () => {
       const { getPayload } = setupFetchMock();
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
       await handler.requestDecision(makeRequest({ urgency: 'normal' }), 30_000);
 
-      expect(getPayload()?.priority).toBe('when_available');
+      expect(getPayload()?.urgency).toBe('when_available');
     });
 
-    it('maps urgency "blocking_soon" to priority "blocking_soon"', async () => {
+    it('maps urgency "blocking_soon" to "blocking_soon"', async () => {
       const { getPayload } = setupFetchMock();
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
       await handler.requestDecision(makeRequest({ urgency: 'blocking_soon' }), 30_000);
 
-      expect(getPayload()?.priority).toBe('blocking_soon');
+      expect(getPayload()?.urgency).toBe('blocking_soon');
     });
 
-    it('maps urgency "blocking_now" to priority "blocking_now"', async () => {
+    it('maps urgency "blocking_now" to "blocking_now"', async () => {
       const { getPayload } = setupFetchMock();
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
       await handler.requestDecision(makeRequest({ urgency: 'blocking_now' }), 30_000);
 
-      expect(getPayload()?.priority).toBe('blocking_now');
+      expect(getPayload()?.urgency).toBe('blocking_now');
     });
   });
 
@@ -449,24 +471,23 @@ describe('HumancyApiDecisionHandler — request-to-payload mapping (T020)', () =
 
     const payload = getPayload();
     expect(payload).toEqual({
-      workflowId: 'wf_test_001',
-      stepId: 'step-1',
+      agentId: 'agent-full-test',
       type: 'review',
-      prompt: 'Review: full test',
+      urgency: 'blocking_now',
+      question: 'Review: full test',
+      context: expect.stringContaining('Full payload test'),
       options: [
         { id: 'approve', label: 'Approve' },
         { id: 'reject', label: 'Reject', description: 'Comment required' },
       ],
-      context: {
-        description: 'Full payload test',
-        artifact: 'some artifact',
-      },
-      priority: 'blocking_now',
       expiresAt: new Date(
         new Date('2026-02-15T09:00:00.000Z').getTime() + 120_000 + 5 * 60 * 1000,
       ).toISOString(),
-      agentId: 'agent-full-test',
     });
+    // Verify context string contains artifact and workflow metadata
+    const ctx = payload?.context as string;
+    expect(ctx).toContain('some artifact');
+    expect(ctx).toContain('[workflow=wf_test_001, step=step-1]');
   });
 
   // -----------------------------------------------------------------------
@@ -474,11 +495,11 @@ describe('HumancyApiDecisionHandler — request-to-payload mapping (T020)', () =
   // -----------------------------------------------------------------------
 
   describe('POST request', () => {
-    it('sends to {apiUrl}/queue', async () => {
+    it('sends to {apiUrl}/decisions', async () => {
       const { fetchMock } = setupFetchMock();
       const handler = new HumancyApiDecisionHandler({
         ...defaultConfig,
-        apiUrl: 'http://my-orchestrator:3200',
+        apiUrl: 'http://my-humancy-api:3200',
       });
 
       await handler.requestDecision(makeRequest(), 30_000);
@@ -490,7 +511,7 @@ describe('HumancyApiDecisionHandler — request-to-payload mapping (T020)', () =
         },
       );
       expect(postCall).toBeDefined();
-      expect(postCall![0]).toBe('http://my-orchestrator:3200/queue');
+      expect(postCall![0]).toBe('http://my-humancy-api:3200/decisions');
     });
 
     it('strips trailing slashes from apiUrl', async () => {
@@ -508,7 +529,7 @@ describe('HumancyApiDecisionHandler — request-to-payload mapping (T020)', () =
           return init?.method === 'POST';
         },
       );
-      expect(postCall![0]).toBe('http://localhost:3200/queue');
+      expect(postCall![0]).toBe('http://localhost:3200/decisions');
     });
 
     it('includes Content-Type: application/json header', async () => {
@@ -601,45 +622,12 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Boolean response mapping
+  // selectedOptionId mapping
   // -----------------------------------------------------------------------
 
-  describe('boolean response', () => {
-    it('maps response: true to approved: true', async () => {
-      setupFetchMock('dec-bool-true', { response: true, comment: undefined });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-
-      const result = await handler.requestDecision(makeRequest(), 30_000);
-
-      expect(result.approved).toBe(true);
-    });
-
-    it('maps response: false to approved: false', async () => {
-      setupFetchMock('dec-bool-false', { response: false, comment: undefined });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-
-      const result = await handler.requestDecision(makeRequest(), 30_000);
-
-      expect(result.approved).toBe(false);
-    });
-
-    it('does not set decision field for boolean response', async () => {
-      setupFetchMock('dec-bool-no-decision', { response: true, comment: undefined });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-
-      const result = await handler.requestDecision(makeRequest(), 30_000);
-
-      expect(result.decision).toBeUndefined();
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // String response mapping
-  // -----------------------------------------------------------------------
-
-  describe('string response', () => {
-    it('maps response matching first option to approved: true', async () => {
-      setupFetchMock('dec-str-approve', { response: 'approve', comment: undefined });
+  describe('selectedOptionId response', () => {
+    it('maps selectedOptionId matching first option to approved: true', async () => {
+      setupFetchMock('dec-opt-approve', { selectedOptionId: 'approve' });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
       const request = makeRequest({
         options: [
@@ -654,8 +642,8 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
       expect(result.decision).toBe('approve');
     });
 
-    it('maps response not matching first option to approved: false', async () => {
-      setupFetchMock('dec-str-reject', { response: 'reject', comment: undefined });
+    it('maps selectedOptionId not matching first option to approved: false', async () => {
+      setupFetchMock('dec-opt-reject', { selectedOptionId: 'reject' });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
       const request = makeRequest({
         options: [
@@ -670,8 +658,8 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
       expect(result.decision).toBe('reject');
     });
 
-    it('sets decision to the raw string option ID', async () => {
-      setupFetchMock('dec-str-custom', { response: 'custom-option', comment: undefined });
+    it('sets decision to the selectedOptionId value', async () => {
+      setupFetchMock('dec-opt-custom', { selectedOptionId: 'custom-option' });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
       const request = makeRequest({
         options: [
@@ -688,71 +676,14 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Array response mapping
+  // customResponse mapping
   // -----------------------------------------------------------------------
 
-  describe('array response', () => {
-    it('maps array with first option match to approved: true', async () => {
-      setupFetchMock('dec-arr-approve', { response: ['approve'], comment: undefined });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-      const request = makeRequest({
-        options: [
-          { id: 'approve', label: 'Approve' },
-          { id: 'reject', label: 'Reject' },
-        ],
-      });
-
-      const result = await handler.requestDecision(request, 30_000);
-
-      expect(result.approved).toBe(true);
-      expect(result.decision).toBe('approve');
-    });
-
-    it('maps array without first option match to approved: false', async () => {
-      setupFetchMock('dec-arr-reject', { response: ['reject'], comment: undefined });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-      const request = makeRequest({
-        options: [
-          { id: 'approve', label: 'Approve' },
-          { id: 'reject', label: 'Reject' },
-        ],
-      });
-
-      const result = await handler.requestDecision(request, 30_000);
-
-      expect(result.approved).toBe(false);
-      expect(result.decision).toBe('reject');
-    });
-
-    it('uses only the first element of the array for decision', async () => {
-      setupFetchMock('dec-arr-multi', {
-        response: ['reject', 'approve'],
-        comment: undefined,
-      });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-      const request = makeRequest({
-        options: [
-          { id: 'approve', label: 'Approve' },
-          { id: 'reject', label: 'Reject' },
-        ],
-      });
-
-      const result = await handler.requestDecision(request, 30_000);
-
-      expect(result.decision).toBe('reject');
-      expect(result.approved).toBe(false);
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // Comment → input mapping
-  // -----------------------------------------------------------------------
-
-  describe('comment mapping', () => {
-    it('maps comment to input', async () => {
-      setupFetchMock('dec-comment', {
-        response: true,
-        comment: 'Looks great, ship it!',
+  describe('customResponse mapping', () => {
+    it('maps customResponse to input', async () => {
+      setupFetchMock('dec-custom', {
+        selectedOptionId: 'approve',
+        customResponse: 'Looks great, ship it!',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
@@ -761,8 +692,8 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
       expect(result.input).toBe('Looks great, ship it!');
     });
 
-    it('omits input when comment is undefined', async () => {
-      setupFetchMock('dec-no-comment', { response: true, comment: undefined });
+    it('omits input when customResponse is undefined', async () => {
+      setupFetchMock('dec-no-custom', { selectedOptionId: 'approve' });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
       const result = await handler.requestDecision(makeRequest(), 30_000);
@@ -770,40 +701,59 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
       expect(result.input).toBeUndefined();
     });
 
-    it('omits input when comment is empty string', async () => {
-      setupFetchMock('dec-empty-comment', { response: true, comment: '' });
-      const handler = new HumancyApiDecisionHandler(defaultConfig);
-
-      const result = await handler.requestDecision(makeRequest(), 30_000);
-
-      // Empty string is falsy, so comment should not be mapped
-      expect(result.input).toBeUndefined();
-    });
-  });
-
-  // -----------------------------------------------------------------------
-  // respondedBy and respondedAt passthrough
-  // -----------------------------------------------------------------------
-
-  describe('respondedBy and respondedAt passthrough', () => {
-    it('passes respondedBy directly from response', async () => {
-      setupFetchMock('dec-by', {
-        response: true,
-        respondedBy: 'user-jane-42',
-        comment: undefined,
+    it('maps customResponse without selectedOptionId to approved: false', async () => {
+      setupFetchMock('dec-custom-only', {
+        selectedOptionId: undefined,
+        customResponse: 'Custom free-text response',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
       const result = await handler.requestDecision(makeRequest(), 30_000);
 
-      expect(result.respondedBy).toBe('user-jane-42');
+      expect(result.approved).toBe(false);
+      expect(result.input).toBe('Custom free-text response');
+      expect(result.decision).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // No response fields
+  // -----------------------------------------------------------------------
+
+  describe('no response fields', () => {
+    it('maps no selectedOptionId and no customResponse to approved: false', async () => {
+      setupFetchMock('dec-no-response', {
+        selectedOptionId: undefined,
+        customResponse: undefined,
+      });
+      const handler = new HumancyApiDecisionHandler(defaultConfig);
+
+      const result = await handler.requestDecision(makeRequest(), 30_000);
+
+      expect(result.approved).toBe(false);
+      expect(result.decision).toBeUndefined();
+      expect(result.input).toBeUndefined();
+    });
+  });
+
+  // -----------------------------------------------------------------------
+  // respondedBy and respondedAt
+  // -----------------------------------------------------------------------
+
+  describe('respondedBy and respondedAt', () => {
+    it('always sets respondedBy to "human"', async () => {
+      setupFetchMock('dec-by', { selectedOptionId: 'approve' });
+      const handler = new HumancyApiDecisionHandler(defaultConfig);
+
+      const result = await handler.requestDecision(makeRequest(), 30_000);
+
+      expect(result.respondedBy).toBe('human');
     });
 
-    it('passes respondedAt directly from response', async () => {
+    it('passes respondedAt from the decision response', async () => {
       setupFetchMock('dec-at', {
-        response: true,
+        selectedOptionId: 'approve',
         respondedAt: '2026-02-15T14:30:00.000Z',
-        comment: undefined,
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
 
@@ -817,11 +767,10 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
   // Full response structure
   // -----------------------------------------------------------------------
 
-  it('produces a complete, correctly shaped response for boolean approval', async () => {
-    setupFetchMock('dec-full-bool', {
-      response: true,
-      comment: 'LGTM',
-      respondedBy: 'reviewer-alice',
+  it('produces a complete response for selectedOptionId approval', async () => {
+    setupFetchMock('dec-full-approve', {
+      selectedOptionId: 'approve',
+      customResponse: 'LGTM',
       respondedAt: '2026-02-15T12:00:00.000Z',
     });
     const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -830,17 +779,17 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
 
     expect(result).toEqual({
       approved: true,
+      decision: 'approve',
       input: 'LGTM',
-      respondedBy: 'reviewer-alice',
+      respondedBy: 'human',
       respondedAt: '2026-02-15T12:00:00.000Z',
     });
   });
 
-  it('produces a complete, correctly shaped response for string rejection', async () => {
-    setupFetchMock('dec-full-str', {
-      response: 'reject',
-      comment: 'Needs more tests',
-      respondedBy: 'reviewer-bob',
+  it('produces a complete response for selectedOptionId rejection', async () => {
+    setupFetchMock('dec-full-reject', {
+      selectedOptionId: 'reject',
+      customResponse: 'Needs more tests',
       respondedAt: '2026-02-15T13:00:00.000Z',
     });
     const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -857,33 +806,25 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
       approved: false,
       decision: 'reject',
       input: 'Needs more tests',
-      respondedBy: 'reviewer-bob',
+      respondedBy: 'human',
       respondedAt: '2026-02-15T13:00:00.000Z',
     });
   });
 
-  it('produces a complete, correctly shaped response for array approval', async () => {
-    setupFetchMock('dec-full-arr', {
-      response: ['approve'],
-      comment: 'Ship it',
-      respondedBy: 'reviewer-carol',
+  it('produces a complete response for customResponse-only (free text)', async () => {
+    setupFetchMock('dec-full-custom', {
+      selectedOptionId: undefined,
+      customResponse: 'Please reconsider the approach',
       respondedAt: '2026-02-15T14:00:00.000Z',
     });
     const handler = new HumancyApiDecisionHandler(defaultConfig);
-    const request = makeRequest({
-      options: [
-        { id: 'approve', label: 'Approve' },
-        { id: 'reject', label: 'Reject' },
-      ],
-    });
 
-    const result = await handler.requestDecision(request, 30_000);
+    const result = await handler.requestDecision(makeRequest(), 30_000);
 
     expect(result).toEqual({
-      approved: true,
-      decision: 'approve',
-      input: 'Ship it',
-      respondedBy: 'reviewer-carol',
+      approved: false,
+      input: 'Please reconsider the approach',
+      respondedBy: 'human',
       respondedAt: '2026-02-15T14:00:00.000Z',
     });
   });
@@ -893,8 +834,8 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
   // -----------------------------------------------------------------------
 
   describe('edge cases', () => {
-    it('handles string response with empty options array (approved: false)', async () => {
-      setupFetchMock('dec-edge-empty-opts', { response: 'approve', comment: undefined });
+    it('handles selectedOptionId with empty options array (approved: false)', async () => {
+      setupFetchMock('dec-edge-empty-opts', { selectedOptionId: 'approve' });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
       const request = makeRequest({ options: [] });
 
@@ -905,15 +846,24 @@ describe('HumancyApiDecisionHandler — response mapping (T021)', () => {
       expect(result.decision).toBe('approve');
     });
 
-    it('handles array response with empty options array (approved: false)', async () => {
-      setupFetchMock('dec-edge-arr-empty-opts', { response: ['approve'], comment: undefined });
+    it('handles selectedOptionId with customResponse (both set)', async () => {
+      setupFetchMock('dec-edge-both', {
+        selectedOptionId: 'reject',
+        customResponse: 'Extra context for rejection',
+      });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
-      const request = makeRequest({ options: [] });
+      const request = makeRequest({
+        options: [
+          { id: 'approve', label: 'Approve' },
+          { id: 'reject', label: 'Reject' },
+        ],
+      });
 
       const result = await handler.requestDecision(request, 30_000);
 
       expect(result.approved).toBe(false);
-      expect(result.decision).toBe('approve');
+      expect(result.decision).toBe('reject');
+      expect(result.input).toBe('Extra context for rejection');
     });
   });
 });
@@ -940,9 +890,8 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
   it('completes full cycle: POST creates decision, SSE resolves it, response is mapped', async () => {
     const decisionId = 'dec-e2e-001';
     const { fetchMock } = setupFetchMock(decisionId, {
-      response: true,
-      comment: 'Ship it!',
-      respondedBy: 'reviewer-alice',
+      selectedOptionId: 'approve',
+      customResponse: 'Ship it!',
       respondedAt: '2026-02-15T10:30:00.000Z',
     });
     const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -957,19 +906,20 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
       },
     );
     expect(postCall).toBeDefined();
-    expect(postCall![0]).toBe('http://localhost:3200/queue');
+    expect(postCall![0]).toBe('http://localhost:3200/decisions');
 
     // Verify SSE endpoint was called
     const sseCall = fetchMock.mock.calls.find(
-      (call) => String(call[0]).includes('/events'),
+      (call) => String(call[0]).includes('/decisions/events'),
     );
     expect(sseCall).toBeDefined();
 
     // Verify the fully mapped response
     expect(result).toEqual({
       approved: true,
+      decision: 'approve',
       input: 'Ship it!',
-      respondedBy: 'reviewer-alice',
+      respondedBy: 'human',
       respondedAt: '2026-02-15T10:30:00.000Z',
     });
   });
@@ -980,21 +930,19 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
-        callOrder.push('POST /queue');
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
+        callOrder.push('POST /decisions');
         return new Response(
           JSON.stringify({ id: 'dec-order-001', createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
-        callOrder.push('GET /events');
+      if (urlStr.includes('/decisions/events')) {
+        callOrder.push('GET /decisions/events');
         return new Response(
           createSSEStream('dec-order-001', {
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           }),
           { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
@@ -1009,7 +957,7 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     const handler = new HumancyApiDecisionHandler(defaultConfig);
     await handler.requestDecision(makeRequest(), 30_000);
 
-    expect(callOrder).toEqual(['POST /queue', 'GET /events']);
+    expect(callOrder).toEqual(['POST /decisions', 'GET /decisions/events']);
   });
 
   it('uses the decision ID from POST response to match SSE events', async () => {
@@ -1018,44 +966,41 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
 
     // Emit two SSE events: one for a different decision, one matching
     const nonMatchingEvent = JSON.stringify({
-      action: 'removed',
-      item: { id: 'some-other-decision' },
-      queueSize: 1,
+      id: 'some-other-decision',
+      type: 'decision',
+      urgency: 'when_available',
+      status: 'responded',
       response: {
-        id: 'some-other-decision',
-        response: false,
-        respondedBy: 'reviewer',
         respondedAt: '2026-02-15T09:30:00.000Z',
       },
     });
     const matchingEvent = JSON.stringify({
-      action: 'removed',
-      item: { id: serverId },
-      queueSize: 0,
+      id: serverId,
+      type: 'decision',
+      urgency: 'when_available',
+      status: 'responded',
       response: {
-        id: serverId,
-        response: true,
-        comment: 'Correct decision matched',
-        respondedBy: 'reviewer-bob',
+        selectedOptionId: 'approve',
+        customResponse: 'Correct decision matched',
         respondedAt: '2026-02-15T10:00:00.000Z',
       },
     });
 
     const sseText =
-      `event: queue:item:removed\ndata: ${nonMatchingEvent}\nid: evt_1\n\n` +
-      `event: queue:item:removed\ndata: ${matchingEvent}\nid: evt_2\n\n`;
+      `event: decision:resolved\ndata: ${nonMatchingEvent}\nid: evt_1\n\n` +
+      `event: decision:resolved\ndata: ${matchingEvent}\nid: evt_2\n\n`;
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: serverId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode(sseText));
@@ -1079,28 +1024,28 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     // Should have matched the second event (serverId), not the first
     expect(result.approved).toBe(true);
     expect(result.input).toBe('Correct decision matched');
-    expect(result.respondedBy).toBe('reviewer-bob');
+    expect(result.respondedBy).toBe('human');
   });
 
-  it('ignores non-queue:item:removed SSE events', async () => {
+  it('ignores non-decision:resolved SSE events', async () => {
     const decisionId = 'dec-ignore-events';
     const encoder = new TextEncoder();
 
     const heartbeatEvent = `event: heartbeat\ndata: {}\nid: evt_0\n\n`;
-    const addedEvent = `event: queue:item:added\ndata: ${JSON.stringify({
-      action: 'added',
-      item: { id: decisionId },
-      queueSize: 1,
+    const addedEvent = `event: decision:created\ndata: ${JSON.stringify({
+      id: decisionId,
+      type: 'decision',
+      urgency: 'when_available',
+      status: 'pending',
     })}\nid: evt_1\n\n`;
-    const removedEvent = `event: queue:item:removed\ndata: ${JSON.stringify({
-      action: 'removed',
-      item: { id: decisionId },
-      queueSize: 0,
+    const removedEvent = `event: decision:resolved\ndata: ${JSON.stringify({
+      id: decisionId,
+      type: 'decision',
+      urgency: 'when_available',
+      status: 'responded',
       response: {
-        id: decisionId,
-        response: 'approve',
-        comment: 'After filtering',
-        respondedBy: 'reviewer',
+        selectedOptionId: 'approve',
+        customResponse: 'After filtering',
         respondedAt: '2026-02-15T10:00:00.000Z',
       },
     })}\nid: evt_2\n\n`;
@@ -1110,14 +1055,14 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         const stream = new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode(sseText));
@@ -1144,7 +1089,7 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     });
     const result = await handler.requestDecision(request, 30_000);
 
-    // Should have resolved from the queue:item:removed event only
+    // Should have resolved from the decision:resolved event only
     expect(result.approved).toBe(true);
     expect(result.decision).toBe('approve');
     expect(result.input).toBe('After filtering');
@@ -1161,21 +1106,19 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         // Capture the signal passed to the SSE fetch
         sseAbortSignal = init?.signal ?? undefined;
         return new Response(
           createSSEStream(decisionId, {
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           }),
           { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
@@ -1201,27 +1144,27 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
   // SSE auth headers
   // -----------------------------------------------------------------------
 
-  it('passes Authorization header to SSE endpoint when authToken configured', async () => {
+  it('passes auth token to SSE endpoint as query parameter when authToken configured', async () => {
     const decisionId = 'dec-sse-auth';
+    let sseUrl: string | undefined;
     let sseHeaders: Record<string, string> | undefined;
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && !urlStr.includes('/decisions/events') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
+        sseUrl = urlStr;
         sseHeaders = init?.headers as Record<string, string> | undefined;
         return new Response(
           createSSEStream(decisionId, {
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           }),
           { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
@@ -1239,8 +1182,10 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
     });
     await handler.requestDecision(makeRequest(), 30_000);
 
+    // Auth token is passed via query parameter (Humancy SSE auth convention)
+    expect(sseUrl).toBeDefined();
+    expect(sseUrl).toContain('token=sse-secret-token');
     expect(sseHeaders).toBeDefined();
-    expect(sseHeaders!['Authorization']).toBe('Bearer sse-secret-token');
     expect(sseHeaders!['Accept']).toBe('text/event-stream');
   });
 
@@ -1251,9 +1196,8 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
   describe('full cycle with different response types', () => {
     it('handles boolean true response end-to-end', async () => {
       setupFetchMock('dec-cycle-bool-true', {
-        response: true,
-        comment: 'LGTM',
-        respondedBy: 'alice',
+        selectedOptionId: 'approve',
+        customResponse: 'LGTM',
         respondedAt: '2026-02-15T10:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1262,17 +1206,17 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
 
       expect(result).toEqual({
         approved: true,
+        decision: 'approve',
         input: 'LGTM',
-        respondedBy: 'alice',
+        respondedBy: 'human',
         respondedAt: '2026-02-15T10:00:00.000Z',
       });
     });
 
     it('handles boolean false response end-to-end', async () => {
       setupFetchMock('dec-cycle-bool-false', {
-        response: false,
-        comment: 'Needs work',
-        respondedBy: 'bob',
+        selectedOptionId: undefined,
+        customResponse: 'Needs work',
         respondedAt: '2026-02-15T11:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1282,16 +1226,15 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
       expect(result).toEqual({
         approved: false,
         input: 'Needs work',
-        respondedBy: 'bob',
+        respondedBy: 'human',
         respondedAt: '2026-02-15T11:00:00.000Z',
       });
     });
 
     it('handles string option response end-to-end', async () => {
       setupFetchMock('dec-cycle-str', {
-        response: 'approve',
-        comment: 'Good to go',
-        respondedBy: 'carol',
+        selectedOptionId: 'approve',
+        customResponse: 'Good to go',
         respondedAt: '2026-02-15T12:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1308,16 +1251,15 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
         approved: true,
         decision: 'approve',
         input: 'Good to go',
-        respondedBy: 'carol',
+        respondedBy: 'human',
         respondedAt: '2026-02-15T12:00:00.000Z',
       });
     });
 
     it('handles string rejection response end-to-end', async () => {
       setupFetchMock('dec-cycle-str-reject', {
-        response: 'reject',
-        comment: 'Security concerns',
-        respondedBy: 'dave',
+        selectedOptionId: 'reject',
+        customResponse: 'Security concerns',
         respondedAt: '2026-02-15T13:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1334,16 +1276,14 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
         approved: false,
         decision: 'reject',
         input: 'Security concerns',
-        respondedBy: 'dave',
+        respondedBy: 'human',
         respondedAt: '2026-02-15T13:00:00.000Z',
       });
     });
 
     it('handles array response end-to-end', async () => {
       setupFetchMock('dec-cycle-arr', {
-        response: ['approve'],
-        comment: undefined,
-        respondedBy: 'eve',
+        selectedOptionId: 'approve',
         respondedAt: '2026-02-15T14:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1359,7 +1299,7 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
       expect(result).toEqual({
         approved: true,
         decision: 'approve',
-        respondedBy: 'eve',
+        respondedBy: 'human',
         respondedAt: '2026-02-15T14:00:00.000Z',
       });
     });
@@ -1372,9 +1312,7 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
   it('clears timeout timer on successful resolution (no dangling timers)', async () => {
     const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
     setupFetchMock('dec-no-dangle', {
-      response: true,
-      comment: undefined,
-      respondedBy: 'reviewer',
+      selectedOptionId: 'approve',
       respondedAt: '2026-02-15T10:00:00.000Z',
     });
     const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1394,9 +1332,8 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
 
     // First request
     setupFetchMock('dec-seq-1', {
-      response: true,
-      comment: 'First approval',
-      respondedBy: 'reviewer-1',
+      selectedOptionId: 'approve',
+      customResponse: 'First approval',
       respondedAt: '2026-02-15T10:00:00.000Z',
     });
     const result1 = await handler.requestDecision(makeRequest(), 30_000);
@@ -1409,9 +1346,8 @@ describe('HumancyApiDecisionHandler — happy path full cycle (T022)', () => {
 
     // Second request with different response
     setupFetchMock('dec-seq-2', {
-      response: false,
-      comment: 'Second rejection',
-      respondedBy: 'reviewer-2',
+      selectedOptionId: undefined,
+      customResponse: 'Second rejection',
       respondedAt: '2026-02-15T11:00:00.000Z',
     });
     const result2 = await handler.requestDecision(makeRequest(), 30_000);
@@ -1440,7 +1376,7 @@ describe('HumancyApiDecisionHandler — timeout enforcement (T023)', () => {
   // -----------------------------------------------------------------------
 
   /**
-   * Sets up a fetch mock where POST /queue succeeds but the SSE stream
+   * Sets up a fetch mock where POST /decisions succeeds but the SSE stream
    * stays open indefinitely without emitting the matching decision event.
    *
    * The stream sends periodic heartbeat comments to keep the connection
@@ -1453,16 +1389,16 @@ describe('HumancyApiDecisionHandler — timeout enforcement (T023)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      // POST /queue — create decision successfully
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      // POST /decisions — create decision successfully
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      // GET /events — SSE stream that never resolves the decision
-      if (urlStr.includes('/events')) {
+      // GET /decisions/events — SSE stream that never resolves the decision
+      if (urlStr.includes('/decisions/events')) {
         sseAbortSignal = init?.signal ?? undefined;
         const encoder = new TextEncoder();
 
@@ -1471,20 +1407,19 @@ describe('HumancyApiDecisionHandler — timeout enforcement (T023)', () => {
             // Send a heartbeat comment — the stream stays open
             controller.enqueue(encoder.encode(': heartbeat\n\n'));
 
-            // Emit a queue:item:removed for a DIFFERENT decision (should be ignored)
+            // Emit a decision:resolved for a DIFFERENT decision (should be ignored)
             const unrelatedEvent = JSON.stringify({
-              action: 'removed',
-              item: { id: 'some-other-decision-id' },
-              queueSize: 0,
+              id: 'some-other-decision-id',
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'responded',
               response: {
-                id: 'some-other-decision-id',
-                response: true,
-                respondedBy: 'reviewer',
+                selectedOptionId: 'approve',
                 respondedAt: '2026-02-15T09:30:00.000Z',
               },
             });
             controller.enqueue(
-              encoder.encode(`event: queue:item:removed\ndata: ${unrelatedEvent}\nid: evt_1\n\n`),
+              encoder.encode(`event: decision:resolved\ndata: ${unrelatedEvent}\nid: evt_1\n\n`),
             );
 
             // Never close the stream — simulates waiting for the human reviewer
@@ -1750,9 +1685,8 @@ describe('HumancyApiDecisionHandler — timeout enforcement (T023)', () => {
   it('does not throw timeout error when SSE resolves before timeout', async () => {
     // Use the standard setupFetchMock which immediately resolves
     setupFetchMock('dec-no-timeout', {
-      response: true,
-      comment: 'Resolved before timeout',
-      respondedBy: 'fast-reviewer',
+      selectedOptionId: 'approve',
+      customResponse: 'Resolved before timeout',
       respondedAt: '2026-02-15T09:01:00.000Z',
     });
     const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -1775,28 +1709,27 @@ describe('HumancyApiDecisionHandler — timeout enforcement (T023)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         // Emit multiple events for OTHER decisions — none match
         const events = ['other-1', 'other-2', 'other-3'].map((otherId, idx) => {
           const data = JSON.stringify({
-            action: 'removed',
-            item: { id: otherId },
-            queueSize: 0,
+            id: otherId,
+            type: 'decision',
+            urgency: 'when_available',
+            status: 'responded',
             response: {
-              id: otherId,
-              response: true,
-              respondedBy: 'reviewer',
+              selectedOptionId: 'approve',
               respondedAt: '2026-02-15T09:30:00.000Z',
             },
           });
-          return `event: queue:item:removed\ndata: ${data}\nid: evt_${idx}\n\n`;
+          return `event: decision:resolved\ndata: ${data}\nid: evt_${idx}\n\n`;
         }).join('');
 
         const stream = new ReadableStream<Uint8Array>({
@@ -1834,28 +1767,29 @@ describe('HumancyApiDecisionHandler — timeout enforcement (T023)', () => {
     expect(caughtError!.name).toBe('CorrelationTimeoutError');
   });
 
-  it('times out when SSE emits only non-queue:item:removed event types', async () => {
+  it('times out when SSE emits only non-decision:resolved event types', async () => {
     const decisionId = 'dec-timeout-wrong-type';
     const encoder = new TextEncoder();
 
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
-        // Emit events of wrong types (heartbeat, added, etc.) — none are queue:item:removed
+      if (urlStr.includes('/decisions/events')) {
+        // Emit events of wrong types (heartbeat, added, etc.) — none are decision:resolved
         const events =
           `: heartbeat\n\n` +
-          `event: queue:item:added\ndata: ${JSON.stringify({
-            action: 'added',
-            item: { id: decisionId },
-            queueSize: 1,
+          `event: decision:created\ndata: ${JSON.stringify({
+            id: decisionId,
+            type: 'decision',
+            urgency: 'when_available',
+            status: 'pending',
           })}\nid: evt_1\n\n` +
           `event: heartbeat\ndata: {}\nid: evt_2\n\n`;
 
@@ -1923,11 +1857,11 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
   });
 
   // -----------------------------------------------------------------------
-  // Helper: mock fetch that fails on POST /queue
+  // Helper: mock fetch that fails on POST /decisions
   // -----------------------------------------------------------------------
 
   /**
-   * Sets up a fetch mock where POST /queue fails in a specific way.
+   * Sets up a fetch mock where POST /decisions fails in a specific way.
    *
    * @param mode  How the POST should fail:
    *   - 'network' — fetch itself throws a TypeError (simulating connection refused)
@@ -1937,7 +1871,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         if (mode === 'network') {
           throw new TypeError('fetch failed: ECONNREFUSED');
         }
@@ -1948,7 +1882,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
       }
 
       // SSE endpoint should never be reached in fallback/error tests
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         return new Response(createSSEStream('should-not-reach'), {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream' },
@@ -2011,7 +1945,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
       await handler.requestDecision(makeRequest(), 30_000);
 
       const sseCalls = fetchMock.mock.calls.filter(
-        (call) => String(call[0]).includes('/events'),
+        (call) => String(call[0]).includes('/decisions/events'),
       );
       expect(sseCalls).toHaveLength(0);
     });
@@ -2059,7 +1993,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
       await handler.requestDecision(makeRequest(), 30_000);
 
       const sseCalls = fetchMock.mock.calls.filter(
-        (call) => String(call[0]).includes('/events'),
+        (call) => String(call[0]).includes('/decisions/events'),
       );
       expect(sseCalls).toHaveLength(0);
     });
@@ -2076,7 +2010,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 401/);
+      ).rejects.toThrow(/POST \/decisions failed: 401/);
     });
 
     it('throws on 400 Bad Request even with fallback enabled', async () => {
@@ -2085,7 +2019,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 400/);
+      ).rejects.toThrow(/POST \/decisions failed: 400/);
     });
 
     it('throws on 403 Forbidden even with fallback enabled', async () => {
@@ -2094,7 +2028,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 403/);
+      ).rejects.toThrow(/POST \/decisions failed: 403/);
     });
 
     it('throws on 404 Not Found even with fallback enabled', async () => {
@@ -2103,7 +2037,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 404/);
+      ).rejects.toThrow(/POST \/decisions failed: 404/);
     });
 
     it('throws on 422 Unprocessable Entity even with fallback enabled', async () => {
@@ -2112,7 +2046,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 422/);
+      ).rejects.toThrow(/POST \/decisions failed: 422/);
     });
   });
 
@@ -2136,7 +2070,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 503/);
+      ).rejects.toThrow(/POST \/decisions failed: 503/);
     });
 
     it('throws on 500 when fallback disabled', async () => {
@@ -2145,7 +2079,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 500/);
+      ).rejects.toThrow(/POST \/decisions failed: 500/);
     });
 
     it('throws on 401 when fallback disabled', async () => {
@@ -2154,7 +2088,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 401/);
+      ).rejects.toThrow(/POST \/decisions failed: 401/);
     });
 
     it('throws on 400 when fallback disabled', async () => {
@@ -2163,7 +2097,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 400/);
+      ).rejects.toThrow(/POST \/decisions failed: 400/);
     });
   });
 
@@ -2208,7 +2142,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       await expect(
         handler.requestDecision(makeRequest(), 30_000),
-      ).rejects.toThrow(/POST \/queue failed: 400/);
+      ).rejects.toThrow(/POST \/decisions failed: 400/);
     });
   });
 
@@ -2225,7 +2159,7 @@ describe('HumancyApiDecisionHandler — simulation fallback (T024)', () => {
 
       // The SSE endpoint should never have been called — no connection to leak
       const sseCalls = fetchMock.mock.calls.filter(
-        (call) => String(call[0]).includes('/events'),
+        (call) => String(call[0]).includes('/decisions/events'),
       );
       expect(sseCalls).toHaveLength(0);
     });
@@ -2321,34 +2255,34 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      // POST /queue — create decision
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      // POST /decisions — create decision
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      // GET /events — SSE stream
-      if (urlStr.includes('/events')) {
+      // GET /decisions/events — SSE stream
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
 
         if (sseCallCount === 1) {
           // First connection: emit 2 unrelated events, then close the stream
           const events = [
-            sseEvent('queue:item:added', {
-              action: 'added',
-              item: { id: decisionId },
-              queueSize: 1,
+            sseEvent('decision:created', {
+              id: decisionId,
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'pending',
             }, 'evt_1'),
-            sseEvent('queue:item:removed', {
-              action: 'removed',
-              item: { id: 'some-other-decision' },
-              queueSize: 0,
+            sseEvent('decision:resolved', {
+              id: 'some-other-decision',
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'responded',
               response: {
-                id: 'some-other-decision',
-                response: true,
-                respondedBy: 'reviewer',
+                selectedOptionId: 'approve',
                 respondedAt: '2026-02-15T09:30:00.000Z',
               },
             }, 'evt_2'),
@@ -2360,15 +2294,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Second connection (reconnection): emit the matching event
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: true,
-            comment: 'Approved on reconnect',
-            respondedBy: 'reviewer-reconnect',
+            selectedOptionId: 'approve',
+            customResponse: 'Approved on reconnect',
             respondedAt: '2026-02-15T10:00:00.000Z',
           },
         }, 'evt_3');
@@ -2399,7 +2332,7 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     // Should have resolved from the reconnected stream
     expect(result.approved).toBe(true);
     expect(result.input).toBe('Approved on reconnect');
-    expect(result.respondedBy).toBe('reviewer-reconnect');
+    expect(result.respondedBy).toBe('human');
 
     // Verify SSE was called twice (initial + 1 reconnection)
     expect(sseCallCount).toBe(2);
@@ -2417,23 +2350,24 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
         capturedHeaders.push({ ...(init?.headers as Record<string, string>) });
 
         if (sseCallCount === 1) {
           // First connection: emit one event with id "evt_42", then close
-          const event = sseEvent('queue:item:added', {
-            action: 'added',
-            item: { id: decisionId },
-            queueSize: 1,
+          const event = sseEvent('decision:created', {
+            id: decisionId,
+            type: 'decision',
+            urgency: 'when_available',
+            status: 'pending',
           }, 'evt_42');
           return new Response(createSSEStreamFromTexts([event]), {
             status: 200,
@@ -2442,15 +2376,13 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Second connection: emit the matching resolution event
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           },
         }, 'evt_43');
@@ -2493,14 +2425,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
         // Always fail with a network error to consume reconnection attempts
         throw new TypeError('fetch failed: ECONNRESET');
@@ -2532,7 +2464,7 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     expect(caughtError).toBeDefined();
     expect(caughtError!.message).toContain('attempts');
 
-    // 1 initial + 3 reconnect attempts = 4 total fetch calls to /events
+    // 1 initial + 3 reconnect attempts = 4 total fetch calls to /decisions/events
     expect(sseCallCount).toBe(4);
   });
 
@@ -2546,14 +2478,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         // Every SSE connection fails with a network error
         throw new TypeError('fetch failed: ECONNREFUSED');
       }
@@ -2595,14 +2527,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
 
         if (sseCallCount === 1) {
@@ -2611,15 +2543,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Second connection: succeeds with matching event
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: 'approve',
-            comment: 'Recovered from network error',
-            respondedBy: 'reviewer-net',
+            selectedOptionId: 'approve',
+            customResponse: 'Recovered from network error',
             respondedAt: '2026-02-15T10:00:00.000Z',
           },
         }, 'evt_10');
@@ -2668,14 +2599,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
 
         if (sseCallCount === 1) {
@@ -2687,15 +2618,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Second connection: succeeds with matching event
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: true,
-            comment: 'Recovered from 503',
-            respondedBy: 'reviewer-503',
+            selectedOptionId: 'approve',
+            customResponse: 'Recovered from 503',
             respondedAt: '2026-02-15T10:00:00.000Z',
           },
         }, 'evt_20');
@@ -2736,24 +2666,25 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
 
         if (sseCallCount <= 2) {
           // Connections 1 and 2: return a valid stream that closes (no matching event)
           // Each successful connection should reset the counter
           return new Response(createSSEStreamFromTexts([
-            sseEvent('queue:item:added', {
-              action: 'added',
-              item: { id: 'other' },
-              queueSize: 1,
+            sseEvent('decision:created', {
+              id: 'other',
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'pending',
             }, `evt_${sseCallCount}`),
           ]), {
             status: 200,
@@ -2762,15 +2693,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Connection 3: return the matching event
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: true,
-            comment: 'After counter reset',
-            respondedBy: 'reviewer-reset',
+            selectedOptionId: 'approve',
+            customResponse: 'After counter reset',
             respondedAt: '2026-02-15T10:00:00.000Z',
           },
         }, 'evt_3');
@@ -2814,14 +2744,14 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
         // Stream closes immediately with no matching event
         return new Response(createSSEStreamFromTexts([
@@ -2867,23 +2797,24 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
 
         // Connections 1-3: emit unrelated events and close
         if (sseCallCount <= 3) {
           return new Response(createSSEStreamFromTexts([
-            sseEvent('queue:item:added', {
-              action: 'added',
-              item: { id: `unrelated-${sseCallCount}` },
-              queueSize: sseCallCount,
+            sseEvent('decision:created', {
+              id: `unrelated-${sseCallCount}`,
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'pending',
             }, `evt_${sseCallCount}`),
           ]), {
             status: 200,
@@ -2892,15 +2823,13 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Connection 4: the matching event
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: false,
-            comment: 'Finally resolved after many drops',
-            respondedBy: 'patient-reviewer',
+            customResponse: 'Finally resolved after many drops',
             respondedAt: '2026-02-15T11:00:00.000Z',
           },
         }, 'evt_final');
@@ -2929,7 +2858,7 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
 
     expect(result.approved).toBe(false);
     expect(result.input).toBe('Finally resolved after many drops');
-    expect(result.respondedBy).toBe('patient-reviewer');
+    expect(result.respondedBy).toBe('human');
     expect(sseCallCount).toBe(4);
   });
 
@@ -2945,24 +2874,25 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-      if (urlStr.includes('/queue') && init?.method === 'POST') {
+      if (urlStr.includes('/decisions') && init?.method === 'POST') {
         return new Response(
           JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
           { status: 201, headers: { 'Content-Type': 'application/json' } },
         );
       }
 
-      if (urlStr.includes('/events')) {
+      if (urlStr.includes('/decisions/events')) {
         sseCallCount++;
         capturedHeaders.push({ ...(init?.headers as Record<string, string>) });
 
         if (sseCallCount === 1) {
           // First connection: emit event with id "first-id"
           return new Response(createSSEStreamFromTexts([
-            sseEvent('queue:item:added', {
-              action: 'added',
-              item: { id: 'x' },
-              queueSize: 1,
+            sseEvent('decision:created', {
+              id: 'x',
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'pending',
             }, 'first-id'),
           ]), {
             status: 200,
@@ -2973,10 +2903,11 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         if (sseCallCount === 2) {
           // Second connection: emit event with id "second-id"
           return new Response(createSSEStreamFromTexts([
-            sseEvent('queue:item:added', {
-              action: 'added',
-              item: { id: 'y' },
-              queueSize: 2,
+            sseEvent('decision:created', {
+              id: 'y',
+              type: 'decision',
+              urgency: 'when_available',
+              status: 'pending',
             }, 'second-id'),
           ]), {
             status: 200,
@@ -2985,15 +2916,13 @@ describe('HumancyApiDecisionHandler — SSE reconnection (T025)', () => {
         }
 
         // Third connection: resolve
-        const matchingEvent = sseEvent('queue:item:removed', {
-          action: 'removed',
-          item: { id: decisionId },
-          queueSize: 0,
+        const matchingEvent = sseEvent('decision:resolved', {
+          id: decisionId,
+          type: 'decision',
+          urgency: 'when_available',
+          status: 'responded',
           response: {
-            id: decisionId,
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           },
         }, 'third-id');
@@ -3055,19 +2984,17 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           return new Response(
             JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
             { status: 201, headers: { 'Content-Type': 'application/json' } },
           );
         }
 
-        if (urlStr.includes('/events')) {
+        if (urlStr.includes('/decisions/events')) {
           capturedSignal = init?.signal ?? undefined;
           return new Response(createSSEStream(decisionId, {
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           }), {
             status: 200,
@@ -3096,7 +3023,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           postSignal = init?.signal ?? undefined;
           return new Response(
             JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
@@ -3104,12 +3031,10 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
           );
         }
 
-        if (urlStr.includes('/events')) {
+        if (urlStr.includes('/decisions/events')) {
           sseSignal = init?.signal ?? undefined;
           return new Response(createSSEStream(decisionId, {
-            response: true,
-            comment: undefined,
-            respondedBy: 'reviewer',
+            selectedOptionId: 'approve',
             respondedAt: '2026-02-15T10:00:00.000Z',
           }), {
             status: 200,
@@ -3146,14 +3071,14 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           return new Response(
             JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
             { status: 201, headers: { 'Content-Type': 'application/json' } },
           );
         }
 
-        if (urlStr.includes('/events')) {
+        if (urlStr.includes('/decisions/events')) {
           capturedSignal = init?.signal ?? undefined;
           const encoder = new TextEncoder();
           // Stream that stays open — never emits a matching event
@@ -3194,14 +3119,14 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           return new Response(
             JSON.stringify({ id: decisionId, createdAt: '2026-02-15T09:00:00.000Z' }),
             { status: 201, headers: { 'Content-Type': 'application/json' } },
           );
         }
 
-        if (urlStr.includes('/events')) {
+        if (urlStr.includes('/decisions/events')) {
           const signal = init?.signal;
           const encoder = new TextEncoder();
           const stream = new ReadableStream<Uint8Array>({
@@ -3251,11 +3176,11 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           throw new TypeError('fetch failed: ECONNREFUSED');
         }
 
-        if (urlStr.includes('/events')) {
+        if (urlStr.includes('/decisions/events')) {
           return new Response(createSSEStream('should-not-reach'), {
             status: 200,
             headers: { 'Content-Type': 'text/event-stream' },
@@ -3276,7 +3201,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
 
       // SSE endpoint should never be called — no leaked connection
       const sseCalls = fetchMock.mock.calls.filter(
-        (call) => String(call[0]).includes('/events'),
+        (call) => String(call[0]).includes('/decisions/events'),
       );
       expect(sseCalls).toHaveLength(0);
     });
@@ -3285,14 +3210,14 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           return new Response(
             JSON.stringify({ error: 'Service Unavailable' }),
             { status: 503, statusText: 'Service Unavailable' },
           );
         }
 
-        if (urlStr.includes('/events')) {
+        if (urlStr.includes('/decisions/events')) {
           return new Response(createSSEStream('should-not-reach'), {
             status: 200,
             headers: { 'Content-Type': 'text/event-stream' },
@@ -3312,7 +3237,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       await handler.requestDecision(makeRequest(), 30_000);
 
       const sseCalls = fetchMock.mock.calls.filter(
-        (call) => String(call[0]).includes('/events'),
+        (call) => String(call[0]).includes('/decisions/events'),
       );
       expect(sseCalls).toHaveLength(0);
     });
@@ -3321,7 +3246,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
       const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
         const urlStr = typeof url === 'string' ? url : url instanceof URL ? url.toString() : url.url;
 
-        if (urlStr.includes('/queue') && init?.method === 'POST') {
+        if (urlStr.includes('/decisions') && init?.method === 'POST') {
           throw new TypeError('fetch failed: ECONNREFUSED');
         }
 
@@ -3350,9 +3275,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
     it('calls clearTimeout after successful resolution', async () => {
       const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
       setupFetchMock('dec-timer-cleanup-1', {
-        response: true,
-        comment: undefined,
-        respondedBy: 'reviewer',
+        selectedOptionId: 'approve',
         respondedAt: '2026-02-15T10:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -3364,9 +3287,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
 
     it('timeout timer does not fire after successful resolution', async () => {
       setupFetchMock('dec-timer-no-fire', {
-        response: true,
-        comment: undefined,
-        respondedBy: 'reviewer',
+        selectedOptionId: 'approve',
         respondedAt: '2026-02-15T10:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -3385,9 +3306,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
     it('clearTimeout is called exactly once per successful request', async () => {
       const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
       setupFetchMock('dec-timer-once', {
-        response: true,
-        comment: undefined,
-        respondedBy: 'reviewer',
+        selectedOptionId: 'approve',
         respondedAt: '2026-02-15T10:00:00.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);
@@ -3405,9 +3324,7 @@ describe('HumancyApiDecisionHandler — resource cleanup (T026)', () => {
     it('clearTimeout is called even when resolution is very fast', async () => {
       const clearTimeoutSpy = vi.spyOn(global, 'clearTimeout');
       setupFetchMock('dec-timer-fast', {
-        response: true,
-        comment: undefined,
-        respondedBy: 'fast-reviewer',
+        selectedOptionId: 'approve',
         respondedAt: '2026-02-15T09:00:01.000Z',
       });
       const handler = new HumancyApiDecisionHandler(defaultConfig);

@@ -1,11 +1,13 @@
 /**
  * HumancyApiDecisionHandler — concrete HumanDecisionHandler that bridges
- * the workflow engine's human review steps with the Humancy orchestrator's
- * decision queue API.
+ * the workflow engine's human review steps with the Humancy Cloud API's
+ * decision endpoints.
  *
- * Creates decisions via POST /queue, listens for resolution via SSE
- * (queue:item:removed event), and maps responses back to the workflow
+ * Creates decisions via POST /decisions, listens for resolution via SSE
+ * (decision:resolved event), and maps responses back to the workflow
  * engine's ReviewDecisionResponse format.
+ *
+ * API: generacy.ai/api/humancy/decisions (architecture-overview-v3)
  */
 import type { HumanDecisionHandler } from './humancy-review.js';
 import type { HumancyUrgency } from '../../types/action.js';
@@ -19,13 +21,13 @@ import { CorrelationTimeoutError } from '../../errors/correlation-timeout.js';
  * Configuration for HumancyApiDecisionHandler.
  */
 export interface HumancyApiHandlerConfig {
-  /** Base URL for the orchestrator API (e.g., http://localhost:3200) */
+  /** Base URL for the Humancy API (e.g., http://localhost:3002/api/humancy) */
   apiUrl: string;
   /** Agent ID for decision attribution */
   agentId: string;
   /** Optional project ID for scoping decisions */
   projectId?: string;
-  /** Optional auth token for API requests */
+  /** Optional auth token for API requests (JWT) */
   authToken?: string;
   /** Whether to fall back to simulation on API failure (default: true) */
   fallbackToSimulation?: boolean;
@@ -94,36 +96,34 @@ interface ReviewDecisionResponse {
 }
 
 /**
- * Orchestrator priority levels for decision queue items.
+ * Humancy Cloud API urgency levels (from @humancy-cloud/db urgencySchema).
  */
-type DecisionPriority = 'blocking_now' | 'blocking_soon' | 'when_available';
+type HumancyCloudUrgency = 'blocking_now' | 'blocking_soon' | 'when_available';
 
 /**
- * Decision response from the orchestrator's queue API.
- * Structurally compatible with the orchestrator's DecisionResponse schema.
+ * Humancy Cloud API decision response embedded in SSE events and GET responses.
+ * Matches decisionResponseSchema from @humancy-cloud/db.
  */
-interface DecisionResponse {
-  id: string;
-  response: string | boolean | string[];
-  comment?: string;
-  respondedBy: string;
+interface HumancyDecisionResponse {
+  selectedOptionId?: string;
+  customResponse?: string;
+  reasoning?: string;
   respondedAt: string;
 }
 
 /**
- * Payload sent to POST /queue to create a decision.
- * Structurally compatible with the orchestrator's CreateDecisionRequest.
+ * Payload sent to POST /decisions to create a decision.
+ * Matches createDecisionInputSchema from @humancy-cloud/db.
  */
 interface CreateDecisionPayload {
-  workflowId: string;
-  stepId: string;
-  type: 'review';
-  prompt: string;
-  options?: Array<{ id: string; label: string; description?: string }>;
-  context: Record<string, unknown>;
-  priority: DecisionPriority;
-  expiresAt: string;
   agentId: string;
+  projectId?: string;
+  type: 'review';
+  urgency: HumancyCloudUrgency;
+  question: string;
+  context?: string;
+  options?: Array<{ id: string; label: string; description?: string }>;
+  expiresAt?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,9 +146,9 @@ export interface ParsedSSEEvent {
 }
 
 /**
- * Maps workflow-engine urgency to orchestrator decision priority.
+ * Maps workflow-engine urgency to Humancy Cloud API urgency.
  */
-function mapUrgencyToPriority(urgency: HumancyUrgency): DecisionPriority {
+function mapUrgency(urgency: HumancyUrgency): HumancyCloudUrgency {
   switch (urgency) {
     case 'low':
     case 'normal':
@@ -166,7 +166,7 @@ function mapUrgencyToPriority(urgency: HumancyUrgency): DecisionPriority {
 
 /**
  * Concrete HumanDecisionHandler that communicates with the Humancy
- * orchestrator's queue API to request and await human decisions.
+ * Cloud API's decision endpoints to request and await human decisions.
  */
 export class HumancyApiDecisionHandler implements HumanDecisionHandler {
   private readonly config: ResolvedConfig;
@@ -186,32 +186,35 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
   }
 
   /**
-   * Maps a workflow-engine ReviewDecisionRequest to the orchestrator's
-   * POST /queue payload (CreateDecisionRequest shape).
+   * Maps a workflow-engine ReviewDecisionRequest to the Humancy Cloud API's
+   * POST /decisions payload (CreateDecisionInput shape).
    *
-   * Field mapping (spec FR-003):
-   *   title        → prompt
-   *   description  → context.description
-   *   artifact     → context.artifact
+   * Field mapping:
+   *   title        → question
+   *   description  → context (with workflow/step metadata)
+   *   artifact     → appended to context
    *   options      → options (requiresComment → description hint)
-   *   urgency      → priority (low/normal → when_available)
-   *   workflowId   → workflowId
-   *   stepId       → stepId
+   *   urgency      → urgency (low/normal → when_available)
    *   type         → type ('review')
    *   config.agentId → agentId
+   *   config.projectId → projectId
    *   timeout+5min  → expiresAt
    */
   private mapRequestToPayload(
     request: ReviewDecisionRequest,
     timeout: number,
   ): CreateDecisionPayload {
-    const context: Record<string, unknown> = {};
+    // Build context string from description, artifact, and workflow metadata
+    const contextParts: string[] = [];
     if (request.description) {
-      context.description = request.description;
+      contextParts.push(request.description);
     }
     if (request.artifact) {
-      context.artifact = request.artifact;
+      contextParts.push(`\n---\nArtifact:\n${request.artifact}`);
     }
+    // Include workflow/step IDs as metadata for traceability
+    contextParts.push(`\n[workflow=${request.workflowId}, step=${request.stepId}]`);
+    const context = contextParts.join('');
 
     const options = request.options.map((opt) => {
       const mapped: { id: string; label: string; description?: string } = {
@@ -224,57 +227,57 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
       return mapped;
     });
 
-    return {
-      workflowId: request.workflowId,
-      stepId: request.stepId,
-      type: 'review',
-      prompt: request.title,
-      options: options.length > 0 ? options : undefined,
-      context,
-      priority: mapUrgencyToPriority(request.urgency),
-      expiresAt: new Date(Date.now() + timeout + EXPIRY_BUFFER_MS).toISOString(),
+    const payload: CreateDecisionPayload = {
       agentId: this.config.agentId,
+      type: 'review',
+      urgency: mapUrgency(request.urgency),
+      question: request.title,
+      context,
+      options: options.length > 0 ? options : undefined,
+      expiresAt: new Date(Date.now() + timeout + EXPIRY_BUFFER_MS).toISOString(),
     };
+
+    if (this.config.projectId) {
+      payload.projectId = this.config.projectId;
+    }
+
+    return payload;
   }
 
   /**
-   * Maps an orchestrator DecisionResponse back to the workflow engine's
-   * ReviewDecisionResponse format.
+   * Maps a Humancy Cloud API decision:resolved event response back to the
+   * workflow engine's ReviewDecisionResponse format.
    *
-   * Response mapping (spec FR-005):
-   *   response: true       → { approved: true }
-   *   response: false      → { approved: false }
-   *   response: string     → { decision: string, approved: string === options[0]?.id }
-   *   response: string[]   → { decision: string[0], approved: string[0] === options[0]?.id }
-   *   comment              → input
-   *   respondedBy          → respondedBy
-   *   respondedAt          → respondedAt
+   * Response mapping:
+   *   selectedOptionId === first option → approved: true
+   *   selectedOptionId !== first option → approved: false, decision: selectedOptionId
+   *   customResponse   → input (free-text response)
+   *   respondedAt      → respondedAt
    */
-  private mapResponse(
-    response: DecisionResponse,
+  private mapResolvedEvent(
+    response: HumancyDecisionResponse,
     request: ReviewDecisionRequest,
   ): ReviewDecisionResponse {
     const result: ReviewDecisionResponse = {
-      respondedBy: response.respondedBy,
+      respondedBy: 'human',
       respondedAt: response.respondedAt,
     };
 
-    if (response.comment) {
-      result.input = response.comment;
+    if (response.customResponse) {
+      result.input = response.customResponse;
     }
 
     const firstOptionId = request.options[0]?.id;
 
-    if (typeof response.response === 'boolean') {
-      result.approved = response.response;
-    } else if (Array.isArray(response.response)) {
-      const selected = response.response[0];
-      result.decision = selected;
-      result.approved = selected === firstOptionId;
+    if (response.selectedOptionId) {
+      result.decision = response.selectedOptionId;
+      result.approved = response.selectedOptionId === firstOptionId;
+    } else if (response.customResponse) {
+      // Free-text response without option selection — treat as custom input
+      result.approved = false;
     } else {
-      // string response — single option ID
-      result.decision = response.response;
-      result.approved = response.response === firstOptionId;
+      // No option selected and no custom response — treat as rejection
+      result.approved = false;
     }
 
     return result;
@@ -405,11 +408,11 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
   }
 
   /**
-   * Connects to the orchestrator's SSE endpoint and yields parsed events,
+   * Connects to the Humancy Cloud API's SSE endpoint and yields parsed events,
    * automatically reconnecting on stream errors or unexpected closes.
    *
-   * Uses `GET {apiUrl}/events?channels=queue` with:
-   *   - `Authorization: Bearer {authToken}` header (when configured)
+   * Uses `GET {apiUrl}/decisions/events?token={authToken}` with:
+   *   - Auth via `token` query parameter (Humancy SSE auth convention)
    *   - `Last-Event-ID` header on reconnection attempts
    *   - `Accept: text/event-stream` header
    *
@@ -426,17 +429,18 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
     let attempts = 0;
 
     while (attempts <= this.config.maxReconnectAttempts) {
-      // Build SSE endpoint URL
-      const url = `${this.config.apiUrl}/events?channels=queue`;
+      // Build SSE endpoint URL with token auth via query parameter
+      const sseUrl = new URL(`${this.config.apiUrl}/decisions/events`);
+      if (this.config.authToken) {
+        sseUrl.searchParams.set('token', this.config.authToken);
+      }
+      const url = sseUrl.toString();
 
       // Build headers
       const headers: Record<string, string> = {
         Accept: 'text/event-stream',
         'Cache-Control': 'no-cache',
       };
-      if (this.config.authToken) {
-        headers['Authorization'] = `Bearer ${this.config.authToken}`;
-      }
       if (this.lastEventId) {
         headers['Last-Event-ID'] = this.lastEventId;
       }
@@ -497,7 +501,7 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
       }
 
       this.logger.debug(
-        `SSE connected to ${url}${this.lastEventId ? ` (resuming from ${this.lastEventId})` : ''}`,
+        `SSE connected to ${this.config.apiUrl}/decisions/events${this.lastEventId ? ` (resuming from ${this.lastEventId})` : ''}`,
       );
 
       // Reset attempts on successful connection
@@ -572,15 +576,15 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
   }
 
   /**
-   * Request a human decision via the Humancy orchestrator queue API.
+   * Request a human decision via the Humancy Cloud API.
    *
    * Flow:
    *   1. Map ReviewDecisionRequest → CreateDecisionPayload
-   *   2. POST /queue to create the decision
-   *   3. On POST failure → fall back to simulation if configured (T015)
-   *   4. Connect to SSE stream and wait for queue:item:removed matching the decision ID
-   *   5. Extract DecisionResponse from the event data
-   *   6. Map DecisionResponse → ReviewDecisionResponse
+   *   2. POST /decisions to create the decision
+   *   3. On POST failure → fall back to simulation if configured
+   *   4. Connect to SSE stream and wait for decision:resolved matching the decision ID
+   *   5. Extract response from the event data
+   *   6. Map response → ReviewDecisionResponse
    *   7. Clean up timeout timer and SSE connection
    *
    * Throws CorrelationTimeoutError if the timeout elapses before a response.
@@ -589,7 +593,7 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
     request: ReviewDecisionRequest,
     timeout: number,
   ): Promise<ReviewDecisionResponse> {
-    // --- Step 1: Map request to orchestrator payload ---
+    // --- Step 1: Map request to Humancy Cloud API payload ---
     const payload = this.mapRequestToPayload(request, timeout);
 
     // --- Step 2: Set up abort controller for timeout management ---
@@ -600,8 +604,8 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
     let decisionId: string | undefined;
 
     try {
-      // --- Step 3: POST /queue to create the decision ---
-      const createUrl = `${this.config.apiUrl}/queue`;
+      // --- Step 3: POST /decisions to create the decision ---
+      const createUrl = `${this.config.apiUrl}/decisions`;
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
       };
@@ -626,7 +630,7 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
         // HTTP error — classify and apply fallback logic
         const status = createResponse.status;
         const body = await createResponse.text().catch(() => '');
-        const errorMsg = `POST /queue failed: ${status} ${createResponse.statusText}${body ? ` — ${body}` : ''}`;
+        const errorMsg = `POST /decisions failed: ${status} ${createResponse.statusText}${body ? ` — ${body}` : ''}`;
 
         if (status >= 400 && status < 500) {
           // 4xx = client error / misconfiguration — always throw, never fall back
@@ -636,6 +640,7 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
         return this.handlePostFailure(new Error(errorMsg), 'server');
       }
 
+      // Humancy Cloud API returns { id, status, createdAt, expiresAt, success, data }
       const createdItem = (await createResponse.json()) as { id: string };
       decisionId = createdItem.id;
 
@@ -683,8 +688,13 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
   }
 
   /**
-   * Connects to SSE and waits for a `queue:item:removed` event whose
-   * `data.item.id` matches the given decisionId. Returns the mapped response.
+   * Connects to SSE and waits for a `decision:resolved` event whose
+   * `data.id` matches the given decisionId. Returns the mapped response.
+   *
+   * Humancy Cloud API SSE event format:
+   *   event: decision:resolved
+   *   id: evt_<timestamp>_<random>
+   *   data: { id, type, urgency, preview, projectId, status, response }
    */
   private async waitForResolution(
     decisionId: string,
@@ -694,14 +704,14 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
     for await (const event of this.connectSSE(signal)) {
       this.logger.debug(`SSE event received: ${event.event} (id=${event.id})`);
 
-      if (event.event !== 'queue:item:removed') {
+      if (event.event !== 'decision:resolved') {
         continue;
       }
 
       // Parse the event data to check if it matches our decision
       let eventData: {
-        item?: { id: string };
-        response?: DecisionResponse;
+        id?: string;
+        response?: HumancyDecisionResponse;
       };
       try {
         eventData = JSON.parse(event.data);
@@ -710,23 +720,23 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
         continue;
       }
 
-      if (eventData.item?.id !== decisionId) {
+      if (eventData.id !== decisionId) {
         continue;
       }
 
       // Matched! Extract the response from the event data
       if (!eventData.response) {
         this.logger.warn(
-          `queue:item:removed event for ${decisionId} has no response — treating as rejection`,
+          `decision:resolved event for ${decisionId} has no response — treating as rejection`,
         );
         return {
           approved: false,
-          respondedBy: 'unknown',
+          respondedBy: 'human',
           respondedAt: new Date().toISOString(),
         };
       }
 
-      const mapped = this.mapResponse(eventData.response, request);
+      const mapped = this.mapResolvedEvent(eventData.response, request);
 
       this.logger.info(
         `Decision resolved: ${decisionId} (${mapped.approved ? 'approved' : 'rejected'}${mapped.decision ? `, decision=${mapped.decision}` : ''})`,
@@ -742,9 +752,9 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
   }
 
   /**
-   * Handles POST /queue failures with optional simulation fallback.
+   * Handles POST /decisions failures with optional simulation fallback.
    *
-   * Fallback rules (decision Q6):
+   * Fallback rules:
    *   - Network errors (connection refused, DNS, fetch errors) → fall back if configured
    *   - 5xx server errors → fall back if configured
    *   - 4xx client errors → always throw (misconfiguration, fail loudly)
