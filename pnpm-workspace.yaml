@@ -1,2 +1,9 @@
 packages:
   - 'packages/*'
+  # Exclude packages with workspace:* deps on @generacy-ai/latency (separate repo)
+  - '!packages/generacy-plugin-claude-code'
+  - '!packages/generacy-plugin-cloud-build'
+  - '!packages/generacy-plugin-copilot'
+  - '!packages/github-actions'
+  - '!packages/github-issues'
+  - '!packages/jira'
