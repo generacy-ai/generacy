@@ -31,6 +31,9 @@ export type { OrchestratorServer, OrchestratorServerOptions } from './server.js'
 export { EventBus } from './event-bus.js';
 export type { EventBusOptions } from './event-bus.js';
 
+export { createEventForwarder } from './event-forwarder.js';
+export type { EventForwarderOptions, EventForwarderResult } from './event-forwarder.js';
+
 export type {
   Job,
   JobStatus,

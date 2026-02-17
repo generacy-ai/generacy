@@ -139,6 +139,9 @@ export function agentCommand(): Command {
         logger: workflowLogger,
         workdir: config.workdir,
         capabilities,
+        onProgress: (jobId, progress) => {
+          heartbeatManager.setCurrentJob(jobId, progress);
+        },
         onJobStart: (job) => {
           logger.info({ jobId: job.id, jobName: job.name }, 'Job started');
           heartbeatManager.setStatus('busy');

@@ -20,6 +20,7 @@ import {
 } from '@generacy-ai/workflow-engine';
 import type { OrchestratorClient } from './client.js';
 import type { Job, JobResult } from './types.js';
+import { createEventForwarder } from './event-forwarder.js';
 
 /**
  * Job handler options
@@ -54,6 +55,9 @@ export interface JobHandlerOptions {
 
   /** Human decision handler for real human-in-the-loop review */
   humanDecisionHandler?: HumanDecisionHandler;
+
+  /** Callback for job progress updates (0-100) */
+  onProgress?: (jobId: string, progress: number) => void;
 }
 
 /**
@@ -69,6 +73,7 @@ export class JobHandler {
   private readonly onJobStart?: (job: Job) => void;
   private readonly onJobComplete?: (job: Job, result: JobResult) => void;
   private readonly onError?: (error: Error, job?: Job) => void;
+  private readonly onProgress?: (jobId: string, progress: number) => void;
 
   private pollTimer: NodeJS.Timeout | null = null;
   private currentJob: Job | null = null;
@@ -86,6 +91,7 @@ export class JobHandler {
     this.onJobStart = options.onJobStart;
     this.onJobComplete = options.onJobComplete;
     this.onError = options.onError;
+    this.onProgress = options.onProgress;
 
     // Register builtin actions
     registerBuiltinActions();
@@ -190,6 +196,9 @@ export class JobHandler {
     this.logger.info(`Starting job: ${job.id} (${job.name})`);
     this.onJobStart?.(job);
 
+    let forwarder: ReturnType<typeof createEventForwarder> | undefined;
+    let subscription: { dispose: () => void } | undefined;
+
     try {
       // Update job status to running
       await this.client.updateJobStatus(job.id, 'running', {
@@ -217,6 +226,17 @@ export class JobHandler {
       const executor = new WorkflowExecutor({
         logger: this.logger,
       });
+
+      // Attach event forwarder
+      forwarder = createEventForwarder({
+        client: this.client,
+        jobId: job.id,
+        logger: this.logger,
+        totalPhases: workflow.phases.length,
+        stepsPerPhase: workflow.phases.map(p => p.steps.length),
+        onProgress: (progress) => this.onProgress?.(job.id, progress),
+      });
+      subscription = executor.addEventListener(forwarder.listener);
 
       // Execute workflow
       const result = await executor.execute(
@@ -260,6 +280,10 @@ export class JobHandler {
 
       this.onJobComplete?.(job, failureResult);
     } finally {
+      // Clean up event forwarder
+      subscription?.dispose();
+      forwarder?.dispose();
+
       this.currentJob = null;
       this.abortController = null;
 
