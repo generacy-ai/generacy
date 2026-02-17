@@ -132,12 +132,18 @@ export function workerCommand(): Command {
       if (humancyApiUrl) {
         const humancyAgentId = process.env['HUMANCY_AGENT_ID'] ?? workerId;
         const humancyAuthToken = process.env['HUMANCY_AUTH_TOKEN'] ?? process.env['ORCHESTRATOR_TOKEN'];
+        const handlerLogger = {
+          info: (msg: string) => logger.info(msg),
+          warn: (msg: string) => logger.warn(msg),
+          error: (msg: string) => logger.error(msg),
+          debug: (msg: string) => logger.debug(msg),
+        };
         humanDecisionHandler = new HumancyApiDecisionHandler({
           apiUrl: humancyApiUrl,
           agentId: humancyAgentId,
           authToken: humancyAuthToken,
           fallbackToSimulation: true,
-        });
+        }, handlerLogger);
         logger.info({ humancyApiUrl, humancyAgentId }, 'Humancy API decision handler configured');
       }
 
