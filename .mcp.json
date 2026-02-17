@@ -4,6 +4,10 @@
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@playwright/mcp@latest", "--headless"]
+    },
+    "vscode-mcp-server": {
+      "command": "npx",
+      "args": ["mcp-remote@next", "http://localhost:3000/mcp", "--allow-http"]
     }
   }
 }
