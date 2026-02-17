@@ -147,6 +147,9 @@ importers:
       '@fastify/rate-limit':
         specifier: ^10.0.0
         version: 10.3.0
+      '@generacy-ai/workflow-engine':
+        specifier: workspace:^
+        version: link:../workflow-engine
       fastify:
         specifier: ^5.0.0
         version: 5.7.2

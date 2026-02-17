@@ -101,6 +101,17 @@ export const LoggingConfigSchema = z.object({
 export type LoggingConfig = z.infer<typeof LoggingConfigSchema>;
 
 /**
+ * Repository configuration for label sync
+ */
+export const RepositoryConfigSchema = z.object({
+  /** GitHub organization or username */
+  owner: z.string().min(1),
+  /** Repository name */
+  repo: z.string().min(1),
+});
+export type RepositoryConfig = z.infer<typeof RepositoryConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
@@ -110,6 +121,7 @@ export const OrchestratorConfigSchema = z.object({
   rateLimit: RateLimitConfigSchema.default({}),
   cors: CorsConfigSchema.default({}),
   logging: LoggingConfigSchema.default({}),
+  repositories: z.array(RepositoryConfigSchema).default([]),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

@@ -32,6 +32,7 @@ function loadFromEnv(): Record<string, unknown> {
     rateLimit: {},
     cors: {},
     logging: {},
+    repositories: undefined,
   };
 
   // Server config
@@ -99,6 +100,16 @@ function loadFromEnv(): Record<string, unknown> {
   if (process.env[`${ENV_PREFIX}LOG_PRETTY`]) {
     (config.logging as Record<string, unknown>).pretty =
       process.env[`${ENV_PREFIX}LOG_PRETTY`] === 'true';
+  }
+
+  // Repositories config
+  if (process.env[`${ENV_PREFIX}REPOSITORIES`]) {
+    const reposStr = process.env[`${ENV_PREFIX}REPOSITORIES`]!;
+    const repos = reposStr.split(',').map(r => {
+      const [owner, repo] = r.trim().split('/');
+      return { owner, repo };
+    }).filter(r => r.owner && r.repo);
+    config.repositories = repos;
   }
 
   return config;

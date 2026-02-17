@@ -13,6 +13,8 @@ import { registerRoutes, InMemoryIntegrationRegistry, closeAllSSEConnections } f
 import { WorkflowService, InMemoryWorkflowStore } from './services/workflow-service.js';
 import { QueueService, InMemoryQueueStore } from './services/queue-service.js';
 import { AgentRegistry } from './services/agent-registry.js';
+import { LabelSyncService } from './services/label-sync-service.js';
+import { createGitHubClient } from '@generacy-ai/workflow-engine';
 
 /**
  * Server creation options
@@ -99,6 +101,24 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     skipRoutes: ['/health', '/metrics'],
   });
   server.addHook('preHandler', authMiddleware);
+
+  // Sync labels for watched repositories
+  if (config.repositories.length > 0) {
+    const labelSyncService = new LabelSyncService(server.log, createGitHubClient);
+    try {
+      const syncResult = await labelSyncService.syncAll(config.repositories);
+      server.log.info(
+        `Label sync complete: ${syncResult.successfulRepos}/${syncResult.totalRepos} repos succeeded`
+      );
+      if (syncResult.failedRepos > 0) {
+        server.log.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
+      }
+    } catch (error) {
+      server.log.warn(
+        `Label sync failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
 
   // Register routes (unless skipped for testing)
   if (!options.skipRoutes) {

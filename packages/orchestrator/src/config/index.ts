@@ -18,6 +18,8 @@ export {
   type CorsConfig,
   LoggingConfigSchema,
   type LoggingConfig,
+  RepositoryConfigSchema,
+  type RepositoryConfig,
   OrchestratorConfigSchema,
   type OrchestratorConfig,
   validateConfig,
