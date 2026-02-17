@@ -100,6 +100,15 @@ phases:
           timeout: 600
         timeout: 660000  # 11 min
 
+      - name: review-clarifications
+        uses: humancy.request_review
+        with:
+          title: "Review clarification questions for: ${{ inputs.description }}"
+          context: "Clarification questions have been generated. Please review and answer them before the workflow proceeds to planning."
+          artifact: ${{ steps.create-feature.output.feature_dir }}/clarifications.yaml
+          urgency: blocking_soon
+          timeout: 86400000  # 24 hours
+
       - name: commit-clarifications
         uses: shell
         command: 'git add -A && git commit -m "spec: add clarification questions" --allow-empty'
