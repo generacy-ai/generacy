@@ -127,6 +127,25 @@ export const MonitorConfigSchema = z.object({
 export type MonitorConfig = z.infer<typeof MonitorConfigSchema>;
 
 /**
+ * Dispatch configuration for worker queue and dispatcher
+ */
+export const DispatchConfigSchema = z.object({
+  /** Interval between queue polls in milliseconds */
+  pollIntervalMs: z.number().int().min(1000).default(5000),
+  /** Maximum number of concurrent workers */
+  maxConcurrentWorkers: z.number().int().min(1).max(20).default(3),
+  /** Worker heartbeat TTL in milliseconds */
+  heartbeatTtlMs: z.number().int().min(5000).default(30000),
+  /** Interval between heartbeat/reaper checks in milliseconds */
+  heartbeatCheckIntervalMs: z.number().int().min(5000).default(15000),
+  /** Timeout for graceful shutdown of workers in milliseconds */
+  shutdownTimeoutMs: z.number().int().min(5000).default(60000),
+  /** Maximum retry attempts before dead-lettering */
+  maxRetries: z.number().int().min(1).default(3),
+});
+export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
@@ -138,6 +157,7 @@ export const OrchestratorConfigSchema = z.object({
   logging: LoggingConfigSchema.default({}),
   repositories: z.array(RepositoryConfigSchema).default([]),
   monitor: MonitorConfigSchema.default({}),
+  dispatch: DispatchConfigSchema.default({}),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

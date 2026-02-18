@@ -16,9 +16,11 @@ import { AgentRegistry } from './services/agent-registry.js';
 import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
+import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
+import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
+import { setupDispatchRoutes } from './routes/dispatch.js';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
-import type { QueueItem } from './types/index.js';
 import { Redis as IORedis } from 'ioredis';
 
 /**
@@ -139,17 +141,42 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     redisClient = null;
   }
 
+  // Initialize Redis queue adapter (replaces in-memory placeholder)
+  let redisQueueAdapter: RedisQueueAdapter | null = null;
+  let workerDispatcher: WorkerDispatcher | null = null;
+  if (redisClient) {
+    redisQueueAdapter = new RedisQueueAdapter(redisClient, server.log, {
+      maxRetries: config.dispatch.maxRetries,
+    });
+
+    // Placeholder handler — will be replaced by Claude CLI spawner in a future issue
+    const placeholderHandler = async (item: import('./types/index.js').QueueItem) => {
+      server.log.info(
+        { owner: item.owner, repo: item.repo, issue: item.issueNumber },
+        'Worker handler invoked (placeholder)',
+      );
+    };
+
+    workerDispatcher = new WorkerDispatcher(
+      redisQueueAdapter,
+      redisClient,
+      server.log,
+      config.dispatch,
+      placeholderHandler,
+    );
+  }
+
   // Initialize label monitor service
   let labelMonitorService: LabelMonitorService | null = null;
   if (config.repositories.length > 0) {
     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
 
-    // In-memory queue adapter (will be replaced by Redis sorted-set queue in sibling issue)
-    const inMemoryQueueAdapter = {
-      async enqueue(item: QueueItem): Promise<void> {
-        server.log.info(
-          { owner: item.owner, repo: item.repo, issue: item.issueNumber, command: item.command },
-          'Item enqueued (in-memory adapter)'
+    // Use Redis queue adapter if available, otherwise fall back to a logging-only adapter
+    const queueAdapter = redisQueueAdapter ?? {
+      async enqueue(item: import('./types/index.js').QueueItem): Promise<void> {
+        server.log.warn(
+          { owner: item.owner, repo: item.repo, issue: item.issueNumber },
+          'Item enqueued (fallback adapter — Redis unavailable)',
         );
       },
     };
@@ -158,7 +185,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       server.log,
       createGitHubClient,
       phaseTracker,
-      inMemoryQueueAdapter,
+      queueAdapter,
       config.monitor,
       config.repositories,
     );
@@ -195,29 +222,44 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       });
     }
 
+    // Register dispatch queue routes (if queue adapter is available)
+    if (redisQueueAdapter) {
+      await setupDispatchRoutes(server, redisQueueAdapter);
+    }
+
     // Note: SSE routes are registered via registerRoutes() -> setupEventsRoutes()
   }
 
-  // Start polling on server ready
-  if (labelMonitorService) {
-    const monitor = labelMonitorService;
-    server.addHook('onReady', async () => {
+  // Start polling and dispatcher on server ready
+  server.addHook('onReady', async () => {
+    if (labelMonitorService) {
       // Start polling in the background (non-blocking)
-      monitor.startPolling().catch((error) => {
+      labelMonitorService.startPolling().catch((error) => {
         server.log.error({ err: error }, 'Label monitor polling failed');
       });
-    });
-  }
+    }
+
+    if (workerDispatcher) {
+      // Start worker dispatcher in the background (non-blocking)
+      workerDispatcher.start().catch((error) => {
+        server.log.error({ err: error }, 'Worker dispatcher failed');
+      });
+    }
+  });
 
   // Setup graceful shutdown with SSE connection cleanup
   setupGracefulShutdown(server, {
-    timeout: 30000,
+    timeout: Math.max(30000, config.dispatch.shutdownTimeoutMs),
     logger: {
       info: (msg) => server.log.info(msg),
       error: (msg, error) => server.log.error({ err: error }, msg),
     },
     cleanup: [
       async () => {
+        // Stop worker dispatcher (waits for in-flight workers)
+        if (workerDispatcher) {
+          await workerDispatcher.stop();
+        }
         // Stop label monitor polling
         if (labelMonitorService) {
           labelMonitorService.stopPolling();

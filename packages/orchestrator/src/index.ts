@@ -16,6 +16,7 @@ export {
   type LoadConfigOptions,
   type MonitorConfig,
   type RepositoryConfig,
+  type DispatchConfig,
 } from './config/index.js';
 
 // Types
@@ -86,6 +87,12 @@ export {
   type MonitorState,
   type QueueAdapter,
   type PhaseTracker,
+  // Dispatch Queue
+  type QueueItemWithScore,
+  type SerializedQueueItem,
+  type QueueManager,
+  type WorkerInfo,
+  type WorkerHandler,
 } from './types/index.js';
 
 // Services
@@ -122,6 +129,10 @@ export {
   PhaseTrackerService,
   type PhaseTrackerOptions,
 } from './services/phase-tracker-service.js';
+
+export { RedisQueueAdapter } from './services/redis-queue-adapter.js';
+
+export { WorkerDispatcher } from './services/worker-dispatcher.js';
 
 // Auth
 export {

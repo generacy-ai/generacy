@@ -67,3 +67,4 @@ export {
   setupWebhookRoutes,
   type WebhookRouteOptions,
 } from './webhooks.js';
+export { setupDispatchRoutes } from './dispatch.js';
