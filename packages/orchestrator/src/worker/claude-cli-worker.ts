@@ -1,0 +1,257 @@
+import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import { createGitHubClient } from '@generacy-ai/workflow-engine';
+import type { QueueItem } from '../types/index.js';
+import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger } from './types.js';
+import type { WorkerConfig } from './config.js';
+import { PhaseResolver } from './phase-resolver.js';
+import { LabelManager } from './label-manager.js';
+import { StageCommentManager } from './stage-comment-manager.js';
+import { GateChecker } from './gate-checker.js';
+import { CliSpawner } from './cli-spawner.js';
+import { OutputCapture } from './output-capture.js';
+import type { SSEEventEmitter } from './output-capture.js';
+import { RepoCheckout } from './repo-checkout.js';
+import { PhaseLoop } from './phase-loop.js';
+
+/**
+ * Default ProcessFactory that uses Node's child_process.spawn.
+ */
+const defaultProcessFactory: ProcessFactory = {
+  spawn(
+    command: string,
+    args: string[],
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal },
+  ): ChildProcessHandle {
+    const child: ChildProcess = spawn(command, args, {
+      cwd: options.cwd,
+      env: { ...process.env, ...options.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    const exitPromise = new Promise<number | null>((resolve) => {
+      child.on('exit', (code) => {
+        resolve(code);
+      });
+      child.on('error', () => {
+        resolve(1);
+      });
+    });
+
+    return {
+      stdout: child.stdout,
+      stderr: child.stderr,
+      pid: child.pid,
+      kill: (signal?: NodeJS.Signals) => child.kill(signal),
+      exitPromise,
+    };
+  },
+};
+
+/**
+ * Dependencies that can be injected for testing.
+ */
+export interface ClaudeCliWorkerDeps {
+  processFactory?: ProcessFactory;
+  sseEmitter?: SSEEventEmitter;
+}
+
+/**
+ * Top-level worker class that composes all sub-components to process
+ * a QueueItem through the full speckit phase loop.
+ *
+ * This class implements the WorkerHandler signature:
+ *   `(item: QueueItem) => Promise<void>`
+ *
+ * It orchestrates:
+ * - Repository checkout
+ * - Phase resolution from issue labels
+ * - Phase loop execution (CLI spawning, label management, gate checking)
+ * - SSE event emission for dashboard streaming
+ * - Error handling with structured label reporting
+ */
+export class ClaudeCliWorker {
+  private readonly processFactory: ProcessFactory;
+  private readonly sseEmitter?: SSEEventEmitter;
+  private readonly repoCheckout: RepoCheckout;
+  private readonly phaseResolver: PhaseResolver;
+
+  constructor(
+    private readonly config: WorkerConfig,
+    private readonly logger: Logger,
+    deps: ClaudeCliWorkerDeps = {},
+  ) {
+    this.processFactory = deps.processFactory ?? defaultProcessFactory;
+    this.sseEmitter = deps.sseEmitter;
+    this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
+    this.phaseResolver = new PhaseResolver();
+  }
+
+  /**
+   * Process a queue item through the full phase loop.
+   *
+   * This is the entry point invoked by the WorkerDispatcher.
+   * It creates a WorkerContext, resolves the starting phase,
+   * and runs the phase loop to completion (or gate/error).
+   */
+  async handle(item: QueueItem): Promise<void> {
+    const workerId = crypto.randomUUID();
+    const workflowId = `${item.owner}/${item.repo}#${item.issueNumber}`;
+
+    const workerLogger = this.logger.child({
+      workerId,
+      owner: item.owner,
+      repo: item.repo,
+      issue: item.issueNumber,
+      workflowName: item.workflowName,
+    });
+
+    workerLogger.info('Worker started processing queue item');
+
+    // Emit SSE workflow:started event
+    this.sseEmitter?.({
+      type: 'workflow:started',
+      workflowId,
+      data: {
+        owner: item.owner,
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+        workflowName: item.workflowName,
+        command: item.command,
+      },
+    });
+
+    // Create a GitHub client scoped to the checkout directory
+    let checkoutPath: string | undefined;
+    const abortController = new AbortController();
+
+    try {
+      // 1. Ensure repository checkout
+      checkoutPath = await this.repoCheckout.ensureCheckout(
+        workerId,
+        item.owner,
+        item.repo,
+        `feature/${item.issueNumber}`, // Convention: feature branches by issue number
+      );
+
+      // Create GitHub client scoped to checkout dir
+      const github = createGitHubClient(checkoutPath);
+
+      // 2. Get issue labels to resolve starting phase
+      const issue = await github.getIssue(item.owner, item.repo, item.issueNumber);
+      const labels = issue.labels.map((l) =>
+        typeof l === 'string' ? l : l.name,
+      );
+
+      // 3. Resolve starting phase
+      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command);
+      workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
+
+      // 4. Build WorkerContext
+      const context: WorkerContext = {
+        workerId,
+        item,
+        startPhase,
+        github,
+        logger: workerLogger,
+        signal: abortController.signal,
+        checkoutPath,
+        issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
+      };
+
+      // 5. Create sub-components
+      const labelManager = new LabelManager(
+        github,
+        item.owner,
+        item.repo,
+        item.issueNumber,
+        workerLogger,
+      );
+
+      const stageCommentManager = new StageCommentManager(
+        github,
+        item.owner,
+        item.repo,
+        item.issueNumber,
+        workerLogger,
+      );
+
+      const gateChecker = new GateChecker(workerLogger);
+
+      const cliSpawner = new CliSpawner(
+        this.processFactory,
+        workerLogger,
+        this.config.shutdownGracePeriodMs,
+      );
+
+      const outputCapture = new OutputCapture(
+        workflowId,
+        workerLogger,
+        this.sseEmitter,
+      );
+
+      // 6. Execute the phase loop
+      const phaseLoop = new PhaseLoop(workerLogger);
+      const loopResult = await phaseLoop.executeLoop(context, this.config, {
+        labelManager,
+        stageCommentManager,
+        gateChecker,
+        cliSpawner,
+        outputCapture,
+      });
+
+      // 7. Handle completion
+      if (loopResult.completed) {
+        await labelManager.onWorkflowComplete();
+        workerLogger.info('Workflow completed successfully — all phases done');
+
+        this.sseEmitter?.({
+          type: 'workflow:completed',
+          workflowId,
+          data: {
+            lastPhase: loopResult.lastPhase,
+            totalPhases: loopResult.results.length,
+          },
+        });
+      } else if (loopResult.gateHit) {
+        workerLogger.info(
+          { lastPhase: loopResult.lastPhase },
+          'Workflow paused at review gate',
+        );
+      } else {
+        // Phase failure
+        workerLogger.error(
+          { lastPhase: loopResult.lastPhase },
+          'Workflow stopped due to phase failure',
+        );
+
+        this.sseEmitter?.({
+          type: 'workflow:failed',
+          workflowId,
+          data: {
+            lastPhase: loopResult.lastPhase,
+            totalPhases: loopResult.results.length,
+          },
+        });
+      }
+    } catch (error) {
+      workerLogger.error(
+        { error: String(error) },
+        'Worker encountered an unhandled error',
+      );
+
+      this.sseEmitter?.({
+        type: 'workflow:failed',
+        workflowId,
+        data: {
+          error: error instanceof Error ? error.message : String(error),
+        },
+      });
+
+      throw error;
+    } finally {
+      // Cleanup: abort any in-flight operations
+      abortController.abort();
+    }
+  }
+}

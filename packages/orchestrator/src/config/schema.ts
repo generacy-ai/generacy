@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WorkerConfigSchema, type WorkerConfig } from '../worker/config.js';
 
 /**
  * Logging level configuration
@@ -145,6 +146,8 @@ export const DispatchConfigSchema = z.object({
 });
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 
+export { WorkerConfigSchema, type WorkerConfig };
+
 /**
  * Complete orchestrator configuration
  */
@@ -158,6 +161,7 @@ export const OrchestratorConfigSchema = z.object({
   repositories: z.array(RepositoryConfigSchema).default([]),
   monitor: MonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
+  worker: WorkerConfigSchema.default({}),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

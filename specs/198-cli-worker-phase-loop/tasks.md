@@ -10,33 +10,33 @@
 
 ## Phase 1: Types, Config, and Setup
 
-- [ ] T001 Define worker types in `packages/orchestrator/src/worker/types.ts` — WorkflowPhase, PhaseResult, WorkerContext, CliSpawnOptions, GateDefinition, OutputChunk, PHASE_SEQUENCE, PHASE_TO_COMMAND, PHASE_TO_STAGE constants
-- [ ] T002 [P] Define WorkerConfig schema in `packages/orchestrator/src/worker/config.ts` — Zod schema for phaseTimeoutMs, workspaceDir, shutdownGracePeriodMs, validateCommand, maxTurns, gates (per-workflow-type)
-- [ ] T003 [P] Extend OrchestratorConfig in `packages/orchestrator/src/config/schema.ts` — add `worker` field using WorkerConfigSchema, update loadConfig to include worker defaults
-- [ ] T004 Create barrel export in `packages/orchestrator/src/worker/index.ts` — re-export all public types and classes from the worker module
+- [X] T001 Define worker types in `packages/orchestrator/src/worker/types.ts` — WorkflowPhase, PhaseResult, WorkerContext, CliSpawnOptions, GateDefinition, OutputChunk, PHASE_SEQUENCE, PHASE_TO_COMMAND, PHASE_TO_STAGE constants
+- [X] T002 [P] Define WorkerConfig schema in `packages/orchestrator/src/worker/config.ts` — Zod schema for phaseTimeoutMs, workspaceDir, shutdownGracePeriodMs, validateCommand, maxTurns, gates (per-workflow-type)
+- [X] T003 [P] Extend OrchestratorConfig in `packages/orchestrator/src/config/schema.ts` — add `worker` field using WorkerConfigSchema, update loadConfig to include worker defaults
+- [X] T004 Create barrel export in `packages/orchestrator/src/worker/index.ts` — re-export all public types and classes from the worker module
 
 ## Phase 2: Core Components (independently testable)
 
-- [ ] T005 [US1] Implement PhaseResolver in `packages/orchestrator/src/worker/phase-resolver.ts` — resolveStartPhase(labels, command) returns starting WorkflowPhase; handles 'process' (from labels/completed phases) and 'continue' (from waiting-for satisfaction) commands (FR-1)
-- [ ] T006 [P] [US2] Implement LabelManager in `packages/orchestrator/src/worker/label-manager.ts` — onPhaseStart (add phase:X, remove previous phase:*), onPhaseComplete (add completed:X), onGateHit (add waiting-for:X, add agent:paused, remove phase:X), onError (add agent:error, remove phase:X), onWorkflowComplete (remove agent:in-progress); all operations use createGitHubClient with exponential backoff retry (3 attempts) (FR-4)
-- [ ] T007 [P] [US4] Implement StageCommentManager in `packages/orchestrator/src/worker/stage-comment-manager.ts` — findOrCreateStageComment(stage) using HTML markers `<!-- generacy-stage:X -->`, updateStageComment(stageData) with phase progress table, timestamps, and PR link (FR-5)
-- [ ] T008 [P] [US3] Implement GateChecker in `packages/orchestrator/src/worker/gate-checker.ts` — checkGate(phase, workflowName, config) returns GateDefinition or null; uses config-driven gate mapping with defaults per workflow type (FR-4, Q3 answer)
-- [ ] T009 [P] [US5] Implement OutputCapture in `packages/orchestrator/src/worker/output-capture.ts` — parse newline-delimited JSON from Claude CLI stdout; emit SSE events (workflow:started, step:started, step:completed, workflow:completed/failed) via SubscriptionManager; buffer chunks for post-processing (FR-6)
+- [X] T005 [US1] Implement PhaseResolver in `packages/orchestrator/src/worker/phase-resolver.ts` — resolveStartPhase(labels, command) returns starting WorkflowPhase; handles 'process' (from labels/completed phases) and 'continue' (from waiting-for satisfaction) commands (FR-1)
+- [X] T006 [P] [US2] Implement LabelManager in `packages/orchestrator/src/worker/label-manager.ts` — onPhaseStart (add phase:X, remove previous phase:*), onPhaseComplete (add completed:X), onGateHit (add waiting-for:X, add agent:paused, remove phase:X), onError (add agent:error, remove phase:X), onWorkflowComplete (remove agent:in-progress); all operations use createGitHubClient with exponential backoff retry (3 attempts) (FR-4)
+- [X] T007 [P] [US4] Implement StageCommentManager in `packages/orchestrator/src/worker/stage-comment-manager.ts` — findOrCreateStageComment(stage) using HTML markers `<!-- generacy-stage:X -->`, updateStageComment(stageData) with phase progress table, timestamps, and PR link (FR-5)
+- [X] T008 [P] [US3] Implement GateChecker in `packages/orchestrator/src/worker/gate-checker.ts` — checkGate(phase, workflowName, config) returns GateDefinition or null; uses config-driven gate mapping with defaults per workflow type (FR-4, Q3 answer)
+- [X] T009 [P] [US5] Implement OutputCapture in `packages/orchestrator/src/worker/output-capture.ts` — parse newline-delimited JSON from Claude CLI stdout; emit SSE events (workflow:started, step:started, step:completed, workflow:completed/failed) via SubscriptionManager; buffer chunks for post-processing (FR-6)
 
 ## Phase 3: Process Management
 
-- [ ] T010 [US1] Implement CliSpawner in `packages/orchestrator/src/worker/cli-spawner.ts` — spawnClaudeCliPhase(options: CliSpawnOptions) spawns `claude --headless --output json --print all --max-turns N --prompt "<command>"` as child process; handles stdout/stderr capture, timeout with SIGTERM→SIGKILL, abort signal propagation; injectable ProcessFactory for testing (FR-3, FR-8, FR-10)
-- [ ] T011 [P] [US1] Implement RepoCheckout in `packages/orchestrator/src/worker/repo-checkout.ts` — ensureCheckout(workerId, owner, repo, branch) at path `{workspaceDir}/{workerId}/{owner}/{repo}`; clone if missing, fetch+checkout if exists; cleanup method for post-processing (FR-9, Q4 answer)
-- [ ] T012 [US1] Implement validate phase runner in CliSpawner — runValidatePhase(checkoutPath, command) spawns configurable test command (default: `pnpm test && pnpm build`); returns PhaseResult with pass/fail (FR-2, Q2 answer)
+- [X] T010 [US1] Implement CliSpawner in `packages/orchestrator/src/worker/cli-spawner.ts` — spawnClaudeCliPhase(options: CliSpawnOptions) spawns `claude --headless --output json --print all --max-turns N --prompt "<command>"` as child process; handles stdout/stderr capture, timeout with SIGTERM→SIGKILL, abort signal propagation; injectable ProcessFactory for testing (FR-3, FR-8, FR-10)
+- [X] T011 [P] [US1] Implement RepoCheckout in `packages/orchestrator/src/worker/repo-checkout.ts` — ensureCheckout(workerId, owner, repo, branch) at path `{workspaceDir}/{workerId}/{owner}/{repo}`; clone if missing, fetch+checkout if exists; cleanup method for post-processing (FR-9, Q4 answer)
+- [X] T012 [US1] Implement validate phase runner in CliSpawner — runValidatePhase(checkoutPath, command) spawns configurable test command (default: `pnpm test && pnpm build`); returns PhaseResult with pass/fail (FR-2, Q2 answer)
 
 ## Phase 4: Phase Loop and Worker Assembly
 
-- [ ] T013 [US1][US2][US3] Implement PhaseLoop in `packages/orchestrator/src/worker/phase-loop.ts` — executeLoop(context: WorkerContext, config: WorkerConfig) iterates from startPhase through PHASE_SEQUENCE; for each phase: call LabelManager.onPhaseStart, spawn CLI (or run validate), call LabelManager.onPhaseComplete, check gate, update stage comment; stop on gate hit, error, or completion; full-loop-per-claim per Q1 answer (FR-1, FR-2)
-- [ ] T014 [US1-US7] Implement ClaudeCliWorker in `packages/orchestrator/src/worker/claude-cli-worker.ts` — top-level class composing all components; constructor accepts WorkerConfig + dependencies; handle(item: QueueItem) method creates WorkerContext, calls RepoCheckout, PhaseResolver, PhaseLoop; try/finally for label cleanup; emits SSE events for workflow lifecycle (all FRs)
+- [X] T013 [US1][US2][US3] Implement PhaseLoop in `packages/orchestrator/src/worker/phase-loop.ts` — executeLoop(context: WorkerContext, config: WorkerConfig) iterates from startPhase through PHASE_SEQUENCE; for each phase: call LabelManager.onPhaseStart, spawn CLI (or run validate), call LabelManager.onPhaseComplete, check gate, update stage comment; stop on gate hit, error, or completion; full-loop-per-claim per Q1 answer (FR-1, FR-2)
+- [X] T014 [US1-US7] Implement ClaudeCliWorker in `packages/orchestrator/src/worker/claude-cli-worker.ts` — top-level class composing all components; constructor accepts WorkerConfig + dependencies; handle(item: QueueItem) method creates WorkerContext, calls RepoCheckout, PhaseResolver, PhaseLoop; try/finally for label cleanup; emits SSE events for workflow lifecycle (all FRs)
 
 ## Phase 5: Server Integration
 
-- [ ] T015 Replace placeholder handler in `packages/orchestrator/src/server.ts` — instantiate ClaudeCliWorker with config.worker and server dependencies; pass worker.handle.bind(worker) to WorkerDispatcher constructor; remove placeholder handler code
+- [X] T015 Replace placeholder handler in `packages/orchestrator/src/server.ts` — instantiate ClaudeCliWorker with config.worker and server dependencies; pass worker.handle.bind(worker) to WorkerDispatcher constructor; remove placeholder handler code
 
 ## Phase 6: Tests
 

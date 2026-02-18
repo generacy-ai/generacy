@@ -1,0 +1,170 @@
+import type { OutputChunk, Logger } from './types.js';
+
+/**
+ * Valid OutputChunk type values recognized from Claude CLI JSON output.
+ */
+const KNOWN_TYPES = new Set<OutputChunk['type']>([
+  'init',
+  'tool_use',
+  'tool_result',
+  'text',
+  'complete',
+  'error',
+]);
+
+/**
+ * Callback for SSE event emission
+ */
+export type SSEEventEmitter = (event: {
+  type: 'workflow:started' | 'step:started' | 'step:completed' | 'workflow:completed' | 'workflow:failed';
+  workflowId: string;
+  data: Record<string, unknown>;
+}) => void;
+
+/**
+ * Parses newline-delimited JSON from Claude CLI stdout and emits SSE events.
+ *
+ * Claude CLI outputs one JSON object per line. This class accumulates raw
+ * string chunks (which may arrive mid-line), splits on newline boundaries,
+ * parses each complete line, and optionally emits SSE events for key
+ * lifecycle moments.
+ */
+export class OutputCapture {
+  private buffer: OutputChunk[] = [];
+  private lineBuffer = '';
+
+  constructor(
+    private readonly workflowId: string,
+    private readonly logger: Logger,
+    private readonly emitter?: SSEEventEmitter,
+  ) {}
+
+  /**
+   * Process a chunk of stdout data from Claude CLI.
+   * Parses newline-delimited JSON lines.
+   */
+  processChunk(chunk: string): void {
+    this.lineBuffer += chunk;
+
+    const lines = this.lineBuffer.split('\n');
+
+    // The last element is either an empty string (if chunk ended with \n)
+    // or an incomplete line that we keep in the buffer.
+    this.lineBuffer = lines.pop() ?? '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (trimmed.length === 0) {
+        continue;
+      }
+      this.parseLine(trimmed);
+    }
+  }
+
+  /**
+   * Flush any remaining data in the line buffer.
+   */
+  flush(): void {
+    const remaining = this.lineBuffer.trim();
+    this.lineBuffer = '';
+
+    if (remaining.length === 0) {
+      return;
+    }
+
+    this.parseLine(remaining);
+  }
+
+  /**
+   * Get all captured output chunks.
+   */
+  getOutput(): OutputChunk[] {
+    return [...this.buffer];
+  }
+
+  /**
+   * Clear the output buffer.
+   */
+  clear(): void {
+    this.buffer = [];
+  }
+
+  /**
+   * Parse a single line of JSON and push the resulting OutputChunk.
+   */
+  private parseLine(line: string): void {
+    let parsed: Record<string, unknown>;
+
+    try {
+      parsed = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      this.logger.debug({ line }, 'Non-JSON line from Claude CLI, treating as text');
+      const chunk: OutputChunk = {
+        type: 'text',
+        data: { text: line },
+        timestamp: new Date().toISOString(),
+      };
+      this.buffer.push(chunk);
+      return;
+    }
+
+    const rawType = typeof parsed.type === 'string' ? parsed.type : 'text';
+    const type: OutputChunk['type'] = KNOWN_TYPES.has(rawType as OutputChunk['type'])
+      ? (rawType as OutputChunk['type'])
+      : 'text';
+
+    // Extract metadata from tool_result chunks (e.g., filePath)
+    let metadata: Record<string, string> | undefined;
+    if (type === 'tool_result' && typeof parsed.filePath === 'string') {
+      metadata = { filePath: parsed.filePath };
+    }
+
+    const chunk: OutputChunk = {
+      type,
+      data: parsed,
+      ...(metadata ? { metadata } : {}),
+      timestamp: new Date().toISOString(),
+    };
+
+    this.buffer.push(chunk);
+    this.emitSSEEvent(chunk);
+  }
+
+  /**
+   * Emit SSE events based on the chunk type.
+   */
+  private emitSSEEvent(chunk: OutputChunk): void {
+    if (!this.emitter) {
+      return;
+    }
+
+    switch (chunk.type) {
+      case 'init':
+        this.emitter({
+          type: 'step:started',
+          workflowId: this.workflowId,
+          data: { timestamp: chunk.timestamp, output: chunk.data },
+        });
+        break;
+
+      case 'complete':
+        this.emitter({
+          type: 'step:completed',
+          workflowId: this.workflowId,
+          data: { timestamp: chunk.timestamp, output: chunk.data },
+        });
+        break;
+
+      case 'error':
+        this.logger.warn(
+          { workflowId: this.workflowId, error: chunk.data },
+          'Error chunk received from Claude CLI',
+        );
+        break;
+
+      default:
+        // No SSE event for other chunk types
+        break;
+    }
+  }
+}
