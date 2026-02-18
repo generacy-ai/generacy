@@ -10,7 +10,7 @@
 - B: Full loop per claim — worker loops through all phases until a `waiting-for:*` gate or workflow completion
 - C: Configurable — support both modes via a config flag
 
-**Answer**: *Pending*
+**Answer**: **B — Full loop per claim.** The `WorkerDispatcher` calls `queue.complete()` on handler success, permanently removing the item from the queue. There is no re-enqueue-for-next-phase mechanism. The only re-enqueue path is via `LabelMonitorService` detecting a `completed:*` + `waiting-for:*` label pair (for `continue` commands). The worker loops through all remaining phases until hitting a `waiting-for:*` gate or workflow completion.
 
 ### Q2: Validate Phase Behavior
 **Context**: FR-2 maps all phases to speckit slash commands except `validate`, which says "(no command — validation is manual or automated test)". The worker needs to know what to do when it reaches this phase.
@@ -20,7 +20,7 @@
 - B: Run a configurable test command (e.g., `pnpm test && pnpm build`) and auto-complete if passing
 - C: Skip validate entirely — mark workflow complete after `implement`
 
-**Answer**: *Pending*
+**Answer**: **B — Run configurable test command, auto-complete if passing.** The label-protocol step 11 states "Agent runs verification → PR marked ready for review". Default: run `pnpm test && pnpm build` (or configured equivalent); if passing, mark `completed:validate` and PR ready for review. If tests fail, set `agent:error` with diagnostic output. `waiting-for:manual-validation` is available as a configurable option for workflows requiring human sign-off.
 
 ### Q3: Waiting-For Detection Mechanism
 **Context**: FR-4 says the worker should stop when a `waiting-for:*` label is detected, but doesn't specify HOW the worker knows to add this label. The Claude CLI output doesn't inherently signal review gates. This needs a clear detection strategy.
@@ -30,7 +30,7 @@
 - B: Parse Claude CLI output for a specific signal/marker indicating a gate was hit
 - C: Configuration-driven — define which phases have review gates in orchestrator config
 
-**Answer**: *Pending*
+**Answer**: **C — Configuration-driven, with predefined defaults per workflow.** Gate mapping varies by workflow (e.g., `speckit-bugfix` skips clarification). Default gates for `speckit-feature`: clarify → `waiting-for:clarification` (always), validate → none (runs tests, only gates on failure). Optional review gates (`waiting-for:spec-review`, `waiting-for:plan-review`, etc.) can be enabled per workflow in config.
 
 ### Q4: Concurrent Workers on Same Repository
 **Context**: FR-9 describes repository checkout at `{WORKSPACE_DIR}/{owner}/{repo}`, but the dispatcher supports multiple concurrent workers (default: 3). If two workers claim items for the same repo, they'd conflict on the same checkout directory.
@@ -40,7 +40,7 @@
 - B: Per-repo mutex — only one worker per repo at a time, others wait or skip
 - C: Assume different repos — concurrent same-repo processing is out of scope for MVP
 
-**Answer**: *Pending*
+**Answer**: **A — Per-worker isolated checkout** at `{WORKSPACE_DIR}/{workerId}/{owner}/{repo}`. Each worker gets its own clone to avoid race conditions with concurrent workers on the same repo. Cleanup on worker completion or via periodic pruner.
 
 ### Q5: Claude CLI Prompt Construction
 **Context**: FR-3 says "the prompt should include the slash command" but the exact prompt template affects behavior significantly. The Claude CLI needs enough context to operate on the correct issue and branch, and may need MCP tool configuration for Agency tools.
@@ -50,4 +50,4 @@
 - B: Use raw `/speckit:*` commands — worker handles all label transitions, commits, and stage comments directly
 - C: Use a new `/worker:execute` command designed specifically for orchestrator-driven execution
 
-**Answer**: *Pending*
+**Answer**: **B — Use raw `/speckit:*` commands, worker handles all label transitions.** Speckit commands do the AI work (generate artifacts, post comments) while the worker manages the state machine (labels, phase transitions, gates, stage comments). Worker invokes: `claude --headless --output json --print all --max-turns 100 --prompt "/speckit:specify <context>"`. After completion, worker inspects result and drives label transition. This avoids dual-control issues.

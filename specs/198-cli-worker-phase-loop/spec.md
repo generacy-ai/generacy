@@ -67,6 +67,7 @@ The codebase already has patterns for subprocess management:
 - Given a `QueueItem` with `command: 'continue'`, determine the resume phase:
   - Find the `waiting-for:*` label that was just satisfied (matching `completed:*`)
   - Map the satisfied gate to the next phase in the workflow
+- **Full loop per claim**: The worker loops through ALL remaining phases in a single queue claim until hitting a `waiting-for:*` gate or workflow completion. The dispatcher calls `queue.complete()` on handler success (permanently removing the item). Re-enqueue only occurs via `LabelMonitorService` detecting label changes for `continue` commands.
 
 ### FR-2: Phase Sequence Definition
 
@@ -82,7 +83,7 @@ The codebase already has patterns for subprocess management:
   | `plan` | `/speckit:plan` |
   | `tasks` | `/speckit:tasks` |
   | `implement` | `/speckit:implement` |
-  | `validate` | (no command — validation is manual or automated test) |
+  | `validate` | Runs configurable test command (default: `pnpm test && pnpm build`). Auto-completes if passing; sets `agent:error` if failing. `waiting-for:manual-validation` available as configurable option for workflows requiring human sign-off. |
 
 ### FR-3: Claude CLI Spawning
 
@@ -90,10 +91,11 @@ The codebase already has patterns for subprocess management:
   ```
   claude --headless --output json --print all --max-turns 100 --prompt "<constructed prompt>"
   ```
-- The prompt should include:
+- The prompt should include the raw speckit slash command for the current phase (worker handles all label transitions, stage comments, and state machine):
   - The slash command for the current phase (e.g., `/speckit:specify`)
   - The issue URL for context
   - Any phase-specific arguments (e.g., `--issue <number>` for clarify)
+- **Separation of concerns**: Speckit commands do the AI work (generate artifacts, post comments); the worker manages the state machine (labels, phase transitions, gates, stage comments). This avoids dual-control issues.
 - Environment variables to pass:
   - `GITHUB_TOKEN` — for GitHub API access
   - Any MCP tool configuration the worker needs
@@ -104,7 +106,7 @@ The codebase already has patterns for subprocess management:
 
 - **On phase start**: Add `phase:<current>` label, remove any previous `phase:*` label
 - **On phase completion**: Add `completed:<current>` label, remove `phase:<current>` label
-- **On waiting-for detection**: Add `waiting-for:<gate>` label, remove `phase:<current>` label, set `agent:paused` label, exit cleanly
+- **On waiting-for detection** (configuration-driven): Add `waiting-for:<gate>` label, remove `phase:<current>` label, set `agent:paused` label, exit cleanly. Gate mapping is configuration-driven with predefined defaults per workflow type (e.g., `speckit-feature` gates at clarify; `speckit-bugfix` skips clarify). Optional review gates (`waiting-for:spec-review`, `waiting-for:plan-review`, etc.) can be enabled per workflow in config.
 - **On error**: Add `agent:error` label, remove `phase:<current>` label
 - **On workflow complete** (all phases done): Remove `agent:in-progress` label
 - Use GitHub API via the existing `createGitHubClient` factory for all label operations
@@ -157,7 +159,7 @@ The codebase already has patterns for subprocess management:
   - Check if a checkout exists at a configured workspace path
   - If not, clone the repository (`git clone`)
   - If exists, fetch latest and checkout the appropriate branch (feature branch from the issue, or default branch)
-- Checkout path convention: `{WORKSPACE_DIR}/{owner}/{repo}`
+- Checkout path convention: `{WORKSPACE_DIR}/{workerId}/{owner}/{repo}` — per-worker isolated checkout to avoid race conditions with concurrent workers on the same repository. Each worker gets its own clone; cleanup on worker completion or via periodic pruner.
 
 ### FR-10: Graceful Shutdown
 
