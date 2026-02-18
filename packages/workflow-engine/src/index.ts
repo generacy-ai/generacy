@@ -62,6 +62,13 @@ export {
   type CLIStatus,
 } from './actions/index.js';
 
+// GitHub client
+export { createGitHubClient, GhCliGitHubClient } from './actions/github/client/index.js';
+export type { GitHubClient, GitHubClientFactory } from './actions/github/client/index.js';
+
+// Label definitions (shared)
+export { WORKFLOW_LABELS, type LabelDefinition } from './actions/github/label-definitions.js';
+
 // Interpolation
 export {
   ExecutionContext,

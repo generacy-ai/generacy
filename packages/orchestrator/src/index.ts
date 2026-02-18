@@ -97,6 +97,13 @@ export {
   type AgentRegistration,
 } from './services/agent-registry.js';
 
+export {
+  LabelSyncService,
+  type LabelSyncResult,
+  type RepoSyncResult,
+  type SyncAllResult,
+} from './services/label-sync-service.js';
+
 // Auth
 export {
   API_KEY_HEADER,

@@ -14,3 +14,10 @@ export {
   AgentRegistry,
   type AgentRegistration,
 } from './agent-registry.js';
+
+export {
+  LabelSyncService,
+  type LabelSyncResult,
+  type RepoSyncResult,
+  type SyncAllResult,
+} from './label-sync-service.js';
