@@ -83,6 +83,11 @@ export {
   type MonitorState,
   type QueueAdapter,
   type PhaseTracker,
+  type QueueItemWithScore,
+  type SerializedQueueItem,
+  type QueueManager,
+  type WorkerInfo,
+  type WorkerHandler,
 } from './monitor.js';
 
 // SSE Types

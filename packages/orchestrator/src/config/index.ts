@@ -22,6 +22,8 @@ export {
   type RepositoryConfig,
   MonitorConfigSchema,
   type MonitorConfig,
+  DispatchConfigSchema,
+  type DispatchConfig,
   OrchestratorConfigSchema,
   type OrchestratorConfig,
   validateConfig,

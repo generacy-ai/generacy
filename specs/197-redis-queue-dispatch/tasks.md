@@ -10,13 +10,13 @@
 
 ## Phase 1: Configuration & Type Definitions
 
-- [ ] T001 [US1] Add `DispatchConfigSchema` to `packages/orchestrator/src/config/schema.ts` — define `pollIntervalMs`, `maxConcurrentWorkers`, `heartbeatTtlMs`, `heartbeatCheckIntervalMs`, `shutdownTimeoutMs`, `maxRetries` with Zod validation; add `dispatch` field to `OrchestratorConfigSchema`
-- [ ] T002 [P] [US1] Add `QueueManager` interface and supporting types to `packages/orchestrator/src/types/monitor.ts` — extend `QueueAdapter` with `claim`, `release`, `complete`, `getQueueDepth`, `getQueueItems`, `getActiveWorkerCount`; add `QueueItemWithScore`, `SerializedQueueItem`, `WorkerHandler` types
-- [ ] T003 [P] [US1] Export new types from `packages/orchestrator/src/types/index.ts`
+- [X] T001 [US1] Add `DispatchConfigSchema` to `packages/orchestrator/src/config/schema.ts` — define `pollIntervalMs`, `maxConcurrentWorkers`, `heartbeatTtlMs`, `heartbeatCheckIntervalMs`, `shutdownTimeoutMs`, `maxRetries` with Zod validation; add `dispatch` field to `OrchestratorConfigSchema`
+- [X] T002 [P] [US1] Add `QueueManager` interface and supporting types to `packages/orchestrator/src/types/monitor.ts` — extend `QueueAdapter` with `claim`, `release`, `complete`, `getQueueDepth`, `getQueueItems`, `getActiveWorkerCount`; add `QueueItemWithScore`, `SerializedQueueItem`, `WorkerHandler` types
+- [X] T003 [P] [US1] Export new types from `packages/orchestrator/src/types/index.ts`
 
 ## Phase 2: Core Queue Implementation
 
-- [ ] T004 [US1] [US2] Create `packages/orchestrator/src/services/redis-queue-adapter.ts` — implement `RedisQueueAdapter` class:
+- [X] T004 [US1] [US2] Create `packages/orchestrator/src/services/redis-queue-adapter.ts` — implement `RedisQueueAdapter` class:
   - Constructor accepting Redis client and logger (same DI pattern as `PhaseTrackerService`)
   - `enqueue(item)`: serialize with `attemptCount: 0`, `ZADD` to pending sorted set
   - Lua script for atomic claim: `ZPOPMIN` + `HSET` claimed hash + `SET` heartbeat with TTL
@@ -30,7 +30,7 @@
 
 ## Phase 3: Worker Dispatcher
 
-- [ ] T005 [US3] [US4] Create `packages/orchestrator/src/services/worker-dispatcher.ts` — implement `WorkerDispatcher` class:
+- [X] T005 [US3] [US4] Create `packages/orchestrator/src/services/worker-dispatcher.ts` — implement `WorkerDispatcher` class:
   - Constructor accepting `QueueManager`, logger, `DispatchConfig`, and `WorkerHandler` callback
   - `start()`: begin poll loop and reaper loop using `AbortController`
   - Poll loop: check `activeWorkers.size < maxConcurrentWorkers`, call `queue.claim(workerId)`, wrap handler with heartbeat refresh interval (`setInterval` at TTL/2), track in `activeWorkers` Map
@@ -41,19 +41,19 @@
 
 ## Phase 4: Routes & Server Integration
 
-- [ ] T006 [US5] Create `packages/orchestrator/src/routes/dispatch.ts` — Fastify route plugin:
+- [X] T006 [US5] Create `packages/orchestrator/src/routes/dispatch.ts` — Fastify route plugin:
   - `GET /dispatch/queue/depth` → call `queue.getQueueDepth()`, return `{ depth: number }`
   - `GET /dispatch/queue/items?offset=0&limit=10` → call `queue.getQueueItems()`, return paginated items with scores
   - `GET /dispatch/queue/workers` → call `queue.getActiveWorkerCount()`, return `{ count: number }`
   - Zod schemas for query parameters
-- [ ] T007 [P] [US1] Update `packages/orchestrator/src/services/index.ts` — export `RedisQueueAdapter` and `WorkerDispatcher`
-- [ ] T008 [P] [US1] Update `packages/orchestrator/src/index.ts` — export new public API types and services
-- [ ] T009 [US1] [US3] Modify `packages/orchestrator/src/server.ts` — replace in-memory queue adapter (lines 147-155) with `RedisQueueAdapter`; instantiate `WorkerDispatcher` with a placeholder handler; start dispatcher in `onReady` hook; add dispatcher stop + Redis cleanup to graceful shutdown
-- [ ] T010 [US5] Update `packages/orchestrator/src/routes/index.ts` — register dispatch routes, pass `QueueManager` instance
+- [X] T007 [P] [US1] Update `packages/orchestrator/src/services/index.ts` — export `RedisQueueAdapter` and `WorkerDispatcher`
+- [X] T008 [P] [US1] Update `packages/orchestrator/src/index.ts` — export new public API types and services
+- [X] T009 [US1] [US3] Modify `packages/orchestrator/src/server.ts` — replace in-memory queue adapter (lines 147-155) with `RedisQueueAdapter`; instantiate `WorkerDispatcher` with a placeholder handler; start dispatcher in `onReady` hook; add dispatcher stop + Redis cleanup to graceful shutdown
+- [X] T010 [US5] Update `packages/orchestrator/src/routes/index.ts` — register dispatch routes, pass `QueueManager` instance
 
 ## Phase 5: Tests
 
-- [ ] T011 [US2] Create `packages/orchestrator/tests/unit/services/redis-queue-adapter.test.ts`:
+- [X] T011 [US2] Create `packages/orchestrator/tests/unit/services/redis-queue-adapter.test.ts`:
   - Mock ioredis client
   - Test enqueue adds to sorted set with correct score
   - Test claim returns deserialized item and sets heartbeat
@@ -64,7 +64,7 @@
   - Test getQueueDepth returns ZCARD result
   - Test getQueueItems returns paginated results
   - Test graceful degradation on Redis errors
-- [ ] T012 [P] [US3] [US4] Create `packages/orchestrator/tests/unit/services/worker-dispatcher.test.ts`:
+- [X] T012 [P] [US3] [US4] Create `packages/orchestrator/tests/unit/services/worker-dispatcher.test.ts`:
   - Mock QueueManager
   - Test poll loop claims and dispatches to handler
   - Test concurrency limit enforcement (doesn't claim when at max)

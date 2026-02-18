@@ -84,6 +84,65 @@ export interface QueueAdapter {
 }
 
 /**
+ * Queue item with its priority score, used for listing
+ */
+export interface QueueItemWithScore {
+  item: QueueItem;
+  score: number;
+}
+
+/**
+ * Internal representation stored in Redis, adding retry tracking
+ */
+export interface SerializedQueueItem extends QueueItem {
+  /** Number of times this item has been claimed and released */
+  attemptCount: number;
+  /** Unique key for deduplication in the sorted set */
+  itemKey: string;
+}
+
+/**
+ * Extended queue interface for dispatch operations.
+ * The monitor only uses enqueue() via QueueAdapter.
+ * The dispatcher and routes use the full QueueManager interface.
+ */
+export interface QueueManager extends QueueAdapter {
+  /** Atomically claim the highest-priority item for a worker */
+  claim(workerId: string): Promise<QueueItem | null>;
+  /** Release a claimed item back to the pending queue */
+  release(workerId: string, item: QueueItem): Promise<void>;
+  /** Mark a claimed item as complete and remove it */
+  complete(workerId: string, item: QueueItem): Promise<void>;
+  /** Get the number of items in the pending queue */
+  getQueueDepth(): Promise<number>;
+  /** Get paginated list of pending items with scores */
+  getQueueItems(offset: number, limit: number): Promise<QueueItemWithScore[]>;
+  /** Get the number of currently active (claimed) workers */
+  getActiveWorkerCount(): Promise<number>;
+}
+
+/**
+ * Represents an active worker tracked by the dispatcher
+ */
+export interface WorkerInfo {
+  /** Unique worker ID */
+  workerId: string;
+  /** The item being processed */
+  item: QueueItem;
+  /** When the worker started processing */
+  startedAt: number;
+  /** Heartbeat refresh interval handle */
+  heartbeatInterval: NodeJS.Timeout;
+  /** Promise resolving when the handler completes */
+  promise: Promise<void>;
+}
+
+/**
+ * Callback signature for processing queue items
+ */
+export type WorkerHandler = (item: QueueItem) => Promise<void>;
+
+/**
  * Phase tracker interface for deduplication
  */
 export interface PhaseTracker {

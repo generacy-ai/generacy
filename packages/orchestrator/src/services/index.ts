@@ -31,3 +31,7 @@ export {
   PhaseTrackerService,
   type PhaseTrackerOptions,
 } from './phase-tracker-service.js';
+
+export { RedisQueueAdapter } from './redis-queue-adapter.js';
+
+export { WorkerDispatcher } from './worker-dispatcher.js';
