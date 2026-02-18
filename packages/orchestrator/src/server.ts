@@ -22,6 +22,7 @@ import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { Redis as IORedis } from 'ioredis';
+import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
 
 /**
  * Server creation options
@@ -149,20 +150,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       maxRetries: config.dispatch.maxRetries,
     });
 
-    // Placeholder handler — will be replaced by Claude CLI spawner in a future issue
-    const placeholderHandler = async (item: import('./types/index.js').QueueItem) => {
-      server.log.info(
-        { owner: item.owner, repo: item.repo, issue: item.issueNumber },
-        'Worker handler invoked (placeholder)',
-      );
-    };
+    // Create CLI worker to handle queue items
+    const cliWorker = new ClaudeCliWorker(config.worker, server.log);
 
     workerDispatcher = new WorkerDispatcher(
       redisQueueAdapter,
       redisClient,
       server.log,
       config.dispatch,
-      placeholderHandler,
+      cliWorker.handle.bind(cliWorker),
     );
   }
 

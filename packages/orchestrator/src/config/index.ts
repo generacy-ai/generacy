@@ -24,6 +24,8 @@ export {
   type MonitorConfig,
   DispatchConfigSchema,
   type DispatchConfig,
+  WorkerConfigSchema,
+  type WorkerConfig,
   OrchestratorConfigSchema,
   type OrchestratorConfig,
   validateConfig,
