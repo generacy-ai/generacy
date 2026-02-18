@@ -145,44 +145,34 @@ describe('LabelManager', () => {
 
   describe('retry on API failure', () => {
     it('succeeds on second attempt after first addLabels call throws', async () => {
-      vi.useFakeTimers();
       const lm = createLabelManager();
+      // Bypass real sleep delays by mocking the private sleep method
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (lm as any).sleep = vi.fn().mockResolvedValue(undefined);
 
       mockGithub.addLabels
         .mockRejectedValueOnce(new Error('GitHub API 503'))
         .mockResolvedValueOnce(undefined);
 
-      const promise = lm.onPhaseComplete('plan');
-
-      // Advance past the first retry delay (1000ms)
-      await vi.advanceTimersByTimeAsync(1000);
-
-      await promise;
+      await lm.onPhaseComplete('plan');
 
       expect(mockGithub.addLabels).toHaveBeenCalledTimes(2);
       expect(mockGithub.removeLabels).toHaveBeenCalledTimes(2);
       expect(mockLogger.warn).toHaveBeenCalled();
-
-      vi.useRealTimers();
     });
 
     it('throws after all 3 attempts fail', async () => {
-      vi.useFakeTimers();
       const lm = createLabelManager();
+      // Bypass real sleep delays by mocking the private sleep method
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (lm as any).sleep = vi.fn().mockResolvedValue(undefined);
 
       mockGithub.addLabels.mockRejectedValue(new Error('GitHub API 503'));
 
-      const promise = lm.onPhaseComplete('plan');
-
-      // Advance through all retry delays at once to avoid unhandled rejection windows
-      await vi.runAllTimersAsync();
-
-      await expect(promise).rejects.toThrow('GitHub API 503');
+      await expect(lm.onPhaseComplete('plan')).rejects.toThrow('GitHub API 503');
 
       expect(mockGithub.addLabels).toHaveBeenCalledTimes(3);
       expect(mockLogger.error).toHaveBeenCalled();
-
-      vi.useRealTimers();
     });
   });
 });

@@ -116,9 +116,10 @@ describe('ClaudeCliWorker (integration)', () => {
   let sseEvents: unknown[];
 
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
 
-    // Re-set mock implementations after restoreAllMocks
+    // Re-set mock implementations after clearAllMocks
+    mockGithub.getIssue.mockReset();
     mockGithub.addLabels.mockResolvedValue(undefined);
     mockGithub.removeLabels.mockResolvedValue(undefined);
     mockGithub.getIssueComments.mockResolvedValue([]);
@@ -181,7 +182,7 @@ describe('ClaudeCliWorker (integration)', () => {
       const removeCallArgs = (mockGithub.removeLabels as ReturnType<typeof vi.fn>).mock.calls
         .map((c: unknown[]) => c[3]);
       const removedAgentInProgress = removeCallArgs.some(
-        (labels: string[]) => labels.includes('agent:in-progress'),
+        (labels: unknown) => Array.isArray(labels) && labels.includes('agent:in-progress'),
       );
       expect(removedAgentInProgress).toBe(false);
     });

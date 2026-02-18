@@ -40,12 +40,12 @@
 
 ## Phase 6: Tests
 
-- [ ] T016 [P] Unit tests for PhaseResolver in `packages/orchestrator/src/worker/__tests__/phase-resolver.test.ts` — test process command (no labels → specify, has completed:specify → clarify, has phase:plan → plan); test continue command (waiting-for:clarification satisfied → clarify/plan)
-- [ ] T017 [P] Unit tests for GateChecker in `packages/orchestrator/src/worker/__tests__/gate-checker.test.ts` — test speckit-feature defaults (clarify gates), speckit-bugfix defaults (no gates), custom gate config, unknown workflow fallback
-- [ ] T018 [P] Unit tests for LabelManager in `packages/orchestrator/src/worker/__tests__/label-manager.test.ts` — test onPhaseStart adds/removes labels, onPhaseComplete adds completed label, onGateHit adds waiting-for + paused, onError adds agent:error; mock Octokit; test retry on API failure
-- [ ] T019 [P] Unit tests for CliSpawner in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — test successful spawn with mock ProcessFactory, test timeout triggers SIGTERM→SIGKILL, test abort signal kills process, test non-zero exit code handling, test stdout/stderr capture
-- [ ] T020 [P] Unit tests for OutputCapture in `packages/orchestrator/src/worker/__tests__/output-capture.test.ts` — test JSON line parsing, test SSE event emission for each event type, test malformed JSON handling, test buffering
-- [ ] T021 Integration test for ClaudeCliWorker in `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` — test full phase loop with mock CLI (specify→clarify→gate hit), test continue command (resume after gate), test error handling (CLI crash), test validate phase (test pass/fail), test graceful shutdown
+- [X] T016 [P] Unit tests for PhaseResolver in `packages/orchestrator/src/worker/__tests__/phase-resolver.test.ts` — test process command (no labels → specify, has completed:specify → clarify, has phase:plan → plan); test continue command (waiting-for:clarification satisfied → clarify/plan)
+- [X] T017 [P] Unit tests for GateChecker in `packages/orchestrator/src/worker/__tests__/gate-checker.test.ts` — test speckit-feature defaults (clarify gates), speckit-bugfix defaults (no gates), custom gate config, unknown workflow fallback
+- [X] T018 [P] Unit tests for LabelManager in `packages/orchestrator/src/worker/__tests__/label-manager.test.ts` — test onPhaseStart adds/removes labels, onPhaseComplete adds completed label, onGateHit adds waiting-for + paused, onError adds agent:error; mock Octokit; test retry on API failure
+- [X] T019 [P] Unit tests for CliSpawner in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — test successful spawn with mock ProcessFactory, test timeout triggers SIGTERM→SIGKILL, test abort signal kills process, test non-zero exit code handling, test stdout/stderr capture
+- [X] T020 [P] Unit tests for OutputCapture in `packages/orchestrator/src/worker/__tests__/output-capture.test.ts` — test JSON line parsing, test SSE event emission for each event type, test malformed JSON handling, test buffering
+- [X] T021 Integration test for ClaudeCliWorker in `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` — test full phase loop with mock CLI (specify→clarify→gate hit), test continue command (resume after gate), test error handling (CLI crash), test validate phase (test pass/fail), test graceful shutdown
 
 ## Dependencies & Execution Order
 

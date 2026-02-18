@@ -24,15 +24,15 @@ describe('OutputCapture', () => {
       capture.processChunk('{"type":"init","data":{}}\n');
       const output = capture.getOutput();
       expect(output).toHaveLength(1);
-      expect(output[0].type).toBe('init');
+      expect(output[0]!.type).toBe('init');
     });
 
     it('parses multiple JSON lines into multiple OutputChunks', () => {
       capture.processChunk('{"type":"init","data":{}}\n{"type":"complete","data":{}}\n');
       const output = capture.getOutput();
       expect(output).toHaveLength(2);
-      expect(output[0].type).toBe('init');
-      expect(output[1].type).toBe('complete');
+      expect(output[0]!.type).toBe('init');
+      expect(output[1]!.type).toBe('complete');
     });
   });
 
@@ -44,7 +44,7 @@ describe('OutputCapture', () => {
       capture.processChunk('"text"}\n');
       const output = capture.getOutput();
       expect(output).toHaveLength(1);
-      expect(output[0].type).toBe('text');
+      expect(output[0]!.type).toBe('text');
     });
   });
 
@@ -53,8 +53,8 @@ describe('OutputCapture', () => {
       capture.processChunk('this is not json\n');
       const output = capture.getOutput();
       expect(output).toHaveLength(1);
-      expect(output[0].type).toBe('text');
-      expect(output[0].data).toEqual({ text: 'this is not json' });
+      expect(output[0]!.type).toBe('text');
+      expect(output[0]!.data).toEqual({ text: 'this is not json' });
     });
   });
 
@@ -67,7 +67,7 @@ describe('OutputCapture', () => {
       capture.flush();
       const output = capture.getOutput();
       expect(output).toHaveLength(1);
-      expect(output[0].type).toBe('text');
+      expect(output[0]!.type).toBe('text');
     });
   });
 
