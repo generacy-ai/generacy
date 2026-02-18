@@ -112,6 +112,21 @@ export const RepositoryConfigSchema = z.object({
 export type RepositoryConfig = z.infer<typeof RepositoryConfigSchema>;
 
 /**
+ * Monitor configuration for label detection
+ */
+export const MonitorConfigSchema = z.object({
+  /** Polling interval in milliseconds */
+  pollIntervalMs: z.number().int().min(5000).default(30000),
+  /** GitHub webhook secret for signature verification */
+  webhookSecret: z.string().optional(),
+  /** Maximum concurrent GitHub API calls during polling */
+  maxConcurrentPolls: z.number().int().min(1).max(20).default(5),
+  /** Enable adaptive polling frequency */
+  adaptivePolling: z.boolean().default(true),
+});
+export type MonitorConfig = z.infer<typeof MonitorConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
@@ -122,6 +137,7 @@ export const OrchestratorConfigSchema = z.object({
   cors: CorsConfigSchema.default({}),
   logging: LoggingConfigSchema.default({}),
   repositories: z.array(RepositoryConfigSchema).default([]),
+  monitor: MonitorConfigSchema.default({}),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

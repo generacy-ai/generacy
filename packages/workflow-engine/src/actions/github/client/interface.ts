@@ -133,6 +133,11 @@ export interface GitHubClient {
    */
   updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>;
 
+  /**
+   * List open issues in a repository that have a specific label
+   */
+  listIssuesWithLabel(owner: string, repo: string, label: string): Promise<Issue[]>;
+
   // ==========================================================================
   // PR Operations
   // ==========================================================================

@@ -14,7 +14,12 @@ import { WorkflowService, InMemoryWorkflowStore } from './services/workflow-serv
 import { QueueService, InMemoryQueueStore } from './services/queue-service.js';
 import { AgentRegistry } from './services/agent-registry.js';
 import { LabelSyncService } from './services/label-sync-service.js';
+import { LabelMonitorService } from './services/label-monitor-service.js';
+import { PhaseTrackerService } from './services/phase-tracker-service.js';
+import { setupWebhookRoutes } from './routes/webhooks.js';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
+import type { QueueItem } from './types/index.js';
+import { Redis as IORedis } from 'ioredis';
 
 /**
  * Server creation options
@@ -98,7 +103,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const authMiddleware = createAuthMiddleware({
     apiKeyStore,
     enabled: config.auth.enabled,
-    skipRoutes: ['/health', '/metrics'],
+    skipRoutes: ['/health', '/metrics', '/webhooks/github'],
   });
   server.addHook('preHandler', authMiddleware);
 
@@ -120,6 +125,45 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     }
   }
 
+  // Initialize Redis client (shared across services)
+  let redisClient: IORedis | null = null;
+  try {
+    redisClient = new IORedis(config.redis.url);
+    // Test connection
+    await redisClient.ping();
+    server.log.info('Redis connected');
+  } catch (error) {
+    server.log.warn(
+      `Redis connection failed: ${error instanceof Error ? error.message : String(error)}. Phase tracker will operate without deduplication.`
+    );
+    redisClient = null;
+  }
+
+  // Initialize label monitor service
+  let labelMonitorService: LabelMonitorService | null = null;
+  if (config.repositories.length > 0) {
+    const phaseTracker = new PhaseTrackerService(server.log, redisClient);
+
+    // In-memory queue adapter (will be replaced by Redis sorted-set queue in sibling issue)
+    const inMemoryQueueAdapter = {
+      async enqueue(item: QueueItem): Promise<void> {
+        server.log.info(
+          { owner: item.owner, repo: item.repo, issue: item.issueNumber, command: item.command },
+          'Item enqueued (in-memory adapter)'
+        );
+      },
+    };
+
+    labelMonitorService = new LabelMonitorService(
+      server.log,
+      createGitHubClient,
+      phaseTracker,
+      inMemoryQueueAdapter,
+      config.monitor,
+      config.repositories,
+    );
+  }
+
   // Register routes (unless skipped for testing)
   if (!options.skipRoutes) {
     // Create services with in-memory stores (can be replaced with real implementations)
@@ -139,7 +183,30 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       integrationRegistry,
     });
 
+    // Register webhook routes (if monitor service is available)
+    if (labelMonitorService) {
+      const watchedRepos = new Set(
+        config.repositories.map(r => `${r.owner}/${r.repo}`)
+      );
+      await setupWebhookRoutes(server, {
+        monitorService: labelMonitorService,
+        webhookSecret: config.monitor.webhookSecret,
+        watchedRepos,
+      });
+    }
+
     // Note: SSE routes are registered via registerRoutes() -> setupEventsRoutes()
+  }
+
+  // Start polling on server ready
+  if (labelMonitorService) {
+    const monitor = labelMonitorService;
+    server.addHook('onReady', async () => {
+      // Start polling in the background (non-blocking)
+      monitor.startPolling().catch((error) => {
+        server.log.error({ err: error }, 'Label monitor polling failed');
+      });
+    });
   }
 
   // Setup graceful shutdown with SSE connection cleanup
@@ -151,8 +218,16 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     },
     cleanup: [
       async () => {
+        // Stop label monitor polling
+        if (labelMonitorService) {
+          labelMonitorService.stopPolling();
+        }
         // Close all active SSE connections before shutdown
         closeAllSSEConnections();
+        // Close Redis connection
+        if (redisClient) {
+          await redisClient.quit();
+        }
       },
     ],
   });

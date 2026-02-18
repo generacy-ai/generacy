@@ -14,6 +14,8 @@ export {
   type CorsConfig,
   type LoggingConfig,
   type LoadConfigOptions,
+  type MonitorConfig,
+  type RepositoryConfig,
 } from './config/index.js';
 
 // Types
@@ -77,6 +79,13 @@ export {
   type SSEConnectionOptions,
   type SSEStreamConfig,
   DEFAULT_SSE_CONFIG,
+  // Monitor
+  type QueueItem,
+  type LabelEvent,
+  type GitHubWebhookPayload,
+  type MonitorState,
+  type QueueAdapter,
+  type PhaseTracker,
 } from './types/index.js';
 
 // Services
@@ -103,6 +112,16 @@ export {
   type RepoSyncResult,
   type SyncAllResult,
 } from './services/label-sync-service.js';
+
+export {
+  LabelMonitorService,
+  type LabelMonitorOptions,
+} from './services/label-monitor-service.js';
+
+export {
+  PhaseTrackerService,
+  type PhaseTrackerOptions,
+} from './services/phase-tracker-service.js';
 
 // Auth
 export {
