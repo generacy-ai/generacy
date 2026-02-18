@@ -63,3 +63,7 @@ export {
   getActiveConnectionCount,
   closeAllSSEConnections,
 } from './events.js';
+export {
+  setupWebhookRoutes,
+  type WebhookRouteOptions,
+} from './webhooks.js';

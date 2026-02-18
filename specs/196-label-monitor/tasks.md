@@ -10,44 +10,44 @@
 
 ## Phase 1: Configuration & Types
 
-- [ ] T001 [US1] Extend orchestrator config schema with `MonitorConfigSchema` in `src/config/schema.ts` — add `monitor` section with `pollIntervalMs`, `webhookSecret`, `maxConcurrentPolls`, `adaptivePolling` fields using Zod
-- [ ] T002 [P] [US1] Define monitor types in `src/types/monitor.ts` — `QueueItem`, `LabelEvent`, `GitHubWebhookPayload`, `MonitorState`, `QueueAdapter` interface, `PhaseTracker` interface
-- [ ] T003 [P] [US1] Export new types from `src/types/index.ts`
+- [X] T001 [US1] Extend orchestrator config schema with `MonitorConfigSchema` in `src/config/schema.ts` — add `monitor` section with `pollIntervalMs`, `webhookSecret`, `maxConcurrentPolls`, `adaptivePolling` fields using Zod
+- [X] T002 [P] [US1] Define monitor types in `src/types/monitor.ts` — `QueueItem`, `LabelEvent`, `GitHubWebhookPayload`, `MonitorState`, `QueueAdapter` interface, `PhaseTracker` interface
+- [X] T003 [P] [US1] Export new types from `src/types/index.ts`
 
 ## Phase 2: Phase Tracker (Deduplication)
 
-- [ ] T004 [US4] Implement `PhaseTrackerService` in `src/services/phase-tracker-service.ts` — Redis-backed deduplication with `isDuplicate()` and `markProcessed()` methods, key pattern `phase-tracker:{owner}:{repo}:{issue}:{phase}`, 24h TTL, graceful degradation when Redis unavailable
-- [ ] T005 [P] [US4] Write unit tests for `PhaseTrackerService` in `tests/unit/services/phase-tracker-service.test.ts` — test dedup key creation, TTL behavior, Redis failure fallback, key format validation
+- [X] T004 [US4] Implement `PhaseTrackerService` in `src/services/phase-tracker-service.ts` — Redis-backed deduplication with `isDuplicate()` and `markProcessed()` methods, key pattern `phase-tracker:{owner}:{repo}:{issue}:{phase}`, 24h TTL, graceful degradation when Redis unavailable
+- [X] T005 [P] [US4] Write unit tests for `PhaseTrackerService` in `tests/unit/services/phase-tracker-service.test.ts` — test dedup key creation, TTL behavior, Redis failure fallback, key format validation
 
 ## Phase 3: Core Monitor Service
 
-- [ ] T006 [US1] Implement `LabelMonitorService` core in `src/services/label-monitor-service.ts` — constructor with dependency injection (logger, GitHubClient factory, PhaseTracker, QueueAdapter, config), `parseLabelEvent()` to extract workflow name from `process:*` labels
-- [ ] T007 [US1] Implement `processLabelEvent()` in `LabelMonitorService` — shared processing logic: check dedup → enqueue → remove trigger label → add `agent:in-progress` label, with structured logging
-- [ ] T008 [US3] Implement `waiting-for:*/completed:*` resume detection in `processLabelEvent()` — detect `completed:*` label, check for matching `waiting-for:*` on same issue, enqueue "continue" command, remove `waiting-for:*` label
-- [ ] T009 [US2] Implement polling loop in `LabelMonitorService` — `startPolling()`, `stopPolling()`, `poll()` methods using AbortController pattern, iterate watched repos, find issues with `process:*` labels via GitHubClient
-- [ ] T010 [US2] Implement adaptive polling in `LabelMonitorService` — track webhook health via `lastWebhookEvent` timestamp, reduce interval by 3x when webhooks unhealthy (min 10s), restore normal interval on reconnect, log mode transitions
-- [ ] T011 [US2] Implement concurrency limiting for polling — cap concurrent GitHub API calls to `maxConcurrentPolls` using semaphore pattern when polling multiple repos simultaneously
+- [X] T006 [US1] Implement `LabelMonitorService` core in `src/services/label-monitor-service.ts` — constructor with dependency injection (logger, GitHubClient factory, PhaseTracker, QueueAdapter, config), `parseLabelEvent()` to extract workflow name from `process:*` labels
+- [X] T007 [US1] Implement `processLabelEvent()` in `LabelMonitorService` — shared processing logic: check dedup → enqueue → remove trigger label → add `agent:in-progress` label, with structured logging
+- [X] T008 [US3] Implement `waiting-for:*/completed:*` resume detection in `processLabelEvent()` — detect `completed:*` label, check for matching `waiting-for:*` on same issue, enqueue "continue" command, remove `waiting-for:*` label
+- [X] T009 [US2] Implement polling loop in `LabelMonitorService` — `startPolling()`, `stopPolling()`, `poll()` methods using AbortController pattern, iterate watched repos, find issues with `process:*` labels via GitHubClient
+- [X] T010 [US2] Implement adaptive polling in `LabelMonitorService` — track webhook health via `lastWebhookEvent` timestamp, reduce interval by 3x when webhooks unhealthy (min 10s), restore normal interval on reconnect, log mode transitions
+- [X] T011 [US2] Implement concurrency limiting for polling — cap concurrent GitHub API calls to `maxConcurrentPolls` using semaphore pattern when polling multiple repos simultaneously
 
 ## Phase 4: Webhook Route
 
-- [ ] T012 [US2] Implement webhook route in `src/routes/webhooks.ts` — `POST /webhooks/github` Fastify route with raw body capture for signature verification
-- [ ] T013 [US2] Implement HMAC-SHA256 webhook signature verification — verify `X-Hub-Signature-256` header using `crypto.timingSafeEqual`, skip when `webhookSecret` not configured
-- [ ] T014 [US2] Wire webhook handler to `LabelMonitorService.processLabelEvent()` — parse payload, validate action is `labeled`, filter for watched repos, call shared processing logic, update webhook health timestamp
+- [X] T012 [US2] Implement webhook route in `src/routes/webhooks.ts` — `POST /webhooks/github` Fastify route with raw body capture for signature verification
+- [X] T013 [US2] Implement HMAC-SHA256 webhook signature verification — verify `X-Hub-Signature-256` header using `crypto.timingSafeEqual`, skip when `webhookSecret` not configured
+- [X] T014 [US2] Wire webhook handler to `LabelMonitorService.processLabelEvent()` — parse payload, validate action is `labeled`, filter for watched repos, call shared processing logic, update webhook health timestamp
 
 ## Phase 5: Server Integration
 
-- [ ] T015 [US1] Integrate `LabelMonitorService` into `src/server.ts` — instantiate service with dependencies, start polling on `server.ready`, stop on graceful shutdown
-- [ ] T016 [P] [US1] Register webhook route in `src/routes/index.ts` — add `setupWebhookRoutes()` to `registerRoutes()`, pass monitor service reference
-- [ ] T017 [P] [US1] Export new services and types from `src/services/index.ts` and `src/index.ts`
-- [ ] T018 [P] [US1] Add `ioredis` dependency to `package.json` if not already present
+- [X] T015 [US1] Integrate `LabelMonitorService` into `src/server.ts` — instantiate service with dependencies, start polling on `server.ready`, stop on graceful shutdown
+- [X] T016 [P] [US1] Register webhook route in `src/routes/index.ts` — add `setupWebhookRoutes()` to `registerRoutes()`, pass monitor service reference
+- [X] T017 [P] [US1] Export new services and types from `src/services/index.ts` and `src/index.ts`
+- [X] T018 [P] [US1] Add `ioredis` dependency to `package.json` if not already present
 
 ## Phase 6: Tests
 
-- [ ] T019 [US1] Write unit tests for `LabelMonitorService` in `tests/unit/services/label-monitor-service.test.ts` — test `parseLabelEvent()` for `process:*` labels, test `processLabelEvent()` with mocked GitHubClient/PhaseTracker/QueueAdapter, verify label removal and `agent:in-progress` addition
-- [ ] T020 [P] [US3] Write unit tests for resume detection — test `completed:*` + `waiting-for:*` pair detection, verify "continue" command enqueue, verify `waiting-for:*` removal
-- [ ] T021 [P] [US2] Write unit tests for polling loop — test polling iterates repos, test adaptive frequency changes based on webhook health, test AbortController stops polling cleanly
-- [ ] T022 [P] [US4] Write unit tests for dedup integration — test that duplicate events are skipped, test that non-duplicates proceed normally
-- [ ] T023 [US2] Write unit tests for webhook route — test signature verification, test payload parsing, test rejection of non-`labeled` events, test filtering for watched repos only
+- [X] T019 [US1] Write unit tests for `LabelMonitorService` in `tests/unit/services/label-monitor-service.test.ts` — test `parseLabelEvent()` for `process:*` labels, test `processLabelEvent()` with mocked GitHubClient/PhaseTracker/QueueAdapter, verify label removal and `agent:in-progress` addition
+- [X] T020 [P] [US3] Write unit tests for resume detection — test `completed:*` + `waiting-for:*` pair detection, verify "continue" command enqueue, verify `waiting-for:*` removal
+- [X] T021 [P] [US2] Write unit tests for polling loop — test polling iterates repos, test adaptive frequency changes based on webhook health, test AbortController stops polling cleanly
+- [X] T022 [P] [US4] Write unit tests for dedup integration — test that duplicate events are skipped, test that non-duplicates proceed normally
+- [X] T023 [US2] Write unit tests for webhook route — test signature verification, test payload parsing, test rejection of non-`labeled` events, test filtering for watched repos only
 
 ## Dependencies & Execution Order
 

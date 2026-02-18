@@ -105,6 +105,46 @@ export class GhCliGitHubClient implements GitHubClient {
     };
   }
 
+  async listIssuesWithLabel(owner: string, repo: string, label: string): Promise<Issue[]> {
+    const result = await executeCommand('gh', [
+      'issue', 'list',
+      '-R', `${owner}/${repo}`,
+      '--label', label,
+      '--state', 'open',
+      '--json', 'number,title,body,state,labels,assignees,milestone,createdAt,updatedAt',
+      '--limit', '100',
+    ], { cwd: this.workdir });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list issues with label "${label}": ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Array<Record<string, unknown>> | null;
+    if (!data) {
+      return [];
+    }
+
+    return data.map(item => ({
+      number: item['number'] as number,
+      title: item['title'] as string,
+      body: item['body'] as string ?? '',
+      state: ((item['state'] as string) ?? 'open').toLowerCase() as 'open' | 'closed',
+      labels: ((item['labels'] as Array<{ name: string; color: string; description?: string }>) ?? []).map(l => ({
+        name: l.name,
+        color: l.color,
+        description: l.description,
+      })),
+      assignees: ((item['assignees'] as Array<{ login: string }>) ?? []).map(a => a.login),
+      milestone: item['milestone'] ? {
+        number: (item['milestone'] as { number: number }).number,
+        title: (item['milestone'] as { title: string }).title,
+        state: 'open' as const,
+      } : undefined,
+      created_at: item['createdAt'] as string,
+      updated_at: item['updatedAt'] as string,
+    }));
+  }
+
   async updateIssue(owner: string, repo: string, number: number, data: IssueUpdate): Promise<void> {
     const args = ['issue', 'edit', String(number), '-R', `${owner}/${repo}`];
 

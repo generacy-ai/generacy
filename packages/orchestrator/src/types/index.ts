@@ -75,6 +75,16 @@ export {
   type AuthContext,
 } from './api.js';
 
+// Monitor Types
+export {
+  type QueueItem,
+  type LabelEvent,
+  type GitHubWebhookPayload,
+  type MonitorState,
+  type QueueAdapter,
+  type PhaseTracker,
+} from './monitor.js';
+
 // SSE Types
 export {
   // Channel types

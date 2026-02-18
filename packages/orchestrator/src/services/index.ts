@@ -21,3 +21,13 @@ export {
   type RepoSyncResult,
   type SyncAllResult,
 } from './label-sync-service.js';
+
+export {
+  LabelMonitorService,
+  type LabelMonitorOptions,
+} from './label-monitor-service.js';
+
+export {
+  PhaseTrackerService,
+  type PhaseTrackerOptions,
+} from './phase-tracker-service.js';

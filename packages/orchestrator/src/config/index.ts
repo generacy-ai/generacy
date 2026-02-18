@@ -20,6 +20,8 @@ export {
   type LoggingConfig,
   RepositoryConfigSchema,
   type RepositoryConfig,
+  MonitorConfigSchema,
+  type MonitorConfig,
   OrchestratorConfigSchema,
   type OrchestratorConfig,
   validateConfig,
