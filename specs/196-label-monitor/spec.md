@@ -113,6 +113,14 @@ The orchestrator package already exists at `packages/orchestrator/` with Fastify
 - [ ] Configurable watched repositories
 - [ ] Adaptive polling frequency based on webhook health
 
+## Clarified Decisions
+
+- **QueueAdapter**: New separate interface, independent of the existing `QueueService`/`MessageRouter` (which handles "decision" items). The actual Redis sorted-set queue will be implemented in a sibling epic child issue. For this issue, use an in-memory adapter for testing.
+- **GitHubClient methods**: Issue-level methods (`listIssuesWithLabel`, `addLabels`, `removeLabels`) must be added to `GitHubClient` in `@generacy-ai/workflow-engine` as a prerequisite before the monitor can use them.
+- **Webhook authentication**: The webhook route (`/webhooks/*`) bypasses the global `preHandler` auth middleware. Authentication is handled solely via HMAC-SHA256 signature verification of the `X-Hub-Signature-256` header.
+- **Initial webhook health**: At startup, assume webhooks are healthy (normal poll rate). Only switch to fast polling if webhooks were previously active and then stop responding. `lastWebhookEvent === null` is treated as "no data yet", not "unhealthy".
+- **Redis client**: A single shared `ioredis` instance is created in `server.ts` and injected into `PhaseTrackerService` (and later the queue service).
+
 ## Out of Scope
 
 - Worker implementation (separate issue: Redis queue consumer + Claude CLI spawner)
