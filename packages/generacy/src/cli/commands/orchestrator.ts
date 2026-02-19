@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 import { getLogger } from '../utils/logger.js';
 import { createOrchestratorServer } from '../../orchestrator/index.js';
+import { createJobQueue } from '../../orchestrator/redis-job-queue.js';
 
 /**
  * Create the orchestrator command
@@ -18,6 +19,7 @@ export function orchestratorCommand(): Command {
     .option('-h, --host <host>', 'Host to bind to', '0.0.0.0')
     .option('--worker-timeout <ms>', 'Worker heartbeat timeout in milliseconds', '60000')
     .option('--auth-token <token>', 'Authentication token (or set ORCHESTRATOR_TOKEN env var)')
+    .option('--redis-url <url>', 'Redis URL for persistent job queue (or set REDIS_URL env var)')
     .action(async (options) => {
       const logger = getLogger();
 
@@ -25,6 +27,7 @@ export function orchestratorCommand(): Command {
       const host = options['host'] as string;
       const workerTimeout = parseInt(options['workerTimeout'], 10);
       const authToken = options['authToken'] as string | undefined;
+      const redisUrl = (options['redisUrl'] as string | undefined) ?? process.env['REDIS_URL'];
 
       // Validate port
       if (isNaN(port) || port < 1 || port > 65535) {
@@ -38,12 +41,22 @@ export function orchestratorCommand(): Command {
         process.exit(1);
       }
 
+      const loggerAdapter = {
+        info: (message: string, data?: Record<string, unknown>) => logger.info(data ?? {}, message),
+        warn: (message: string, data?: Record<string, unknown>) => logger.warn(data ?? {}, message),
+        error: (message: string, data?: Record<string, unknown>) => logger.error(data ?? {}, message),
+      };
+
       logger.info({
         port,
         host,
         workerTimeout,
         authEnabled: !!(authToken || process.env['ORCHESTRATOR_TOKEN']),
+        redisUrl: redisUrl ? redisUrl.replace(/\/\/.*@/, '//***@') : undefined,
       }, 'Starting orchestrator server');
+
+      // Create job queue (Redis if URL provided, in-memory fallback)
+      const jobQueue = await createJobQueue(redisUrl, loggerAdapter);
 
       // Create server with pino logger adapter
       const server = createOrchestratorServer({
@@ -51,11 +64,8 @@ export function orchestratorCommand(): Command {
         host,
         workerTimeout,
         authToken,
-        logger: {
-          info: (message: string, data?: Record<string, unknown>) => logger.info(data ?? {}, message),
-          warn: (message: string, data?: Record<string, unknown>) => logger.warn(data ?? {}, message),
-          error: (message: string, data?: Record<string, unknown>) => logger.error(data ?? {}, message),
-        },
+        jobQueue,
+        logger: loggerAdapter,
       });
 
       // Graceful shutdown handler

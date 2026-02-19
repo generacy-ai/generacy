@@ -80,7 +80,14 @@ export class OrchestratorClient {
       if (!response.ok) {
         let errorData: OrchestratorError;
         try {
-          errorData = await response.json() as OrchestratorError;
+          const body = await response.json() as Record<string, unknown>;
+          // Server wraps errors as { error: { code, message } }
+          const inner = (body['error'] ?? body) as OrchestratorError;
+          errorData = {
+            code: inner.code ?? 'UNKNOWN_ERROR',
+            message: inner.message ?? response.statusText,
+            details: inner.details,
+          };
         } catch {
           errorData = {
             code: 'UNKNOWN_ERROR',

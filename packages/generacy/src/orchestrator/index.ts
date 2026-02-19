@@ -25,6 +25,8 @@ export type { Route, RouteMatch, PathToRegexResult, Router } from './router.js';
 export { InMemoryJobQueue } from './job-queue.js';
 export type { JobQueue } from './job-queue.js';
 
+export { RedisJobQueue, createJobQueue } from './redis-job-queue.js';
+
 export { createOrchestratorServer } from './server.js';
 export type { OrchestratorServer, OrchestratorServerOptions } from './server.js';
 
