@@ -150,7 +150,7 @@ export function orchestratorCommand(): Command {
 
         // Start label monitoring after server is ready
         if (labelMonitorService) {
-          labelMonitorService.startPolling().catch(error => {
+          labelMonitorService.startPolling().catch((error: unknown) => {
             logger.error({ error: String(error) }, 'Label monitor polling failed');
           });
           logger.info('Label monitor polling started');
@@ -253,7 +253,7 @@ async function setupLabelMonitor(
   };
 
   const phaseTracker = new PhaseTrackerService(monitorLogger, phaseTrackerRedis);
-  const bridge = new LabelMonitorBridge(server, loggerAdapter);
+  const bridge = new LabelMonitorBridge(server, createGitHubClient, loggerAdapter);
 
   const labelMonitor = new LabelMonitorService(
     monitorLogger,
