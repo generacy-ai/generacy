@@ -19,6 +19,15 @@ const mockGithub = {
   getIssueComments: vi.fn().mockResolvedValue([]),
   addIssueComment: vi.fn().mockResolvedValue({ id: 1, body: '' }),
   updateComment: vi.fn().mockResolvedValue(undefined),
+  // Git operations used by PrManager
+  getStatus: vi.fn().mockResolvedValue({ branch: 'feature/42', has_changes: false, staged: [], unstaged: [], untracked: [] }),
+  stageAll: vi.fn().mockResolvedValue(undefined),
+  commit: vi.fn().mockResolvedValue({ sha: 'abc123', files_committed: [] }),
+  push: vi.fn().mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' }),
+  getCurrentBranch: vi.fn().mockResolvedValue('feature/42'),
+  findPRForBranch: vi.fn().mockResolvedValue(null),
+  getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+  createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -125,6 +134,15 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.getIssueComments.mockResolvedValue([]);
     mockGithub.addIssueComment.mockResolvedValue({ id: 1, body: '' });
     mockGithub.updateComment.mockResolvedValue(undefined);
+    // PrManager git mocks
+    mockGithub.getStatus.mockResolvedValue({ branch: 'feature/42', has_changes: false, staged: [], unstaged: [], untracked: [] });
+    mockGithub.stageAll.mockResolvedValue(undefined);
+    mockGithub.commit.mockResolvedValue({ sha: 'abc123', files_committed: [] });
+    mockGithub.push.mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' });
+    mockGithub.getCurrentBranch.mockResolvedValue('feature/42');
+    mockGithub.findPRForBranch.mockResolvedValue(null);
+    mockGithub.getDefaultBranch.mockResolvedValue('develop');
+    mockGithub.createPullRequest.mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' });
 
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;

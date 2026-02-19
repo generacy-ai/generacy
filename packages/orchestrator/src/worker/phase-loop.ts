@@ -6,6 +6,7 @@ import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
+import type { PrManager } from './pr-manager.js';
 
 /**
  * Dependencies injected into the PhaseLoop.
@@ -16,6 +17,7 @@ export interface PhaseLoopDeps {
   gateChecker: GateChecker;
   cliSpawner: CliSpawner;
   outputCapture: OutputCapture;
+  prManager: PrManager;
 }
 
 /**
@@ -59,7 +61,7 @@ export class PhaseLoop {
     config: WorkerConfig,
     deps: PhaseLoopDeps,
   ): Promise<PhaseLoopResult> {
-    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture } = deps;
+    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager } = deps;
     const results: PhaseResult[] = [];
 
     // Find the starting index in PHASE_SEQUENCE
@@ -158,6 +160,12 @@ export class PhaseLoop {
       // 5. Mark phase as completed in labels
       await labelManager.onPhaseComplete(phase);
 
+      // 5b. Commit, push, and ensure draft PR exists
+      const prUrl = await prManager.commitPushAndEnsurePr(phase);
+      if (prUrl) {
+        context.prUrl = prUrl;
+      }
+
       // 6. Check for review gates
       const gate = gateChecker.checkGate(phase, context.item.workflowName, config);
       if (gate && gate.condition === 'always') {
@@ -179,6 +187,7 @@ export class PhaseLoop {
           status: 'in_progress',
           phases: this.buildPhaseProgress(startIndex, i, 'complete'),
           startedAt: new Date().toISOString(),
+          prUrl: context.prUrl,
         });
 
         return { results, completed: false, lastPhase: phase, gateHit: true };
@@ -194,6 +203,7 @@ export class PhaseLoop {
         phases: this.buildPhaseProgress(startIndex, i, 'complete'),
         startedAt: new Date().toISOString(),
         ...(isLastPhaseInStage ? { completedAt: new Date().toISOString() } : {}),
+        prUrl: context.prUrl,
       });
 
       // Clear output buffer for next phase

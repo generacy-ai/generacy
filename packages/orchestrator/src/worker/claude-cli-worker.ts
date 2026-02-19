@@ -13,6 +13,7 @@ import { OutputCapture } from './output-capture.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
+import { PrManager } from './pr-manager.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -190,6 +191,14 @@ export class ClaudeCliWorker {
         this.sseEmitter,
       );
 
+      const prManager = new PrManager(
+        github,
+        item.owner,
+        item.repo,
+        item.issueNumber,
+        workerLogger,
+      );
+
       // 6. Execute the phase loop
       const phaseLoop = new PhaseLoop(workerLogger);
       const loopResult = await phaseLoop.executeLoop(context, this.config, {
@@ -198,6 +207,7 @@ export class ClaudeCliWorker {
         gateChecker,
         cliSpawner,
         outputCapture,
+        prManager,
       });
 
       // 7. Handle completion
