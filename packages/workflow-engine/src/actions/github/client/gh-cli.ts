@@ -878,7 +878,19 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async createLabel(owner: string, repo: string, name: string, color: string, description?: string): Promise<void> {
-    await this.createOrUpdateLabel(owner, repo, { name, color, description });
+    const args = [
+      'label', 'create', name,
+      '-R', `${owner}/${repo}`,
+      '--color', color.replace('#', ''),
+    ];
+    if (description) {
+      args.push('--description', description);
+    }
+
+    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to create label ${name}: ${result.stderr}`);
+    }
   }
 
   async updateLabel(owner: string, repo: string, name: string, data: { color?: string; description?: string }): Promise<void> {

@@ -1,4 +1,4 @@
-import type { GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import { WORKFLOW_LABELS, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
 import type {
   LabelEvent,
   MonitorState,
@@ -7,6 +7,18 @@ import type {
   QueueItem,
 } from '../types/index.js';
 import type { RepositoryConfig, MonitorConfig } from '../config/schema.js';
+
+/**
+ * Known process:* and completed:* label names derived from WORKFLOW_LABELS.
+ * Using these avoids a GraphQL listLabels call on every poll cycle.
+ */
+const KNOWN_PROCESS_LABELS = WORKFLOW_LABELS
+  .filter(l => l.name.startsWith('process:'))
+  .map(l => l.name);
+
+const KNOWN_COMPLETED_LABELS = WORKFLOW_LABELS
+  .filter(l => l.name.startsWith('completed:'))
+  .map(l => l.name);
 
 interface Logger {
   info(msg: string): void;
@@ -42,6 +54,14 @@ export class LabelMonitorService {
   private readonly queueAdapter: QueueAdapter;
   private readonly options: LabelMonitorOptions;
   private abortController: AbortController | null = null;
+  private pollCycleCount = 0;
+
+  /**
+   * How often to check completed:* labels (every Nth cycle).
+   * Process:* labels are checked every cycle. Completed:* labels
+   * are for resume detection and can be checked less frequently.
+   */
+  private static readonly COMPLETED_CHECK_INTERVAL = 10;
 
   private state: MonitorState;
 
@@ -262,10 +282,15 @@ export class LabelMonitorService {
 
   /**
    * Run a single poll cycle across all watched repositories.
+   * Process:* labels are checked every cycle (2 labels × N repos).
+   * Completed:* labels for resume detection are checked every Nth cycle.
    */
   async poll(): Promise<void> {
     const repos = this.options.repositories;
     if (repos.length === 0) return;
+
+    this.pollCycleCount++;
+    const checkCompleted = this.pollCycleCount % LabelMonitorService.COMPLETED_CHECK_INTERVAL === 0;
 
     // Use semaphore pattern for concurrency limiting
     const semaphore = new Semaphore(this.options.maxConcurrentPolls);
@@ -273,7 +298,7 @@ export class LabelMonitorService {
     const pollTasks = repos.map(({ owner, repo }) =>
       semaphore.acquire().then(async (release) => {
         try {
-          await this.pollRepo(owner, repo);
+          await this.pollRepo(owner, repo, checkCompleted);
         } finally {
           release();
         }
@@ -285,20 +310,17 @@ export class LabelMonitorService {
 
   /**
    * Poll a single repository for trigger labels.
+   * Uses known label names from WORKFLOW_LABELS to avoid GraphQL listLabels calls.
+   * listIssuesWithLabel uses the REST API (separate rate limit bucket).
+   *
+   * @param checkCompleted - Whether to also check completed:* labels for resume detection
    */
-  private async pollRepo(owner: string, repo: string): Promise<void> {
+  private async pollRepo(owner: string, repo: string, checkCompleted: boolean): Promise<void> {
     const client = this.createClient();
 
-    // Find issues with process:* labels
-    // We search for each known process label prefix
     try {
-      // Get all repo labels to find active process:* labels
-      const labels = await client.listLabels(owner, repo);
-      const processLabels = labels
-        .filter(l => l.name.startsWith(PROCESS_LABEL_PREFIX))
-        .map(l => l.name);
-
-      for (const processLabel of processLabels) {
+      // Check known process:* labels for issues (REST API, 2 calls per repo)
+      for (const processLabel of KNOWN_PROCESS_LABELS) {
         const issues = await client.listIssuesWithLabel(owner, repo, processLabel);
         for (const issue of issues) {
           const event = this.parseLabelEvent(
@@ -315,25 +337,24 @@ export class LabelMonitorService {
         }
       }
 
-      // Also check for completed:* + waiting-for:* resume pairs
-      const completedLabels = labels
-        .filter(l => l.name.startsWith(COMPLETED_LABEL_PREFIX))
-        .map(l => l.name);
-
-      for (const completedLabel of completedLabels) {
-        const issues = await client.listIssuesWithLabel(owner, repo, completedLabel);
-        for (const issue of issues) {
-          const issueLabels = issue.labels.map(l => l.name);
-          const event = this.parseLabelEvent(
-            completedLabel,
-            owner,
-            repo,
-            issue.number,
-            issueLabels,
-            'poll',
-          );
-          if (event) {
-            await this.processLabelEvent(event);
+      // Check known completed:* labels for resume pairs (REST API, 13 calls per repo)
+      // Only checked periodically to conserve API rate limit
+      if (checkCompleted) {
+        for (const completedLabel of KNOWN_COMPLETED_LABELS) {
+          const issues = await client.listIssuesWithLabel(owner, repo, completedLabel);
+          for (const issue of issues) {
+            const issueLabels = issue.labels.map(l => l.name);
+            const event = this.parseLabelEvent(
+              completedLabel,
+              owner,
+              repo,
+              issue.number,
+              issueLabels,
+              'poll',
+            );
+            if (event) {
+              await this.processLabelEvent(event);
+            }
           }
         }
       }
