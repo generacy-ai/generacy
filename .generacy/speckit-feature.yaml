@@ -6,6 +6,12 @@
 # Each phase commits and pushes its artifacts. A draft PR is created
 # after specification so progress is visible from the start.
 #
+# Clarification uses the label-driven protocol (Humancy deferred to post-MVP):
+# - Agent posts questions as issue comment
+# - Adds waiting-for:clarification label, workflow pauses
+# - Developer answers via comment + adds completed:clarification label
+# - Orchestrator resumes the workflow
+#
 # Usage:
 #   generacy run speckit-feature.yaml --input description="Your feature description"
 #
@@ -22,7 +28,7 @@ description: |
   then proceeds through clarification, planning, task generation, and
   implementation — committing and pushing after each phase.
 
-version: "1.1.0"
+version: "1.2.0"
 
 inputs:
   - name: description
@@ -74,7 +80,8 @@ phases:
 
       - name: push-spec
         uses: shell
-        command: git push -u origin HEAD
+        command: git push --force-with-lease -u origin HEAD
+        continueOnError: true
 
       - name: create-pr
         uses: pr.create
@@ -89,8 +96,11 @@ phases:
             ---
             *Draft PR created by speckit-feature workflow. Implementation in progress.*
           draft: true
+        continueOnError: true
 
   # Phase 3: Clarification
+  # In headless mode: posts questions to issue, exits; orchestrator pauses via labels
+  # Developer answers via issue comment + adds completed:clarification label to resume
   - name: clarification
     steps:
       - name: clarify
@@ -100,15 +110,6 @@ phases:
           timeout: 600
         timeout: 660000  # 11 min
 
-      - name: review-clarifications
-        uses: humancy.request_review
-        with:
-          title: "Review clarification questions for: ${{ inputs.description }}"
-          context: "Clarification questions have been generated. Please review and answer them before the workflow proceeds to planning."
-          artifact: ${{ steps.create-feature.output.feature_dir }}/clarifications.yaml
-          urgency: blocking_soon
-          timeout: 86400000  # 24 hours
-
       - name: commit-clarifications
         uses: shell
         command: 'git add -A && git commit -m "spec: add clarification questions" --allow-empty'
@@ -117,6 +118,7 @@ phases:
       - name: push-clarifications
         uses: shell
         command: git push
+        continueOnError: true
 
   # Phase 4: Planning
   - name: planning
@@ -136,6 +138,7 @@ phases:
       - name: push-plan
         uses: shell
         command: git push
+        continueOnError: true
 
   # Phase 5: Task Generation
   - name: task-generation
@@ -155,6 +158,7 @@ phases:
       - name: push-tasks
         uses: shell
         command: git push
+        continueOnError: true
 
   # Phase 6: Implementation
   - name: implementation
@@ -173,6 +177,7 @@ phases:
       - name: push-implementation
         uses: shell
         command: git push
+        continueOnError: true
 
   # Phase 7: Verification
   - name: verification
