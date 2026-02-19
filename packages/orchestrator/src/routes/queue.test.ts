@@ -20,13 +20,14 @@ import { QueueService, InMemoryQueueStore } from '../services/queue-service.js';
 import { setupErrorHandler } from '../middleware/error-handler.js';
 import { resetSSESubscriptionManager, getSSESubscriptionManager } from '../sse/subscriptions.js';
 import type { DecisionQueueItem } from '../types/api.js';
+import type { QueueEventData } from '../types/sse.js';
 
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
 
 /** Minimal valid payload for POST /queue */
-function validCreatePayload(overrides: Record<string, unknown> = {}) {
+function validCreatePayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     workflowId: 'wf_deploy_abc123',
     stepId: 'review-deploy',
@@ -271,9 +272,10 @@ describe('Queue routes', () => {
       const [channel, event] = broadcastSpy.mock.calls[0]!;
       expect(channel).toBe('queue');
       expect(event.event).toBe('queue:item:added');
-      expect(event.data.action).toBe('added');
-      expect(event.data.items).toHaveLength(1);
-      expect(event.data.item).toBeDefined();
+      const data = event.data as QueueEventData;
+      expect(data.action).toBe('added');
+      expect(data.items).toHaveLength(1);
+      expect(data.item).toBeDefined();
     });
   });
 
@@ -360,7 +362,8 @@ describe('Queue routes', () => {
       const [channel, event] = broadcastSpy.mock.calls[0]!;
       expect(channel).toBe('queue');
       expect(event.event).toBe('queue:item:removed');
-      expect(event.data.action).toBe('removed');
+      const data = event.data as QueueEventData;
+      expect(data.action).toBe('removed');
     });
 
     it('SSE event data includes response field with DecisionResponse', async () => {
@@ -375,14 +378,15 @@ describe('Queue routes', () => {
       });
 
       const [, event] = broadcastSpy.mock.calls[0]!;
-      const { response } = event.data;
+      const data = event.data as QueueEventData;
+      const { response } = data;
 
       expect(response).toBeDefined();
-      expect(response.id).toBe(decisionId);
-      expect(response.response).toBe('approve');
-      expect(response.comment).toBe('Ship it');
-      expect(response.respondedBy).toBe('test-user');
-      expect(response.respondedAt).toBeDefined();
+      expect(response!.id).toBe(decisionId);
+      expect(response!.response).toBe('approve');
+      expect(response!.comment).toBe('Ship it');
+      expect(response!.respondedBy).toBe('test-user');
+      expect(response!.respondedAt).toBeDefined();
     });
 
     it('response includes respondedBy, comment, and respondedAt', async () => {

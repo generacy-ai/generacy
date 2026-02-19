@@ -23,8 +23,6 @@ export async function setupQueueRoutes(
     {
       preHandler: [requireRead('queue')],
       schema: {
-        description: 'Get decision queue',
-        tags: ['Queue'],
         querystring: {
           type: 'object',
           properties: {
@@ -35,7 +33,7 @@ export async function setupQueueRoutes(
             workflowId: { type: 'string' },
           },
         },
-      },
+      } as const,
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const query = QueueQuerySchema.parse(request.query);
@@ -49,11 +47,7 @@ export async function setupQueueRoutes(
     '/queue',
     {
       preHandler: [requireWrite('queue')],
-      schema: {
-        description: 'Create a new decision in the queue',
-        tags: ['Queue'],
-        // Body validation done by Zod in handler to support defaults and coercion
-      },
+      // Body validation done by Zod in handler to support defaults and coercion
     },
     async (request: FastifyRequest, reply: FastifyReply) => {
       const body = CreateDecisionRequestSchema.parse(request.body);
@@ -75,8 +69,6 @@ export async function setupQueueRoutes(
     {
       preHandler: [requireRead('queue')],
       schema: {
-        description: 'Get decision details',
-        tags: ['Queue'],
         params: {
           type: 'object',
           properties: {
