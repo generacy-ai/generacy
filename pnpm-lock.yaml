@@ -48,6 +48,9 @@ importers:
 
   packages/generacy:
     dependencies:
+      '@generacy-ai/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
       '@generacy-ai/workflow-engine':
         specifier: workspace:*
         version: link:../workflow-engine

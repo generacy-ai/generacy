@@ -46,9 +46,10 @@ function loadFromEnv(): Record<string, unknown> {
     (config.server as Record<string, unknown>).host = process.env[`${ENV_PREFIX}HOST`];
   }
 
-  // Redis config
-  if (process.env[`${ENV_PREFIX}REDIS_URL`]) {
-    (config.redis as Record<string, unknown>).url = process.env[`${ENV_PREFIX}REDIS_URL`];
+  // Redis config (REDIS_URL takes precedence, falls back to ORCHESTRATOR_REDIS_URL)
+  const redisUrl = process.env['REDIS_URL'] ?? process.env[`${ENV_PREFIX}REDIS_URL`];
+  if (redisUrl) {
+    (config.redis as Record<string, unknown>).url = redisUrl;
   }
 
   // Auth config
@@ -93,23 +94,42 @@ function loadFromEnv(): Record<string, unknown> {
       process.env[`${ENV_PREFIX}RATE_LIMIT_WINDOW`];
   }
 
-  // Logging config
-  if (process.env[`${ENV_PREFIX}LOG_LEVEL`]) {
-    (config.logging as Record<string, unknown>).level = process.env[`${ENV_PREFIX}LOG_LEVEL`];
+  // Logging config (LOG_LEVEL takes precedence, falls back to ORCHESTRATOR_LOG_LEVEL)
+  const logLevel = process.env['LOG_LEVEL'] ?? process.env[`${ENV_PREFIX}LOG_LEVEL`];
+  if (logLevel) {
+    (config.logging as Record<string, unknown>).level = logLevel;
   }
   if (process.env[`${ENV_PREFIX}LOG_PRETTY`]) {
     (config.logging as Record<string, unknown>).pretty =
       process.env[`${ENV_PREFIX}LOG_PRETTY`] === 'true';
   }
 
-  // Repositories config
-  if (process.env[`${ENV_PREFIX}REPOSITORIES`]) {
-    const reposStr = process.env[`${ENV_PREFIX}REPOSITORIES`]!;
+  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES)
+  const reposStr = process.env['MONITORED_REPOS'] ?? process.env[`${ENV_PREFIX}REPOSITORIES`];
+  if (reposStr) {
     const repos = reposStr.split(',').map(r => {
       const [owner, repo] = r.trim().split('/');
       return { owner, repo };
     }).filter(r => r.owner && r.repo);
     config.repositories = repos;
+  }
+
+  // Monitor config (POLL_INTERVAL_MS takes precedence, falls back to ORCHESTRATOR_POLL_INTERVAL_MS)
+  const pollIntervalMs = process.env['POLL_INTERVAL_MS'] ?? process.env[`${ENV_PREFIX}POLL_INTERVAL_MS`];
+  if (pollIntervalMs) {
+    if (!config.monitor) {
+      config.monitor = {};
+    }
+    (config.monitor as Record<string, unknown>).pollIntervalMs = parseInt(pollIntervalMs, 10);
+  }
+
+  // Webhook secret (WEBHOOK_SECRET takes precedence, falls back to ORCHESTRATOR_WEBHOOK_SECRET)
+  const webhookSecret = process.env['WEBHOOK_SECRET'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SECRET`];
+  if (webhookSecret) {
+    if (!config.monitor) {
+      config.monitor = {};
+    }
+    (config.monitor as Record<string, unknown>).webhookSecret = webhookSecret;
   }
 
   return config;

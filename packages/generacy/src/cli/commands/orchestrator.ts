@@ -1,11 +1,13 @@
 /**
  * Orchestrator command implementation.
  * Starts the orchestrator HTTP server for worker coordination.
+ * Optionally enables label monitoring to watch GitHub repos for process:* labels.
  */
 import { Command } from 'commander';
 import { getLogger } from '../utils/logger.js';
 import { createOrchestratorServer } from '../../orchestrator/index.js';
 import { createJobQueue } from '../../orchestrator/redis-job-queue.js';
+import { LabelMonitorBridge } from '../../orchestrator/label-monitor-bridge.js';
 
 /**
  * Create the orchestrator command
@@ -20,6 +22,9 @@ export function orchestratorCommand(): Command {
     .option('--worker-timeout <ms>', 'Worker heartbeat timeout in milliseconds', '60000')
     .option('--auth-token <token>', 'Authentication token (or set ORCHESTRATOR_TOKEN env var)')
     .option('--redis-url <url>', 'Redis URL for persistent job queue (or set REDIS_URL env var)')
+    .option('--label-monitor', 'Enable GitHub label monitoring (or set LABEL_MONITOR_ENABLED=true)')
+    .option('--poll-interval <ms>', 'Label monitor poll interval in milliseconds (or set POLL_INTERVAL_MS)')
+    .option('--monitored-repos <repos>', 'Comma-separated owner/repo list (or set MONITORED_REPOS)')
     .action(async (options) => {
       const logger = getLogger();
 
@@ -68,6 +73,17 @@ export function orchestratorCommand(): Command {
         logger: loggerAdapter,
       });
 
+      // Label monitor setup
+      const labelMonitorEnabled =
+        options['labelMonitor'] === true ||
+        process.env['LABEL_MONITOR_ENABLED'] === 'true';
+
+      let labelMonitorService: Awaited<ReturnType<typeof setupLabelMonitor>> | null = null;
+
+      if (labelMonitorEnabled) {
+        labelMonitorService = await setupLabelMonitor(options, redisUrl, server, loggerAdapter, logger);
+      }
+
       // Graceful shutdown handler
       let isShuttingDown = false;
       const shutdown = async (signal: string) => {
@@ -79,6 +95,12 @@ export function orchestratorCommand(): Command {
         logger.info({ signal }, 'Received shutdown signal, stopping orchestrator...');
 
         try {
+          // Stop label monitor before closing the server (it may need to submit final jobs)
+          if (labelMonitorService) {
+            labelMonitorService.stopPolling();
+            logger.info('Label monitor stopped');
+          }
+
           // Give a brief grace period for in-flight requests
           await new Promise(resolve => setTimeout(resolve, 1000));
 
@@ -112,6 +134,7 @@ export function orchestratorCommand(): Command {
         logger.info({
           port: server.getPort(),
           host,
+          labelMonitor: labelMonitorEnabled,
           endpoints: [
             'GET  /api/health',
             'POST /api/workers/register',
@@ -124,6 +147,14 @@ export function orchestratorCommand(): Command {
             'POST /api/jobs/:jobId/cancel',
           ],
         }, 'Orchestrator server ready and listening');
+
+        // Start label monitoring after server is ready
+        if (labelMonitorService) {
+          labelMonitorService.startPolling().catch(error => {
+            logger.error({ error: String(error) }, 'Label monitor polling failed');
+          });
+          logger.info('Label monitor polling started');
+        }
       } catch (error) {
         logger.error({ error: String(error) }, 'Failed to start orchestrator server');
         process.exit(1);
@@ -131,4 +162,112 @@ export function orchestratorCommand(): Command {
     });
 
   return command;
+}
+
+/**
+ * Setup label monitoring when enabled.
+ * Dynamically imports orchestrator services to avoid loading them when disabled.
+ */
+async function setupLabelMonitor(
+  options: Record<string, unknown>,
+  redisUrl: string | undefined,
+  server: ReturnType<typeof createOrchestratorServer>,
+  loggerAdapter: { info: (msg: string, data?: Record<string, unknown>) => void; warn: (msg: string, data?: Record<string, unknown>) => void; error: (msg: string, data?: Record<string, unknown>) => void },
+  logger: ReturnType<typeof getLogger>,
+) {
+  // Dynamic import to avoid loading orchestrator deps when label monitor is disabled
+  const { LabelMonitorService, PhaseTrackerService } = await import('@generacy-ai/orchestrator');
+  const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
+  const { Redis: IORedis } = await import('ioredis');
+
+  // Parse repositories
+  const reposStr =
+    (options['monitoredRepos'] as string | undefined) ??
+    process.env['MONITORED_REPOS'] ?? '';
+
+  const repositories = reposStr
+    .split(',')
+    .map(r => r.trim())
+    .filter(Boolean)
+    .map(r => {
+      const [owner, repo] = r.split('/');
+      if (!owner || !repo) {
+        logger.warn({ repo: r }, 'Invalid repository format, expected owner/repo');
+        return null;
+      }
+      return { owner, repo };
+    })
+    .filter((r): r is { owner: string; repo: string } => r !== null);
+
+  if (repositories.length === 0) {
+    logger.error('Label monitor enabled but no valid repositories configured. Set MONITORED_REPOS.');
+    process.exit(1);
+  }
+
+  const pollIntervalMs = parseInt(
+    (options['pollInterval'] as string | undefined) ??
+    process.env['POLL_INTERVAL_MS'] ?? '30000',
+    10,
+  );
+
+  // Create Redis connection for phase tracker (reuse URL from job queue)
+  let phaseTrackerRedis: InstanceType<typeof IORedis> | null = null;
+  if (redisUrl) {
+    try {
+      phaseTrackerRedis = new IORedis(redisUrl);
+      await phaseTrackerRedis.ping();
+      logger.info('Phase tracker Redis connected');
+    } catch (error) {
+      logger.warn(
+        { error: String(error) },
+        'Failed to connect Redis for phase tracker, dedup will be disabled',
+      );
+      phaseTrackerRedis = null;
+    }
+  }
+
+  // Pino-compatible logger adapter for LabelMonitorService
+  // The service calls logger.info(obj, msg) or logger.info(msg)
+  const monitorLogger = {
+    info: (msgOrObj: string | Record<string, unknown>, msg?: string) => {
+      if (typeof msgOrObj === 'string') {
+        logger.info(msgOrObj);
+      } else {
+        logger.info(msgOrObj, msg ?? '');
+      }
+    },
+    warn: (msgOrObj: string | Record<string, unknown>, msg?: string) => {
+      if (typeof msgOrObj === 'string') {
+        logger.warn(msgOrObj);
+      } else {
+        logger.warn(msgOrObj, msg ?? '');
+      }
+    },
+    error: (msgOrObj: string | Record<string, unknown>, msg?: string) => {
+      if (typeof msgOrObj === 'string') {
+        logger.error(msgOrObj);
+      } else {
+        logger.error(msgOrObj, msg ?? '');
+      }
+    },
+  };
+
+  const phaseTracker = new PhaseTrackerService(monitorLogger, phaseTrackerRedis);
+  const bridge = new LabelMonitorBridge(server, loggerAdapter);
+
+  const labelMonitor = new LabelMonitorService(
+    monitorLogger,
+    createGitHubClient,
+    phaseTracker,
+    bridge,
+    { pollIntervalMs, maxConcurrentPolls: 5, adaptivePolling: true },
+    repositories,
+  );
+
+  logger.info(
+    { repositories: repositories.length, pollIntervalMs },
+    'Label monitor configured',
+  );
+
+  return labelMonitor;
 }
