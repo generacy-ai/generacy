@@ -78,10 +78,10 @@ export function orchestratorCommand(): Command {
         options['labelMonitor'] === true ||
         process.env['LABEL_MONITOR_ENABLED'] === 'true';
 
-      let labelMonitorService: Awaited<ReturnType<typeof setupLabelMonitor>> | null = null;
+      let labelMonitorSetup: Awaited<ReturnType<typeof setupLabelMonitor>> | null = null;
 
       if (labelMonitorEnabled) {
-        labelMonitorService = await setupLabelMonitor(options, redisUrl, server, loggerAdapter, logger);
+        labelMonitorSetup = await setupLabelMonitor(options, redisUrl, server, loggerAdapter, logger);
       }
 
       // Graceful shutdown handler
@@ -95,9 +95,12 @@ export function orchestratorCommand(): Command {
         logger.info({ signal }, 'Received shutdown signal, stopping orchestrator...');
 
         try {
-          // Stop label monitor before closing the server (it may need to submit final jobs)
-          if (labelMonitorService) {
-            labelMonitorService.stopPolling();
+          // Stop label monitor and smee receiver before closing the server
+          if (labelMonitorSetup) {
+            labelMonitorSetup.monitor.stopPolling();
+            if (labelMonitorSetup.smeeReceiver) {
+              labelMonitorSetup.smeeReceiver.stop();
+            }
             logger.info('Label monitor stopped');
           }
 
@@ -149,11 +152,23 @@ export function orchestratorCommand(): Command {
         }, 'Orchestrator server ready and listening');
 
         // Start label monitoring after server is ready
-        if (labelMonitorService) {
-          labelMonitorService.startPolling().catch((error: unknown) => {
+        if (labelMonitorSetup) {
+          // Start smee receiver for real-time webhook events (if configured)
+          if (labelMonitorSetup.smeeReceiver) {
+            labelMonitorSetup.smeeReceiver.start().catch((error: unknown) => {
+              logger.error({ error: String(error) }, 'Smee webhook receiver failed');
+            });
+            logger.info('Smee webhook receiver started');
+          }
+
+          // Start polling as primary (no smee) or fallback (with smee)
+          labelMonitorSetup.monitor.startPolling().catch((error: unknown) => {
             logger.error({ error: String(error) }, 'Label monitor polling failed');
           });
-          logger.info('Label monitor polling started');
+          logger.info(
+            { mode: labelMonitorSetup.smeeReceiver ? 'smee+polling-fallback' : 'polling-only' },
+            'Label monitor started',
+          );
         }
       } catch (error) {
         logger.error({ error: String(error) }, 'Failed to start orchestrator server');
@@ -165,8 +180,15 @@ export function orchestratorCommand(): Command {
 }
 
 /**
+ * Default poll interval when smee.io webhooks are active.
+ * Polling serves as a fallback only, so it can be very infrequent.
+ */
+const SMEE_FALLBACK_POLL_INTERVAL_MS = 300_000; // 5 minutes
+
+/**
  * Setup label monitoring when enabled.
  * Dynamically imports orchestrator services to avoid loading them when disabled.
+ * Returns both the monitor service and an optional smee receiver.
  */
 async function setupLabelMonitor(
   options: Record<string, unknown>,
@@ -176,7 +198,7 @@ async function setupLabelMonitor(
   logger: ReturnType<typeof getLogger>,
 ) {
   // Dynamic import to avoid loading orchestrator deps when label monitor is disabled
-  const { LabelMonitorService, PhaseTrackerService } = await import('@generacy-ai/orchestrator');
+  const { LabelMonitorService, SmeeWebhookReceiver, PhaseTrackerService } = await import('@generacy-ai/orchestrator');
   const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
   const { Redis: IORedis } = await import('ioredis');
 
@@ -204,11 +226,17 @@ async function setupLabelMonitor(
     process.exit(1);
   }
 
-  const pollIntervalMs = parseInt(
+  // Check for smee.io channel URL
+  const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'];
+  const useSmee = !!smeeChannelUrl;
+
+  // When smee is active, polling is just a fallback — use a much longer interval
+  const configuredPollMs = parseInt(
     (options['pollInterval'] as string | undefined) ??
     process.env['POLL_INTERVAL_MS'] ?? '30000',
     10,
   );
+  const pollIntervalMs = useSmee ? SMEE_FALLBACK_POLL_INTERVAL_MS : configuredPollMs;
 
   // Create Redis connection for phase tracker (reuse URL from job queue)
   let phaseTrackerRedis: InstanceType<typeof IORedis> | null = null;
@@ -255,19 +283,33 @@ async function setupLabelMonitor(
   const phaseTracker = new PhaseTrackerService(monitorLogger, phaseTrackerRedis);
   const bridge = new LabelMonitorBridge(server, createGitHubClient, loggerAdapter);
 
-  const labelMonitor = new LabelMonitorService(
+  const monitor = new LabelMonitorService(
     monitorLogger,
     createGitHubClient,
     phaseTracker,
     bridge,
-    { pollIntervalMs, maxConcurrentPolls: 5, adaptivePolling: true },
+    { pollIntervalMs, maxConcurrentPolls: 5, adaptivePolling: !useSmee },
     repositories,
   );
 
+  // Create smee receiver if channel URL is configured
+  let smeeReceiver: InstanceType<typeof SmeeWebhookReceiver> | null = null;
+  if (useSmee) {
+    const watchedRepos = new Set(repositories.map(r => `${r.owner}/${r.repo}`));
+    smeeReceiver = new SmeeWebhookReceiver(monitorLogger, monitor, {
+      channelUrl: smeeChannelUrl,
+      watchedRepos,
+    });
+    logger.info(
+      { channelUrl: smeeChannelUrl, pollFallbackMs: pollIntervalMs },
+      'Smee.io webhook receiver configured (polling reduced to fallback)',
+    );
+  }
+
   logger.info(
-    { repositories: repositories.length, pollIntervalMs },
+    { repositories: repositories.length, pollIntervalMs, smee: useSmee },
     'Label monitor configured',
   );
 
-  return labelMonitor;
+  return { monitor, smeeReceiver };
 }

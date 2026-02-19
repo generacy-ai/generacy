@@ -126,6 +126,11 @@ export {
 } from './services/label-monitor-service.js';
 
 export {
+  SmeeWebhookReceiver,
+  type SmeeReceiverOptions,
+} from './services/smee-receiver.js';
+
+export {
   PhaseTrackerService,
   type PhaseTrackerOptions,
 } from './services/phase-tracker-service.js';
