@@ -114,7 +114,7 @@ phases:
       - name: create-pr
         uses: pr.create
         with:
-          title: "feat: ${{ inputs.description }}"
+          title: "feat: ${{ steps.create-feature.output.branch_name }}"
           body: |
             ## Summary
             ${{ steps.specify.output.summary }}

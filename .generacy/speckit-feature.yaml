@@ -69,7 +69,7 @@ phases:
 
       - name: commit-spec
         uses: shell
-        command: 'git add -A && git commit -m "spec: add specification for ${{ inputs.description }}" --allow-empty'
+        command: 'git add -A && git commit -m "spec: add specification for ${{ steps.create-feature.output.branch_name }}" --allow-empty'
         continueOnError: true
 
       - name: push-spec
@@ -79,7 +79,7 @@ phases:
       - name: create-pr
         uses: pr.create
         with:
-          title: "feat: ${{ inputs.description }}"
+          title: "feat: ${{ steps.create-feature.output.branch_name }}"
           body: |
             Closes #${{ inputs.issue_number }}
 
@@ -167,7 +167,7 @@ phases:
 
       - name: commit-implementation
         uses: shell
-        command: 'git add -A && git commit -m "feat: implement ${{ inputs.description }}" --allow-empty'
+        command: 'git add -A && git commit -m "feat: implement ${{ steps.create-feature.output.branch_name }}" --allow-empty'
         continueOnError: true
 
       - name: push-implementation
