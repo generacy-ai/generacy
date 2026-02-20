@@ -226,12 +226,15 @@ export class RetryManager {
 }
 
 /**
- * Create a timeout wrapper for an async operation
+ * Create a timeout wrapper for an async operation.
+ * When the timeout fires, the optional onTimeout callback is invoked so the
+ * caller can abort the underlying operation (e.g. signal an AbortController).
  */
 export function withTimeout<T>(
   operation: Promise<T>,
   timeoutMs: number,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onTimeout?: () => void,
 ): Promise<T> {
   return new Promise((resolve, reject) => {
     // Check if already aborted
@@ -244,6 +247,7 @@ export function withTimeout<T>(
     const timeoutId = setTimeout(() => {
       if (!settled) {
         settled = true;
+        onTimeout?.(); // let caller abort the underlying operation
         reject(new Error(`Operation timed out after ${formatDuration(timeoutMs)}`));
       }
     }, timeoutMs);

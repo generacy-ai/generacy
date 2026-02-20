@@ -497,8 +497,19 @@ export class WorkflowExecutor {
       };
     }
 
-    // Create action context
+    // Create a step-level AbortController so step timeouts can cancel the operation.
+    // Links to the parent (workflow-level) abort controller.
+    const stepAbort = new AbortController();
+    const parentSignal = this.abortController?.signal;
+    if (parentSignal?.aborted) {
+      stepAbort.abort();
+    } else {
+      parentSignal?.addEventListener('abort', () => stepAbort.abort(), { once: true });
+    }
+
+    // Create action context with step-level signal
     const context = this.createActionContext(workflow, phase, step, options);
+    context.signal = stepAbort.signal;
 
     // Emit action start event
     this.eventEmitter.emitEvent('action:start', workflow.name, {
@@ -521,11 +532,13 @@ export class WorkflowExecutor {
     const DEFAULT_STEP_TIMEOUT = 300000;
     const stepTimeout = step.timeout ?? DEFAULT_STEP_TIMEOUT;
 
-    // Execute with retry and timeout wrapper
+    // Execute with retry and timeout wrapper.
+    // On timeout, abort the step so spawned processes are killed.
     const retryResult = await withTimeout(
       retryManager.executeWithRetry(handler, step, context),
       stepTimeout,
-      context.signal
+      stepAbort.signal,
+      () => stepAbort.abort(),
     );
 
     // Emit action completion event

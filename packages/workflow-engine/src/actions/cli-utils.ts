@@ -108,24 +108,44 @@ export async function executeCommand(
 ): Promise<CommandResult> {
   const { cwd, env, timeout, signal } = options;
 
+  // If already aborted before we start, resolve immediately
+  if (signal?.aborted) {
+    return { exitCode: 130, stdout: '', stderr: 'Aborted before start' };
+  }
+
   return new Promise((resolve, reject) => {
     const proc = spawn(command, args, {
       cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
-      signal,
+      detached: true, // create process group so we can kill the entire tree
     });
 
     let stdout = '';
     let stderr = '';
     let killed = false;
 
+    /** Kill the entire process group (negative PID) */
+    const killProcessGroup = () => {
+      if (killed) return;
+      killed = true;
+      if (proc.pid) {
+        try {
+          process.kill(-proc.pid, 'SIGTERM');
+        } catch {
+          // Process may already be dead
+          proc.kill('SIGTERM');
+        }
+      } else {
+        proc.kill('SIGTERM');
+      }
+    };
+
     // Handle timeout
     let timeoutId: NodeJS.Timeout | undefined;
     if (timeout && timeout > 0) {
       timeoutId = setTimeout(() => {
-        killed = true;
-        proc.kill('SIGTERM');
+        killProcessGroup();
       }, timeout);
     }
 
@@ -161,11 +181,10 @@ export async function executeCommand(
       });
     });
 
-    // Handle abort signal
+    // Handle abort signal — kills the entire process group
     if (signal) {
       signal.addEventListener('abort', () => {
-        killed = true;
-        proc.kill('SIGTERM');
+        killProcessGroup();
       }, { once: true });
     }
   });
@@ -183,25 +202,44 @@ export async function executeShellCommand(
 ): Promise<CommandResult> {
   const { cwd, env, timeout, signal } = options;
 
+  // If already aborted before we start, resolve immediately
+  if (signal?.aborted) {
+    return { exitCode: 130, stdout: '', stderr: 'Aborted before start' };
+  }
+
   return new Promise((resolve, reject) => {
     const proc = spawn(command, [], {
       cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: true,
-      signal,
+      detached: true, // create process group so we can kill the entire tree
     });
 
     let stdout = '';
     let stderr = '';
     let killed = false;
 
+    /** Kill the entire process group (negative PID) */
+    const killProcessGroup = () => {
+      if (killed) return;
+      killed = true;
+      if (proc.pid) {
+        try {
+          process.kill(-proc.pid, 'SIGTERM');
+        } catch {
+          proc.kill('SIGTERM');
+        }
+      } else {
+        proc.kill('SIGTERM');
+      }
+    };
+
     // Handle timeout
     let timeoutId: NodeJS.Timeout | undefined;
     if (timeout && timeout > 0) {
       timeoutId = setTimeout(() => {
-        killed = true;
-        proc.kill('SIGTERM');
+        killProcessGroup();
       }, timeout);
     }
 
@@ -237,11 +275,10 @@ export async function executeShellCommand(
       });
     });
 
-    // Handle abort signal
+    // Handle abort signal — kills the entire process group
     if (signal) {
       signal.addEventListener('abort', () => {
-        killed = true;
-        proc.kill('SIGTERM');
+        killProcessGroup();
       }, { once: true });
     }
   });

@@ -168,6 +168,7 @@ phases:
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
         timeout: 3600000  # 1 hour max
+        continueOnError: true  # partial work should still be committed/pushed
 
       - name: commit-implementation
         uses: shell
