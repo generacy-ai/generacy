@@ -33,11 +33,22 @@ export class OutputCapture {
   private buffer: OutputChunk[] = [];
   private lineBuffer = '';
 
+  /** Session ID extracted from the Claude CLI `init` event (if present). */
+  private _sessionId: string | undefined;
+
   constructor(
     private readonly workflowId: string,
     private readonly logger: Logger,
     private readonly emitter?: SSEEventEmitter,
   ) {}
+
+  /**
+   * Get the Claude CLI session ID captured from the `init` event.
+   * Returns undefined if no session ID has been received yet.
+   */
+  get sessionId(): string | undefined {
+    return this._sessionId;
+  }
 
   /**
    * Process a chunk of stdout data from Claude CLI.
@@ -125,6 +136,12 @@ export class OutputCapture {
       ...(metadata ? { metadata } : {}),
       timestamp: new Date().toISOString(),
     };
+
+    // Extract session_id from init events for conversation resume support
+    if (type === 'init' && typeof parsed.session_id === 'string') {
+      this._sessionId = parsed.session_id;
+      this.logger.debug({ sessionId: this._sessionId }, 'Captured Claude CLI session ID');
+    }
 
     this.buffer.push(chunk);
     this.emitSSEEvent(chunk);

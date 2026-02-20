@@ -109,6 +109,64 @@ describe('CliSpawner', () => {
     });
   });
 
+  describe('spawnPhase - session resume', () => {
+    it('does not pass --resume when no resumeSessionId is provided', async () => {
+      const { handle } = createMockProcess(0, 10);
+      spawnFn.mockReturnValue(handle);
+      const capture = createMockCapture();
+
+      await spawner.spawnPhase('clarify', defaultOptions(), capture);
+
+      const spawnArgs = spawnFn.mock.calls[0]![1] as string[];
+      expect(spawnArgs).not.toContain('--resume');
+    });
+
+    it('passes --resume flag when resumeSessionId is provided', async () => {
+      const { handle } = createMockProcess(0, 10);
+      spawnFn.mockReturnValue(handle);
+      const capture = createMockCapture();
+
+      await spawner.spawnPhase(
+        'plan',
+        defaultOptions({ resumeSessionId: 'ses-abc-123' }),
+        capture,
+      );
+
+      const spawnArgs = spawnFn.mock.calls[0]![1] as string[];
+      const resumeIndex = spawnArgs.indexOf('--resume');
+      expect(resumeIndex).toBeGreaterThan(-1);
+      expect(spawnArgs[resumeIndex + 1]).toBe('ses-abc-123');
+    });
+
+    it('places --resume before --prompt in args', async () => {
+      const { handle } = createMockProcess(0, 10);
+      spawnFn.mockReturnValue(handle);
+      const capture = createMockCapture();
+
+      await spawner.spawnPhase(
+        'plan',
+        defaultOptions({ resumeSessionId: 'ses-abc-123' }),
+        capture,
+      );
+
+      const spawnArgs = spawnFn.mock.calls[0]![1] as string[];
+      const resumeIndex = spawnArgs.indexOf('--resume');
+      const promptIndex = spawnArgs.indexOf('--prompt');
+      expect(resumeIndex).toBeLessThan(promptIndex);
+    });
+
+    it('includes sessionId from capture in PhaseResult', async () => {
+      const { handle } = createMockProcess(0, 10);
+      spawnFn.mockReturnValue(handle);
+      const capture = createMockCapture();
+      (capture as any).sessionId = 'ses-from-output';
+
+      const result = await spawner.spawnPhase('clarify', defaultOptions(), capture);
+
+      expect(result.sessionId).toBe('ses-from-output');
+    });
+  });
+
   describe('spawnPhase - non-zero exit code', () => {
     it('returns PhaseResult with success=false and error set', async () => {
       const { handle } = createMockProcess(1, 10);

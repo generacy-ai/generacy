@@ -48,12 +48,26 @@ export class CliSpawner {
       '--output', 'json',
       '--print', 'all',
       '--max-turns', String(options.maxTurns),
-      '--prompt', prompt,
     ];
 
+    // Resume a previous session to keep MCP servers warm and carry context
+    if (options.resumeSessionId) {
+      args.push('--resume', options.resumeSessionId);
+    }
+
+    args.push('--prompt', prompt);
+
     this.logger.info(
-      { phase, cwd: options.cwd, maxTurns: options.maxTurns, timeoutMs: options.timeoutMs },
-      'Spawning Claude CLI for phase',
+      {
+        phase,
+        cwd: options.cwd,
+        maxTurns: options.maxTurns,
+        timeoutMs: options.timeoutMs,
+        resumeSessionId: options.resumeSessionId ?? null,
+      },
+      options.resumeSessionId
+        ? 'Resuming Claude CLI session for phase'
+        : 'Spawning new Claude CLI session for phase',
     );
 
     const child = this.processFactory.spawn('claude', args, {
@@ -189,6 +203,7 @@ export class CliSpawner {
       exitCode: resolvedExitCode,
       durationMs,
       output: capture ? capture.getOutput() : [],
+      sessionId: capture?.sessionId,
     };
 
     if (!success) {

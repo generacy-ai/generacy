@@ -77,6 +77,8 @@ export interface PhaseResult {
   durationMs: number;
   /** Captured output chunks */
   output: OutputChunk[];
+  /** Claude CLI session ID (for resuming conversation in subsequent phases) */
+  sessionId?: string;
   /** Whether a gate was hit (stops the loop) */
   gateHit?: {
     gateLabel: string;
@@ -120,6 +122,8 @@ export interface CliSpawnOptions {
   timeoutMs: number;
   /** Abort signal for graceful shutdown */
   signal: AbortSignal;
+  /** Session ID from a previous phase to resume (keeps MCP servers warm, carries context) */
+  resumeSessionId?: string;
 }
 
 /**

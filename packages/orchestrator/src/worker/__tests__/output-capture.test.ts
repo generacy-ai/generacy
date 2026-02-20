@@ -120,4 +120,34 @@ describe('OutputCapture', () => {
       expect(capture.getOutput()).toHaveLength(0);
     });
   });
+
+  describe('sessionId extraction', () => {
+    it('extracts session_id from init chunks', () => {
+      expect(capture.sessionId).toBeUndefined();
+
+      capture.processChunk('{"type":"init","session_id":"ses-abc-123"}\n');
+
+      expect(capture.sessionId).toBe('ses-abc-123');
+    });
+
+    it('returns undefined when init has no session_id', () => {
+      capture.processChunk('{"type":"init","data":{}}\n');
+
+      expect(capture.sessionId).toBeUndefined();
+    });
+
+    it('updates session_id if a later init chunk arrives', () => {
+      capture.processChunk('{"type":"init","session_id":"ses-first"}\n');
+      expect(capture.sessionId).toBe('ses-first');
+
+      capture.processChunk('{"type":"init","session_id":"ses-second"}\n');
+      expect(capture.sessionId).toBe('ses-second');
+    });
+
+    it('ignores session_id from non-init chunk types', () => {
+      capture.processChunk('{"type":"text","session_id":"ses-wrong"}\n');
+
+      expect(capture.sessionId).toBeUndefined();
+    });
+  });
 });

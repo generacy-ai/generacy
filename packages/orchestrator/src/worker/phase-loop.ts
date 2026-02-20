@@ -64,6 +64,12 @@ export class PhaseLoop {
     const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager } = deps;
     const results: PhaseResult[] = [];
 
+    // Track session ID across phases for conversation resume.
+    // When a CLI phase completes, its session ID is passed to the next phase
+    // so Claude CLI can reuse the conversation (keeping MCP servers warm and
+    // carrying forward accumulated context).
+    let currentSessionId: string | undefined;
+
     // Find the starting index in PHASE_SEQUENCE
     const startIndex = PHASE_SEQUENCE.indexOf(context.startPhase);
     if (startIndex === -1) {
@@ -109,7 +115,7 @@ export class PhaseLoop {
             context.signal,
           );
         } else {
-          // CLI phase — spawn Claude CLI
+          // CLI phase — spawn Claude CLI (resume previous session if available)
           result = await cliSpawner.spawnPhase(
             phase,
             {
@@ -119,6 +125,7 @@ export class PhaseLoop {
               maxTurns: config.maxTurns,
               timeoutMs: config.phaseTimeoutMs,
               signal: context.signal,
+              resumeSessionId: currentSessionId,
             },
             outputCapture,
           );
@@ -140,6 +147,14 @@ export class PhaseLoop {
       }
 
       results.push(result);
+
+      // 3b. Capture session ID for resume in subsequent phases
+      if (result.sessionId) {
+        if (!currentSessionId) {
+          this.logger.info({ sessionId: result.sessionId, phase }, 'Captured initial session ID for conversation reuse');
+        }
+        currentSessionId = result.sessionId;
+      }
 
       // 4. Handle phase failure
       if (!result.success) {
