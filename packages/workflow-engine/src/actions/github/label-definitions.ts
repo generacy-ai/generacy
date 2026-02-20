@@ -46,6 +46,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:tasks-review', color: '0E8A16', description: 'Tasks review completed' },
   { name: 'completed:implementation-review', color: '0E8A16', description: 'Implementation review completed' },
   { name: 'completed:manual-validation', color: '0E8A16', description: 'Manual validation completed' },
+  { name: 'completed:setup', color: '0E8A16', description: 'Setup phase completed' },
   { name: 'completed:specify', color: '0E8A16', description: 'Specification phase completed' },
   { name: 'completed:clarify', color: '0E8A16', description: 'Clarification phase completed' },
   { name: 'completed:plan', color: '0E8A16', description: 'Planning phase completed' },
