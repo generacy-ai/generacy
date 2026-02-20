@@ -206,7 +206,7 @@ export class JobHandler {
     this.currentJob = job;
     this.abortController = new AbortController();
     const startTime = Date.now();
-    const jobWorkdir = job.workdir ?? this.workdir;
+    const jobWorkdir = this.resolveJobWorkdir(job);
 
     // Record the current branch so we can restore it after the job
     let originalBranch: string | undefined;
@@ -234,7 +234,7 @@ export class JobHandler {
         if (job.workflow.includes('\n') || job.workflow.startsWith('name:')) {
           definition = await loadWorkflowFromString(job.workflow);
         } else {
-          const resolvedPath = this.resolveWorkflowPath(job.workflow, job.workdir);
+          const resolvedPath = this.resolveWorkflowPath(job.workflow, jobWorkdir);
           definition = await loadWorkflow(resolvedPath);
         }
       } else {
@@ -285,7 +285,7 @@ export class JobHandler {
         workflow,
         {
           mode: 'normal',
-          cwd: job.workdir ?? this.workdir,
+          cwd: jobWorkdir,
           env: process.env as Record<string, string>,
         },
         job.inputs
@@ -347,6 +347,24 @@ export class JobHandler {
         this.pollTimer = setTimeout(() => this.poll(), this.pollInterval);
       }
     }
+  }
+
+  /**
+   * Resolve the working directory for a job.
+   * If the job targets a specific repo (via inputs.repo), use /workspaces/{repo}.
+   * Falls back to job.workdir, then this.workdir.
+   */
+  private resolveJobWorkdir(job: Job): string {
+    // Check if there's a repo-specific workspace
+    const repo = job.inputs?.repo as string | undefined;
+    if (repo) {
+      const repoWorkdir = `/workspaces/${repo}`;
+      if (existsSync(repoWorkdir)) {
+        this.logger.info(`Using repo workdir: ${repoWorkdir}`);
+        return repoWorkdir;
+      }
+    }
+    return job.workdir ?? this.workdir;
   }
 
   /**
