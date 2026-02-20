@@ -351,20 +351,35 @@ export class JobHandler {
 
   /**
    * Resolve the working directory for a job.
-   * If the job targets a specific repo (via inputs.repo), use /workspaces/{repo}.
+   * Uses MONITORED_REPOS env var to map owner/repo to local workspace paths.
    * Falls back to job.workdir, then this.workdir.
    */
   private resolveJobWorkdir(job: Job): string {
-    // Check if there's a repo-specific workspace
+    if (job.workdir) return job.workdir;
+
+    const owner = job.inputs?.owner as string | undefined;
     const repo = job.inputs?.repo as string | undefined;
-    if (repo) {
-      const repoWorkdir = `/workspaces/${repo}`;
-      if (existsSync(repoWorkdir)) {
-        this.logger.info(`Using repo workdir: ${repoWorkdir}`);
-        return repoWorkdir;
+    if (owner && repo) {
+      const fullName = `${owner}/${repo}`;
+      const monitoredRepos = process.env['MONITORED_REPOS'] ?? '';
+      const repos = monitoredRepos.split(',').map(r => r.trim()).filter(Boolean);
+
+      for (const entry of repos) {
+        if (entry === fullName) {
+          // Derive workspace path from the repo name portion
+          const repoName = entry.split('/')[1];
+          if (repoName) {
+            const repoWorkdir = `/workspaces/${repoName}`;
+            if (existsSync(repoWorkdir)) {
+              this.logger.info(`Using repo workdir: ${repoWorkdir} (from MONITORED_REPOS)`);
+              return repoWorkdir;
+            }
+          }
+        }
       }
     }
-    return job.workdir ?? this.workdir;
+
+    return this.workdir;
   }
 
   /**
