@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
+import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -127,12 +128,13 @@ export class ClaudeCliWorker {
     const abortController = new AbortController();
 
     try {
-      // 1. Ensure repository checkout
+      // 1. Clone the default branch first (always works, even on first run)
+      const defaultBranch = await this.repoCheckout.getDefaultBranch(item.owner, item.repo);
       checkoutPath = await this.repoCheckout.ensureCheckout(
         workerId,
         item.owner,
         item.repo,
-        `feature/${item.issueNumber}`, // Convention: feature branches by issue number
+        defaultBranch,
       );
 
       // Create GitHub client scoped to checkout dir
@@ -147,6 +149,17 @@ export class ClaudeCliWorker {
       // 3. Resolve starting phase
       const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command);
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
+
+      // 3b. If resuming (has completed phases), find and checkout the feature branch
+      if (startPhase !== 'specify') {
+        const featureBranch = await this.resolveFeatureBranch(
+          github, item.owner, item.repo, item.issueNumber, workerLogger,
+        );
+        if (featureBranch) {
+          workerLogger.info({ featureBranch }, 'Switching to existing feature branch for resume');
+          await this.repoCheckout.switchBranch(checkoutPath, featureBranch);
+        }
+      }
 
       // 4. Build WorkerContext
       const context: WorkerContext = {
@@ -262,6 +275,43 @@ export class ClaudeCliWorker {
     } finally {
       // Cleanup: abort any in-flight operations
       abortController.abort();
+    }
+  }
+
+  /**
+   * Find the feature branch for an issue by checking for an existing PR.
+   *
+   * When resuming a workflow, the feature branch was created during the first
+   * run's setup phase. We find it by searching for an open draft PR that
+   * references the issue number.
+   *
+   * @returns The branch name, or undefined if no feature branch was found.
+   */
+  private async resolveFeatureBranch(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    logger: Logger,
+  ): Promise<string | undefined> {
+    try {
+      // Search remote branches for one starting with the issue number
+      const branches = await github.listBranches(owner, repo);
+      const featureBranch = branches.find((b) => b.startsWith(`${issueNumber}-`));
+
+      if (featureBranch) {
+        logger.info({ featureBranch, issueNumber }, 'Found feature branch by issue number prefix');
+        return featureBranch;
+      }
+
+      logger.info({ issueNumber }, 'No feature branch found for issue');
+      return undefined;
+    } catch (error) {
+      logger.warn(
+        { error: String(error), issueNumber },
+        'Failed to resolve feature branch (non-fatal)',
+      );
+      return undefined;
     }
   }
 }

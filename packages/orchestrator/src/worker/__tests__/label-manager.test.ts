@@ -119,13 +119,14 @@ describe('LabelManager', () => {
   });
 
   describe('onError', () => {
-    it('removes phase:implement and adds agent:error', async () => {
+    it('removes phase:implement and agent:in-progress, adds agent:error', async () => {
       const lm = createLabelManager();
 
       await lm.onError('implement');
 
       expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'phase:implement',
+        'agent:in-progress',
       ]);
       expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, ['agent:error']);
     });

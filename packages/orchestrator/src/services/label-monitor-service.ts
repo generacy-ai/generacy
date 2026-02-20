@@ -164,8 +164,16 @@ export class LabelMonitorService {
       `Processing ${type} label event`,
     );
 
-    // Check deduplication
+    // Deduplication: prevents webhook+poll race from double-processing.
+    // For 'process' events, clear any existing dedup key first so the issue
+    // can be re-queued after a failure or completion. The label removal after
+    // processing prevents the poll from re-detecting the same label.
     const dedupPhase = type === 'process' ? parsedName : `resume:${parsedName}`;
+
+    if (type === 'process') {
+      await this.phaseTracker.clear(owner, repo, issueNumber, dedupPhase);
+    }
+
     const isDuplicate = await this.phaseTracker.isDuplicate(owner, repo, issueNumber, dedupPhase);
     if (isDuplicate) {
       this.logger.info(
@@ -200,9 +208,9 @@ export class LabelMonitorService {
     const client = this.createClient();
 
     if (type === 'process') {
-      // Remove trigger label and add agent:in-progress
+      // Remove trigger label (and agent:error from previous run), add agent:in-progress
       try {
-        await client.removeLabels(owner, repo, issueNumber, [event.labelName]);
+        await client.removeLabels(owner, repo, issueNumber, [event.labelName, 'agent:error']);
         await client.addLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
       } catch (error) {
         this.logger.warn(

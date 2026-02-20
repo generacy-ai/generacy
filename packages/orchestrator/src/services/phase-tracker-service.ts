@@ -60,6 +60,24 @@ export class PhaseTrackerService implements PhaseTracker {
     }
   }
 
+  async clear(owner: string, repo: string, issue: number, phase: string): Promise<void> {
+    if (!this.redis) {
+      return;
+    }
+
+    const key = this.buildKey(owner, repo, issue, phase);
+
+    try {
+      await this.redis.del(key);
+      this.logger.info({ key }, 'Cleared dedup key');
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in clear, deduplication may block this event'
+      );
+    }
+  }
+
   async markProcessed(owner: string, repo: string, issue: number, phase: string): Promise<void> {
     if (!this.redis) {
       this.logger.warn('Redis unavailable for phase tracker, skipping markProcessed');

@@ -103,10 +103,13 @@ export class LabelManager {
 
       this.logger.info(
         { phase, issue: this.issueNumber },
-        `Error in phase: removing ${phaseLabel}, adding agent:error`,
+        `Error in phase: removing ${phaseLabel} and agent:in-progress, adding agent:error`,
       );
 
-      await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
+      await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [
+        phaseLabel,
+        'agent:in-progress',
+      ]);
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, ['agent:error']);
     });
   }

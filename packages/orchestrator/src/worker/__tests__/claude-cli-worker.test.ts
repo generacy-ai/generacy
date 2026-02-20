@@ -28,6 +28,7 @@ const mockGithub = {
   findPRForBranch: vi.fn().mockResolvedValue(null),
   getDefaultBranch: vi.fn().mockResolvedValue('develop'),
   createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
+  listBranches: vi.fn().mockResolvedValue([]),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -37,6 +38,8 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
 vi.mock('../repo-checkout.js', () => ({
   RepoCheckout: vi.fn().mockImplementation(() => ({
     ensureCheckout: vi.fn().mockResolvedValue('/tmp/test-checkout'),
+    getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+    switchBranch: vi.fn().mockResolvedValue(undefined),
   })),
 }));
 
@@ -143,6 +146,7 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.findPRForBranch.mockResolvedValue(null);
     mockGithub.getDefaultBranch.mockResolvedValue('develop');
     mockGithub.createPullRequest.mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' });
+    mockGithub.listBranches.mockResolvedValue([]);
 
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
@@ -250,6 +254,8 @@ describe('ClaudeCliWorker (integration)', () => {
           { name: 'waiting-for:clarification' },
         ],
       });
+      // Feature branch exists on remote for resume
+      mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop']);
 
       // No gates for this test — use speckit-bugfix to let it run through
       spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
@@ -315,6 +321,8 @@ describe('ClaudeCliWorker (integration)', () => {
           { name: 'completed:tasks' },
         ],
       });
+      // Feature branch exists on remote for resume
+      mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop', 'main']);
 
       spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
 
@@ -344,6 +352,7 @@ describe('ClaudeCliWorker (integration)', () => {
           { name: 'completed:tasks' },
         ],
       });
+      mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop']);
 
       // implement succeeds, validate fails
       spawnFn

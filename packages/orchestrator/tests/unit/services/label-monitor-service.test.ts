@@ -15,6 +15,7 @@ function createMockPhaseTracker(overrides: Partial<PhaseTracker> = {}): PhaseTra
   return {
     isDuplicate: vi.fn().mockResolvedValue(false),
     markProcessed: vi.fn().mockResolvedValue(undefined),
+    clear: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -161,7 +162,7 @@ describe('LabelMonitorService', () => {
         }),
       );
       expect(mockClient.removeLabels).toHaveBeenCalledWith(
-        'owner', 'repo', 42, ['process:speckit-feature'],
+        'owner', 'repo', 42, ['process:speckit-feature', 'agent:error'],
       );
       expect(mockClient.addLabels).toHaveBeenCalledWith(
         'owner', 'repo', 42, ['agent:in-progress'],
@@ -421,16 +422,18 @@ describe('LabelMonitorService', () => {
   // ==========================================================================
 
   describe('deduplication integration', () => {
-    it('should skip duplicate events via phase tracker', async () => {
+    it('should skip duplicate events via phase tracker (resume events only)', async () => {
+      // Process events always clear dedup first, so they won't be blocked.
+      // Resume events don't clear, so they can be deduplicated.
       (phaseTracker.isDuplicate as ReturnType<typeof vi.fn>).mockResolvedValue(true);
 
       const event = {
-        type: 'process' as const,
+        type: 'resume' as const,
         owner: 'owner',
         repo: 'repo',
         issueNumber: 42,
-        labelName: 'process:speckit-feature',
-        parsedName: 'speckit-feature',
+        labelName: 'completed:clarification',
+        parsedName: 'clarification',
         source: 'poll' as const,
       };
 
@@ -439,9 +442,11 @@ describe('LabelMonitorService', () => {
       expect(result).toBe(false);
       expect(queueAdapter.enqueue).not.toHaveBeenCalled();
       expect(phaseTracker.markProcessed).not.toHaveBeenCalled();
+      // clear should NOT be called for resume events
+      expect(phaseTracker.clear).not.toHaveBeenCalled();
     });
 
-    it('should proceed normally for non-duplicate events', async () => {
+    it('should clear dedup and proceed for process events', async () => {
       (phaseTracker.isDuplicate as ReturnType<typeof vi.fn>).mockResolvedValue(false);
 
       const event = {
@@ -457,6 +462,8 @@ describe('LabelMonitorService', () => {
       const result = await service.processLabelEvent(event);
 
       expect(result).toBe(true);
+      // Process events clear dedup first to allow requeue
+      expect(phaseTracker.clear).toHaveBeenCalledWith('owner', 'repo', 42, 'speckit-feature');
       expect(queueAdapter.enqueue).toHaveBeenCalled();
       expect(phaseTracker.markProcessed).toHaveBeenCalled();
     });

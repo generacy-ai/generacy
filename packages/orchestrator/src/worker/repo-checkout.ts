@@ -63,6 +63,53 @@ export class RepoCheckout {
   }
 
   /**
+   * Get the default branch for a repository using the GitHub API.
+   */
+  async getDefaultBranch(owner: string, repo: string): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync('gh', [
+        'repo', 'view', `${owner}/${repo}`, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name',
+      ]);
+      const branch = stdout.trim();
+      if (branch) {
+        this.logger.info({ owner, repo, branch }, 'Resolved default branch');
+        return branch;
+      }
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo },
+        'Failed to resolve default branch, falling back to develop',
+      );
+    }
+    return 'develop';
+  }
+
+  /**
+   * Switch an existing checkout to a different branch.
+   * Fetches from origin first, then checks out the branch and resets to remote HEAD.
+   */
+  async switchBranch(checkoutPath: string, branch: string): Promise<void> {
+    this.logger.info({ checkoutPath, branch }, 'Switching to branch');
+
+    await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
+
+    try {
+      await execFileAsync('git', ['checkout', branch], { cwd: checkoutPath });
+    } catch {
+      this.logger.debug({ checkoutPath, branch }, 'Local branch not found, creating tracking branch');
+      await execFileAsync('git', ['checkout', '-b', branch, `origin/${branch}`], {
+        cwd: checkoutPath,
+      });
+    }
+
+    await execFileAsync('git', ['reset', '--hard', `origin/${branch}`], {
+      cwd: checkoutPath,
+    });
+
+    this.logger.info({ checkoutPath, branch }, 'Switched to branch successfully');
+  }
+
+  /**
    * Remove a checkout directory recursively.
    *
    * @param checkoutPath - Absolute path to the checkout directory to remove

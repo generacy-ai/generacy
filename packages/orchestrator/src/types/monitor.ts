@@ -148,4 +148,5 @@ export type WorkerHandler = (item: QueueItem) => Promise<void>;
 export interface PhaseTracker {
   isDuplicate(owner: string, repo: string, issue: number, phase: string): Promise<boolean>;
   markProcessed(owner: string, repo: string, issue: number, phase: string): Promise<void>;
+  clear(owner: string, repo: string, issue: number, phase: string): Promise<void>;
 }
