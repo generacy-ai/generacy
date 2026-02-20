@@ -9,7 +9,7 @@ import { executeCommand, extractJSON } from '../../../cli-utils.js';
 import { exists, readFile, writeFile } from '../lib/fs.js';
 
 /**
- * Build the prompt for clarification question generation
+ * Build the prompt for initial clarification question generation
  */
 function buildClarifyPrompt(featureDir: string, specContent: string): string {
   return `Analyze the feature specification and identify underspecified areas that need clarification.
@@ -50,6 +50,54 @@ Format the clarifications file as markdown with this structure:
 
 Write the clarifications to the file directly.
 Return the count of questions generated.`;
+}
+
+/**
+ * Build the prompt for resuming after developer answers.
+ * Instructs the agent to fetch answers from the issue, consolidate,
+ * and determine if follow-up questions are needed.
+ */
+function buildResumePrompt(
+  featureDir: string,
+  specContent: string,
+  existingClarifications: string,
+  issueNumber: number,
+): string {
+  return `You are resuming a clarification round for a feature specification.
+Previously, clarification questions were posted to GitHub issue #${issueNumber}.
+The developer has answered the questions and signaled that answers are ready.
+
+Feature directory: ${featureDir}
+Clarifications file: ${join(featureDir, 'clarifications.md')}
+
+Current spec content:
+${specContent}
+
+Previous clarification questions:
+${existingClarifications}
+
+Instructions:
+1. Run \`gh issue view ${issueNumber} --comments\` to read the developer's answers from the issue comments
+2. Read the existing clarifications.md file
+3. For each question, find the developer's answer in the issue comments and fill in the **Answer** field
+4. Update the clarifications.md file with the consolidated answers
+5. Evaluate whether the answers are sufficient or if follow-up questions are needed
+6. If all questions are adequately answered:
+   - Update ## Status to "Resolved"
+   - Do NOT add any new questions
+   - Return 0 for the count of NEW questions
+7. If follow-up questions are needed (answers are ambiguous, incomplete, or raise new concerns):
+   - Keep the answered questions with their answers
+   - Add NEW follow-up questions at the end using the same format (### Q{N+1}: [Topic] etc.)
+   - Update ## Status to "Follow-up Required"
+   - Return ONLY the count of NEW follow-up questions (not the total)
+
+IMPORTANT: Only generate follow-up questions if genuinely necessary. If the developer's answers
+are clear and sufficient, resolve the clarifications and return 0 new questions so the workflow
+can proceed.
+
+Write updates to the clarifications file directly.
+Return the count of NEW questions generated (0 if all resolved).`;
 }
 
 /**
@@ -107,7 +155,13 @@ export async function executeClarify(
   const specFile = join(input.feature_dir, 'spec.md');
   const clarificationsFile = join(input.feature_dir, 'clarifications.md');
 
-  context.logger.info(`Generating clarification questions for: ${input.feature_dir}`);
+  // Detect resume: if clarifications.md already exists, this is a follow-up round
+  const isResume = await exists(clarificationsFile);
+  context.logger.info(
+    isResume
+      ? `Resuming clarification (answers received) for: ${input.feature_dir}`
+      : `Generating clarification questions for: ${input.feature_dir}`
+  );
 
   // Read the spec file
   if (!(await exists(specFile))) {
@@ -132,8 +186,26 @@ export async function executeClarify(
     };
   }
 
-  // Build prompt
-  const prompt = buildClarifyPrompt(input.feature_dir, specContent);
+  // Build prompt — use resume prompt if clarifications already exist and we have an issue number
+  let prompt: string;
+  if (isResume && input.issue_number) {
+    let existingClarifications = '';
+    try {
+      existingClarifications = await readFile(clarificationsFile);
+    } catch { /* will proceed with empty */ }
+    prompt = buildResumePrompt(input.feature_dir, specContent, existingClarifications, input.issue_number);
+  } else {
+    prompt = buildClarifyPrompt(input.feature_dir, specContent);
+  }
+
+  // Track how many questions exist before the agent runs (for resume: detect new follow-ups)
+  let previousQuestionCount = 0;
+  if (isResume && (await exists(clarificationsFile))) {
+    try {
+      const existing = await readFile(clarificationsFile);
+      previousQuestionCount = parseQuestions(existing).length;
+    } catch { /* use 0 */ }
+  }
 
   try {
     // Invoke Claude agent (--dangerously-skip-permissions for automated workflows)
@@ -166,15 +238,23 @@ export async function executeClarify(
       }
     }
 
-    // Post to GitHub issue if requested
+    // On resume: only count NEW questions (beyond what existed before the agent ran).
+    // On initial run: all questions are new.
+    const newQuestions = isResume
+      ? questions.slice(previousQuestionCount)
+      : questions;
+
+    // Post NEW questions to GitHub issue
     let postedToIssue = false;
-    if (input.issue_number && questions.length > 0) {
+    if (input.issue_number && newQuestions.length > 0) {
       try {
-        // Format questions for GitHub comment
-        let comment = '## Clarification Questions\n\n';
-        comment += 'The following areas need clarification before proceeding:\n\n';
-        for (let i = 0; i < questions.length; i++) {
-          const q = questions[i];
+        const header = isResume
+          ? '## Follow-up Clarification Questions\n\nAfter reviewing your answers, the following additional questions need clarification:\n\n'
+          : '## Clarification Questions\n\nThe following areas need clarification before proceeding:\n\n';
+
+        let comment = header;
+        for (let i = 0; i < newQuestions.length; i++) {
+          const q = newQuestions[i];
           if (q) {
             comment += `### Q${i + 1}: ${q.topic}\n`;
             comment += `**Context**: ${q.context}\n\n`;
@@ -197,18 +277,26 @@ export async function executeClarify(
           timeout: 30000,
         });
         postedToIssue = true;
-        context.logger.info(`Posted ${questions.length} questions to issue #${input.issue_number}`);
+        context.logger.info(`Posted ${newQuestions.length} ${isResume ? 'follow-up ' : ''}questions to issue #${input.issue_number}`);
       } catch (error) {
         context.logger.warn(`Failed to post to issue: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 
-    context.logger.info(`Generated ${questions.length} clarification questions`);
+    if (isResume) {
+      context.logger.info(
+        newQuestions.length > 0
+          ? `Generated ${newQuestions.length} follow-up questions`
+          : `All clarifications resolved, proceeding`
+      );
+    } else {
+      context.logger.info(`Generated ${questions.length} clarification questions`);
+    }
 
     return {
       success: true,
-      questions_count: questions.length,
-      questions,
+      questions_count: newQuestions.length,
+      questions: newQuestions,
       posted_to_issue: postedToIssue,
       clarifications_file: clarificationsFile,
     };
