@@ -12,6 +12,7 @@ import {
   WorkflowExecutor,
   getActionHandlerByType,
   HumancyReviewAction,
+  createGitHubClient,
   type HumanDecisionHandler,
   type ExecutionResult,
   type Logger,
@@ -20,6 +21,34 @@ import {
 } from '@generacy-ai/workflow-engine';
 import type { OrchestratorClient } from './client.js';
 import type { Job, JobResult } from './types.js';
+
+/**
+ * Mapping from YAML phase names to completed:* label suffixes.
+ * When a phase completes, we add `completed:{suffix}` to the issue.
+ * When resolving startPhase on requeue, we check for these labels to skip phases.
+ */
+const PHASE_TO_LABEL_SUFFIX: Record<string, string> = {
+  setup: 'setup',
+  specification: 'specify',
+  clarification: 'clarify',
+  planning: 'plan',
+  'task-generation': 'tasks',
+  implementation: 'implement',
+  verification: 'validate',
+};
+
+/**
+ * Ordered list of YAML phase names for resolving which phases to skip.
+ */
+const PHASE_ORDER = [
+  'setup',
+  'specification',
+  'clarification',
+  'planning',
+  'task-generation',
+  'implementation',
+  'verification',
+];
 
 /**
  * Job handler options
@@ -215,6 +244,12 @@ export class JobHandler {
 
       const workflow = prepareWorkflow(definition as WorkflowDefinition, job.inputs);
 
+      // Resolve startPhase from issue labels (skip already-completed phases on requeue)
+      const startPhase = await this.resolveStartPhase(job);
+      if (startPhase) {
+        this.logger.info(`Resuming workflow from phase: ${startPhase}`);
+      }
+
       // Create executor (this also registers builtin actions)
       const executor = new WorkflowExecutor({
         logger: this.logger,
@@ -229,6 +264,19 @@ export class JobHandler {
         }
       }
 
+      // Listen for phase completions to add completed:* labels to the issue
+      const owner = job.inputs?.owner as string | undefined;
+      const repo = job.inputs?.repo as string | undefined;
+      const issueNumber = job.inputs?.issue_number as number | undefined;
+
+      if (owner && repo && issueNumber) {
+        executor.addEventListener((event) => {
+          if (event.type === 'phase:complete' && event.phaseName) {
+            void this.addCompletedLabel(owner, repo, issueNumber, event.phaseName);
+          }
+        });
+      }
+
       // Execute workflow
       const result = await executor.execute(
         workflow,
@@ -236,6 +284,7 @@ export class JobHandler {
           mode: 'normal',
           cwd: job.workdir ?? this.workdir,
           env: process.env as Record<string, string>,
+          startPhase,
         },
         job.inputs
       );
@@ -327,6 +376,81 @@ export class JobHandler {
 
     // Fallback: return original string (will produce a clear "file not found" error)
     return workflow;
+  }
+
+  /**
+   * Resolve which phase to start from based on completed:* labels on the issue.
+   * Returns the name of the first uncompleted phase, or undefined to start from the beginning.
+   */
+  private async resolveStartPhase(job: Job): Promise<string | undefined> {
+    const owner = job.inputs?.owner as string | undefined;
+    const repo = job.inputs?.repo as string | undefined;
+    const issueNumber = job.inputs?.issue_number as number | undefined;
+
+    if (!owner || !repo || !issueNumber) {
+      return undefined;
+    }
+
+    try {
+      const github = createGitHubClient();
+      const issue = await github.getIssue(owner, repo, issueNumber);
+      const labelNames = issue.labels.map(l =>
+        typeof l === 'string' ? l : l.name
+      );
+
+      // Find completed:* labels
+      const completedSuffixes = new Set(
+        labelNames
+          .filter(n => n.startsWith('completed:'))
+          .map(n => n.slice('completed:'.length))
+      );
+
+      if (completedSuffixes.size === 0) {
+        return undefined;
+      }
+
+      this.logger.info(`Found completed labels: ${[...completedSuffixes].join(', ')}`);
+
+      // Walk through phase order and find the first non-completed phase
+      for (const phaseName of PHASE_ORDER) {
+        const suffix = PHASE_TO_LABEL_SUFFIX[phaseName];
+        if (!suffix || !completedSuffixes.has(suffix)) {
+          // This phase hasn't been completed — start here
+          // But never skip setup (it's idempotent and fast)
+          if (phaseName === 'setup') continue;
+          this.logger.info(`Resolved startPhase: ${phaseName}`);
+          return phaseName;
+        }
+      }
+
+      // All phases completed — start from the beginning (shouldn't happen in practice)
+      return undefined;
+    } catch (error) {
+      this.logger.warn(`Failed to resolve startPhase from labels: ${error}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * Add a completed:* label to the issue after a phase finishes successfully.
+   */
+  private async addCompletedLabel(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    phaseName: string,
+  ): Promise<void> {
+    const suffix = PHASE_TO_LABEL_SUFFIX[phaseName];
+    if (!suffix) return;
+
+    const label = `completed:${suffix}`;
+    try {
+      const github = createGitHubClient();
+      await github.addLabels(owner, repo, issueNumber, [label]);
+      this.logger.info(`Added label ${label} to ${owner}/${repo}#${issueNumber}`);
+    } catch (error) {
+      this.logger.warn(`Failed to add label ${label}: ${error}`);
+    }
   }
 
   /**

@@ -308,14 +308,24 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
     };
   }
 
-  // Create feature directory
+  // Create feature directory (idempotent — succeed if it already exists for resume)
   const featureDir = join(specsDir, branchName);
   if (await exists(featureDir)) {
+    // Feature dir already exists — this is a resume/requeue.
+    // Ensure we're on the right branch and return success with existing info.
+    if (await isGitRepo(repoRoot)) {
+      const git = simpleGit(repoRoot);
+      const branches = await git.branchLocal();
+      if (branches.all.includes(branchName)) {
+        await git.checkout(branchName);
+      }
+    }
+    const specFile = join(featureDir, 'spec.md');
     return {
-      success: false,
+      success: true,
       branch_name: branchName,
       feature_num: featureNum,
-      spec_file: '',
+      spec_file: (await exists(specFile)) ? specFile : '',
       feature_dir: featureDir,
       git_branch_created: false,
     };
