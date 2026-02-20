@@ -10,12 +10,88 @@ export interface QueueItem {
   issueNumber: number;
   /** Workflow name parsed from label (e.g., "speckit-feature") */
   workflowName: string;
-  /** Command type: "process" for new, "continue" for resume */
-  command: 'process' | 'continue';
+  /** Command type: "process" for new, "continue" for resume, "address-pr-feedback" for PR review feedback */
+  command: 'process' | 'continue' | 'address-pr-feedback';
   /** Priority score (timestamp for FIFO, lower = higher priority) */
   priority: number;
   /** When this item was enqueued */
   enqueuedAt: string;
+  /** Optional metadata for command-specific data */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Metadata for the address-pr-feedback command
+ */
+export interface PrFeedbackMetadata {
+  /** PR number on the repository */
+  prNumber: number;
+  /** IDs of unresolved review threads at detection time */
+  reviewThreadIds: number[];
+}
+
+/**
+ * Represents a PR review event from webhook or polling
+ */
+export interface PrReviewEvent {
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  repo: string;
+  /** PR number */
+  prNumber: number;
+  /** PR body text */
+  prBody: string;
+  /** Head branch name */
+  branchName: string;
+  /** How this event was detected */
+  source: 'webhook' | 'poll';
+}
+
+/**
+ * Result of linking a PR to an orchestrated issue
+ */
+export interface PrToIssueLink {
+  /** PR number */
+  prNumber: number;
+  /** Linked issue number */
+  issueNumber: number;
+  /** How the link was resolved */
+  linkMethod: 'pr-body' | 'branch-name';
+}
+
+/**
+ * GitHub webhook payload for pull_request_review and pull_request_review_comment events
+ */
+export interface GitHubPrReviewWebhookPayload {
+  action: string;
+  review?: {
+    id: number;
+    state: string;
+    body: string | null;
+    user: { login: string };
+  };
+  comment?: {
+    id: number;
+    body: string;
+    path: string;
+    line: number | null;
+    user: { login: string };
+    in_reply_to_id?: number;
+  };
+  pull_request: {
+    number: number;
+    title: string;
+    body: string | null;
+    head: { ref: string; sha: string };
+    base: { ref: string };
+    state: string;
+  };
+  repository: {
+    owner: { login: string };
+    name: string;
+    full_name: string;
+  };
 }
 
 /**
@@ -149,4 +225,10 @@ export interface PhaseTracker {
   isDuplicate(owner: string, repo: string, issue: number, phase: string): Promise<boolean>;
   markProcessed(owner: string, repo: string, issue: number, phase: string): Promise<void>;
   clear(owner: string, repo: string, issue: number, phase: string): Promise<void>;
+  /**
+   * Atomically check and mark as processed (SET NX).
+   * Returns true if this call won the race (not a duplicate).
+   * Returns false if already processed (duplicate).
+   */
+  tryMarkProcessed(owner: string, repo: string, issue: number, phase: string): Promise<boolean>;
 }

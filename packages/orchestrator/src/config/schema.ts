@@ -128,6 +128,23 @@ export const MonitorConfigSchema = z.object({
 export type MonitorConfig = z.infer<typeof MonitorConfigSchema>;
 
 /**
+ * PR feedback monitor configuration
+ */
+export const PrMonitorConfigSchema = z.object({
+  /** Whether the PR feedback monitor is enabled */
+  enabled: z.boolean().default(true),
+  /** Polling interval in milliseconds */
+  pollIntervalMs: z.number().int().min(5000).default(60000),
+  /** GitHub webhook secret for signature verification */
+  webhookSecret: z.string().optional(),
+  /** Enable adaptive polling frequency */
+  adaptivePolling: z.boolean().default(true),
+  /** Maximum concurrent GitHub API calls during polling */
+  maxConcurrentPolls: z.number().int().min(1).max(20).default(3),
+});
+export type PrMonitorConfig = z.infer<typeof PrMonitorConfigSchema>;
+
+/**
  * Dispatch configuration for worker queue and dispatcher
  */
 export const DispatchConfigSchema = z.object({
@@ -160,6 +177,7 @@ export const OrchestratorConfigSchema = z.object({
   logging: LoggingConfigSchema.default({}),
   repositories: z.array(RepositoryConfigSchema).default([]),
   monitor: MonitorConfigSchema.default({}),
+  prMonitor: PrMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
 });

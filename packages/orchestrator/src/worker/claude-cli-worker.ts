@@ -146,8 +146,8 @@ export class ClaudeCliWorker {
         typeof l === 'string' ? l : l.name,
       );
 
-      // 3. Resolve starting phase
-      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command);
+      // 3. Resolve starting phase (address-pr-feedback is routed separately in T020)
+      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command as 'process' | 'continue');
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
 
       // 3b. If resuming (has completed phases), find and checkout the feature branch
