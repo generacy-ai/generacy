@@ -28,7 +28,7 @@ import type { Job, JobResult } from './types.js';
  * When resolving startPhase on requeue, we check for these labels to skip phases.
  */
 const PHASE_TO_LABEL_SUFFIX: Record<string, string> = {
-  setup: 'setup',
+  // setup is intentionally excluded — it always runs (handles branch checkout)
   specification: 'specify',
   clarification: 'clarify',
   planning: 'plan',
@@ -39,9 +39,9 @@ const PHASE_TO_LABEL_SUFFIX: Record<string, string> = {
 
 /**
  * Ordered list of YAML phase names for resolving which phases to skip.
+ * setup is excluded — it must always run.
  */
 const PHASE_ORDER = [
-  'setup',
   'specification',
   'clarification',
   'planning',
@@ -244,10 +244,13 @@ export class JobHandler {
 
       const workflow = prepareWorkflow(definition as WorkflowDefinition, job.inputs);
 
-      // Resolve startPhase from issue labels (skip already-completed phases on requeue)
-      const startPhase = await this.resolveStartPhase(job);
-      if (startPhase) {
-        this.logger.info(`Resuming workflow from phase: ${startPhase}`);
+      // Remove already-completed phases (but never remove setup — it handles branch checkout)
+      const completedPhases = await this.resolveCompletedPhases(job);
+      if (completedPhases.size > 0) {
+        this.logger.info(`Skipping completed phases: ${[...completedPhases].join(', ')}`);
+        workflow.phases = workflow.phases.filter(
+          p => !completedPhases.has(p.name)
+        );
       }
 
       // Create executor (this also registers builtin actions)
@@ -284,7 +287,6 @@ export class JobHandler {
           mode: 'normal',
           cwd: job.workdir ?? this.workdir,
           env: process.env as Record<string, string>,
-          startPhase,
         },
         job.inputs
       );
@@ -379,16 +381,16 @@ export class JobHandler {
   }
 
   /**
-   * Resolve which phase to start from based on completed:* labels on the issue.
-   * Returns the name of the first uncompleted phase, or undefined to start from the beginning.
+   * Resolve which phases have already been completed based on issue labels.
+   * Returns a set of YAML phase names to skip. Setup is never included.
    */
-  private async resolveStartPhase(job: Job): Promise<string | undefined> {
+  private async resolveCompletedPhases(job: Job): Promise<Set<string>> {
     const owner = job.inputs?.owner as string | undefined;
     const repo = job.inputs?.repo as string | undefined;
     const issueNumber = job.inputs?.issue_number as number | undefined;
 
     if (!owner || !repo || !issueNumber) {
-      return undefined;
+      return new Set();
     }
 
     try {
@@ -406,28 +408,24 @@ export class JobHandler {
       );
 
       if (completedSuffixes.size === 0) {
-        return undefined;
+        return new Set();
       }
 
       this.logger.info(`Found completed labels: ${[...completedSuffixes].join(', ')}`);
 
-      // Walk through phase order and find the first non-completed phase
+      // Map completed label suffixes back to YAML phase names
+      const completed = new Set<string>();
       for (const phaseName of PHASE_ORDER) {
         const suffix = PHASE_TO_LABEL_SUFFIX[phaseName];
-        if (!suffix || !completedSuffixes.has(suffix)) {
-          // This phase hasn't been completed — start here
-          // But never skip setup (it's idempotent and fast)
-          if (phaseName === 'setup') continue;
-          this.logger.info(`Resolved startPhase: ${phaseName}`);
-          return phaseName;
+        if (suffix && completedSuffixes.has(suffix)) {
+          completed.add(phaseName);
         }
       }
 
-      // All phases completed — start from the beginning (shouldn't happen in practice)
-      return undefined;
+      return completed;
     } catch (error) {
-      this.logger.warn(`Failed to resolve startPhase from labels: ${error}`);
-      return undefined;
+      this.logger.warn(`Failed to resolve completed phases from labels: ${error}`);
+      return new Set();
     }
   }
 
