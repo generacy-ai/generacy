@@ -51,6 +51,14 @@ const PHASE_ORDER = [
 ];
 
 /**
+ * Phase gates: phases that should pause the workflow and wait for developer input.
+ * Maps YAML phase name → waiting-for label to add when the gate is hit.
+ */
+const PHASE_GATES: Record<string, string> = {
+  clarification: 'waiting-for:clarification',
+};
+
+/**
  * Job handler options
  */
 export interface JobHandlerOptions {
@@ -267,16 +275,35 @@ export class JobHandler {
         }
       }
 
-      // Listen for phase completions to add completed:* labels to the issue
+      // Listen for phase completions: add labels and handle gates
       const owner = job.inputs?.owner as string | undefined;
       const repo = job.inputs?.repo as string | undefined;
       const issueNumber = job.inputs?.issue_number as number | undefined;
+      let shouldPauseForGate = false;
+      let gatedPhaseName: string | undefined;
 
       if (owner && repo && issueNumber) {
         executor.addEventListener((event) => {
-          if (event.type === 'phase:complete' && event.phaseName) {
-            void this.addCompletedLabel(owner, repo, issueNumber, event.phaseName);
+          if (event.type !== 'phase:complete' || !event.phaseName) return;
+
+          const gateLabel = PHASE_GATES[event.phaseName];
+          if (gateLabel) {
+            // Check if the gated phase posted questions (needs developer input)
+            const stepOutput = executor.getExecutionContext()?.getStepOutput('clarify');
+            const parsed = stepOutput?.parsed as Record<string, unknown> | null;
+            const postedQuestions = parsed?.posted_to_issue === true
+              && (parsed?.questions_count as number) > 0;
+
+            if (postedQuestions) {
+              shouldPauseForGate = true;
+              gatedPhaseName = event.phaseName;
+              executor.cancel(); // stops before next phase starts
+              return; // don't add completed label for gated phase
+            }
           }
+
+          // Add completed:* label for non-gated phases (or gated phases that didn't pause)
+          void this.addCompletedLabel(owner, repo, issueNumber, event.phaseName);
         });
       }
 
@@ -291,8 +318,23 @@ export class JobHandler {
         job.inputs
       );
 
-      // Build job result
-      const jobResult = this.buildJobResult(job, result, startTime);
+      // Handle gate pause: add waiting label and mark agent as paused
+      if (shouldPauseForGate && gatedPhaseName && owner && repo && issueNumber) {
+        const gateLabel = PHASE_GATES[gatedPhaseName]!;
+        try {
+          const github = createGitHubClient();
+          await github.addLabels(owner, repo, issueNumber, [gateLabel, 'agent:paused']);
+          try {
+            await github.removeLabels(owner, repo, issueNumber, ['agent:in-progress']);
+          } catch { /* may not exist */ }
+          this.logger.info(`Paused at gate: ${gatedPhaseName}, added ${gateLabel}`);
+        } catch (error) {
+          this.logger.warn(`Failed to add gate label: ${error}`);
+        }
+      }
+
+      // Build job result (treat gate-pause cancellation as success)
+      const jobResult = this.buildJobResult(job, result, startTime, shouldPauseForGate);
 
       // Report result
       await this.client.reportJobResult(jobResult);
@@ -487,7 +529,7 @@ export class JobHandler {
   /**
    * Build job result from execution result
    */
-  private buildJobResult(job: Job, result: ExecutionResult, startTime: number): JobResult {
+  private buildJobResult(job: Job, result: ExecutionResult, startTime: number, gatePaused?: boolean): JobResult {
     // Find the first error from failed phases/steps
     let errorMessage: string | undefined;
     const failedPhase = result.phaseResults.find((p: PhaseResult) => p.status === 'failed');
@@ -500,7 +542,9 @@ export class JobHandler {
 
     return {
       jobId: job.id,
-      status: result.status === 'completed' ? 'completed' :
+      // Gate-paused cancellation is intentional — report as completed so the worker is freed
+      status: gatePaused ? 'completed' :
+              result.status === 'completed' ? 'completed' :
               result.status === 'cancelled' ? 'cancelled' : 'failed',
       error: errorMessage,
       duration: Date.now() - startTime,
