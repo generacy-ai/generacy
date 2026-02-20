@@ -208,9 +208,17 @@ export class LabelMonitorService {
     const client = this.createClient();
 
     if (type === 'process') {
-      // Remove trigger label (and agent:error from previous run), add agent:in-progress
+      // Remove trigger label, agent:error, and all completed:* labels from previous runs.
+      // Without clearing completed:* labels, requeued issues skip already-labeled phases
+      // even if the prior run failed mid-implementation.
       try {
-        await client.removeLabels(owner, repo, issueNumber, [event.labelName, 'agent:error']);
+        const issue = await client.getIssue(owner, repo, issueNumber);
+        const completedLabels = issue.labels
+          .map(l => typeof l === 'string' ? l : l.name)
+          .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX));
+
+        const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
+        await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
         await client.addLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
       } catch (error) {
         this.logger.warn(
