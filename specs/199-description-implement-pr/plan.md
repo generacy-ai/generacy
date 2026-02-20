@@ -1,487 +1,390 @@
-# Implementation Plan: PR Feedback Monitor for Orchestrated Issues
+# Implementation Plan: PR Feedback Monitor
 
 ## Summary
 
-This implementation adds a **PR Feedback Monitor** service that detects unresolved review comments on pull requests linked to orchestrated issues and automatically triggers a feedback-addressing workflow. The system uses a hybrid webhook + polling approach (mirroring the existing `LabelMonitorService`), integrates with the existing queue/worker infrastructure, and extends the `ClaudeCliWorker` to handle a new `address-pr-feedback` command.
+This plan adds a **PR Feedback Monitor** to the orchestrator — a new service that detects unresolved review comments on PRs linked to orchestrated issues and triggers the feedback-addressing flow. The system uses a hybrid webhook + polling architecture (mirroring `LabelMonitorService`), integrates with the existing Redis queue and worker dispatcher, and extends `ClaudeCliWorker` with a new `address-pr-feedback` command that routes to a `PrFeedbackHandler`.
 
-### Key Design Decisions
+### Core Architecture
 
-1. **Separate Service Architecture**: Create `PrFeedbackMonitorService` as a standalone service (similar to `LabelMonitorService`) for clean separation of concerns
-2. **Extend QueueItem Type**: Add `'address-pr-feedback'` to the command union and add optional `metadata` field for PR-specific data
-3. **Webhook + Polling Hybrid**: Mirror the proven `LabelMonitorService` pattern with webhook reception and polling fallback
-4. **Strict Thread-Based Detection**: Ignore review state, only process PRs with `resolved: false` threads for accuracy
-5. **Worker Command Extension**: Handle `address-pr-feedback` as a new command type in `ClaudeCliWorker` with specialized checkout and reply logic
+```
+GitHub PR Review Events
+        │
+        ├─── Webhook: POST /webhooks/github/pr-review
+        │         │
+        │         ▼
+        │    PrFeedbackMonitorService.processPrReviewEvent()
+        │         │
+        └─── Polling: list open PRs → check unresolved threads
+                  │
+                  ▼
+             PrLinker.linkPrToIssue()
+                  │ (PR body keywords → branch name fallback)
+                  ▼
+             PhaseTrackerService.tryMarkProcessed() [atomic dedup]
+                  │
+                  ▼
+             RedisQueueAdapter.enqueue({ command: 'address-pr-feedback' })
+                  │
+                  ▼
+             WorkerDispatcher → ClaudeCliWorker.handle()
+                  │
+                  ▼
+             PrFeedbackHandler
+                  ├── Checkout PR branch
+                  ├── Fetch fresh unresolved threads
+                  ├── Build prompt → spawn Claude CLI
+                  ├── Push changes to PR branch
+                  ├── Reply to each thread (never resolve)
+                  └── Remove waiting-for:address-pr-feedback label
+```
 
 ## Technical Context
 
-**Language**: TypeScript
-**Framework**: Fastify (REST API), Node.js
-**Key Dependencies**:
-- `@octokit/rest` - GitHub API client
-- `ioredis` - Redis client for queue and deduplication
-- `fastify` - Web framework for webhook routes
-- `@generacy-ai/workflow-engine` - Label definitions and GitHub client
+| Aspect | Detail |
+|--------|--------|
+| Language | TypeScript (ES modules) |
+| Server | Fastify |
+| Queue | Redis sorted sets via `RedisQueueAdapter` |
+| GitHub API | `gh` CLI via `GhCliGitHubClient` from `@generacy-ai/workflow-engine` |
+| Deduplication | `PhaseTrackerService` (Redis `SET NX`) |
+| Config | Zod schemas in `packages/orchestrator/src/config/schema.ts` |
+| Testing | Vitest |
 
-**Project Structure**:
-```
-packages/orchestrator/
-├── src/
-│   ├── services/
-│   │   ├── pr-feedback-monitor-service.ts (NEW)
-│   │   ├── label-monitor-service.ts (reference)
-│   │   └── phase-tracker-service.ts (shared)
-│   ├── worker/
-│   │   ├── claude-cli-worker.ts (EXTEND)
-│   │   ├── pr-feedback-handler.ts (NEW)
-│   │   └── pr-linker.ts (NEW)
-│   ├── types/
-│   │   └── monitor.ts (EXTEND - QueueItem)
-│   ├── config/
-│   │   └── schema.ts (EXTEND - add prMonitor config)
-│   ├── routes/
-│   │   └── webhooks.ts (EXTEND - add PR review webhook)
-│   └── server.ts (EXTEND - initialize PR monitor)
-```
+### Key Files (Existing)
 
-## Architecture Overview
+| File | Role |
+|------|------|
+| `packages/orchestrator/src/types/monitor.ts` | `QueueItem`, `QueueAdapter`, `PhaseTracker` types |
+| `packages/orchestrator/src/config/schema.ts` | `OrchestratorConfigSchema`, `MonitorConfigSchema` |
+| `packages/orchestrator/src/services/label-monitor-service.ts` | Reference architecture (webhook+polling+adaptive) |
+| `packages/orchestrator/src/services/phase-tracker-service.ts` | Redis deduplication |
+| `packages/orchestrator/src/services/redis-queue-adapter.ts` | Queue enqueue/claim/complete |
+| `packages/orchestrator/src/worker/claude-cli-worker.ts` | Worker entry point — routes `process`/`continue` |
+| `packages/orchestrator/src/worker/repo-checkout.ts` | Git clone/checkout/switch |
+| `packages/orchestrator/src/routes/webhooks.ts` | Existing `POST /webhooks/github` for issue labels |
+| `packages/orchestrator/src/server.ts` | Service initialization, lifecycle |
+| `packages/workflow-engine/src/actions/github/client/interface.ts` | `GitHubClient` interface |
+| `packages/workflow-engine/src/actions/github/label-definitions.ts` | `WORKFLOW_LABELS` |
 
-### Component Diagram
+### Key Files (New)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     GitHub Webhooks & Polling                    │
-└────────────────┬────────────────────────────────────────────────┘
-                 │
-                 │ PR Review Events
-                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              PrFeedbackMonitorService                            │
-│  ┌──────────────────┐          ┌──────────────────┐            │
-│  │ Webhook Handler  │          │ Polling Loop     │            │
-│  │ (Fastify Route)  │          │ (Background)     │            │
-│  └────────┬─────────┘          └────────┬─────────┘            │
-│           │                              │                       │
-│           └──────────┬───────────────────┘                       │
-│                      │                                           │
-│                      ▼                                           │
-│           ┌──────────────────────┐                              │
-│           │   PrLinker           │ (PR-to-Issue Linking)        │
-│           │  - PR body parsing   │                              │
-│           │  - Branch name parse │                              │
-│           └──────────┬───────────┘                              │
-│                      │                                           │
-│                      ▼                                           │
-│           ┌──────────────────────┐                              │
-│           │  Thread Detection    │ (GitHub API)                 │
-│           │  resolved: false     │                              │
-│           └──────────┬───────────┘                              │
-└─────────────────────┼────────────────────────────────────────────┘
-                      │
-                      │ Enqueue if unresolved
-                      ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                  RedisQueueAdapter                               │
-│  command: 'address-pr-feedback'                                  │
-│  metadata: { prNumber, reviewThreadIds }                         │
-└────────────────┬────────────────────────────────────────────────┘
-                 │
-                 │ Claimed by dispatcher
-                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              WorkerDispatcher                                    │
-└────────────────┬────────────────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────────────────┐
-│             ClaudeCliWorker                                      │
-│  ┌──────────────────────────────────────────────────────┐       │
-│  │  handle(item: QueueItem)                             │       │
-│  │    if (item.command === 'address-pr-feedback'):      │       │
-│  │      → PrFeedbackHandler                             │       │
-│  └────────────────────┬─────────────────────────────────┘       │
-│                       │                                          │
-│                       ▼                                          │
-│           ┌───────────────────────┐                             │
-│           │ PrFeedbackHandler     │                             │
-│           │ - Checkout PR branch  │                             │
-│           │ - Fetch threads       │                             │
-│           │ - Build prompt        │                             │
-│           │ - Spawn Claude CLI    │                             │
-│           │ - Reply to threads    │                             │
-│           │ - Update labels       │                             │
-│           └───────────────────────┘                             │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Data Flow
-
-1. **Event Detection**:
-   - Webhook receives `pull_request_review.submitted` event → parse PR number & repo
-   - OR Polling cycle lists open PRs → check each for unresolved threads
-
-2. **PR-to-Issue Linking**:
-   - Parse PR body for "Closes #N" keywords (priority)
-   - Parse branch name for "{N}-description" pattern (fallback)
-   - Query GitHub API to verify issue exists and has `agent:*` label
-
-3. **Unresolved Thread Detection**:
-   - Fetch review threads via GitHub API (`GET /repos/{owner}/{repo}/pulls/{pr}/comments`)
-   - Filter for `resolved: false`
-   - Skip if no unresolved threads exist
-
-4. **Enqueue & Deduplication**:
-   - Build `QueueItem` with `command: 'address-pr-feedback'` and `metadata: { prNumber, reviewThreadIds }`
-   - Check `PhaseTrackerService` with key `phase-tracker:{owner}:{repo}:{issue}:address-pr-feedback`
-   - If not duplicate: enqueue, add `waiting-for:address-pr-feedback` label to issue
-
-5. **Worker Processing**:
-   - `WorkerDispatcher` claims item from queue
-   - `ClaudeCliWorker.handle()` routes to `PrFeedbackHandler` based on command
-   - Handler checks out PR branch, fetches fresh threads, builds prompt
-   - Spawns Claude CLI with feedback prompt
-   - Pushes changes, replies to threads (without resolving), updates labels
-
-## Implementation Phases
-
-### Phase 1: Type Extensions and Configuration (Foundation)
-
-**Goal**: Extend type definitions and configuration schema to support PR feedback monitoring.
-
-**Files**:
-- `packages/orchestrator/src/types/monitor.ts`
-- `packages/orchestrator/src/config/schema.ts`
-
-**Tasks**:
-1. **Extend QueueItem type** (Q2 Answer: A):
-   ```typescript
-   export interface QueueItem {
-     owner: string;
-     repo: string;
-     issueNumber: number;
-     workflowName: string;
-     command: 'process' | 'continue' | 'address-pr-feedback'; // EXTENDED
-     priority: number;
-     enqueuedAt: string;
-     metadata?: Record<string, unknown>; // NEW (Q16 Answer: A)
-   }
-   ```
-
-2. **Add PR monitor config schema** (Q17 Answer: A):
-   ```typescript
-   export const PrMonitorConfigSchema = z.object({
-     enabled: z.boolean().default(true),
-     pollIntervalMs: z.number().int().min(5000).default(60000),
-     webhookSecret: z.string().optional(), // shared with issue webhook
-     adaptivePolling: z.boolean().default(true),
-     maxConcurrentPolls: z.number().int().min(1).max(20).default(3),
-   });
-   export type PrMonitorConfig = z.infer<typeof PrMonitorConfigSchema>;
-
-   // Extend OrchestratorConfigSchema
-   export const OrchestratorConfigSchema = z.object({
-     // ... existing fields
-     prMonitor: PrMonitorConfigSchema.default({}), // NEW
-   });
-   ```
-
-3. **Add PR-specific types**:
-   ```typescript
-   export interface PrToIssueLink {
-     prNumber: number;
-     issueNumber: number;
-     linkMethod: 'pr-body' | 'branch-name';
-   }
-
-   export interface ReviewThread {
-     id: number;
-     path: string | null;
-     line: number | null;
-     body: string;
-     resolved: boolean;
-     reviewer: string;
-   }
-
-   export interface PrFeedbackMetadata {
-     prNumber: number;
-     reviewThreadIds: number[];
-   }
-   ```
-
-**Acceptance Criteria**:
-- [ ] TypeScript compiles without errors
-- [ ] Config validation tests pass
-- [ ] `metadata` field is properly serialized/deserialized in `RedisQueueAdapter`
+| File | Role |
+|------|------|
+| `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` | Core monitoring service |
+| `packages/orchestrator/src/worker/pr-feedback-handler.ts` | Worker handler for `address-pr-feedback` |
+| `packages/orchestrator/src/worker/pr-linker.ts` | PR-to-issue linking utility |
+| `packages/orchestrator/src/routes/pr-webhooks.ts` | PR review webhook route |
 
 ---
 
-### Phase 2: PR-to-Issue Linking Utility
+## Implementation Phases
 
-**Goal**: Implement reliable PR-to-issue linking using PR body references and branch naming conventions.
+### Phase 1: Type Extensions and Configuration
 
-**Files**:
-- `packages/orchestrator/src/worker/pr-linker.ts` (NEW)
-- `packages/orchestrator/src/worker/__tests__/pr-linker.test.ts` (NEW)
+**Goal**: Extend type system and configuration to support the new command and monitor.
 
-**Tasks**:
-1. **Implement PrLinker class**:
-   ```typescript
-   export class PrLinker {
-     private static readonly CLOSING_KEYWORDS = [
-       'close', 'closes', 'closed',
-       'fix', 'fixes', 'fixed',
-       'resolve', 'resolves', 'resolved'
-     ];
+#### 1.1 Extend `QueueItem` type
 
-     /**
-      * Extract issue numbers from PR body using GitHub closing keywords.
-      * Returns first matched issue number or null.
-      */
-     parsePrBody(prBody: string): number | null;
+**File**: `packages/orchestrator/src/types/monitor.ts`
 
-     /**
-      * Extract issue number from branch name (e.g., "199-feature-name" → 199).
-      * Returns issue number or null.
-      */
-     parseBranchName(branchName: string): number | null;
+Add `'address-pr-feedback'` to the `command` union and an optional `metadata` field:
 
-     /**
-      * Link PR to issue using both methods (Q1 Answer: B - first issue only).
-      * Prefer PR body reference over branch name (FR-2).
-      */
-     async linkPrToIssue(
-       github: GitHubClient,
-       owner: string,
-       repo: string,
-       pr: { number: number; body: string; head: { ref: string } }
-     ): Promise<PrToIssueLink | null>;
+```typescript
+export interface QueueItem {
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  workflowName: string;
+  command: 'process' | 'continue' | 'address-pr-feedback';
+  priority: number;
+  enqueuedAt: string;
+  metadata?: Record<string, unknown>;
+}
+```
 
-     /**
-      * Verify that the linked issue is orchestrated (has agent:* label).
-      */
-     async verifyOrchestrated(
-       github: GitHubClient,
-       owner: string,
-       repo: string,
-       issueNumber: number
-     ): Promise<boolean>;
-   }
-   ```
+Add new types for PR feedback:
 
-2. **Write comprehensive tests**:
-   - PR body parsing with various closing keywords
-   - Branch name parsing (valid/invalid formats)
-   - Link resolution priority (body over branch)
-   - Edge cases (multiple issues, no match, invalid formats)
+```typescript
+export interface PrFeedbackMetadata {
+  prNumber: number;
+  reviewThreadIds: number[];
+}
+
+export interface PrReviewEvent {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  prBody: string;
+  branchName: string;
+  source: 'webhook' | 'poll';
+}
+
+export interface PrToIssueLink {
+  prNumber: number;
+  issueNumber: number;
+  linkMethod: 'pr-body' | 'branch-name';
+}
+```
+
+#### 1.2 Add PR monitor configuration
+
+**File**: `packages/orchestrator/src/config/schema.ts`
+
+```typescript
+export const PrMonitorConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  pollIntervalMs: z.number().int().min(5000).default(60000),
+  webhookSecret: z.string().optional(),
+  adaptivePolling: z.boolean().default(true),
+  maxConcurrentPolls: z.number().int().min(1).max(20).default(3),
+});
+export type PrMonitorConfig = z.infer<typeof PrMonitorConfigSchema>;
+```
+
+Add to `OrchestratorConfigSchema`:
+```typescript
+prMonitor: PrMonitorConfigSchema.default({}),
+```
+
+Add env var mapping in config loader for `PR_MONITOR_ENABLED`, `PR_MONITOR_POLL_INTERVAL_MS`, etc.
+
+#### 1.3 Add label definition
+
+**File**: `packages/workflow-engine/src/actions/github/label-definitions.ts`
+
+The label `waiting-for:pr-feedback` already exists (line 37: `"Waiting to address PR feedback"`). The spec refers to `waiting-for:address-pr-feedback` — we will use a new label with that exact name to distinguish from the existing gate label:
+
+```typescript
+{ name: 'waiting-for:address-pr-feedback', color: 'FBCA04', description: 'Agent is addressing PR review feedback' },
+```
+
+**Rationale**: `waiting-for:pr-feedback` is the existing gate label that indicates a review is pending human action. `waiting-for:address-pr-feedback` specifically indicates the agent is actively addressing feedback. These are different states.
+
+#### 1.4 Add `listOpenPullRequests` to `GitHubClient`
+
+**File**: `packages/workflow-engine/src/actions/github/client/interface.ts`
+
+The polling loop needs to list open PRs. The interface currently lacks this:
+
+```typescript
+listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
+```
+
+**File**: `packages/workflow-engine/src/actions/github/client/gh-cli.ts`
+
+Implement using `gh pr list --state open --json ...`.
 
 **Acceptance Criteria**:
-- [ ] Unit tests cover >90% of PrLinker code
-- [ ] Handles malformed PR bodies and branch names gracefully
-- [ ] Returns null for non-orchestrated issues
+- TypeScript compiles without errors
+- Existing queue items (without `metadata`) still deserialize correctly
+- Config validation accepts both with and without `prMonitor` key
+- `pnpm build` succeeds across all packages
+
+---
+
+### Phase 2: PR-to-Issue Linking
+
+**Goal**: Implement reliable PR-to-issue linking using PR body keywords and branch naming patterns.
+
+**File**: `packages/orchestrator/src/worker/pr-linker.ts` (NEW)
+
+```typescript
+export class PrLinker {
+  /**
+   * Regex for GitHub closing keywords.
+   * Matches: close/closes/closed/fix/fixes/fixed/resolve/resolves/resolved #N
+   * Case-insensitive, word-boundary aware.
+   */
+  private static readonly CLOSING_REGEX =
+    /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+
+  /**
+   * Branch name pattern: {N}-{description}
+   */
+  private static readonly BRANCH_REGEX = /^(\d+)-/;
+
+  /**
+   * Parse PR body for closing keywords. Returns first matched issue number.
+   */
+  parsePrBody(body: string): number | null
+
+  /**
+   * Parse branch name for issue number prefix. Returns issue number or null.
+   */
+  parseBranchName(branch: string): number | null
+
+  /**
+   * Link a PR to its orchestrated issue.
+   * Priority: PR body > branch name.
+   * Verifies the linked issue has an agent:* label.
+   */
+  async linkPrToIssue(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    pr: { number: number; body: string; head: { ref: string } }
+  ): Promise<PrToIssueLink | null>
+}
+```
+
+**Key behaviors**:
+- First issue number from PR body keywords wins (Q1: B)
+- Branch name fallback only when PR body has no match
+- Verify linked issue has `agent:*` label (skip non-orchestrated)
+- Return `null` for unlinked or non-orchestrated PRs
+
+**Tests**: `packages/orchestrator/src/worker/__tests__/pr-linker.test.ts`
+- Various closing keyword formats (case variations, multiple issues)
+- Branch name parsing (standard, edge cases like dates)
+- PR body priority over branch name
+- Non-orchestrated issue filtering
+
+**Acceptance Criteria**:
+- > 95% linking accuracy on standard PR conventions (SC-002)
+- Handles malformed bodies/branches gracefully (returns null)
 
 ---
 
 ### Phase 3: PR Feedback Monitor Service
 
-**Goal**: Create the core monitoring service that detects PR feedback events via webhooks and polling.
+**Goal**: Core monitoring service with webhook processing and polling fallback.
 
-**Files**:
-- `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` (NEW)
-- `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.test.ts` (NEW)
+**File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` (NEW)
 
-**Tasks**:
-1. **Implement PrFeedbackMonitorService** (Q12 Answer: A - separate service):
-   ```typescript
-   export class PrFeedbackMonitorService {
-     private readonly logger: Logger;
-     private readonly createClient: GitHubClientFactory;
-     private readonly phaseTracker: PhaseTracker;
-     private readonly queueAdapter: QueueAdapter;
-     private readonly prLinker: PrLinker;
-     private readonly options: PrMonitorOptions;
-     private abortController: AbortController | null = null;
-     private state: MonitorState; // reuse type from label monitor
+Mirror `LabelMonitorService` architecture with these key differences:
+- Polls open PRs (not issue labels)
+- Checks review threads for `resolved: false`
+- Uses `PrLinker` for PR-to-issue linking
+- Enqueues `address-pr-feedback` command
 
-     constructor(/* deps */);
+```typescript
+export class PrFeedbackMonitorService {
+  constructor(
+    logger: Logger,
+    createClient: GitHubClientFactory,
+    phaseTracker: PhaseTracker,
+    queueAdapter: QueueAdapter,
+    config: PrMonitorConfig,
+    repositories: RepositoryConfig[],
+  )
 
-     /**
-      * Start polling loop (background task).
-      */
-     async startPolling(): Promise<void>;
+  /** Process a PR review event (shared by webhook and polling). */
+  async processPrReviewEvent(event: PrReviewEvent): Promise<boolean>
 
-     /**
-      * Stop polling loop (graceful shutdown).
-      */
-     stopPolling(): void;
+  /** Start background polling loop. */
+  async startPolling(): Promise<void>
 
-     /**
-      * Process a PR review event (shared by webhook and polling).
-      * Q15 Answer: A - only check resolved: false threads, ignore review state.
-      */
-     async processPrReviewEvent(event: PrReviewEvent): Promise<boolean>;
+  /** Stop polling (graceful shutdown). */
+  stopPolling(): void
 
-     /**
-      * Record webhook event for adaptive polling health tracking.
-      * Q18 Answer: A - mirror label monitor logic.
-      */
-     recordWebhookEvent(): void;
+  /** Record webhook receipt for adaptive polling health. */
+  recordWebhookEvent(): void
 
-     /**
-      * Get monitor state (for observability).
-      */
-     getState(): Readonly<MonitorState>;
-   }
-   ```
+  /** Get current monitor state. */
+  getState(): Readonly<MonitorState>
+}
+```
 
-2. **Implement polling logic** (Q6 Answer: A, Q10 Answer: A):
-   ```typescript
-   private async poll(): Promise<void> {
-     const semaphore = new Semaphore(this.options.maxConcurrentPolls); // 3 total
-     const repos = this.options.repositories;
+#### Polling Logic
 
-     const pollTasks = repos.map(({ owner, repo }) =>
-       semaphore.acquire().then(async (release) => {
-         try {
-           await this.pollRepo(owner, repo);
-         } finally {
-           release();
-         }
-       })
-     );
+```
+For each watched repository (concurrency limited by semaphore):
+  1. List open PRs via github.listOpenPullRequests()
+  2. For each PR:
+     a. Link to issue via PrLinker
+     b. Skip if not linked or not orchestrated
+     c. Fetch review comments via github.getPRComments()
+     d. Filter for resolved === false
+     e. If unresolved threads exist → enqueuePrFeedback()
+  3. When multiple PRs exist for same issue → process most recent only (FR-015)
+```
 
-     await Promise.allSettled(pollTasks);
-   }
+#### Enqueue Logic
 
-   private async pollRepo(owner: string, repo: string): Promise<void> {
-     const client = this.createClient();
-     const openPrs = await client.listPullRequests(owner, repo, { state: 'open' });
+```
+1. Check dedup: phaseTracker.tryMarkProcessed(owner, repo, issue, 'address-pr-feedback')
+   - Uses atomic SET NX to prevent webhook+poll race (Q8)
+   - If already marked → skip (duplicate)
+2. Resolve workflow name from issue labels (process:* or completed:*) (Q13/FR-014)
+3. Build QueueItem with command: 'address-pr-feedback', metadata: { prNumber, reviewThreadIds }
+4. Enqueue via queueAdapter.enqueue()
+5. Add 'waiting-for:address-pr-feedback' label to issue (Q3: don't touch phase labels)
+```
 
-     for (const pr of openPrs) {
-       const link = await this.prLinker.linkPrToIssue(client, owner, repo, pr);
-       if (!link) continue; // not orchestrated
+#### Adaptive Polling (Q18: mirror label monitor)
 
-       const threads = await this.fetchReviewThreads(client, owner, repo, pr.number);
-       const unresolvedThreads = threads.filter(t => !t.resolved);
+- Track `lastWebhookEvent` timestamp
+- If no webhook in 2x `pollIntervalMs` → decrease interval by 50% (spec says 50%, not 3x)
+- Reset to base interval when webhook received
+- Minimum interval: 10 seconds
 
-       if (unresolvedThreads.length > 0) {
-         await this.enqueuePrFeedback(owner, repo, link.issueNumber, pr.number, unresolvedThreads);
-       }
-     }
-   }
-   ```
+**Note on spec discrepancy**: FR-009 says "Mirror LabelMonitorService adaptive polling pattern" but US4 says "decrease by 50%". The label monitor divides by 3 (ADAPTIVE_DIVISOR = 3). Following US4 literally: use 50% reduction (divide by 2).
 
-3. **Implement enqueue logic** (Q4 Answer: A, Q8 Answer: A):
-   ```typescript
-   private async enqueuePrFeedback(
-     owner: string,
-     repo: string,
-     issueNumber: number,
-     prNumber: number,
-     threads: ReviewThread[]
-   ): Promise<void> {
-     const phase = 'address-pr-feedback';
+#### Atomic Deduplication
 
-     // Deduplication (Q8: Redis handles race conditions)
-     const isDuplicate = await this.phaseTracker.isDuplicate(owner, repo, issueNumber, phase);
-     if (isDuplicate) {
-       this.logger.info({ owner, repo, issueNumber, prNumber }, 'Skipping duplicate PR feedback event');
-       return;
-     }
+The current `PhaseTrackerService` uses non-atomic check-then-set (`isDuplicate` + `markProcessed`). Need to add an atomic method:
 
-     // Determine workflow name (Q13 Answer: A - read from labels)
-     const workflowName = await this.resolveWorkflowName(owner, repo, issueNumber);
+**File**: `packages/orchestrator/src/services/phase-tracker-service.ts` (EXTEND)
 
-     const queueItem: QueueItem = {
-       owner,
-       repo,
-       issueNumber,
-       workflowName,
-       command: 'address-pr-feedback',
-       priority: Date.now(), // FIFO
-       enqueuedAt: new Date().toISOString(),
-       metadata: {
-         prNumber,
-         reviewThreadIds: threads.map(t => t.id),
-       },
-     };
-
-     await this.queueAdapter.enqueue(queueItem);
-     await this.phaseTracker.markProcessed(owner, repo, issueNumber, phase);
-
-     // Add waiting label to issue (Q3 Answer: A - don't change phase labels)
-     const client = this.createClient();
-     await client.addLabels(owner, repo, issueNumber, ['waiting-for:address-pr-feedback']);
-
-     this.logger.info({ owner, repo, issueNumber, prNumber }, 'PR feedback enqueued');
-   }
-   ```
+```typescript
+/**
+ * Atomically check and mark as processed.
+ * Returns true if this call won the race (not a duplicate).
+ * Returns false if already processed (duplicate).
+ */
+async tryMarkProcessed(
+  owner: string, repo: string, issue: number, phase: string
+): Promise<boolean> {
+  if (!this.redis) return true; // degraded mode
+  const key = buildKey(owner, repo, issue, phase);
+  const result = await this.redis.set(key, '1', 'EX', this.ttlSeconds, 'NX');
+  return result === 'OK';
+}
+```
 
 **Acceptance Criteria**:
-- [ ] Polling detects unresolved threads within one poll cycle
-- [ ] Deduplication prevents double-enqueue from webhook + poll race
-- [ ] Adaptive polling increases frequency when webhooks go unhealthy
-- [ ] Graceful shutdown stops polling without data loss
+- Polling detects unresolved threads within one poll cycle (SC-003)
+- Deduplication: 0 duplicate enqueues from concurrent webhook+poll (SC-004)
+- Adaptive polling increases frequency when webhooks go unhealthy (US4)
+- Graceful shutdown stops polling cleanly (US4)
 
 ---
 
-### Phase 4: Webhook Route Extension
+### Phase 4: Webhook Route
 
-**Goal**: Extend the webhook route handler to accept PR review events.
+**Goal**: Accept PR review webhook events on a dedicated endpoint.
 
-**Files**:
-- `packages/orchestrator/src/routes/webhooks.ts` (EXTEND)
+**File**: `packages/orchestrator/src/routes/pr-webhooks.ts` (NEW)
 
-**Tasks**:
-1. **Add PR review webhook handler**:
-   ```typescript
-   server.post(
-     '/webhooks/github/pr-review',
-     {},
-     async (request: FastifyRequest, reply: FastifyReply) => {
-       const body = request.body as { parsed: unknown; raw: string };
-       const rawBody = body.raw;
-       const payload = body.parsed as PrReviewWebhookPayload;
+```typescript
+export interface PrWebhookRouteOptions {
+  monitorService: PrFeedbackMonitorService;
+  webhookSecret?: string;
+  watchedRepos: Set<string>;
+}
 
-       // Verify signature (shared webhookSecret)
-       const signatureHeader = request.headers['x-hub-signature-256'] as string | undefined;
-       if (!verifySignature(webhookSecret, rawBody, signatureHeader)) {
-         server.log.warn('Invalid PR webhook signature');
-         return reply.status(401).send({ error: 'Invalid signature' });
-       }
+export async function setupPrWebhookRoutes(
+  server: FastifyInstance,
+  options: PrWebhookRouteOptions,
+): Promise<void>
+```
 
-       // Only handle review submitted/comment created events
-       if (!['pull_request_review.submitted', 'pull_request_review_comment.created'].includes(payload.action)) {
-         return reply.status(200).send({ status: 'ignored', reason: 'not a review event' });
-       }
+**Endpoint**: `POST /webhooks/github/pr-review`
 
-       // Verify watched repository
-       const repoKey = `${payload.repository.owner.login}/${payload.repository.name}`;
-       if (!watchedRepos.has(repoKey)) {
-         return reply.status(200).send({ status: 'ignored', reason: 'not a watched repository' });
-       }
+**Event handling**:
+- Verify HMAC-SHA256 signature (reuse `verifySignature` from `webhooks.ts`)
+- Accept `pull_request_review.submitted` and `pull_request_review_comment.created`
+- Check `X-GitHub-Event` header to determine event type
+- Extract PR number, body, branch from payload
+- Build `PrReviewEvent` and pass to `monitorService.processPrReviewEvent()`
+- Record webhook event for adaptive polling health
 
-       // Record webhook health
-       prMonitorService.recordWebhookEvent();
-
-       // Process the review event
-       const processed = await prMonitorService.processPrReviewEvent({
-         owner: payload.repository.owner.login,
-         repo: payload.repository.name,
-         prNumber: payload.pull_request.number,
-         prBody: payload.pull_request.body,
-         branchName: payload.pull_request.head.ref,
-         source: 'webhook',
-       });
-
-       return reply.status(200).send({ status: processed ? 'processed' : 'ignored' });
-     }
-   );
-   ```
+**Auth**: Skip auth for this route (add `/webhooks/github/pr-review` to `skipRoutes` in auth middleware).
 
 **Acceptance Criteria**:
-- [ ] Webhook accepts `pull_request_review.submitted` events
-- [ ] Webhook signature validation works (same secret as issue webhook)
-- [ ] Ignored events return 200 status (don't trigger retries)
-- [ ] Latency < 500ms from event receipt to enqueue (SC-001)
+- Webhook-to-enqueue latency < 500ms (SC-001)
+- HMAC signature validation works
+- Non-review events return 200 (don't trigger GitHub retries)
 
 ---
 
@@ -489,723 +392,306 @@ packages/orchestrator/
 
 **Goal**: Extend `ClaudeCliWorker` to handle the `address-pr-feedback` command.
 
-**Files**:
-- `packages/orchestrator/src/worker/pr-feedback-handler.ts` (NEW)
-- `packages/orchestrator/src/worker/claude-cli-worker.ts` (EXTEND)
-- `packages/orchestrator/src/worker/__tests__/pr-feedback-handler.test.ts` (NEW)
+#### 5.1 Create PrFeedbackHandler
 
-**Tasks**:
-1. **Implement PrFeedbackHandler** (Q11 Answer: A - checkout PR branch):
-   ```typescript
-   export class PrFeedbackHandler {
-     constructor(
-       private readonly config: WorkerConfig,
-       private readonly logger: Logger,
-       private readonly processFactory: ProcessFactory,
-       private readonly sseEmitter?: SSEEventEmitter,
-     ) {}
+**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts` (NEW)
 
-     /**
-      * Handle address-pr-feedback command.
-      * Q7 Answer: A - partial completion with retry on timeout.
-      */
-     async handle(context: WorkerContext, metadata: PrFeedbackMetadata): Promise<void> {
-       const { owner, repo, issueNumber } = context.item;
-       const { prNumber } = metadata;
+```typescript
+export class PrFeedbackHandler {
+  constructor(
+    private readonly config: WorkerConfig,
+    private readonly logger: Logger,
+    private readonly processFactory: ProcessFactory,
+    private readonly sseEmitter?: SSEEventEmitter,
+  )
 
-       // 1. Fetch PR to get branch name
-       const pr = await context.github.getPullRequest(owner, repo, prNumber);
-       const branchName = pr.head.ref;
+  async handle(item: QueueItem, checkoutPath: string): Promise<void>
+}
+```
 
-       // 2. Checkout PR branch (Q11 Answer: A)
-       const repoCheckout = new RepoCheckout(this.config.workspaceDir, this.logger);
-       await repoCheckout.switchBranch(context.checkoutPath, branchName);
+**Processing flow**:
 
-       // 3. Fetch fresh unresolved threads (ignore stale metadata)
-       const threads = await this.fetchUnresolvedThreads(context.github, owner, repo, prNumber);
+1. **Extract metadata**: `const { prNumber } = item.metadata as PrFeedbackMetadata`
+2. **Fetch PR**: `github.getPullRequest(owner, repo, prNumber)` → get branch name
+3. **Checkout PR branch**: `repoCheckout.switchBranch(checkoutPath, pr.head.ref)` (Q11: A)
+4. **Fetch fresh unresolved threads**: `github.getPRComments(owner, repo, prNumber)` → filter `resolved === false` (US2: fetch at processing time, not stale metadata)
+5. **If no unresolved threads**: Remove label, return early
+6. **Build feedback prompt**: Include all unresolved comments with file paths and line numbers
+7. **Spawn Claude CLI**: Using existing `CliSpawner` with `phaseTimeoutMs` timeout
+8. **Push changes**: Stage all, commit, push to PR branch
+9. **Reply to threads**: `github.replyToPRComment()` for each thread (Q5: single reply per thread, never resolve)
+10. **Remove label**: `github.removeLabels(owner, repo, issueNumber, ['waiting-for:address-pr-feedback'])`
 
-       if (threads.length === 0) {
-         this.logger.info({ prNumber }, 'No unresolved threads, skipping');
-         await this.completeWithoutChanges(context);
-         return;
-       }
+**Error handling**:
+- **Timeout** (Q7: A): Push partial changes, keep label, re-enqueue on next detection cycle
+- **Reply failure** (Q9: A): Still remove label, log warnings for failed replies
+- **Thread resolution** (SC-006): Never call resolve API — agent only replies
 
-       // 4. Build feedback prompt
-       const prompt = this.buildFeedbackPrompt(threads, pr.html_url);
+**SSE events** (Q20: A): Emit `workflow:started`, `workflow:progress`, `workflow:completed` with `command: 'address-pr-feedback'`.
 
-       // 5. Spawn Claude CLI with timeout
-       const cliSpawner = new CliSpawner(this.processFactory, this.logger, this.config.shutdownGracePeriodMs);
-       const outputCapture = new OutputCapture(this.logger, this.sseEmitter, context);
+#### 5.2 Extend ClaudeCliWorker.handle()
 
-       try {
-         await cliSpawner.spawnWithTimeout(
-           context,
-           ['--prompt', prompt],
-           outputCapture,
-           this.config.phaseTimeoutMs, // 10 min default
-         );
-       } catch (error) {
-         // Timeout or failure (Q7: partial completion)
-         this.logger.warn({ err: error, prNumber }, 'PR feedback addressing timed out or failed');
-         // Don't remove waiting label - re-enqueue will happen
-         throw error;
-       }
+**File**: `packages/orchestrator/src/worker/claude-cli-worker.ts` (EXTEND)
 
-       // 6. Push changes to PR branch
-       await this.pushChanges(context.checkoutPath, branchName);
+Add early routing for `address-pr-feedback` before the existing `process`/`continue` logic:
 
-       // 7. Reply to review threads (Q5 Answer: A - single reply per thread)
-       await this.replyToThreads(context.github, owner, repo, threads, outputCapture.getOutput());
+```typescript
+async handle(item: QueueItem): Promise<void> {
+  // ... existing setup (workerId, logger, SSE started event)
 
-       // 8. Update labels (Q3 Answer: A - don't change phase labels)
-       await context.github.removeLabels(owner, repo, issueNumber, ['waiting-for:address-pr-feedback']);
-       // Optional: await context.github.addLabels(owner, repo, issueNumber, ['completed:address-pr-feedback']);
+  if (item.command === 'address-pr-feedback') {
+    const handler = new PrFeedbackHandler(
+      this.config, workerLogger, this.processFactory, this.sseEmitter,
+    );
+    // Clone repo + checkout will be handled inside handler
+    const defaultBranch = await this.repoCheckout.getDefaultBranch(item.owner, item.repo);
+    const checkoutPath = await this.repoCheckout.ensureCheckout(
+      workerId, item.owner, item.repo, defaultBranch,
+    );
+    await handler.handle(item, checkoutPath);
+    return; // Early return — don't fall through to phase loop (FR-012)
+  }
 
-       this.logger.info({ prNumber }, 'PR feedback addressed successfully');
-     }
-
-     /**
-      * Build prompt for Claude CLI with review feedback.
-      */
-     private buildFeedbackPrompt(threads: ReviewThread[], prUrl: string): string {
-       let prompt = `You are addressing PR review feedback. Read the comments below, make the necessary changes, and reply to each comment explaining what you changed. Never resolve the threads yourself.\n\n`;
-       prompt += `PR: ${prUrl}\n\n`;
-       prompt += `Review Comments:\n`;
-
-       for (const thread of threads) {
-         prompt += `\n---\n`;
-         prompt += `Reviewer: ${thread.reviewer}\n`;
-         if (thread.path) {
-           prompt += `File: ${thread.path}:${thread.line}\n`;
-         }
-         prompt += `Comment: ${thread.body}\n`;
-       }
-
-       return prompt;
-     }
-
-     /**
-      * Reply to review threads via GitHub API.
-      * Q9 Answer: A - mark as partial success if reply fails.
-      */
-     private async replyToThreads(
-       github: GitHubClient,
-       owner: string,
-       repo: string,
-       threads: ReviewThread[],
-       cliOutput: string,
-     ): Promise<void> {
-       for (const thread of threads) {
-         try {
-           const reply = this.generateReply(thread, cliOutput);
-           await github.replyToReviewComment(owner, repo, thread.id, reply);
-           this.logger.info({ threadId: thread.id }, 'Replied to review thread');
-         } catch (error) {
-           this.logger.warn({ err: error, threadId: thread.id }, 'Failed to reply to review thread');
-           // Continue to next thread (partial success)
-         }
-       }
-     }
-   }
-   ```
-
-2. **Extend ClaudeCliWorker.handle()**:
-   ```typescript
-   async handle(item: QueueItem): Promise<void> {
-     // ... existing setup
-
-     if (item.command === 'address-pr-feedback') {
-       const metadata = item.metadata as PrFeedbackMetadata;
-       const handler = new PrFeedbackHandler(
-         this.config,
-         workerLogger,
-         this.processFactory,
-         this.sseEmitter,
-       );
-       await handler.handle(context, metadata);
-       return;
-     }
-
-     // ... existing process/continue logic
-   }
-   ```
+  // ... existing process/continue logic (unchanged)
+}
+```
 
 **Acceptance Criteria**:
-- [ ] Worker checks out PR branch before running Claude CLI
-- [ ] Unresolved threads are fetched fresh (not from stale metadata)
-- [ ] Prompt includes all review comments with file paths
-- [ ] Claude CLI is spawned with feedback prompt
-- [ ] Changes are pushed to PR branch
-- [ ] Review threads receive agent replies (Q5: single reply per thread)
-- [ ] Threads are NOT auto-resolved (SC-006: 0% auto-resolved)
-- [ ] Labels are updated correctly (Q3: keep phase labels unchanged)
-- [ ] SSE events are emitted (Q20 Answer: A - reuse workflow events)
+- Agent checks out PR branch (not default) (US2)
+- Fresh unresolved threads fetched at processing time (US2)
+- Prompt contains all comments with file paths and line numbers (US2)
+- Changes committed and pushed to PR branch (US2)
+- Single consolidated reply per thread (US2)
+- Threads never auto-resolved (SC-006)
+- `waiting-for:address-pr-feedback` removed on completion (US2)
+- SSE events emitted for dashboard streaming (US5)
 
 ---
 
 ### Phase 6: Server Integration
 
-**Goal**: Wire up the PR monitor service in the server initialization flow.
+**Goal**: Wire up the PR monitor service in server initialization and lifecycle.
 
-**Files**:
-- `packages/orchestrator/src/server.ts` (EXTEND)
+**File**: `packages/orchestrator/src/server.ts` (EXTEND)
 
-**Tasks**:
-1. **Initialize PrFeedbackMonitorService**:
-   ```typescript
-   // After label monitor initialization
-   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
-   if (config.prMonitor.enabled && config.repositories.length > 0) {
-     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
-     const queueAdapter = redisQueueAdapter ?? /* fallback */;
+#### Initialization (after label monitor setup, ~line 188)
 
-     prFeedbackMonitorService = new PrFeedbackMonitorService(
-       server.log,
-       createGitHubClient,
-       phaseTracker,
-       queueAdapter,
-       config.prMonitor,
-       config.repositories,
-     );
-   }
-   ```
+```typescript
+let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
+if (config.prMonitor.enabled && config.repositories.length > 0) {
+  const prPhaseTracker = new PhaseTrackerService(server.log, redisClient);
+  const prQueueAdapter = redisQueueAdapter ?? /* fallback logging adapter */;
 
-2. **Register webhook routes**:
-   ```typescript
-   if (prFeedbackMonitorService) {
-     const watchedRepos = new Set(config.repositories.map(r => `${r.owner}/${r.repo}`));
-     await setupPrWebhookRoutes(server, {
-       monitorService: prFeedbackMonitorService,
-       webhookSecret: config.prMonitor.webhookSecret,
-       watchedRepos,
-     });
-   }
-   ```
+  prFeedbackMonitorService = new PrFeedbackMonitorService(
+    server.log,
+    createGitHubClient,
+    prPhaseTracker,
+    prQueueAdapter,
+    config.prMonitor,
+    config.repositories,
+  );
+}
+```
 
-3. **Start polling on server ready**:
-   ```typescript
-   server.addHook('onReady', async () => {
-     // ... existing label monitor polling
+#### Route registration (after issue webhook routes, ~line 219)
 
-     if (prFeedbackMonitorService) {
-       prFeedbackMonitorService.startPolling().catch((error) => {
-         server.log.error({ err: error }, 'PR feedback monitor polling failed');
-       });
-     }
-   });
-   ```
+```typescript
+if (prFeedbackMonitorService) {
+  const watchedRepos = new Set(config.repositories.map(r => `${r.owner}/${r.repo}`));
+  await setupPrWebhookRoutes(server, {
+    monitorService: prFeedbackMonitorService,
+    webhookSecret: config.prMonitor.webhookSecret,
+    watchedRepos,
+  });
+}
+```
 
-4. **Graceful shutdown**:
-   ```typescript
-   setupGracefulShutdown(server, {
-     cleanup: [
-       async () => {
-         // ... existing cleanup
+#### Auth skip routes
 
-         if (prFeedbackMonitorService) {
-           prFeedbackMonitorService.stopPolling();
-         }
-       },
-     ],
-   });
-   ```
+Add `/webhooks/github/pr-review` to `skipRoutes`:
+```typescript
+skipRoutes: ['/health', '/metrics', '/webhooks/github', '/webhooks/github/pr-review'],
+```
+
+#### Lifecycle hooks
+
+**onReady** (~line 230):
+```typescript
+if (prFeedbackMonitorService) {
+  prFeedbackMonitorService.startPolling().catch((error) => {
+    server.log.error({ err: error }, 'PR feedback monitor polling failed');
+  });
+}
+```
+
+**Graceful shutdown** (~line 253):
+```typescript
+if (prFeedbackMonitorService) {
+  prFeedbackMonitorService.stopPolling();
+}
+```
 
 **Acceptance Criteria**:
-- [ ] PR monitor starts polling when server is ready
-- [ ] Polling stops gracefully on server shutdown
-- [ ] No memory leaks or hanging connections
-- [ ] Works correctly when `prMonitor.enabled = false`
+- PR monitor starts polling on server ready (FR-016)
+- Polling stops cleanly on shutdown (FR-016)
+- Skip initialization when `prMonitor.enabled = false` (FR-016)
+- No impact on existing label monitor or dispatcher
 
 ---
 
-### Phase 7: Testing & Validation
+### Phase 7: Testing and Validation
 
-**Goal**: Comprehensive testing to validate all functional and non-functional requirements.
+**Goal**: Comprehensive testing to validate all functional requirements and success criteria.
 
-**Files**:
-- `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (NEW)
-- Update all unit tests for modified components
+#### Unit Tests
 
-**Tasks**:
-1. **Unit Tests**:
-   - `PrLinker`: PR body parsing, branch name parsing, link resolution
-   - `PrFeedbackMonitorService`: polling, enqueue logic, deduplication
-   - `PrFeedbackHandler`: prompt building, thread replies, label management
-   - `ClaudeCliWorker`: command routing for `address-pr-feedback`
+| Test Suite | File | Covers |
+|-----------|------|--------|
+| PrLinker | `worker/__tests__/pr-linker.test.ts` | PR body parsing, branch name parsing, link resolution, orchestration check |
+| PrFeedbackMonitorService | `services/__tests__/pr-feedback-monitor-service.test.ts` | Polling, enqueue, dedup, adaptive polling, workflow name resolution |
+| PrFeedbackHandler | `worker/__tests__/pr-feedback-handler.test.ts` | Branch checkout, prompt building, thread replies, label management, timeout |
+| QueueItem metadata | `types/__tests__/monitor.test.ts` | Serialization, deserialization with metadata |
+| PrMonitorConfig | `config/__tests__/schema.test.ts` | Config validation, defaults, env vars |
 
-2. **Integration Tests**:
-   - End-to-end flow: webhook → enqueue → worker → reply
-   - Polling fallback when webhooks are disabled
-   - Deduplication across webhook + poll paths
-   - Timeout handling (partial completion)
-   - Multiple PRs for same issue (Q14 Answer: A - most recent only)
+#### Integration Tests
 
-3. **Load Tests**:
-   - Concurrency limit enforcement (`maxConcurrentPolls = 3`)
-   - Queue depth under high PR review volume
-   - Rate limit handling (pause when GitHub rate limit hit)
+| Test | Validates |
+|------|-----------|
+| Webhook → enqueue → worker → reply | End-to-end flow with mocked GitHub API |
+| Polling fallback (no webhooks) | SC-003: polling detects within one cycle |
+| Webhook + poll dedup race | SC-004: 0 duplicate enqueues |
+| Worker timeout → partial completion | FR-013: push partial, keep label |
+| Multiple PRs per issue | FR-015: process most recent only |
+| Reply posting failure | FR-007: remove label, log warnings |
 
-4. **Manual Validation**:
-   - SC-002: PR-to-issue linking accuracy > 95%
-   - SC-005: 100% of unresolved comments receive agent reply
-   - SC-006: 0% of threads auto-resolved by agent
+#### Success Criteria Validation
 
-**Acceptance Criteria**:
-- [ ] All unit tests pass with >85% coverage
-- [ ] Integration tests cover happy path and error scenarios
-- [ ] Success criteria SC-001 through SC-006 validated
-- [ ] No regressions in existing label monitor or worker flows
-
----
-
-## API Contracts
-
-### Webhook Payload Schema
-
-**Endpoint**: `POST /webhooks/github/pr-review`
-
-**Headers**:
-- `X-Hub-Signature-256`: HMAC-SHA256 signature for verification
-- `X-GitHub-Event`: `pull_request_review` or `pull_request_review_comment`
-
-**Payload** (example for `pull_request_review.submitted`):
-```json
-{
-  "action": "submitted",
-  "review": {
-    "id": 123456,
-    "state": "changes_requested",
-    "body": "Please fix the validation logic"
-  },
-  "pull_request": {
-    "number": 42,
-    "title": "Implement PR feedback monitor",
-    "body": "Closes #199\n\nThis PR implements...",
-    "head": {
-      "ref": "199-pr-feedback-monitor"
-    },
-    "html_url": "https://github.com/owner/repo/pull/42"
-  },
-  "repository": {
-    "owner": { "login": "generacy-ai" },
-    "name": "generacy"
-  }
-}
-```
-
-**Response**:
-```json
-{
-  "status": "processed" | "ignored" | "duplicate",
-  "event": {
-    "prNumber": 42,
-    "linkedIssue": 199
-  }
-}
-```
-
----
-
-## Data Models
-
-### QueueItem (Extended)
-
-```typescript
-interface QueueItem {
-  owner: string;
-  repo: string;
-  issueNumber: number;
-  workflowName: string;
-  command: 'process' | 'continue' | 'address-pr-feedback'; // EXTENDED
-  priority: number;
-  enqueuedAt: string;
-  metadata?: {
-    // For address-pr-feedback command
-    prNumber?: number;
-    reviewThreadIds?: number[];
-    // Extensible for future commands
-    [key: string]: unknown;
-  };
-}
-```
-
-### PrMonitorConfig
-
-```typescript
-interface PrMonitorConfig {
-  enabled: boolean; // default: true
-  pollIntervalMs: number; // default: 60000 (1 min)
-  webhookSecret?: string; // shared with issue webhook
-  adaptivePolling: boolean; // default: true
-  maxConcurrentPolls: number; // default: 3 (across all repos)
-}
-```
-
-### PrToIssueLink
-
-```typescript
-interface PrToIssueLink {
-  prNumber: number;
-  issueNumber: number;
-  linkMethod: 'pr-body' | 'branch-name';
-}
-```
-
-### ReviewThread
-
-```typescript
-interface ReviewThread {
-  id: number; // GitHub review comment ID
-  path: string | null; // file path for inline comments
-  line: number | null; // line number for inline comments
-  body: string; // comment text
-  resolved: boolean; // thread resolution status
-  reviewer: string; // GitHub username of reviewer
-}
-```
+| ID | Metric | Target | Test Method |
+|----|--------|--------|-------------|
+| SC-001 | Webhook-to-enqueue latency | < 500ms | Timestamp delta in integration test |
+| SC-002 | PR-to-issue linking accuracy | > 95% | Unit tests with 100+ PR format variations |
+| SC-003 | Polling fallback coverage | 100% | Integration test: disable webhook, verify poll detects |
+| SC-004 | Deduplication effectiveness | 0 duplicates | Concurrent webhook + poll test |
+| SC-005 | Reply completeness | 100% | Verify all unresolved threads receive reply |
+| SC-006 | Thread auto-resolve prevention | 0% | Verify `replyToPRComment` used (not resolve API) |
 
 ---
 
 ## Key Technical Decisions
 
-### 1. **Separate Service vs. Extend LabelMonitor**
-**Decision**: Create `PrFeedbackMonitorService` as a separate service (Q12 Answer: A)
-**Rationale**:
-- Clean separation of concerns (issue labels vs. PR reviews are different event sources)
-- Independent configuration and state management
-- Easier to test and maintain
-- Mirrors proven architecture of `LabelMonitorService`
+### 1. Separate `PrFeedbackMonitorService` vs extending `LabelMonitorService`
 
-### 2. **QueueItem Command Extension**
-**Decision**: Extend `command` type union to include `'address-pr-feedback'` (Q2 Answer: A)
-**Rationale**:
-- Type-safe command routing in `ClaudeCliWorker`
-- Clear distinction from `process`/`continue` flows
-- Enables command-specific logic (checkout PR branch vs. create branch)
-- Better observability in logs and metrics
+**Decision**: Separate service (Q12: A, FR-016)
 
-### 3. **Metadata Storage**
-**Decision**: Add optional `metadata` field to `QueueItem` (Q16 Answer: A)
-**Rationale**:
-- Flexible, extensible design for future commands
-- Avoids encoding PR data in priority score or command string
-- Properly serialized/deserialized by `RedisQueueAdapter`
-- Type-safe via `Record<string, unknown>` with runtime validation
+**Rationale**: PR review events and issue label events are fundamentally different event sources with different webhook types, polling strategies, and processing logic. Keeping them separate follows SRP, enables independent configuration (`prMonitor` vs `monitor`), and avoids bloating `LabelMonitorService` which is already 489 lines.
 
-### 4. **Review State vs. Thread-Based Detection**
-**Decision**: Ignore review state, only check `resolved: false` threads (Q15 Answer: A)
-**Rationale**:
-- More accurate: a reviewer can approve while leaving unresolved threads for follow-up
-- Simpler logic: single source of truth (thread resolution status)
-- Avoids edge cases with `dismissed` reviews and state transitions
-- Aligns with user story: "agent addresses unresolved comments"
+### 2. Atomic deduplication via `tryMarkProcessed`
 
-### 5. **Label Management During Feedback**
-**Decision**: Keep existing phase labels unchanged (Q3 Answer: A)
-**Rationale**:
-- PR feedback is an interrupt/side-quest, not a formal phase
-- Preserves workflow state (e.g., issue stays in `phase:implement`)
-- Only add/remove `waiting-for:address-pr-feedback` for tracking
-- Simplifies gate checking (no integration needed, Q19 Answer: A)
+**Decision**: Add `SET NX` method to `PhaseTrackerService`
 
-### 6. **Worker Timeout Handling**
-**Decision**: Partial completion with retry on timeout (Q7 Answer: A)
-**Rationale**:
-- Don't discard agent's partial work (some threads may be addressed)
-- Push whatever changes were made, reply to addressed threads
-- Keep `waiting-for:address-pr-feedback` label for retry
-- Prevents wasted work on complex PRs with many review threads
+**Rationale**: The existing `isDuplicate()` + `markProcessed()` pattern has a TOCTOU race between check and set. For PR feedback where webhook and poll may process the same PR simultaneously, atomic `SET key value EX ttl NX` guarantees exactly one winner. This is additive — existing code using `isDuplicate`/`markProcessed` is unaffected.
 
-### 7. **Adaptive Polling Strategy**
-**Decision**: Mirror label monitor logic (Q18 Answer: A)
-**Rationale**:
-- Proven approach: increase frequency when no webhooks received in 2x pollInterval
-- Consistent behavior across monitoring services
-- Reduces latency when webhooks are unavailable
-- Automatically recovers when webhooks resume
+### 3. Reuse existing `GitHubClient` methods
 
-### 8. **Concurrency Limiting**
-**Decision**: `maxConcurrentPolls` limits API calls across all repos (Q10 Answer: A)
-**Rationale**:
-- Prevents overwhelming GitHub API (rate limit: 5000 req/hr)
-- Fair resource allocation across multiple repos
-- Simpler to configure (single global limit)
-- Consistent with `LabelMonitorService` semaphore pattern
+**Decision**: Use `getPRComments()` and `replyToPRComment()` from existing interface
 
-### 9. **Branch Checkout Strategy**
-**Decision**: Checkout existing PR branch (Q11 Answer: A)
-**Rationale**:
-- Changes must be made on top of current PR state
-- Avoids conflicts from default branch divergence
-- Aligns with PR review workflow (review what's in the PR)
-- Worker can directly push to PR branch after changes
+**Rationale**: The `GitHubClient` interface already has these methods implemented via `gh` CLI. The `Comment` type already has `path`, `line`, `in_reply_to_id`, and `resolved` fields. No need for GraphQL — the existing REST-based `gh api` calls provide thread resolution status.
 
-### 10. **Reply Strategy**
-**Decision**: Single consolidated reply per thread (Q5 Answer: A)
-**Rationale**:
-- Clean, organized thread conversations
-- Summarizes all changes in one comment
-- Avoids notification spam to reviewers
-- Simplifies testing and validation (SC-005)
+**Missing**: Need to add `listOpenPullRequests()` to the interface and implement in `GhCliGitHubClient`.
+
+### 4. Label naming: `waiting-for:address-pr-feedback`
+
+**Decision**: Create new label (not reuse `waiting-for:pr-feedback`)
+
+**Rationale**: The existing `waiting-for:pr-feedback` (line 37) serves as a general gate label meaning "PR needs human review feedback". The new `waiting-for:address-pr-feedback` specifically means "agent is actively addressing PR feedback". These are semantically different states — one is waiting for human action, the other is waiting for agent action.
+
+### 5. Adaptive polling: 50% reduction vs 3x speedup
+
+**Decision**: Follow spec US4 — decrease interval by 50% (divide by 2)
+
+**Rationale**: The spec explicitly states "Polling interval decreases by 50%" (US4). The existing `LabelMonitorService` uses `ADAPTIVE_DIVISOR = 3` which is a 66% reduction. We follow the spec for this service since it's explicitly stated, though the difference is minor.
+
+### 6. Prompt construction approach
+
+**Decision**: Build a structured text prompt with all review comments
+
+**Rationale**: The prompt includes all unresolved review comments with file paths, line numbers, and reviewer names. This gives Claude CLI full context to make targeted changes. The prompt instructs the agent to: make changes, commit, and reply to each thread — but never resolve threads.
 
 ---
 
-## Risk Mitigation Strategies
+## Risk Mitigation
 
-### Risk 1: GitHub API Rate Limits
-**Likelihood**: Medium
-**Impact**: High (polling stops, events missed)
-
-**Mitigation**:
-- Respect `X-RateLimit-Remaining` headers, pause polling when limit approached
-- Use conditional requests (`If-None-Match`) where possible
-- Webhook-first approach (polling is fallback only)
-- `maxConcurrentPolls` limits concurrent API calls
-- Structured logging of rate limit status for monitoring
-
-### Risk 2: Webhook Delivery Failures
-**Likelihood**: Medium
-**Impact**: Medium (delayed feedback addressing)
-
-**Mitigation**:
-- Polling fallback catches missed webhook events within one poll cycle (SC-003)
-- Adaptive polling increases frequency when webhooks go unhealthy
-- Redis deduplication prevents double-processing when webhook arrives late (Q8)
-- Idempotent enqueue logic (PhaseTracker prevents duplicates)
-
-### Risk 3: PR-to-Issue Linking Failures
-**Likelihood**: Medium
-**Impact**: Medium (PR not processed)
-
-**Mitigation**:
-- Dual linking methods (PR body + branch name) increase success rate
-- Fallback chain: PR body (priority) → branch name → skip
-- Validation: verify issue exists and has `agent:*` label
-- Structured logging of link failures for debugging
-- Target: >95% linking accuracy (SC-002)
-
-### Risk 4: Worker Timeout on Large PRs
-**Likelihood**: Medium
-**Impact**: Medium (partial addressing)
-
-**Mitigation**:
-- Partial completion strategy: push changes made so far, reply to addressed threads
-- Keep `waiting-for:address-pr-feedback` label for automatic retry
-- `phaseTimeoutMs` configurable (default 10 min, can extend for PR feedback)
-- Structured logging of timeout events for tuning
-- Q7 Answer: Prefer partial work over full rollback
-
-### Risk 5: Concurrent Feedback While Agent is Working
-**Likelihood**: Low
-**Impact**: Low (new comments missed)
-
-**Mitigation**:
-- Q4 Answer: Skip new events until current completes, process fresh comments in next cycle
-- PhaseTracker deduplication prevents concurrent processing of same issue
-- Worker always fetches fresh threads (ignores stale metadata)
-- Worst case: reviewer adds comment, agent completes, next poll cycle detects new comment
-
-### Risk 6: Reply Posting Failures
-**Likelihood**: Low
-**Impact**: Low (reviewer doesn't see agent response)
-
-**Mitigation**:
-- Q9 Answer: Mark as partial success, remove `waiting-for` label, let reviewer see changes
-- Continue to next thread on failure (don't fail entire job)
-- Structured logging of reply failures
-- Manual fallback: reviewer can see changes in PR commits
-
-### Risk 7: Race Condition (Webhook + Polling)
-**Likelihood**: Medium
-**Impact**: Low (wasted API call)
-
-**Mitigation**:
-- Q8 Answer: Trust PhaseTracker Redis deduplication
-- Atomic check-and-set in `isDuplicate()`/`markProcessed()` sequence
-- Both paths use same dedup key pattern
-- Idempotent label operations (adding existing label is no-op)
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| GitHub API rate limits during polling | Medium | High | `maxConcurrentPolls=3` across repos, webhook-first approach |
+| Webhook delivery failure | Medium | Medium | Polling fallback detects within one cycle, adaptive frequency increase |
+| PR-to-issue linking failure | Medium | Medium | Dual strategy (body + branch), verify `agent:*` label, structured logging |
+| Worker timeout on large PRs | Medium | Medium | Partial completion: push changes, keep label, retry next cycle (Q7) |
+| Webhook + poll race condition | Medium | Low | Atomic `SET NX` dedup in PhaseTracker (Q8) |
+| Reply posting failures | Low | Low | Partial success: remove label, log warnings, reviewer sees commits (Q9) |
+| `listOpenPullRequests` not available | N/A | N/A | Add to GitHubClient interface + GhCliGitHubClient implementation |
 
 ---
 
-## Testing Strategy
-
-### Unit Tests
-- **PrLinker**: Mocked GitHub API responses, cover all parsing edge cases
-- **PrFeedbackMonitorService**: Mocked dependencies, test polling and enqueue logic
-- **PrFeedbackHandler**: Mocked CliSpawner and GitHub client, test prompt building and replies
-- **Config validation**: Test schema parsing with valid/invalid configs
-
-### Integration Tests
-- **End-to-end flow**: Real Redis, mocked GitHub API, test webhook → queue → worker → reply
-- **Polling fallback**: Disable webhooks, verify polling detects events within one cycle
-- **Deduplication**: Send duplicate webhook + poll events, verify single enqueue
-- **Timeout handling**: Mock slow CLI, verify partial completion and retry
-
-### Manual Tests
-- **Live GitHub repo**: Create test PR with review comments, verify agent addresses feedback
-- **Multiple PRs**: Test Q14 scenario (most recent PR processed)
-- **Branch checkout**: Verify worker checks out PR branch, not default branch
-- **Thread resolution**: Verify agent never auto-resolves threads (SC-006)
-
-### Performance Tests
-- **Polling concurrency**: 10 repos × 20 open PRs, verify maxConcurrentPolls respected
-- **Queue throughput**: Enqueue 100 PR feedback items, verify FIFO processing
-- **Webhook latency**: Measure time from webhook receipt to enqueue (target: <500ms, SC-001)
-
----
-
-## Observability
-
-### Structured Logging Events
-
-**PR Feedback Detection**:
-```json
-{
-  "level": "info",
-  "msg": "PR feedback detected",
-  "prNumber": 42,
-  "linkedIssue": 199,
-  "unresolvedThreads": 3,
-  "linkMethod": "pr-body",
-  "source": "webhook"
-}
-```
-
-**Enqueue**:
-```json
-{
-  "level": "info",
-  "msg": "PR feedback enqueued",
-  "owner": "generacy-ai",
-  "repo": "generacy",
-  "issue": 199,
-  "prNumber": 42,
-  "workflowName": "speckit-feature",
-  "priority": 1645123456789
-}
-```
-
-**Worker Processing**:
-```json
-{
-  "level": "info",
-  "msg": "Addressing PR feedback",
-  "workerId": "uuid",
-  "prNumber": 42,
-  "unresolvedThreads": 3,
-  "branchName": "199-pr-feedback-monitor"
-}
-```
-
-**Reply Success**:
-```json
-{
-  "level": "info",
-  "msg": "Replied to review thread",
-  "threadId": 12345,
-  "prNumber": 42,
-  "file": "src/services/pr-monitor.ts",
-  "line": 42
-}
-```
-
-### Metrics (for future dashboard)
-- `pr_feedback_events_total` (by source: webhook/poll)
-- `pr_feedback_enqueued_total`
-- `pr_feedback_processed_total`
-- `pr_feedback_threads_addressed_total`
-- `pr_linking_failures_total` (by reason: not-orchestrated, parse-failed)
-- `webhook_latency_ms` (p50, p95, p99)
-
-### SSE Events
-**Q20 Answer: A - Reuse workflow events**
-- `workflow:started` with `command: 'address-pr-feedback'`
-- `workflow:progress` during CLI execution
-- `workflow:completed` after replies posted
-
----
-
-## Deployment Considerations
-
-### Environment Variables
-```bash
-# PR Monitor Configuration
-PR_MONITOR_ENABLED=true
-PR_MONITOR_POLL_INTERVAL_MS=60000
-PR_MONITOR_ADAPTIVE_POLLING=true
-PR_MONITOR_MAX_CONCURRENT_POLLS=3
-
-# Shared webhook secret
-WEBHOOK_SECRET=<same as issue webhook>
-
-# Worker timeout (optional, increase for large PRs)
-PHASE_TIMEOUT_MS=600000  # 10 min default
-```
+## Deployment Notes
 
 ### GitHub Webhook Configuration
-**New webhook required** (in addition to existing issue webhook):
+
+New webhook (in addition to existing issue webhook):
 - **Payload URL**: `https://orchestrator.example.com/webhooks/github/pr-review`
 - **Content type**: `application/json`
-- **Secret**: Same as issue webhook secret
-- **Events**:
-  - `Pull request review`
-  - `Pull request review comment`
+- **Secret**: Same as issue webhook secret (or separate)
+- **Events**: `Pull request review`, `Pull request review comment`
 
-### Redis Schema Changes
-**New keys**:
-- `phase-tracker:{owner}:{repo}:{issue}:address-pr-feedback` (TTL: 24h)
-- Queue items in `orchestrator:queue:pending` will have new `metadata` field
+### Environment Variables
 
-**Migration**: No migration needed (additive changes only)
+```bash
+PR_MONITOR_ENABLED=true              # default: true
+PR_MONITOR_POLL_INTERVAL_MS=60000    # default: 60000 (1 min)
+PR_MONITOR_ADAPTIVE_POLLING=true     # default: true
+PR_MONITOR_MAX_CONCURRENT_POLLS=3    # default: 3
+PR_MONITOR_WEBHOOK_SECRET=<secret>   # optional, for signature verification
+```
 
 ### Rollout Strategy
-1. **Phase 1**: Deploy with `PR_MONITOR_ENABLED=false`, validate server starts correctly
-2. **Phase 2**: Enable polling only (`PR_MONITOR_ENABLED=true`, no webhook configured yet)
-3. **Phase 3**: Configure webhook, test end-to-end flow on test repository
-4. **Phase 4**: Enable for production repositories, monitor logs and metrics
-5. **Phase 5**: Tune `pollIntervalMs` and `maxConcurrentPolls` based on observed load
+
+1. Deploy with `PR_MONITOR_ENABLED=false` — validate server starts correctly
+2. Enable with polling only (no webhook configured)
+3. Configure webhook on test repository, validate end-to-end
+4. Enable for production repositories
+
+### Redis Changes
+
+- New keys: `phase-tracker:{owner}:{repo}:{issue}:address-pr-feedback` (TTL: 24h)
+- Queue items in `orchestrator:queue:pending` gain optional `metadata` field
+- No migration needed (all changes are additive)
 
 ---
 
-## Success Metrics
+## Appendix: Clarification Answers Applied
 
-| Metric | Target | Measurement |
-|--------|--------|-------------|
-| SC-001: Webhook latency | < 500ms | Timestamp delta: webhook receipt → enqueue |
-| SC-002: PR linking accuracy | > 95% | Manual validation: 100 test PRs, count successful links |
-| SC-003: Polling fallback coverage | 100% | Integration test: disable webhook, verify poll detects event |
-| SC-004: Deduplication effectiveness | 0 duplicates | Redis query: count duplicate `phase-tracker` keys |
-| SC-005: Reply completeness | 100% | GitHub API: verify all unresolved threads have agent reply |
-| SC-006: Thread auto-resolve prevention | 0% auto-resolved | GitHub API: verify `resolved: false` after agent reply |
-
----
-
-## Appendix: Clarification Answers Summary
-
-For reference, here are the selected answers to clarification questions:
-
-| Question | Answer | Impact |
-|----------|--------|--------|
-| Q1: Multiple issue references in PR | B: First issue only | `PrLinker.parsePrBody()` returns first match |
-| Q2: QueueItem command extension | A: Extend type union | Add `'address-pr-feedback'` to command type |
-| Q3: Label workflow during PR feedback | A: Keep existing phase labels | Only add/remove `waiting-for:address-pr-feedback` |
-| Q4: Multiple review events | A: Queue after current completes | PhaseTracker dedup blocks concurrent processing |
-| Q5: Review comment reply strategy | A: Single reply per thread | `PrFeedbackHandler.replyToThreads()` posts one comment per thread |
-| Q6: Polling PR selection | A: Process all in parallel | Enqueue all orchestrated PRs, dispatcher handles concurrency |
-| Q7: Worker timeout | A: Partial completion with retry | Push partial changes, keep `waiting-for` label |
-| Q8: Webhook vs. polling race | A: Redis dedup sufficient | PhaseTracker handles concurrent checks |
-| Q9: Reply posting error | A: Mark as partial success | Remove `waiting-for` label, log warnings |
-| Q10: Multi-repo polling | A: Across all repositories | `maxConcurrentPolls=3` total across all repos |
-| Q11: Branch checkout | A: Check out PR branch | Fetch and checkout existing PR branch |
-| Q12: Service architecture | A: New PrFeedbackMonitorService | Separate service class |
-| Q13: Workflow name preservation | A: Read from issue labels | Query issue labels for `process:*` or `completed:*` |
-| Q14: Concurrent feedback on multiple PRs | A: Process most recent PR only | Skip older PRs (out of scope per spec) |
-| Q15: Review state filtering | A: Strict unresolved-thread-only | Ignore review state, check `resolved: false` |
-| Q16: PR metadata in queue item | A: Extend QueueItem with metadata field | Add optional `metadata?: Record<string, unknown>` |
-| Q17: Configuration grouping | A: Separate prMonitor config | Add `prMonitor` field to `OrchestratorConfigSchema` |
-| Q18: Adaptive polling trigger | A: Mirror label monitor logic | If no webhook in 2x pollInterval, decrease interval by 50% |
-| Q19: Gate integration | A: No gate integration | Treat as interrupt, don't participate in gate system |
-| Q20: SSE event streaming | A: Reuse workflow events | Emit `workflow:started/progress/completed` events |
+| Q# | Answer | Implementation Impact |
+|----|--------|----------------------|
+| Q1 | B: First issue only | `PrLinker.parsePrBody()` returns first match |
+| Q2 | A: Extend type union | `command: '...' \| 'address-pr-feedback'` |
+| Q3 | A: Keep phase labels | Only add/remove `waiting-for:address-pr-feedback` |
+| Q4 | A: Queue after current completes | PhaseTracker blocks re-enqueue while in progress |
+| Q5 | A: Single reply per thread | One `replyToPRComment()` call per thread |
+| Q6 | A: Process all in parallel | Each issue gets its own queue item |
+| Q7 | A: Partial completion + retry | Push partial changes, keep label |
+| Q8 | A: Redis dedup sufficient | Atomic `SET NX` in `tryMarkProcessed()` |
+| Q9 | A: Partial success | Remove label, log warnings for failed replies |
+| Q10 | A: Across all repos | `maxConcurrentPolls=3` global semaphore |
+| Q11 | A: Checkout PR branch | `repoCheckout.switchBranch(checkoutPath, pr.head.ref)` |
+| Q12 | A: New PrFeedbackMonitorService | Separate service class |
+| Q13 | A: Read from issue labels | Query `process:*` or `completed:*` labels |
+| Q14 | A: Most recent PR only | Sort by `updated_at`, take first |
+| Q15 | A: Thread-only detection | Ignore review state, check `resolved: false` |
+| Q16 | A: Extend QueueItem with metadata | `metadata?: Record<string, unknown>` |
+| Q17 | A: Separate prMonitor config | `PrMonitorConfigSchema` in config |
+| Q18 | A: Mirror label monitor | 50% interval decrease when webhooks unhealthy |
+| Q19 | A: No gate integration | Early return in worker, no gate check |
+| Q20 | A: Reuse workflow events | `workflow:started/progress/completed` SSE events |
 
 ---
 
