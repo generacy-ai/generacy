@@ -1,4 +1,4 @@
-# Tasks: PR Feedback Monitor for Orchestrated Issues
+# Tasks: PR Feedback Monitor
 
 **Input**: Design documents from feature directory
 **Prerequisites**: plan.md (required), spec.md (required)
@@ -6,836 +6,329 @@
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to (US1-US5)
+- **[Story]**: Which user story this task belongs to
 
 ---
 
-## Phase 1: Type Extensions and Configuration (Foundation)
+## Phase 1: Type Extensions and Configuration
 
-### T001 [US1] Extend QueueItem type with address-pr-feedback command
+### T001 [US1] Extend `QueueItem` type with `address-pr-feedback` command and metadata
 **File**: `packages/orchestrator/src/types/monitor.ts`
-- Add `'address-pr-feedback'` to command union type
-- Add optional `metadata?: Record<string, unknown>` field to QueueItem interface
-- Export PrFeedbackMetadata interface with `prNumber` and `reviewThreadIds`
-- Ensure TypeScript compiles without errors
+- Add `'address-pr-feedback'` to the `command` union: `'process' | 'continue' | 'address-pr-feedback'`
+- Add optional `metadata?: Record<string, unknown>` field to `QueueItem`
+- Add new `PrFeedbackMetadata` interface with `prNumber: number` and `reviewThreadIds: number[]`
+- Add `PrReviewEvent` interface with `owner`, `repo`, `prNumber`, `prBody`, `branchName`, `source: 'webhook' | 'poll'`
+- Add `PrToIssueLink` interface with `prNumber`, `issueNumber`, `linkMethod: 'pr-body' | 'branch-name'`
+- Add `GitHubPrReviewWebhookPayload` interface for webhook deserialization (model after existing `GitHubWebhookPayload` — include `action`, `review`, `comment`, `pull_request`, `repository` fields)
+- Verify existing `SerializedQueueItem`, `QueueAdapter`, `QueueManager` all remain compatible (they extend `QueueItem`)
 
-### T002 [P] [US1] Add PR-specific type definitions
-**File**: `packages/orchestrator/src/types/monitor.ts`
-- Define `PrToIssueLink` interface (prNumber, issueNumber, linkMethod)
-- Define `ReviewThread` interface (id, path, line, body, resolved, reviewer)
-- Define `PrFeedbackMetadata` interface for queue metadata
-- Add JSDoc comments for all new types
-
-### T003 [P] [US1] Extend orchestrator config schema for PR monitor
+### T002 [P] [US1] Add `PrMonitorConfig` to configuration schema
 **File**: `packages/orchestrator/src/config/schema.ts`
-- Create `PrMonitorConfigSchema` with zod:
-  - `enabled` (default: true)
-  - `pollIntervalMs` (default: 60000, min: 5000)
-  - `webhookSecret` (optional string)
-  - `adaptivePolling` (default: true)
-  - `maxConcurrentPolls` (default: 3, min: 1, max: 20)
+- Add `PrMonitorConfigSchema` with zod: `enabled` (boolean, default true), `pollIntervalMs` (int, min 5000, default 60000), `webhookSecret` (string, optional), `adaptivePolling` (boolean, default true), `maxConcurrentPolls` (int, min 1, max 20, default 3)
 - Export `PrMonitorConfig` type
-- Add `prMonitor` field to `OrchestratorConfigSchema` with default empty object
+- Add `prMonitor: PrMonitorConfigSchema.default({})` to `OrchestratorConfigSchema`
 
-### T004 [US1] Update RedisQueueAdapter to handle metadata field
-**File**: `packages/orchestrator/src/services/redis-queue-adapter.ts`
-- Verify metadata field serialization in `enqueue()` method
-- Verify metadata field deserialization in `claim()` method
-- Add unit tests for metadata round-trip (serialize → deserialize)
+### T003 [P] [US1] Add environment variable loading for PR monitor config
+**File**: `packages/orchestrator/src/config/loader.ts`
+- Add env var mappings: `PR_MONITOR_ENABLED` → `prMonitor.enabled`, `PR_MONITOR_POLL_INTERVAL_MS` → `prMonitor.pollIntervalMs`, `PR_MONITOR_WEBHOOK_SECRET` → `prMonitor.webhookSecret`, `PR_MONITOR_ADAPTIVE_POLLING` → `prMonitor.adaptivePolling`, `PR_MONITOR_MAX_CONCURRENT_POLLS` → `prMonitor.maxConcurrentPolls`
+- Follow existing env loading pattern (check `process.env`, parse as int/boolean as appropriate)
+
+### T004 [P] [US1] Export new config types from config barrel
+**File**: `packages/orchestrator/src/config/index.ts`
+- Add exports for `PrMonitorConfigSchema` and `PrMonitorConfig` type
+
+### T005 [P] [US2] Add `waiting-for:address-pr-feedback` label definition
+**File**: `packages/workflow-engine/src/actions/github/label-definitions.ts`
+- Add `{ name: 'waiting-for:address-pr-feedback', color: 'FBCA04', description: 'Agent is addressing PR review feedback' }` to `WORKFLOW_LABELS` array (after the existing `waiting-for:pr-feedback` entry)
+
+### T006 [P] [US4] Add `listOpenPullRequests` to `GitHubClient` interface
+**File**: `packages/workflow-engine/src/actions/github/client/interface.ts`
+- Add `listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>` to the `GitHubClient` interface under PR Operations section
+
+### T007 [US4] Implement `listOpenPullRequests` in `GhCliGitHubClient`
+**File**: `packages/workflow-engine/src/actions/github/client/gh-cli.ts`
+- Implement using `gh pr list -R {owner}/{repo} --state open --json number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,labels,createdAt,updatedAt --limit 100`
+- Map the JSON output to `PullRequest[]` type (handle field name differences between gh CLI JSON and our types — e.g., `headRefName` → `head.ref`, `isDraft` → `draft`)
+- Handle empty result (no open PRs) gracefully
+
+### T008 [US1] Add `tryMarkProcessed` atomic method to `PhaseTrackerService`
+**File**: `packages/orchestrator/src/services/phase-tracker-service.ts`
+- Add `tryMarkProcessed(owner, repo, issue, phase): Promise<boolean>` method
+- Use Redis `SET key value EX ttl NX` for atomic check-and-set
+- Return `true` if this call won the race (key was set — not a duplicate)
+- Return `false` if already processed (duplicate)
+- If Redis unavailable, return `true` (graceful degradation — treat as not duplicate)
+- Add to `PhaseTracker` interface in `types/monitor.ts`
 
 ---
 
-## Phase 2: PR-to-Issue Linking Utility
+## Phase 2: PR-to-Issue Linking
 
-### T005 [US3] Implement PrLinker class with PR body parsing
+### T009 [US3] Create `PrLinker` utility class
 **File**: `packages/orchestrator/src/worker/pr-linker.ts` (NEW)
-- Create `PrLinker` class
-- Implement `parsePrBody(prBody: string): number | null`
-  - Define CLOSING_KEYWORDS array (close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved)
-  - Parse PR body using regex for "keyword #number" patterns
-  - Return first matched issue number (case-insensitive)
-  - Return null if no match found
-- Add JSDoc with examples
+- Implement `parsePrBody(body: string): number | null` — regex for closing keywords (`close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved #N`, case-insensitive, word-boundary aware); return first matched issue number only
+- Implement `parseBranchName(branch: string): number | null` — regex for `^(\d+)-` pattern; return captured number or null
+- Implement `async linkPrToIssue(github: GitHubClient, owner: string, repo: string, pr: { number: number; body: string; head: { ref: string } }): Promise<PrToIssueLink | null>`:
+  - Try PR body first, then branch name fallback
+  - Verify linked issue exists and has an `agent:*` label (call `github.getIssue()`, check labels)
+  - Return `null` for unlinked or non-orchestrated PRs
+  - Log which linking method succeeded
 
-### T006 [US3] Implement branch name parsing in PrLinker
-**File**: `packages/orchestrator/src/worker/pr-linker.ts`
-- Implement `parseBranchName(branchName: string): number | null`
-  - Match pattern `{number}-{description}` (e.g., "199-feature-name")
-  - Extract and validate issue number
-  - Return null for invalid formats
-- Handle edge cases (leading zeros, non-numeric prefixes)
-
-### T007 [US3] Implement PR-to-issue linking with GitHub API
-**File**: `packages/orchestrator/src/worker/pr-linker.ts`
-- Implement `linkPrToIssue()` method
-  - Call `parsePrBody()` first (priority method)
-  - Fallback to `parseBranchName()` if body parsing fails
-  - Return `PrToIssueLink` with linkMethod indicator
-  - Return null if both methods fail
-- Add structured logging for link resolution (info level)
-
-### T008 [US3] Implement orchestration verification in PrLinker
-**File**: `packages/orchestrator/src/worker/pr-linker.ts`
-- Implement `verifyOrchestrated()` method
-  - Fetch issue labels via GitHub API
-  - Check for any `agent:*` label
-  - Return boolean (true if orchestrated)
-  - Handle 404 errors gracefully (issue not found → false)
-- Add error handling with try-catch
-
-### T009 [P] [US3] Write comprehensive PrLinker unit tests
+### T010 [P] [US3] Write unit tests for `PrLinker`
 **File**: `packages/orchestrator/src/worker/__tests__/pr-linker.test.ts` (NEW)
-- Test `parsePrBody()`:
-  - Valid closing keywords (Closes, Fixes, Resolves with #123)
-  - Case insensitivity
-  - Multiple issue references (returns first)
-  - No matches (returns null)
-  - Malformed body text
-- Test `parseBranchName()`:
-  - Valid format "123-description"
-  - Invalid formats (no dash, no number, letters first)
-  - Edge cases (leading zeros, special characters)
-- Test `linkPrToIssue()`:
-  - PR body takes priority over branch name
-  - Fallback to branch name when body empty
-  - Returns null when both fail
-- Test `verifyOrchestrated()`:
-  - Issue with agent:* label returns true
-  - Issue without agent label returns false
-  - Non-existent issue returns false
-- Mock GitHub API responses
-- Target >90% code coverage
+- Test `parsePrBody` with: `Closes #42`, `fixes #7`, `Resolves #100`, mixed case, multiple issues (verify first wins), no keywords, empty body
+- Test `parseBranchName` with: `42-feature-name`, `7-fix`, `100-`, `not-a-number`, empty string, date-prefixed branches
+- Test `linkPrToIssue` with: PR body priority over branch name, non-orchestrated issue (no `agent:*` label), issue not found, both methods failing → null
+- Verify > 95% linking accuracy on standard PR conventions (SC-002)
 
 ---
 
 ## Phase 3: PR Feedback Monitor Service
 
-### T010 [US1,US4] Create PrFeedbackMonitorService skeleton
+### T011 [US1] Create `PrFeedbackMonitorService` class
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` (NEW)
-- Define class structure with constructor
-- Inject dependencies (logger, GitHubClientFactory, PhaseTracker, QueueAdapter, PrLinker)
-- Add config options and repositories list
-- Define private fields (abortController, state)
-- Add state getter `getState(): Readonly<MonitorState>`
+- Constructor: accept `logger`, `createClient: GitHubClientFactory`, `phaseTracker: PhaseTracker`, `queueAdapter: QueueAdapter`, `config: PrMonitorConfig`, `repositories: RepositoryConfig[]`
+- Maintain internal state: `MonitorState` (isPolling, webhookHealthy, lastWebhookEvent, currentPollIntervalMs, basePollIntervalMs)
+- Implement `getState(): Readonly<MonitorState>`
+- Implement `recordWebhookEvent(): void` — update `lastWebhookEvent` and `webhookHealthy`, reset poll interval to base
 
-### T011 [US1] Implement unresolved thread detection
+### T012 [US1] Implement `processPrReviewEvent()` in monitor service
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Create `fetchReviewThreads()` private method
-  - Call GitHub API: `GET /repos/{owner}/{repo}/pulls/{pr}/comments`
-  - Map response to `ReviewThread[]` array
-  - Handle pagination if needed
-  - Handle API errors (rate limit, 404)
-- Create `filterUnresolvedThreads()` helper
-  - Filter threads where `resolved === false`
-  - Ignore review state (submitted, changes_requested, etc.)
+- Accept `PrReviewEvent` and return `Promise<boolean>` (processed or not)
+- Create `GitHubClient` via factory
+- Use `PrLinker.linkPrToIssue()` to find linked issue
+- If not linked → return false
+- Fetch PR review comments via `github.getPRComments()`, filter for `resolved === false`
+- If no unresolved threads → return false
+- Deduplicate via `phaseTracker.tryMarkProcessed(owner, repo, issue, 'address-pr-feedback')` — if duplicate, return false
+- Resolve workflow name from issue labels (`process:*` or `completed:*` prefix)
+- Build `QueueItem` with `command: 'address-pr-feedback'`, `metadata: { prNumber, reviewThreadIds }`
+- Enqueue via `queueAdapter.enqueue()`
+- Add `waiting-for:address-pr-feedback` label to linked issue
+- Return true
 
-### T012 [US1,US2] Implement PR review event processing
+### T013 [US4] Implement polling loop in monitor service
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Implement `processPrReviewEvent()` method
-  - Accept event object (owner, repo, prNumber, prBody, branchName, source)
-  - Call `prLinker.linkPrToIssue()` to get linked issue
-  - Return false if no link found (log warning)
-  - Call `prLinker.verifyOrchestrated()` to validate issue
-  - Return false if not orchestrated (log info)
-  - Fetch unresolved threads
-  - Return false if no unresolved threads (log info)
-  - Call `enqueuePrFeedback()` if threads exist
-  - Return true on successful processing
-- Add structured logging at each step
+- Implement `startPolling(): Promise<void>` — infinite loop with adaptive interval, controlled by `isPolling` flag
+- Implement `stopPolling(): void` — set `isPolling` to false for graceful exit
+- Implement `poll(): Promise<void>` — single poll cycle across all watched repositories
+- Implement `pollRepo(owner, repo): Promise<void>`:
+  - Call `github.listOpenPullRequests(owner, repo)`
+  - For each open PR: link to issue, check for unresolved threads
+  - When multiple PRs exist for same issue: process only the most recently updated PR (FR-015), log warning for skipped older PRs
+  - Call `processPrReviewEvent()` for eligible PRs (builds `PrReviewEvent` with `source: 'poll'`)
+- Use semaphore for `maxConcurrentPolls` across all repos (mirror `LabelMonitorService` pattern)
+- Handle GitHub API rate limits gracefully (log warning, continue)
 
-### T013 [US1] Implement workflow name resolution
+### T014 [US4] Implement adaptive polling in monitor service
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Create `resolveWorkflowName()` private method
-  - Fetch issue labels via GitHub API
-  - Search for labels matching `process:*` pattern
-  - Extract workflow name from label (e.g., `process:speckit-feature` → `speckit-feature`)
-  - Fallback to `completed:*` labels if no `process:*` found
-  - Return workflow name or throw error if not found
-- Add error handling for issues without workflow labels
+- In polling loop, calculate effective interval:
+  - If `adaptivePolling` enabled and no webhook received in `2 * basePollIntervalMs` → decrease interval by 50% (divide by 2)
+  - Minimum interval: 10 seconds
+  - When `recordWebhookEvent()` is called → reset to `basePollIntervalMs`
+- Update `currentPollIntervalMs` in state for observability
+- Log when switching between normal and adaptive polling modes
 
-### T014 [US1] Implement enqueue logic with deduplication
-**File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Implement `enqueuePrFeedback()` private method
-  - Check `phaseTracker.isDuplicate()` with key pattern `phase-tracker:{owner}:{repo}:{issue}:address-pr-feedback`
-  - Skip and log if duplicate found
-  - Call `resolveWorkflowName()` to get workflow
-  - Build `QueueItem` object:
-    - command: `'address-pr-feedback'`
-    - priority: `Date.now()` (FIFO)
-    - metadata: `{ prNumber, reviewThreadIds }`
-  - Call `queueAdapter.enqueue(item)`
-  - Call `phaseTracker.markProcessed()` atomically
-  - Add `waiting-for:address-pr-feedback` label to issue via GitHub API
-  - Log successful enqueue (info level)
-- Handle errors (API failures, queue failures)
-
-### T015 [US4] Implement polling loop infrastructure
-**File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Implement `startPolling()` method
-  - Create AbortController for graceful shutdown
-  - Start background polling loop with `setInterval`
-  - Use configured `pollIntervalMs`
-  - Call `poll()` on each tick
-  - Catch and log errors without crashing
-- Implement `stopPolling()` method
-  - Abort controller signal
-  - Clear interval
-  - Log shutdown (info level)
-
-### T016 [US4] Implement polling with concurrency limiting
-**File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Implement `poll()` private method
-  - Create semaphore with `maxConcurrentPolls` limit
-  - Map over all repositories
-  - For each repo, acquire semaphore → call `pollRepo()` → release
-  - Use `Promise.allSettled()` to prevent one failure from blocking others
-- Implement `pollRepo()` private method
-  - List open PRs via GitHub API
-  - For each PR, call `prLinker.linkPrToIssue()`
-  - Skip if not linked or not orchestrated
-  - Fetch unresolved threads
-  - If threads exist, call `enqueuePrFeedback()`
-- Add structured logging (poll start, repo processing, PR count)
-
-### T017 [P] [US4] Implement adaptive polling logic
-**File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
-- Implement `recordWebhookEvent()` method
-  - Update `lastWebhookReceivedAt` timestamp in state
-  - Reset adaptive polling interval if currently adapted
-- Add adaptive polling trigger in `poll()`:
-  - Check if `lastWebhookReceivedAt` older than 2x pollInterval
-  - If true, decrease pollInterval by 50% (min 5000ms)
-  - Update state.adaptivePolling flag
-  - Log adaptive polling activation (warn level)
-- Reset interval when webhook received
-
-### T018 [P] [US1,US2,US3,US4] Write PrFeedbackMonitorService unit tests
+### T015 [P] [US1] Write unit tests for `PrFeedbackMonitorService`
 **File**: `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.test.ts` (NEW)
-- Mock dependencies (GitHub client, PhaseTracker, QueueAdapter, PrLinker)
-- Test `processPrReviewEvent()`:
-  - Happy path (linked, orchestrated, unresolved threads → enqueue)
-  - PR not linked → return false, no enqueue
-  - Issue not orchestrated → return false, no enqueue
-  - No unresolved threads → return false, no enqueue
-- Test `enqueuePrFeedback()`:
-  - Successful enqueue with correct QueueItem structure
-  - Duplicate detection (PhaseTracker blocks)
-  - Workflow name resolution
-  - Label addition to issue
-- Test `poll()`:
-  - Concurrency limit enforced (maxConcurrentPolls)
-  - All repos processed
-  - Handles repo failures gracefully
-- Test `pollRepo()`:
-  - Lists open PRs
-  - Links and verifies each PR
-  - Enqueues when unresolved threads found
-- Test adaptive polling:
-  - Interval decreases when no webhooks
-  - Resets when webhook received
-- Test graceful shutdown:
-  - `stopPolling()` aborts loop
-  - No hanging promises
-- Target >85% code coverage
+- Test `processPrReviewEvent`: successful enqueue, duplicate detection, unlinked PR, no unresolved threads, non-orchestrated issue
+- Test polling: detects unresolved threads within one cycle (SC-003), skips non-watched repos
+- Test deduplication: concurrent webhook+poll produce 0 duplicate enqueues (SC-004)
+- Test adaptive polling: interval decrease when webhooks unhealthy, reset when webhook received
+- Test workflow name resolution from issue labels
+- Test graceful shutdown: stopPolling terminates polling loop
+- Test multiple PRs per issue: only most recent processed (FR-015)
 
 ---
 
-## Phase 4: Webhook Route Extension
+## Phase 4: Webhook Route
 
-### T019 [US1,US4] Add PR review webhook payload types
-**File**: `packages/orchestrator/src/types/webhooks.ts` (extend or create)
-- Define `PrReviewWebhookPayload` interface
-  - action: string
-  - review: { id, state, body }
-  - pull_request: { number, title, body, head: { ref }, html_url }
-  - repository: { owner: { login }, name }
-- Define `PrReviewEvent` interface for internal use
-  - owner, repo, prNumber, prBody, branchName, source
+### T016 [US1] Create PR review webhook route
+**File**: `packages/orchestrator/src/routes/pr-webhooks.ts` (NEW)
+- Define `PrWebhookRouteOptions` interface: `monitorService: PrFeedbackMonitorService`, `webhookSecret?: string`, `watchedRepos: Set<string>`
+- Implement `setupPrWebhookRoutes(server: FastifyInstance, options: PrWebhookRouteOptions): Promise<void>`
+- Register `POST /webhooks/github/pr-review` endpoint
+- Reuse `verifySignature` from existing `webhooks.ts` (extract to shared utility or import — prefer extracting to `packages/orchestrator/src/routes/webhook-utils.ts` if it makes the import cleaner, or just inline the same logic)
+- Handle `X-GitHub-Event` header: accept `pull_request_review` and `pull_request_review_comment`, ignore others with 200 response
+- For `pull_request_review.submitted`: extract `review`, `pull_request` from payload; check repo is in `watchedRepos`
+- For `pull_request_review_comment.created`: extract `comment`, `pull_request` from payload; check repo is in `watchedRepos`
+- Build `PrReviewEvent` from payload and call `monitorService.processPrReviewEvent()`
+- Call `monitorService.recordWebhookEvent()` for adaptive polling health
+- Return `{ status: 'processed' | 'duplicate' | 'ignored' }` with 200 status
 
-### T020 [US1] Implement PR review webhook route handler
-**File**: `packages/orchestrator/src/routes/webhooks.ts` (EXTEND)
-- Add `POST /webhooks/github/pr-review` route
-- Verify webhook signature using shared `WEBHOOK_SECRET`
-  - Extract `X-Hub-Signature-256` header
-  - Compute HMAC-SHA256 of raw body
-  - Compare signatures (timing-safe)
-  - Return 401 if mismatch
-- Filter events:
-  - Accept `pull_request_review.submitted` and `pull_request_review_comment.created`
-  - Ignore other actions (return 200 with status: ignored)
-- Verify repository is watched (check against config.repositories)
-  - Return 200 with status: ignored if not watched
-- Parse payload to extract PR details
-- Call `prMonitorService.recordWebhookEvent()` for adaptive polling
-- Call `prMonitorService.processPrReviewEvent()`
-- Return JSON response:
-  - `{ status: 'processed', event: { prNumber, linkedIssue } }` on success
-  - `{ status: 'ignored', reason: '...' }` if skipped
-
-### T021 [P] [US1] Write webhook route tests
-**File**: `packages/orchestrator/src/routes/__tests__/webhooks.test.ts` (extend)
-- Test signature verification:
-  - Valid signature → 200
-  - Invalid signature → 401
-  - Missing signature → 401
-- Test event filtering:
-  - `pull_request_review.submitted` → processed
-  - `pull_request_review_comment.created` → processed
-  - Other actions → ignored
-- Test repository filtering:
-  - Watched repo → processed
-  - Unwatched repo → ignored
-- Test processing delegation:
-  - Calls `processPrReviewEvent()` with correct parameters
-  - Returns processed status on success
-- Mock `PrFeedbackMonitorService`
+### T017 [P] [US1] Write unit tests for PR webhook route
+**File**: `packages/orchestrator/src/routes/__tests__/pr-webhooks.test.ts` (NEW)
+- Test HMAC signature verification (valid, invalid, missing, no secret configured)
+- Test event type filtering (accept `pull_request_review.submitted`, `pull_request_review_comment.created`, ignore others)
+- Test repo filtering (accept watched, reject unwatched)
+- Test webhook-to-enqueue latency < 500ms (SC-001)
+- Test non-review events return 200 (don't trigger GitHub retries)
 
 ---
 
 ## Phase 5: PR Feedback Handler (Worker Extension)
 
-### T022 [US2] Create PrFeedbackHandler class skeleton
+### T018 [US2] Create `PrFeedbackHandler` class
 **File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts` (NEW)
-- Define class structure with constructor
-- Inject dependencies (config, logger, processFactory, sseEmitter)
-- Define `handle()` method signature (context, metadata)
-- Add private helper method stubs:
-  - `fetchUnresolvedThreads()`
-  - `buildFeedbackPrompt()`
-  - `pushChanges()`
-  - `replyToThreads()`
-  - `generateReply()`
-  - `completeWithoutChanges()`
+- Constructor: accept `config: WorkerConfig`, `logger: Logger`, `processFactory: ProcessFactory`, `sseEmitter?: SSEEventEmitter`
+- Implement `async handle(item: QueueItem, checkoutPath: string): Promise<void>`:
+  1. Extract `prNumber` from `item.metadata as PrFeedbackMetadata`
+  2. Create `GitHubClient` scoped to `checkoutPath` via `createGitHubClient(checkoutPath)`
+  3. Fetch PR via `github.getPullRequest(owner, repo, prNumber)` → get branch name from `pr.head.ref`
+  4. Switch to PR branch via `RepoCheckout.switchBranch(checkoutPath, pr.head.ref)` (or create new `RepoCheckout` instance)
+  5. Fetch fresh unresolved threads: `github.getPRComments(owner, repo, prNumber)` → filter `resolved === false` (fetch at processing time, not from stale metadata)
+  6. If no unresolved threads: remove `waiting-for:address-pr-feedback` label, return early
+  7. Build structured prompt containing all unresolved comments with file paths (`comment.path`), line numbers (`comment.line`), author, and body; instruct agent to make changes, commit, push, and reply to each thread
+  8. Spawn Claude CLI using `CliSpawner` (or direct `processFactory.spawn`) with the prompt and appropriate timeout
+  9. After CLI completes: stage all, commit, push to PR branch
+  10. Reply to each unresolved thread via `github.replyToPRComment()` — single consolidated reply per thread explaining what was changed; never call resolve-thread API (SC-006)
+  11. Remove `waiting-for:address-pr-feedback` label from linked issue
+- Emit SSE events: `workflow:started`, `workflow:progress`, `workflow:completed` with `command: 'address-pr-feedback'` (US5)
 
-### T023 [US2] Implement PR branch checkout in handler
+### T019 [US2] Implement error handling in `PrFeedbackHandler`
 **File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- Implement branch checkout in `handle()`:
-  - Fetch PR details via GitHub API to get head ref (branch name)
-  - Use `RepoCheckout` utility (or Git commands) to checkout PR branch
-  - Handle errors (branch not found, checkout conflicts)
-  - Log checkout success (info level)
+- **Timeout handling** (FR-013): If CLI times out, push any partial changes that were made, keep `waiting-for:address-pr-feedback` label (don't remove), log timeout warning; the label stays so next detection cycle will re-enqueue
+- **Reply failure** (FR-007): If posting replies fails for some threads, still remove `waiting-for:address-pr-feedback` label, log warnings for each failed reply; partial reply success is acceptable
+- **Thread resolution prevention** (SC-006): Ensure no code path calls any thread-resolve API; only use `replyToPRComment()`
+- Structured logging for all operations: feedback detection, prompt building, CLI spawn, push, reply posting, label management, errors (US5)
 
-### T024 [US2] Implement fresh thread fetching
-**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- Implement `fetchUnresolvedThreads()` method
-  - Call GitHub API to get review threads
-  - Filter for `resolved: false`
-  - Map to `ReviewThread[]` array
-  - Return empty array if no unresolved threads
-- Handle in `handle()`:
-  - Skip processing if no threads (call `completeWithoutChanges()`)
-  - Log thread count (info level)
+### T020 [US2] Extend `ClaudeCliWorker.handle()` to route `address-pr-feedback` command
+**File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
+- Import `PrFeedbackHandler` from `./pr-feedback-handler.js`
+- Add early check at the start of `handle()`: if `item.command === 'address-pr-feedback'`, create `PrFeedbackHandler` instance and delegate
+- Clone repo + checkout default branch (reuse existing logic): call `repoCheckout.getDefaultBranch()` and `repoCheckout.ensureCheckout()`
+- Pass `checkoutPath` to `handler.handle(item, checkoutPath)` — the handler will switch to the PR branch internally
+- Early return after handler completes — do not fall through to phase resolver / phase loop logic (FR-012)
+- Ensure SSE `workflow:started` event is emitted before delegation (already exists at line 114)
+- Wrap handler call in try/catch to emit `workflow:failed` SSE on error (match existing error handling pattern)
 
-### T025 [US2] Implement feedback prompt builder
-**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- Implement `buildFeedbackPrompt()` method
-  - Start with instruction header:
-    - "You are addressing PR review feedback. Read the comments below, make the necessary changes, and reply to each comment explaining what you changed. Never resolve the threads yourself."
-  - Add PR URL
-  - Add "Review Comments:" section
-  - For each thread:
-    - Reviewer name
-    - File path and line (if inline comment)
-    - Comment body
-  - Return formatted prompt string
-- Add proper escaping for special characters
-
-### T026 [US2] Implement Claude CLI spawning with timeout
-**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- In `handle()` method:
-  - Create `CliSpawner` instance
-  - Create `OutputCapture` instance for SSE streaming
-  - Build CLI arguments: `['--prompt', prompt]`
-  - Call `cliSpawner.spawnWithTimeout()` with `phaseTimeoutMs`
-  - Catch timeout errors:
-    - Log warning (timeout occurred)
-    - Continue to push partial changes
-    - Don't remove `waiting-for` label (allow retry)
-    - Rethrow error for worker error handling
-  - Catch other errors:
-    - Log error
-    - Rethrow for worker error handling
-
-### T027 [US2] Implement Git push for PR branch
-**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- Implement `pushChanges()` method
-  - Stage all changes: `git add -A`
-  - Commit with message: "Address PR review feedback"
-  - Push to PR branch: `git push origin {branchName}`
-  - Handle push errors (conflicts, authentication)
-  - Log push success (info level)
-
-### T028 [US2] Implement review thread reply logic
-**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- Implement `generateReply()` helper
-  - Extract relevant changes from CLI output
-  - Build reply message summarizing changes for specific thread
-  - Include file path and line context
-  - Keep concise (1-3 sentences per thread)
-- Implement `replyToThreads()` method
-  - Iterate over all unresolved threads
-  - For each thread:
-    - Call `generateReply()` to build response
-    - Post reply via GitHub API: `POST /repos/{owner}/{repo}/pulls/comments/{threadId}/replies`
-    - Log success (info level)
-    - On error: log warning, continue to next thread (partial success)
-  - Never call resolve thread API
-  - Return count of successful replies
-
-### T029 [US2] Implement label management in handler
-**File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
-- In `handle()` method after successful completion:
-  - Remove `waiting-for:address-pr-feedback` label via GitHub API
-  - Optionally add `completed:address-pr-feedback` label (if desired)
-  - Keep existing phase labels unchanged (`phase:*`, `process:*`)
-  - Handle label API errors gracefully (log warning)
-- Implement `completeWithoutChanges()`:
-  - Remove `waiting-for` label
-  - Log info (no changes needed)
-
-### T030 [US2] Extend ClaudeCliWorker to route address-pr-feedback command
-**File**: `packages/orchestrator/src/worker/claude-cli-worker.ts` (EXTEND)
-- In `handle()` method, add command routing:
-  - Check `if (item.command === 'address-pr-feedback')`
-  - Extract metadata: `const metadata = item.metadata as PrFeedbackMetadata`
-  - Create `PrFeedbackHandler` instance
-  - Call `handler.handle(context, metadata)`
-  - Return early (don't fall through to process/continue logic)
-- Add import for `PrFeedbackHandler`
-- Validate metadata structure (has prNumber and reviewThreadIds)
-
-### T031 [P] [US2] Write PrFeedbackHandler unit tests
+### T021 [P] [US2] Write unit tests for `PrFeedbackHandler`
 **File**: `packages/orchestrator/src/worker/__tests__/pr-feedback-handler.test.ts` (NEW)
-- Mock dependencies (GitHub client, CliSpawner, RepoCheckout, ProcessFactory)
-- Test `handle()` happy path:
-  - Fetches PR and checks out branch
-  - Fetches unresolved threads
-  - Builds prompt correctly
-  - Spawns CLI with timeout
-  - Pushes changes to branch
-  - Replies to all threads
-  - Removes waiting label
-- Test no unresolved threads scenario:
-  - Skips CLI spawn
-  - Calls `completeWithoutChanges()`
-- Test timeout handling:
-  - CLI times out
-  - Partial changes pushed
-  - Partial replies posted
-  - Waiting label kept (no removal)
-- Test reply failure:
-  - Some threads succeed, some fail
-  - Continues processing (doesn't stop on first failure)
-  - Logs warnings for failures
-- Test `buildFeedbackPrompt()`:
-  - Includes all thread details
-  - Formats correctly
-  - Escapes special characters
-- Test `replyToThreads()`:
-  - Posts replies to GitHub API
-  - Handles API errors gracefully
-  - Never calls resolve thread API
-- Target >85% code coverage
+- Test PR branch checkout (not default branch)
+- Test fresh unresolved thread fetch at processing time
+- Test prompt contains all comments with file paths and line numbers
+- Test push to PR branch after CLI completes
+- Test single consolidated reply per thread (SC-005)
+- Test threads never auto-resolved (SC-006): verify `replyToPRComment` is called but never any resolve API
+- Test `waiting-for:address-pr-feedback` label removed on completion
+- Test timeout: partial changes pushed, label kept
+- Test reply failure: label still removed, warnings logged
+- Test no unresolved threads at processing time: early return, label removed
+- Test SSE events emitted (workflow:started, workflow:completed)
 
-### T032 [P] [US2] Write ClaudeCliWorker extension tests
-**File**: `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` (extend)
-- Test command routing for `address-pr-feedback`:
-  - Routes to `PrFeedbackHandler`
-  - Passes metadata correctly
-  - Returns after handling (doesn't fall through)
-- Test metadata validation:
-  - Valid metadata accepted
-  - Invalid/missing metadata throws error
-- Mock `PrFeedbackHandler.handle()`
+### T022 [P] [US2] Write tests for `ClaudeCliWorker` `address-pr-feedback` routing
+**File**: `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` (EXTEND existing or NEW)
+- Test `address-pr-feedback` command routes to `PrFeedbackHandler`
+- Test early return (no phase loop execution)
+- Test repo checkout is performed before handler delegation
+- Test error handling wraps handler errors
 
 ---
 
 ## Phase 6: Server Integration
 
-### T033 [US1] Initialize PrFeedbackMonitorService in server
-**File**: `packages/orchestrator/src/server.ts` (EXTEND)
-- After label monitor initialization:
-  - Check `if (config.prMonitor.enabled && config.repositories.length > 0)`
-  - Create `PhaseTrackerService` instance (or reuse existing)
-  - Create `PrFeedbackMonitorService` instance with dependencies:
-    - logger: `server.log`
-    - createClient: `createGitHubClient`
-    - phaseTracker
-    - queueAdapter
-    - options: `config.prMonitor`
-    - repositories: `config.repositories`
-  - Store in server-scoped variable for shutdown
+### T023 [US1] Initialize `PrFeedbackMonitorService` in server startup
+**File**: `packages/orchestrator/src/server.ts`
+- After label monitor setup (~line 188): create `PrFeedbackMonitorService` when `config.prMonitor.enabled` and `config.repositories.length > 0`
+- Create a `PhaseTrackerService` instance (can share Redis client)
+- Use `redisQueueAdapter ?? fallback logging adapter` pattern (match existing label monitor)
+- Store as `prFeedbackMonitorService` variable
 
-### T034 [US1] Register PR webhook routes in server
-**File**: `packages/orchestrator/src/server.ts` (EXTEND)
-- Import webhook setup function
-- After PR monitor initialization:
-  - Build watched repos set from `config.repositories`
-  - Call webhook route registration:
-    ```typescript
-    await setupPrWebhookRoutes(server, {
-      monitorService: prFeedbackMonitorService,
-      webhookSecret: config.prMonitor.webhookSecret,
-      watchedRepos,
-    });
-    ```
+### T024 [US1] Register PR webhook routes in server
+**File**: `packages/orchestrator/src/server.ts`
+- After issue webhook routes (~line 219): if `prFeedbackMonitorService` exists, call `setupPrWebhookRoutes(server, { monitorService, webhookSecret, watchedRepos })`
+- Import `setupPrWebhookRoutes` from `./routes/pr-webhooks.js`
 
-### T035 [US4] Start PR monitor polling on server ready
-**File**: `packages/orchestrator/src/server.ts` (EXTEND)
-- In `onReady` hook (after label monitor polling):
-  - Check `if (prFeedbackMonitorService)`
-  - Call `prFeedbackMonitorService.startPolling()`
-  - Catch errors and log to `server.log.error`
-  - Don't crash server if polling fails to start
+### T025 [US1] Add auth skip for PR webhook endpoint
+**File**: `packages/orchestrator/src/server.ts`
+- Add `/webhooks/github/pr-review` to `skipRoutes` array in `createAuthMiddleware` call (line 109)
 
-### T036 [US1] Add PR monitor to graceful shutdown
-**File**: `packages/orchestrator/src/server.ts` (EXTEND)
-- In `setupGracefulShutdown()` cleanup array:
-  - Add cleanup function:
-    ```typescript
-    async () => {
-      if (prFeedbackMonitorService) {
-        prFeedbackMonitorService.stopPolling();
-      }
-    }
-    ```
-  - Ensure polling stops before server shutdown completes
+### T026 [US4] Add lifecycle hooks for PR monitor service
+**File**: `packages/orchestrator/src/server.ts`
+- In `onReady` hook (~line 230): if `prFeedbackMonitorService`, call `prFeedbackMonitorService.startPolling()` in background (non-blocking, with `.catch()` error log)
+- In graceful shutdown cleanup (~line 253): if `prFeedbackMonitorService`, call `prFeedbackMonitorService.stopPolling()`
 
-### T037 [P] [US1] Write server integration tests
-**File**: `packages/orchestrator/src/__tests__/integration/server-integration.test.ts` (extend)
-- Test PR monitor initialization:
-  - Enabled when `prMonitor.enabled=true` and repos exist
-  - Disabled when `prMonitor.enabled=false`
-  - Disabled when no repositories configured
-- Test polling lifecycle:
-  - Starts on server ready
-  - Stops on server shutdown
-- Test webhook route registration:
-  - Route exists when monitor enabled
-  - Route not registered when monitor disabled
-- Mock all dependencies
+### T027 [P] [US5] Verify SSE event integration
+**File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
+- Verify that the existing `sseEmitter` is passed through to `PrFeedbackHandler` when routing `address-pr-feedback` command
+- Ensure SSE events include `command: 'address-pr-feedback'` in the data payload for dashboard filtering
 
 ---
 
-## Phase 7: Testing & Validation
+## Phase 7: Testing and Validation
 
-### T038 [P] Write end-to-end integration test
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (NEW)
-- Set up test infrastructure:
-  - Real Redis instance (or mock)
-  - Mocked GitHub API
-  - Test server instance
-- Test webhook → enqueue → worker → reply flow:
-  - Send webhook event to `/webhooks/github/pr-review`
-  - Verify QueueItem enqueued with correct structure
-  - Simulate worker claiming item
-  - Verify `PrFeedbackHandler` called
-  - Verify changes pushed and replies posted
-  - Verify labels updated correctly
-- Test polling fallback:
-  - Disable webhooks
-  - Set up test PR with unresolved threads
-  - Wait for poll cycle
-  - Verify event detected and enqueued
-- Test deduplication:
-  - Send duplicate webhook events
-  - Verify only one enqueue occurs
-  - Send webhook + poll concurrently
-  - Verify PhaseTracker prevents duplicates
+### T028 [US1] Write integration test: webhook → enqueue → worker flow
+**File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts` (NEW)
+- End-to-end test with mocked GitHub API:
+  1. Send PR review webhook event to `/webhooks/github/pr-review`
+  2. Verify event is processed and enqueued
+  3. Verify `waiting-for:address-pr-feedback` label is added
+  4. Verify queue item has correct `command` and `metadata`
+- Test webhook-to-enqueue latency < 500ms (SC-001)
 
-### T039 [P] Write timeout handling integration test
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (extend)
-- Mock slow CLI execution (exceeds phaseTimeoutMs)
-- Verify timeout error thrown
-- Verify partial changes pushed
-- Verify `waiting-for` label NOT removed (retry enabled)
-- Verify error logged appropriately
+### T029 [P] [US4] Write integration test: polling fallback
+**File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
+- Disable webhooks, verify polling detects unresolved threads within one cycle (SC-003)
+- Verify adaptive polling increases frequency when no webhooks received
 
-### T040 [P] Write multiple PR handling test
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (extend)
-- Create scenario: issue has 2 PRs with unresolved threads
-- Per spec (out of scope), only most recent PR processed
-- Verify older PR skipped
-- Verify most recent PR enqueued
+### T030 [P] [US1] Write integration test: deduplication
+**File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
+- Send identical events via webhook + poll concurrently
+- Verify single queue item (SC-004: 0 duplicate enqueues)
 
-### T041 [P] Write concurrency limit validation test
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-concurrency.test.ts` (NEW)
-- Set `maxConcurrentPolls = 3`
-- Create 10 repos with open PRs
-- Monitor concurrent API calls during poll cycle
-- Verify never exceeds 3 concurrent polls
-- Verify all repos eventually processed
+### T031 [US2] Write integration test: worker processes feedback end-to-end
+**File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
+- Mock GitHub API and CLI spawner
+- Verify: PR branch checkout, unresolved thread fetch, prompt construction, push, reply to each thread, label removal
+- Verify reply completeness: all unresolved threads receive agent reply (SC-005)
+- Verify thread auto-resolve prevention: resolved status unchanged (SC-006)
 
-### T042 [P] Write rate limit handling test
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-rate-limit.test.ts` (NEW)
-- Mock GitHub API rate limit response (429 or rate limit headers)
-- Trigger polling
-- Verify polling pauses when rate limit hit
-- Verify structured logging of rate limit status
-- Verify polling resumes after rate limit reset
+### T032 [US2] Write integration test: multiple PRs per issue
+**File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
+- Create scenario with 2 PRs linked to same issue
+- Verify only the most recently updated PR is processed (FR-015)
+- Verify warning logged for skipped older PR
 
-### T043 [P] Validate success criteria SC-001 (webhook latency)
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-performance.test.ts` (NEW)
-- Send webhook event
-- Measure timestamp delta from receipt to enqueue
-- Assert latency < 500ms
-- Run 100 iterations for statistical confidence
+### T033 [US2] Write integration test: partial failure scenarios
+**File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
+- Test worker timeout → partial changes pushed, label kept for retry (FR-013)
+- Test reply posting failure → label still removed, warnings logged (FR-007)
 
-### T044 [P] Validate success criteria SC-002 (PR linking accuracy)
-**File**: `packages/orchestrator/src/__tests__/validation/pr-linking-accuracy.test.ts` (NEW)
-- Create 100 test PR scenarios:
-  - 50 with valid PR body references
-  - 30 with valid branch names
-  - 10 with both methods
-  - 10 with neither (should fail)
-- Run through `PrLinker.linkPrToIssue()`
-- Calculate success rate
-- Assert > 95% accuracy
-
-### T045 [P] Validate success criteria SC-003 (polling fallback)
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (extend)
-- Disable webhooks
-- Create PR with unresolved threads
-- Wait for one poll cycle (60s max)
-- Verify event detected and enqueued
-- Assert 100% coverage within one cycle
-
-### T046 [P] Validate success criteria SC-004 (deduplication)
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (extend)
-- Send same PR review event multiple times
-- Query Redis for `phase-tracker` keys
-- Assert 0 duplicate enqueues
-- Query queue for duplicate items
-- Assert only one item in queue
-
-### T047 [P] Validate success criteria SC-005 (reply completeness)
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (extend)
-- Create PR with 5 unresolved threads
-- Process via worker
-- Query GitHub API for thread replies
-- Assert all 5 threads have agent reply
-- Assert 100% reply completeness
-
-### T048 [P] Validate success criteria SC-006 (no auto-resolve)
-**File**: `packages/orchestrator/src/__tests__/integration/pr-feedback-flow.test.ts` (extend)
-- Create PR with unresolved threads
-- Process via worker
-- Query GitHub API for thread resolution status
-- Assert all threads remain `resolved: false`
-- Assert 0% auto-resolved
-
-### T049 [P] Write load test for queue throughput
-**File**: `packages/orchestrator/src/__tests__/load/pr-feedback-queue.test.ts` (NEW)
-- Enqueue 100 PR feedback items
-- Simulate worker processing (mock Claude CLI)
-- Measure throughput (items/second)
-- Verify FIFO ordering maintained
-- Verify no queue deadlocks or starvation
-
-### T050 [P] Manual validation with live GitHub repo
-**Task**: Manual testing (not automated)
-- Create test repository
-- Create test PR with review comments
-- Configure orchestrator to watch test repo
-- Trigger webhook (or wait for poll)
-- Verify agent addresses feedback correctly
-- Verify no threads auto-resolved
-- Verify changes pushed to PR branch
-- Verify replies posted correctly
-
----
-
-## Phase 8: Documentation & Deployment
-
-### T051 [P] Add configuration documentation
-**File**: `packages/orchestrator/README.md` (extend)
-- Document PR monitor configuration options:
-  - `prMonitor.enabled`
-  - `prMonitor.pollIntervalMs`
-  - `prMonitor.webhookSecret`
-  - `prMonitor.adaptivePolling`
-  - `prMonitor.maxConcurrentPolls`
-- Add example configuration
-- Document environment variable mappings
-
-### T052 [P] Document GitHub webhook setup
-**File**: `packages/orchestrator/docs/WEBHOOKS.md` (extend or create)
-- Add PR review webhook setup instructions:
-  - Payload URL format
-  - Content type (application/json)
-  - Secret (shared with issue webhook)
-  - Events to enable (pull_request_review, pull_request_review_comment)
-- Add troubleshooting section for webhook issues
-
-### T053 [P] Add deployment checklist
-**File**: `packages/orchestrator/docs/DEPLOYMENT.md` (extend or create)
-- Add PR monitor deployment steps:
-  1. Deploy with `PR_MONITOR_ENABLED=false`
-  2. Validate server starts
-  3. Enable polling only (no webhook)
-  4. Test polling detection
-  5. Configure GitHub webhook
-  6. Test end-to-end flow
-  7. Enable for production repos
-  8. Monitor metrics and logs
-- Add rollback procedure
-
-### T054 [P] Document observability and metrics
-**File**: `packages/orchestrator/docs/OBSERVABILITY.md` (extend or create)
-- Document structured log events:
-  - PR feedback detection
-  - Enqueue events
-  - Worker processing
-  - Reply success/failure
-- Document future metrics (for dashboard):
-  - `pr_feedback_events_total`
-  - `pr_feedback_enqueued_total`
-  - `pr_feedback_processed_total`
-  - `pr_feedback_threads_addressed_total`
-  - `pr_linking_failures_total`
-  - `webhook_latency_ms`
-- Add SSE event schema
-
-### T055 [P] Update CHANGELOG
-**File**: `packages/orchestrator/CHANGELOG.md`
-- Add entry for PR Feedback Monitor feature:
-  - Version number
-  - Feature description
-  - Breaking changes (none expected)
-  - New configuration options
-  - Migration notes (none required)
+### T034 Build verification
+**Files**:
+- All modified packages
+- Run `pnpm build` across all packages to verify TypeScript compilation
+- Run `pnpm test` to verify all existing tests still pass
+- Run new test suites to verify all new tests pass
 
 ---
 
 ## Dependencies & Execution Order
 
-### Phase Dependencies (Sequential)
+**Phase dependencies (sequential)**:
+- Phase 1 must complete before Phase 2 (types needed by PrLinker)
+- Phase 1 must complete before Phase 3 (types + config needed by monitor service)
+- Phase 2 must complete before Phase 3 (PrLinker used by monitor service)
+- Phase 3 must complete before Phase 4 (monitor service used by webhook route)
+- Phases 3 + 4 must complete before Phase 5 (monitor enqueues items handled by worker)
+- Phases 3 + 4 + 5 must complete before Phase 6 (server wires everything together)
+- Phase 6 must complete before Phase 7 integration tests (server integration required)
 
-**Must complete in order**:
-1. **Phase 1** (Foundation) → all other phases depend on type definitions
-2. **Phase 2** (PrLinker) → Phase 3, 5 depend on linking logic
-3. **Phase 3** (Monitor Service) → Phase 4, 6 depend on service
-4. **Phase 4** (Webhook Routes) → Phase 6 (server integration)
-5. **Phase 5** (Worker Handler) → Phase 6, 7 (testing requires handler)
-6. **Phase 6** (Server Integration) → Phase 7 (integration tests require full system)
-7. **Phase 7** (Testing) → Phase 8 (docs should reflect tested behavior)
-8. **Phase 8** (Documentation) → can proceed after Phase 7
+**Parallel opportunities within phases**:
 
-### Parallel Opportunities Within Phases
+*Phase 1*: T002, T003, T004, T005, T006 can all run in parallel (different files, no dependencies). T001 should run first (defines types used by T008). T007 depends on T006. T008 depends on T001 (for `PhaseTracker` interface update).
 
-**Phase 1** (all can run in parallel):
-- T002 (PR types) || T003 (config schema) || T001 (QueueItem extension)
-- T004 blocks on T001 completing
+*Phase 2*: T009 and T010 are sequential (implementation before tests), but T010 can begin once T009 is done.
 
-**Phase 2**:
-- T005-T008 sequential (build PrLinker methods incrementally)
-- T009 parallel after T005-T008
+*Phase 3*: T011 → T012 → T013 → T014 are sequential (building up the service). T015 can run in parallel once T014 is done.
 
-**Phase 3**:
-- T010-T017 sequential (build service incrementally)
-- T018 parallel after T010-T017
+*Phase 4*: T016 → T017 are sequential. T016 depends on Phase 3 (needs monitor service type).
 
-**Phase 4**:
-- T019-T020 sequential
-- T021 parallel after T020
+*Phase 5*: T018 → T019 are sequential (error handling builds on handler). T020 depends on T018. T021 and T022 are parallel with each other, depend on T018-T020.
 
-**Phase 5**:
-- T022-T030 sequential (build handler incrementally)
-- T031, T032 parallel after T030
+*Phase 6*: T023 → T024 → T025 → T026 are sequential (server wiring). T027 is parallel.
 
-**Phase 6**:
-- T033-T036 sequential (server integration order matters)
-- T037 parallel after T036
+*Phase 7*: T028-T033 can all run in parallel. T034 depends on all prior tasks.
 
-**Phase 7** (all validation tasks can run in parallel):
-- T038-T050 all parallel (independent test scenarios)
-
-**Phase 8** (all documentation tasks can run in parallel):
-- T051-T055 all parallel
-
-### Critical Path
-
-**Longest sequential dependency chain**:
-```
-T001 → T004 → T010 → T011 → T012 → T013 → T014 → T015 → T016 → T022 → T023 → T024 → T025 → T026 → T027 → T028 → T029 → T030 → T033 → T034 → T035 → T036 → T038
-```
-
-**Estimated critical path duration**: ~40-50 hours (assumes 1-2 hours per task on critical path)
-
-### Parallelization Strategy
-
-**Maximum parallel tasks by phase**:
-- Phase 1: 3 tasks (T001, T002, T003)
-- Phase 2: 1 task (sequential build, then T009)
-- Phase 3: 1 task (sequential build, then T018)
-- Phase 4: 1 task (sequential, then T021)
-- Phase 5: 2 tasks (T031, T032 after main sequence)
-- Phase 6: 1 task (sequential, then T037)
-- Phase 7: 13 tasks (all validation tests)
-- Phase 8: 5 tasks (all documentation)
-
-**Recommended execution**:
-1. Start with Phase 1 tasks in parallel
-2. Phase 2-6: sequential build with parallel tests
-3. Phase 7: run all validation tests concurrently for fast feedback
-4. Phase 8: write all docs concurrently
-
----
-
-## Test Coverage Requirements
-
-### Unit Tests
-- **Target**: >85% code coverage for all new code
-- **Files requiring tests**:
-  - `pr-linker.ts` (T009)
-  - `pr-feedback-monitor-service.ts` (T018)
-  - `pr-feedback-handler.ts` (T031)
-  - `claude-cli-worker.ts` extensions (T032)
-  - Webhook routes (T021)
-
-### Integration Tests
-- **Target**: Cover all functional requirements (FR-1 through FR-8)
-- **Files requiring tests**:
-  - End-to-end flow (T038)
-  - Timeout handling (T039)
-  - Multiple PR handling (T040)
-  - Concurrency limits (T041)
-  - Rate limit handling (T042)
-
-### Validation Tests
-- **Target**: Validate all success criteria (SC-001 through SC-006)
-- **Tasks**: T043-T048
-
-### Manual Testing
-- **Target**: Validate real GitHub integration
-- **Task**: T050
-
----
-
-## Rollout Checklist
-
-- [ ] Phase 1 complete: Type definitions compile
-- [ ] Phase 2 complete: PrLinker unit tests pass (>90% coverage)
-- [ ] Phase 3 complete: Monitor service unit tests pass (>85% coverage)
-- [ ] Phase 4 complete: Webhook route tests pass
-- [ ] Phase 5 complete: Handler unit tests pass (>85% coverage)
-- [ ] Phase 6 complete: Server integration tests pass
-- [ ] Phase 7 complete: All validation tests pass, success criteria met
-- [ ] Phase 8 complete: Documentation updated
-- [ ] Deploy to staging with `PR_MONITOR_ENABLED=false`
-- [ ] Enable polling on staging, validate no errors
-- [ ] Configure test webhook, validate end-to-end flow
-- [ ] Monitor logs and metrics for 24 hours
-- [ ] Deploy to production with polling enabled
-- [ ] Configure production webhooks
-- [ ] Monitor success criteria metrics for 1 week
-
----
-
-**Total Tasks**: 55 (50 implementation + 5 documentation)
-**Estimated Duration**: 80-100 hours (with parallelization: ~50-60 hours)
-**Critical Path**: ~40-50 hours
-
----
-
-*End of Task List*
+**Critical path**:
+T001 → T008 → T009 → T011 → T012 → T013 → T014 → T016 → T018 → T019 → T020 → T023 → T024 → T025 → T026 → T028 → T034
