@@ -312,12 +312,33 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
   const featureDir = join(specsDir, branchName);
   if (await exists(featureDir)) {
     // Feature dir already exists — this is a resume/requeue.
-    // Ensure we're on the right branch and return success with existing info.
+    // Ensure we're on the right branch and pull latest from remote.
     if (await isGitRepo(repoRoot)) {
       const git = simpleGit(repoRoot);
+      try {
+        await git.fetch(['--all', '--prune']);
+      } catch {
+        // Continue even if fetch fails
+      }
       const branches = await git.branchLocal();
       if (branches.all.includes(branchName)) {
         await git.checkout(branchName);
+        try {
+          await git.pull('origin', branchName);
+        } catch {
+          // Continue even if pull fails
+        }
+      } else {
+        // Local branch missing but dir exists — check out from remote
+        const allBranches = await git.branch(['-a']);
+        const remoteBranchExists = allBranches.all.some(
+          (b: string) =>
+            b === `remotes/origin/${branchName}` ||
+            b === `origin/${branchName}`
+        );
+        if (remoteBranchExists) {
+          await git.checkout(['-b', branchName, `origin/${branchName}`]);
+        }
       }
     }
     const specFile = join(featureDir, 'spec.md');
@@ -344,16 +365,26 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
     const branches = await git.branchLocal();
 
     if (!branches.all.includes(branchName)) {
-      // If parent_epic_branch is provided, branch from it
-      if (input.parent_epic_branch) {
-        try {
-          await git.fetch(['--all', '--prune']);
-        } catch {
-          // Continue even if fetch fails
-        }
+      // Fetch remote refs so we can detect existing remote branches
+      try {
+        await git.fetch(['--all', '--prune']);
+      } catch {
+        // Continue even if fetch fails
+      }
 
+      // Check if the branch already exists on remote (resume in fresh workspace)
+      const allBranches = await git.branch(['-a']);
+      const remoteBranchExists = allBranches.all.some(
+        (b: string) =>
+          b === `remotes/origin/${branchName}` ||
+          b === `origin/${branchName}`
+      );
+
+      if (remoteBranchExists) {
+        // Track the existing remote branch to pick up previous commits
+        await git.checkout(['-b', branchName, `origin/${branchName}`]);
+      } else if (input.parent_epic_branch) {
         // Check if the epic branch exists
-        const allBranches = await git.branch(['-a']);
         const epicBranchExists = allBranches.all.some(
           (b: string) =>
             b === input.parent_epic_branch ||
@@ -384,6 +415,12 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       gitBranchCreated = true;
     } else {
       await git.checkout(branchName);
+      // Pull latest from remote in case local is behind (resume scenario)
+      try {
+        await git.pull('origin', branchName);
+      } catch {
+        // Continue even if pull fails (e.g., no upstream set)
+      }
     }
   }
 
