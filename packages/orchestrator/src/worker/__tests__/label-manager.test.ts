@@ -144,6 +144,112 @@ describe('LabelManager', () => {
     });
   });
 
+  describe('ensureCleanup', () => {
+    it('removes agent:in-progress and phase:* labels', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [{ name: 'phase:specify' }, { name: 'agent:in-progress' }, { name: 'bug' }],
+      });
+
+      await lm.ensureCleanup();
+
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'agent:in-progress',
+        'phase:specify',
+      ]);
+    });
+
+    it('removes multiple phase:* labels', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [{ name: 'phase:plan' }, { name: 'phase:implement' }],
+      });
+
+      await lm.ensureCleanup();
+
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'agent:in-progress',
+        'phase:plan',
+        'phase:implement',
+      ]);
+    });
+
+    it('does not throw when removeLabels fails', async () => {
+      const lm = createLabelManager();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (lm as any).sleep = vi.fn().mockResolvedValue(undefined);
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [{ name: 'phase:specify' }],
+      });
+      mockGithub.removeLabels.mockRejectedValue(new Error('GitHub API 503'));
+
+      await expect(lm.ensureCleanup()).resolves.toBeUndefined();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ issue: 42 }),
+        expect.stringContaining('Failed to ensure label cleanup'),
+      );
+    });
+
+    it('is a no-op when no relevant labels exist', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [{ name: 'bug' }, { name: 'enhancement' }],
+      });
+
+      await lm.ensureCleanup();
+
+      // agent:in-progress is always included in the removal list
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'agent:in-progress',
+      ]);
+    });
+
+    it('handles getIssue failure gracefully', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockRejectedValue(new Error('Network error'));
+
+      await expect(lm.ensureCleanup()).resolves.toBeUndefined();
+
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ issue: 42 }),
+        expect.stringContaining('Failed to ensure label cleanup'),
+      );
+    });
+
+    it('retries on transient failure then succeeds', async () => {
+      const lm = createLabelManager();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (lm as any).sleep = vi.fn().mockResolvedValue(undefined);
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [{ name: 'phase:plan' }],
+      });
+      mockGithub.removeLabels
+        .mockRejectedValueOnce(new Error('GitHub API 503'))
+        .mockResolvedValueOnce(undefined);
+
+      await expect(lm.ensureCleanup()).resolves.toBeUndefined();
+
+      expect(mockGithub.removeLabels).toHaveBeenCalledTimes(2);
+      expect(mockLogger.warn).toHaveBeenCalled();
+    });
+
+    it('handles plain string labels', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockResolvedValue({
+        labels: ['phase:validate', 'bug'],
+      });
+
+      await lm.ensureCleanup();
+
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'agent:in-progress',
+        'phase:validate',
+      ]);
+    });
+  });
+
   describe('retry on API failure', () => {
     it('succeeds on second attempt after first addLabels call throws', async () => {
       const lm = createLabelManager();

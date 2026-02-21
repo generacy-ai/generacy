@@ -7,6 +7,7 @@ import type {
   ChildProcessHandle,
   Logger,
 } from '../types.js';
+import type { SSEEventEmitter } from '../output-capture.js';
 import type { QueueItem } from '../../types/index.js';
 
 // ---------------------------------------------------------------------------
@@ -665,6 +666,274 @@ describe('ClaudeCliWorker (integration)', () => {
         (e: unknown) => (e as { type: string }).type === 'workflow:completed',
       );
       expect(completedEvent).toBeDefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T010: finally-block cleanup and log severity
+  // ---------------------------------------------------------------------------
+  describe('finally-block cleanup', () => {
+    it('calls ensureCleanup after successful completion', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // ensureCleanup in finally calls getIssue to fetch current phase labels,
+      // then calls removeLabels with ['agent:in-progress', ...phaseLabels].
+      // Since onWorkflowComplete already removed agent:in-progress, this is
+      // idempotent — but we verify the cleanup call was made.
+      const removeCallArgs = (mockGithub.removeLabels as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => c[3] as string[]);
+
+      // The last removeLabels call should be from ensureCleanup (includes 'agent:in-progress')
+      const cleanupCalls = removeCallArgs.filter(
+        (labels) => Array.isArray(labels) && labels.includes('agent:in-progress'),
+      );
+      // At least 2 calls with agent:in-progress: onWorkflowComplete + ensureCleanup
+      expect(cleanupCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('calls ensureCleanup after unhandled error', async () => {
+      // Make getIssue throw on the second call (first call for checkout succeeds,
+      // but we need the error to occur during the phase loop)
+      // Actually, make getIssue succeed for initial label resolution but have
+      // something throw unexpectedly during the phase loop
+      mockGithub.getIssue
+        .mockResolvedValueOnce({ labels: [] }) // For phase resolution
+        .mockResolvedValue({ labels: [] }); // For subsequent calls including cleanup
+
+      // Make the first phase spawn throw unexpectedly
+      spawnFn.mockImplementation(() => { throw new Error('Spawn crashed'); });
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await expect(
+        worker.handle(createQueueItem({ workflowName: 'no-gates' })),
+      ).rejects.toThrow();
+
+      // ensureCleanup should still have been called in the finally block.
+      // Since labelManager is created before the phase loop, it should be
+      // available in finally. Verify via getIssue being called for cleanup.
+      // The last getIssue call is from ensureCleanup's getCurrentPhaseLabels().
+      const getIssueCalls = (mockGithub.getIssue as ReturnType<typeof vi.fn>).mock.calls;
+      // At least 2 calls: one for phase resolution + one for ensureCleanup
+      expect(getIssueCalls.length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('does not call ensureCleanup when workflow paused at gate', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig(); // Has gates for speckit-feature
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem()); // speckit-feature by default
+
+      // Gate hit should have been detected (clarify gate)
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42,
+        ['waiting-for:clarification', 'agent:paused'],
+      );
+
+      // ensureCleanup should NOT be called when gateHit is true.
+      // Verify by checking that no removeLabels call includes 'agent:in-progress'.
+      // The gate path does not remove agent:in-progress.
+      const removeCallArgs = (mockGithub.removeLabels as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => c[3] as string[]);
+      const agentInProgressRemovals = removeCallArgs.filter(
+        (labels) => Array.isArray(labels) && labels.includes('agent:in-progress'),
+      );
+      expect(agentInProgressRemovals).toHaveLength(0);
+    });
+
+    it('calls ensureCleanup after phase failure (non-gate)', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+
+      // First phase succeeds, second phase fails
+      spawnFn
+        .mockReturnValueOnce(createMockProcess(0, 5).handle)
+        .mockReturnValueOnce(createMockProcess(1, 5).handle);
+
+      const config = createConfig({ gates: {} }); // No gates
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // On phase failure, onError removes agent:in-progress.
+      // Then ensureCleanup in finally also attempts removal (idempotent).
+      const removeCallArgs = (mockGithub.removeLabels as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => c[3] as string[]);
+      const agentInProgressRemovals = removeCallArgs.filter(
+        (labels) => Array.isArray(labels) && labels.includes('agent:in-progress'),
+      );
+      // At least 2: onError + ensureCleanup
+      expect(agentInProgressRemovals.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  describe('post-completion error handling (log severity)', () => {
+    it('logs at warn level when post-completion step fails', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+
+      // Make the SSE emitter throw on workflow:completed event (post-completion).
+      // This is after phasesCompleted=true and onWorkflowComplete succeeds,
+      // so it should be caught and logged at warn level.
+      const throwingSseEmitter = vi.fn((event: { type: string }) => {
+        if (event.type === 'workflow:completed') {
+          throw new Error('SSE emit failed');
+        }
+      });
+
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: throwingSseEmitter as unknown as SSEEventEmitter,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // Should log at warn level, not error, for post-completion failure
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('SSE emit failed') }),
+        'Post-completion step failed (all phases completed successfully)',
+      );
+
+      // Should NOT log at error level with the unhandled error message
+      const errorCalls = (mockLogger.error as ReturnType<typeof vi.fn>).mock.calls;
+      const unhandledErrorLogs = errorCalls.filter(
+        (call: unknown[]) => call[1] === 'Worker encountered an unhandled error',
+      );
+      expect(unhandledErrorLogs).toHaveLength(0);
+    });
+
+    it('logs at error level when error occurs before phases complete', async () => {
+      // Make getIssue throw to simulate a pre-phase-completion error
+      mockGithub.getIssue.mockRejectedValue(new Error('Network timeout'));
+
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await expect(
+        worker.handle(createQueueItem()),
+      ).rejects.toThrow('Network timeout');
+
+      // Should log at error level for pre-completion failure
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('Network timeout') }),
+        'Worker encountered an unhandled error',
+      );
+    });
+
+    it('does not emit workflow:failed when post-completion step fails', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+
+      // Make the SSE emitter throw on workflow:completed (post-completion).
+      // Track all events received before the throw.
+      const receivedEvents: unknown[] = [];
+      const throwingSseEmitter = vi.fn((event: { type: string }) => {
+        receivedEvents.push(event);
+        if (event.type === 'workflow:completed') {
+          throw new Error('SSE emit failed');
+        }
+      });
+
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: throwingSseEmitter as unknown as SSEEventEmitter,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // The post-completion error is caught and logged at warn level.
+      // The catch block with phasesCompleted=true does NOT emit workflow:failed.
+      const failedEvents = receivedEvents.filter(
+        (e: unknown) => (e as { type: string }).type === 'workflow:failed',
+      );
+      expect(failedEvents).toHaveLength(0);
+    });
+
+    it('emits workflow:failed when error occurs before phases complete', async () => {
+      mockGithub.getIssue.mockRejectedValue(new Error('Network timeout'));
+
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await expect(
+        worker.handle(createQueueItem()),
+      ).rejects.toThrow('Network timeout');
+
+      const failedEvents = sseEvents.filter(
+        (e: unknown) => (e as { type: string }).type === 'workflow:failed',
+      );
+      expect(failedEvents).toHaveLength(1);
+    });
+
+    it('does not re-throw when post-completion step fails', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+
+      // Make the SSE emitter throw on workflow:completed (post-completion)
+      const throwingSseEmitter = vi.fn((event: { type: string }) => {
+        if (event.type === 'workflow:completed') {
+          throw new Error('SSE emit failed');
+        }
+      });
+
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: throwingSseEmitter as unknown as SSEEventEmitter,
+      });
+
+      // handle() should resolve (not reject) — workflow completed even though
+      // post-completion work failed. This means WorkerDispatcher calls
+      // queue.complete() instead of queue.release().
+      await expect(
+        worker.handle(createQueueItem({ workflowName: 'no-gates' })),
+      ).resolves.toBeUndefined();
+    });
+
+    it('re-throws when error occurs before phases complete', async () => {
+      mockGithub.getIssue.mockRejectedValue(new Error('Network timeout'));
+
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await expect(
+        worker.handle(createQueueItem()),
+      ).rejects.toThrow('Network timeout');
     });
   });
 

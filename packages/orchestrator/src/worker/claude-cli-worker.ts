@@ -135,6 +135,9 @@ export class ClaudeCliWorker {
     // Create a GitHub client scoped to the checkout directory
     let checkoutPath: string | undefined;
     const abortController = new AbortController();
+    let labelManager: LabelManager | undefined;
+    let phasesCompleted = false;
+    let gateHit = false;
 
     try {
       // 1. Clone the default branch first (always works, even on first run)
@@ -211,7 +214,7 @@ export class ClaudeCliWorker {
       };
 
       // 7. Create sub-components
-      const labelManager = new LabelManager(
+      labelManager = new LabelManager(
         github,
         item.owner,
         item.repo,
@@ -262,6 +265,7 @@ export class ClaudeCliWorker {
 
       // 9. Handle completion
       if (loopResult.completed) {
+        phasesCompleted = true;
         await labelManager.onWorkflowComplete();
         workerLogger.info('Marking PR as ready for review');
         await prManager.markReadyForReview();
@@ -277,6 +281,7 @@ export class ClaudeCliWorker {
           },
         });
       } else if (loopResult.gateHit) {
+        gateHit = true;
         workerLogger.info(
           { lastPhase: loopResult.lastPhase },
           'Workflow paused at review gate',
@@ -299,24 +304,42 @@ export class ClaudeCliWorker {
         });
       }
     } catch (error) {
-      workerLogger.error(
-        { error: String(error) },
-        'Worker encountered an unhandled error',
-      );
+      if (phasesCompleted) {
+        // All phases completed successfully — the failure is in post-completion
+        // work (e.g. markReadyForReview, SSE emission). Log at warn level and
+        // do NOT re-throw, so WorkerDispatcher calls queue.complete() instead
+        // of queue.release().
+        workerLogger.warn(
+          { error: String(error) },
+          'Post-completion step failed (all phases completed successfully)',
+        );
+      } else {
+        workerLogger.error(
+          { error: String(error) },
+          'Worker encountered an unhandled error',
+        );
 
-      this.sseEmitter?.({
-        type: 'workflow:failed',
-        workflowId,
-        data: {
-          command: item.command,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      });
+        this.sseEmitter?.({
+          type: 'workflow:failed',
+          workflowId,
+          data: {
+            command: item.command,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        });
 
-      throw error;
+        throw error;
+      }
     } finally {
       // Cleanup: abort any in-flight operations
       abortController.abort();
+
+      // Ensure agent:in-progress is cleaned up on every exit path.
+      // This is a no-op if onWorkflowComplete() or onError() already removed it.
+      // Gate hits intentionally leave agent:in-progress — the guard prevents unwanted cleanup.
+      if (labelManager && !gateHit) {
+        await labelManager.ensureCleanup();
+      }
     }
   }
 
