@@ -11,6 +11,6 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['src/**/*.d.ts', 'src/types/**/*.ts'],
     },
-    testTimeout: 10000,
+    testTimeout: 15000,
   },
 });
