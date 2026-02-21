@@ -432,6 +432,41 @@ export class GhCliGitHubClient implements GitHubClient {
     };
   }
 
+  async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
+    const result = await executeCommand('gh', [
+      'pr', 'list',
+      '-R', `${owner}/${repo}`,
+      '--state', 'open',
+      '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
+      '--limit', '100',
+    ], { cwd: this.workdir });
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list open PRs for ${owner}/${repo}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Array<Record<string, unknown>> | null;
+    if (!data) {
+      return [];
+    }
+
+    return data.map(pr => ({
+      number: pr['number'] as number,
+      title: pr['title'] as string,
+      body: pr['body'] as string ?? '',
+      state: 'open' as const,
+      draft: pr['isDraft'] as boolean ?? false,
+      head: { ref: pr['headRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+      base: { ref: pr['baseRefName'] as string, sha: '', repo: `${owner}/${repo}` },
+      labels: ((pr['labels'] as Array<{ name: string; color: string }>) ?? []).map(l => ({
+        name: l.name,
+        color: l.color,
+      })),
+      created_at: pr['createdAt'] as string,
+      updated_at: pr['updatedAt'] as string,
+    }));
+  }
+
   async findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
     const result = await executeCommand('gh', [
       'pr', 'list',

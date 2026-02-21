@@ -78,6 +78,31 @@ export class PhaseTrackerService implements PhaseTracker {
     }
   }
 
+  async tryMarkProcessed(owner: string, repo: string, issue: number, phase: string): Promise<boolean> {
+    if (!this.redis) {
+      this.logger.warn('Redis unavailable for phase tracker, treating as not duplicate');
+      return true;
+    }
+
+    const key = this.buildKey(owner, repo, issue, phase);
+
+    try {
+      const result = await this.redis.set(key, '1', 'EX', this.ttlSeconds, 'NX');
+      const won = result === 'OK';
+      this.logger.info(
+        { key, owner, repo, issue, phase, won },
+        won ? 'Atomically marked phase as processed' : 'Duplicate detected (atomic check)',
+      );
+      return won;
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in tryMarkProcessed, treating as not duplicate',
+      );
+      return true;
+    }
+  }
+
   async markProcessed(owner: string, repo: string, issue: number, phase: string): Promise<void> {
     if (!this.redis) {
       this.logger.warn('Redis unavailable for phase tracker, skipping markProcessed');

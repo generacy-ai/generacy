@@ -1,0 +1,238 @@
+openapi: 3.0.3
+info:
+  title: PR Review Webhook
+  description: GitHub webhook endpoint for PR review events (pull_request_review.submitted, pull_request_review_comment.created)
+  version: 1.0.0
+
+paths:
+  /webhooks/github/pr-review:
+    post:
+      summary: Receive GitHub PR review webhook events
+      description: |
+        Handles `pull_request_review.submitted` and `pull_request_review_comment.created` events.
+
+        Authentication is via HMAC-SHA256 signature verification (not JWT/API key).
+        This route is excluded from the global auth middleware.
+
+        Processing flow:
+        1. Verify HMAC-SHA256 signature
+        2. Check event type (only review submitted and comment created)
+        3. Check watched repository
+        4. Link PR to orchestrated issue (body keywords → branch name)
+        5. Detect unresolved review threads
+        6. Enqueue address-pr-feedback command (with deduplication)
+      operationId: receivePrReviewWebhook
+      tags:
+        - webhooks
+      parameters:
+        - name: X-Hub-Signature-256
+          in: header
+          required: false
+          description: HMAC-SHA256 signature for webhook payload verification
+          schema:
+            type: string
+            example: "sha256=abc123..."
+        - name: X-GitHub-Event
+          in: header
+          required: true
+          description: GitHub event type
+          schema:
+            type: string
+            enum:
+              - pull_request_review
+              - pull_request_review_comment
+        - name: X-GitHub-Delivery
+          in: header
+          required: false
+          description: Unique delivery ID for idempotency
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/PullRequestReviewPayload'
+                - $ref: '#/components/schemas/PullRequestReviewCommentPayload'
+      responses:
+        '200':
+          description: Event processed or ignored
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+              examples:
+                processed:
+                  summary: Event was processed and enqueued
+                  value:
+                    status: processed
+                    event:
+                      prNumber: 42
+                      linkedIssue: 199
+                ignored_not_review:
+                  summary: Event type not relevant
+                  value:
+                    status: ignored
+                    reason: "not a review event"
+                ignored_not_watched:
+                  summary: Repository not in watch list
+                  value:
+                    status: ignored
+                    reason: "not a watched repository"
+                duplicate:
+                  summary: Event already processed (deduplication)
+                  value:
+                    status: duplicate
+                    event:
+                      prNumber: 42
+                      linkedIssue: 199
+        '401':
+          description: Invalid webhook signature
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    example: "Invalid signature"
+
+components:
+  schemas:
+    PullRequestReviewPayload:
+      type: object
+      required: [action, review, pull_request, repository]
+      properties:
+        action:
+          type: string
+          enum: [submitted, edited, dismissed]
+          description: Only 'submitted' is processed
+        review:
+          type: object
+          required: [id, state, body, user]
+          properties:
+            id:
+              type: integer
+            state:
+              type: string
+              enum: [approved, changes_requested, commented, dismissed]
+              description: Ignored — thread resolution is the source of truth
+            body:
+              type: string
+            user:
+              type: object
+              properties:
+                login:
+                  type: string
+        pull_request:
+          $ref: '#/components/schemas/PullRequestRef'
+        repository:
+          $ref: '#/components/schemas/RepositoryRef'
+
+    PullRequestReviewCommentPayload:
+      type: object
+      required: [action, comment, pull_request, repository]
+      properties:
+        action:
+          type: string
+          enum: [created, edited, deleted]
+          description: Only 'created' is processed
+        comment:
+          type: object
+          required: [id, body, path, user]
+          properties:
+            id:
+              type: integer
+            body:
+              type: string
+            path:
+              type: string
+              description: File path for inline comment
+            line:
+              type: integer
+              nullable: true
+              description: Line number for inline comment
+            in_reply_to_id:
+              type: integer
+              nullable: true
+              description: Parent comment ID if this is a reply
+            user:
+              type: object
+              properties:
+                login:
+                  type: string
+        pull_request:
+          $ref: '#/components/schemas/PullRequestRef'
+        repository:
+          $ref: '#/components/schemas/RepositoryRef'
+
+    PullRequestRef:
+      type: object
+      required: [number, body, state, head]
+      properties:
+        number:
+          type: integer
+          description: PR number
+        title:
+          type: string
+        body:
+          type: string
+          description: PR description (used for issue linking)
+        state:
+          type: string
+          enum: [open, closed]
+        draft:
+          type: boolean
+        head:
+          type: object
+          required: [ref]
+          properties:
+            ref:
+              type: string
+              description: Branch name (used for issue linking fallback)
+            sha:
+              type: string
+        base:
+          type: object
+          properties:
+            ref:
+              type: string
+        updated_at:
+          type: string
+          format: date-time
+
+    RepositoryRef:
+      type: object
+      required: [name, owner]
+      properties:
+        name:
+          type: string
+        owner:
+          type: object
+          required: [login]
+          properties:
+            login:
+              type: string
+        full_name:
+          type: string
+
+    WebhookResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [processed, ignored, duplicate]
+        reason:
+          type: string
+          description: Present when status is 'ignored'
+        event:
+          type: object
+          description: Present when status is 'processed' or 'duplicate'
+          properties:
+            prNumber:
+              type: integer
+            linkedIssue:
+              type: integer

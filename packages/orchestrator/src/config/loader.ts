@@ -132,6 +132,47 @@ function loadFromEnv(): Record<string, unknown> {
     (config.monitor as Record<string, unknown>).webhookSecret = webhookSecret;
   }
 
+  // PR Monitor config
+  if (process.env['PR_MONITOR_ENABLED']) {
+    if (!config.prMonitor) {
+      config.prMonitor = {};
+    }
+    (config.prMonitor as Record<string, unknown>).enabled =
+      process.env['PR_MONITOR_ENABLED'] === 'true';
+  }
+  if (process.env['PR_MONITOR_POLL_INTERVAL_MS']) {
+    if (!config.prMonitor) {
+      config.prMonitor = {};
+    }
+    (config.prMonitor as Record<string, unknown>).pollIntervalMs = parseInt(
+      process.env['PR_MONITOR_POLL_INTERVAL_MS']!,
+      10
+    );
+  }
+  if (process.env['PR_MONITOR_WEBHOOK_SECRET']) {
+    if (!config.prMonitor) {
+      config.prMonitor = {};
+    }
+    (config.prMonitor as Record<string, unknown>).webhookSecret =
+      process.env['PR_MONITOR_WEBHOOK_SECRET'];
+  }
+  if (process.env['PR_MONITOR_ADAPTIVE_POLLING']) {
+    if (!config.prMonitor) {
+      config.prMonitor = {};
+    }
+    (config.prMonitor as Record<string, unknown>).adaptivePolling =
+      process.env['PR_MONITOR_ADAPTIVE_POLLING'] === 'true';
+  }
+  if (process.env['PR_MONITOR_MAX_CONCURRENT_POLLS']) {
+    if (!config.prMonitor) {
+      config.prMonitor = {};
+    }
+    (config.prMonitor as Record<string, unknown>).maxConcurrentPolls = parseInt(
+      process.env['PR_MONITOR_MAX_CONCURRENT_POLLS']!,
+      10
+    );
+  }
+
   return config;
 }
 
