@@ -32,18 +32,19 @@ function parseTasks(content: string): ParsedTask[] {
 
   for (const line of lines) {
     // Match task header: ### T001 [P] Description or - [ ] T001 Description
-    const taskMatch = line.match(/(?:###\s*|[-*]\s*\[([ xX])\]\s*)(T\d+)\s*(\[P\])?\s*(.*)/);
+    // Also detects [DONE] marker for heading-format completion tracking
+    const taskMatch = line.match(/(?:###\s*|[-*]\s*\[([ xX])\]\s*)(T\d+)\s*(\[DONE\]\s*)?(\[P\])?\s*(.*)/);
     if (taskMatch && taskMatch[2]) {
       if (currentTask) {
         tasks.push(currentTask);
       }
       currentTask = {
         id: taskMatch[2],
-        description: (taskMatch[4] ?? '').trim(),
+        description: (taskMatch[5] ?? '').trim(),
         files: [],
         subtasks: [],
-        isParallel: !!taskMatch[3],
-        isComplete: taskMatch[1] ? taskMatch[1].toLowerCase() === 'x' : false,
+        isParallel: !!taskMatch[4],
+        isComplete: taskMatch[1] ? taskMatch[1].toLowerCase() === 'x' : !!taskMatch[3],
       };
       inFiles = false;
       continue;
@@ -95,6 +96,11 @@ function markTaskComplete(content: string, taskId: string): string {
   content = content.replace(
     new RegExp(`([-*]\\s*)\\[\\s*\\](\\s*${taskId})`, 'g'),
     '$1[X]$2'
+  );
+  // Replace heading format: ### Txxx -> ### Txxx [DONE] (only if not already marked)
+  content = content.replace(
+    new RegExp(`(###\\s*${taskId})(?!\\s*\\[DONE\\])`, 'g'),
+    '$1 [DONE]'
   );
   return content;
 }
