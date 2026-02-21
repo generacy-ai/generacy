@@ -133,6 +133,42 @@ export class LabelManager {
   }
 
   /**
+   * Ensures `agent:in-progress` and any lingering `phase:*` labels are removed.
+   *
+   * Designed to be called from `finally` blocks and reaper loops — this method
+   * never throws. If the GitHub API call fails after retries, the error is logged
+   * at `warn` level and swallowed.
+   *
+   * Safe to call when labels have already been removed (idempotent):
+   * `removeLabels()` in `gh-cli.ts` checks for "not found" in stderr and
+   * silently ignores it, so removing an already-absent label is a no-op.
+   * This also means `onWorkflowComplete()` is idempotent — calling it when
+   * `agent:in-progress` has already been removed will not throw.
+   */
+  async ensureCleanup(): Promise<void> {
+    try {
+      const currentLabels = await this.getCurrentPhaseLabels();
+      const labelsToRemove = ['agent:in-progress', ...currentLabels];
+
+      if (labelsToRemove.length > 0) {
+        this.logger.info(
+          { labels: labelsToRemove, issue: this.issueNumber },
+          'Ensuring cleanup: removing agent:in-progress and phase labels',
+        );
+        await this.retryWithBackoff(async () => {
+          await this.github.removeLabels(this.owner, this.repo, this.issueNumber, labelsToRemove);
+        });
+      }
+    } catch (error) {
+      // Never throw from cleanup — log and move on
+      this.logger.warn(
+        { error: String(error), issue: this.issueNumber },
+        'Failed to ensure label cleanup (non-fatal)',
+      );
+    }
+  }
+
+  /**
    * Fetch current labels on the issue and return those matching the `phase:*` pattern.
    */
   private async getCurrentPhaseLabels(): Promise<string[]> {

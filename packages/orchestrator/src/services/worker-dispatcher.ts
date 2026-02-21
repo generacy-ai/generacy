@@ -3,6 +3,8 @@ import type { Redis } from 'ioredis';
 import type { QueueManager, WorkerHandler, WorkerInfo } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
 
+export type LabelCleanupFn = (owner: string, repo: string, issueNumber: number) => Promise<void>;
+
 interface Logger {
   info(msg: string): void;
   info(obj: Record<string, unknown>, msg: string): void;
@@ -27,6 +29,7 @@ export class WorkerDispatcher {
   private readonly config: DispatchConfig;
   private readonly handler: WorkerHandler;
   private readonly activeWorkers = new Map<string, WorkerInfo>();
+  private readonly labelCleanup?: LabelCleanupFn;
   private abortController: AbortController | null = null;
   private running = false;
 
@@ -36,12 +39,14 @@ export class WorkerDispatcher {
     logger: Logger,
     config: DispatchConfig,
     handler: WorkerHandler,
+    labelCleanup?: LabelCleanupFn,
   ) {
     this.queue = queue;
     this.redis = redis;
     this.logger = logger;
     this.config = config;
     this.handler = handler;
+    this.labelCleanup = labelCleanup;
   }
 
   /**
@@ -249,6 +254,20 @@ export class WorkerDispatcher {
             { workerId, item: `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}` },
             'Reaping stale worker (heartbeat expired)',
           );
+
+          // Clean up labels before releasing queue item
+          if (this.labelCleanup) {
+            try {
+              await this.labelCleanup(
+                worker.item.owner, worker.item.repo, worker.item.issueNumber,
+              );
+            } catch (error) {
+              this.logger.warn(
+                { err: error, workerId },
+                'Failed to clean up labels during reap (non-fatal)',
+              );
+            }
+          }
 
           clearInterval(worker.heartbeatInterval);
           await this.queue.release(workerId, worker.item);

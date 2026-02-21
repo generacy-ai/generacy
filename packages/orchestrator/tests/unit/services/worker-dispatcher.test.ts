@@ -308,6 +308,150 @@ describe('WorkerDispatcher', () => {
     });
   });
 
+  describe('reaper label cleanup', () => {
+    it('calls labelCleanup when heartbeat expires', async () => {
+      const labelCleanup = vi.fn<(owner: string, repo: string, issueNumber: number) => Promise<void>>()
+        .mockResolvedValue(undefined);
+
+      dispatcher = new WorkerDispatcher(queue, redis, logger, testConfig, handler, labelCleanup);
+
+      // Handler that never resolves so the worker stays active
+      handler.mockImplementation(() => new Promise<void>(() => {}));
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      // Heartbeat disappears after first check
+      (redis.exists as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValue(0);
+
+      const startPromise = dispatcher.start();
+      await tick(100);
+
+      expect(labelCleanup).toHaveBeenCalledWith(
+        sampleItem.owner,
+        sampleItem.repo,
+        sampleItem.issueNumber,
+      );
+
+      // Queue item should still be released after label cleanup
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          owner: sampleItem.owner,
+          issueNumber: sampleItem.issueNumber,
+        }),
+      );
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+
+    it('continues reaping if labelCleanup throws', async () => {
+      const labelCleanup = vi.fn<(owner: string, repo: string, issueNumber: number) => Promise<void>>()
+        .mockRejectedValue(new Error('GitHub API unavailable'));
+
+      dispatcher = new WorkerDispatcher(queue, redis, logger, testConfig, handler, labelCleanup);
+
+      // Handler that never resolves so the worker stays active
+      handler.mockImplementation(() => new Promise<void>(() => {}));
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      // Heartbeat disappears after first check
+      (redis.exists as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValue(0);
+
+      const startPromise = dispatcher.start();
+      await tick(100);
+
+      // labelCleanup was called but threw
+      expect(labelCleanup).toHaveBeenCalledWith(
+        sampleItem.owner,
+        sampleItem.repo,
+        sampleItem.issueNumber,
+      );
+
+      // Error should be logged at warn level (non-fatal)
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          err: expect.any(Error),
+          workerId: expect.any(String),
+        }),
+        'Failed to clean up labels during reap (non-fatal)',
+      );
+
+      // Queue item should still be released despite labelCleanup failure
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          owner: sampleItem.owner,
+          issueNumber: sampleItem.issueNumber,
+        }),
+      );
+
+      // Worker should be removed from activeWorkers
+      expect(dispatcher.getActiveWorkerCount()).toBe(0);
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+
+    it('works without labelCleanup callback (backward-compatible)', async () => {
+      // Construct without labelCleanup (default from beforeEach)
+      // dispatcher already created without labelCleanup in beforeEach
+
+      // Handler that never resolves so the worker stays active
+      handler.mockImplementation(() => new Promise<void>(() => {}));
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      // Heartbeat disappears after first check
+      (redis.exists as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValue(0);
+
+      const startPromise = dispatcher.start();
+      await tick(100);
+
+      // Reaper should still work: log the stale worker
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workerId: expect.any(String),
+        }),
+        'Reaping stale worker (heartbeat expired)',
+      );
+
+      // Queue item should be released
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          owner: sampleItem.owner,
+          issueNumber: sampleItem.issueNumber,
+        }),
+      );
+
+      // Worker should be removed from activeWorkers
+      expect(dispatcher.getActiveWorkerCount()).toBe(0);
+
+      // No label cleanup warning should appear (no callback provided)
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.anything() }),
+        'Failed to clean up labels during reap (non-fatal)',
+      );
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+  });
+
   describe('reaper', () => {
     it('should release items whose heartbeat has expired', async () => {
       // Handler that never resolves so the worker stays active
