@@ -12,7 +12,7 @@
 
 ## Phase 1: WorkflowRegistry (Global Singleton)
 
-### T001 [P] [Plugin Discovery] Create WorkflowRegistry module
+### T001 [DONE] [P] [Plugin Discovery] Create WorkflowRegistry module
 **File**: `packages/workflow-engine/src/registry/index.ts`
 - Create `registry/` directory under `packages/workflow-engine/src/`
 - Implement module-level `workflowRegistry` Map (follows `actionRegistry` pattern in `actions/index.ts`)
@@ -23,7 +23,7 @@
 - Implement `getRegisteredWorkflowNames()` — returns all registered names
 - Implement `clearWorkflowRegistry()` — clears registry (for testing)
 
-### T002 [P] [Inheritance] Create error classes for extends/override
+### T002 [DONE] [P] [Inheritance] Create error classes for extends/override
 **Files**:
 - `packages/workflow-engine/src/errors/base-workflow-not-found.ts`
 - `packages/workflow-engine/src/errors/circular-extends.ts`
@@ -33,7 +33,7 @@
 - Create `WorkflowOverrideError` — generic error for invalid override configurations (e.g., `overrides` without `extends`, `phases` + `overrides.phases` simultaneously)
 - All follow the pattern of existing `CorrelationTimeoutError` in `errors/correlation-timeout.ts` (extends `Error`, sets `this.name`)
 
-### T003 [P] [Inheritance] Implement workflow merge logic (`extends.ts`)
+### T003 [DONE] [P] [Inheritance] Implement workflow merge logic (`extends.ts`)
 **File**: `packages/workflow-engine/src/loader/extends.ts`
 - Define `WorkflowOverride` interface for the `overrides:` YAML block (phases, inputs, env)
 - Implement `mergeWorkflows(base, overrideData)` function
@@ -82,7 +82,7 @@
   5. `/workspaces/tetrad-development` — existing hardcoded fallback (kept for now)
 - All candidates skip if `resolve(candidate) === excludePath`
 
-### T006 [Inheritance] Update `executeJob()` to use `loadWorkflowWithExtends`
+### T006 [DONE] [Inheritance] Update `executeJob()` to use `loadWorkflowWithExtends`
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - Import `loadWorkflowWithExtends` and `WorkflowResolver` from `@generacy-ai/workflow-engine`
 - In the file-path branch of `executeJob()` (around lines 244-247), replace:
@@ -101,7 +101,7 @@
 
 ## Phase 4: Built-in Workflow Registration
 
-### T007 [Plugin Discovery] Register built-in workflows at startup
+### T007 [DONE] [Plugin Discovery] Register built-in workflows at startup
 **File**: `packages/generacy/src/orchestrator/job-handler.ts` (or orchestrator init)
 - Create a `registerBuiltinWorkflows()` helper function
 - Scan the generacy package's `.generacy/` directory for known workflow files (e.g., `speckit-feature`, `speckit-bugfix`)
@@ -113,11 +113,11 @@
 
 ## Phase 5: Package Exports
 
-### T008 [P] [Plugin Discovery] Export registry API from workflow-engine package
+### T008 [DONE] [P] [Plugin Discovery] Export registry API from workflow-engine package
 **File**: `packages/workflow-engine/src/index.ts`
 - Add exports for registry functions: `registerWorkflow`, `registerWorkflows`, `resolveRegisteredWorkflow`, `hasRegisteredWorkflow`, `getRegisteredWorkflowNames`, `clearWorkflowRegistry`
 
-### T009 [P] [Inheritance] Export extends API and error classes from workflow-engine package
+### T009 [DONE] [P] [Inheritance] Export extends API and error classes from workflow-engine package
 **File**: `packages/workflow-engine/src/index.ts`
 - Add exports for `loadWorkflowWithExtends` and `WorkflowResolver` type from `./loader/index.js`
 - Add exports for error classes: `BaseWorkflowNotFoundError`, `CircularExtendsError`, `WorkflowOverrideError` from `./errors/*.js`
@@ -126,7 +126,7 @@
 
 ## Phase 6: Testing
 
-### T010 [P] [Plugin Discovery] Write unit tests for WorkflowRegistry
+### T010 [DONE] [P] [Plugin Discovery] Write unit tests for WorkflowRegistry
 **File**: `packages/workflow-engine/src/registry/__tests__/registry.test.ts`
 - Test `registerWorkflow()` registers and resolves correctly
 - Test `registerWorkflow()` throws on non-existent file path
@@ -138,7 +138,7 @@
 - Test `clearWorkflowRegistry()` empties the registry
 - Use temp files for realistic path validation
 
-### T011 [P] [Inheritance] Write unit tests for merge logic (`extends.ts`)
+### T011 [DONE] [P] [Inheritance] Write unit tests for merge logic (`extends.ts`)
 **File**: `packages/workflow-engine/src/loader/__tests__/extends.test.ts`
 - Test basic scalar override: `name`, `description`, `version` from override win
 - Test `timeout` and `retry` override
@@ -152,7 +152,7 @@
 - Test `phases` + `overrides.phases` mutually exclusive → `WorkflowOverrideError`
 - Test base phases preserved when not mentioned in overrides
 
-### T012 [P] [Inheritance] Write unit tests for `loadWorkflowWithExtends()`
+### T012 [DONE] [P] [Inheritance] Write unit tests for `loadWorkflowWithExtends()`
 **File**: `packages/workflow-engine/src/loader/__tests__/extends.test.ts` (or separate file)
 - Test non-extends workflow loads identically to `loadWorkflow()` (same validation path)
 - Test single-level extends: base resolved, merged, validated
@@ -164,7 +164,7 @@
 - Test `extends` + `phases` (full replacement mode, no `overrides`) works
 - Test merged result passes strict `WorkflowDefinitionSchema` validation
 
-### T013 [P] [Plugin Discovery] Write unit tests for updated `resolveWorkflowPath()`
+### T013 [DONE] [P] [Plugin Discovery] Write unit tests for updated `resolveWorkflowPath()`
 **File**: `packages/generacy/src/orchestrator/__tests__/job-handler.test.ts` (or new test file)
 - Test repo-local `.generacy/` takes priority over registry
 - Test registry takes priority over hardcoded fallback
@@ -177,7 +177,7 @@
 
 ## Phase 7: Remove Hardcoded Fallback
 
-### T014 [Cleanup] Remove `/workspaces/tetrad-development` fallback
+### T014 [DONE] [Cleanup] Remove `/workspaces/tetrad-development` fallback
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - Remove the `/workspaces/tetrad-development` search tier from `resolveWorkflowPath()`
 - Remove the `searchDirs` array and hardcoded fallback directory
