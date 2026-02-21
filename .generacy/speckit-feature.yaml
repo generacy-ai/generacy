@@ -28,7 +28,7 @@ description: |
   then proceeds through clarification, planning, task generation, and
   implementation — committing and pushing after each phase.
 
-version: "1.2.0"
+version: "1.3.0"
 
 inputs:
   - name: description
@@ -186,11 +186,11 @@ phases:
       - name: run-tests
         uses: verification.check
         with:
-          command: npm test
+          command: pnpm run test
         continueOnError: true
 
       - name: run-lint
         uses: verification.check
         with:
-          command: npm run lint
+          command: pnpm run lint
         continueOnError: true

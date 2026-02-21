@@ -281,9 +281,15 @@ export class JobHandler {
       const issueNumber = job.inputs?.issue_number as number | undefined;
       let shouldPauseForGate = false;
       let gatedPhaseName: string | undefined;
+      const phasesWithFailedSteps = new Set<string>();
 
       if (owner && repo && issueNumber) {
         executor.addEventListener((event) => {
+          // Track step failures so we can label phases accurately
+          if (event.type === 'step:error' && event.phaseName) {
+            phasesWithFailedSteps.add(event.phaseName);
+          }
+
           if (event.type !== 'phase:complete' || !event.phaseName) return;
 
           const gateLabel = PHASE_GATES[event.phaseName];
@@ -302,8 +308,9 @@ export class JobHandler {
             }
           }
 
-          // Add completed:* label for non-gated phases (or gated phases that didn't pause)
-          void this.addCompletedLabel(owner, repo, issueNumber, event.phaseName);
+          // Add completed:* or failed:* label based on whether steps had errors
+          const hasFailed = phasesWithFailedSteps.has(event.phaseName);
+          void this.addPhaseLabel(owner, repo, issueNumber, event.phaseName, !hasFailed);
         });
       }
 
@@ -456,7 +463,9 @@ export class JobHandler {
   }
 
   /**
-   * Resolve which phases have already been completed based on issue labels.
+   * Resolve which phases have already been attempted based on issue labels.
+   * Recognises both `completed:*` and `failed:*` labels so that phases are
+   * not re-run on retry (failed verification still means the phase executed).
    * Returns a set of YAML phase names to skip. Setup is never included.
    */
   private async resolveCompletedPhases(job: Job): Promise<Set<string>> {
@@ -475,24 +484,24 @@ export class JobHandler {
         typeof l === 'string' ? l : l.name
       );
 
-      // Find completed:* labels
-      const completedSuffixes = new Set(
+      // Find completed:* and failed:* labels (both indicate the phase has run)
+      const attemptedSuffixes = new Set(
         labelNames
-          .filter(n => n.startsWith('completed:'))
-          .map(n => n.slice('completed:'.length))
+          .filter(n => n.startsWith('completed:') || n.startsWith('failed:'))
+          .map(n => n.replace(/^(completed|failed):/, ''))
       );
 
-      if (completedSuffixes.size === 0) {
+      if (attemptedSuffixes.size === 0) {
         return new Set();
       }
 
-      this.logger.info(`Found completed labels: ${[...completedSuffixes].join(', ')}`);
+      this.logger.info(`Found phase labels: ${[...attemptedSuffixes].join(', ')}`);
 
-      // Map completed label suffixes back to YAML phase names
+      // Map label suffixes back to YAML phase names
       const completed = new Set<string>();
       for (const phaseName of PHASE_ORDER) {
         const suffix = PHASE_TO_LABEL_SUFFIX[phaseName];
-        if (suffix && completedSuffixes.has(suffix)) {
+        if (suffix && attemptedSuffixes.has(suffix)) {
           completed.add(phaseName);
         }
       }
@@ -505,18 +514,21 @@ export class JobHandler {
   }
 
   /**
-   * Add a completed:* label to the issue after a phase finishes successfully.
+   * Add a completed:* or failed:* label to the issue after a phase finishes.
+   * Uses `completed:` prefix when the phase succeeded, `failed:` when any step errored.
    */
-  private async addCompletedLabel(
+  private async addPhaseLabel(
     owner: string,
     repo: string,
     issueNumber: number,
     phaseName: string,
+    success: boolean,
   ): Promise<void> {
     const suffix = PHASE_TO_LABEL_SUFFIX[phaseName];
     if (!suffix) return;
 
-    const label = `completed:${suffix}`;
+    const prefix = success ? 'completed' : 'failed';
+    const label = `${prefix}:${suffix}`;
     try {
       const github = createGitHubClient();
       await github.addLabels(owner, repo, issueNumber, [label]);
