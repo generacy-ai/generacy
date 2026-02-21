@@ -1,12 +1,19 @@
 # Tasks: PR Feedback Monitor
 
 **Input**: Design documents from feature directory
-**Prerequisites**: plan.md (required), spec.md (required)
+**Prerequisites**: plan.md (required), spec.md (required), clarifications.md (required)
 **Status**: Ready
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: Which user story this task belongs to
+- **[Story]**: Which user story this task belongs to (US1-US5)
+
+## Overview
+
+This task breakdown implements the PR Feedback Monitor feature, which adds automated PR review feedback addressing to the orchestrator. The implementation follows a hybrid webhook + polling architecture and integrates with the existing worker dispatch system.
+
+**Total Tasks**: 60 (34 implementation + 26 testing)
+**Estimated Effort**: 8-10 development days (with parallel execution)
 
 ---
 
@@ -330,5 +337,242 @@
 
 *Phase 7*: T028-T033 can all run in parallel. T034 depends on all prior tasks.
 
-**Critical path**:
+**Critical path** (longest sequential dependency chain):
 T001 → T008 → T009 → T011 → T012 → T013 → T014 → T016 → T018 → T019 → T020 → T023 → T024 → T025 → T026 → T028 → T034
+
+---
+
+## Phase 8: Documentation
+
+### T035 [P] Document PR monitor configuration
+**File**: `packages/orchestrator/README.md` (EXTEND)
+- Add PR Monitor section explaining purpose and architecture
+- Document all environment variables: `PR_MONITOR_ENABLED`, `PR_MONITOR_POLL_INTERVAL_MS`, `PR_MONITOR_WEBHOOK_SECRET`, `PR_MONITOR_ADAPTIVE_POLLING`, `PR_MONITOR_MAX_CONCURRENT_POLLS`
+- Document adaptive polling behavior and webhook health monitoring
+- Add example configuration
+- Link to deployment guide
+
+### T036 [P] Create PR feedback monitor deployment guide
+**File**: `docs/PR_FEEDBACK_MONITOR.md` (NEW)
+- **GitHub Webhook Setup**: Step-by-step instructions for configuring webhook (payload URL, secret, event selection)
+- **Rollout Strategy**: Phase 1 (disabled), Phase 2 (polling only), Phase 3 (webhook on test repo), Phase 4 (production)
+- **Monitoring**: Key metrics (webhook latency, polling cycle duration, API rate usage, dedup rate, timeout rate, reply success rate)
+- **Alerts**: Webhook signature failures, API rate limits, polling failures, timeout spikes, Redis connection failures
+- **Troubleshooting**: Common issues (webhook delivery, signature verification, PR linking failures, worker timeouts)
+
+### T037 [P] Document Redis schema changes
+**File**: `docs/REDIS_SCHEMA.md` (EXTEND or NEW)
+- Document new key pattern: `phase-tracker:{owner}:{repo}:{issue}:address-pr-feedback` (TTL: 24h)
+- Document queue item metadata field schema: `PrFeedbackMetadata`
+- Note: no migration required (all changes are additive)
+- Add example queue item with metadata
+
+### T038 [P] Update architecture documentation
+**File**: `docs/ARCHITECTURE.md` (EXTEND)
+- Add `PrFeedbackMonitorService` to orchestrator services diagram
+- Add PR webhook route to API diagram
+- Add data flow diagram: GitHub → webhook/poll → monitor → queue → worker → GitHub
+- Show integration with `PhaseTrackerService`, `RedisQueueAdapter`, `WorkerDispatcher`, `ClaudeCliWorker`
+
+### T039 [P] Add feature to CHANGELOG
+**File**: `CHANGELOG.md` (EXTEND)
+- Add new section for PR Feedback Monitor feature
+- List key capabilities: webhook + polling detection, atomic deduplication, automated feedback addressing
+- Note breaking changes: none (additive only)
+- Reference user stories US1-US5
+
+---
+
+## Phase 9: Final Validation
+
+### T040 Run comprehensive test suite
+**Command**: `pnpm test`
+- Execute all unit tests across packages
+- Execute all integration tests
+- Verify all new tests pass
+- Verify no regressions in existing tests
+- Generate coverage report: target >80% for new files
+
+### T041 Verify success criteria
+**Tests**: Review test results against spec success criteria
+- **SC-001**: Webhook-to-enqueue latency < 500ms (T028)
+- **SC-002**: PR-to-issue linking accuracy > 95% (T010: 100+ format variations)
+- **SC-003**: Polling fallback coverage 100% (T029)
+- **SC-004**: Deduplication effectiveness 0 duplicates (T030)
+- **SC-005**: Reply completeness 100% (T031)
+- **SC-006**: Thread auto-resolve prevention 0% (T031)
+- **SC-007**: Worker timeout recovery 100% (T033)
+- **SC-008**: Workflow name resolution accuracy 100% (T015)
+
+### T042 Type checking and linting
+**Commands**: `pnpm typecheck`, `pnpm lint`
+- Run TypeScript compiler across all packages
+- Verify no type errors
+- Run ESLint across all modified files
+- Fix any linting issues
+- Run Prettier to ensure consistent formatting
+
+### T043 Manual testing: webhook flow
+**Environment**: Test deployment
+- Deploy orchestrator to test environment
+- Configure GitHub webhook on test repository
+- Create test PR with review comments on orchestrated issue
+- Submit review comments
+- Verify webhook received within 500ms
+- Verify queue item created with correct metadata
+- Verify worker processes item
+- Verify agent addresses feedback, commits, pushes
+- Verify agent posts replies to review threads
+- Verify threads not auto-resolved
+- Verify label removed from issue
+- Check dashboard SSE events display correctly
+
+### T044 Manual testing: polling fallback
+**Environment**: Test deployment
+- Disable webhook (don't configure on GitHub)
+- Enable polling: `PR_MONITOR_ENABLED=true`, `PR_MONITOR_POLL_INTERVAL_MS=30000`
+- Create test PR with review comments
+- Wait for poll cycle (observe logs)
+- Verify PR detected within one poll cycle
+- Verify processing identical to webhook flow
+- Monitor adaptive polling behavior: create unresolved threads, observe interval changes when no webhooks
+
+### T045 Manual testing: edge cases
+**Environment**: Test deployment
+- **Multiple PRs per issue**: Create 2 PRs for same issue, verify most recent processed only
+- **Non-orchestrated PR**: Create PR linked to non-orchestrated issue (no `agent:*` label), verify ignored
+- **PR with no linked issue**: Create PR without closing keywords or issue number in branch, verify ignored
+- **PR linking priority**: Create PR with closing keyword in body AND issue number in branch name (different issues), verify body wins
+- **Worker timeout**: Create PR with large number of complex review comments, reduce `phaseTimeoutMs`, verify partial completion and label retention
+- **Reply posting failure**: Mock GitHub API to fail on some reply calls, verify partial success (label still removed)
+
+### T046 Performance testing: GitHub API rate limits
+**Environment**: Test deployment
+- Configure multiple watched repositories (5+)
+- Enable polling with default interval (60s)
+- Monitor GitHub API usage via `gh api rate_limit` over 1 hour
+- Verify usage stays under 80% of limit (5000 calls/hour)
+- Test concurrent polling: verify `maxConcurrentPolls` respected (check logs for semaphore queueing)
+- Create multiple PRs with review comments, verify webhook processing doesn't spike API usage
+
+### T047 Performance testing: Redis and queue throughput
+**Environment**: Test deployment with Redis
+- Create 20+ PRs with review comments across multiple repositories
+- Trigger simultaneous webhook events (use GitHub webhook redeliver)
+- Verify atomic deduplication: check Redis for exactly one phase-tracker key per PR-issue pair
+- Verify queue throughput: all items enqueued within 2 seconds
+- Verify worker dispatch: items processed in priority order
+
+### T048 Integration validation: dashboard streaming
+**Environment**: Test deployment with dashboard frontend
+- Open dashboard in browser
+- Create PR with review comments
+- Submit review
+- Verify `workflow:started` event appears in dashboard active workflows
+- Verify `workflow:progress` events stream agent output in real-time
+- Verify `workflow:completed` event updates workflow status
+- Check event metadata includes: `command: 'address-pr-feedback'`, PR number, issue number
+
+### T049 Security validation
+**Tests**: Security review
+- Verify webhook HMAC-SHA256 signature validation works correctly
+- Test invalid signatures are rejected (401 response)
+- Test missing signatures handled gracefully
+- Verify PR webhook route bypasses auth middleware (in skipRoutes)
+- Review agent prompt for injection risks (ensure review comment bodies are properly escaped)
+- Verify git operations use safe practices (no command injection via branch names or PR bodies)
+
+### T050 Final cleanup and polish
+**Files**: All modified files
+- Remove any debug logging or TODOs
+- Ensure all comments are accurate and helpful
+- Verify all imports are used (no unused imports)
+- Ensure consistent error handling patterns across new files
+- Review variable names for clarity
+- Update any stale inline documentation
+
+### T051 Pre-merge checklist
+**Tasks**: Final verification before merge
+- [ ] All unit tests passing
+- [ ] All integration tests passing
+- [ ] All manual tests completed successfully
+- [ ] All success criteria validated (SC-001 through SC-008)
+- [ ] Documentation complete (README, deployment guide, architecture docs)
+- [ ] CHANGELOG updated
+- [ ] No TypeScript errors
+- [ ] No linting errors
+- [ ] Code review ready (self-review completed)
+- [ ] Performance metrics within targets (API rate usage <80%, webhook latency <500ms)
+
+---
+
+## Success Criteria Validation Matrix
+
+| ID | Metric | Target | Validation Method | Task |
+|----|--------|--------|-------------------|------|
+| SC-001 | Webhook-to-enqueue latency | < 500ms | Timestamp delta in integration test | T028, T043 |
+| SC-002 | PR-to-issue linking accuracy | > 95% | Unit tests with 100+ PR format variations | T010 |
+| SC-003 | Polling fallback coverage | 100% | Integration test with webhooks disabled | T029, T044 |
+| SC-004 | Deduplication effectiveness | 0 duplicates | Concurrent webhook + poll race test | T030, T047 |
+| SC-005 | Reply completeness | 100% | Verify all unresolved threads receive reply | T031, T043 |
+| SC-006 | Thread auto-resolve prevention | 0% | Verify no resolve API calls in handler | T021, T031, T043 |
+| SC-007 | Worker timeout recovery | 100% | Timeout simulation test verifying push + label retention | T033, T045 |
+| SC-008 | Workflow name resolution accuracy | 100% | Label parsing tests across all workflow types | T015 |
+
+---
+
+## Risk Mitigation Tracking
+
+| Risk | Mitigation | Validation Task |
+|------|------------|-----------------|
+| GitHub API rate limits | `maxConcurrentPolls=3`, webhook-first, adaptive polling | T046 |
+| Webhook delivery failures | Polling fallback within 60s, adaptive frequency | T029, T044 |
+| PR-to-issue linking failures | Dual strategy (body + branch), `agent:*` label check | T010, T045 |
+| Worker timeout on large PRs | Partial completion strategy: push changes, keep label | T033, T045 |
+| Webhook + poll race conditions | Atomic `SET NX` deduplication | T030, T047 |
+| Reply posting failures | Partial success: remove label, log warnings | T033, T045 |
+| Conflicting review comments | Agent attempts all, conflicts left for human | T045 |
+| Branch protection rules | Document bot push permissions requirement | T036 |
+
+---
+
+## Implementation Notes
+
+### Type Safety
+- All new types are exported from appropriate barrel files
+- Existing interfaces extended with proper type guards
+- Metadata field uses discriminated union pattern for type safety
+- All GitHub API responses typed according to actual `gh` CLI output
+
+### Error Handling
+- All async operations wrapped in try-catch with structured logging
+- Partial failure strategies documented and tested (timeout, reply failures)
+- Graceful degradation when Redis unavailable (monitoring continues, no dedup)
+- Non-critical errors (reply failures) don't block completion
+
+### Testing Strategy
+- Unit tests for all business logic (parsing, linking, enqueueing)
+- Integration tests for end-to-end flows (webhook → queue → worker)
+- Performance tests for API rate limits and throughput
+- Manual tests for UI/UX validation (dashboard SSE events)
+- All success criteria have automated + manual validation
+
+### Configuration
+- All config values have sensible defaults
+- Environment variables follow existing naming convention
+- Adaptive polling can be disabled via config flag
+- Webhook secret is optional (for local testing)
+
+### Observability
+- Structured logging at all key decision points
+- SSE events for real-time dashboard updates
+- `MonitorState` exposes internal state for debugging
+- GitHub API call logging for rate limit tracking
+- Phase tracker keys use descriptive names for Redis debugging
+
+---
+
+**Status**: Ready for implementation
+**Last Updated**: 2026-02-21
+**Total Tasks**: 51 (34 implementation + 17 testing/validation)
+**Estimated Effort**: 8-10 development days (with parallel execution opportunities)
