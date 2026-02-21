@@ -19,7 +19,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 1: Type Extensions and Configuration
 
-### T001 [US1] Extend `QueueItem` type with `address-pr-feedback` command and metadata
+### T001 [DONE] [US1] Extend `QueueItem` type with `address-pr-feedback` command and metadata
 **File**: `packages/orchestrator/src/types/monitor.ts`
 - Add `'address-pr-feedback'` to the `command` union: `'process' | 'continue' | 'address-pr-feedback'`
 - Add optional `metadata?: Record<string, unknown>` field to `QueueItem`
@@ -29,36 +29,36 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Add `GitHubPrReviewWebhookPayload` interface for webhook deserialization (model after existing `GitHubWebhookPayload` — include `action`, `review`, `comment`, `pull_request`, `repository` fields)
 - Verify existing `SerializedQueueItem`, `QueueAdapter`, `QueueManager` all remain compatible (they extend `QueueItem`)
 
-### T002 [P] [US1] Add `PrMonitorConfig` to configuration schema
+### T002 [DONE] [P] [US1] Add `PrMonitorConfig` to configuration schema
 **File**: `packages/orchestrator/src/config/schema.ts`
 - Add `PrMonitorConfigSchema` with zod: `enabled` (boolean, default true), `pollIntervalMs` (int, min 5000, default 60000), `webhookSecret` (string, optional), `adaptivePolling` (boolean, default true), `maxConcurrentPolls` (int, min 1, max 20, default 3)
 - Export `PrMonitorConfig` type
 - Add `prMonitor: PrMonitorConfigSchema.default({})` to `OrchestratorConfigSchema`
 
-### T003 [P] [US1] Add environment variable loading for PR monitor config
+### T003 [DONE] [P] [US1] Add environment variable loading for PR monitor config
 **File**: `packages/orchestrator/src/config/loader.ts`
 - Add env var mappings: `PR_MONITOR_ENABLED` → `prMonitor.enabled`, `PR_MONITOR_POLL_INTERVAL_MS` → `prMonitor.pollIntervalMs`, `PR_MONITOR_WEBHOOK_SECRET` → `prMonitor.webhookSecret`, `PR_MONITOR_ADAPTIVE_POLLING` → `prMonitor.adaptivePolling`, `PR_MONITOR_MAX_CONCURRENT_POLLS` → `prMonitor.maxConcurrentPolls`
 - Follow existing env loading pattern (check `process.env`, parse as int/boolean as appropriate)
 
-### T004 [P] [US1] Export new config types from config barrel
+### T004 [DONE] [P] [US1] Export new config types from config barrel
 **File**: `packages/orchestrator/src/config/index.ts`
 - Add exports for `PrMonitorConfigSchema` and `PrMonitorConfig` type
 
-### T005 [P] [US2] Add `waiting-for:address-pr-feedback` label definition
+### T005 [DONE] [P] [US2] Add `waiting-for:address-pr-feedback` label definition
 **File**: `packages/workflow-engine/src/actions/github/label-definitions.ts`
 - Add `{ name: 'waiting-for:address-pr-feedback', color: 'FBCA04', description: 'Agent is addressing PR review feedback' }` to `WORKFLOW_LABELS` array (after the existing `waiting-for:pr-feedback` entry)
 
-### T006 [P] [US4] Add `listOpenPullRequests` to `GitHubClient` interface
+### T006 [DONE] [P] [US4] Add `listOpenPullRequests` to `GitHubClient` interface
 **File**: `packages/workflow-engine/src/actions/github/client/interface.ts`
 - Add `listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>` to the `GitHubClient` interface under PR Operations section
 
-### T007 [US4] Implement `listOpenPullRequests` in `GhCliGitHubClient`
+### T007 [DONE] [US4] Implement `listOpenPullRequests` in `GhCliGitHubClient`
 **File**: `packages/workflow-engine/src/actions/github/client/gh-cli.ts`
 - Implement using `gh pr list -R {owner}/{repo} --state open --json number,title,body,state,isDraft,headRefName,headRefOid,baseRefName,baseRefOid,labels,createdAt,updatedAt --limit 100`
 - Map the JSON output to `PullRequest[]` type (handle field name differences between gh CLI JSON and our types — e.g., `headRefName` → `head.ref`, `isDraft` → `draft`)
 - Handle empty result (no open PRs) gracefully
 
-### T008 [US1] Add `tryMarkProcessed` atomic method to `PhaseTrackerService`
+### T008 [DONE] [US1] Add `tryMarkProcessed` atomic method to `PhaseTrackerService`
 **File**: `packages/orchestrator/src/services/phase-tracker-service.ts`
 - Add `tryMarkProcessed(owner, repo, issue, phase): Promise<boolean>` method
 - Use Redis `SET key value EX ttl NX` for atomic check-and-set
@@ -71,7 +71,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 2: PR-to-Issue Linking
 
-### T009 [US3] Create `PrLinker` utility class
+### T009 [DONE] [US3] Create `PrLinker` utility class
 **File**: `packages/orchestrator/src/worker/pr-linker.ts` (NEW)
 - Implement `parsePrBody(body: string): number | null` — regex for closing keywords (`close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved #N`, case-insensitive, word-boundary aware); return first matched issue number only
 - Implement `parseBranchName(branch: string): number | null` — regex for `^(\d+)-` pattern; return captured number or null
@@ -81,7 +81,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
   - Return `null` for unlinked or non-orchestrated PRs
   - Log which linking method succeeded
 
-### T010 [P] [US3] Write unit tests for `PrLinker`
+### T010 [DONE] [P] [US3] Write unit tests for `PrLinker`
 **File**: `packages/orchestrator/src/worker/__tests__/pr-linker.test.ts` (NEW)
 - Test `parsePrBody` with: `Closes #42`, `fixes #7`, `Resolves #100`, mixed case, multiple issues (verify first wins), no keywords, empty body
 - Test `parseBranchName` with: `42-feature-name`, `7-fix`, `100-`, `not-a-number`, empty string, date-prefixed branches
@@ -92,14 +92,14 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 3: PR Feedback Monitor Service
 
-### T011 [US1] Create `PrFeedbackMonitorService` class
+### T011 [DONE] [US1] Create `PrFeedbackMonitorService` class
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` (NEW)
 - Constructor: accept `logger`, `createClient: GitHubClientFactory`, `phaseTracker: PhaseTracker`, `queueAdapter: QueueAdapter`, `config: PrMonitorConfig`, `repositories: RepositoryConfig[]`
 - Maintain internal state: `MonitorState` (isPolling, webhookHealthy, lastWebhookEvent, currentPollIntervalMs, basePollIntervalMs)
 - Implement `getState(): Readonly<MonitorState>`
 - Implement `recordWebhookEvent(): void` — update `lastWebhookEvent` and `webhookHealthy`, reset poll interval to base
 
-### T012 [US1] Implement `processPrReviewEvent()` in monitor service
+### T012 [DONE] [US1] Implement `processPrReviewEvent()` in monitor service
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
 - Accept `PrReviewEvent` and return `Promise<boolean>` (processed or not)
 - Create `GitHubClient` via factory
@@ -114,7 +114,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Add `waiting-for:address-pr-feedback` label to linked issue
 - Return true
 
-### T013 [US4] Implement polling loop in monitor service
+### T013 [DONE] [US4] Implement polling loop in monitor service
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
 - Implement `startPolling(): Promise<void>` — infinite loop with adaptive interval, controlled by `isPolling` flag
 - Implement `stopPolling(): void` — set `isPolling` to false for graceful exit
@@ -127,7 +127,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Use semaphore for `maxConcurrentPolls` across all repos (mirror `LabelMonitorService` pattern)
 - Handle GitHub API rate limits gracefully (log warning, continue)
 
-### T014 [US4] Implement adaptive polling in monitor service
+### T014 [DONE] [US4] Implement adaptive polling in monitor service
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
 - In polling loop, calculate effective interval:
   - If `adaptivePolling` enabled and no webhook received in `2 * basePollIntervalMs` → decrease interval by 50% (divide by 2)
@@ -136,7 +136,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Update `currentPollIntervalMs` in state for observability
 - Log when switching between normal and adaptive polling modes
 
-### T015 [P] [US1] Write unit tests for `PrFeedbackMonitorService`
+### T015 [DONE] [P] [US1] Write unit tests for `PrFeedbackMonitorService`
 **File**: `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.test.ts` (NEW)
 - Test `processPrReviewEvent`: successful enqueue, duplicate detection, unlinked PR, no unresolved threads, non-orchestrated issue
 - Test polling: detects unresolved threads within one cycle (SC-003), skips non-watched repos
@@ -150,7 +150,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 4: Webhook Route
 
-### T016 [US1] Create PR review webhook route
+### T016 [DONE] [US1] Create PR review webhook route
 **File**: `packages/orchestrator/src/routes/pr-webhooks.ts` (NEW)
 - Define `PrWebhookRouteOptions` interface: `monitorService: PrFeedbackMonitorService`, `webhookSecret?: string`, `watchedRepos: Set<string>`
 - Implement `setupPrWebhookRoutes(server: FastifyInstance, options: PrWebhookRouteOptions): Promise<void>`
@@ -163,7 +163,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Call `monitorService.recordWebhookEvent()` for adaptive polling health
 - Return `{ status: 'processed' | 'duplicate' | 'ignored' }` with 200 status
 
-### T017 [P] [US1] Write unit tests for PR webhook route
+### T017 [DONE] [P] [US1] Write unit tests for PR webhook route
 **File**: `packages/orchestrator/src/routes/__tests__/pr-webhooks.test.ts` (NEW)
 - Test HMAC signature verification (valid, invalid, missing, no secret configured)
 - Test event type filtering (accept `pull_request_review.submitted`, `pull_request_review_comment.created`, ignore others)
@@ -175,7 +175,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 5: PR Feedback Handler (Worker Extension)
 
-### T018 [US2] Create `PrFeedbackHandler` class
+### T018 [DONE] [US2] Create `PrFeedbackHandler` class
 **File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts` (NEW)
 - Constructor: accept `config: WorkerConfig`, `logger: Logger`, `processFactory: ProcessFactory`, `sseEmitter?: SSEEventEmitter`
 - Implement `async handle(item: QueueItem, checkoutPath: string): Promise<void>`:
@@ -192,14 +192,14 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
   11. Remove `waiting-for:address-pr-feedback` label from linked issue
 - Emit SSE events: `workflow:started`, `workflow:progress`, `workflow:completed` with `command: 'address-pr-feedback'` (US5)
 
-### T019 [US2] Implement error handling in `PrFeedbackHandler`
+### T019 [DONE] [US2] Implement error handling in `PrFeedbackHandler`
 **File**: `packages/orchestrator/src/worker/pr-feedback-handler.ts`
 - **Timeout handling** (FR-013): If CLI times out, push any partial changes that were made, keep `waiting-for:address-pr-feedback` label (don't remove), log timeout warning; the label stays so next detection cycle will re-enqueue
 - **Reply failure** (FR-007): If posting replies fails for some threads, still remove `waiting-for:address-pr-feedback` label, log warnings for each failed reply; partial reply success is acceptable
 - **Thread resolution prevention** (SC-006): Ensure no code path calls any thread-resolve API; only use `replyToPRComment()`
 - Structured logging for all operations: feedback detection, prompt building, CLI spawn, push, reply posting, label management, errors (US5)
 
-### T020 [US2] Extend `ClaudeCliWorker.handle()` to route `address-pr-feedback` command
+### T020 [DONE] [US2] Extend `ClaudeCliWorker.handle()` to route `address-pr-feedback` command
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - Import `PrFeedbackHandler` from `./pr-feedback-handler.js`
 - Add early check at the start of `handle()`: if `item.command === 'address-pr-feedback'`, create `PrFeedbackHandler` instance and delegate
@@ -209,7 +209,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Ensure SSE `workflow:started` event is emitted before delegation (already exists at line 114)
 - Wrap handler call in try/catch to emit `workflow:failed` SSE on error (match existing error handling pattern)
 
-### T021 [P] [US2] Write unit tests for `PrFeedbackHandler`
+### T021 [DONE] [P] [US2] Write unit tests for `PrFeedbackHandler`
 **File**: `packages/orchestrator/src/worker/__tests__/pr-feedback-handler.test.ts` (NEW)
 - Test PR branch checkout (not default branch)
 - Test fresh unresolved thread fetch at processing time
@@ -223,7 +223,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 - Test no unresolved threads at processing time: early return, label removed
 - Test SSE events emitted (workflow:started, workflow:completed)
 
-### T022 [P] [US2] Write tests for `ClaudeCliWorker` `address-pr-feedback` routing
+### T022 [DONE] [P] [US2] Write tests for `ClaudeCliWorker` `address-pr-feedback` routing
 **File**: `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` (EXTEND existing or NEW)
 - Test `address-pr-feedback` command routes to `PrFeedbackHandler`
 - Test early return (no phase loop execution)
@@ -234,28 +234,28 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 6: Server Integration
 
-### T023 [US1] Initialize `PrFeedbackMonitorService` in server startup
+### T023 [DONE] [US1] Initialize `PrFeedbackMonitorService` in server startup
 **File**: `packages/orchestrator/src/server.ts`
 - After label monitor setup (~line 188): create `PrFeedbackMonitorService` when `config.prMonitor.enabled` and `config.repositories.length > 0`
 - Create a `PhaseTrackerService` instance (can share Redis client)
 - Use `redisQueueAdapter ?? fallback logging adapter` pattern (match existing label monitor)
 - Store as `prFeedbackMonitorService` variable
 
-### T024 [US1] Register PR webhook routes in server
+### T024 [DONE] [US1] Register PR webhook routes in server
 **File**: `packages/orchestrator/src/server.ts`
 - After issue webhook routes (~line 219): if `prFeedbackMonitorService` exists, call `setupPrWebhookRoutes(server, { monitorService, webhookSecret, watchedRepos })`
 - Import `setupPrWebhookRoutes` from `./routes/pr-webhooks.js`
 
-### T025 [US1] Add auth skip for PR webhook endpoint
+### T025 [DONE] [US1] Add auth skip for PR webhook endpoint
 **File**: `packages/orchestrator/src/server.ts`
 - Add `/webhooks/github/pr-review` to `skipRoutes` array in `createAuthMiddleware` call (line 109)
 
-### T026 [US4] Add lifecycle hooks for PR monitor service
+### T026 [DONE] [US4] Add lifecycle hooks for PR monitor service
 **File**: `packages/orchestrator/src/server.ts`
 - In `onReady` hook (~line 230): if `prFeedbackMonitorService`, call `prFeedbackMonitorService.startPolling()` in background (non-blocking, with `.catch()` error log)
 - In graceful shutdown cleanup (~line 253): if `prFeedbackMonitorService`, call `prFeedbackMonitorService.stopPolling()`
 
-### T027 [P] [US5] Verify SSE event integration
+### T027 [DONE] [P] [US5] Verify SSE event integration
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - Verify that the existing `sseEmitter` is passed through to `PrFeedbackHandler` when routing `address-pr-feedback` command
 - Ensure SSE events include `command: 'address-pr-feedback'` in the data payload for dashboard filtering
@@ -264,7 +264,7 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
 
 ## Phase 7: Testing and Validation
 
-### T028 [US1] Write integration test: webhook → enqueue → worker flow
+### T028 [DONE] [US1] Write integration test: webhook → enqueue → worker flow
 **File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts` (NEW)
 - End-to-end test with mocked GitHub API:
   1. Send PR review webhook event to `/webhooks/github/pr-review`
@@ -273,12 +273,12 @@ This task breakdown implements the PR Feedback Monitor feature, which adds autom
   4. Verify queue item has correct `command` and `metadata`
 - Test webhook-to-enqueue latency < 500ms (SC-001)
 
-### T029 [P] [US4] Write integration test: polling fallback
+### T029 [DONE] [P] [US4] Write integration test: polling fallback
 **File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
 - Disable webhooks, verify polling detects unresolved threads within one cycle (SC-003)
 - Verify adaptive polling increases frequency when no webhooks received
 
-### T030 [P] [US1] Write integration test: deduplication
+### T030 [DONE] [P] [US1] Write integration test: deduplication
 **File**: `packages/orchestrator/src/__tests__/pr-feedback-integration.test.ts`
 - Send identical events via webhook + poll concurrently
 - Verify single queue item (SC-004: 0 duplicate enqueues)

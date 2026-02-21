@@ -15,10 +15,12 @@ import { QueueService, InMemoryQueueStore } from './services/queue-service.js';
 import { AgentRegistry } from './services/agent-registry.js';
 import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
+import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
+import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { Redis as IORedis } from 'ioredis';
@@ -106,7 +108,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const authMiddleware = createAuthMiddleware({
     apiKeyStore,
     enabled: config.auth.enabled,
-    skipRoutes: ['/health', '/metrics', '/webhooks/github'],
+    skipRoutes: ['/health', '/metrics', '/webhooks/github', '/webhooks/github/pr-review'],
   });
   server.addHook('preHandler', authMiddleware);
 
@@ -164,6 +166,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Initialize label monitor service
   let labelMonitorService: LabelMonitorService | null = null;
+  let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
   if (config.repositories.length > 0) {
     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
 
@@ -185,6 +188,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       config.monitor,
       config.repositories,
     );
+
+    // Initialize PR feedback monitor service (if enabled)
+    if (config.prMonitor.enabled) {
+      prFeedbackMonitorService = new PrFeedbackMonitorService(
+        server.log,
+        createGitHubClient,
+        phaseTracker,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+      );
+    }
   }
 
   // Register routes (unless skipped for testing)
@@ -218,6 +233,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       });
     }
 
+    // Register PR webhook routes (if PR feedback monitor service is available)
+    if (prFeedbackMonitorService) {
+      const watchedRepos = new Set(
+        config.repositories.map(r => `${r.owner}/${r.repo}`)
+      );
+      await setupPrWebhookRoutes(server, {
+        monitorService: prFeedbackMonitorService,
+        webhookSecret: config.prMonitor.webhookSecret,
+        watchedRepos,
+      });
+    }
+
     // Register dispatch queue routes (if queue adapter is available)
     if (redisQueueAdapter) {
       await setupDispatchRoutes(server, redisQueueAdapter);
@@ -232,6 +259,13 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       // Start polling in the background (non-blocking)
       labelMonitorService.startPolling().catch((error) => {
         server.log.error({ err: error }, 'Label monitor polling failed');
+      });
+    }
+
+    if (prFeedbackMonitorService) {
+      // Start PR feedback polling in the background (non-blocking)
+      prFeedbackMonitorService.startPolling().catch((error) => {
+        server.log.error({ err: error }, 'PR feedback monitor polling failed');
       });
     }
 
@@ -259,6 +293,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         // Stop label monitor polling
         if (labelMonitorService) {
           labelMonitorService.stopPolling();
+        }
+        // Stop PR feedback monitor polling
+        if (prFeedbackMonitorService) {
+          prFeedbackMonitorService.stopPolling();
         }
         // Close all active SSE connections before shutdown
         closeAllSSEConnections();

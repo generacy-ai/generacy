@@ -67,4 +67,8 @@ export {
   setupWebhookRoutes,
   type WebhookRouteOptions,
 } from './webhooks.js';
+export {
+  setupPrWebhookRoutes,
+  type PrWebhookRouteOptions,
+} from './pr-webhooks.js';
 export { setupDispatchRoutes } from './dispatch.js';

@@ -33,7 +33,7 @@ export class PrLinker {
    * RegExp objects with the `g` flag are stateful (they track `lastIndex`).
    */
   private static closingRegex(): RegExp {
-    return /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/gi;
+    return /\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s#(\d+)/gi;
   }
 
   /**

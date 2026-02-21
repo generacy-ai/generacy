@@ -88,6 +88,10 @@ export {
   type QueueManager,
   type WorkerInfo,
   type WorkerHandler,
+  type PrFeedbackMetadata,
+  type PrReviewEvent,
+  type PrToIssueLink,
+  type GitHubPrReviewWebhookPayload,
 } from './monitor.js';
 
 // SSE Types
