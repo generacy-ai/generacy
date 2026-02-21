@@ -64,6 +64,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'agent:dispatched', color: 'C5DEF5', description: 'Dispatched to agent queue' },
   { name: 'agent:in-progress', color: '0366D6', description: 'Agent is actively working' },
   { name: 'agent:paused', color: 'F9D0C4', description: 'Agent work is paused' },
+  { name: 'agent:error', color: 'D73A4A', description: 'Agent encountered an error' },
 
   // Needs labels
   { name: 'needs:epic-approval', color: 'D93F0B', description: 'Epic PR needs approval' },
