@@ -133,6 +133,33 @@ export class LabelManager {
   }
 
   /**
+   * Called at the start of a resume (continue command) before the phase loop.
+   *
+   * Removes stale `waiting-for:*` and `agent:paused` labels that were set
+   * when the workflow paused at a gate.
+   */
+  async onResumeStart(): Promise<void> {
+    await this.retryWithBackoff(async () => {
+      const issue = await this.github.getIssue(this.owner, this.repo, this.issueNumber);
+      const currentLabels = issue.labels.map((l) =>
+        typeof l === 'string' ? l : l.name,
+      );
+
+      const labelsToRemove = currentLabels.filter(
+        (l) => l.startsWith('waiting-for:') || l === 'agent:paused',
+      );
+
+      if (labelsToRemove.length > 0) {
+        this.logger.info(
+          { labels: labelsToRemove, issue: this.issueNumber },
+          'Resume: removing waiting-for and agent:paused labels',
+        );
+        await this.github.removeLabels(this.owner, this.repo, this.issueNumber, labelsToRemove);
+      }
+    });
+  }
+
+  /**
    * Ensures `agent:in-progress` and any lingering `phase:*` labels are removed.
    *
    * Designed to be called from `finally` blocks and reaper loops — this method

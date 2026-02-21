@@ -34,6 +34,7 @@ function createMockGitHubClient(overrides: Record<string, unknown> = {}) {
     removeLabels: vi.fn().mockResolvedValue(undefined),
     listLabels: vi.fn().mockResolvedValue([]),
     listIssuesWithLabel: vi.fn().mockResolvedValue([]),
+    getIssue: vi.fn().mockResolvedValue({ labels: [] }),
     ...overrides,
   } as unknown as ReturnType<import('@generacy-ai/workflow-engine').GitHubClientFactory>;
 }
@@ -97,6 +98,7 @@ describe('LabelMonitorService', () => {
         labelName: 'process:speckit-feature',
         parsedName: 'speckit-feature',
         source: 'webhook',
+        issueLabels: ['process:speckit-feature'],
       });
     });
 
@@ -131,6 +133,7 @@ describe('LabelMonitorService', () => {
       );
 
       expect(event?.source).toBe('poll');
+      expect(event?.issueLabels).toEqual(['process:speckit-bugfix']);
     });
   });
 
@@ -148,6 +151,7 @@ describe('LabelMonitorService', () => {
         labelName: 'process:speckit-feature',
         parsedName: 'speckit-feature',
         source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
       };
 
       const result = await service.processLabelEvent(event);
@@ -166,7 +170,7 @@ describe('LabelMonitorService', () => {
         'owner', 'repo', 42, ['process:speckit-feature', 'agent:error'],
       );
       expect(mockClient.addLabels).toHaveBeenCalledWith(
-        'owner', 'repo', 42, ['agent:in-progress'],
+        'owner', 'repo', 42, ['agent:in-progress', 'workflow:speckit-feature'],
       );
     });
 
@@ -181,6 +185,7 @@ describe('LabelMonitorService', () => {
         labelName: 'process:speckit-feature',
         parsedName: 'speckit-feature',
         source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
       };
 
       const result = await service.processLabelEvent(event);
@@ -198,6 +203,7 @@ describe('LabelMonitorService', () => {
         labelName: 'process:speckit-feature',
         parsedName: 'speckit-feature',
         source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
       };
 
       await service.processLabelEvent(event);
@@ -208,7 +214,7 @@ describe('LabelMonitorService', () => {
     });
 
     it('should still enqueue even if label update fails', async () => {
-      (mockClient.removeLabels as ReturnType<typeof vi.fn>).mockRejectedValue(
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('API error'),
       );
 
@@ -220,6 +226,7 @@ describe('LabelMonitorService', () => {
         labelName: 'process:speckit-feature',
         parsedName: 'speckit-feature',
         source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
       };
 
       const result = await service.processLabelEvent(event);
@@ -251,6 +258,7 @@ describe('LabelMonitorService', () => {
         labelName: 'completed:spec-review',
         parsedName: 'spec-review',
         source: 'webhook',
+        issueLabels: ['completed:spec-review', 'waiting-for:spec-review', 'phase:clarify'],
       });
     });
 
@@ -265,7 +273,7 @@ describe('LabelMonitorService', () => {
       expect(event).toBeNull();
     });
 
-    it('should enqueue continue command for resume event', async () => {
+    it('should enqueue continue command for resume event with resolved workflow name', async () => {
       const event = {
         type: 'resume' as const,
         owner: 'owner',
@@ -274,6 +282,7 @@ describe('LabelMonitorService', () => {
         labelName: 'completed:spec-review',
         parsedName: 'spec-review',
         source: 'webhook' as const,
+        issueLabels: ['completed:spec-review', 'waiting-for:spec-review', 'workflow:speckit-feature'],
       };
 
       await service.processLabelEvent(event);
@@ -281,12 +290,12 @@ describe('LabelMonitorService', () => {
       expect(queueAdapter.enqueue).toHaveBeenCalledWith(
         expect.objectContaining({
           command: 'continue',
-          workflowName: 'spec-review',
+          workflowName: 'speckit-feature',
         }),
       );
     });
 
-    it('should remove waiting-for:* label on resume', async () => {
+    it('should not remove waiting-for:* label on resume (deferred to worker)', async () => {
       const event = {
         type: 'resume' as const,
         owner: 'owner',
@@ -295,13 +304,37 @@ describe('LabelMonitorService', () => {
         labelName: 'completed:spec-review',
         parsedName: 'spec-review',
         source: 'webhook' as const,
+        issueLabels: ['completed:spec-review', 'waiting-for:spec-review', 'workflow:speckit-feature'],
       };
 
       await service.processLabelEvent(event);
 
-      expect(mockClient.removeLabels).toHaveBeenCalledWith(
-        'owner', 'repo', 42, ['waiting-for:spec-review'],
+      // waiting-for:* removal is now handled by the worker (labelManager.onResumeStart)
+      // to avoid a race condition where the label is removed before the worker reads it
+      expect(mockClient.removeLabels).not.toHaveBeenCalled();
+    });
+
+    it('should default to speckit-feature when no workflow: label exists on resume', async () => {
+      const event = {
+        type: 'resume' as const,
+        owner: 'owner',
+        repo: 'repo',
+        issueNumber: 42,
+        labelName: 'completed:spec-review',
+        parsedName: 'spec-review',
+        source: 'webhook' as const,
+        issueLabels: ['completed:spec-review', 'waiting-for:spec-review'],
+      };
+
+      await service.processLabelEvent(event);
+
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'continue',
+          workflowName: 'speckit-feature',
+        }),
       );
+      expect(logger.warn).toHaveBeenCalled();
     });
 
     it('should use resume dedup key prefix', async () => {
@@ -313,6 +346,7 @@ describe('LabelMonitorService', () => {
         labelName: 'completed:spec-review',
         parsedName: 'spec-review',
         source: 'webhook' as const,
+        issueLabels: ['completed:spec-review', 'waiting-for:spec-review', 'workflow:speckit-feature'],
       };
 
       await service.processLabelEvent(event);
@@ -436,6 +470,7 @@ describe('LabelMonitorService', () => {
         labelName: 'completed:clarification',
         parsedName: 'clarification',
         source: 'poll' as const,
+        issueLabels: ['completed:clarification', 'waiting-for:clarification', 'workflow:speckit-feature'],
       };
 
       const result = await service.processLabelEvent(event);
@@ -458,6 +493,7 @@ describe('LabelMonitorService', () => {
         labelName: 'process:speckit-feature',
         parsedName: 'speckit-feature',
         source: 'poll' as const,
+        issueLabels: ['process:speckit-feature'],
       };
 
       const result = await service.processLabelEvent(event);
@@ -485,6 +521,7 @@ describe('LabelMonitorService', () => {
 
       expect(event).not.toBeNull();
       expect(event?.type).toBe('process');
+      expect(event?.issueLabels).toEqual(['process:speckit-feature']);
     });
 
     it('should filter out non-process labels', () => {

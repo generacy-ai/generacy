@@ -122,6 +122,7 @@ export class LabelMonitorService {
         labelName,
         parsedName: workflowName,
         source,
+        issueLabels,
       };
     }
 
@@ -141,11 +142,30 @@ export class LabelMonitorService {
           labelName,
           parsedName: phaseName,
           source,
+          issueLabels,
         };
       }
     }
 
     return null;
+  }
+
+  // ==========================================================================
+  // Workflow Resolution
+  // ==========================================================================
+
+  /**
+   * Resolve workflow name from a workflow:* label on the issue.
+   * Falls back to 'speckit-feature' for backward compatibility with
+   * pre-existing issues that lack a workflow: label.
+   */
+  private resolveWorkflowFromLabels(issueLabels: string[]): string {
+    const WORKFLOW_LABEL_PREFIX = 'workflow:';
+    const workflowLabel = issueLabels.find(l => l.startsWith(WORKFLOW_LABEL_PREFIX));
+    if (workflowLabel) {
+      return workflowLabel.slice(WORKFLOW_LABEL_PREFIX.length);
+    }
+    return 'speckit-feature';
   }
 
   // ==========================================================================
@@ -183,12 +203,25 @@ export class LabelMonitorService {
       return false;
     }
 
+    // Resolve workflow name: for process events, use parsedName directly;
+    // for resume events, read the workflow:* label from the issue.
+    const workflowName = type === 'resume'
+      ? this.resolveWorkflowFromLabels(event.issueLabels)
+      : parsedName;
+
+    if (type === 'resume' && !event.issueLabels.some(l => l.startsWith('workflow:'))) {
+      this.logger.warn(
+        { owner, repo, issueNumber, defaultedTo: 'speckit-feature' },
+        'No workflow: label found on issue, defaulting to speckit-feature',
+      );
+    }
+
     // Build queue item
     const queueItem: QueueItem = {
       owner,
       repo,
       issueNumber,
-      workflowName: parsedName,
+      workflowName,
       command: type === 'process' ? 'process' : 'continue',
       priority: Date.now(),
       enqueuedAt: new Date().toISOString(),
@@ -197,7 +230,7 @@ export class LabelMonitorService {
     // Enqueue
     await this.queueAdapter.enqueue(queueItem);
     this.logger.info(
-      { owner, repo, issueNumber, command: queueItem.command, workflowName: parsedName },
+      { owner, repo, issueNumber, command: queueItem.command, workflowName },
       'Issue enqueued',
     );
 
@@ -219,25 +252,20 @@ export class LabelMonitorService {
 
         const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
         await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
-        await client.addLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
+        await client.addLabels(owner, repo, issueNumber, [
+          AGENT_IN_PROGRESS_LABEL,
+          `workflow:${parsedName}`,
+        ]);
       } catch (error) {
         this.logger.warn(
           { err: error, owner, repo, issueNumber },
           'Failed to update labels after process enqueue',
         );
       }
-    } else if (type === 'resume') {
-      // Remove the waiting-for:* label
-      const waitingLabel = `${WAITING_FOR_LABEL_PREFIX}${parsedName}`;
-      try {
-        await client.removeLabels(owner, repo, issueNumber, [waitingLabel]);
-      } catch (error) {
-        this.logger.warn(
-          { err: error, owner, repo, issueNumber },
-          'Failed to remove waiting-for label after resume enqueue',
-        );
-      }
     }
+    // Note: waiting-for:* label removal for resume events is handled by the
+    // worker (labelManager.onResumeStart) to avoid a race condition where
+    // the label is removed before the worker reads it for phase resolution.
 
     return true;
   }

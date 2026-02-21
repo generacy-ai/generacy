@@ -144,6 +144,44 @@ describe('LabelManager', () => {
     });
   });
 
+  describe('onResumeStart', () => {
+    it('removes waiting-for:* and agent:paused labels when present', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'waiting-for:clarification' },
+          { name: 'agent:paused' },
+          { name: 'workflow:speckit-feature' },
+          { name: 'completed:specify' },
+        ],
+      });
+
+      await lm.onResumeStart();
+
+      expect(mockGithub.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'waiting-for:clarification',
+        'agent:paused',
+      ]);
+    });
+
+    it('does not call removeLabels when no stale labels exist', async () => {
+      const lm = createLabelManager();
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'workflow:speckit-feature' },
+          { name: 'completed:specify' },
+          { name: 'agent:in-progress' },
+        ],
+      });
+
+      await lm.onResumeStart();
+
+      expect(mockGithub.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+    });
+  });
+
   describe('ensureCleanup', () => {
     it('removes agent:in-progress and phase:* labels', async () => {
       const lm = createLabelManager();

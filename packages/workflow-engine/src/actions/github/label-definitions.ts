@@ -74,6 +74,10 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'process:speckit-feature', color: 'D876E3', description: 'Speckit feature process trigger' },
   { name: 'process:speckit-bugfix', color: 'D876E3', description: 'Speckit bugfix process trigger' },
 
+  // Workflow identity labels (persist for issue lifetime)
+  { name: 'workflow:speckit-feature', color: '6F42C1', description: 'Speckit feature workflow' },
+  { name: 'workflow:speckit-bugfix', color: '6F42C1', description: 'Speckit bugfix workflow' },
+
   // Relationship labels
   { name: 'epic-child', color: 'bfd4f2', description: 'Child issue of an epic' },
 ];

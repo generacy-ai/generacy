@@ -467,7 +467,8 @@ export class PrFeedbackMonitorService {
 
   /**
    * Resolve workflow name from the issue's labels.
-   * Looks for process:* or completed:* labels to determine the workflow.
+   * Checks workflow:* labels first (authoritative, set by label monitor on process events),
+   * then falls back to process:* / completed:* / agent:* for pre-migration issues.
    * Falls back to 'unknown' if no workflow label is found.
    */
   private async resolveWorkflowName(
@@ -479,6 +480,14 @@ export class PrFeedbackMonitorService {
       const client = this.createClient();
       const issue = await client.getIssue(owner, repo, issueNumber);
 
+      // Primary: persistent workflow:* label (authoritative)
+      for (const label of issue.labels) {
+        if (label.name.startsWith('workflow:')) {
+          return label.name.slice('workflow:'.length);
+        }
+      }
+
+      // Fallback: existing logic for pre-migration issues
       for (const label of issue.labels) {
         if (label.name.startsWith('process:')) {
           return label.name.slice('process:'.length);

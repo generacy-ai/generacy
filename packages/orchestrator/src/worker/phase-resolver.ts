@@ -1,6 +1,22 @@
 import { PHASE_SEQUENCE, type WorkflowPhase } from './types.js';
 
 /**
+ * Unified mapping from gate names to their owning phase and the phase to resume from.
+ *
+ * - `phase`: the workflow phase this gate belongs to (used to normalize gate names in resolveFromProcess)
+ * - `resumeFrom`: the phase to start from when the gate is satisfied (used in resolveFromContinue)
+ */
+export const GATE_MAPPING: Record<string, { phase: WorkflowPhase; resumeFrom: WorkflowPhase }> = {
+  'clarification':          { phase: 'clarify',    resumeFrom: 'plan' },
+  'spec-review':            { phase: 'specify',    resumeFrom: 'clarify' },
+  'clarification-review':   { phase: 'clarify',    resumeFrom: 'plan' },
+  'plan-review':            { phase: 'plan',       resumeFrom: 'tasks' },
+  'tasks-review':           { phase: 'tasks',      resumeFrom: 'implement' },
+  'implementation-review':  { phase: 'implement',  resumeFrom: 'validate' },
+  'manual-validation':      { phase: 'validate',   resumeFrom: 'validate' },
+};
+
+/**
  * Resolve the starting phase based on issue labels and command type.
  */
 export class PhaseResolver {
@@ -8,7 +24,7 @@ export class PhaseResolver {
    * Determine the starting phase for a queue item.
    *
    * - 'process' command: inspects completed/phase labels to find the next uncompleted phase.
-   * - 'continue' command: finds the waiting-for label that was just satisfied and maps to the next phase.
+   * - 'continue' command: matches completed gate labels via GATE_MAPPING to determine resume phase.
    */
   resolveStartPhase(
     labels: string[],
@@ -26,6 +42,7 @@ export class PhaseResolver {
    * Priority:
    * 1. If a `phase:*` label exists, resume from that phase
    * 2. If `completed:*` labels exist, start from next uncompleted phase
+   *    (gate names like 'clarification' are normalized to phase names via GATE_MAPPING)
    * 3. If no phase labels, start from 'specify'
    */
   private resolveFromProcess(labels: string[]): WorkflowPhase {
@@ -39,11 +56,18 @@ export class PhaseResolver {
       }
     }
 
-    // Find the last completed phase and return the next one
+    // Find the last completed phase and return the next one.
+    // Normalize gate names (e.g., 'clarification') to phase names (e.g., 'clarify')
+    // so phase sequence iteration matches correctly.
     const completedPhases = new Set<string>();
     for (const label of labels) {
       if (label.startsWith('completed:')) {
-        completedPhases.add(label.slice('completed:'.length));
+        const name = label.slice('completed:'.length);
+        completedPhases.add(name);
+        const gateEntry = GATE_MAPPING[name];
+        if (gateEntry) {
+          completedPhases.add(gateEntry.phase);
+        }
       }
     }
 
@@ -62,41 +86,32 @@ export class PhaseResolver {
   }
 
   /**
-   * For 'continue' command: find which waiting-for was just satisfied.
+   * For 'continue' command: find which gate was just satisfied and resume from the next phase.
    *
-   * Look for `completed:*` labels that match a `waiting-for:*` pattern
-   * and determine the next phase to resume from.
+   * Does not depend on `waiting-for:*` labels (those are removed by the worker on resume).
+   * Matches `completed:*` labels against GATE_MAPPING and returns the most advanced gate's
+   * resumeFrom phase.
    */
   private resolveFromContinue(labels: string[]): WorkflowPhase {
-    const completedSet = new Set<string>();
-    const waitingForSet = new Set<string>();
+    const completedGates = new Set<string>();
 
     for (const label of labels) {
       if (label.startsWith('completed:')) {
-        completedSet.add(label.slice('completed:'.length));
-      } else if (label.startsWith('waiting-for:')) {
-        waitingForSet.add(label.slice('waiting-for:'.length));
+        const name = label.slice('completed:'.length);
+        if (GATE_MAPPING[name]) {
+          completedGates.add(name);
+        }
       }
     }
 
-    // If clarification was completed, resume from clarify (which will advance to plan)
-    if (completedSet.has('clarification') && waitingForSet.has('clarification')) {
-      return 'clarify';
-    }
-
-    // For review gates: find completed reviews and map to next phase
-    const reviewToPhase: Record<string, WorkflowPhase> = {
-      'spec-review': 'clarify',
-      'clarification-review': 'plan',
-      'plan-review': 'tasks',
-      'tasks-review': 'implement',
-      'implementation-review': 'validate',
-      'manual-validation': 'validate',
-    };
-
-    for (const [review, nextPhase] of Object.entries(reviewToPhase)) {
-      if (completedSet.has(review) && waitingForSet.has(review)) {
-        return nextPhase;
+    // Iterate phases latest-to-earliest — most advanced gate wins
+    for (let i = PHASE_SEQUENCE.length - 1; i >= 0; i--) {
+      const phase = PHASE_SEQUENCE[i];
+      for (const gateName of completedGates) {
+        const mapping = GATE_MAPPING[gateName];
+        if (mapping && mapping.phase === phase) {
+          return mapping.resumeFrom;
+        }
       }
     }
 

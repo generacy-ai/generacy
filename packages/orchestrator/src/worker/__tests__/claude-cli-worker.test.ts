@@ -262,12 +262,11 @@ describe('ClaudeCliWorker (integration)', () => {
   });
 
   describe('continue command: resume after gate', () => {
-    it('starts from clarify when continue command and waiting-for:clarification labels present', async () => {
+    it('starts from plan when continue command with completed:clarification label', async () => {
       mockGithub.getIssue.mockResolvedValue({
         labels: [
           { name: 'completed:specify' },
           { name: 'completed:clarification' },
-          { name: 'waiting-for:clarification' },
         ],
       });
       // Feature branch exists on remote for resume
@@ -286,10 +285,10 @@ describe('ClaudeCliWorker (integration)', () => {
         workflowName: 'speckit-bugfix',
       }));
 
-      // First CLI spawn should be for 'clarify' (resumed phase)
+      // First CLI spawn should be for 'plan' (GATE_MAPPING: clarification → resumeFrom: plan)
       const firstSpawnArgs = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
       const promptArg = firstSpawnArgs[firstSpawnArgs.indexOf('--prompt') + 1]!;
-      expect(promptArg).toContain('/speckit:clarify');
+      expect(promptArg).toContain('/speckit:plan');
     });
   });
 
