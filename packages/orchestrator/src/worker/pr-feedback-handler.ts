@@ -248,7 +248,7 @@ export class PrFeedbackHandler {
    * - NOT resolve any threads (human reviewer will resolve)
    */
   private buildFeedbackPrompt(
-    comments: Array<{ id: number; path?: string; line?: number; body: string; user: { login: string } }>,
+    comments: Array<{ id: number; path?: string; line?: number; body: string; author: string }>,
     prNumber: number,
     issueNumber: number,
   ): string {
@@ -257,7 +257,7 @@ export class PrFeedbackHandler {
         const location = c.path && c.line
           ? `${c.path}:${c.line}`
           : c.path || 'general comment';
-        return `${idx + 1}. **${c.user.login}** (${location}):\n   ${c.body}`;
+        return `${idx + 1}. **${c.author}** (${location}):\n   ${c.body}`;
       })
       .join('\n\n');
 

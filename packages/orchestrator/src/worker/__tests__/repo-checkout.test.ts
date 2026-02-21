@@ -66,12 +66,14 @@ function enoentError(): NodeJS.ErrnoException {
 }
 
 /** Match an execFile call by command and first arg(s) */
+type ExecFileCall = [string, string[], Record<string, unknown>?];
+
 function findCall(
   command: string,
   argsPrefix: string[],
-): [string, string[], Record<string, unknown>] | undefined {
-  return mockExecFile.mock.calls.find(
-    (call: [string, string[], Record<string, unknown>?]) =>
+): ExecFileCall | undefined {
+  return (mockExecFile.mock.calls as ExecFileCall[]).find(
+    (call) =>
       call[0] === command &&
       argsPrefix.every((arg, i) => call[1][i] === arg),
   );
@@ -80,9 +82,9 @@ function findCall(
 function findAllCalls(
   command: string,
   argsPrefix: string[],
-): [string, string[], Record<string, unknown>][] {
-  return mockExecFile.mock.calls.filter(
-    (call: [string, string[], Record<string, unknown>?]) =>
+): ExecFileCall[] {
+  return (mockExecFile.mock.calls as ExecFileCall[]).filter(
+    (call) =>
       call[0] === command &&
       argsPrefix.every((arg, i) => call[1][i] === arg),
   );
@@ -183,7 +185,7 @@ describe('RepoCheckout', () => {
     it('runs fetch before reset (correct order)', async () => {
       const callOrder: string[] = [];
       mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
-        if (cmd === 'git') {
+        if (cmd === 'git' && args[0]) {
           callOrder.push(args[0]);
         }
         return { stdout: '', stderr: '' };

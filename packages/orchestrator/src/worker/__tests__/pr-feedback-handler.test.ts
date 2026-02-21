@@ -92,6 +92,7 @@ const defaultConfig: WorkerConfig = {
   phaseTimeoutMs: 60_000,
   shutdownGracePeriodMs: 5_000,
   validateCommand: 'pnpm test && pnpm build',
+  gates: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -106,7 +107,7 @@ function createQueueItem(metadata?: PrFeedbackMetadata): QueueItem {
     command: 'address-pr-feedback',
     priority: Date.now(),
     enqueuedAt: new Date().toISOString(),
-    metadata,
+    metadata: metadata as unknown as Record<string, unknown>,
   };
 }
 
@@ -127,7 +128,7 @@ function createMockComment(id: number, resolved = false, path?: string, line?: n
     path: path || 'src/index.ts',
     line: line || 10,
     body: `Review comment ${id}`,
-    user: { login: 'reviewer' },
+    author: 'reviewer',
     resolved,
   };
 }
@@ -607,7 +608,7 @@ describe('PrFeedbackHandler', () => {
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
       mockGitHub.getPRComments = vi.fn().mockResolvedValue([
-        { ...createMockComment(1, false), user: { login: 'alice' } },
+        { ...createMockComment(1, false), author: 'alice' },
       ]);
 
       const { handle } = createMockProcess(0, 50);
