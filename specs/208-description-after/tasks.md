@@ -12,7 +12,7 @@
 
 ## Phase 1: Core Implementation
 
-### T001 Add markReadyForReview() method to PrManager
+### T001 [DONE] Add markReadyForReview() method to PrManager
 **File**: `packages/orchestrator/src/worker/pr-manager.ts`
 - Add method after `ensureDraftPr()` (after line 140)
 - Implement try-catch with warn-level logging
@@ -24,7 +24,7 @@
 - Catch all errors and log as warnings without re-throwing
 - Add JSDoc comment explaining idempotent behavior and best-effort nature
 
-### T002 Integrate markReadyForReview() into workflow completion
+### T002 [DONE] Integrate markReadyForReview() into workflow completion
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - Locate `loopResult.completed` branch at line 227-229
 - Add info log "Marking PR as ready for review" before method call
@@ -36,7 +36,7 @@
 
 ## Phase 2: Testing
 
-### T003 [P] Write unit tests for PrManager.markReadyForReview()
+### T003 [DONE] [P] Write unit tests for PrManager.markReadyForReview()
 **File**: `packages/orchestrator/src/worker/pr-manager.test.ts`
 - Test success path: verify `markPRReady()` called with correct args
   - Mock `getCurrentBranch()` → `"123-feature"`
@@ -53,7 +53,7 @@
   - Assert warning log emitted with `error: String(error)`
   - Assert method doesn't throw (returns normally)
 
-### T004 [P] Write integration tests for claude-cli-worker
+### T004 [DONE] [P] Write integration tests for claude-cli-worker
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.test.ts`
 - Test workflow completion: verify `markReadyForReview()` called on completion
   - Mock `phaseLoop.executeLoop()` → `{ completed: true, ... }`
@@ -66,7 +66,7 @@
   - Mock `phaseLoop.executeLoop()` → `{ completed: false, gateHit: false, ... }`
   - Assert `prManager.markReadyForReview()` NOT called
 
-### T005 Write edge case tests
+### T005 [DONE] Write edge case tests
 **File**: `packages/orchestrator/src/worker/pr-manager.test.ts`
 - Test resume after gate: workflow pauses, resumes, completes → `markReadyForReview()` called
 - Test PR already ready: verify idempotent behavior (no error when already ready)
@@ -77,14 +77,14 @@
 
 ## Phase 3: Verification & Documentation
 
-### T006 Run full test suite
+### T006 [DONE] Run full test suite
 **Files**: All test files in `packages/orchestrator`
 - Run `pnpm test` in orchestrator package
 - Verify all new tests pass
 - Verify no regression in existing tests
 - Check test coverage for new code paths
 
-### T007 Manual E2E verification
+### T007 [DONE] Manual E2E verification
 **Environment**: Staging/local development
 - Start development stack with Firebase emulators
 - Run full orchestrator workflow (specify → clarify → plan → tasks → implement → validate)
@@ -94,7 +94,7 @@
 - Verify no errors or warnings in orchestrator logs
 - Confirm GitHub UI shows PR as "Ready for review"
 
-### T008 Update CHANGELOG
+### T008 [DONE] Update CHANGELOG
 **File**: `packages/orchestrator/CHANGELOG.md`
 - Add entry under "Unreleased" or next version section
 - Document new feature: "PRs automatically marked ready for review on workflow completion"

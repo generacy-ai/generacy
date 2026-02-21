@@ -28,6 +28,7 @@ const mockGithub = {
   findPRForBranch: vi.fn().mockResolvedValue(null),
   getDefaultBranch: vi.fn().mockResolvedValue('develop'),
   createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
+  markPRReady: vi.fn().mockResolvedValue(undefined),
   listBranches: vi.fn().mockResolvedValue([]),
 };
 
@@ -146,6 +147,7 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.findPRForBranch.mockResolvedValue(null);
     mockGithub.getDefaultBranch.mockResolvedValue('develop');
     mockGithub.createPullRequest.mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' });
+    mockGithub.markPRReady = vi.fn().mockResolvedValue(undefined);
     mockGithub.listBranches.mockResolvedValue([]);
 
     spawnFn = vi.fn();
@@ -401,6 +403,255 @@ describe('ClaudeCliWorker (integration)', () => {
         (e: unknown) => (e as { type: string }).type === 'workflow:failed',
       );
       expect(failedEvent).toBeDefined();
+    });
+  });
+
+  describe('markReadyForReview on workflow completion', () => {
+    it('should call markPRReady when workflow completes successfully', async () => {
+      // No existing labels → starts at 'specify' and runs all phases
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      // Mock PR creation to have a PR number
+      mockGithub.createPullRequest.mockResolvedValue({
+        number: 42,
+        state: 'open',
+        title: 'test',
+        html_url: 'https://github.com/test-owner/test-repo/pull/42',
+      });
+
+      const config = createConfig({ gates: {} }); // No gates to allow full completion
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // Verify markPRReady was called with correct parameters
+      expect(mockGithub.markPRReady).toHaveBeenCalledWith('test-owner', 'test-repo', 42);
+      expect(mockGithub.markPRReady).toHaveBeenCalledTimes(1);
+
+      // Verify workflow completed successfully
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42, ['agent:in-progress'],
+      );
+
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
+    });
+
+    it('should NOT call markPRReady when workflow pauses at gate', async () => {
+      // No existing labels → starts at 'specify'
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig(); // Has gates for speckit-feature
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem()); // Uses speckit-feature by default
+
+      // Should NOT have called markPRReady (workflow paused at gate, not completed)
+      expect(mockGithub.markPRReady).not.toHaveBeenCalled();
+
+      // Verify gate hit
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42,
+        ['waiting-for:clarification', 'agent:paused'],
+      );
+    });
+
+    it('should NOT call markPRReady when workflow fails', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+
+      // First phase succeeds, second phase fails
+      spawnFn
+        .mockReturnValueOnce(createMockProcess(0, 5).handle)
+        .mockReturnValueOnce(createMockProcess(1, 5).handle);
+
+      const config = createConfig({ gates: {} }); // No gates
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // Should NOT have called markPRReady (workflow failed, not completed)
+      expect(mockGithub.markPRReady).not.toHaveBeenCalled();
+
+      // Verify error handling
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42, ['agent:error'],
+      );
+    });
+
+    it('should log info message before calling markReadyForReview', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // Verify the log message appears before markReadyForReview
+      expect(mockLogger.info).toHaveBeenCalledWith('Marking PR as ready for review');
+    });
+
+    it('should handle markPRReady errors gracefully without failing workflow', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      // Make markPRReady fail
+      mockGithub.markPRReady.mockRejectedValue(new Error('GitHub API error'));
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      // Should NOT throw even if markPRReady fails
+      await expect(
+        worker.handle(createQueueItem({ workflowName: 'no-gates' })),
+      ).resolves.toBeUndefined();
+
+      // Workflow should still complete successfully
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42, ['agent:in-progress'],
+      );
+
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
+    });
+
+    it('should call markPRReady when resuming and completing workflow', async () => {
+      // Start from implement phase (already completed previous phases)
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:specify' },
+          { name: 'completed:clarify' },
+          { name: 'completed:plan' },
+          { name: 'completed:tasks' },
+        ],
+      });
+
+      // Feature branch exists (resume scenario)
+      mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop']);
+
+      // PR already exists from previous run
+      mockGithub.findPRForBranch.mockResolvedValue({
+        number: 99,
+        url: 'https://github.com/test-owner/test-repo/pull/99',
+      });
+
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        command: 'continue',
+        workflowName: 'no-gates',
+      }));
+
+      // Should call markPRReady with the existing PR number
+      expect(mockGithub.markPRReady).toHaveBeenCalledWith('test-owner', 'test-repo', 99);
+      expect(mockGithub.markPRReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('should call markReadyForReview after onWorkflowComplete', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // Get call order by inspecting mock call indices
+      const removeLabelsCallIndex = (mockGithub.removeLabels as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+      const markPRReadyCallIndex = (mockGithub.markPRReady as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+
+      // markPRReady should be called AFTER removeLabels (which happens in onWorkflowComplete)
+      expect(markPRReadyCallIndex).toBeGreaterThan(removeLabelsCallIndex!);
+    });
+
+    it('should work with existing PR that was created in previous phase', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      // Simulate PR creation during first commitPushAndEnsurePr call
+      let prCreated = false;
+      mockGithub.findPRForBranch.mockImplementation(async () => {
+        if (prCreated) {
+          return { number: 77, url: 'https://github.com/test-owner/test-repo/pull/77' };
+        }
+        return null;
+      });
+
+      mockGithub.createPullRequest.mockImplementation(async () => {
+        prCreated = true;
+        return {
+          number: 77,
+          state: 'open',
+          title: 'test',
+          html_url: 'https://github.com/test-owner/test-repo/pull/77',
+        };
+      });
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // Should use the PR number that was created earlier
+      expect(mockGithub.markPRReady).toHaveBeenCalledWith('test-owner', 'test-repo', 77);
+    });
+
+    it('should handle missing PR number gracefully (no-op)', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      // Simulate PR creation failure (no PR created)
+      mockGithub.findPRForBranch.mockResolvedValue(null);
+      mockGithub.createPullRequest.mockRejectedValue(new Error('PR creation failed'));
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      // Should NOT throw even if there's no PR to mark ready
+      await expect(
+        worker.handle(createQueueItem({ workflowName: 'no-gates' })),
+      ).resolves.toBeUndefined();
+
+      // markPRReady should not be called (no PR number available)
+      expect(mockGithub.markPRReady).not.toHaveBeenCalled();
+
+      // Workflow should still complete successfully
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
     });
   });
 });
