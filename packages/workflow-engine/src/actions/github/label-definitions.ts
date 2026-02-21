@@ -35,6 +35,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:implementation-review', color: 'FBCA04', description: 'Waiting for implementation review' },
   { name: 'waiting-for:manual-validation', color: 'FBCA04', description: 'Waiting for manual validation' },
   { name: 'waiting-for:pr-feedback', color: 'FBCA04', description: 'Waiting to address PR feedback' },
+  { name: 'waiting-for:address-pr-feedback', color: 'FBCA04', description: 'Agent is addressing PR review feedback' },
   { name: 'waiting-for:children-complete', color: 'FBCA04', description: 'Waiting for child issues to complete' },
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
 
@@ -63,6 +64,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'agent:dispatched', color: 'C5DEF5', description: 'Dispatched to agent queue' },
   { name: 'agent:in-progress', color: '0366D6', description: 'Agent is actively working' },
   { name: 'agent:paused', color: 'F9D0C4', description: 'Agent work is paused' },
+  { name: 'agent:error', color: 'D73A4A', description: 'Agent encountered an error' },
 
   // Needs labels
   { name: 'needs:epic-approval', color: 'D93F0B', description: 'Epic PR needs approval' },

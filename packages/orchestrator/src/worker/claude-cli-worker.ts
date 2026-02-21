@@ -15,6 +15,7 @@ import type { SSEEventEmitter } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
+import { PrFeedbackHandler } from './pr-feedback-handler.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -60,14 +61,15 @@ export interface ClaudeCliWorkerDeps {
 
 /**
  * Top-level worker class that composes all sub-components to process
- * a QueueItem through the full speckit phase loop.
+ * a QueueItem through the full speckit phase loop or route to specialized handlers.
  *
  * This class implements the WorkerHandler signature:
  *   `(item: QueueItem) => Promise<void>`
  *
  * It orchestrates:
  * - Repository checkout
- * - Phase resolution from issue labels
+ * - Command routing (address-pr-feedback → PrFeedbackHandler)
+ * - Phase resolution from issue labels (for process/continue commands)
  * - Phase loop execution (CLI spawning, label management, gate checking)
  * - SSE event emission for dashboard streaming
  * - Error handling with structured label reporting
@@ -90,11 +92,18 @@ export class ClaudeCliWorker {
   }
 
   /**
-   * Process a queue item through the full phase loop.
+   * Process a queue item through the full phase loop or route to specialized handlers.
    *
    * This is the entry point invoked by the WorkerDispatcher.
-   * It creates a WorkerContext, resolves the starting phase,
-   * and runs the phase loop to completion (or gate/error).
+   *
+   * Command routing (T020):
+   * - `address-pr-feedback`: Routes to PrFeedbackHandler for PR review feedback
+   * - `process` / `continue`: Standard phase loop processing
+   *
+   * For phase loop processing:
+   * - Creates a WorkerContext
+   * - Resolves the starting phase from issue labels
+   * - Runs the phase loop to completion (or gate/error)
    */
   async handle(item: QueueItem): Promise<void> {
     const workerId = crypto.randomUUID();
@@ -140,17 +149,45 @@ export class ClaudeCliWorker {
       // Create GitHub client scoped to checkout dir
       const github = createGitHubClient(checkoutPath);
 
-      // 2. Get issue labels to resolve starting phase
+      // 2. Route address-pr-feedback command to PrFeedbackHandler (T020)
+      if (item.command === 'address-pr-feedback') {
+        workerLogger.info('Routing to PrFeedbackHandler for PR feedback addressing');
+
+        const prFeedbackHandler = new PrFeedbackHandler(
+          this.config,
+          workerLogger,
+          this.processFactory,
+          this.sseEmitter,
+        );
+
+        await prFeedbackHandler.handle(item, checkoutPath);
+
+        workerLogger.info('PR feedback addressing completed');
+
+        this.sseEmitter?.({
+          type: 'workflow:completed',
+          workflowId,
+          data: {
+            command: 'address-pr-feedback',
+            lastPhase: 'address-pr-feedback',
+            totalPhases: 1,
+          },
+        });
+
+        return;
+      }
+
+      // 3. Get issue labels to resolve starting phase
       const issue = await github.getIssue(item.owner, item.repo, item.issueNumber);
       const labels = issue.labels.map((l) =>
         typeof l === 'string' ? l : l.name,
       );
 
-      // 3. Resolve starting phase
-      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command);
+      // 4. Resolve starting phase (for process/continue commands)
+      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command as 'process' | 'continue');
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
 
-      // 3b. If resuming (has completed phases), find and checkout the feature branch
+      // 5. If resuming (has completed phases), find and checkout the feature branch
       if (startPhase !== 'specify') {
         const featureBranch = await this.resolveFeatureBranch(
           github, item.owner, item.repo, item.issueNumber, workerLogger,
@@ -161,7 +198,7 @@ export class ClaudeCliWorker {
         }
       }
 
-      // 4. Build WorkerContext
+      // 6. Build WorkerContext
       const context: WorkerContext = {
         workerId,
         item,
@@ -173,7 +210,7 @@ export class ClaudeCliWorker {
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
       };
 
-      // 5. Create sub-components
+      // 7. Create sub-components
       const labelManager = new LabelManager(
         github,
         item.owner,
@@ -212,7 +249,7 @@ export class ClaudeCliWorker {
         workerLogger,
       );
 
-      // 6. Execute the phase loop
+      // 8. Execute the phase loop
       const phaseLoop = new PhaseLoop(workerLogger);
       const loopResult = await phaseLoop.executeLoop(context, this.config, {
         labelManager,
@@ -223,7 +260,7 @@ export class ClaudeCliWorker {
         prManager,
       });
 
-      // 7. Handle completion
+      // 9. Handle completion
       if (loopResult.completed) {
         await labelManager.onWorkflowComplete();
         workerLogger.info('Marking PR as ready for review');
@@ -234,6 +271,7 @@ export class ClaudeCliWorker {
           type: 'workflow:completed',
           workflowId,
           data: {
+            command: item.command,
             lastPhase: loopResult.lastPhase,
             totalPhases: loopResult.results.length,
           },
@@ -254,6 +292,7 @@ export class ClaudeCliWorker {
           type: 'workflow:failed',
           workflowId,
           data: {
+            command: item.command,
             lastPhase: loopResult.lastPhase,
             totalPhases: loopResult.results.length,
           },
@@ -269,6 +308,7 @@ export class ClaudeCliWorker {
         type: 'workflow:failed',
         workflowId,
         data: {
+          command: item.command,
           error: error instanceof Error ? error.message : String(error),
         },
       });

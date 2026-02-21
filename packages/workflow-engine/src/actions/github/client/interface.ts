@@ -173,6 +173,11 @@ export interface GitHubClient {
   replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment>;
 
   /**
+   * List all open pull requests in a repository
+   */
+  listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
+
+  /**
    * Find PR for the current branch
    */
   findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null>;

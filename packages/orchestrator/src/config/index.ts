@@ -22,6 +22,8 @@ export {
   type RepositoryConfig,
   MonitorConfigSchema,
   type MonitorConfig,
+  PrMonitorConfigSchema,
+  type PrMonitorConfig,
   DispatchConfigSchema,
   type DispatchConfig,
   WorkerConfigSchema,

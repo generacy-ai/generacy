@@ -16,6 +16,7 @@ function createMockPhaseTracker(overrides: Partial<PhaseTracker> = {}): PhaseTra
     isDuplicate: vi.fn().mockResolvedValue(false),
     markProcessed: vi.fn().mockResolvedValue(undefined),
     clear: vi.fn().mockResolvedValue(undefined),
+    tryMarkProcessed: vi.fn().mockResolvedValue(true),
     ...overrides,
   };
 }

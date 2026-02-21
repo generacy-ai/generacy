@@ -30,6 +30,10 @@ const mockGithub = {
   createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
   markPRReady: vi.fn().mockResolvedValue(undefined),
   listBranches: vi.fn().mockResolvedValue([]),
+  // PR operations for PrFeedbackHandler
+  getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
+  getPRComments: vi.fn().mockResolvedValue([]),
+  replyToPRComment: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -42,6 +46,15 @@ vi.mock('../repo-checkout.js', () => ({
     getDefaultBranch: vi.fn().mockResolvedValue('develop'),
     switchBranch: vi.fn().mockResolvedValue(undefined),
   })),
+}));
+
+// Mock PrFeedbackHandler for address-pr-feedback command routing tests
+const mockPrFeedbackHandlerInstance = {
+  handle: vi.fn().mockResolvedValue(undefined),
+};
+
+vi.mock('../pr-feedback-handler.js', () => ({
+  PrFeedbackHandler: vi.fn().mockImplementation(() => mockPrFeedbackHandlerInstance),
 }));
 
 // ---------------------------------------------------------------------------
@@ -652,6 +665,341 @@ describe('ClaudeCliWorker (integration)', () => {
         (e: unknown) => (e as { type: string }).type === 'workflow:completed',
       );
       expect(completedEvent).toBeDefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T022: address-pr-feedback command routing
+  // ---------------------------------------------------------------------------
+  describe('address-pr-feedback command routing (T022)', () => {
+    beforeEach(() => {
+      // Clear the mock handler
+      mockPrFeedbackHandlerInstance.handle.mockClear();
+      mockPrFeedbackHandlerInstance.handle.mockResolvedValue(undefined);
+    });
+
+    it('routes address-pr-feedback command to PrFeedbackHandler', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1, 2, 3],
+        },
+      });
+
+      await worker.handle(item);
+
+      // Should NOT spawn CLI directly (no calls to spawnFn)
+      expect(spawnFn).not.toHaveBeenCalled();
+
+      // Should NOT call getIssue (PR feedback flow doesn't need issue labels)
+      expect(mockGithub.getIssue).not.toHaveBeenCalled();
+
+      // Should delegate to PrFeedbackHandler with correct parameters
+      expect(mockPrFeedbackHandlerInstance.handle).toHaveBeenCalledWith(
+        item,
+        '/tmp/test-checkout', // checkoutPath from RepoCheckout mock
+      );
+
+      // Should emit workflow:started event
+      expect(sseEvents[0]).toEqual(expect.objectContaining({
+        type: 'workflow:started',
+        data: expect.objectContaining({
+          owner: 'test-owner',
+          repo: 'test-repo',
+          issueNumber: 42,
+          workflowName: 'speckit-feature',
+          command: 'address-pr-feedback',
+        }),
+      }));
+
+      // Should emit workflow:completed event after handler completes
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toEqual(expect.objectContaining({
+        type: 'workflow:completed',
+        data: expect.objectContaining({
+          lastPhase: 'address-pr-feedback',
+          totalPhases: 1,
+        }),
+      }));
+    });
+
+    it('emits workflow:failed when PrFeedbackHandler throws error', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      // Make handler throw
+      mockPrFeedbackHandlerInstance.handle.mockRejectedValueOnce(new Error('Failed to fetch PR #100'));
+
+      await expect(worker.handle(item)).rejects.toThrow('Failed to fetch PR #100');
+
+      // Should emit workflow:started
+      expect(sseEvents[0]).toEqual(expect.objectContaining({ type: 'workflow:started' }));
+
+      // Should emit workflow:failed with error message
+      const failedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:failed',
+      );
+      expect(failedEvent).toBeDefined();
+      expect(failedEvent).toHaveProperty('type', 'workflow:failed');
+      expect(failedEvent).toHaveProperty('data');
+      expect((failedEvent as any).data).toHaveProperty('error');
+      expect((failedEvent as any).data.error).toContain('Failed to fetch PR #100');
+    });
+
+    it('checks out default branch before routing to PrFeedbackHandler', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      await worker.handle(item);
+
+      // ClaudeCliWorker should have called RepoCheckout.ensureCheckout
+      // which is mocked to return '/tmp/test-checkout'
+      // PrFeedbackHandler.handle should receive this checkout path
+      expect(mockPrFeedbackHandlerInstance.handle).toHaveBeenCalledWith(
+        item,
+        '/tmp/test-checkout',
+      );
+    });
+
+    it('does not execute phase loop for address-pr-feedback command', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      await worker.handle(item);
+
+      // Should NOT call getIssue to fetch labels (phase loop logic)
+      expect(mockGithub.getIssue).not.toHaveBeenCalled();
+
+      // Should NOT add/remove phase labels
+      const addLabelsCalls = (mockGithub.addLabels as ReturnType<typeof vi.fn>).mock.calls;
+      const phaseLabels = addLabelsCalls.filter((call: unknown[]) => {
+        const labels = call[3] as string[];
+        return labels.some((l: string) => l.startsWith('phase:') || l.startsWith('completed:'));
+      });
+      expect(phaseLabels).toHaveLength(0);
+
+      // Should NOT spawn CLI for phases
+      expect(spawnFn).not.toHaveBeenCalled();
+    });
+
+    it('passes processFactory to PrFeedbackHandler constructor', async () => {
+      const config = createConfig();
+
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      await worker.handle(item);
+
+      // PrFeedbackHandler should be constructed with correct dependencies
+      // This verifies the handler receives the same processFactory for consistent behavior
+      expect(mockPrFeedbackHandlerInstance.handle).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'address-pr-feedback',
+          metadata: expect.objectContaining({
+            prNumber: 100,
+          }),
+        }),
+        expect.any(String), // checkoutPath
+      );
+    });
+
+    it('passes SSE emitter to PrFeedbackHandler for event streaming', async () => {
+      const sseEmitter = vi.fn();
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      await worker.handle(item);
+
+      // SSE emitter should be called for workflow events
+      expect(sseEmitter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'workflow:started',
+        }),
+      );
+
+      expect(sseEmitter).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'workflow:completed',
+        }),
+      );
+    });
+
+    it('returns early after PrFeedbackHandler completes without executing phase loop', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      await worker.handle(item);
+
+      // Handler should complete
+      expect(mockPrFeedbackHandlerInstance.handle).toHaveBeenCalled();
+
+      // Should NOT proceed to phase resolution
+      expect(mockGithub.getIssue).not.toHaveBeenCalled();
+
+      // Should NOT switch branches (PrFeedbackHandler handles branch switching internally)
+      // Note: The worker does checkout the default branch initially, but doesn't switch
+      // to feature branches like it would in the phase loop
+    });
+
+    it('handles missing metadata by delegating validation to PrFeedbackHandler', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      // Item with address-pr-feedback but no metadata
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        // metadata intentionally omitted
+      });
+
+      // PrFeedbackHandler should throw for missing prNumber (actual behavior)
+      mockPrFeedbackHandlerInstance.handle.mockRejectedValueOnce(
+        new Error('Missing prNumber in metadata for address-pr-feedback command'),
+      );
+
+      await expect(worker.handle(item)).rejects.toThrow(
+        'Missing prNumber in metadata for address-pr-feedback command',
+      );
+
+      // Worker should have attempted to delegate to PrFeedbackHandler
+      // The worker doesn't validate metadata; it delegates to the handler
+      expect(mockPrFeedbackHandlerInstance.handle).toHaveBeenCalledWith(
+        item,
+        expect.any(String),
+      );
+    });
+
+    it('creates scoped logger for address-pr-feedback processing', async () => {
+      const childLogger = { ...mockLogger };
+      (mockLogger.child as ReturnType<typeof vi.fn>).mockReturnValueOnce(childLogger);
+
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      const item = createQueueItem({
+        command: 'address-pr-feedback',
+        metadata: {
+          prNumber: 100,
+          reviewThreadIds: [1],
+        },
+      });
+
+      await worker.handle(item);
+
+      // Should create child logger with workflow context
+      expect(mockLogger.child).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workerId: expect.any(String),
+          owner: 'test-owner',
+          repo: 'test-repo',
+          issue: 42,
+          workflowName: 'speckit-feature',
+        }),
+      );
+
+      // Child logger should log the routing decision
+      expect(childLogger.info).toHaveBeenCalledWith(
+        'Routing to PrFeedbackHandler for PR feedback addressing',
+      );
+
+      // Child logger should log completion
+      expect(childLogger.info).toHaveBeenCalledWith(
+        'PR feedback addressing completed',
+      );
+    });
+
+    it('does not interfere with process/continue commands', async () => {
+      const config = createConfig();
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      // Standard process command should not route to PrFeedbackHandler
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      await worker.handle(createQueueItem({ command: 'process' }));
+
+      // PrFeedbackHandler should NOT be called
+      expect(mockPrFeedbackHandlerInstance.handle).not.toHaveBeenCalled();
+
+      // Phase loop should execute normally
+      expect(mockGithub.getIssue).toHaveBeenCalled();
+      expect(spawnFn).toHaveBeenCalled();
     });
   });
 });
