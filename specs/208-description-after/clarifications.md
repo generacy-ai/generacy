@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -14,7 +14,9 @@
 - B) No, require manual marking after gate resumes: Only mark ready if the workflow never hit a gate, requiring manual intervention for workflows that paused
 - C) Add a flag to control this behavior: Allow configuration to specify whether gate-resumed workflows should auto-mark ready
 
-**Answer**:
+**Answer**: **A) Yes, mark ready on any successful completion**
+
+The `loopResult.completed` branch in `claude-cli-worker.ts` already handles this correctly — it fires regardless of whether the workflow previously paused at gates. A resumed workflow that runs to completion will hit the same `loopResult.completed === true` path. No special-casing needed.
 
 ---
 
@@ -28,7 +30,9 @@
 - B) Check draft state first: Query the PR to verify it's in draft state before calling `markPRReady()`, skip if already ready
 - C) Log a warning if already ready: Check state, call the API anyway for consistency, but log an informational message if it was already ready
 
-**Answer**:
+**Answer**: **A) Trust GitHub API idempotency**
+
+This is consistent with how `PrManager` already works. `ensureDraftPr()` doesn't check whether a PR is already a draft before trying to create one — it relies on `findPRForBranch` and GitHub's behavior. The `markPullRequestAsReady` GraphQL mutation is a no-op on non-draft PRs. Adding pre-checks adds complexity and a race window for no practical benefit.
 
 ---
 
@@ -42,7 +46,9 @@
 - B) Match label manager retries: Use the same 3-attempt retry with exponential backoff (1s, 2s, 4s delays) as `LabelManager`
 - C) Limited retries: Use fewer retries (e.g., 2 attempts with 1s delay) since marking ready is less critical than label management
 
-**Answer**:
+**Answer**: **A) Single attempt only**
+
+`PrManager` already has an established pattern: single attempt, try/catch, log as `warn`, don't re-throw. Both `commitAndPush()` and `ensureDraftPr()` follow this. `LabelManager` uses retries because label operations are structural to the workflow (they control gate-resume triggers, status visibility). Marking ready is a final best-effort notification — if it fails, a human can click the button. Stay consistent with the existing `PrManager` pattern.
 
 ---
 
@@ -56,7 +62,9 @@
 - B) Add info-level log before call: Log "Marking PR as ready for review" before calling `prManager.markReadyForReview()` for better traceability
 - C) Add debug-level log before call: Use debug level to avoid cluttering production logs, but provide visibility when needed
 
-**Answer**:
+**Answer**: **B) Add info-level log before call**
+
+The worker already logs at info level for significant state transitions (`"Workflow completed successfully — all phases done"`). Adding `"Marking PR as ready for review"` before the call fits that style and gives clear traceability in logs. Since this is a one-time operation at workflow end, info-level won't cause log noise.
 
 ---
 
@@ -70,7 +78,9 @@
 - B) Include error object: Pass the error object directly to the logger for better structured logging and stack traces
 - C) Extract specific fields: Serialize both message and stack: `{ message: error.message, stack: error.stack }`
 
-**Answer**:
+**Answer**: **A) Convert to string with `String(error)`**
+
+Every error log in `PrManager` uses `{ error: String(error) }`. `LabelManager` does the same. The SSE emitter uses `error instanceof Error ? error.message : String(error)` but that's a different context (client-facing payloads vs structured logs). Stay consistent with the existing logger pattern. If richer error context is needed later, that's a cross-cutting concern to address across all of `PrManager`, not just this method.
 
 ---
 
@@ -84,7 +94,9 @@
 - B) Log timing for monitoring: Add timestamp logging before/after `markReadyForReview()` to enable verification through log analysis
 - C) Emit timing metrics: Add structured timing metrics (e.g., duration_ms) that can be consumed by monitoring systems
 
-**Answer**:
+**Answer**: **A) No timing implementation**
+
+This is a single GitHub API call. It will be well under 10s barring network issues. Adding timing instrumentation for one API call is over-engineering. If latency becomes a concern, it can be added across all GitHub operations as a cross-cutting concern, not scoped to this one method.
 
 ---
 
@@ -98,7 +110,9 @@
 - B) Remove draft language only: Update only the "*Draft PR...*" footer to say "*PR created by Generacy orchestrator*" when marking ready
 - C) Add completion notice: Append a message like "✅ All workflow phases completed successfully" to the PR body when marking ready
 
-**Answer**:
+**Answer**: **A) No change (as specified)**
+
+The spec explicitly lists this as out of scope. The "Draft PR" footer text is cosmetic — GitHub's own UI clearly shows whether a PR is draft or ready. Updating the body adds a second API call, another failure mode, and scope creep. If body updates are desired later, that's a separate issue.
 
 ---
 
@@ -112,4 +126,6 @@
 - B) Add issue label override: Allow specific labels (e.g., `keep-draft`) on the issue to prevent auto-marking ready
 - C) Add workflow config option: Support a configuration flag in workflow settings to enable/disable auto-marking ready per repository or workflow
 
-**Answer**:
+**Answer**: **A) Always mark ready (as specified)**
+
+`PrManager` takes no configuration today — it's fully parameterized by constructor args. Adding a config path for a hypothetical "keep-draft" use case adds complexity before there's a real need. If the need arises, a `keep-draft` issue label (option B) would be the lightest-weight approach, but it should be a separate issue at that point. YAGNI.
