@@ -3,7 +3,7 @@
  * Ported from speckit MCP server for direct library access.
  */
 import { join } from 'node:path';
-import { simpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit } from 'simple-git';
 import {
   exists,
   mkdir,
@@ -250,6 +250,21 @@ async function isGitRepo(path: string): Promise<boolean> {
 }
 
 /**
+ * Resolve the default branch name from the remote's HEAD reference.
+ * Falls back to 'develop' if the symbolic-ref cannot be read (e.g. shallow clone, detached HEAD).
+ */
+export async function getDefaultBranch(git: SimpleGit): Promise<string> {
+  try {
+    const result = await git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    const branch = result.trim().replace('refs/remotes/origin/', '');
+    if (branch) return branch;
+  } catch {
+    // Fallback — symbolic-ref not available
+  }
+  return 'develop';
+}
+
+/**
  * Create a new feature branch and initialize the spec directory with template files.
  * Ported from speckit MCP create_feature tool.
  */
@@ -359,6 +374,7 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
   // Create git branch if in a git repo
   let gitBranchCreated = false;
   let branchedFromEpic = false;
+  let baseCommit: string | undefined;
 
   if (await isGitRepo(repoRoot)) {
     const git = simpleGit(repoRoot);
@@ -399,17 +415,22 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
           } else {
             await git.checkout(input.parent_epic_branch);
           }
-          try {
-            await git.pull('origin', input.parent_epic_branch);
-          } catch {
-            // Continue even if pull fails
-          }
+          await git.reset(['--hard', `origin/${input.parent_epic_branch}`]);
+          baseCommit = (await git.revparse(['HEAD'])).trim();
           await git.checkoutLocalBranch(branchName);
           branchedFromEpic = true;
         } else {
+          // Epic branch not found — create from current HEAD
+          baseCommit = (await git.revparse(['HEAD'])).trim();
           await git.checkoutLocalBranch(branchName);
         }
       } else {
+        // Sync to latest default branch before creating feature branch
+        // so the new branch forks from the tip of origin/<default>
+        const defaultBranch = await getDefaultBranch(git);
+        await git.checkout(defaultBranch);
+        await git.reset(['--hard', `origin/${defaultBranch}`]);
+        baseCommit = (await git.revparse(['HEAD'])).trim();
         await git.checkoutLocalBranch(branchName);
       }
       gitBranchCreated = true;
@@ -438,5 +459,6 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
     git_branch_created: gitBranchCreated,
     branched_from_epic: branchedFromEpic,
     ...(branchedFromEpic && { parent_epic_branch: input.parent_epic_branch }),
+    ...(baseCommit && { base_commit: baseCommit }),
   };
 }

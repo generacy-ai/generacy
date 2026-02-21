@@ -12,14 +12,14 @@
 
 ## Phase 1: Core bug fix — Sync default branch before creating feature branch
 
-### T001 [US1] Add `getDefaultBranch()` helper to `feature.ts`
+### T001 [DONE] [US1] Add `getDefaultBranch()` helper to `feature.ts`
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 - Add an `async function getDefaultBranch(git: SimpleGit): Promise<string>` helper
 - Use `git.raw(['symbolic-ref', 'refs/remotes/origin/HEAD'])` to resolve the remote's default branch
 - Parse the output (e.g. `refs/remotes/origin/develop` → `develop`)
 - Catch errors and fall back to `'develop'`
 
-### T002 [US1] Sync to latest default branch before `checkoutLocalBranch()` for new branches
+### T002 [DONE] [US1] Sync to latest default branch before `checkoutLocalBranch()` for new branches
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 **Depends on**: T001
 - In the `else` block at line 412-413 (new branch creation, no epic parent, no remote branch)
@@ -34,7 +34,7 @@
 
 ## Phase 2: Epic branch fix — Replace `pull` with `fetch` + `reset --hard`
 
-### T003 [US1] Replace `git.pull()` with `git.reset(['--hard', ...])` for epic parent branches
+### T003 [DONE] [US1] Replace `git.pull()` with `git.reset(['--hard', ...])` for epic parent branches
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 - At lines 402-406, replace the `try { await git.pull(...) } catch {}` block with:
   - `await git.reset(['--hard', \`origin/${input.parent_epic_branch}\`])`
@@ -45,12 +45,12 @@
 
 ## Phase 3: Diagnostics — Log base commit SHA
 
-### T004 [P] [US1] Add `base_commit` field to `CreateFeatureOutput` type
+### T004 [DONE] [P] [US1] Add `base_commit` field to `CreateFeatureOutput` type
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/types.ts`
 - Add `base_commit?: string` to the `CreateFeatureOutput` interface (after `parent_epic_branch`)
 - Add JSDoc comment: `/** SHA of the commit the feature branch was based on */`
 
-### T005 [US1] Capture and return base commit SHA in `createFeature()`
+### T005 [DONE] [US1] Capture and return base commit SHA in `createFeature()`
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 **Depends on**: T002, T004
 - After the default branch reset (T002) and before `checkoutLocalBranch()`, capture: `const baseSha = await git.revparse(['HEAD'])`
@@ -62,7 +62,7 @@
 
 ## Phase 4: Verification — Confirm `repo-checkout.ts` is already correct
 
-### T006 [P] [US1] [US2] Verify `ensureCheckout()` always syncs when directory exists
+### T006 [DONE] [P] [US1] [US2] Verify `ensureCheckout()` always syncs when directory exists
 **File**: `packages/orchestrator/src/worker/repo-checkout.ts`
 - **Read-only verification — no code changes expected**
 - Confirm line 58-59: when directory exists, `updateRepo()` is always called (fetch + reset --hard)
@@ -74,7 +74,7 @@
 
 ## Phase 5: Testing
 
-### T007 [US1] Write unit tests for `createFeature()` branch sync behavior
+### T007 [DONE] [US1] Write unit tests for `createFeature()` branch sync behavior
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/__tests__/feature.test.ts` (new)
 **Depends on**: T002, T003, T004, T005
 - Mock `simple-git` using `vi.mock('simple-git')` — return a mock `SimpleGit` instance with chainable methods
@@ -101,7 +101,7 @@
   - Mock `git.revparse(['HEAD'])` to return a known SHA
   - Assert `result.base_commit` matches the mocked SHA
 
-### T008 [P] [US2] Write unit tests for `RepoCheckout` regression guard
+### T008 [DONE] [P] [US2] Write unit tests for `RepoCheckout` regression guard
 **File**: `packages/orchestrator/src/worker/__tests__/repo-checkout.test.ts` (new)
 **Depends on**: T006
 - Mock `node:child_process` `execFile` using `vi.mock()`
