@@ -1,9 +1,10 @@
 # Speckit Bugfix Workflow
 #
 # Streamlined bugfix workflow using the speckit methodology:
-# specify → plan → tasks → implement → commit → verify → PR
+# specify → plan → tasks → implement → verify
 #
-# Skips clarification for faster bug resolution.
+# Skips clarification for faster bug resolution. Otherwise follows
+# the same structure as the feature workflow (early PR, per-phase commits).
 #
 # Inputs:
 #   - description: Bug description text (required)
@@ -14,11 +15,12 @@ name: speckit-bugfix
 
 description: |
   Streamlined bugfix workflow following spec-driven development.
-  Creates a feature branch, generates specification, plans the fix,
-  generates tasks, and executes implementation. Skips clarification
-  for faster turnaround on bug fixes.
+  Creates a feature branch, generates specification, creates a draft PR,
+  then proceeds through planning, task generation, and implementation —
+  committing and pushing after each phase. Skips clarification for faster
+  turnaround on bug fixes.
 
-version: "1.0.0"
+version: "1.2.0"
 
 inputs:
   - name: description
@@ -57,55 +59,98 @@ phases:
     steps:
       - name: specify
         uses: speckit.specify
-        timeout: 1800000  # 30 minutes (executor-level, in ms)
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
           issue_url: ${{ inputs.issue_url }}
-          timeout: 1800  # claude CLI timeout (in seconds)
+          timeout: 600
+        timeout: 660000  # 11 min
+
+      - name: commit-spec
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add specification for ${{ steps.create-feature.output.branch_name }}" --allow-empty'
+        continueOnError: true
+
+      - name: push-spec
+        uses: shell
+        command: git push --force-with-lease -u origin HEAD
+        continueOnError: true
+
+      - name: create-pr
+        uses: pr.create
+        with:
+          title: "fix: ${{ steps.create-feature.output.branch_name }}"
+          body: |
+            Closes #${{ inputs.issue_number }}
+
+            ## Summary
+            ${{ steps.specify.output.summary }}
+
+            ---
+            *Draft PR created by speckit-bugfix workflow. Implementation in progress.*
+          draft: true
+        continueOnError: true
 
   # Phase 3: Planning
   - name: planning
     steps:
       - name: plan
         uses: speckit.plan
-        timeout: 1800000  # 30 minutes (executor-level, in ms)
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
-          timeout: 1800  # claude CLI timeout (in seconds)
+          timeout: 900
+        timeout: 960000  # 16 min
+
+      - name: commit-plan
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add implementation plan" --allow-empty'
+        continueOnError: true
+
+      - name: push-plan
+        uses: shell
+        command: git push
+        continueOnError: true
 
   # Phase 4: Task Generation
   - name: task-generation
     steps:
       - name: tasks
         uses: speckit.tasks
-        timeout: 1800000  # 30 minutes (executor-level, in ms)
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
-          timeout: 1800  # claude CLI timeout (in seconds)
+          timeout: 600
+        timeout: 660000  # 11 min
+
+      - name: commit-tasks
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add task breakdown" --allow-empty'
+        continueOnError: true
+
+      - name: push-tasks
+        uses: shell
+        command: git push
+        continueOnError: true
 
   # Phase 5: Implementation
   - name: implementation
     steps:
       - name: implement
         uses: speckit.implement
-        timeout: 3600000  # 1 hour max (executor-level, in ms)
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
+        timeout: 3600000  # 1 hour max
+        continueOnError: true  # partial work should still be committed/pushed
 
-  # Phase 6: Commit & Push
-  - name: commit-push
-    steps:
-      - name: git-add-commit
+      - name: commit-implementation
         uses: shell
-        command: 'git add -A && git commit -m "fix: ${{ inputs.description }}" --no-verify'
-        timeout: 30000
+        command: 'git add -A && git commit -m "fix: implement ${{ steps.create-feature.output.branch_name }}" --allow-empty'
+        continueOnError: true
 
-      - name: git-push
+      - name: push-implementation
         uses: shell
-        command: git push -u origin HEAD
-        timeout: 60000
+        command: git push
+        continueOnError: true
 
-  # Phase 7: Verification
+  # Phase 6: Verification
   - name: verification
     steps:
       - name: run-tests
@@ -119,21 +164,3 @@ phases:
         with:
           command: npm run lint
         continueOnError: true
-
-  # Phase 8: PR Creation
-  - name: pr-creation
-    steps:
-      - name: create-pr
-        uses: pr.create
-        with:
-          title: "fix: ${{ inputs.description }}"
-          body: |
-            ## Summary
-            ${{ steps.specify.output.summary }}
-
-            ## Fix
-            - Files modified: ${{ steps.implement.output.files_modified }}
-
-            ---
-            Generated by speckit-bugfix workflow
-          draft: true
