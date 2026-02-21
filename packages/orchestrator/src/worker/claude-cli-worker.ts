@@ -263,6 +263,8 @@ export class ClaudeCliWorker {
       // 9. Handle completion
       if (loopResult.completed) {
         await labelManager.onWorkflowComplete();
+        workerLogger.info('Marking PR as ready for review');
+        await prManager.markReadyForReview();
         workerLogger.info('Workflow completed successfully — all phases done');
 
         this.sseEmitter?.({

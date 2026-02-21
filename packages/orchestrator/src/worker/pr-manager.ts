@@ -13,6 +13,7 @@ import type { WorkflowPhase, Logger } from './types.js';
  */
 export class PrManager {
   private prUrl: string | undefined;
+  private prNumber: number | undefined;
 
   constructor(
     private readonly github: GitHubClient,
@@ -103,6 +104,7 @@ export class PrManager {
       // Check if a PR already exists for this branch
       const existingPr = await this.github.findPRForBranch(this.owner, this.repo, branch);
       if (existingPr) {
+        this.prNumber = existingPr.number;
         this.prUrl = `https://github.com/${this.owner}/${this.repo}/pull/${existingPr.number}`;
 
         this.logger.info(
@@ -122,6 +124,7 @@ export class PrManager {
         draft: true,
       });
 
+      this.prNumber = pr.number;
       this.prUrl = `https://github.com/${this.owner}/${this.repo}/pull/${pr.number}`;
       this.logger.info(
         { prNumber: pr.number, prUrl: this.prUrl },
@@ -136,6 +139,36 @@ export class PrManager {
         'Failed to ensure draft PR (non-fatal)',
       );
       return undefined;
+    }
+  }
+
+  /**
+   * Mark the draft PR as ready for review.
+   *
+   * Should be called after the workflow completes successfully (all phases done).
+   * If no PR exists or the PR number is unknown, this is a no-op.
+   *
+   * The underlying GitHub API call is idempotent — calling it on a non-draft PR
+   * has no effect.
+   */
+  async markReadyForReview(): Promise<void> {
+    if (!this.prNumber) {
+      this.logger.debug('No PR number available — skipping markReadyForReview');
+      return;
+    }
+
+    try {
+      await this.github.markPRReady(this.owner, this.repo, this.prNumber);
+      this.logger.info(
+        { prNumber: this.prNumber, prUrl: this.prUrl },
+        'Marked PR as ready for review',
+      );
+    } catch (error) {
+      // Log but don't fail the workflow — marking ready is best-effort
+      this.logger.warn(
+        { prNumber: this.prNumber, error: String(error) },
+        'Failed to mark PR as ready for review (non-fatal)',
+      );
     }
   }
 }
