@@ -252,6 +252,11 @@ export class ClaudeCliWorker {
         workerLogger,
       );
 
+      // 7b. On resume, clean up gate labels before starting the phase loop
+      if (item.command === 'continue') {
+        await labelManager.onResumeStart();
+      }
+
       // 8. Execute the phase loop
       const phaseLoop = new PhaseLoop(workerLogger);
       const loopResult = await phaseLoop.executeLoop(context, this.config, {

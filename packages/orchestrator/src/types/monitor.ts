@@ -112,6 +112,8 @@ export interface LabelEvent {
   parsedName: string;
   /** Source of detection */
   source: 'webhook' | 'poll';
+  /** All labels on the issue at detection time */
+  issueLabels: string[];
 }
 
 /**

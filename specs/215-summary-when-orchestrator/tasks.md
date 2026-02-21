@@ -14,13 +14,13 @@
 
 Foundational changes that other phases depend on. No behavioral changes yet.
 
-### T001 [P] Add `workflow:` labels to label definitions
+### T001 [DONE] [P] Add `workflow:` labels to label definitions
 **File**: `packages/workflow-engine/src/actions/github/label-definitions.ts`
 - Add `workflow:speckit-feature` label entry (color `6F42C1`, description "Speckit feature workflow")
 - Add `workflow:speckit-bugfix` label entry (color `6F42C1`, description "Speckit bugfix workflow")
 - Insert after the process trigger labels (after line 75)
 
-### T002 [P] Add `issueLabels` field to `LabelEvent` interface
+### T002 [DONE] [P] Add `issueLabels` field to `LabelEvent` interface
 **File**: `packages/orchestrator/src/types/monitor.ts`
 - Add `issueLabels: string[]` field to the `LabelEvent` interface (line 100-115)
 - Add JSDoc comment: "All labels on the issue at detection time"
@@ -31,7 +31,7 @@ Foundational changes that other phases depend on. No behavioral changes yet.
 
 The three interacting bugs are fixed here. T003 and T004 are independent of each other.
 
-### T003 Fix label monitor — workflow resolution, `workflow:` label, and `waiting-for:` removal (Bug 1 + Bug 2 partial)
+### T003 [DONE] Fix label monitor — workflow resolution, `workflow:` label, and `waiting-for:` removal (Bug 1 + Bug 2 partial)
 **File**: `packages/orchestrator/src/services/label-monitor-service.ts`
 - **A**: Include `issueLabels` in both return branches of `parseLabelEvent()` (lines 117-125 for process, lines 136-144 for resume)
 - **B**: Add private `resolveWorkflowFromLabels(issueLabels: string[]): string` helper — finds `workflow:*` label, falls back to `'speckit-feature'`
@@ -39,7 +39,7 @@ The three interacting bugs are fixed here. T003 and T004 are independent of each
 - **D**: On `process:` events (~line 222), apply `workflow:${parsedName}` label alongside `agent:in-progress`
 - **E**: Delete the `else if (type === 'resume')` block (lines 229-239) that removes `waiting-for:*` labels — the worker will handle this now
 
-### T004 Add unified `GATE_MAPPING` and rewrite phase resolver (Bug 2 + Bug 3)
+### T004 [DONE] Add unified `GATE_MAPPING` and rewrite phase resolver (Bug 2 + Bug 3)
 **File**: `packages/orchestrator/src/worker/phase-resolver.ts`
 - **A**: Add exported `GATE_MAPPING` constant mapping gate names to `{ phase: WorkflowPhase; resumeFrom: WorkflowPhase }`:
   - `'clarification'` → `{ phase: 'clarify', resumeFrom: 'plan' }`
@@ -59,14 +59,14 @@ The three interacting bugs are fixed here. T003 and T004 are independent of each
 
 Depends on Phase 2 (T003 removing `waiting-for:` cleanup from label monitor).
 
-### T005 Add `onResumeStart()` to label manager (Bug 2 fix — move cleanup to worker)
+### T005 [DONE] Add `onResumeStart()` to label manager (Bug 2 fix — move cleanup to worker)
 **File**: `packages/orchestrator/src/worker/label-manager.ts`
 - Add `onResumeStart()` method after `onWorkflowComplete()` (~line 133)
 - Method fetches current issue labels, filters for `waiting-for:*` and `agent:paused`, removes them via `removeLabels()`
 - Wrap in `retryWithBackoff()` consistent with other methods
 - Add info-level log listing labels being removed
 
-### T006 Call `onResumeStart()` before phase loop for `continue` commands
+### T006 [DONE] Call `onResumeStart()` before phase loop for `continue` commands
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - After sub-component creation (line ~253) and before phase loop execution (line ~255), add:
   ```typescript
@@ -81,7 +81,7 @@ Depends on Phase 2 (T003 removing `waiting-for:` cleanup from label monitor).
 
 Independent of Phase 3, but depends on Phase 1 (T001 for `workflow:` labels to exist).
 
-### T007 [P] Update `resolveWorkflowName()` to prefer `workflow:*` labels
+### T007 [DONE] [P] Update `resolveWorkflowName()` to prefer `workflow:*` labels
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
 - In `resolveWorkflowName()` (lines 473-505), add a primary check for `workflow:*` labels before the existing `process:*` / `completed:*` fallback logic
 - Existing logic remains as backward-compatible fallback for pre-migration issues
@@ -92,7 +92,7 @@ Independent of Phase 3, but depends on Phase 1 (T001 for `workflow:` labels to e
 
 Depends on Phases 2-4 (implementation must be complete before fixing assertions).
 
-### T008 Update label monitor service tests
+### T008 [DONE] Update label monitor service tests
 **File**: `packages/orchestrator/tests/unit/services/label-monitor-service.test.ts`
 - **parseLabelEvent tests** (~line 83): Add `issueLabels` to all expected `LabelEvent` objects
   - Line 92: add `issueLabels: ['process:speckit-feature']`
@@ -107,13 +107,13 @@ Depends on Phases 2-4 (implementation must be complete before fixing assertions)
 - **Webhook integration tests** (~lines 477-494): Add `issueLabels` to expected outputs
 - **Process event test** (~line 142): Update `addLabels` expectation to include `workflow:speckit-feature` alongside `agent:in-progress`
 
-### T009 [P] Update phase resolver tests
+### T009 [DONE] [P] Update phase resolver tests
 **File**: `packages/orchestrator/src/worker/__tests__/phase-resolver.test.ts`
 - **Continue + clarification test** (~line 59): Change expected result from `'clarify'` to `'plan'`; update test description to reflect new behavior
 - **Fallback test** (~line 107): Verify behavior is unchanged (no waiting-for dependency)
 - Verify all other existing tests still pass with the `GATE_MAPPING` rewrite
 
-### T010 [P] Update claude-cli-worker tests
+### T010 [DONE] [P] Update claude-cli-worker tests
 **File**: `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts`
 - **Continue command resume test** (~line 265): Update assertion — first spawn should use `/speckit:plan` instead of `/speckit:clarify`; update test description
 
@@ -123,7 +123,7 @@ Depends on Phases 2-4 (implementation must be complete before fixing assertions)
 
 Can be done in parallel with Phase 5 since they add new test blocks (no conflicts with existing test edits).
 
-### T011 [P] Add `GATE_MAPPING` integration tests
+### T011 [DONE] [P] Add `GATE_MAPPING` integration tests
 **File**: `packages/orchestrator/src/worker/__tests__/phase-resolver.test.ts`
 - Add `describe('GATE_MAPPING integration')` block with:
   - Parameterized test (`it.each`) for all gate-to-phase mappings: `clarification→plan`, `spec-review→clarify`, `clarification-review→plan`, `plan-review→tasks`, `tasks-review→implement`, `implementation-review→validate`
@@ -131,7 +131,7 @@ Can be done in parallel with Phase 5 since they add new test blocks (no conflict
   - Test that `resolveFromProcess` normalizes gate names via `GATE_MAPPING` (e.g., `completed:clarification` treated as `clarify` phase done)
   - Test that most advanced gate wins when multiple `completed:` gate labels exist
 
-### T012 [P] Add `onResumeStart()` tests
+### T012 [DONE] [P] Add `onResumeStart()` tests
 **File**: `packages/orchestrator/src/worker/__tests__/label-manager.test.ts`
 - Add `describe('onResumeStart')` block with:
   - Test: removes `waiting-for:*` and `agent:paused` labels when present
@@ -141,14 +141,14 @@ Can be done in parallel with Phase 5 since they add new test blocks (no conflict
 
 ## Phase 7: Integration Verification
 
-### T013 Run full test suite and fix regressions
+### T013 [DONE] Run full test suite and fix regressions
 **Files**:
 - All test files in `packages/orchestrator/`
 - Run `pnpm test` (or equivalent) from `packages/orchestrator`
 - Fix any test failures or type errors introduced by the changes
 - Verify no regressions in unmodified tests
 
-### T014 TypeScript compilation check
+### T014 [DONE] TypeScript compilation check
 **Files**:
 - `packages/orchestrator/`
 - `packages/workflow-engine/`
