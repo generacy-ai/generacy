@@ -2,17 +2,20 @@
  * Job handler.
  * Handles job polling, execution, and result reporting.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
 import {
   loadWorkflowFromString,
-  loadWorkflow,
+  loadWorkflowWithExtends,
   prepareWorkflow,
   WorkflowExecutor,
   getActionHandlerByType,
   HumancyReviewAction,
   createGitHubClient,
+  registerWorkflow,
+  resolveRegisteredWorkflow,
+  type WorkflowResolver,
   type HumanDecisionHandler,
   type ExecutionResult,
   type Logger,
@@ -57,6 +60,42 @@ const PHASE_ORDER = [
 const PHASE_GATES: Record<string, string> = {
   clarification: 'waiting-for:clarification',
 };
+
+/**
+ * Register built-in workflow files from the generacy package's .generacy/ directory.
+ * This is a temporary bridge until plugins (e.g., agency-plugin-spec-kit) bundle
+ * and register their own workflows (see agency#244).
+ *
+ * Uses a lazy-init guard so registration only happens once, following the same
+ * pattern as ensureActionsRegistered() in the workflow executor.
+ */
+let builtinWorkflowsRegistered = false;
+function registerBuiltinWorkflows(): void {
+  if (builtinWorkflowsRegistered) return;
+  builtinWorkflowsRegistered = true;
+
+  // Resolve the .generacy/ directory relative to this source file's package root.
+  // From src/orchestrator/ (or dist/orchestrator/), go up to the monorepo root.
+  const workflowDir = resolve(import.meta.dirname, '..', '..', '..', '..', '.generacy');
+
+  if (!existsSync(workflowDir)) return;
+
+  try {
+    const entries = readdirSync(workflowDir);
+    for (const entry of entries) {
+      if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
+      const name = entry.replace(/\.ya?ml$/, '');
+      const filePath = resolve(workflowDir, entry);
+      try {
+        registerWorkflow(name, filePath);
+      } catch {
+        // registerWorkflow throws if file doesn't exist; skip silently
+      }
+    }
+  } catch {
+    // Directory not readable; skip silently
+  }
+}
 
 /**
  * Job handler options
@@ -115,6 +154,8 @@ export class JobHandler {
   private readonly humanDecisionHandler?: HumanDecisionHandler;
 
   constructor(options: JobHandlerOptions) {
+    registerBuiltinWorkflows();
+
     this.client = options.client;
     this.workerId = options.workerId;
     this.pollInterval = options.pollInterval ?? 5000;
@@ -243,7 +284,9 @@ export class JobHandler {
           definition = await loadWorkflowFromString(job.workflow);
         } else {
           const resolvedPath = this.resolveWorkflowPath(job.workflow, jobWorkdir);
-          definition = await loadWorkflow(resolvedPath);
+          const resolver: WorkflowResolver = (name, excludePath) =>
+            this.resolveWorkflowPath(name, jobWorkdir, excludePath);
+          definition = await loadWorkflowWithExtends(resolvedPath, resolver);
         }
       } else {
         // Already a workflow object
@@ -433,30 +476,33 @@ export class JobHandler {
 
   /**
    * Resolve a workflow name or path to an absolute file path.
-   * Searches: absolute path, relative to workdir, .generacy/ directories.
+   * Searches: absolute path, relative to workdir, .generacy/ directory, plugin registry.
+   *
+   * @param workflow - Workflow name or path to resolve
+   * @param jobWorkdir - Job working directory for relative resolution
+   * @param excludePath - Optional resolved path to skip (used by extends to avoid self-resolution)
    */
-  private resolveWorkflowPath(workflow: string, jobWorkdir?: string): string {
-    // If already absolute and exists, use directly
-    if (isAbsolute(workflow) && existsSync(workflow)) {
+  private resolveWorkflowPath(workflow: string, jobWorkdir?: string, excludePath?: string): string {
+    // 1. Absolute path (if exists and not excluded)
+    if (isAbsolute(workflow) && existsSync(workflow) && resolve(workflow) !== excludePath) {
       return workflow;
     }
 
-    const searchDirs = [
-      jobWorkdir ?? this.workdir,
-      '/workspaces/tetrad-development',
-    ];
+    const searchDir = jobWorkdir ?? this.workdir;
 
-    for (const dir of searchDirs) {
-      // Try as-is relative to dir
-      const direct = resolve(dir, workflow);
-      if (existsSync(direct)) return direct;
+    // 2. Relative to workdir
+    const direct = resolve(searchDir, workflow);
+    if (existsSync(direct) && resolve(direct) !== excludePath) return direct;
 
-      // Try in .generacy/ subdirectory
-      for (const ext of ['', '.yaml', '.yml']) {
-        const candidate = resolve(dir, '.generacy', `${workflow}${ext}`);
-        if (existsSync(candidate)) return candidate;
-      }
+    // 3. .generacy/ in workdir (repo-local override — highest priority)
+    for (const ext of ['', '.yaml', '.yml']) {
+      const candidate = resolve(searchDir, '.generacy', `${workflow}${ext}`);
+      if (existsSync(candidate) && resolve(candidate) !== excludePath) return candidate;
     }
+
+    // 4. Plugin-provided workflows (WorkflowRegistry)
+    const registered = resolveRegisteredWorkflow(workflow);
+    if (registered && registered !== excludePath) return registered;
 
     // Fallback: return original string (will produce a clear "file not found" error)
     return workflow;

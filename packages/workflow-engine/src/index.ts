@@ -18,6 +18,7 @@ export {
 export {
   loadWorkflow,
   loadWorkflowFromString,
+  loadWorkflowWithExtends,
   prepareWorkflow,
   validateWorkflow,
   isValidWorkflow,
@@ -27,6 +28,7 @@ export {
   StepDefinitionSchema,
   InputDefinitionSchema,
   RetryConfigSchema,
+  type WorkflowResolver,
 } from './loader/index.js';
 
 // Action system
@@ -61,6 +63,21 @@ export {
   type CommandResult,
   type CLIStatus,
 } from './actions/index.js';
+
+// Workflow registry
+export {
+  registerWorkflow,
+  registerWorkflows,
+  resolveRegisteredWorkflow,
+  hasRegisteredWorkflow,
+  getRegisteredWorkflowNames,
+  clearWorkflowRegistry,
+} from './registry/index.js';
+
+// Inheritance errors
+export { BaseWorkflowNotFoundError } from './errors/base-workflow-not-found.js';
+export { CircularExtendsError } from './errors/circular-extends.js';
+export { WorkflowOverrideError } from './errors/workflow-override.js';
 
 // GitHub client
 export { createGitHubClient, GhCliGitHubClient } from './actions/github/client/index.js';
