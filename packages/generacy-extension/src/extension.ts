@@ -540,8 +540,7 @@ async function handleSubmitJob(): Promise<void> {
   }
 
   // Get orchestrator URL from config or default
-  const config = getConfig();
-  const orchestratorUrl = config.get('orchestratorUrl') || 'http://localhost:3100';
+  const orchestratorUrl = vscode.workspace.getConfiguration('generacy').get<string>('orchestratorUrl', 'http://localhost:3100');
 
   // Build job payload
   const jobPayload = {

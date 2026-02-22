@@ -1,12 +1,14 @@
 /**
  * QueueTreeProvider - Tree data provider for the Workflow Queue view.
- * Provides queue items with API polling, filtering, and real-time status updates.
+ * Provides queue items with SSE real-time updates, API polling fallback,
+ * filtering, and grouped display modes.
  */
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils/logger';
 import { getAuthService } from '../../../api/auth';
 import { queueApi, QueueFilterOptions } from '../../../api/endpoints/queue';
-import { QueueItem, QueueStatus } from '../../../api/types';
+import { getSSEManager } from '../../../api/sse';
+import type { QueueItem, QueueStatus, SSEEvent } from '../../../api/types';
 import { VIEWS } from '../../../constants';
 import {
   QueueTreeItem,
@@ -39,7 +41,8 @@ export interface QueueTreeProviderOptions {
  * QueueTreeProvider implements TreeDataProvider for workflow queue items.
  *
  * Features:
- * - API polling for real-time updates
+ * - SSE real-time updates via queue channel (with 200ms debouncing)
+ * - API polling fallback for data integrity
  * - Filtering by status, repository, and assignee
  * - Multiple view modes (flat, grouped by status/repo/assignee)
  * - Loading and error states
@@ -55,6 +58,7 @@ export class QueueTreeProvider
   private readonly disposables: vscode.Disposable[] = [];
   private queueItems: QueueItem[] = [];
   private pollingTimer: ReturnType<typeof setInterval> | undefined;
+  private sseDebounceTimer: ReturnType<typeof setTimeout> | undefined;
   private isLoading = false;
   private loadError: Error | undefined;
   private viewMode: QueueViewMode;
@@ -76,10 +80,11 @@ export class QueueTreeProvider
     this.disposables.push(
       authService.onDidChange((event) => {
         if (event.newState.isAuthenticated) {
-          logger.info('User authenticated, starting queue polling');
+          logger.info('User authenticated, starting queue polling and SSE');
           this.startPolling();
+          this.subscribeSSE();
         } else {
-          logger.info('User logged out, stopping queue polling');
+          logger.info('User logged out, stopping queue polling and SSE');
           this.stopPolling();
           this.queueItems = [];
           this._onDidChangeTreeData.fire();
@@ -87,9 +92,10 @@ export class QueueTreeProvider
       })
     );
 
-    // Start polling if already authenticated
+    // Start polling and SSE if already authenticated
     if (authService.isAuthenticated()) {
       this.startPolling();
+      this.subscribeSSE();
     }
   }
 
@@ -306,6 +312,104 @@ export class QueueTreeProvider
     }
 
     return filtered.map((item) => new QueueTreeItem(item));
+  }
+
+  // ==========================================================================
+  // SSE Subscription
+  // ==========================================================================
+
+  /**
+   * Subscribe to SSE queue channel for real-time updates
+   */
+  private subscribeSSE(): void {
+    const logger = getLogger();
+    const sseManager = getSSEManager();
+
+    const subscription = sseManager.subscribe('queue', (event: SSEEvent) => {
+      this.handleSSEEvent(event);
+    });
+
+    this.disposables.push(subscription);
+    logger.debug('Subscribed to SSE queue channel');
+  }
+
+  /**
+   * Handle an SSE event on the queue channel
+   */
+  private handleSSEEvent(event: SSEEvent): void {
+    const logger = getLogger();
+    const itemData = event.data as Partial<QueueItem> & { id?: string; itemId?: string };
+    const itemId = itemData.id ?? itemData.itemId;
+
+    switch (event.event) {
+      case 'queue:item:added': {
+        if (!itemId) break;
+        // Avoid duplicates
+        const exists = this.queueItems.some((i) => i.id === itemId);
+        if (!exists && this.isCompleteQueueItem(itemData)) {
+          this.queueItems.push(itemData as QueueItem);
+          logger.debug(`Queue item added via SSE: ${itemId}`);
+          this.debouncedRefreshTree();
+        }
+        break;
+      }
+
+      case 'queue:item:removed': {
+        if (!itemId) break;
+        const removeIdx = this.queueItems.findIndex((i) => i.id === itemId);
+        if (removeIdx >= 0) {
+          this.queueItems.splice(removeIdx, 1);
+          logger.debug(`Queue item removed via SSE: ${itemId}`);
+          this.debouncedRefreshTree();
+        }
+        break;
+      }
+
+      case 'queue:updated': {
+        if (!itemId) break;
+        const updateIdx = this.queueItems.findIndex((i) => i.id === itemId);
+        if (updateIdx >= 0) {
+          const oldItem = this.queueItems[updateIdx]!;
+          const updatedItem = { ...oldItem, ...itemData } as QueueItem;
+          // Only refresh if key fields changed
+          if (
+            oldItem.status !== updatedItem.status ||
+            oldItem.priority !== updatedItem.priority ||
+            oldItem.assigneeId !== updatedItem.assigneeId ||
+            oldItem.startedAt !== updatedItem.startedAt ||
+            oldItem.completedAt !== updatedItem.completedAt
+          ) {
+            this.queueItems[updateIdx] = updatedItem;
+            logger.debug(`Queue item updated via SSE: ${itemId}`);
+            this.debouncedRefreshTree();
+          }
+        }
+        break;
+      }
+
+      default:
+        logger.debug(`Unknown queue SSE event: ${event.event}`);
+    }
+  }
+
+  /**
+   * Check if a partial queue item has all required fields
+   */
+  private isCompleteQueueItem(data: Partial<QueueItem>): data is QueueItem {
+    return !!(data.id && data.workflowId && data.workflowName && data.status && data.priority && data.queuedAt);
+  }
+
+  /**
+   * Debounce tree refresh to avoid rapid successive updates from SSE
+   */
+  private debouncedRefreshTree(): void {
+    if (this.sseDebounceTimer) {
+      clearTimeout(this.sseDebounceTimer);
+    }
+    this.sseDebounceTimer = setTimeout(() => {
+      this.sseDebounceTimer = undefined;
+      this._onDidChangeTreeData.fire();
+    }, 200);
   }
 
   // ==========================================================================
@@ -573,6 +677,9 @@ export class QueueTreeProvider
    */
   public dispose(): void {
     this.stopPolling();
+    if (this.sseDebounceTimer) {
+      clearTimeout(this.sseDebounceTimer);
+    }
     this._onDidChangeTreeData.dispose();
     this.disposables.forEach((d) => d.dispose());
     this.queueItems = [];

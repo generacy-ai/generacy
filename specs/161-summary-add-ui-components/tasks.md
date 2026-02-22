@@ -18,7 +18,7 @@
 
 Builds the shared infrastructure all subsequent phases depend on.
 
-### T001 [Infra] Add Agent, Activity & Stats types and Zod schemas
+### T001 [DONE] [Infra] Add Agent, Activity & Stats types and Zod schemas
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `AgentConnectionStatus` type (`'connected' | 'idle' | 'busy' | 'disconnected'`)
 - Add `AgentType` type (`'claude' | 'gpt4' | 'custom'`)
@@ -33,14 +33,14 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Add `AgentLogLine` and `AgentLogsResponse` types with Zod schemas
 - Add `SSEEvent` interface (id, event, channel, data, timestamp) and `SSEEventSchema`
 
-### T002 [Infra] Add constants for new views, commands, context keys
+### T002 [DONE] [Infra] Add constants for new views, commands, context keys
 **File**: `packages/generacy-extension/src/constants.ts`
 - Add to `VIEWS`: `agents: 'generacy.agents'`, `orchestratorSummary: 'generacy.orchestratorSummary'`
 - Add to `COMMANDS` (or `CLOUD_COMMANDS`): `openDashboard`, `refreshAgents`, `viewAgentLogs`, `viewAgentsByStatus`, `viewAgentsFlat`, `assignWorkItem`, `setPriority`, `pinDetail`
 - Add to `CONTEXT_KEYS`: `orchestratorConnected: 'generacy.orchestratorConnected'`
 - Add to `TREE_ITEM_CONTEXT`: `agent: 'agent'`, `agentGroup: 'agentGroup'`
 
-### T003 [P] [Infra] Create agents API endpoint module
+### T003 [DONE] [P] [Infra] Create agents API endpoint module
 **File**: `packages/generacy-extension/src/api/endpoints/agents.ts`
 - Follow `queueApi` object pattern from `endpoints/queue.ts`
 - Implement `getAgents(filters?)` → `GET /agents` with pagination and status filter
@@ -51,14 +51,14 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Use `getApiClient()` singleton and `getValidated`/`postValidated` with Zod schemas
 - Export `agentsApi` object and `getAgentsApi()` helper function
 
-### T004 [P] [Infra] Create activity API endpoint module
+### T004 [DONE] [P] [Infra] Create activity API endpoint module
 **File**: `packages/generacy-extension/src/api/endpoints/activity.ts`
 - Follow `queueApi` object pattern
 - Implement `getActivity(params?)` → `GET /activity` with limit (default 50), offset, type filter
 - Use `ActivityListResponseSchema` for validation
 - Export `activityApi` object and `getActivityApi()` helper function
 
-### T005 [Infra] Create SSE Subscription Manager
+### T005 [DONE] [Infra] Create SSE Subscription Manager
 **File**: `packages/generacy-extension/src/api/sse.ts`
 - Implement `SSESubscriptionManager` class implementing `vscode.Disposable`
 - Singleton pattern with `static getInstance()` and private constructor
@@ -80,7 +80,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 
 ## Phase 2: Agent Tree View
 
-### T006 [Agents] Create agent tree item classes
+### T006 [DONE] [Agents] Create agent tree item classes
 **File**: `packages/generacy-extension/src/views/cloud/agents/tree-item.ts`
 - Create `AgentTreeItem` extending `vscode.TreeItem`
   - Constructor takes `Agent`, sets label to agent name
@@ -100,7 +100,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Add `isAgentTreeItem()` type guard
 - Implement `getDisplayStatus(status: AgentConnectionStatus): AgentDisplayStatus` helper
 
-### T007 [Agents] Create agent tree data provider
+### T007 [DONE] [Agents] Create agent tree data provider
 **File**: `packages/generacy-extension/src/views/cloud/agents/provider.ts`
 - Create `AgentTreeProvider` implementing `TreeDataProvider<AgentExplorerItem>` and `Disposable`
 - Define `AgentViewMode` type (`'flat' | 'byStatus'`), default to `'byStatus'`
@@ -127,7 +127,7 @@ Builds the shared infrastructure all subsequent phases depend on.
   - Registers view mode toggle commands
   - Pushes all disposables to `context.subscriptions`
 
-### T008 [Agents] Create agent action commands
+### T008 [DONE] [Agents] Create agent action commands
 **File**: `packages/generacy-extension/src/views/cloud/agents/actions.ts`
 - Implement `viewAgentLogs(agent)` — delegates to `AgentLogChannel` (Phase 5, stub for now)
 - Implement `registerAgentActions(context, provider)`:
@@ -136,7 +136,7 @@ Builds the shared infrastructure all subsequent phases depend on.
   - Register `generacy.agents.viewFlat` command (sets provider view mode)
   - Validate tree item selection before acting
 
-### T009 [P] [Agents] Create barrel export for agents module
+### T009 [DONE] [P] [Agents] Create barrel export for agents module
 **File**: `packages/generacy-extension/src/views/cloud/agents/index.ts`
 - Re-export provider, factory function, types from `provider.ts`
 - Re-export tree item types and type guards from `tree-item.ts`
@@ -146,7 +146,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 
 ## Phase 3: Orchestration Dashboard
 
-### T010 [Dashboard] Create dashboard webview HTML template
+### T010 [DONE] [Dashboard] Create dashboard webview HTML template
 **File**: `packages/generacy-extension/src/views/cloud/orchestrator/webview.ts`
 - Implement `getDashboardHtml(webview, extensionUri, data)` template function
 - Generate nonce for CSP
@@ -166,7 +166,7 @@ Builds the shared infrastructure all subsequent phases depend on.
   - Agent summary line: "3 available, 2 busy, 0 offline"
   - "Open Dashboard" button
 
-### T011 [Dashboard] Create sidebar summary WebviewViewProvider
+### T011 [DONE] [Dashboard] Create sidebar summary WebviewViewProvider
 **File**: `packages/generacy-extension/src/views/cloud/orchestrator/sidebar-view.ts`
 - Create `OrchestratorSidebarViewProvider` implementing `vscode.WebviewViewProvider`
 - Implement `resolveWebviewView(webviewView, context, token)`:
@@ -184,7 +184,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Implement `Disposable` for SSE subscription cleanup
 - Visibility-aware: only process SSE events when webview is visible
 
-### T012 [Dashboard] Create dashboard editor panel
+### T012 [DONE] [Dashboard] Create dashboard editor panel
 **File**: `packages/generacy-extension/src/views/cloud/orchestrator/panel.ts`
 - Create `OrchestratorDashboardPanel` following `OrgDashboardPanel` singleton pattern
 - Static `createOrShow(extensionUri)`:
@@ -209,7 +209,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Define `DashboardData` type (queueStats, agentStats, activity list, connectionStatus)
 - Define message protocol types (DashboardWebviewMessage, DashboardExtensionMessage)
 
-### T013 [P] [Dashboard] Create barrel export for orchestrator module
+### T013 [DONE] [P] [Dashboard] Create barrel export for orchestrator module
 **File**: `packages/generacy-extension/src/views/cloud/orchestrator/index.ts`
 - Re-export `OrchestratorSidebarViewProvider` from `sidebar-view.ts`
 - Re-export `OrchestratorDashboardPanel`, `showOrchestratorDashboard` from `panel.ts`
@@ -219,7 +219,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 
 ## Phase 4: Enhanced Queue Actions & Work Item Detail
 
-### T014 [Queue] Add SSE subscription to QueueTreeProvider
+### T014 [DONE] [Queue] Add SSE subscription to QueueTreeProvider
 **File**: `packages/generacy-extension/src/views/cloud/queue/provider.ts`
 - Import `SSESubscriptionManager` from `api/sse.ts`
 - In constructor, subscribe to `'queue'` channel
@@ -230,7 +230,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Add debouncing to tree refresh (coalesce rapid SSE events within 200ms)
 - Push SSE subscription disposable to `this.disposables`
 
-### T015 [Queue] Add assign and setPriority actions
+### T015 [DONE] [Queue] Add assign and setPriority actions
 **File**: `packages/generacy-extension/src/views/cloud/queue/actions.ts`
 - Implement `assignWorkItem(item, provider)`:
   - Fetch available agents via `agentsApi.getAgents({ status: 'idle' })`
@@ -246,7 +246,7 @@ Builds the shared infrastructure all subsequent phases depend on.
   - `generacy.queue.assign` → `assignWorkItem`
   - `generacy.queue.setPriority` → `setPriority`
 
-### T016 [Queue] Create WorkItemDetailPanel with singleton + pinning
+### T016 [DONE] [Queue] Create WorkItemDetailPanel with singleton + pinning
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - Create `WorkItemDetailPanel` class
 - Static `previewInstance` for singleton behavior
@@ -272,7 +272,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 
 ## Phase 5: Agent Log Streaming
 
-### T017 [Agents] Create AgentLogChannel for log viewing and streaming
+### T017 [DONE] [Agents] Create AgentLogChannel for log viewing and streaming
 **File**: `packages/generacy-extension/src/views/cloud/agents/log-channel.ts`
 - Create `AgentLogChannel` class implementing `vscode.Disposable`
 - Static map of active channels by agent ID (reuse existing channel for same agent)
@@ -292,7 +292,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 
 ## Phase 6: Notifications & Configuration
 
-### T018 [P] [Infra] Create notification manager
+### T018 [DONE] [P] [Infra] Create notification manager
 **File**: `packages/generacy-extension/src/utils/notifications.ts`
 - Create `NotificationManager` class implementing `vscode.Disposable`
 - Read notification level from config: `generacy.dashboard.notifications` (all/summary/none)
@@ -307,7 +307,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Listen for config changes to update behavior at runtime
 - Proper cleanup of timers and SSE subscription in `dispose()`
 
-### T019 [P] [Infra] Create capability checker for graceful degradation
+### T019 [DONE] [P] [Infra] Create capability checker for graceful degradation
 **File**: `packages/generacy-extension/src/utils/capabilities.ts`
 - Create `CapabilityChecker` class (singleton)
 - Maintain `Map<string, boolean>` of endpoint availability
@@ -320,7 +320,7 @@ Builds the shared infrastructure all subsequent phases depend on.
 - Set VS Code context keys `generacy.capability.<feature>` for `when` clause bindings
 - Export singleton getter `getCapabilityChecker()`
 
-### T020 [P] [Infra] Add configuration settings to package.json
+### T020 [DONE] [P] [Infra] Add configuration settings to package.json
 **File**: `packages/generacy-extension/package.json`
 - Add to `contributes.configuration.properties`:
   - `generacy.dashboard.pollInterval`: number, default 30000, min 5000, max 300000, description for polling interval
@@ -331,13 +331,13 @@ Builds the shared infrastructure all subsequent phases depend on.
 
 ## Phase 7: Package.json Contributions & Extension Wiring
 
-### T021 [Infra] Add view contributions to package.json
+### T021 [DONE] [Infra] Add view contributions to package.json
 **File**: `packages/generacy-extension/package.json`
 - Add to `contributes.views.generacy` array:
   - `{ "id": "generacy.agents", "name": "Agents", "contextualTitle": "Agent Pool", "when": "generacy.isAuthenticated" }`
   - `{ "id": "generacy.orchestratorSummary", "name": "Orchestrator", "type": "webview", "when": "generacy.isAuthenticated" }`
 
-### T022 [Infra] Add command contributions to package.json
+### T022 [DONE] [Infra] Add command contributions to package.json
 **File**: `packages/generacy-extension/package.json`
 - Add to `contributes.commands` array:
   - `generacy.openDashboard` — "Open Orchestration Dashboard", category "Generacy", icon `$(dashboard)`
@@ -349,7 +349,7 @@ Builds the shared infrastructure all subsequent phases depend on.
   - `generacy.queue.setPriority` — "Set Priority...", category "Generacy", icon `$(arrow-both)`
   - `generacy.queue.pinDetail` — "Pin Detail Panel", category "Generacy", icon `$(pin)`
 
-### T023 [Infra] Add menu contributions to package.json
+### T023 [DONE] [Infra] Add menu contributions to package.json
 **File**: `packages/generacy-extension/package.json`
 - Add to `contributes.menus`:
   - **view/title** for `generacy.agents`:
@@ -364,7 +364,7 @@ Builds the shared infrastructure all subsequent phases depend on.
     - `generacy.queue.assign`, `when: "viewItem =~ /^queueItem-pending/"`, group `inline`
     - `generacy.queue.setPriority`, `when: "viewItem =~ /^queueItem-/"`, group `2_priority`
 
-### T024 [Infra] Wire up all new components in extension.ts
+### T024 [DONE] [Infra] Wire up all new components in extension.ts
 **File**: `packages/generacy-extension/src/extension.ts`
 - Import SSESubscriptionManager, AgentTreeProvider factory, OrchestratorSidebarViewProvider, OrchestratorDashboardPanel, NotificationManager
 - In cloud initialization section (after existing auth setup):

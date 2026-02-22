@@ -5,9 +5,12 @@
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils/logger';
 import { queueApi } from '../../../api/endpoints/queue';
+import { agentsApi } from '../../../api/endpoints/agents';
 import { QueueItem, QueuePriority, QueueStatus } from '../../../api/types';
 import { QueueTreeItem, isQueueTreeItem } from './tree-item';
 import { QueueTreeProvider } from './provider';
+import { CLOUD_COMMANDS } from '../../../constants';
+import { WorkItemDetailPanel, registerDetailPanelCommands } from './detail-panel';
 
 /**
  * Priority levels in ascending order for adjustment
@@ -114,7 +117,6 @@ export async function increasePriority(
   item: QueueTreeItem | QueueItem,
   provider: QueueTreeProvider
 ): Promise<boolean> {
-  const logger = getLogger();
   const queueItem = 'queueItem' in item ? item.queueItem : item;
 
   // Only pending items can have priority changed
@@ -150,7 +152,6 @@ export async function decreasePriority(
   item: QueueTreeItem | QueueItem,
   provider: QueueTreeProvider
 ): Promise<boolean> {
-  const logger = getLogger();
   const queueItem = 'queueItem' in item ? item.queueItem : item;
 
   // Only pending items can have priority changed
@@ -209,9 +210,113 @@ async function updatePriority(
 }
 
 /**
- * Show detailed information about a queue item in a webview panel
+ * Assign a work item to an available agent via quick pick
  */
-export async function viewQueueItemDetails(item: QueueTreeItem | QueueItem): Promise<void> {
+export async function assignWorkItem(
+  item: QueueTreeItem | QueueItem,
+  provider: QueueTreeProvider
+): Promise<boolean> {
+  const logger = getLogger();
+  const queueItem = 'queueItem' in item ? item.queueItem : item;
+
+  // Only pending items can be assigned
+  if (queueItem.status !== 'pending') {
+    vscode.window.showWarningMessage(
+      `Cannot assign workflow "${queueItem.workflowName}" - status is ${queueItem.status}`
+    );
+    return false;
+  }
+
+  try {
+    // Fetch available (idle) agents
+    const agentResponse = await agentsApi.getAgents({ status: 'idle' });
+
+    if (agentResponse.items.length === 0) {
+      vscode.window.showWarningMessage('No available agents to assign. All agents are busy or offline.');
+      return false;
+    }
+
+    // Show quick pick with agent details
+    const selected = await vscode.window.showQuickPick(
+      agentResponse.items.map((agent) => ({
+        label: agent.name,
+        description: agent.type,
+        detail: agent.id,
+      })),
+      { placeHolder: 'Select an agent to assign this work item to' }
+    );
+
+    if (!selected) {
+      logger.debug('Assign action cancelled by user');
+      return false;
+    }
+
+    logger.info(`Assigning queue item ${queueItem.id} to agent ${selected.detail}`);
+    await agentsApi.assignWorkItem(queueItem.id, selected.detail!);
+
+    vscode.window.showInformationMessage(
+      `"${queueItem.workflowName}" assigned to ${selected.label}`
+    );
+
+    provider.refresh();
+    return true;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`Failed to assign queue item: ${queueItem.id}`, error);
+    vscode.window.showErrorMessage(`Failed to assign work item: ${errorMessage}`);
+    return false;
+  }
+}
+
+/**
+ * Set queue item priority via quick pick with all priority levels
+ */
+export async function setPriority(
+  item: QueueTreeItem | QueueItem,
+  provider: QueueTreeProvider
+): Promise<boolean> {
+  const logger = getLogger();
+  const queueItem = 'queueItem' in item ? item.queueItem : item;
+
+  // Only pending items can have priority changed
+  if (queueItem.status !== 'pending') {
+    vscode.window.showWarningMessage(
+      `Cannot change priority - workflow "${queueItem.workflowName}" is ${queueItem.status}`
+    );
+    return false;
+  }
+
+  const priorities: QueuePriority[] = ['low', 'normal', 'high', 'urgent'];
+
+  const selected = await vscode.window.showQuickPick(
+    priorities.map((p) => ({
+      label: p.charAt(0).toUpperCase() + p.slice(1),
+      description: p === queueItem.priority ? '(current)' : undefined,
+      value: p,
+    })),
+    { placeHolder: 'Set priority level' }
+  );
+
+  if (!selected) {
+    logger.debug('Set priority action cancelled by user');
+    return false;
+  }
+
+  if (selected.value === queueItem.priority) {
+    return false;
+  }
+
+  return updatePriority(queueItem, selected.value, provider);
+}
+
+/**
+ * Show detailed information about a queue item in a webview panel.
+ * Delegates to WorkItemDetailPanel which supports singleton preview and pinning.
+ */
+export async function viewQueueItemDetails(
+  item: QueueTreeItem | QueueItem,
+  extensionUri: vscode.Uri
+): Promise<void> {
   const logger = getLogger();
   const queueItem = 'queueItem' in item ? item.queueItem : item;
 
@@ -227,235 +332,7 @@ export async function viewQueueItemDetails(item: QueueTreeItem | QueueItem): Pro
     freshItem = queueItem;
   }
 
-  // Create and show a webview panel with the details
-  const panel = vscode.window.createWebviewPanel(
-    'generacy.queueItemDetails',
-    `Queue: ${freshItem.workflowName}`,
-    vscode.ViewColumn.One,
-    {
-      enableScripts: false,
-      localResourceRoots: [],
-    }
-  );
-
-  panel.webview.html = generateDetailsHtml(freshItem);
-}
-
-/**
- * Generate HTML content for the queue item details panel
- */
-function generateDetailsHtml(item: QueueItem): string {
-  const statusColors: Record<QueueStatus, string> = {
-    pending: '#f0ad4e',
-    running: '#5bc0de',
-    completed: '#5cb85c',
-    failed: '#d9534f',
-    cancelled: '#777',
-  };
-
-  const priorityColors: Record<QueuePriority, string> = {
-    low: '#777',
-    normal: '#5bc0de',
-    high: '#f0ad4e',
-    urgent: '#d9534f',
-  };
-
-  const formatDateTime = (dateStr: string | undefined): string => {
-    if (!dateStr) return 'N/A';
-    return new Date(dateStr).toLocaleString();
-  };
-
-  const calculateDuration = (
-    startStr: string | undefined,
-    endStr: string | undefined
-  ): string => {
-    if (!startStr) return 'N/A';
-    const start = new Date(startStr);
-    const end = endStr ? new Date(endStr) : new Date();
-    const diffMs = end.getTime() - start.getTime();
-    const diffSec = Math.floor(diffMs / 1000);
-
-    if (diffSec < 60) {
-      return `${diffSec} second${diffSec !== 1 ? 's' : ''}`;
-    }
-    const diffMin = Math.floor(diffSec / 60);
-    if (diffMin < 60) {
-      return `${diffMin} minute${diffMin !== 1 ? 's' : ''} ${diffSec % 60}s`;
-    }
-    const diffHour = Math.floor(diffMin / 60);
-    return `${diffHour} hour${diffHour !== 1 ? 's' : ''} ${diffMin % 60}m`;
-  };
-
-  const statusColor = statusColors[item.status];
-  const priorityColor = priorityColors[item.priority];
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Queue Item Details</title>
-  <style>
-    body {
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      color: var(--vscode-foreground);
-      background-color: var(--vscode-editor-background);
-      padding: 20px;
-      line-height: 1.6;
-    }
-    h1 {
-      border-bottom: 1px solid var(--vscode-panel-border);
-      padding-bottom: 10px;
-      margin-bottom: 20px;
-    }
-    .section {
-      margin-bottom: 24px;
-    }
-    .section-title {
-      font-weight: 600;
-      font-size: 1.1em;
-      margin-bottom: 12px;
-      color: var(--vscode-textLink-foreground);
-    }
-    .field {
-      display: flex;
-      margin-bottom: 8px;
-    }
-    .field-label {
-      font-weight: 500;
-      min-width: 140px;
-      color: var(--vscode-descriptionForeground);
-    }
-    .field-value {
-      flex: 1;
-    }
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-weight: 500;
-      text-transform: uppercase;
-      font-size: 0.85em;
-    }
-    .error-section {
-      background-color: var(--vscode-inputValidation-errorBackground);
-      border: 1px solid var(--vscode-inputValidation-errorBorder);
-      border-radius: 4px;
-      padding: 12px;
-      margin-top: 16px;
-    }
-    .error-title {
-      color: var(--vscode-inputValidation-errorForeground);
-      font-weight: 600;
-      margin-bottom: 8px;
-    }
-    .error-message {
-      font-family: var(--vscode-editor-font-family);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    code {
-      font-family: var(--vscode-editor-font-family);
-      background-color: var(--vscode-textCodeBlock-background);
-      padding: 2px 6px;
-      border-radius: 3px;
-    }
-  </style>
-</head>
-<body>
-  <h1>${escapeHtml(item.workflowName)}</h1>
-
-  <div class="section">
-    <div class="section-title">Status</div>
-    <div class="field">
-      <span class="field-label">Current Status</span>
-      <span class="field-value">
-        <span class="badge" style="background-color: ${statusColor}; color: white;">
-          ${item.status.toUpperCase()}
-        </span>
-      </span>
-    </div>
-    <div class="field">
-      <span class="field-label">Priority</span>
-      <span class="field-value">
-        <span class="badge" style="background-color: ${priorityColor}; color: white;">
-          ${item.priority.toUpperCase()}
-        </span>
-      </span>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Workflow Details</div>
-    <div class="field">
-      <span class="field-label">Workflow ID</span>
-      <span class="field-value"><code>${escapeHtml(item.workflowId)}</code></span>
-    </div>
-    <div class="field">
-      <span class="field-label">Queue Item ID</span>
-      <span class="field-value"><code>${escapeHtml(item.id)}</code></span>
-    </div>
-    ${
-      item.repository
-        ? `<div class="field">
-      <span class="field-label">Repository</span>
-      <span class="field-value"><code>${escapeHtml(item.repository)}</code></span>
-    </div>`
-        : ''
-    }
-    ${
-      item.assigneeId
-        ? `<div class="field">
-      <span class="field-label">Assignee</span>
-      <span class="field-value">${escapeHtml(item.assigneeId)}</span>
-    </div>`
-        : ''
-    }
-  </div>
-
-  <div class="section">
-    <div class="section-title">Timeline</div>
-    <div class="field">
-      <span class="field-label">Queued At</span>
-      <span class="field-value">${formatDateTime(item.queuedAt)}</span>
-    </div>
-    <div class="field">
-      <span class="field-label">Started At</span>
-      <span class="field-value">${formatDateTime(item.startedAt)}</span>
-    </div>
-    <div class="field">
-      <span class="field-label">Completed At</span>
-      <span class="field-value">${formatDateTime(item.completedAt)}</span>
-    </div>
-    <div class="field">
-      <span class="field-label">Duration</span>
-      <span class="field-value">${calculateDuration(item.startedAt, item.completedAt)}</span>
-    </div>
-  </div>
-
-  ${
-    item.error
-      ? `<div class="error-section">
-    <div class="error-title">Error Details</div>
-    <div class="error-message">${escapeHtml(item.error)}</div>
-  </div>`
-      : ''
-  }
-</body>
-</html>`;
-}
-
-/**
- * Escape HTML special characters
- */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
+  WorkItemDetailPanel.showPreview(freshItem, extensionUri);
 }
 
 /**
@@ -533,7 +410,38 @@ export function registerQueueActions(
           vscode.window.showWarningMessage('Please select a queue item to view');
           return;
         }
-        await viewQueueItemDetails(item);
+        await viewQueueItemDetails(item, context.extensionUri);
+      }
+    )
+  );
+
+  // Register detail panel commands (pin, etc.)
+  registerDetailPanelCommands(context);
+
+  // Assign to agent action
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      CLOUD_COMMANDS.assignWorkItem,
+      async (item?: QueueTreeItem) => {
+        if (!item || !isQueueTreeItem(item)) {
+          vscode.window.showWarningMessage('Please select a queue item to assign');
+          return;
+        }
+        await assignWorkItem(item, provider);
+      }
+    )
+  );
+
+  // Set priority action
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      CLOUD_COMMANDS.setPriority,
+      async (item?: QueueTreeItem) => {
+        if (!item || !isQueueTreeItem(item)) {
+          vscode.window.showWarningMessage('Please select a queue item');
+          return;
+        }
+        await setPriority(item, provider);
       }
     )
   );
