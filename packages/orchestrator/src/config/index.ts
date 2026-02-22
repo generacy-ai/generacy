@@ -24,6 +24,8 @@ export {
   type MonitorConfig,
   PrMonitorConfigSchema,
   type PrMonitorConfig,
+  EpicMonitorConfigSchema,
+  type EpicMonitorConfig,
   DispatchConfigSchema,
   type DispatchConfig,
   WorkerConfigSchema,

@@ -40,3 +40,8 @@ export {
 export { RedisQueueAdapter } from './redis-queue-adapter.js';
 
 export { WorkerDispatcher } from './worker-dispatcher.js';
+
+export {
+  EpicCompletionMonitorService,
+  type EpicMonitorConfig,
+} from './epic-completion-monitor-service.js';

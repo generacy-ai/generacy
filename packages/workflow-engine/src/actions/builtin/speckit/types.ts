@@ -16,7 +16,8 @@ export type SpecKitOperation =
   | 'clarify'
   | 'plan'
   | 'tasks'
-  | 'implement';
+  | 'implement'
+  | 'tasks_to_issues';
 
 /**
  * Available template names for copy_template operation

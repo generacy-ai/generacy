@@ -37,6 +37,7 @@ import type {
   ImplementInput,
   ImplementOutput,
 } from './types.js';
+import type { TasksToIssuesInput } from '../../../types/index.js';
 
 // Import operation handlers
 import { executeCreateFeature } from './operations/create-feature.js';
@@ -48,6 +49,7 @@ import { executeClarify } from './operations/clarify.js';
 import { executePlan } from './operations/plan.js';
 import { executeTasks } from './operations/tasks.js';
 import { executeImplement } from './operations/implement.js';
+import { executeTasksToIssues } from './operations/tasks-to-issues.js';
 
 /** Valid speckit operations */
 const VALID_OPERATIONS: Set<SpecKitOperation> = new Set([
@@ -60,6 +62,7 @@ const VALID_OPERATIONS: Set<SpecKitOperation> = new Set([
   'plan',
   'tasks',
   'implement',
+  'tasks_to_issues',
 ]);
 
 /**
@@ -164,6 +167,33 @@ export class SpecKitAction extends BaseAction {
         }
         break;
       }
+      case 'tasks_to_issues': {
+        const featureDir = step.with?.['feature_dir'];
+        if (!featureDir) {
+          errors.push({
+            field: 'feature_dir',
+            message: 'feature_dir is required for tasks_to_issues operation',
+            code: 'MISSING_FEATURE_DIR',
+          });
+        }
+        const epicIssueNumber = step.with?.['epic_issue_number'];
+        if (epicIssueNumber == null) {
+          errors.push({
+            field: 'epic_issue_number',
+            message: 'epic_issue_number is required for tasks_to_issues operation',
+            code: 'MISSING_EPIC_ISSUE_NUMBER',
+          });
+        }
+        const epicBranch = step.with?.['epic_branch'];
+        if (!epicBranch) {
+          errors.push({
+            field: 'epic_branch',
+            message: 'epic_branch is required for tasks_to_issues operation',
+            code: 'MISSING_EPIC_BRANCH',
+          });
+        }
+        break;
+      }
       // get_paths and check_prereqs have optional inputs
     }
 
@@ -209,6 +239,8 @@ export class SpecKitAction extends BaseAction {
           return await this.handleTasks(step, context);
         case 'implement':
           return await this.handleImplement(step, context);
+        case 'tasks_to_issues':
+          return await this.handleTasksToIssues(step, context);
         default:
           return this.failureResult(`Unhandled speckit operation: ${operation}`);
       }
@@ -400,6 +432,31 @@ export class SpecKitAction extends BaseAction {
       });
     }
     return this.failureResult('implement operation failed', { output: result });
+  }
+
+  // --- Epic Operation Handlers ---
+
+  private async handleTasksToIssues(
+    step: StepDefinition,
+    context: ActionContext
+  ): Promise<Omit<ActionResult, 'duration'>> {
+    const input: TasksToIssuesInput = {
+      feature_dir: this.getRequiredInput<string>(step, context, 'feature_dir'),
+      epic_issue_number: this.getRequiredInput<number>(step, context, 'epic_issue_number'),
+      epic_branch: this.getRequiredInput<string>(step, context, 'epic_branch'),
+      trigger_label: this.getInput<string>(step, context, 'trigger_label'),
+    };
+
+    const result = await executeTasksToIssues(input, context);
+
+    if (result.failed_tasks.length > 0 && result.created_issues.length === 0) {
+      return this.failureResult(
+        `tasks_to_issues failed: all ${result.failed_tasks.length} tasks failed to create issues`,
+        { output: result }
+      );
+    }
+
+    return this.successResult(result);
   }
 }
 

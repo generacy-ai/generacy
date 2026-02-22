@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PhaseResolver, GATE_MAPPING } from '../phase-resolver.js';
+import { PhaseResolver, GATE_MAPPING, WORKFLOW_GATE_MAPPING } from '../phase-resolver.js';
 
 describe('PhaseResolver', () => {
   const resolver = new PhaseResolver();
@@ -183,6 +183,152 @@ describe('PhaseResolver', () => {
           'continue',
         ),
       ).toBe('validate');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Workflow-aware resolution (T006)
+  // -------------------------------------------------------------------------
+  describe('workflow-aware resolution (speckit-epic)', () => {
+    describe('process command with workflowName', () => {
+      it('uses epic phase sequence (stops at tasks) when all phases completed', () => {
+        // Epic sequence is [specify, clarify, plan, tasks] — when all are completed,
+        // terminal phase should be 'tasks' (not 'validate' like the default)
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:specify', 'completed:clarify', 'completed:plan', 'completed:tasks'],
+            'process',
+            'speckit-epic',
+          ),
+        ).toBe('tasks');
+      });
+
+      it('resolves next uncompleted phase within epic sequence', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:specify', 'completed:clarify'],
+            'process',
+            'speckit-epic',
+          ),
+        ).toBe('plan');
+      });
+
+      it('ignores phase:implement label for epic workflow (not in sequence)', () => {
+        // 'implement' is not in the epic sequence, so this label should be ignored
+        expect(
+          resolver.resolveStartPhase(
+            ['phase:implement'],
+            'process',
+            'speckit-epic',
+          ),
+        ).toBe('specify');
+      });
+
+      it('accepts phase:tasks label for epic workflow', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['phase:tasks'],
+            'process',
+            'speckit-epic',
+          ),
+        ).toBe('tasks');
+      });
+    });
+
+    describe('continue command with workflowName', () => {
+      it('resolves tasks-review to tasks (not implement) for speckit-epic', () => {
+        // Global GATE_MAPPING: tasks-review → resumeFrom: implement
+        // Epic WORKFLOW_GATE_MAPPING: tasks-review → resumeFrom: tasks
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:tasks-review'],
+            'continue',
+            'speckit-epic',
+          ),
+        ).toBe('tasks');
+      });
+
+      it('resolves children-complete gate for speckit-epic', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:children-complete'],
+            'continue',
+            'speckit-epic',
+          ),
+        ).toBe('tasks');
+      });
+
+      it('resolves epic-approval gate for speckit-epic', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:epic-approval'],
+            'continue',
+            'speckit-epic',
+          ),
+        ).toBe('tasks');
+      });
+
+      it('still resolves global gates (clarification) for speckit-epic', () => {
+        // clarification is not overridden by WORKFLOW_GATE_MAPPING, so global mapping applies
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:clarification'],
+            'continue',
+            'speckit-epic',
+          ),
+        ).toBe('plan');
+      });
+    });
+
+    describe('fallback to global GATE_MAPPING for non-epic workflows', () => {
+      it('resolves tasks-review to implement for speckit-feature (global mapping)', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:tasks-review'],
+            'continue',
+            'speckit-feature',
+          ),
+        ).toBe('implement');
+      });
+
+      it('resolves tasks-review to implement with no workflowName (global mapping)', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:tasks-review'],
+            'continue',
+          ),
+        ).toBe('implement');
+      });
+
+      it('uses global GATE_MAPPING for unknown workflow names', () => {
+        expect(
+          resolver.resolveStartPhase(
+            ['completed:plan-review'],
+            'continue',
+            'unknown-workflow',
+          ),
+        ).toBe('tasks');
+      });
+    });
+  });
+
+  describe('WORKFLOW_GATE_MAPPING', () => {
+    it('contains speckit-epic overrides', () => {
+      expect(WORKFLOW_GATE_MAPPING).toHaveProperty('speckit-epic');
+    });
+
+    it('speckit-epic overrides tasks-review, children-complete, and epic-approval', () => {
+      const epicGates = WORKFLOW_GATE_MAPPING['speckit-epic']!;
+      expect(Object.keys(epicGates)).toEqual(
+        expect.arrayContaining(['tasks-review', 'children-complete', 'epic-approval']),
+      );
+    });
+
+    it('epic gates all map resumeFrom to tasks', () => {
+      const epicGates = WORKFLOW_GATE_MAPPING['speckit-epic']!;
+      for (const [, mapping] of Object.entries(epicGates)) {
+        expect(mapping.resumeFrom).toBe('tasks');
+      }
     });
   });
 });
