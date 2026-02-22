@@ -1,20 +1,19 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { EpicPostTasks } from '../epic-post-tasks.js';
-import type { EpicPostTasksResult } from '../epic-post-tasks.js';
 import type { WorkerContext, Logger } from '../types.js';
-import type { TasksToIssuesOutput } from '@generacy-ai/workflow-engine';
+import type { TasksToIssuesOutput, ActionContext } from '@generacy-ai/workflow-engine';
 
 // ---------------------------------------------------------------------------
 // Mock executeTasksToIssues from workflow-engine
 // ---------------------------------------------------------------------------
-const mockExecuteTasksToIssues = vi.fn<[], Promise<TasksToIssuesOutput>>();
+const mockExecuteTasksToIssues = vi.fn<(...args: unknown[]) => Promise<TasksToIssuesOutput>>();
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
-  executeTasksToIssues: (...args: unknown[]) => mockExecuteTasksToIssues(...(args as [])),
+  executeTasksToIssues: (...args: unknown[]) => mockExecuteTasksToIssues(...args),
 }));
 
 // Mock readdirSync for resolveFeatureDir
-const mockReaddirSync = vi.fn<[string], string[]>();
+const mockReaddirSync = vi.fn<(path: string) => string[]>();
 
 vi.mock('node:fs', () => ({
   readdirSync: (path: string) => mockReaddirSync(path),
@@ -88,6 +87,22 @@ function createTasksOutput(overrides: Partial<TasksToIssuesOutput> = {}): TasksT
   };
 }
 
+/** Type-safe accessor for mockExecuteTasksToIssues call args */
+interface TasksToIssuesCallInput {
+  feature_dir: string;
+  epic_issue_number: number;
+  epic_branch: string;
+  trigger_label: string;
+}
+
+function getTasksToIssuesCallArgs(callIndex = 0) {
+  const args = mockExecuteTasksToIssues.mock.calls[callIndex]!;
+  return {
+    input: args[0] as TasksToIssuesCallInput,
+    actionContext: args[1] as ActionContext,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -111,7 +126,7 @@ describe('EpicPostTasks', () => {
   describe('post-tasks orchestration', () => {
     it('executes all four steps in order: create issues → dispatch → summary → label', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       const result = await epicPostTasks.execute(context);
@@ -121,7 +136,7 @@ describe('EpicPostTasks', () => {
 
       // Step 1: executeTasksToIssues was called
       expect(mockExecuteTasksToIssues).toHaveBeenCalledTimes(1);
-      const [input, actionContext] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input, actionContext } = getTasksToIssuesCallArgs();
       expect(input).toEqual(expect.objectContaining({
         feature_dir: '/tmp/test-checkout/specs/42-epic-feature',
         epic_issue_number: 42,
@@ -193,7 +208,7 @@ describe('EpicPostTasks', () => {
       }));
 
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
@@ -216,7 +231,7 @@ describe('EpicPostTasks', () => {
       }));
 
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       const result = await epicPostTasks.execute(context);
@@ -251,7 +266,7 @@ describe('EpicPostTasks', () => {
       }));
 
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
@@ -275,7 +290,7 @@ describe('EpicPostTasks', () => {
       }));
 
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
@@ -335,7 +350,7 @@ describe('EpicPostTasks', () => {
 
     it('continues when dispatch fails for some children', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       // First child dispatch fails, rest succeed
@@ -358,7 +373,7 @@ describe('EpicPostTasks', () => {
 
     it('continues when summary comment posting fails', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       github.addIssueComment.mockRejectedValue(new Error('Comment API error'));
@@ -375,7 +390,7 @@ describe('EpicPostTasks', () => {
 
     it('returns failure when adding waiting-for:children-complete label fails', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       // Make addLabels fail ONLY for waiting-for:children-complete
@@ -420,7 +435,7 @@ describe('EpicPostTasks', () => {
 
     it('handles dispatch throwing an error for the entire batch', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       // All dispatch calls fail
@@ -440,7 +455,7 @@ describe('EpicPostTasks', () => {
   describe('waiting-for:children-complete label', () => {
     it('adds waiting-for:children-complete label to the epic issue', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
@@ -452,7 +467,7 @@ describe('EpicPostTasks', () => {
 
     it('adds waiting-for:children-complete AFTER dispatch and summary steps', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
@@ -505,7 +520,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [input] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input } = getTasksToIssuesCallArgs();
       expect(input.feature_dir).toBe('/tmp/test-checkout/specs/42-epic-feature');
     });
 
@@ -517,7 +532,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [input] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input } = getTasksToIssuesCallArgs();
       expect(input.feature_dir).toBe('/tmp/test-checkout/specs/42');
     });
 
@@ -529,7 +544,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [input] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input } = getTasksToIssuesCallArgs();
       expect(input.feature_dir).toBe('/tmp/test-checkout/specs/42');
     });
   });
@@ -540,19 +555,19 @@ describe('EpicPostTasks', () => {
   describe('epic branch resolution', () => {
     it('resolves epic branch from getCurrentBranch', async () => {
       const context = createWorkerContext();
-      (context.github as ReturnType<typeof createMockGithub>).getCurrentBranch.mockResolvedValue('42-my-epic');
+      (context.github as unknown as ReturnType<typeof createMockGithub>).getCurrentBranch.mockResolvedValue('42-my-epic');
 
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
 
-      const [input] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input } = getTasksToIssuesCallArgs();
       expect(input.epic_branch).toBe('42-my-epic');
     });
 
     it('falls back to branch listing when getCurrentBranch fails', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       github.getCurrentBranch.mockRejectedValue(new Error('not in git'));
       github.listBranches.mockResolvedValue(['42-epic-branch', 'develop', 'main']);
 
@@ -560,13 +575,13 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [input] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input } = getTasksToIssuesCallArgs();
       expect(input.epic_branch).toBe('42-epic-branch');
     });
 
     it('falls back to constructed branch name as last resort', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       github.getCurrentBranch.mockRejectedValue(new Error('not in git'));
       github.listBranches.mockResolvedValue(['develop', 'main']); // No matching branch
 
@@ -574,7 +589,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [input] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { input } = getTasksToIssuesCallArgs();
       expect(input.epic_branch).toBe('42-epic');
     });
   });
@@ -589,7 +604,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [, actionContext] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { actionContext } = getTasksToIssuesCallArgs();
       expect(actionContext.workdir).toBe('/custom/path');
     });
 
@@ -600,7 +615,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [, actionContext] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { actionContext } = getTasksToIssuesCallArgs();
       expect(actionContext.signal).toBe(abortController.signal);
     });
 
@@ -610,7 +625,7 @@ describe('EpicPostTasks', () => {
 
       await epicPostTasks.execute(context);
 
-      const [, actionContext] = mockExecuteTasksToIssues.mock.calls[0]!;
+      const { actionContext } = getTasksToIssuesCallArgs();
       expect(actionContext.logger).toBeDefined();
       expect(typeof actionContext.logger.info).toBe('function');
       expect(typeof actionContext.logger.error).toBe('function');
@@ -627,7 +642,7 @@ describe('EpicPostTasks', () => {
 
       try {
         const context = createWorkerContext();
-        const github = context.github as ReturnType<typeof createMockGithub>;
+        const github = context.github as unknown as ReturnType<typeof createMockGithub>;
         const epicPostTasks = new EpicPostTasks(logger);
 
         await epicPostTasks.execute(context);
@@ -651,7 +666,7 @@ describe('EpicPostTasks', () => {
 
       try {
         const context = createWorkerContext();
-        const github = context.github as ReturnType<typeof createMockGithub>;
+        const github = context.github as unknown as ReturnType<typeof createMockGithub>;
         const epicPostTasks = new EpicPostTasks(logger);
 
         await epicPostTasks.execute(context);
@@ -750,7 +765,7 @@ describe('EpicPostTasks', () => {
       }));
 
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       const result = await epicPostTasks.execute(context);
@@ -771,7 +786,7 @@ describe('EpicPostTasks', () => {
 
     it('correctly handles addLabels for agent:dispatched on each child', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       await epicPostTasks.execute(context);
@@ -785,7 +800,7 @@ describe('EpicPostTasks', () => {
 
     it('handles dispatch warning when individual child fails', async () => {
       const context = createWorkerContext();
-      const github = context.github as ReturnType<typeof createMockGithub>;
+      const github = context.github as unknown as ReturnType<typeof createMockGithub>;
       const epicPostTasks = new EpicPostTasks(logger);
 
       // Second child dispatch fails

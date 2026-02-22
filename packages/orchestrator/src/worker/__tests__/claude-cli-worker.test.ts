@@ -1462,7 +1462,7 @@ describe('ClaudeCliWorker (integration)', () => {
       expect(mockEpicPostTasksInstance.execute).toHaveBeenCalledTimes(1);
 
       // Should have been called with a WorkerContext
-      const callArg = mockEpicPostTasksInstance.execute.mock.calls[0][0];
+      const callArg = mockEpicPostTasksInstance.execute.mock.calls[0]![0];
       expect(callArg).toHaveProperty('item');
       expect(callArg).toHaveProperty('github');
       expect(callArg).toHaveProperty('checkoutPath');
