@@ -55,12 +55,17 @@ export class PhaseLoop {
 
   /**
    * Execute the phase loop from the starting phase through to completion.
+   *
+   * @param phaseSequence - Optional workflow-specific phase sequence.
+   *   Defaults to the global PHASE_SEQUENCE for backward compatibility.
    */
   async executeLoop(
     context: WorkerContext,
     config: WorkerConfig,
     deps: PhaseLoopDeps,
+    phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
+    const sequence = phaseSequence ?? PHASE_SEQUENCE;
     const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager } = deps;
     const results: PhaseResult[] = [];
 
@@ -70,19 +75,19 @@ export class PhaseLoop {
     // carrying forward accumulated context).
     let currentSessionId: string | undefined;
 
-    // Find the starting index in PHASE_SEQUENCE
-    const startIndex = PHASE_SEQUENCE.indexOf(context.startPhase);
+    // Find the starting index in the phase sequence
+    const startIndex = sequence.indexOf(context.startPhase);
     if (startIndex === -1) {
       throw new Error(`Unknown starting phase: ${context.startPhase}`);
     }
 
     this.logger.info(
-      { startPhase: context.startPhase, startIndex, totalPhases: PHASE_SEQUENCE.length },
+      { startPhase: context.startPhase, startIndex, totalPhases: sequence.length },
       'Starting phase loop',
     );
 
-    for (let i = startIndex; i < PHASE_SEQUENCE.length; i++) {
-      const phase = PHASE_SEQUENCE[i]!;
+    for (let i = startIndex; i < sequence.length; i++) {
+      const phase = sequence[i]!;
 
       // Check abort signal before starting each phase
       if (context.signal.aborted) {
@@ -100,7 +105,7 @@ export class PhaseLoop {
       await stageCommentManager.updateStageComment({
         stage,
         status: 'in_progress',
-        phases: this.buildPhaseProgress(startIndex, i),
+        phases: this.buildPhaseProgress(sequence, startIndex, i),
         startedAt: new Date().toISOString(),
       });
 
@@ -140,7 +145,7 @@ export class PhaseLoop {
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
-          phases: this.buildPhaseProgress(startIndex, i, 'error'),
+          phases: this.buildPhaseProgress(sequence, startIndex, i, 'error'),
           startedAt: new Date().toISOString(),
         });
         throw error;
@@ -166,7 +171,7 @@ export class PhaseLoop {
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
-          phases: this.buildPhaseProgress(startIndex, i, 'error'),
+          phases: this.buildPhaseProgress(sequence, startIndex, i, 'error'),
           startedAt: new Date().toISOString(),
         });
         return { results, completed: false, lastPhase: phase, gateHit: false };
@@ -200,7 +205,7 @@ export class PhaseLoop {
         await stageCommentManager.updateStageComment({
           stage,
           status: 'in_progress',
-          phases: this.buildPhaseProgress(startIndex, i, 'complete'),
+          phases: this.buildPhaseProgress(sequence, startIndex, i, 'complete'),
           startedAt: new Date().toISOString(),
           prUrl: context.prUrl,
         });
@@ -210,12 +215,12 @@ export class PhaseLoop {
 
       // 7. Update stage comment showing phase complete
       const isLastPhaseInStage =
-        i + 1 >= PHASE_SEQUENCE.length || PHASE_TO_STAGE[PHASE_SEQUENCE[i + 1]!] !== stage;
+        i + 1 >= sequence.length || PHASE_TO_STAGE[sequence[i + 1]!] !== stage;
 
       await stageCommentManager.updateStageComment({
         stage,
         status: isLastPhaseInStage ? 'complete' : 'in_progress',
-        phases: this.buildPhaseProgress(startIndex, i, 'complete'),
+        phases: this.buildPhaseProgress(sequence, startIndex, i, 'complete'),
         startedAt: new Date().toISOString(),
         ...(isLastPhaseInStage ? { completedAt: new Date().toISOString() } : {}),
         prUrl: context.prUrl,
@@ -229,7 +234,7 @@ export class PhaseLoop {
     return {
       results,
       completed: true,
-      lastPhase: PHASE_SEQUENCE[PHASE_SEQUENCE.length - 1]!,
+      lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
     };
   }
@@ -238,12 +243,13 @@ export class PhaseLoop {
    * Build a phase progress array for stage comment updates.
    */
   private buildPhaseProgress(
+    sequence: WorkflowPhase[],
     startIndex: number,
     currentIndex: number,
     currentStatus: 'in_progress' | 'complete' | 'error' = 'in_progress',
   ): { phase: WorkflowPhase; status: 'pending' | 'in_progress' | 'complete' | 'error'; startedAt?: string; completedAt?: string }[] {
     const now = new Date().toISOString();
-    return PHASE_SEQUENCE.map((phase, idx) => {
+    return sequence.map((phase, idx) => {
       if (idx < startIndex) {
         // Before the start — already complete from a prior run
         return { phase, status: 'complete' as const, completedAt: now };

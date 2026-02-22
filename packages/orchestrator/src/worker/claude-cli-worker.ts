@@ -4,6 +4,7 @@ import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger } from './types.js';
+import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
 import { LabelManager } from './label-manager.js';
@@ -16,6 +17,7 @@ import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
+import { EpicPostTasks } from './epic-post-tasks.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -187,7 +189,7 @@ export class ClaudeCliWorker {
       );
 
       // 4. Resolve starting phase (for process/continue commands)
-      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command as 'process' | 'continue');
+      const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command as 'process' | 'continue', item.workflowName);
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
 
       // 5. If resuming (has completed phases), find and checkout the feature branch
@@ -257,7 +259,41 @@ export class ClaudeCliWorker {
         await labelManager.onResumeStart();
       }
 
+      // 7c. Handle tasks-review gate resume for epics (T015)
+      // When an epic resumes after tasks-review approval, run post-tasks directly
+      // instead of re-entering the phase loop. The phase loop already completed
+      // (specify → clarify → plan → tasks); we just need to create child issues.
+      if (item.workflowName === 'speckit-epic' && item.command === 'continue') {
+        if (labels.includes('completed:tasks-review')) {
+          workerLogger.info('Epic tasks-review gate satisfied — running post-tasks directly');
+          const epicPostTasks = new EpicPostTasks(workerLogger);
+          const postTasksResult = await epicPostTasks.execute(context);
+
+          if (postTasksResult.success) {
+            workerLogger.info(
+              { childIssues: postTasksResult.childIssues.length },
+              'Epic post-tasks complete after tasks-review resume',
+            );
+          } else {
+            workerLogger.error('Epic post-tasks failed after tasks-review resume');
+          }
+
+          this.sseEmitter?.({
+            type: 'workflow:completed',
+            workflowId,
+            data: {
+              command: item.command,
+              lastPhase: 'tasks',
+              totalPhases: 4,
+            },
+          });
+
+          return;
+        }
+      }
+
       // 8. Execute the phase loop
+      const phaseSequence = getPhaseSequence(item.workflowName);
       const phaseLoop = new PhaseLoop(workerLogger);
       const loopResult = await phaseLoop.executeLoop(context, this.config, {
         labelManager,
@@ -266,25 +302,53 @@ export class ClaudeCliWorker {
         cliSpawner,
         outputCapture,
         prManager,
-      });
+      }, phaseSequence);
 
       // 9. Handle completion
       if (loopResult.completed) {
         phasesCompleted = true;
-        await labelManager.onWorkflowComplete();
-        workerLogger.info('Marking PR as ready for review');
-        await prManager.markReadyForReview();
-        workerLogger.info('Workflow completed successfully — all phases done');
 
-        this.sseEmitter?.({
-          type: 'workflow:completed',
-          workflowId,
-          data: {
-            command: item.command,
-            lastPhase: loopResult.lastPhase,
-            totalPhases: loopResult.results.length,
-          },
-        });
+        if (item.workflowName === 'speckit-epic') {
+          // Epic workflows: create child issues and pause (do NOT complete workflow or mark PR ready)
+          workerLogger.info('Epic phase loop complete — running post-tasks');
+          const epicPostTasks = new EpicPostTasks(workerLogger);
+          const postTasksResult = await epicPostTasks.execute(context);
+
+          if (postTasksResult.success) {
+            workerLogger.info(
+              { childIssues: postTasksResult.childIssues.length },
+              'Epic post-tasks complete — epic is now waiting for children',
+            );
+          } else {
+            workerLogger.error('Epic post-tasks failed — epic may need manual intervention');
+          }
+
+          this.sseEmitter?.({
+            type: 'workflow:completed',
+            workflowId,
+            data: {
+              command: item.command,
+              lastPhase: loopResult.lastPhase,
+              totalPhases: loopResult.results.length,
+            },
+          });
+        } else {
+          // Non-epic workflows: standard completion flow
+          await labelManager.onWorkflowComplete();
+          workerLogger.info('Marking PR as ready for review');
+          await prManager.markReadyForReview();
+          workerLogger.info('Workflow completed successfully — all phases done');
+
+          this.sseEmitter?.({
+            type: 'workflow:completed',
+            workflowId,
+            data: {
+              command: item.command,
+              lastPhase: loopResult.lastPhase,
+              totalPhases: loopResult.results.length,
+            },
+          });
+        }
       } else if (loopResult.gateHit) {
         gateHit = true;
         workerLogger.info(

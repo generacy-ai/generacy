@@ -37,6 +37,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:pr-feedback', color: 'FBCA04', description: 'Waiting to address PR feedback' },
   { name: 'waiting-for:address-pr-feedback', color: 'FBCA04', description: 'Agent is addressing PR review feedback' },
   { name: 'waiting-for:children-complete', color: 'FBCA04', description: 'Waiting for child issues to complete' },
+  { name: 'waiting-for:epic-approval', color: 'FBCA04', description: 'Epic rollup PR awaiting approval' },
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
 
   // Completed labels
@@ -54,6 +55,8 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:tasks', color: '0E8A16', description: 'Task generation completed' },
   { name: 'completed:implement', color: '0E8A16', description: 'Implementation completed' },
   { name: 'completed:validate', color: '0E8A16', description: 'Validation completed' },
+  { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
+  { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
 
   // Issue type labels
   { name: 'type:feature', color: '1D76DB', description: 'Feature request' },
@@ -73,10 +76,12 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   // Process trigger labels
   { name: 'process:speckit-feature', color: 'D876E3', description: 'Speckit feature process trigger' },
   { name: 'process:speckit-bugfix', color: 'D876E3', description: 'Speckit bugfix process trigger' },
+  { name: 'process:speckit-epic', color: 'D876E3', description: 'Speckit epic process trigger' },
 
   // Workflow identity labels (persist for issue lifetime)
   { name: 'workflow:speckit-feature', color: '6F42C1', description: 'Speckit feature workflow' },
   { name: 'workflow:speckit-bugfix', color: '6F42C1', description: 'Speckit bugfix workflow' },
+  { name: 'workflow:speckit-epic', color: '6F42C1', description: 'Speckit epic workflow' },
 
   // Relationship labels
   { name: 'epic-child', color: 'bfd4f2', description: 'Child issue of an epic' },

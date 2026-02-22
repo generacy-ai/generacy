@@ -14,7 +14,7 @@ import type {
 import { isNamespacedAction } from '../../types/action.js';
 import type { GitHubClient } from '../github/client/index.js';
 import { createGitHubClient } from '../github/client/index.js';
-import { executeCommand } from '../cli-utils.js';
+import { findChildIssues } from './find-children.js';
 
 /**
  * epic.check_completion action handler
@@ -46,7 +46,7 @@ export class CheckCompletionAction extends BaseAction {
       const repoInfo = await client.getRepoInfo();
 
       // Search for child issues that reference this epic
-      const children = await this.findChildIssues(repoInfo.owner, repoInfo.repo, epicIssueNumber);
+      const children = await findChildIssues(repoInfo.owner, repoInfo.repo, epicIssueNumber);
 
       // Calculate completion stats
       const totalChildren = children.length;
@@ -80,63 +80,4 @@ export class CheckCompletionAction extends BaseAction {
     }
   }
 
-  /**
-   * Find child issues that reference the epic
-   */
-  private async findChildIssues(
-    owner: string,
-    repo: string,
-    epicNumber: number
-  ): Promise<EpicChild[]> {
-    // Use gh CLI to search for issues that mention this epic in their body
-    const result = await executeCommand('gh', [
-      'issue', 'list',
-      '-R', `${owner}/${repo}`,
-      '--search', `"epic-parent: ${epicNumber}" in:body`,
-      '--json', 'number,title,state,labels',
-      '--limit', '100',
-    ]);
-
-    if (result.exitCode !== 0) {
-      return [];
-    }
-
-    try {
-      const issues = JSON.parse(result.stdout) as Array<{
-        number: number;
-        title: string;
-        state: string;
-        labels: Array<{ name: string }>;
-      }>;
-
-      // For each child, check if PR was merged
-      const children: EpicChild[] = [];
-      for (const issue of issues) {
-        // Check for merged PR
-        const prResult = await executeCommand('gh', [
-          'pr', 'list',
-          '-R', `${owner}/${repo}`,
-          '--search', `closes:#${issue.number}`,
-          '--state', 'merged',
-          '--json', 'number',
-          '--limit', '1',
-        ]);
-
-        const prMerged = prResult.exitCode === 0 &&
-                        prResult.stdout.trim() !== '[]';
-
-        children.push({
-          issue_number: issue.number,
-          title: issue.title,
-          state: issue.state.toLowerCase() as 'open' | 'closed',
-          pr_merged: prMerged,
-          labels: issue.labels.map(l => l.name),
-        });
-      }
-
-      return children;
-    } catch {
-      return [];
-    }
-  }
 }

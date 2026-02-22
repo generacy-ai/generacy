@@ -86,6 +86,12 @@ export type { GitHubClient, GitHubClientFactory } from './actions/github/client/
 // Label definitions (shared)
 export { WORKFLOW_LABELS, type LabelDefinition } from './actions/github/label-definitions.js';
 
+// Speckit operations (for direct invocation from orchestrator)
+export { executeTasksToIssues } from './actions/builtin/speckit/operations/tasks-to-issues.js';
+
+// Epic utilities (for direct invocation from orchestrator)
+export { findChildIssues, type EpicChildWithPr, type FindChildIssuesOptions } from './actions/epic/find-children.js';
+
 // Interpolation
 export {
   ExecutionContext,
@@ -155,6 +161,13 @@ export type {
   VerificationCheckOutput,
   PrCreateInput,
   PrCreateOutput,
+
+  // Epic/speckit types
+  TasksToIssuesInput,
+  TasksToIssuesOutput,
+  CreatedIssue,
+  SkippedIssue,
+  FailedTask,
 
   // Logger types
   Logger,

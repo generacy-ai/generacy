@@ -37,3 +37,6 @@ export { UpdateStatusAction } from './update-status.js';
 export { CreateEpicPRAction } from './create-pr.js';
 export { CloseEpicAction } from './close.js';
 export { DispatchChildrenAction } from './dispatch-children.js';
+
+// Shared utilities
+export { findChildIssues, type EpicChildWithPr, type FindChildIssuesOptions } from './find-children.js';

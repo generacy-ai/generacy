@@ -12,7 +12,7 @@
 
 ## Phase 1: Workflow-Driven Phase Registry
 
-### T001 Define `WORKFLOW_PHASE_SEQUENCES` map and `getPhaseSequence()` helper
+### T001 [DONE] Define `WORKFLOW_PHASE_SEQUENCES` map and `getPhaseSequence()` helper
 **File**: `packages/orchestrator/src/worker/types.ts`
 - Add `WORKFLOW_PHASE_SEQUENCES` record mapping workflow names to phase arrays
   - `speckit-feature`: full 6-phase sequence (same as `PHASE_SEQUENCE`)
@@ -21,7 +21,7 @@
 - Add `getPhaseSequence(workflowName: string): WorkflowPhase[]` that looks up the map with fallback to `PHASE_SEQUENCE`
 - Keep `PHASE_SEQUENCE` as default/fallback for backward compatibility
 
-### T002 Refactor `PhaseLoop` to accept a phase sequence parameter
+### T002 [DONE] Refactor `PhaseLoop` to accept a phase sequence parameter
 **File**: `packages/orchestrator/src/worker/phase-loop.ts`
 - Add optional `phaseSequence?: WorkflowPhase[]` parameter to `executeLoop()`
 - Replace all internal references to `PHASE_SEQUENCE` with `const sequence = phaseSequence ?? PHASE_SEQUENCE`
@@ -29,7 +29,7 @@
 - Update the loop iteration (`for` loop) to use the local sequence
 - Update the final `lastPhase` return to use the local sequence
 
-### T003 [P] Refactor `PhaseResolver` to be workflow-aware
+### T003 [DONE] [P] Refactor `PhaseResolver` to be workflow-aware
 **File**: `packages/orchestrator/src/worker/phase-resolver.ts`
 - Add `workflowName?: string` parameter to `resolveStartPhase()`
 - Add `WORKFLOW_GATE_MAPPING` keyed by workflow name for epic-specific gate behavior:
@@ -39,20 +39,20 @@
 - Update `resolveFromProcess()` to use `getPhaseSequence(workflowName)` instead of global `PHASE_SEQUENCE`
 - Update `resolveFromContinue()` to check `WORKFLOW_GATE_MAPPING[workflowName]` first, falling back to global `GATE_MAPPING`
 
-### T004 [P] Add `speckit-epic` gate configuration defaults
+### T004 [DONE] [P] Add `speckit-epic` gate configuration defaults
 **File**: `packages/orchestrator/src/worker/config.ts`
 - Add `speckit-epic` entry to the `gates` default:
   - `{ phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' }`
   - `{ phase: 'tasks', gateLabel: 'waiting-for:tasks-review', condition: 'always' }`
 
-### T005 Update `ClaudeCliWorker` to pass workflow-specific phase sequence
+### T005 [DONE] Update `ClaudeCliWorker` to pass workflow-specific phase sequence
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - Import `getPhaseSequence` from `./types.js`
 - Before calling `phaseLoop.executeLoop()`, resolve the phase sequence: `const phaseSequence = getPhaseSequence(item.workflowName)`
 - Pass `phaseSequence` as the new optional parameter to `executeLoop()`
 - Pass `item.workflowName` to `phaseResolver.resolveStartPhase()` as the new optional parameter
 
-### T006 Write unit tests for workflow phase registry
+### T006 [DONE] Write unit tests for workflow phase registry
 **Files**:
 - `packages/orchestrator/src/worker/__tests__/types.test.ts` (new)
 - `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` (update)
@@ -69,13 +69,13 @@
 
 ## Phase 2: `speckit.tasks_to_issues` Workflow-Engine Action
 
-### T007 Define types for tasks-to-issues action
+### T007 [DONE] Define types for tasks-to-issues action
 **File**: `packages/workflow-engine/src/types/github.ts` (or new file alongside speckit types)
 - Add `TasksToIssuesInput` interface: `feature_dir`, `epic_issue_number`, `epic_branch`, `trigger_label?`
 - Add `TasksToIssuesOutput` interface: `created_issues[]`, `skipped_issues[]`, `failed_tasks[]`, `total_tasks`
 - Add `ParsedTask` interface: `title`, `type?`, `labels?`, `description`, `task_id`
 
-### T008 Implement task parser for structured `tasks.md`
+### T008 [DONE] Implement task parser for structured `tasks.md`
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/operations/tasks-to-issues.ts` (new)
 - Implement `parseTasksFile(content: string): ParsedTask[]`
 - Support structured format: `## Task N` headings with YAML frontmatter between `---` delimiters
@@ -84,7 +84,7 @@
 - Fallback: if no frontmatter, use heading text as title and section body as description
 - Handle edge cases: empty file, no tasks, malformed frontmatter
 
-### T009 Implement issue creation with idempotency
+### T009 [DONE] Implement issue creation with idempotency
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/operations/tasks-to-issues.ts`
 - Implement `executeTasksToIssues(input: TasksToIssuesInput, context: ActionContext): Promise<TasksToIssuesOutput>`
 - Read `tasks.md` from `input.feature_dir`
@@ -99,13 +99,13 @@
   - Track created/failed issues
 - Return `TasksToIssuesOutput` summary
 
-### T010 [P] Register action in speckit namespace
+### T010 [DONE] [P] Register action in speckit namespace
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/index.ts`
 - Add `'tasks_to_issues'` to the operation dispatch switch/map
 - Import and wire `executeTasksToIssues`
 - Add input validation for `TasksToIssuesInput` (require `feature_dir`, `epic_issue_number`, `epic_branch`)
 
-### T011 [P] Add epic-related label definitions
+### T011 [DONE] [P] Add epic-related label definitions
 **File**: `packages/workflow-engine/src/actions/github/label-definitions.ts`
 - Add missing epic labels to `WORKFLOW_LABELS` array (check which already exist):
   - `waiting-for:children-complete` (yellow #FBCA04) — "Epic waiting for all children to complete"
@@ -116,7 +116,7 @@
   - `workflow:speckit-epic` (workflow identity label) — if not already present
 - Verify `type:epic` and `epic-child` labels already exist (they do per codebase analysis)
 
-### T012 Write unit tests for tasks-to-issues action
+### T012 [DONE] Write unit tests for tasks-to-issues action
 **Files**:
 - `packages/workflow-engine/src/actions/builtin/speckit/operations/__tests__/tasks-to-issues.test.ts` (new)
 - Test `parseTasksFile()`: structured format with frontmatter
@@ -132,7 +132,7 @@
 
 ## Phase 3: Epic Post-Tasks Step in Worker
 
-### T013 Create `EpicPostTasks` handler
+### T013 [DONE] Create `EpicPostTasks` handler
 **File**: `packages/orchestrator/src/worker/epic-post-tasks.ts` (new)
 - Implement `EpicPostTasks` class with `execute(context: WorkerContext)` method
 - Steps:
@@ -143,7 +143,7 @@
 - Return `{ childIssues: number[], success: boolean }`
 - Error handling: log failures, return partial results
 
-### T014 Integrate `EpicPostTasks` into `ClaudeCliWorker` for loop completion
+### T014 [DONE] Integrate `EpicPostTasks` into `ClaudeCliWorker` for loop completion
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - After phase loop completes (`loopResult.completed`), check if `item.workflowName === 'speckit-epic'`
 - If epic:
@@ -153,7 +153,7 @@
   - Return after post-tasks complete
 - Non-epic workflows continue with existing completion logic unchanged
 
-### T015 Handle tasks-review gate resume for epics
+### T015 [DONE] Handle tasks-review gate resume for epics
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - When `item.workflowName === 'speckit-epic'` and `item.command === 'continue'`:
   - Check issue labels for `completed:tasks-review`
@@ -161,7 +161,7 @@
   - This bypasses the phase loop for this specific resume case
 - Ensure the `PhaseResolver` workflow-aware gate mapping from T003 supports this routing
 
-### T016 Write unit tests for epic post-tasks
+### T016 [DONE] Write unit tests for epic post-tasks
 **Files**:
 - `packages/orchestrator/src/worker/__tests__/epic-post-tasks.test.ts` (new)
 - Test post-tasks orchestration: tasks-to-issues → dispatch → summary → label
@@ -174,14 +174,14 @@
 
 ## Phase 4: Epic Completion Monitor Service
 
-### T017 Create `EpicCompletionMonitorService`
+### T017 [DONE] Create `EpicCompletionMonitorService`
 **File**: `packages/orchestrator/src/services/epic-completion-monitor-service.ts` (new)
 - Implement service with constructor: `logger`, `createClient` (GitHubClientFactory), `queueAdapter`, `config`, `repositories`
 - Implement `startPolling()` and `stopPolling()` lifecycle methods (same pattern as `LabelMonitorService`)
 - Use `AbortController` for clean shutdown
 - Default poll interval: 300000ms (5 minutes)
 
-### T018 Implement polling logic for epic child completion
+### T018 [DONE] Implement polling logic for epic child completion
 **File**: `packages/orchestrator/src/services/epic-completion-monitor-service.ts`
 - For each repository:
   1. Search for issues with label `waiting-for:children-complete`
@@ -195,14 +195,14 @@
      - Add `completed:children-complete` label
      - (LabelMonitorService will detect this and enqueue `epic-complete`)
 
-### T019 [P] Extract shared child-finding utility
+### T019 [DONE] [P] Extract shared child-finding utility
 **File**: `packages/workflow-engine/src/actions/epic/find-children.ts` (new or extract from existing)
 - Implement `findChildIssues(owner, repo, epicNumber): Promise<EpicChild[]>`
 - Uses `gh issue list --search '"epic-parent: #N" in:body'` pattern
 - Returns structured child info: `number`, `title`, `state`, `labels`, `hasMergedPr`
 - Shared between `EpicCompletionMonitorService` and `epic.check_completion` action
 
-### T020 [P] Add epic monitor configuration schema
+### T020 [DONE] [P] Add epic monitor configuration schema
 **File**: `packages/orchestrator/src/config/schema.ts`
 - Add `EpicMonitorConfigSchema`:
   - `enabled: z.boolean().default(true)`

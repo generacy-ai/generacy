@@ -145,6 +145,17 @@ export const PrMonitorConfigSchema = z.object({
 export type PrMonitorConfig = z.infer<typeof PrMonitorConfigSchema>;
 
 /**
+ * Epic completion monitor configuration
+ */
+export const EpicMonitorConfigSchema = z.object({
+  /** Whether the epic completion monitor is enabled */
+  enabled: z.boolean().default(true),
+  /** Polling interval in milliseconds (minimum 60 seconds) */
+  pollIntervalMs: z.number().int().min(60000).default(300000),
+});
+export type EpicMonitorConfig = z.infer<typeof EpicMonitorConfigSchema>;
+
+/**
  * Dispatch configuration for worker queue and dispatcher
  */
 export const DispatchConfigSchema = z.object({
@@ -178,6 +189,7 @@ export const OrchestratorConfigSchema = z.object({
   repositories: z.array(RepositoryConfigSchema).default([]),
   monitor: MonitorConfigSchema.default({}),
   prMonitor: PrMonitorConfigSchema.default({}),
+  epicMonitor: EpicMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
 });

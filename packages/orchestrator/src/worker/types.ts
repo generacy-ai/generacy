@@ -7,11 +7,29 @@ import type { GitHubClient } from '@generacy-ai/workflow-engine';
 export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'validate';
 
 /**
- * Ordered sequence of all workflow phases
+ * Ordered sequence of all workflow phases (default for feature/bugfix workflows)
  */
 export const PHASE_SEQUENCE: WorkflowPhase[] = [
   'specify', 'clarify', 'plan', 'tasks', 'implement', 'validate',
 ];
+
+/**
+ * Phase sequences keyed by workflow name.
+ * Each workflow can define a subset of phases to execute.
+ */
+export const WORKFLOW_PHASE_SEQUENCES: Record<string, WorkflowPhase[]> = {
+  'speckit-feature': PHASE_SEQUENCE,
+  'speckit-bugfix': PHASE_SEQUENCE,
+  'speckit-epic': ['specify', 'clarify', 'plan', 'tasks'],
+};
+
+/**
+ * Get the phase sequence for a given workflow name.
+ * Falls back to PHASE_SEQUENCE for unknown workflows.
+ */
+export function getPhaseSequence(workflowName: string): WorkflowPhase[] {
+  return WORKFLOW_PHASE_SEQUENCES[workflowName] ?? PHASE_SEQUENCE;
+}
 
 /**
  * Map each phase to its Claude CLI slash command (null = no CLI command)

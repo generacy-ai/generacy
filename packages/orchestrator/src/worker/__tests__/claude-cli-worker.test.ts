@@ -58,6 +58,15 @@ vi.mock('../pr-feedback-handler.js', () => ({
   PrFeedbackHandler: vi.fn().mockImplementation(() => mockPrFeedbackHandlerInstance),
 }));
 
+// Mock EpicPostTasks for epic workflow integration tests (T014)
+const mockEpicPostTasksInstance = {
+  execute: vi.fn().mockResolvedValue({ childIssues: [101, 102, 103], success: true }),
+};
+
+vi.mock('../epic-post-tasks.js', () => ({
+  EpicPostTasks: vi.fn().mockImplementation(() => mockEpicPostTasksInstance),
+}));
+
 // ---------------------------------------------------------------------------
 // Mock Logger
 // ---------------------------------------------------------------------------
@@ -167,6 +176,10 @@ describe('ClaudeCliWorker (integration)', () => {
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
     sseEvents = [];
+
+    // Reset EpicPostTasks mock
+    mockEpicPostTasksInstance.execute.mockReset();
+    mockEpicPostTasksInstance.execute.mockResolvedValue({ childIssues: [101, 102, 103], success: true });
 
     // Reset logger child to return the mock logger
     (mockLogger.child as ReturnType<typeof vi.fn>).mockReturnValue(mockLogger);
@@ -937,6 +950,164 @@ describe('ClaudeCliWorker (integration)', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // T006: Workflow-driven phase sequences (epic/custom)
+  // ---------------------------------------------------------------------------
+  describe('speckit-epic workflow: stops after tasks phase (T006)', () => {
+    it('runs only specify → clarify → plan → tasks for speckit-epic (no implement/validate)', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} }); // No gates
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // Epic sequence has 4 phases: specify, clarify, plan, tasks
+      // All use CLI commands (none are validate/null), so 4 spawns
+      expect(spawnFn).toHaveBeenCalledTimes(4);
+
+      // Verify the phases that were executed by checking CLI prompts
+      const spawnCalls = spawnFn.mock.calls as [string, string[], unknown][];
+      const prompts = spawnCalls.map((call) => {
+        const args = call[1] as string[];
+        const promptIdx = args.indexOf('--prompt');
+        return promptIdx >= 0 ? args[promptIdx + 1] : null;
+      });
+      expect(prompts[0]).toContain('/speckit:specify');
+      expect(prompts[1]).toContain('/speckit:clarify');
+      expect(prompts[2]).toContain('/speckit:plan');
+      expect(prompts[3]).toContain('/speckit:tasks');
+
+      // Verify workflow completed (not failed)
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent).toEqual(expect.objectContaining({
+        data: expect.objectContaining({
+          lastPhase: 'tasks',
+          totalPhases: 4,
+        }),
+      }));
+
+      // Should NOT have spawned 'sh -c' for validate phase
+      const shCalls = spawnCalls.filter((call) => call[0] === 'sh');
+      expect(shCalls).toHaveLength(0);
+    });
+
+    it('removes agent:in-progress on epic workflow completion', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42, ['agent:in-progress'],
+      );
+    });
+
+    it('adds completed labels for each epic phase', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      for (const phase of ['specify', 'clarify', 'plan', 'tasks']) {
+        expect(mockGithub.addLabels).toHaveBeenCalledWith(
+          'test-owner', 'test-repo', 42, [`completed:${phase}`],
+        );
+      }
+
+      // Should NOT have completed implement or validate
+      const addLabelsCalls = (mockGithub.addLabels as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => c[3] as string[]);
+      const completedImplement = addLabelsCalls.some(
+        (labels) => labels.includes('completed:implement'),
+      );
+      const completedValidate = addLabelsCalls.some(
+        (labels) => labels.includes('completed:validate'),
+      );
+      expect(completedImplement).toBe(false);
+      expect(completedValidate).toBe(false);
+    });
+
+    it('resumes from plan when epic has completed specify and clarify', async () => {
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:specify' },
+          { name: 'completed:clarify' },
+        ],
+      });
+      mockGithub.listBranches.mockResolvedValue(['42-epic-branch', 'develop']);
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-epic',
+        command: 'process',
+      }));
+
+      // Should spawn CLI for plan + tasks only (2 spawns)
+      expect(spawnFn).toHaveBeenCalledTimes(2);
+
+      const firstPrompt = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
+      const promptIdx = firstPrompt.indexOf('--prompt');
+      expect(firstPrompt[promptIdx + 1]).toContain('/speckit:plan');
+    });
+  });
+
+  describe('custom phase sequence via workflow registry (T006)', () => {
+    it('passes workflow-specific phase sequence to PhaseLoop', async () => {
+      // speckit-epic has a truncated sequence; verify it flows through
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // 4 phases for epic, 6 for default — verify epic count
+      expect(spawnFn).toHaveBeenCalledTimes(4);
+    });
+
+    it('uses default PHASE_SEQUENCE for unknown workflow names', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'unknown-workflow' }));
+
+      // Unknown workflow falls back to full 6-phase sequence
+      expect(spawnFn).toHaveBeenCalledTimes(6);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // T022: address-pr-feedback command routing
   // ---------------------------------------------------------------------------
   describe('address-pr-feedback command routing (T022)', () => {
@@ -1268,6 +1439,412 @@ describe('ClaudeCliWorker (integration)', () => {
       // Phase loop should execute normally
       expect(mockGithub.getIssue).toHaveBeenCalled();
       expect(spawnFn).toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T014: Epic post-tasks integration
+  // ---------------------------------------------------------------------------
+  describe('epic post-tasks integration (T014)', () => {
+    it('runs EpicPostTasks after phase loop completes for speckit-epic', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // EpicPostTasks.execute should have been called
+      expect(mockEpicPostTasksInstance.execute).toHaveBeenCalledTimes(1);
+
+      // Should have been called with a WorkerContext
+      const callArg = mockEpicPostTasksInstance.execute.mock.calls[0][0];
+      expect(callArg).toHaveProperty('item');
+      expect(callArg).toHaveProperty('github');
+      expect(callArg).toHaveProperty('checkoutPath');
+      expect(callArg.item.workflowName).toBe('speckit-epic');
+    });
+
+    it('does NOT call onWorkflowComplete for speckit-epic', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // onWorkflowComplete removes agent:in-progress — for epics, only
+      // ensureCleanup (in finally) should do this, not onWorkflowComplete.
+      // Verify that removeLabels was called at most from ensureCleanup (1 call),
+      // not from onWorkflowComplete + ensureCleanup (2+ calls).
+      const removeCallArgs = (mockGithub.removeLabels as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => c[3] as string[]);
+      const agentInProgressRemovals = removeCallArgs.filter(
+        (labels) => Array.isArray(labels) && labels.includes('agent:in-progress'),
+      );
+      // Only ensureCleanup should have removed agent:in-progress (1 call)
+      expect(agentInProgressRemovals).toHaveLength(1);
+    });
+
+    it('does NOT call markReadyForReview for speckit-epic', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // Epic should NOT mark PR as ready — there's no PR to mark yet
+      expect(mockGithub.markPRReady).not.toHaveBeenCalled();
+    });
+
+    it('still calls onWorkflowComplete and markReadyForReview for non-epic workflows', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-bugfix' }));
+
+      // Non-epic workflow should complete normally
+      expect(mockGithub.removeLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42, ['agent:in-progress'],
+      );
+      expect(mockGithub.markPRReady).toHaveBeenCalled();
+
+      // EpicPostTasks should NOT be called for non-epic workflows
+      expect(mockEpicPostTasksInstance.execute).not.toHaveBeenCalled();
+    });
+
+    it('does NOT run EpicPostTasks for non-epic workflows', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      expect(mockEpicPostTasksInstance.execute).not.toHaveBeenCalled();
+    });
+
+    it('emits workflow:completed SSE event after epic post-tasks', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent).toEqual(expect.objectContaining({
+        data: expect.objectContaining({
+          lastPhase: 'tasks',
+          totalPhases: 4,
+        }),
+      }));
+    });
+
+    it('logs error when epic post-tasks fail', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+      mockEpicPostTasksInstance.execute.mockResolvedValue({ childIssues: [], success: false });
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // Should log error for failed post-tasks
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Epic post-tasks failed — epic may need manual intervention',
+      );
+
+      // Should still emit workflow:completed (phases completed, post-tasks are supplementary)
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
+    });
+
+    it('handles EpicPostTasks throwing an error gracefully', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+      mockEpicPostTasksInstance.execute.mockRejectedValue(new Error('Post-tasks crashed'));
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      // Should NOT throw — phasesCompleted = true, so error is caught as post-completion
+      await expect(
+        worker.handle(createQueueItem({ workflowName: 'speckit-epic' })),
+      ).resolves.toBeUndefined();
+
+      // Should log at warn level (post-completion failure)
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('Post-tasks crashed') }),
+        'Post-completion step failed (all phases completed successfully)',
+      );
+    });
+
+    it('does NOT run EpicPostTasks when epic phase loop hits a gate', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      // Epic with a tasks gate configured
+      const config = createConfig({
+        gates: {
+          'speckit-epic': [
+            { phase: 'tasks', gateLabel: 'waiting-for:tasks-review', condition: 'always' as const },
+          ],
+        },
+      });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // Gate hit → loop is not completed → EpicPostTasks should NOT run
+      expect(mockEpicPostTasksInstance.execute).not.toHaveBeenCalled();
+    });
+
+    it('does NOT run EpicPostTasks when epic phase loop fails', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [] });
+
+      // First phase succeeds, second phase fails
+      spawnFn
+        .mockReturnValueOnce(createMockProcess(0, 5).handle)
+        .mockReturnValueOnce(createMockProcess(1, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'speckit-epic' }));
+
+      // Phase failure → loop is not completed → EpicPostTasks should NOT run
+      expect(mockEpicPostTasksInstance.execute).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T015: Handle tasks-review gate resume for epics
+  // ---------------------------------------------------------------------------
+  describe('epic tasks-review gate resume (T015)', () => {
+    it('runs EpicPostTasks directly when epic resumes with completed:tasks-review', async () => {
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:specify' },
+          { name: 'completed:clarify' },
+          { name: 'completed:plan' },
+          { name: 'completed:tasks' },
+          { name: 'completed:tasks-review' },
+        ],
+      });
+      mockGithub.listBranches.mockResolvedValue(['42-epic-branch', 'develop']);
+
+      const config = createConfig({
+        gates: {
+          'speckit-epic': [
+            { phase: 'tasks', gateLabel: 'waiting-for:tasks-review', condition: 'always' as const },
+          ],
+        },
+      });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-epic',
+        command: 'continue',
+      }));
+
+      // EpicPostTasks should have been called directly (no phase loop)
+      expect(mockEpicPostTasksInstance.execute).toHaveBeenCalledTimes(1);
+
+      // Should NOT have spawned any CLI processes (bypasses phase loop)
+      expect(spawnFn).not.toHaveBeenCalled();
+
+      // Should emit workflow:completed
+      const completedEvent = sseEvents.find(
+        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
+      );
+      expect(completedEvent).toBeDefined();
+      expect(completedEvent).toEqual(expect.objectContaining({
+        data: expect.objectContaining({
+          lastPhase: 'tasks',
+          totalPhases: 4,
+        }),
+      }));
+    });
+
+    it('logs success when post-tasks complete after tasks-review resume', async () => {
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:specify' },
+          { name: 'completed:tasks-review' },
+        ],
+      });
+      mockGithub.listBranches.mockResolvedValue(['42-epic-branch', 'develop']);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-epic',
+        command: 'continue',
+      }));
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Epic tasks-review gate satisfied — running post-tasks directly',
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { childIssues: 3 },
+        'Epic post-tasks complete after tasks-review resume',
+      );
+    });
+
+    it('logs error when post-tasks fail after tasks-review resume', async () => {
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:tasks-review' },
+        ],
+      });
+      mockEpicPostTasksInstance.execute.mockResolvedValue({ childIssues: [], success: false });
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-epic',
+        command: 'continue',
+      }));
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        'Epic post-tasks failed after tasks-review resume',
+      );
+    });
+
+    it('does NOT trigger post-tasks for non-epic continue with completed:tasks-review', async () => {
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:specify' },
+          { name: 'completed:clarify' },
+          { name: 'completed:plan' },
+          { name: 'completed:tasks' },
+          { name: 'completed:tasks-review' },
+        ],
+      });
+      mockGithub.listBranches.mockResolvedValue(['42-feature-branch', 'develop']);
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-feature',
+        command: 'continue',
+      }));
+
+      // Non-epic workflow should NOT trigger epic post-tasks
+      expect(mockEpicPostTasksInstance.execute).not.toHaveBeenCalled();
+
+      // Should have entered the phase loop normally
+      expect(spawnFn).toHaveBeenCalled();
+    });
+
+    it('does NOT use tasks-review shortcut for epic process command', async () => {
+      // When command is 'process' (not 'continue'), the tasks-review shortcut
+      // should NOT activate — the worker should enter the phase loop instead.
+      // With completed:tasks-review, the phase resolver resolves tasks as the
+      // last epic phase, so the loop completes and triggers the post-loop epic
+      // handling from T014 (which also calls EpicPostTasks).
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:tasks-review' },
+        ],
+      });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-epic',
+        command: 'process',
+      }));
+
+      // The phase loop should have been entered (process command goes through phase loop)
+      // With completed:tasks-review, the resolver normalizes it to tasks phase completed,
+      // and with epic's 4-phase sequence, tasks is the last phase. The loop has
+      // nothing left to run and completes, then T014's post-loop code runs EpicPostTasks.
+      // The key point: the tasks-review shortcut (T015) did NOT activate — the execute
+      // call came from the T014 post-loop path instead.
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        'Epic tasks-review gate satisfied — running post-tasks directly',
+      );
+    });
+
+    it('cleans up gate labels before checking tasks-review resume', async () => {
+      mockGithub.getIssue.mockResolvedValue({
+        labels: [
+          { name: 'completed:tasks-review' },
+        ],
+      });
+      mockGithub.listBranches.mockResolvedValue(['42-epic-branch', 'develop']);
+
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      await worker.handle(createQueueItem({
+        workflowName: 'speckit-epic',
+        command: 'continue',
+      }));
+
+      // onResumeStart should have been called before the tasks-review check
+      // (it removes waiting-for:* and agent:paused labels)
+      expect(mockGithub.removeLabels).toHaveBeenCalled();
     });
   });
 });

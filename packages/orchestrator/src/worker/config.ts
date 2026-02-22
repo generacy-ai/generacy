@@ -33,6 +33,10 @@ export const WorkerConfigSchema = z.object({
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
     ],
     'speckit-bugfix': [],
+    'speckit-epic': [
+      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+      { phase: 'tasks', gateLabel: 'waiting-for:tasks-review', condition: 'always' },
+    ],
   }),
 });
 

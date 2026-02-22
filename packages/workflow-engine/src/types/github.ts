@@ -556,6 +556,86 @@ export interface UpdateStageOutput {
 }
 
 /**
+ * A single task parsed from tasks.md
+ */
+export interface ParsedTask {
+  /** Task identifier (e.g., 'T007') */
+  task_id: string;
+  /** Task title */
+  title: string;
+  /** Task description body */
+  description: string;
+  /** Issue type label (e.g., 'feature', 'bugfix') */
+  type?: string;
+  /** Additional labels to apply to the created issue */
+  labels?: string[];
+}
+
+/**
+ * speckit.tasks_to_issues input
+ */
+export interface TasksToIssuesInput {
+  /** Path to the feature directory containing tasks.md */
+  feature_dir: string;
+  /** The epic issue number (parent) */
+  epic_issue_number: number;
+  /** The epic branch name for child issues to reference */
+  epic_branch: string;
+  /** Trigger label to apply to created child issues (default: 'process:speckit-feature') */
+  trigger_label?: string;
+}
+
+/**
+ * A successfully created child issue
+ */
+export interface CreatedIssue {
+  /** The created issue number */
+  issue_number: number;
+  /** The issue title */
+  title: string;
+  /** The task ID this issue was created from */
+  task_id: string;
+}
+
+/**
+ * A skipped child issue (already existed)
+ */
+export interface SkippedIssue {
+  /** The existing issue number */
+  issue_number: number;
+  /** The issue title */
+  title: string;
+  /** The task ID this issue corresponds to */
+  task_id: string;
+}
+
+/**
+ * A task that failed to create an issue
+ */
+export interface FailedTask {
+  /** The task ID that failed */
+  task_id: string;
+  /** The task title */
+  title: string;
+  /** Reason for failure */
+  reason: string;
+}
+
+/**
+ * speckit.tasks_to_issues output
+ */
+export interface TasksToIssuesOutput {
+  /** Issues that were successfully created */
+  created_issues: CreatedIssue[];
+  /** Issues that were skipped (already existed) */
+  skipped_issues: SkippedIssue[];
+  /** Tasks that failed to create issues */
+  failed_tasks: FailedTask[];
+  /** Total number of tasks parsed from tasks.md */
+  total_tasks: number;
+}
+
+/**
  * epic.post_tasks_summary input
  */
 export interface PostTasksSummaryInput {
