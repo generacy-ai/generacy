@@ -51,6 +51,14 @@ export interface JobQueue {
    * @param reason - Optional cancellation reason
    */
   cancelJob(jobId: string, reason?: string): Promise<void>;
+
+  /**
+   * Requeue a job that was dequeued but could not be assigned.
+   * Returns the job to the pending queue at its correct priority position.
+   * @param jobId - The job ID to requeue
+   * @throws Error if job not found or not in 'assigned' status
+   */
+  requeue(jobId: string): Promise<void>;
 }
 
 /**
@@ -275,5 +283,24 @@ export class InMemoryJobQueue implements JobQueue {
     if (queueIndex !== -1) {
       this.pendingQueue.splice(queueIndex, 1);
     }
+  }
+
+  async requeue(jobId: string): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+
+    if (job.status !== 'assigned') {
+      throw new Error(`Cannot requeue job ${jobId}: expected status 'assigned', got '${job.status}'`);
+    }
+
+    // Reset to clean pending state
+    job.status = 'pending';
+    job.workerId = undefined;
+    job.assignedAt = undefined;
+
+    // Re-insert at correct priority position
+    this.insertIntoQueue(jobId, job.priority);
   }
 }

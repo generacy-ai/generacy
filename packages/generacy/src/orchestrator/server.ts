@@ -369,11 +369,26 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
       // Parse capabilities from comma-separated string
       const capabilities = capabilitiesParam ? capabilitiesParam.split(',').map(c => c.trim()) : worker.capabilities;
 
+      // Pre-check: reject if worker is already at capacity
+      if (worker.currentJobs.length >= worker.maxConcurrent) {
+        sendJson(res, 200, { job: undefined, retryAfter: 5 } satisfies PollResponse);
+        return;
+      }
+
       const job = await jobQueue.poll(workerId, capabilities);
 
       if (job) {
-        // Assign job to worker in registry
-        workerRegistry.assignJob(workerId, job.id);
+        const assigned = workerRegistry.assignJob(workerId, job.id);
+        if (!assigned) {
+          // Safety net: job was dequeued but worker can't accept it — put it back
+          logger.warn('Worker assignment failed after poll, requeuing job', {
+            jobId: job.id,
+            workerId,
+          });
+          await jobQueue.requeue(job.id);
+          sendJson(res, 200, { job: undefined, retryAfter: 5 } satisfies PollResponse);
+          return;
+        }
         logger.info('Job assigned to worker', { jobId: job.id, workerId });
       }
 

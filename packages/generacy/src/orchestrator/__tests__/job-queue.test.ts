@@ -663,6 +663,97 @@ describe('InMemoryJobQueue', () => {
     });
   });
 
+  describe('requeue', () => {
+    it('should requeue an assigned job back to pending', async () => {
+      const job = createJob({ id: 'requeue-1' });
+      await queue.enqueue(job);
+
+      // Poll to move to assigned status
+      const polled = await queue.poll('worker-1', ['*']);
+      expect(polled?.id).toBe('requeue-1');
+      expect(polled?.status).toBe('assigned');
+
+      // Requeue the job
+      await queue.requeue('requeue-1');
+
+      // Poll again — should get the same job back
+      const repolled = await queue.poll('worker-2', ['*']);
+      expect(repolled?.id).toBe('requeue-1');
+      expect(repolled?.status).toBe('assigned');
+      expect(repolled?.workerId).toBe('worker-2');
+      expect(repolled?.assignedAt).toBeDefined();
+    });
+
+    it('should maintain priority ordering on requeue', async () => {
+      const highJob = createJob({ id: 'high', priority: 'high' });
+      const lowJob = createJob({ id: 'low', priority: 'low' });
+
+      await queue.enqueue(highJob);
+      await queue.enqueue(lowJob);
+
+      // Poll the high priority job
+      const polled = await queue.poll('worker-1', ['*']);
+      expect(polled?.id).toBe('high');
+
+      // Enqueue a normal priority job while high is assigned
+      const normalJob = createJob({ id: 'normal', priority: 'normal' });
+      await queue.enqueue(normalJob);
+
+      // Requeue the high priority job
+      await queue.requeue('high');
+
+      // Next poll should return the high priority job, not normal
+      const next = await queue.poll('worker-2', ['*']);
+      expect(next?.id).toBe('high');
+    });
+
+    it('should throw for non-existent job', async () => {
+      await expect(queue.requeue('nonexistent')).rejects.toThrow(
+        'Job not found: nonexistent'
+      );
+    });
+
+    it('should throw for job not in assigned status', async () => {
+      const job = createJob({ id: 'pending-job' });
+      await queue.enqueue(job);
+
+      await expect(queue.requeue('pending-job')).rejects.toThrow(
+        "Cannot requeue job pending-job: expected status 'assigned', got 'pending'"
+      );
+    });
+
+    it('should throw for completed job', async () => {
+      const job = createJob({ id: 'completed-job' });
+      await queue.enqueue(job);
+
+      // Poll to assign, then mark completed
+      await queue.poll('worker-1', ['*']);
+      await queue.updateStatus('completed-job', 'completed');
+
+      await expect(queue.requeue('completed-job')).rejects.toThrow(
+        "Cannot requeue job completed-job: expected status 'assigned', got 'completed'"
+      );
+    });
+
+    it('should clear workerId and assignedAt', async () => {
+      const job = createJob({ id: 'clear-fields' });
+      await queue.enqueue(job);
+
+      // Poll sets workerId and assignedAt
+      const polled = await queue.poll('worker-1', ['*']);
+      expect(polled?.workerId).toBe('worker-1');
+      expect(polled?.assignedAt).toBeDefined();
+
+      // Requeue should clear those fields
+      await queue.requeue('clear-fields');
+
+      const retrieved = await queue.getJob('clear-fields');
+      expect(retrieved?.status).toBe('pending');
+      expect(retrieved?.workerId).toBeUndefined();
+      expect(retrieved?.assignedAt).toBeUndefined();
+    });
+  });
+
   describe('constructor warning', () => {
     it('should log a warning about in-memory storage', () => {
       // Clear previous calls
