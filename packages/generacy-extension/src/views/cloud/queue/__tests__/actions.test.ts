@@ -82,11 +82,28 @@ vi.mock('../../../../api/endpoints/queue', () => ({
   },
 }));
 
+// Mock agents API
+vi.mock('../../../../api/endpoints/agents', () => ({
+  agentsApi: {
+    getAgents: vi.fn(),
+    assignWorkItem: vi.fn(),
+  },
+}));
+
 // Mock JobDetailPanel to avoid deep vscode mock requirements
 const mockShowPreview = vi.fn();
 vi.mock('../detail-panel', () => ({
   JobDetailPanel: {
     showPreview: (...args: unknown[]) => mockShowPreview(...args),
+  },
+  registerDetailPanelCommands: vi.fn(),
+}));
+
+// Mock JobLogChannel
+const mockOpenJobLogs = vi.fn();
+vi.mock('../../log-viewer', () => ({
+  JobLogChannel: {
+    openJobLogs: (...args: unknown[]) => mockOpenJobLogs(...args),
   },
 }));
 
@@ -99,7 +116,10 @@ import {
   increasePriority,
   decreasePriority,
   viewQueueItemDetails,
+  viewJobLogs,
+  registerQueueActions,
 } from '../actions';
+import { CLOUD_COMMANDS } from '../../../../constants';
 
 /**
  * Create a mock queue item for testing
@@ -408,6 +428,122 @@ describe('Queue Actions', () => {
         expect.objectContaining({ error: 'Connection timeout' }),
         mockExtensionUri
       );
+    });
+  });
+
+  describe('viewJobLogs', () => {
+    beforeEach(() => {
+      mockOpenJobLogs.mockReset();
+      mockOpenJobLogs.mockResolvedValue(undefined);
+    });
+
+    it('should call JobLogChannel.openJobLogs with correct id and workflowName', async () => {
+      const item = createMockQueueItem({
+        id: 'job-abc-123',
+        workflowName: 'Deploy Service',
+      });
+
+      await viewJobLogs(item);
+
+      expect(mockOpenJobLogs).toHaveBeenCalledWith('job-abc-123', 'Deploy Service');
+    });
+
+    it('should extract queueItem from QueueTreeItem', async () => {
+      const queueItem = createMockQueueItem({
+        id: 'job-xyz-789',
+        workflowName: 'Run Tests',
+      });
+      // Simulate a QueueTreeItem (has a queueItem property)
+      const treeItem = { queueItem } as { queueItem: QueueItem };
+
+      await viewJobLogs(treeItem);
+
+      expect(mockOpenJobLogs).toHaveBeenCalledWith('job-xyz-789', 'Run Tests');
+    });
+
+    it('should work with any job status', async () => {
+      const item = createMockQueueItem({
+        id: 'job-running',
+        workflowName: 'Build',
+        status: 'running',
+      });
+
+      await viewJobLogs(item);
+
+      expect(mockOpenJobLogs).toHaveBeenCalledWith('job-running', 'Build');
+    });
+  });
+
+  describe('registerQueueActions - viewJobLogs command', () => {
+    let mockContext: vscode.ExtensionContext;
+    let registeredCommands: Map<string, (...args: unknown[]) => unknown>;
+
+    beforeEach(() => {
+      mockOpenJobLogs.mockReset();
+      mockOpenJobLogs.mockResolvedValue(undefined);
+
+      registeredCommands = new Map();
+      (vscode.commands.registerCommand as Mock).mockImplementation(
+        (commandId: string, handler: (...args: unknown[]) => unknown) => {
+          registeredCommands.set(commandId, handler);
+          return { dispose: vi.fn() };
+        }
+      );
+
+      mockContext = {
+        subscriptions: [],
+        extensionUri: { fsPath: '/mock/extension' } as vscode.Uri,
+      } as unknown as vscode.ExtensionContext;
+    });
+
+    it('should register the viewJobLogs command', () => {
+      registerQueueActions(mockContext, mockProvider);
+
+      expect(registeredCommands.has(CLOUD_COMMANDS.viewJobLogs)).toBe(true);
+    });
+
+    it('should show warning when no queue item is selected', async () => {
+      registerQueueActions(mockContext, mockProvider);
+
+      const handler = registeredCommands.get(CLOUD_COMMANDS.viewJobLogs)!;
+      await handler(undefined);
+
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        'Please select a queue item to view logs'
+      );
+      expect(mockOpenJobLogs).not.toHaveBeenCalled();
+    });
+
+    it('should show warning for non-QueueTreeItem argument', async () => {
+      registerQueueActions(mockContext, mockProvider);
+
+      const handler = registeredCommands.get(CLOUD_COMMANDS.viewJobLogs)!;
+      // Pass a plain TreeItem without queueItem context
+      const nonQueueItem = { contextValue: 'other' };
+      await handler(nonQueueItem);
+
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        'Please select a queue item to view logs'
+      );
+      expect(mockOpenJobLogs).not.toHaveBeenCalled();
+    });
+
+    it('should call JobLogChannel.openJobLogs with correct args for valid QueueTreeItem', async () => {
+      registerQueueActions(mockContext, mockProvider);
+
+      const handler = registeredCommands.get(CLOUD_COMMANDS.viewJobLogs)!;
+      const queueItem = createMockQueueItem({
+        id: 'job-456',
+        workflowName: 'Deploy Staging',
+      });
+      // Create a mock QueueTreeItem with contextValue that passes isQueueTreeItem
+      const treeItem = {
+        queueItem,
+        contextValue: 'queueItem.pending',
+      };
+      await handler(treeItem);
+
+      expect(mockOpenJobLogs).toHaveBeenCalledWith('job-456', 'Deploy Staging');
     });
   });
 

@@ -93,6 +93,7 @@ function getHeaderSection(item: QueueItem, isPinned: boolean): string {
       </div>
     </div>
     <div class="actions">
+      <button onclick="viewLogs()">View Logs</button>
       <button onclick="pinPanel()" ${pinButtonDisabled} id="pin-button">${pinButtonLabel}</button>
       <button onclick="refreshPanel()">Refresh</button>
     </div>
@@ -745,6 +746,10 @@ function getScript(
 
     function openAgent(agentId) {
       vscode.postMessage({ type: 'openAgent', agentId: agentId });
+    }
+
+    function viewLogs() {
+      vscode.postMessage({ type: 'viewLogs' });
     }
 
     // ======================================================================

@@ -4,6 +4,8 @@
  */
 import { getApiClient } from '../client';
 import {
+  JobLogsResponse,
+  JobLogsResponseSchema,
   JobProgress,
   JobProgressSchema,
   QueueItem,
@@ -103,6 +105,17 @@ export const queueApi = {
   async getJobProgress(id: string): Promise<JobProgress> {
     const client = getApiClient();
     const response = await client.getValidated(`/queue/${id}/progress`, JobProgressSchema);
+    return response.data;
+  },
+
+  /**
+   * Get logs for a job (historical fetch for log viewer)
+   */
+  async getJobLogs(id: string, options?: { limit?: number }): Promise<JobLogsResponse> {
+    const client = getApiClient();
+    const response = await client.getValidated(`/queue/${id}/logs`, JobLogsResponseSchema, {
+      params: { limit: options?.limit ?? 10000 },
+    });
     return response.data;
   },
 

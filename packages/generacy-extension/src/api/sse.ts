@@ -27,7 +27,7 @@ export type SSEEventHandler = (event: SSEEvent) => void;
 export type SSEConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 /** All supported SSE channels */
-const ALL_CHANNELS: SSEChannel[] = ['workflows', 'queue', 'agents'];
+const ALL_CHANNELS: SSEChannel[] = ['workflows', 'queue', 'agents', 'jobs'];
 
 // ============================================================================
 // Constants
@@ -444,6 +444,9 @@ export class SSESubscriptionManager implements vscode.Disposable {
     }
     if (eventType.startsWith('agent')) {
       return 'agents';
+    }
+    if (eventType.startsWith('job')) {
+      return 'jobs';
     }
     // Default to workflows for unknown event types
     return 'workflows';

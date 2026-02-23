@@ -543,7 +543,8 @@ export type JobDetailWebviewMessage =
   | { type: 'pin' }
   | { type: 'togglePhase'; phaseId: string }
   | { type: 'openPR'; url: string }
-  | { type: 'openAgent'; agentId: string };
+  | { type: 'openAgent'; agentId: string }
+  | { type: 'viewLogs' };
 
 /**
  * Messages sent from the extension host to the JobDetailPanel webview.
@@ -911,13 +912,65 @@ export const AgentLogsResponseSchema = z.object({
 });
 
 // ============================================================================
+// Job Log Types
+// ============================================================================
+
+/**
+ * Single log line from a remote job's claude CLI output
+ */
+export interface JobLogLine {
+  /** Log line text (pre-cleaned, no ANSI) */
+  content: string;
+  /** Which output stream this line came from */
+  stream: 'stdout' | 'stderr';
+  /** ISO timestamp */
+  timestamp: string;
+  /** Optional step context */
+  stepName?: string;
+}
+
+/**
+ * Zod schema for job log line
+ */
+export const JobLogLineSchema = z.object({
+  content: z.string(),
+  stream: z.enum(['stdout', 'stderr']),
+  timestamp: z.string().datetime(),
+  stepName: z.string().optional(),
+});
+
+/**
+ * Job logs response from GET /queue/:id/logs
+ */
+export interface JobLogsResponse {
+  /** Array of log lines */
+  lines: JobLogLine[];
+  /** Total line count on server */
+  total: number;
+  /** Cursor for SSE handoff (zero-gap transition) */
+  cursor?: string;
+  /** Whether the result was truncated */
+  truncated: boolean;
+}
+
+/**
+ * Zod schema for job logs response
+ */
+export const JobLogsResponseSchema = z.object({
+  lines: z.array(JobLogLineSchema),
+  total: z.number().int().nonnegative(),
+  cursor: z.string().optional(),
+  truncated: z.boolean(),
+});
+
+// ============================================================================
 // SSE Event Types
 // ============================================================================
 
 /**
  * SSE channel for subscription routing
  */
-export type SSEChannel = 'workflows' | 'queue' | 'agents';
+export type SSEChannel = 'workflows' | 'queue' | 'agents' | 'jobs';
 
 /**
  * SSE event received from the orchestrator
@@ -941,7 +994,7 @@ export interface SSEEvent<T = unknown> {
 export const SSEEventSchema = z.object({
   id: z.string(),
   event: z.string(),
-  channel: z.enum(['workflows', 'queue', 'agents']),
+  channel: z.enum(['workflows', 'queue', 'agents', 'jobs']),
   data: z.unknown(),
   timestamp: z.string().datetime(),
 });

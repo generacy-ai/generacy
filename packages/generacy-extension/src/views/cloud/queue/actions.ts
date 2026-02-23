@@ -11,6 +11,7 @@ import { QueueTreeItem, isQueueTreeItem } from './tree-item';
 import { QueueTreeProvider } from './provider';
 import { CLOUD_COMMANDS } from '../../../constants';
 import { JobDetailPanel, registerDetailPanelCommands } from './detail-panel';
+import { JobLogChannel } from '../log-viewer';
 
 /**
  * Priority levels in ascending order for adjustment
@@ -336,6 +337,15 @@ export async function viewQueueItemDetails(
 }
 
 /**
+ * View live logs for a remote job in a VS Code output channel.
+ * Delegates to JobLogChannel which manages historical fetch + SSE streaming.
+ */
+export async function viewJobLogs(item: QueueTreeItem | QueueItem): Promise<void> {
+  const queueItem = 'queueItem' in item ? item.queueItem : item;
+  await JobLogChannel.openJobLogs(queueItem.id, queueItem.workflowName);
+}
+
+/**
  * Register all queue action commands
  */
 export function registerQueueActions(
@@ -411,6 +421,20 @@ export function registerQueueActions(
           return;
         }
         await viewQueueItemDetails(item, context.extensionUri);
+      }
+    )
+  );
+
+  // View logs action
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      CLOUD_COMMANDS.viewJobLogs,
+      async (item?: QueueTreeItem) => {
+        if (!item || !isQueueTreeItem(item)) {
+          vscode.window.showWarningMessage('Please select a queue item to view logs');
+          return;
+        }
+        await viewJobLogs(item);
       }
     )
   );

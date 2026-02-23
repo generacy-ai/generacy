@@ -1,0 +1,197 @@
+# Job Logs API Contract
+# Feature: #180 — Live Log/Conversation Viewer
+# Consumed by: generacy-extension (JobLogChannel)
+# Provided by: orchestrator (depends on #178)
+
+openapi: "3.0.3"
+info:
+  title: Job Logs API
+  version: "1.0.0"
+  description: |
+    REST endpoint for fetching historical job logs and SSE events
+    for live log streaming. Part of the real-time workflow monitoring
+    feature (#175).
+
+paths:
+  /queue/{jobId}/logs:
+    get:
+      summary: Get historical job logs
+      description: |
+        Fetches the most recent log lines for a job. Returns pre-cleaned
+        plain text (ANSI codes stripped server-side). Includes a cursor
+        for seamless SSE handoff.
+      operationId: getJobLogs
+      tags:
+        - Queue
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The job ID (same as queue item ID)
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 10000
+            minimum: 1
+            maximum: 50000
+          description: Maximum number of lines to return (most recent N)
+      responses:
+        "200":
+          description: Job logs retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobLogsResponse"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error (log endpoint unavailable)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  schemas:
+    JobLogLine:
+      type: object
+      required:
+        - content
+        - stream
+        - timestamp
+      properties:
+        content:
+          type: string
+          description: |
+            Log line content. Pre-cleaned plain text with ANSI codes
+            and non-printable characters stripped by the server.
+        stream:
+          type: string
+          enum: [stdout, stderr]
+          description: Output stream source
+        timestamp:
+          type: string
+          format: date-time
+          description: When this line was emitted (ISO 8601)
+        stepName:
+          type: string
+          description: |
+            Current workflow step name when this line was emitted.
+            Optional — may be absent for setup/teardown output.
+
+    JobLogsResponse:
+      type: object
+      required:
+        - lines
+        - total
+        - truncated
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: "#/components/schemas/JobLogLine"
+          description: Log lines (most recent N, ordered chronologically)
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of log lines available for this job
+        cursor:
+          type: string
+          description: |
+            Opaque cursor for SSE handoff. Pass as the initial
+            Last-Event-ID when subscribing to the SSE stream to
+            resume exactly where this response ended. Absent if
+            the job has no logs yet.
+        truncated:
+          type: boolean
+          description: |
+            True if total > lines.length (response was truncated).
+            Extension should display a truncation header.
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+      properties:
+        error:
+          type: string
+          description: Error code
+        message:
+          type: string
+          description: Human-readable error message
+
+  # SSE Event Schemas (not OpenAPI paths — documented for reference)
+  # These events flow through the shared SSE connection on channel 'jobs'
+
+  x-sse-events:
+    job:log:
+      description: |
+        A single log line from the job's claude CLI output.
+        Emitted on channel 'jobs', filtered by jobId.
+      payload:
+        type: object
+        required: [jobId, content, stream, timestamp]
+        properties:
+          jobId:
+            type: string
+            format: uuid
+          content:
+            type: string
+            description: Pre-cleaned log line text
+          stream:
+            type: string
+            enum: [stdout, stderr]
+          stepName:
+            type: string
+          timestamp:
+            type: string
+            format: date-time
+
+    job:step-start:
+      description: |
+        Emitted when a new workflow step begins executing.
+        Extension renders a visual separator line.
+      payload:
+        type: object
+        required: [jobId, stepName, stepIndex, totalSteps]
+        properties:
+          jobId:
+            type: string
+            format: uuid
+          stepName:
+            type: string
+          stepIndex:
+            type: integer
+            minimum: 0
+          totalSteps:
+            type: integer
+            minimum: 1
+
+    job:log:end:
+      description: |
+        Emitted when the job reaches a terminal state and no more
+        log lines will be sent. Extension displays final status
+        and stops listening.
+      payload:
+        type: object
+        required: [jobId, status, completedAt]
+        properties:
+          jobId:
+            type: string
+            format: uuid
+          status:
+            type: string
+            enum: [completed, failed, cancelled]
+          completedAt:
+            type: string
+            format: date-time

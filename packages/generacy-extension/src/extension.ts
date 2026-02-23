@@ -24,6 +24,7 @@ import { createWorkflow } from './commands/workflow';
 import { initializeExecutionStatusBar } from './providers';
 import { registerDebugAdapter } from './debug';
 import { registerCloudCommands, initializeCloudServices } from './commands/cloud';
+import { JobLogChannel } from './views/cloud/log-viewer';
 
 // Module-level provider reference for command handlers
 let workflowTreeProvider: WorkflowTreeProvider | undefined;
@@ -104,6 +105,9 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): void {
   const logger = getLogger();
   logger.info('Generacy extension deactivating');
+
+  // Clean up log channels
+  JobLogChannel.disposeAll();
 
   // Clean up utilities
   getTelemetry().dispose();
