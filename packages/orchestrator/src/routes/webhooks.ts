@@ -105,6 +105,27 @@ export async function setupWebhookRoutes(
       );
 
       if (!event) {
+        // For completed:* labels without matching waiting-for:*, re-fetch from GitHub
+        if (payload.label.name.startsWith('completed:')) {
+          server.log.info(
+            { label: payload.label.name, repo: repoKey, issue: payload.issue.number },
+            'Webhook completed:* label has no matching waiting-for:*, attempting re-fetch',
+          );
+          monitorService.recordWebhookEvent();
+          const refetchResult = await monitorService.verifyAndProcessCompletedLabel(
+            payload.repository.owner.login,
+            payload.repository.name,
+            payload.issue.number,
+            payload.label.name,
+          );
+          return reply.status(200).send({
+            status: refetchResult ? 'processed' : 'ignored',
+            reason: refetchResult
+              ? 'resume detected after label re-fetch'
+              : 'no matching waiting-for:* after re-fetch',
+          });
+        }
+
         return reply.status(200).send({ status: 'ignored', reason: 'not a trigger label' });
       }
 

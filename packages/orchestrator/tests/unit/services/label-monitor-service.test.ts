@@ -273,6 +273,23 @@ describe('LabelMonitorService', () => {
       expect(event).toBeNull();
     });
 
+    it('should log when completed:* has no matching waiting-for:*', () => {
+      service.parseLabelEvent(
+        'completed:spec-review',
+        'owner', 'repo', 42,
+        ['completed:spec-review', 'phase:clarify'],
+        'webhook',
+      );
+
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          labelName: 'completed:spec-review',
+          expectedWaitingLabel: 'waiting-for:spec-review',
+        }),
+        'completed:* label seen without matching waiting-for:* label',
+      );
+    });
+
     it('should enqueue continue command for resume event with resolved workflow name', async () => {
       const event = {
         type: 'resume' as const,
@@ -354,6 +371,85 @@ describe('LabelMonitorService', () => {
       expect(phaseTracker.isDuplicate).toHaveBeenCalledWith(
         'owner', 'repo', 42, 'resume:spec-review',
       );
+    });
+  });
+
+  // ==========================================================================
+  // verifyAndProcessCompletedLabel tests
+  // ==========================================================================
+
+  describe('verifyAndProcessCompletedLabel', () => {
+    it('should re-fetch labels and process resume when waiting-for:* exists on issue', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [
+          { name: 'completed:spec-review', color: '' },
+          { name: 'waiting-for:spec-review', color: '' },
+          { name: 'workflow:speckit-feature', color: '' },
+        ],
+      });
+
+      const result = await service.verifyAndProcessCompletedLabel(
+        'owner', 'repo', 42, 'completed:spec-review',
+      );
+
+      expect(result).toBe(true);
+      expect(mockClient.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: 'continue',
+          issueNumber: 42,
+        }),
+      );
+    });
+
+    it('should return false when re-fetch confirms no waiting-for:* label', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [
+          { name: 'completed:spec-review', color: '' },
+          { name: 'phase:clarify', color: '' },
+        ],
+      });
+
+      const result = await service.verifyAndProcessCompletedLabel(
+        'owner', 'repo', 42, 'completed:spec-review',
+      );
+
+      expect(result).toBe(false);
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should return false when getIssue API call fails', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('API rate limit exceeded'),
+      );
+
+      const result = await service.verifyAndProcessCompletedLabel(
+        'owner', 'repo', 42, 'completed:spec-review',
+      );
+
+      expect(result).toBe(false);
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ labelName: 'completed:spec-review' }),
+        expect.stringContaining('Failed to re-fetch'),
+      );
+    });
+
+    it('should respect dedup when re-fetch finds a valid pair', async () => {
+      (phaseTracker.isDuplicate as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [
+          { name: 'completed:spec-review', color: '' },
+          { name: 'waiting-for:spec-review', color: '' },
+          { name: 'workflow:speckit-feature', color: '' },
+        ],
+      });
+
+      const result = await service.verifyAndProcessCompletedLabel(
+        'owner', 'repo', 42, 'completed:spec-review',
+      );
+
+      expect(result).toBe(false);
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
     });
   });
 

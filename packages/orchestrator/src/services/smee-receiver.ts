@@ -211,7 +211,31 @@ export class SmeeWebhookReceiver {
       'webhook',
     );
 
-    if (!event) return;
+    if (!event) {
+      // If this was a completed:* label that didn't match a waiting-for:*
+      // in the webhook payload, re-fetch from GitHub to handle stale payloads.
+      if (payload.label.name.startsWith('completed:')) {
+        this.logger.info(
+          { label: payload.label.name, repo: repoKey, issue: payload.issue.number },
+          'Webhook completed:* label has no matching waiting-for:* in payload, attempting re-fetch',
+        );
+        this.monitorService.recordWebhookEvent();
+        try {
+          await this.monitorService.verifyAndProcessCompletedLabel(
+            payload.repository.owner.login,
+            payload.repository.name,
+            payload.issue.number,
+            payload.label.name,
+          );
+        } catch (error) {
+          this.logger.error(
+            { err: String(error), repo: repoKey, issue: payload.issue.number },
+            'Error during completed:* label re-fetch verification',
+          );
+        }
+      }
+      return;
+    }
 
     this.logger.info(
       {
