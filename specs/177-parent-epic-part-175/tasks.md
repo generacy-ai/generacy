@@ -12,7 +12,7 @@
 
 ## Phase 1: Event Type Mapping & Forwarder Infrastructure
 
-### T001 Add EVENT_TYPE_MAP constant to job-handler.ts
+### T001 [DONE] Add EVENT_TYPE_MAP constant to job-handler.ts
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - Add `import type { ExecutionEvent } from '@generacy-ai/workflow-engine'` to imports
 - Add `import type { JobEventType } from './types.js'` if not already imported
@@ -20,7 +20,7 @@
 - Map 7 forwarded events: `phase:start`, `phase:complete`, `step:start`, `step:complete`, `step:output`, `action:error`, `action:retry` → `action:error`
 - Skip 7 events: all `execution:*`, `phase:error`, `step:error`, `action:start`, `action:complete`
 
-### T002 Implement createEventForwarder() function
+### T002 [DONE] Implement createEventForwarder() function
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - Define `EventForwarder` interface with `enqueue()`, `flush()`, `stop()` methods
 - Implement `createEventForwarder(client, jobId, logger)` factory function
@@ -35,7 +35,7 @@
 
 ## Phase 2: Wire Up Event Forwarding in executeJob()
 
-### T003 Register event listener and progress tracking in executeJob()
+### T003 [DONE] Register event listener and progress tracking in executeJob()
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - After executor creation (~line 310), before existing addEventListener (~line 330):
   - Calculate `totalSteps` from `workflow.phases.reduce((sum, p) => sum + p.steps.length, 0)`
@@ -48,7 +48,7 @@
   - On `step:complete`: increment `completedSteps`, attach `progress` percentage to data
   - Call `forwarder.enqueue({ type, data, timestamp })`
 
-### T004 Add cleanup in finally block
+### T004 [DONE] Add cleanup in finally block
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - In the `finally` block of `executeJob()` (~line 416), before existing cleanup:
   - Call `forwarder.stop()` to prevent further enqueueing and clear remaining queue
@@ -59,51 +59,51 @@
 
 ## Phase 3: Testing
 
-### T005 Add unit tests for event forwarding
+### T005 [DONE] Add unit tests for event forwarding
 **File**: `packages/generacy/src/orchestrator/__tests__/job-handler.test.ts`
 - Add `publishEvent: vi.fn()` to `mockClient` setup
 - Add new `describe('event forwarding')` block with the following tests:
 
-### T005a Test: forward phase:start events to orchestrator
+### T005 [DONE]a Test: forward phase:start events to orchestrator
 - Emit a `phase:start` event from executor
 - Verify `publishEvent` called with correct jobId, mapped type, and data payload
 
-### T005b Test: forward step:complete events with progress
+### T005 [DONE]b Test: forward step:complete events with progress
 - Emit `step:complete` events for a workflow with known total steps
 - Verify `progress` field in data reflects `completedSteps / totalSteps * 100`
 
-### T005c Test: do not forward execution:* events
+### T005 [DONE]c Test: do not forward execution:* events
 - Emit `execution:start`, `execution:complete`, `execution:error`, `execution:cancel`
 - Verify `publishEvent` is NOT called for any of them
 
-### T005d Test: do not forward phase:error or step:error
+### T005 [DONE]d Test: do not forward phase:error or step:error
 - Emit `phase:error` and `step:error` events
 - Verify `publishEvent` is NOT called (redundant with completion events)
 
-### T005e Test: map action:retry to action:error
+### T005 [DONE]e Test: map action:retry to action:error
 - Emit an `action:retry` event
 - Verify `publishEvent` called with type `action:error`
 
-### T005f Test: non-blocking error handling
+### T005 [DONE]f Test: non-blocking error handling
 - Make `publishEvent` reject with an error
 - Verify job execution still completes successfully
 - Verify the error does not propagate to the executor or job handler
 
-### T005g Test: log throttling on forwarding failures
+### T005 [DONE]g Test: log throttling on forwarding failures
 - Make `publishEvent` reject multiple times
 - Verify first failure logged at `warn`, subsequent at `debug`
 - Make `publishEvent` succeed, then fail again
 - Verify warn is logged again after success reset
 
-### T005h Test: preserve event ordering
+### T005 [DONE]h Test: preserve event ordering
 - Emit multiple events rapidly
 - Verify `publishEvent` calls are in the same order as emitted events
 
-### T005i Test: progress calculation as completedSteps/totalSteps
+### T005 [DONE]i Test: progress calculation as completedSteps/totalSteps
 - Use a workflow with 2 phases, 3 total steps
 - Verify progress: 33% after step 1, 67% after step 2, 100% after step 3
 
-### T005j Test: stop forwarding after forwarder.stop()
+### T005 [DONE]j Test: stop forwarding after forwarder.stop()
 - Emit events, then call stop
 - Verify no further `publishEvent` calls after stop
 - Verify queue is cleared
@@ -112,14 +112,14 @@
 
 ## Phase 4: Verification
 
-### T006 Type-check and lint
+### T006 [DONE] Type-check and lint
 **Files**:
 - `packages/generacy/src/orchestrator/job-handler.ts`
 - `packages/generacy/src/orchestrator/__tests__/job-handler.test.ts`
 - Run `pnpm tsc --noEmit` to verify no type errors
 - Run `pnpm lint` to verify no linting issues
 
-### T007 Run full test suite
+### T007 [DONE] Run full test suite
 **Files**:
 - `packages/generacy/src/orchestrator/__tests__/job-handler.test.ts`
 - Run `pnpm test` (or `pnpm vitest run`) for the orchestrator package
