@@ -84,6 +84,9 @@ export const CONFIG_KEYS = {
   defaultTemplate: 'defaultTemplate',
   cloudEndpoint: 'cloudEndpoint',
   telemetryEnabled: 'telemetry.enabled',
+  notificationsEnabled: 'notifications.enabled',
+  notificationsOnComplete: 'notifications.onComplete',
+  notificationsOnError: 'notifications.onError',
 } as const;
 
 /**
