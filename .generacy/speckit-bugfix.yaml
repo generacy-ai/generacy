@@ -54,6 +54,17 @@ phases:
           short_name: ${{ inputs.short_name }}
           number: ${{ inputs.issue_number }}
 
+      - name: validate-branch
+        uses: shell
+        command: |
+          CURRENT=$(git rev-parse --abbrev-ref HEAD)
+          EXPECTED="${{ steps.create-feature.output.branch_name }}"
+          if [ "$CURRENT" != "$EXPECTED" ]; then
+            echo "ERROR: Expected branch '$EXPECTED' but on '$CURRENT'"
+            exit 1
+          fi
+          echo "Branch validated: $CURRENT"
+
   # Phase 2: Specification
   - name: specification
     steps:
@@ -72,7 +83,7 @@ phases:
 
       - name: push-spec
         uses: shell
-        command: git push --force-with-lease -u origin HEAD
+        command: git push --force-with-lease -u origin ${{ steps.create-feature.output.branch_name }}
         continueOnError: true
 
       - name: create-pr
@@ -88,7 +99,6 @@ phases:
             ---
             *Draft PR created by speckit-bugfix workflow. Implementation in progress.*
           draft: true
-        continueOnError: true
 
   # Phase 3: Planning
   - name: planning
@@ -107,7 +117,7 @@ phases:
 
       - name: push-plan
         uses: shell
-        command: git push
+        command: git push origin ${{ steps.create-feature.output.branch_name }}
         continueOnError: true
 
   # Phase 4: Task Generation
@@ -127,7 +137,7 @@ phases:
 
       - name: push-tasks
         uses: shell
-        command: git push
+        command: git push origin ${{ steps.create-feature.output.branch_name }}
         continueOnError: true
 
   # Phase 5: Implementation
@@ -147,7 +157,7 @@ phases:
 
       - name: push-implementation
         uses: shell
-        command: git push
+        command: git push origin ${{ steps.create-feature.output.branch_name }}
         continueOnError: true
 
   # Phase 6: Verification

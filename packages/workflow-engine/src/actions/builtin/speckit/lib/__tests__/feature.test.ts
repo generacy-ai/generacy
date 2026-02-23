@@ -74,7 +74,13 @@ function createMockGit(): SimpleGit {
     branch: vi.fn().mockResolvedValue({ all: [] }),
     pull: vi.fn().mockResolvedValue(undefined),
     raw: vi.fn().mockResolvedValue('refs/remotes/origin/develop'),
-    revparse: vi.fn().mockResolvedValue('abc123def456'),
+    revparse: vi.fn().mockImplementation(async (args: string[]) => {
+      // Distinguish between SHA lookup and branch name lookup
+      if (Array.isArray(args) && args.includes('--abbrev-ref')) {
+        return '042-test-feature'; // default: branch verification succeeds
+      }
+      return 'abc123def456'; // default: commit SHA for base_commit
+    }),
   } as unknown as SimpleGit;
   return git;
 }
@@ -259,6 +265,13 @@ describe('createFeature()', () => {
         'spec.md': true,
       });
 
+      // Local branch exists — resume checks it out directly
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: ['042-test-feature'],
+        current: 'develop',
+      });
+      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('042-test-feature');
+
       const result = await createFeature({
         description: 'test feature',
         number: 42,
@@ -291,6 +304,7 @@ describe('createFeature()', () => {
         all: ['042-test-feature'],
         current: 'develop',
       });
+      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('042-test-feature');
 
       await createFeature({
         description: 'test feature',
@@ -300,6 +314,128 @@ describe('createFeature()', () => {
 
       expect(git().checkout).toHaveBeenCalledWith('042-test-feature');
     });
+
+    it('creates branch from default when dir exists but no local or remote branch', async () => {
+      existsFor({
+        '.git': true,
+        'autodev.json': false,
+        '042-test-feature': true,
+        'spec.md': false,
+      });
+
+      // No local branches contain the feature branch
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: [],
+        current: 'develop',
+      });
+
+      // No remote branches contain the feature branch
+      (git().branch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: [],
+      });
+
+      // After branch creation, revparse returns the new branch name
+      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('042-test-feature');
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 42,
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.git_branch_created).toBe(true);
+
+      // Should have synced to default branch and created the feature branch
+      expect(git().checkout).toHaveBeenCalledWith('develop');
+      expect(git().reset).toHaveBeenCalledWith(['--hard', 'origin/develop']);
+      expect(git().checkoutLocalBranch).toHaveBeenCalledWith('042-test-feature');
+    });
+
+    it('returns success: false when checkout fails silently (branch mismatch)', async () => {
+      existsFor({
+        '.git': true,
+        'autodev.json': false,
+        '042-test-feature': true,
+        'spec.md': false,
+      });
+
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: ['042-test-feature'],
+        current: 'develop',
+      });
+
+      // Simulate checkout not actually switching branches
+      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('develop');
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 42,
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Branch checkout failed');
+    });
+
+    it('sets git_branch_created to true when branch is newly created in resume path', async () => {
+      existsFor({
+        '.git': true,
+        'autodev.json': false,
+        '042-test-feature': true,
+        'spec.md': false,
+      });
+
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: [],
+        current: 'develop',
+      });
+      (git().branch as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: [],
+      });
+      // After branch creation, revparse returns the new branch name
+      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('042-test-feature');
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 42,
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.git_branch_created).toBe(true);
+    });
+
+    it('logs a warning when git fetch fails in resume path', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      existsFor({
+        '.git': true,
+        'autodev.json': false,
+        '042-test-feature': true,
+        'spec.md': true,
+      });
+
+      (git().branchLocal as ReturnType<typeof vi.fn>).mockResolvedValue({
+        all: ['042-test-feature'],
+        current: 'develop',
+      });
+      (git().fetch as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('network error'));
+      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('042-test-feature');
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 42,
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('git fetch failed'),
+      );
+
+      warnSpy.mockRestore();
+    });
   });
 
   // -------------------------------------------------------------------------
@@ -307,7 +443,10 @@ describe('createFeature()', () => {
   // -------------------------------------------------------------------------
   describe('base_commit output', () => {
     it('returns base_commit SHA for new branches from default branch', async () => {
-      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('deadbeef1234');
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '042-test-feature';
+        return 'deadbeef1234';
+      });
 
       const result = await createFeature({
         description: 'test feature',
@@ -323,7 +462,10 @@ describe('createFeature()', () => {
       (git().branch as ReturnType<typeof vi.fn>).mockResolvedValue({
         all: ['remotes/origin/epic-123'],
       });
-      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('epic-sha-5678');
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '042-test-feature';
+        return 'epic-sha-5678';
+      });
 
       const result = await createFeature({
         description: 'test feature',
@@ -340,7 +482,10 @@ describe('createFeature()', () => {
       (git().branch as ReturnType<typeof vi.fn>).mockResolvedValue({
         all: [],
       });
-      (git().revparse as ReturnType<typeof vi.fn>).mockResolvedValue('fallback-sha-9999');
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '042-test-feature';
+        return 'fallback-sha-9999';
+      });
 
       const result = await createFeature({
         description: 'test feature',
