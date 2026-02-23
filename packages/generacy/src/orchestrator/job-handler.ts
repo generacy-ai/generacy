@@ -17,14 +17,14 @@ import {
   resolveRegisteredWorkflow,
   type WorkflowResolver,
   type HumanDecisionHandler,
+  type ExecutionEvent,
   type ExecutionResult,
   type Logger,
   type WorkflowDefinition,
   type PhaseResult,
 } from '@generacy-ai/workflow-engine';
 import type { OrchestratorClient } from './client.js';
-import type { Job, JobResult, JobEventType } from './types.js';
-import { AsyncEventQueue } from './async-event-queue.js';
+import type { Job, JobEventType, JobResult } from './types.js';
 
 /**
  * Mapping from YAML phase names to completed:* label suffixes.
@@ -63,18 +63,91 @@ const PHASE_GATES: Record<string, string> = {
 };
 
 /**
- * Event types to forward from the workflow executor to the orchestrator.
- * Lifecycle events (phase/step) needed for real-time monitoring (#175).
- * Log events for stdout/stderr streaming. Action-level events are too granular.
+ * Map executor event types to orchestrator JobEventType.
+ * Returns undefined for events we don't forward (execution:*, phase:error, step:error, action:start/complete).
+ * Includes log:append for stdout/stderr streaming (#178).
  */
-const FORWARD_EVENT_TYPES = new Set<string>([
-  'phase:start',
-  'phase:complete',
-  'step:start',
-  'step:complete',
-  'step:output',
-  'log:append',
-]);
+const EVENT_TYPE_MAP: Partial<Record<string, JobEventType>> = {
+  'phase:start': 'phase:start',
+  'phase:complete': 'phase:complete',
+  'step:start': 'step:start',
+  'step:complete': 'step:complete',
+  'step:output': 'step:output',
+  'action:error': 'action:error',
+  'action:retry': 'action:error',
+  'log:append': 'log:append',
+};
+
+/**
+ * Event forwarder interface.
+ * Provides an async queue that forwards executor events to the orchestrator
+ * sequentially, guaranteeing event ordering while remaining non-blocking.
+ */
+interface EventForwarder {
+  enqueue(event: { type: JobEventType; data: Record<string, unknown>; timestamp: number }): void;
+  flush(): Promise<void>;
+  stop(): void;
+}
+
+/**
+ * Create an event forwarder that enqueues events and drains them sequentially
+ * via the orchestrator client's publishEvent method.
+ *
+ * - enqueue() is synchronous (fire-and-forget drain) so the executor callback is never blocked.
+ * - drain() processes one event at a time, awaiting each publishEvent call, guaranteeing ordering.
+ * - Errors are swallowed (non-blocking): first failure per sequence logs at warn, subsequent at debug.
+ * - stop() prevents further enqueueing and clears the queue.
+ */
+function createEventForwarder(
+  client: OrchestratorClient,
+  jobId: string,
+  logger: Logger,
+): EventForwarder {
+  const queue: Array<{ type: JobEventType; data: Record<string, unknown>; timestamp: number }> = [];
+  let draining = false;
+  let stopped = false;
+  let hasLoggedFailure = false;
+
+  async function drain(): Promise<void> {
+    if (draining) return;
+    draining = true;
+    try {
+      while (queue.length > 0 && !stopped) {
+        const event = queue.shift()!;
+        try {
+          await client.publishEvent(jobId, event);
+          hasLoggedFailure = false; // Reset on success
+        } catch (error) {
+          // Non-blocking: log and continue
+          const msg = error instanceof Error ? error.message : String(error);
+          if (!hasLoggedFailure) {
+            logger.warn(`Event forwarding failed for job ${jobId}: ${msg}`);
+            hasLoggedFailure = true;
+          } else {
+            logger.debug(`Event forwarding failed for job ${jobId}: ${msg}`);
+          }
+        }
+      }
+    } finally {
+      draining = false;
+    }
+  }
+
+  return {
+    enqueue(event) {
+      if (stopped) return;
+      queue.push(event);
+      void drain();
+    },
+    async flush() {
+      await drain();
+    },
+    stop() {
+      stopped = true;
+      queue.length = 0;
+    },
+  };
+}
 
 /**
  * Register built-in workflow files from the generacy package's .generacy/ directory.
@@ -285,14 +358,8 @@ export class JobHandler {
     this.logger.info(`Starting job: ${job.id} (${job.name})`);
     this.onJobStart?.(job);
 
-    // Set up event forwarding to orchestrator for real-time monitoring
-    const eventQueue = new AsyncEventQueue(async (jobId, event) => {
-      await this.client.publishEvent(jobId, event as {
-        type: JobEventType;
-        data: Record<string, unknown>;
-        timestamp?: number;
-      });
-    });
+    let forwarder: EventForwarder | undefined;
+    let forwarderSubscription: { dispose: () => void } | undefined;
 
     try {
       // Update job status to running
@@ -342,6 +409,35 @@ export class JobHandler {
         }
       }
 
+      // --- Event forwarding to orchestrator ---
+      const totalSteps = workflow.phases.reduce((sum, p) => sum + p.steps.length, 0);
+      let completedSteps = 0;
+
+      forwarder = createEventForwarder(this.client, job.id, this.logger);
+      forwarderSubscription = executor.addEventListener((event) => {
+        const mappedType = EVENT_TYPE_MAP[event.type];
+        if (!mappedType) return;
+
+        const data: Record<string, unknown> = {
+          workflowName: event.workflowName,
+        };
+        if (event.phaseName) data.phaseName = event.phaseName;
+        if (event.stepName) data.stepName = event.stepName;
+        if (event.message) data.message = event.message;
+        if (event.data !== undefined) data.detail = event.data;
+
+        if (event.type === 'step:complete') {
+          completedSteps++;
+          data.progress = totalSteps > 0 ? Math.round((completedSteps / totalSteps) * 100) : 0;
+        }
+
+        forwarder!.enqueue({
+          type: mappedType,
+          data,
+          timestamp: event.timestamp,
+        });
+      });
+
       // Listen for phase completions: add labels and handle gates
       const owner = job.inputs?.owner as string | undefined;
       const repo = job.inputs?.repo as string | undefined;
@@ -351,20 +447,6 @@ export class JobHandler {
       const phasesWithFailedSteps = new Set<string>();
 
       executor.addEventListener((event) => {
-        // Forward matching events to orchestrator
-        if (FORWARD_EVENT_TYPES.has(event.type)) {
-          eventQueue.push(job.id, {
-            type: event.type,
-            timestamp: event.timestamp,
-            data: {
-              phaseName: event.phaseName,
-              stepName: event.stepName,
-              message: event.message,
-              ...(event.data as Record<string, unknown> ?? {}),
-            },
-          });
-        }
-
         // Track step failures so we can label phases accurately
         if (event.type === 'step:error' && event.phaseName) {
           phasesWithFailedSteps.add(event.phaseName);
@@ -451,8 +533,9 @@ export class JobHandler {
 
       this.onJobComplete?.(job, failureResult);
     } finally {
-      // Flush any remaining queued events before cleanup
-      await eventQueue.flush();
+      // Stop event forwarding and unsubscribe
+      forwarder?.stop();
+      forwarderSubscription?.dispose();
 
       // Restore the original branch so the repo is clean for the next job
       if (originalBranch) {

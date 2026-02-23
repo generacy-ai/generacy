@@ -61,7 +61,7 @@ export class LabelMonitorService {
    * Process:* labels are checked every cycle. Completed:* labels
    * are for resume detection and can be checked less frequently.
    */
-  private static readonly COMPLETED_CHECK_INTERVAL = 10;
+  private static readonly COMPLETED_CHECK_INTERVAL = 3;
 
   private state: MonitorState;
 
@@ -145,9 +145,67 @@ export class LabelMonitorService {
           issueLabels,
         };
       }
+
+      this.logger.info(
+        { labelName, owner, repo, issueNumber, expectedWaitingLabel: waitingLabel, source },
+        'completed:* label seen without matching waiting-for:* label',
+      );
     }
 
     return null;
+  }
+
+  // ==========================================================================
+  // Webhook Verification
+  // ==========================================================================
+
+  /**
+   * Re-fetch issue labels from GitHub and retry resume detection.
+   * Called when a webhook delivers a completed:* label but the payload's
+   * issueLabels didn't contain a matching waiting-for:* label (stale payload).
+   */
+  async verifyAndProcessCompletedLabel(
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    labelName: string,
+  ): Promise<boolean> {
+    this.logger.info(
+      { owner, repo, issueNumber, labelName },
+      'Re-fetching issue labels for completed:* verification',
+    );
+
+    let freshLabels: string[];
+    try {
+      const client = this.createClient();
+      const issue = await client.getIssue(owner, repo, issueNumber);
+      freshLabels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
+    } catch (error) {
+      this.logger.error(
+        { err: String(error), owner, repo, issueNumber, labelName },
+        'Failed to re-fetch issue labels for completed:* verification',
+      );
+      return false;
+    }
+
+    const event = this.parseLabelEvent(
+      labelName, owner, repo, issueNumber, freshLabels, 'webhook',
+    );
+
+    if (!event) {
+      this.logger.info(
+        { owner, repo, issueNumber, labelName },
+        'Re-fetch confirmed: no matching waiting-for:* label on issue',
+      );
+      return false;
+    }
+
+    this.logger.info(
+      { owner, repo, issueNumber, labelName, type: event.type },
+      'Re-fetch found matching waiting-for:* label, processing resume event',
+    );
+
+    return this.processLabelEvent(event);
   }
 
   // ==========================================================================
