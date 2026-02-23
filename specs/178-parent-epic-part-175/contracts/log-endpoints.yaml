@@ -1,0 +1,242 @@
+openapi: 3.0.3
+info:
+  title: Orchestrator Log Streaming API
+  description: Endpoints for real-time log streaming from workflow execution
+  version: 1.0.0
+
+paths:
+  /api/jobs/{jobId}/logs:
+    get:
+      summary: Retrieve buffered log output for a job
+      description: |
+        Returns log entries from the per-job LogBuffer. Supports incremental
+        fetching with `since` parameter and SSE streaming with `stream=true`.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: The job identifier
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+          description: |
+            LogEntry ID to fetch entries after. Returns only entries with id > since.
+            Used for incremental polling.
+        - name: stream
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["true"]
+          description: |
+            When set to "true", returns an SSE stream instead of JSON.
+            Replays existing buffered entries first, then streams new entries live.
+      responses:
+        "200":
+          description: Log entries (JSON or SSE depending on `stream` parameter)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LogResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: |
+                  SSE stream of log:append events. Format:
+                  ```
+                  event: log:append
+                  id: {entry.id}
+                  data: {JSON LogEntry}
+                  ```
+        "401":
+          description: Authentication required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security:
+        - bearerAuth: []
+
+  /api/jobs/{jobId}/events:
+    post:
+      summary: Publish an event for a job (existing, extended with log:append)
+      description: |
+        Existing endpoint. Now routes `log:append` events to the dedicated
+        LogBuffer in addition to SSE broadcast. Lifecycle events continue
+        to be stored in the EventBus RingBuffer.
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PublishEventRequest"
+            examples:
+              logAppend:
+                summary: Streaming log output from Claude
+                value:
+                  type: "log:append"
+                  timestamp: 1234567890123
+                  data:
+                    stream: "stdout"
+                    stepName: "specify"
+                    content: "Reading extension/src/extension.ts...\n"
+              logAppendWithTask:
+                summary: Log output from implement step with task context
+                value:
+                  type: "log:append"
+                  timestamp: 1234567890123
+                  data:
+                    stream: "stdout"
+                    stepName: "implement"
+                    taskIndex: 2
+                    taskTitle: "Add streaming callbacks to executeCommand"
+                    content: "Editing cli-utils.ts...\n"
+              lifecycleEvent:
+                summary: Phase start lifecycle event
+                value:
+                  type: "phase:start"
+                  timestamp: 1234567890123
+                  data:
+                    phaseName: "specification"
+                    message: "Starting specification phase"
+      responses:
+        "201":
+          description: Event published
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  eventId:
+                    type: string
+        "400":
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Job not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+      security:
+        - bearerAuth: []
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Optional Bearer token (disabled when ORCHESTRATOR_TOKEN is not set)
+
+  schemas:
+    LogEntry:
+      type: object
+      required:
+        - id
+        - timestamp
+        - stream
+        - stepName
+        - content
+      properties:
+        id:
+          type: integer
+          description: Monotonic ID within the job's log buffer (1-based)
+          example: 42
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds
+          example: 1234567890123
+        stream:
+          type: string
+          enum: [stdout, stderr]
+          description: Output stream identifier
+        stepName:
+          type: string
+          description: "Speckit operation name"
+          enum: [specify, clarify, plan, tasks, implement]
+          example: specify
+        content:
+          type: string
+          description: Log content (may contain multiple newline-delimited lines)
+          example: "Reading extension/src/extension.ts...\nAnalyzing code structure...\n"
+        taskIndex:
+          type: integer
+          description: Task index within implement operation (0-based). Only present for implement step.
+          example: 2
+        taskTitle:
+          type: string
+          description: Task description (truncated to 100 chars). Only present for implement step.
+          example: "Add streaming callbacks to executeCommand"
+
+    LogResponse:
+      type: object
+      required:
+        - entries
+        - total
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/LogEntry"
+          description: Log entries matching the query
+        total:
+          type: integer
+          description: Total number of entries currently in the buffer
+          example: 42
+
+    PublishEventRequest:
+      type: object
+      required:
+        - type
+        - data
+      properties:
+        type:
+          type: string
+          enum:
+            - "job:status"
+            - "phase:start"
+            - "phase:complete"
+            - "step:start"
+            - "step:complete"
+            - "step:output"
+            - "action:error"
+            - "log:append"
+          description: Event type
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix epoch milliseconds (defaults to server time if omitted)
+        data:
+          type: object
+          description: Event payload (shape depends on event type)
+          additionalProperties: true
+
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          example: "JOB_NOT_FOUND"
+        message:
+          type: string
+          example: "Job with ID abc-123 not found"
