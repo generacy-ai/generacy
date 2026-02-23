@@ -46,3 +46,15 @@ export {
   type TelemetryEvent,
   type TelemetrySender,
 } from './telemetry';
+
+// Notifications
+export {
+  NotificationManager,
+  type NotificationLevel,
+} from './notifications';
+
+// Capabilities
+export {
+  CapabilityChecker,
+  getCapabilityChecker,
+} from './capabilities';

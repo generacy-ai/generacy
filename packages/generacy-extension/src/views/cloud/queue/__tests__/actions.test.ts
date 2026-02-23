@@ -82,6 +82,14 @@ vi.mock('../../../../api/endpoints/queue', () => ({
   },
 }));
 
+// Mock WorkItemDetailPanel to avoid deep vscode mock requirements
+const mockShowPreview = vi.fn();
+vi.mock('../detail-panel', () => ({
+  WorkItemDetailPanel: {
+    showPreview: (...args: unknown[]) => mockShowPreview(...args),
+  },
+}));
+
 // Import after mocks are set up
 import * as vscode from 'vscode';
 import { queueApi } from '../../../../api/endpoints/queue';
@@ -348,21 +356,22 @@ describe('Queue Actions', () => {
   });
 
   describe('viewQueueItemDetails', () => {
-    it('should create webview panel with item details', async () => {
+    const mockExtensionUri = { fsPath: '/mock/extension' } as vscode.Uri;
+
+    beforeEach(() => {
+      mockShowPreview.mockReset();
+    });
+
+    it('should delegate to WorkItemDetailPanel.showPreview', async () => {
       const item = createMockQueueItem({
         status: 'running',
         startedAt: '2024-01-15T10:05:00Z',
       });
       (queueApi.getQueueItem as Mock).mockResolvedValueOnce(item);
 
-      await viewQueueItemDetails(item);
+      await viewQueueItemDetails(item, mockExtensionUri);
 
-      expect(vscode.window.createWebviewPanel).toHaveBeenCalledWith(
-        'generacy.queueItemDetails',
-        expect.stringContaining('Test Workflow'),
-        1,
-        expect.objectContaining({ enableScripts: false })
-      );
+      expect(mockShowPreview).toHaveBeenCalledWith(item, mockExtensionUri);
     });
 
     it('should fetch fresh data from API', async () => {
@@ -370,35 +379,35 @@ describe('Queue Actions', () => {
       const freshItem = { ...item, status: 'completed' as QueueStatus };
       (queueApi.getQueueItem as Mock).mockResolvedValueOnce(freshItem);
 
-      await viewQueueItemDetails(item);
+      await viewQueueItemDetails(item, mockExtensionUri);
 
       expect(queueApi.getQueueItem).toHaveBeenCalledWith(item.id);
+      expect(mockShowPreview).toHaveBeenCalledWith(freshItem, mockExtensionUri);
     });
 
     it('should use cached data when API fetch fails', async () => {
       const item = createMockQueueItem();
       (queueApi.getQueueItem as Mock).mockRejectedValueOnce(new Error('API Error'));
 
-      await viewQueueItemDetails(item);
+      await viewQueueItemDetails(item, mockExtensionUri);
 
-      // Should still create the panel with cached data
-      expect(vscode.window.createWebviewPanel).toHaveBeenCalled();
+      // Should still show preview with cached data
+      expect(mockShowPreview).toHaveBeenCalledWith(item, mockExtensionUri);
     });
 
-    it('should display error details for failed items', async () => {
+    it('should pass fresh item with error details to panel', async () => {
       const item = createMockQueueItem({
         status: 'failed',
         error: 'Connection timeout',
       });
       (queueApi.getQueueItem as Mock).mockResolvedValueOnce(item);
 
-      const mockPanel = { webview: { html: '' } };
-      (vscode.window.createWebviewPanel as Mock).mockReturnValueOnce(mockPanel);
+      await viewQueueItemDetails(item, mockExtensionUri);
 
-      await viewQueueItemDetails(item);
-
-      expect(mockPanel.webview.html).toContain('Connection timeout');
-      expect(mockPanel.webview.html).toContain('Error Details');
+      expect(mockShowPreview).toHaveBeenCalledWith(
+        expect.objectContaining({ error: 'Connection timeout' }),
+        mockExtensionUri
+      );
     });
   });
 

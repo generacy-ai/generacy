@@ -14,6 +14,11 @@ import {
   registerCloudWorkflowProvider,
   registerDecorationProvider,
 } from '../views/cloud/publish';
+import { SSESubscriptionManager } from '../api/sse';
+import { createAgentTreeProvider } from '../views/cloud/agents';
+import { registerOrchestratorSidebar, OrchestratorDashboardPanel } from '../views/cloud/orchestrator';
+import { NotificationManager } from '../utils/notifications';
+import { CLOUD_COMMANDS as ORCH_COMMANDS, CONTEXT_KEYS } from '../constants';
 
 /**
  * Cloud command identifiers
@@ -23,8 +28,6 @@ export const CLOUD_COMMANDS = {
   logout: 'generacy.logout',
   showAccount: 'generacy.showAccount',
   publishWorkflow: 'generacy.publishWorkflow',
-  compareWithCloud: 'generacy.compareWithCloud',
-  viewVersionHistory: 'generacy.viewVersionHistory',
   compareWithCloud: 'generacy.compareWithCloud',
   viewVersionHistory: 'generacy.viewVersionHistory',
   rollbackWorkflow: 'generacy.rollbackWorkflow',
@@ -108,6 +111,68 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
   context.subscriptions.push({
     dispose: () => authService.dispose(),
   });
+
+  // --- Orchestration UI wiring ---
+
+  // Initialize SSE manager and connect/disconnect based on auth state
+  const sseManager = SSESubscriptionManager.getInstance();
+  context.subscriptions.push(sseManager);
+
+  // Set orchestratorConnected context key based on SSE connection state
+  context.subscriptions.push(
+    sseManager.onDidChangeConnectionState((state) => {
+      void vscode.commands.executeCommand(
+        'setContext',
+        CONTEXT_KEYS.orchestratorConnected,
+        state === 'connected',
+      );
+    }),
+  );
+
+  // Connect SSE when authenticated, disconnect when not
+  context.subscriptions.push(
+    authService.onDidChange(async (event) => {
+      if (event.newState.isAuthenticated) {
+        const orchestratorUrl = vscode.workspace.getConfiguration('generacy').get<string>('orchestratorUrl', 'http://localhost:3100');
+        const token = await authService.getAccessToken();
+        if (token) {
+          sseManager.connect(orchestratorUrl, token);
+        }
+      } else {
+        sseManager.disconnect();
+      }
+    }),
+  );
+
+  // If already authenticated, connect SSE now
+  if (authService.isAuthenticated()) {
+    const orchestratorUrl = vscode.workspace.getConfiguration('generacy').get<string>('orchestratorUrl', 'http://localhost:3100');
+    const token = await authService.getAccessToken();
+    if (token) {
+      sseManager.connect(orchestratorUrl, token);
+    }
+  }
+
+  // Register agent tree view (handles its own commands and actions internally)
+  createAgentTreeProvider(context);
+  logger.info('Agent tree view registered');
+
+  // Register orchestrator sidebar summary view
+  registerOrchestratorSidebar(context);
+  logger.info('Orchestrator sidebar registered');
+
+  // Register dashboard open command
+  context.subscriptions.push(
+    vscode.commands.registerCommand(ORCH_COMMANDS.openDashboard, () => {
+      OrchestratorDashboardPanel.createOrShow(context.extensionUri);
+    }),
+  );
+  logger.info('Dashboard command registered');
+
+  // Initialize notification manager
+  const notificationManager = new NotificationManager();
+  context.subscriptions.push(notificationManager);
+  logger.info('Notification manager initialized');
 
   logger.info('Cloud services initialized');
 }

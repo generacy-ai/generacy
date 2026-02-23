@@ -241,6 +241,54 @@
         "title": "Show Error Details",
         "category": "Generacy Debug",
         "icon": "$(info)"
+      },
+      {
+        "command": "generacy.openDashboard",
+        "title": "Open Orchestration Dashboard",
+        "category": "Generacy",
+        "icon": "$(dashboard)"
+      },
+      {
+        "command": "generacy.agents.refresh",
+        "title": "Refresh Agents",
+        "category": "Generacy",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "generacy.agents.viewLogs",
+        "title": "View Agent Logs",
+        "category": "Generacy",
+        "icon": "$(output)"
+      },
+      {
+        "command": "generacy.agents.viewByStatus",
+        "title": "Group by Status",
+        "category": "Generacy",
+        "icon": "$(group-by-ref-type)"
+      },
+      {
+        "command": "generacy.agents.viewFlat",
+        "title": "Flat View",
+        "category": "Generacy",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "generacy.queue.assign",
+        "title": "Assign to Agent...",
+        "category": "Generacy",
+        "icon": "$(person-add)"
+      },
+      {
+        "command": "generacy.queue.setPriority",
+        "title": "Set Priority...",
+        "category": "Generacy",
+        "icon": "$(arrow-both)"
+      },
+      {
+        "command": "generacy.queue.pinDetail",
+        "title": "Pin Detail Panel",
+        "category": "Generacy",
+        "icon": "$(pin)"
       }
     ],
     "viewsContainers": {
@@ -263,6 +311,18 @@
           "id": "generacy.queue",
           "name": "Queue",
           "contextualTitle": "Workflow Queue",
+          "when": "generacy.isAuthenticated"
+        },
+        {
+          "id": "generacy.agents",
+          "name": "Agents",
+          "contextualTitle": "Agent Pool",
+          "when": "generacy.isAuthenticated"
+        },
+        {
+          "id": "generacy.orchestratorSummary",
+          "name": "Orchestrator",
+          "type": "webview",
           "when": "generacy.isAuthenticated"
         }
       ],
@@ -349,6 +409,26 @@
           "command": "generacy.debug.clearErrors",
           "when": "view == generacy.debugErrors",
           "group": "navigation@2"
+        },
+        {
+          "command": "generacy.agents.refresh",
+          "when": "view == generacy.agents",
+          "group": "navigation@1"
+        },
+        {
+          "command": "generacy.agents.viewByStatus",
+          "when": "view == generacy.agents && generacy.agents.viewMode != 'byStatus'",
+          "group": "navigation@2"
+        },
+        {
+          "command": "generacy.agents.viewFlat",
+          "when": "view == generacy.agents && generacy.agents.viewMode != 'flat'",
+          "group": "navigation@3"
+        },
+        {
+          "command": "generacy.openDashboard",
+          "when": "view == generacy.orchestratorSummary",
+          "group": "navigation@1"
         }
       ],
       "view/item/context": [
@@ -421,6 +501,21 @@
           "command": "generacy.debug.showErrorDetails",
           "when": "view == generacy.debugErrors && viewItem == error",
           "group": "1_view@1"
+        },
+        {
+          "command": "generacy.agents.viewLogs",
+          "when": "view == generacy.agents && viewItem =~ /^agent-/",
+          "group": "inline@1"
+        },
+        {
+          "command": "generacy.queue.assign",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem-pending/",
+          "group": "inline@3"
+        },
+        {
+          "command": "generacy.queue.setPriority",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem-/",
+          "group": "2_priority@1"
         }
       ]
     },
@@ -471,6 +566,28 @@
           "type": "number",
           "default": 300000,
           "description": "Cache TTL for workflow sync status in milliseconds (default: 5 minutes)"
+        },
+        "generacy.orchestratorUrl": {
+          "type": "string",
+          "default": "http://localhost:3100",
+          "description": "URL of the orchestrator service for agent management and work dispatch"
+        },
+        "generacy.dashboard.pollInterval": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 5000,
+          "maximum": 300000,
+          "description": "Polling interval in milliseconds for dashboard data refresh (used as fallback when SSE is unavailable)"
+        },
+        "generacy.dashboard.notifications": {
+          "type": "string",
+          "default": "summary",
+          "enum": [
+            "all",
+            "summary",
+            "none"
+          ],
+          "description": "Notification level for orchestration events: 'all' shows each event immediately, 'summary' batches events into periodic summaries, 'none' suppresses notifications"
         }
       }
     },

@@ -450,6 +450,273 @@ export const PublishWorkflowRequestSchema = z.object({
 });
 
 // ============================================================================
+// Agent Types
+// ============================================================================
+
+/**
+ * Agent connection status (mirrors orchestrator's AgentConnectionStatus)
+ */
+export type AgentConnectionStatus = 'connected' | 'idle' | 'busy' | 'disconnected';
+
+/**
+ * Agent type (mirrors orchestrator's AgentType)
+ */
+export type AgentType = 'claude' | 'gpt4' | 'custom';
+
+/**
+ * Display status for UI grouping in the agent tree view
+ */
+export type AgentDisplayStatus = 'available' | 'busy' | 'offline';
+
+/**
+ * Agent details (mirrors orchestrator's ConnectedAgent)
+ */
+export interface Agent {
+  /** Unique agent ID */
+  id: string;
+  /** Agent display name */
+  name: string;
+  /** Agent type */
+  type: AgentType;
+  /** Connection status */
+  status: AgentConnectionStatus;
+  /** Agent capabilities */
+  capabilities: string[];
+  /** Last seen timestamp (ISO datetime) */
+  lastSeen: string;
+  /** Agent metadata */
+  metadata: {
+    version?: string;
+    platform?: string;
+    workflowId?: string;
+  };
+}
+
+/**
+ * Zod schema for agent
+ */
+export const AgentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  type: z.enum(['claude', 'gpt4', 'custom']),
+  status: z.enum(['connected', 'idle', 'busy', 'disconnected']),
+  capabilities: z.array(z.string()),
+  lastSeen: z.string().datetime(),
+  metadata: z.object({
+    version: z.string().optional(),
+    platform: z.string().optional(),
+    workflowId: z.string().uuid().optional(),
+  }),
+});
+
+/**
+ * Agent list response
+ */
+export interface AgentListResponse {
+  /** Agent items */
+  items: Agent[];
+  /** Total count */
+  total: number;
+  /** Current page */
+  page: number;
+  /** Items per page */
+  pageSize: number;
+}
+
+/**
+ * Zod schema for agent list response
+ */
+export const AgentListResponseSchema = z.object({
+  items: z.array(AgentSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+
+/**
+ * Agent pool statistics
+ */
+export interface AgentStats {
+  /** Total agents */
+  total: number;
+  /** Available agents (connected or idle) */
+  available: number;
+  /** Busy agents */
+  busy: number;
+  /** Offline agents */
+  offline: number;
+}
+
+/**
+ * Zod schema for agent stats
+ */
+export const AgentStatsSchema = z.object({
+  total: z.number().int().nonnegative(),
+  available: z.number().int().nonnegative(),
+  busy: z.number().int().nonnegative(),
+  offline: z.number().int().nonnegative(),
+});
+
+// ============================================================================
+// Activity Types
+// ============================================================================
+
+/**
+ * Activity event types for the dashboard feed
+ */
+export type ActivityEventType =
+  | 'workflow:started'
+  | 'workflow:completed'
+  | 'workflow:failed'
+  | 'workflow:cancelled'
+  | 'agent:connected'
+  | 'agent:disconnected'
+  | 'queue:item:added'
+  | 'queue:item:removed';
+
+/**
+ * Activity event for the dashboard activity feed
+ */
+export interface ActivityEvent {
+  /** Unique event ID */
+  id: string;
+  /** Event type */
+  type: ActivityEventType;
+  /** Human-readable event message */
+  message: string;
+  /** Event timestamp (ISO datetime) */
+  timestamp: string;
+  /** Additional event metadata */
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Zod schema for activity event
+ */
+export const ActivityEventSchema = z.object({
+  id: z.string(),
+  type: z.enum([
+    'workflow:started',
+    'workflow:completed',
+    'workflow:failed',
+    'workflow:cancelled',
+    'agent:connected',
+    'agent:disconnected',
+    'queue:item:added',
+    'queue:item:removed',
+  ]),
+  message: z.string(),
+  timestamp: z.string().datetime(),
+  metadata: z.record(z.unknown()).optional(),
+});
+
+/**
+ * Activity list response
+ */
+export interface ActivityListResponse {
+  /** Activity events */
+  items: ActivityEvent[];
+  /** Total count */
+  total: number;
+  /** Current page */
+  page: number;
+  /** Items per page */
+  pageSize: number;
+}
+
+/**
+ * Zod schema for activity list response
+ */
+export const ActivityListResponseSchema = z.object({
+  items: z.array(ActivityEventSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+
+// ============================================================================
+// Agent Log Types
+// ============================================================================
+
+/**
+ * Single log line from an agent
+ */
+export interface AgentLogLine {
+  /** Log line content */
+  line: string;
+  /** Log line timestamp (ISO datetime) */
+  timestamp?: string;
+}
+
+/**
+ * Zod schema for agent log line
+ */
+export const AgentLogLineSchema = z.object({
+  line: z.string(),
+  timestamp: z.string().datetime().optional(),
+});
+
+/**
+ * Agent logs response
+ */
+export interface AgentLogsResponse {
+  /** Log lines */
+  lines: AgentLogLine[];
+  /** Total number of log lines */
+  total: number;
+  /** Offset from start */
+  offset: number;
+  /** Number of lines requested */
+  limit: number;
+}
+
+/**
+ * Zod schema for agent logs response
+ */
+export const AgentLogsResponseSchema = z.object({
+  lines: z.array(AgentLogLineSchema),
+  total: z.number().int().nonnegative(),
+  offset: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+});
+
+// ============================================================================
+// SSE Event Types
+// ============================================================================
+
+/**
+ * SSE channel for subscription routing
+ */
+export type SSEChannel = 'workflows' | 'queue' | 'agents';
+
+/**
+ * SSE event received from the orchestrator
+ */
+export interface SSEEvent<T = unknown> {
+  /** Unique event ID (maps to SSE 'id:' field for Last-Event-ID) */
+  id: string;
+  /** Event type */
+  event: string;
+  /** Channel this event belongs to */
+  channel: SSEChannel;
+  /** Event payload */
+  data: T;
+  /** Event timestamp (ISO datetime) */
+  timestamp: string;
+}
+
+/**
+ * Zod schema for SSE event
+ */
+export const SSEEventSchema = z.object({
+  id: z.string(),
+  event: z.string(),
+  channel: z.enum(['workflows', 'queue', 'agents']),
+  data: z.unknown(),
+  timestamp: z.string().datetime(),
+});
+
+// ============================================================================
 // Generic API Response Types
 // ============================================================================
 

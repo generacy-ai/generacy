@@ -45,6 +45,22 @@ export const VIEWS = {
   workflows: 'generacy.workflows',
   queue: 'generacy.queue',
   integrations: 'generacy.integrations',
+  agents: 'generacy.agents',
+  orchestratorSummary: 'generacy.orchestratorSummary',
+} as const;
+
+/**
+ * Orchestration command identifiers - must match commands defined in package.json
+ */
+export const CLOUD_COMMANDS = {
+  openDashboard: 'generacy.openDashboard',
+  refreshAgents: 'generacy.agents.refresh',
+  viewAgentLogs: 'generacy.agents.viewLogs',
+  viewAgentsByStatus: 'generacy.agents.viewByStatus',
+  viewAgentsFlat: 'generacy.agents.viewFlat',
+  assignWorkItem: 'generacy.queue.assign',
+  setPriority: 'generacy.queue.setPriority',
+  pinDetail: 'generacy.queue.pinDetail',
 } as const;
 
 /**
@@ -54,6 +70,7 @@ export const CONTEXT_KEYS = {
   isAuthenticated: 'generacy.isAuthenticated',
   hasWorkspace: 'generacy.hasWorkspace',
   isDebugging: 'generacy.isDebugging',
+  orchestratorConnected: 'generacy.orchestratorConnected',
 } as const;
 
 /**
@@ -118,6 +135,8 @@ export const TREE_ITEM_CONTEXT = {
   queueItem: 'queueItem',
   integration: 'integration',
   webhook: 'webhook',
+  agent: 'agent',
+  agentGroup: 'agentGroup',
 } as const;
 
 /**

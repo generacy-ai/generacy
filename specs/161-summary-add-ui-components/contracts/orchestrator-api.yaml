@@ -1,0 +1,354 @@
+openapi: 3.1.0
+info:
+  title: Orchestrator API - New Endpoints for UI Components
+  description: |
+    New API endpoints required by the agent orchestration UI components.
+    These supplement the existing orchestrator API (GET /agents, GET /agents/:id,
+    GET /agents/stats, GET /queue, GET /queue/stats, GET /events).
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:3100/api
+    description: Local development orchestrator
+
+paths:
+  /agents/{agentId}/logs:
+    get:
+      summary: Get agent logs
+      description: |
+        Returns historical log entries for a specific agent.
+        Used by the VS Code extension to populate the agent output channel
+        before subscribing to SSE for live log lines.
+      operationId: getAgentLogs
+      tags:
+        - Agents
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: agentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Agent identifier
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 200
+            minimum: 1
+            maximum: 1000
+          description: Maximum number of log lines to return
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Only return logs after this timestamp
+        - name: level
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [debug, info, warn, error]
+          description: Minimum log level to return
+      responses:
+        '200':
+          description: Agent log entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentLogsResponse'
+        '404':
+          description: Agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /activity:
+    get:
+      summary: Get activity feed
+      description: |
+        Returns a reverse-chronological list of orchestration activity events.
+        Used by the dashboard for initial load; SSE provides real-time updates.
+        Activity events are server-aggregated from workflow, queue, and agent events.
+      operationId: getActivity
+      tags:
+        - Activity
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+          description: Maximum number of activity events to return
+        - name: before
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Only return events before this timestamp (for pagination)
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            Filter by event type (comma-separated).
+            Valid types: workflow:started, workflow:completed, workflow:failed,
+            workflow:cancelled, workflow:paused, workflow:resumed,
+            agent:connected, agent:disconnected,
+            queue:item:added, queue:item:removed
+      responses:
+        '200':
+          description: Activity feed events
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityFeedResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /queue/{itemId}/assign:
+    post:
+      summary: Manually assign a queue item to an agent
+      description: |
+        Overrides automatic dispatch and assigns a pending queue item to a
+        specific agent. The agent must be in 'connected' or 'idle' status.
+        Only pending items can be manually assigned.
+      operationId: assignQueueItem
+      tags:
+        - Queue
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Queue item identifier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignRequest'
+      responses:
+        '200':
+          description: Queue item assigned successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueueItem'
+        '400':
+          description: |
+            Bad request. Possible reasons:
+            - Queue item is not in 'pending' status
+            - Agent is not in 'connected' or 'idle' status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Queue item or agent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    apiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+
+  schemas:
+    AgentLogsResponse:
+      type: object
+      required:
+        - lines
+        - total
+        - hasMore
+      properties:
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentLogEntry'
+          description: Log entries in chronological order
+        total:
+          type: integer
+          minimum: 0
+          description: Total number of log lines available
+        hasMore:
+          type: boolean
+          description: Whether there are more log lines available
+
+    AgentLogEntry:
+      type: object
+      required:
+        - timestamp
+        - level
+        - message
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+          description: Log entry timestamp
+        level:
+          type: string
+          enum: [debug, info, warn, error]
+          description: Log level
+        message:
+          type: string
+          description: Log message content
+        source:
+          type: string
+          description: Log source (e.g., workflow step name)
+
+    ActivityFeedResponse:
+      type: object
+      required:
+        - events
+        - hasMore
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivityEvent'
+          description: Activity events in reverse chronological order
+        hasMore:
+          type: boolean
+          description: Whether there are more events available (for pagination)
+
+    ActivityEvent:
+      type: object
+      required:
+        - id
+        - type
+        - message
+        - timestamp
+      properties:
+        id:
+          type: string
+          description: Unique event identifier
+        type:
+          type: string
+          enum:
+            - workflow:started
+            - workflow:completed
+            - workflow:failed
+            - workflow:cancelled
+            - workflow:paused
+            - workflow:resumed
+            - agent:connected
+            - agent:disconnected
+            - queue:item:added
+            - queue:item:removed
+          description: Event type
+        message:
+          type: string
+          description: Human-readable event description
+          example: 'Workflow "process-issue-42" started on agent claude-1'
+        timestamp:
+          type: string
+          format: date-time
+          description: Event timestamp
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Additional context (workflow ID, agent ID, etc.)
+
+    AssignRequest:
+      type: object
+      required:
+        - agentId
+      properties:
+        agentId:
+          type: string
+          description: ID of the agent to assign the work item to
+
+    QueueItem:
+      type: object
+      description: References existing QueueItem schema from the orchestrator API
+      required:
+        - id
+        - workflowId
+        - workflowName
+        - status
+        - priority
+        - queuedAt
+      properties:
+        id:
+          type: string
+        workflowId:
+          type: string
+        workflowName:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, completed, failed, cancelled]
+        priority:
+          type: string
+          enum: [low, normal, high, urgent]
+        repository:
+          type: string
+        assigneeId:
+          type: string
+        queuedAt:
+          type: string
+          format: date-time
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+        error:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: Error message
+        code:
+          type: string
+          description: Error code
+        details:
+          type: object
+          additionalProperties: true
+          description: Additional error details
