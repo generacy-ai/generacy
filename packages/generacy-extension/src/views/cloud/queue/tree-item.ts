@@ -3,7 +3,7 @@
  * Defines tree items for queue entries with status icons and filtering.
  */
 import * as vscode from 'vscode';
-import { QueueItem, QueueStatus, QueuePriority } from '../../../api/types';
+import { QueueItem, QueueItemProgressSummary, QueueStatus, QueuePriority } from '../../../api/types';
 import { TREE_ITEM_CONTEXT } from '../../../constants';
 
 /**
@@ -32,10 +32,12 @@ const PRIORITY_ICONS: Record<QueuePriority, string> = {
  */
 export class QueueTreeItem extends vscode.TreeItem {
   public readonly queueItem: QueueItem;
+  private readonly progress: QueueItemProgressSummary | undefined;
 
-  constructor(item: QueueItem) {
+  constructor(item: QueueItem, progress?: QueueItemProgressSummary) {
     super(item.workflowName, vscode.TreeItemCollapsibleState.None);
     this.queueItem = item;
+    this.progress = progress;
 
     // Set context value for menus
     this.contextValue = this.getContextValue();
@@ -77,6 +79,9 @@ export class QueueTreeItem extends vscode.TreeItem {
 
   /**
    * Get the description text (shown next to label)
+   * Format with progress: `repository • Phase 5/8 · implementation • running for 18m`
+   * Format with skipped: `repository • Phase 5/8 (2 skipped) · implementation • running for 18m`
+   * Format without progress: `repository • running for 18m`
    */
   private getDescription(): string {
     const parts: string[] = [];
@@ -86,6 +91,12 @@ export class QueueTreeItem extends vscode.TreeItem {
       parts.push(this.queueItem.repository);
     }
 
+    // Add progress info for running jobs
+    const progressInfo = this.getProgressInfo();
+    if (progressInfo) {
+      parts.push(progressInfo);
+    }
+
     // Add time info based on status
     const timeInfo = this.getTimeInfo();
     if (timeInfo) {
@@ -93,6 +104,33 @@ export class QueueTreeItem extends vscode.TreeItem {
     }
 
     return parts.join(' • ');
+  }
+
+  /**
+   * Get progress info string from QueueItemProgressSummary.
+   * Returns e.g. "Phase 5/8 · implementation" or "Phase 5/8 (2 skipped) · implementation"
+   */
+  private getProgressInfo(): string | undefined {
+    if (!this.progress || this.queueItem.status !== 'running') {
+      return undefined;
+    }
+
+    const { phaseProgress, skippedPhases, currentPhase } = this.progress;
+    if (!phaseProgress) {
+      return undefined;
+    }
+
+    let info = phaseProgress;
+
+    if (skippedPhases && skippedPhases > 0) {
+      info += ` (${skippedPhases} skipped)`;
+    }
+
+    if (currentPhase) {
+      info += ` · ${currentPhase}`;
+    }
+
+    return info;
   }
 
   /**
@@ -183,6 +221,20 @@ export class QueueTreeItem extends vscode.TreeItem {
 
     // Workflow ID
     md.appendMarkdown(`**Workflow ID:** \`${workflowId}\`\n\n`);
+
+    // Progress summary
+    if (this.progress && this.progress.phaseProgress) {
+      md.appendMarkdown(`---\n\n`);
+      md.appendMarkdown(`### Progress\n\n`);
+      md.appendMarkdown(`**Phase:** ${this.progress.phaseProgress}`);
+      if (this.progress.skippedPhases && this.progress.skippedPhases > 0) {
+        md.appendMarkdown(` (${this.progress.skippedPhases} skipped)`);
+      }
+      md.appendMarkdown(`\n\n`);
+      if (this.progress.currentPhase) {
+        md.appendMarkdown(`**Current Phase:** ${this.progress.currentPhase}\n\n`);
+      }
+    }
 
     // Timestamps
     md.appendMarkdown(`---\n\n`);

@@ -10,7 +10,7 @@ import { QueueItem, QueuePriority, QueueStatus } from '../../../api/types';
 import { QueueTreeItem, isQueueTreeItem } from './tree-item';
 import { QueueTreeProvider } from './provider';
 import { CLOUD_COMMANDS } from '../../../constants';
-import { WorkItemDetailPanel, registerDetailPanelCommands } from './detail-panel';
+import { JobDetailPanel, registerDetailPanelCommands } from './detail-panel';
 
 /**
  * Priority levels in ascending order for adjustment
@@ -311,7 +311,7 @@ export async function setPriority(
 
 /**
  * Show detailed information about a queue item in a webview panel.
- * Delegates to WorkItemDetailPanel which supports singleton preview and pinning.
+ * Delegates to JobDetailPanel which supports singleton preview and pinning.
  */
 export async function viewQueueItemDetails(
   item: QueueTreeItem | QueueItem,
@@ -332,7 +332,7 @@ export async function viewQueueItemDetails(
     freshItem = queueItem;
   }
 
-  WorkItemDetailPanel.showPreview(freshItem, extensionUri);
+  JobDetailPanel.showPreview(freshItem, extensionUri);
 }
 
 /**

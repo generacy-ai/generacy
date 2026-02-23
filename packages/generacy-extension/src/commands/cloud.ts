@@ -16,8 +16,10 @@ import {
 } from '../views/cloud/publish';
 import { SSESubscriptionManager } from '../api/sse';
 import { createAgentTreeProvider } from '../views/cloud/agents';
+import { createQueueTreeProvider } from '../views/cloud/queue';
 import { registerOrchestratorSidebar, OrchestratorDashboardPanel } from '../views/cloud/orchestrator';
 import { NotificationManager } from '../utils/notifications';
+import { CloudJobStatusBarProvider } from '../providers/status-bar';
 import { CLOUD_COMMANDS as ORCH_COMMANDS, CONTEXT_KEYS } from '../constants';
 
 /**
@@ -168,6 +170,37 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
     }),
   );
   logger.info('Dashboard command registered');
+
+  // Register queue tree view — this also creates the `generacy.queue.focus`
+  // command automatically via createTreeView, used by the status bar to reveal the view
+  const queueProvider = createQueueTreeProvider(context);
+  logger.info('Queue tree view registered');
+
+  const cloudStatusBar = new CloudJobStatusBarProvider();
+  context.subscriptions.push(cloudStatusBar);
+
+  // Helper to sync status bar count from queue provider
+  const updateStatusBarCount = (): void => {
+    const runningCount = queueProvider.getItemsByStatus('running').length;
+    cloudStatusBar.updateCount(runningCount);
+  };
+
+  // Update status bar on SSE queue events (real-time)
+  context.subscriptions.push(
+    sseManager.subscribe('queue', () => {
+      // Defer to next tick so the tree provider processes the event first
+      setTimeout(updateStatusBarCount, 250);
+    })
+  );
+
+  // Update status bar on tree provider data changes (polling fallback)
+  context.subscriptions.push(
+    queueProvider.onDidChangeTreeData(() => {
+      updateStatusBarCount();
+    })
+  );
+
+  logger.info('Cloud job status bar initialized');
 
   // Initialize notification manager
   const notificationManager = new NotificationManager();

@@ -20,7 +20,7 @@
 
 > Foundation types and schemas that all subsequent phases depend on.
 
-### T001 [US-INFRA] Add progress type definitions to `api/types.ts`
+### T001 [DONE] [US-INFRA] Add progress type definitions to `api/types.ts`
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `PhaseStatus` type (`'pending' | 'running' | 'completed' | 'failed' | 'skipped'`)
 - Add `StepStatus` type (`'pending' | 'running' | 'completed' | 'failed' | 'skipped'`)
@@ -31,7 +31,7 @@
 - Extend `QueueItem` interface with optional `progress?: QueueItemProgressSummary`
 - Reference: `data-model.md` for exact field definitions
 
-### T002 [US-INFRA] Add Zod schemas for progress types
+### T002 [DONE] [US-INFRA] Add Zod schemas for progress types
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `StepStatusSchema` — `z.enum(['pending', 'running', 'completed', 'failed', 'skipped'])`
 - Add `PhaseStatusSchema` — `z.enum(['pending', 'running', 'completed', 'failed', 'skipped'])`
@@ -42,7 +42,7 @@
 - Extend `QueueItemSchema` with `.extend({ progress: QueueItemProgressSummarySchema.optional() })`
 - Export all new schemas
 
-### T003 [US-INFRA] Add SSE event payload interfaces
+### T003 [DONE] [US-INFRA] Add SSE event payload interfaces
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `WorkflowPhaseEventData` interface (workflowId, jobId, phase: PhaseProgress, phaseIndex, totalPhases)
 - Add `WorkflowStepEventData` interface (workflowId, jobId, phaseId, phaseIndex, step: StepProgress, stepIndex, totalSteps)
@@ -50,7 +50,7 @@
 - Add `JobDetailExtensionMessage` union type (update, progressUpdate, phaseEvent, stepEvent, connectionStatus, error)
 - Export all new types
 
-### T004 [P] [US-INFRA] Add `getJobProgress()` API endpoint
+### T004 [DONE] [P] [US-INFRA] Add `getJobProgress()` API endpoint
 **File**: `packages/generacy-extension/src/api/endpoints/queue.ts`
 - Add `getJobProgress(id: string): Promise<JobProgress>` method to the queue API
 - Use `client.getValidated('/queue/${id}/progress', JobProgressSchema)`
@@ -63,7 +63,7 @@
 
 > Enhance the existing tree view with real-time progress descriptions. Parallel with Phase 3.
 
-### T005 [P] [US-LIST] Subscribe to `workflows` SSE channel in QueueTreeProvider
+### T005 [DONE] [P] [US-LIST] Subscribe to `workflows` SSE channel in QueueTreeProvider
 **File**: `packages/generacy-extension/src/views/cloud/queue/provider.ts`
 - Add a `Map<string, QueueItemProgressSummary>` field (`progressSummaries`) to `QueueTreeProvider`
 - In `subscribeSSE()`, add second subscription: `sseManager.subscribe('workflows', (event) => this.handleWorkflowEvent(event))`
@@ -74,7 +74,7 @@
 - Dispose the new subscription in `dispose()`
 - Also update `fetchQueue()` to populate `progressSummaries` from `QueueItem.progress` field when available from REST response
 
-### T006 [P] [US-LIST] Update QueueTreeItem description with progress info
+### T006 [DONE] [P] [US-LIST] Update QueueTreeItem description with progress info
 **File**: `packages/generacy-extension/src/views/cloud/queue/tree-item.ts`
 - Modify `QueueTreeItem` constructor or factory to accept optional `QueueItemProgressSummary`
 - Update `getDescription()` to include progress when available:
@@ -84,7 +84,7 @@
 - Update tooltip to include progress summary section when progress is available
 - Update `provider.ts` `getTreeItem()` to pass progress summary from the map to tree items
 
-### T007 [US-LIST] Add elapsed time refresh timer for running jobs
+### T007 [DONE] [US-LIST] Add elapsed time refresh timer for running jobs
 **File**: `packages/generacy-extension/src/views/cloud/queue/provider.ts`
 - Add `private elapsedTimer: ReturnType<typeof setInterval> | undefined` field
 - Add `updateElapsedTimer()` method:
@@ -100,7 +100,7 @@
 
 > Reusable state management for incremental merge and snapshot replacement. Parallel with Phase 2.
 
-### T008 [P] [US-DETAIL] Create `JobProgressState` class
+### T008 [DONE] [P] [US-DETAIL] Create `JobProgressState` class
 **File**: `packages/generacy-extension/src/views/cloud/queue/progress-state.ts` (new)
 - Create `JobProgressState` class with:
   - `private progress: JobProgress | null = null`
@@ -109,7 +109,7 @@
   - `getProgress(): JobProgress | null` — returns current state
   - `getExpandedPhases(): Set<string>` — returns set of phase IDs that should be expanded
 
-### T009 [US-DETAIL] Implement incremental merge logic in `JobProgressState`
+### T009 [DONE] [US-DETAIL] Implement incremental merge logic in `JobProgressState`
 **File**: `packages/generacy-extension/src/views/cloud/queue/progress-state.ts`
 - Implement `applyPhaseEvent(event: WorkflowPhaseEventData): void`:
   - Find phase by `event.phase.id` in `this.progress.phases`
@@ -123,7 +123,7 @@
   - If phase or step not found → ignore (wait for next snapshot)
 - Update `updatedAt` timestamp on every successful merge
 
-### T010 [US-DETAIL] Implement smart expand/collapse logic
+### T010 [DONE] [US-DETAIL] Implement smart expand/collapse logic
 **File**: `packages/generacy-extension/src/views/cloud/queue/progress-state.ts`
 - In `applySnapshot()`: recalculate expanded phases set:
   - Running phase → add to expanded set
@@ -139,7 +139,7 @@
 
 > Core feature: replace WorkItemDetailPanel with live phase/step progress webview.
 
-### T011 [US-DETAIL] Create `JobDetailPanel` class (replace `WorkItemDetailPanel`)
+### T011 [DONE] [US-DETAIL] Create `JobDetailPanel` class (replace `WorkItemDetailPanel`)
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - Rename class from `WorkItemDetailPanel` to `JobDetailPanel`
 - Keep the existing singleton preview/pin pattern (static `previewInstance`, `showPreview()`, `pin()`)
@@ -152,7 +152,7 @@
 - Update `dispose()` to clear all timers and subscriptions
 - Update webview message handling for new message types (togglePhase, openPR)
 
-### T012 [US-DETAIL] Implement SSE event handling with tiered debounce
+### T012 [DONE] [US-DETAIL] Implement SSE event handling with tiered debounce
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - Add `handleWorkflowEvent(event: SSEEvent)` method:
   - Filter events: skip if `data.jobId !== this.queueItem.id && data.workflowId !== this.queueItem.workflowId`
@@ -163,7 +163,7 @@
 - Add `debouncedSendProgressUpdate()`: 200ms debounce wrapper using `stepDebounceTimer`
 - Clear debounce timer on dispose
 
-### T013 [US-DETAIL] Implement SSE connection monitoring and polling fallback
+### T013 [DONE] [US-DETAIL] Implement SSE connection monitoring and polling fallback
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - Subscribe to `SSESubscriptionManager.onDidChangeConnectionState` event
 - On disconnect:
@@ -177,7 +177,7 @@
   - Wait for next snapshot event to restore full state
 - Clear polling timer in `dispose()`
 
-### T014 [US-DETAIL] Implement initial data loading
+### T014 [DONE] [US-DETAIL] Implement initial data loading
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - On panel creation or when switching to a new item:
   - Post `{ type: 'update', data: { item, progress: null } }` as loading placeholder
@@ -187,7 +187,7 @@
   - For completed/failed/cancelled jobs: skip SSE subscription (static view — no live updates)
   - For running/pending jobs: subscribe to `workflows` SSE channel
 
-### T015 [US-DETAIL] Create HTML generation module (`detail-html.ts`)
+### T015 [DONE] [US-DETAIL] Create HTML generation module (`detail-html.ts`)
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-html.ts` (new)
 - Export `getJobDetailHtml(webview, extensionUri, data)` function
 - Generate CSP-safe HTML with nonce-based scripts and styles
@@ -207,7 +207,7 @@
   - Reconnecting banner show/hide
   - `acquireVsCodeApi()` for posting messages back to extension (pin, refresh, togglePhase, openPR)
 
-### T016 [US-DETAIL] Implement phase expand/collapse in webview
+### T016 [DONE] [US-DETAIL] Implement phase expand/collapse in webview
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-html.ts`
 - Webview maintains local expand/collapse state in a `Set<string>` (phase IDs)
 - Initial state received from extension via `update` message (from `JobProgressState.getExpandedPhases()`)
@@ -215,7 +215,7 @@
 - On `progressUpdate` messages: auto-expand newly running phases, collapse previously running phases
 - Post `{ type: 'togglePhase', phaseId }` back to extension for state tracking (optional — for restore on panel re-show)
 
-### T017 [US-DETAIL] Handle completed/failed job static rendering
+### T017 [DONE] [US-DETAIL] Handle completed/failed job static rendering
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - When `queueItem.status` is `completed`, `failed`, or `cancelled`:
   - Fetch progress once via REST (`getJobProgress`)
@@ -232,7 +232,7 @@
 
 > Independent of Phases 2-4. Can run in parallel after Phase 1.
 
-### T018 [P] [US-STATUS] Add `CloudJobStatusBarProvider` class
+### T018 [DONE] [P] [US-STATUS] Add `CloudJobStatusBarProvider` class
 **File**: `packages/generacy-extension/src/providers/status-bar.ts`
 - Create `CloudJobStatusBarProvider` implementing `vscode.Disposable`
 - Constructor creates `vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99)`
@@ -244,7 +244,7 @@
 - Add `dispose()` method to dispose the status bar item
 - Export the class
 
-### T019 [US-STATUS] Wire status bar to queue data
+### T019 [DONE] [US-STATUS] Wire status bar to queue data
 **File**: `packages/generacy-extension/src/commands/cloud.ts`
 - Instantiate `CloudJobStatusBarProvider` during cloud service initialization
 - Subscribe to `queue` SSE events to update count:
@@ -252,7 +252,7 @@
 - Also update count on tree provider refresh (polling fallback)
 - Dispose status bar provider on deactivation
 
-### T020 [US-STATUS] Register `generacy.queue.focus` command
+### T020 [DONE] [US-STATUS] Register `generacy.queue.focus` command
 **File**: `packages/generacy-extension/src/commands/cloud.ts`
 - Register command `generacy.queue.focus` that executes `vscode.commands.executeCommand('generacy.queue.focus')` to reveal the queue tree view
 - Use existing view ID from constants (`VIEWS.queue`)
@@ -263,31 +263,31 @@
 
 > Connect all components. Depends on Phases 2-5.
 
-### T021 [US-DETAIL] Update `viewQueueItemDetails()` to use `JobDetailPanel`
+### T021 [DONE] [US-DETAIL] Update `viewQueueItemDetails()` to use `JobDetailPanel`
 **File**: `packages/generacy-extension/src/views/cloud/queue/actions.ts`
 - Change import from `WorkItemDetailPanel` to `JobDetailPanel`
 - Update `viewQueueItemDetails()` to call `JobDetailPanel.showPreview()` instead of `WorkItemDetailPanel.showPreview()`
 - Verify all call sites pass the same arguments
 
-### T022 [P] [US-INFRA] Update constants with new command IDs
+### T022 [DONE] [P] [US-INFRA] Update constants with new command IDs
 **File**: `packages/generacy-extension/src/constants.ts`
 - Add to `CLOUD_COMMANDS` object:
   - `viewJobProgress: 'generacy.queue.viewProgress'`
   - `focusQueue: 'generacy.queue.focus'`
 
-### T023 [P] [US-INFRA] Register new commands in `package.json`
+### T023 [DONE] [P] [US-INFRA] Register new commands in `package.json`
 **File**: `packages/generacy-extension/package.json`
 - Add to `contributes.commands` array:
   - `{ "command": "generacy.queue.viewProgress", "title": "View Job Progress", "category": "Generacy" }`
   - `{ "command": "generacy.queue.focus", "title": "Focus Queue View", "category": "Generacy" }`
 
-### T024 [US-INFRA] Update module exports in `views/cloud/queue/index.ts`
+### T024 [DONE] [US-INFRA] Update module exports in `views/cloud/queue/index.ts`
 **File**: `packages/generacy-extension/src/views/cloud/queue/index.ts`
 - Export `JobDetailPanel` instead of `WorkItemDetailPanel`
 - Export `JobProgressState` from `./progress-state`
 - Remove `WorkItemDetailPanel` export (it's being replaced, not coexisting)
 
-### T025 [US-INFRA] Update `commands/cloud.ts` initialization for status bar
+### T025 [DONE] [US-INFRA] Update `commands/cloud.ts` initialization for status bar
 **File**: `packages/generacy-extension/src/commands/cloud.ts`
 - Import `CloudJobStatusBarProvider`
 - Add initialization code after queue tree provider setup
@@ -300,7 +300,7 @@
 
 > Verify all new functionality. Depends on all implementation phases.
 
-### T026 [P] [US-INFRA] Write unit tests for `JobProgressState`
+### T026 [DONE] [P] [US-INFRA] Write unit tests for `JobProgressState`
 **File**: `packages/generacy-extension/src/views/cloud/queue/__tests__/progress-state.test.ts` (new)
 - Test `applySnapshot()`:
   - Stores full progress state correctly
@@ -322,7 +322,7 @@
 - Test snapshot-after-incremental:
   - Snapshot overwrites stale incremental state correctly
 
-### T027 [P] [US-INFRA] Write unit tests for progress Zod schemas
+### T027 [DONE] [P] [US-INFRA] Write unit tests for progress Zod schemas
 **File**: `packages/generacy-extension/src/api/__tests__/types-progress.test.ts` (new)
 - Test `StepProgressSchema`:
   - Valid minimal step (id, name, status only)

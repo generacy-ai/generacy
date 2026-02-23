@@ -2,9 +2,10 @@
  * Provider exports for Generacy extension.
  */
 
-// Status bar provider for execution status
+// Status bar providers
 export {
   ExecutionStatusBarProvider,
   getExecutionStatusBarProvider,
   initializeExecutionStatusBar,
+  CloudJobStatusBarProvider,
 } from './status-bar';

@@ -82,10 +82,10 @@ vi.mock('../../../../api/endpoints/queue', () => ({
   },
 }));
 
-// Mock WorkItemDetailPanel to avoid deep vscode mock requirements
+// Mock JobDetailPanel to avoid deep vscode mock requirements
 const mockShowPreview = vi.fn();
 vi.mock('../detail-panel', () => ({
-  WorkItemDetailPanel: {
+  JobDetailPanel: {
     showPreview: (...args: unknown[]) => mockShowPreview(...args),
   },
 }));
@@ -362,7 +362,7 @@ describe('Queue Actions', () => {
       mockShowPreview.mockReset();
     });
 
-    it('should delegate to WorkItemDetailPanel.showPreview', async () => {
+    it('should delegate to JobDetailPanel.showPreview', async () => {
       const item = createMockQueueItem({
         status: 'running',
         startedAt: '2024-01-15T10:05:00Z',

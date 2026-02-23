@@ -289,6 +289,16 @@
         "title": "Pin Detail Panel",
         "category": "Generacy",
         "icon": "$(pin)"
+      },
+      {
+        "command": "generacy.queue.viewProgress",
+        "title": "View Job Progress",
+        "category": "Generacy"
+      },
+      {
+        "command": "generacy.queue.focus",
+        "title": "Focus Queue View",
+        "category": "Generacy"
       }
     ],
     "viewsContainers": {

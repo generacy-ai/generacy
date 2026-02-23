@@ -1,43 +1,62 @@
 /**
- * WorkItemDetailPanel - Webview panel for displaying queue item details.
+ * JobDetailPanel - Webview panel for displaying job progress with live updates.
+ *
+ * Replaces the former WorkItemDetailPanel with real-time phase/step progress.
  *
  * Implements a singleton preview pattern with pinning support:
  * - A single unpinned preview panel is reused when selecting different items
  * - Pinning a panel preserves it and allows a new preview to open alongside
- * - SSE subscription keeps the displayed item's data up-to-date in real time
+ * - SSE subscription on the `workflows` channel keeps progress up-to-date in real time
+ * - Uses JobProgressState for snapshot/incremental merge of phase and step events
+ * - Tiered debounce: phase events sent immediately, step events debounced at 200ms
+ * - Polling fallback when SSE connection is lost
  */
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils/logger';
 import { queueApi } from '../../../api/endpoints/queue';
 import { getSSEManager } from '../../../api/sse';
-import type { QueueItem, QueueStatus, QueuePriority, SSEEvent } from '../../../api/types';
+import type { SSEConnectionState } from '../../../api/sse';
+import type {
+  QueueItem,
+  QueueStatus,
+  JobProgress,
+  JobDetailWebviewMessage,
+  JobDetailExtensionMessage,
+  SSEEvent,
+  WorkflowPhaseEventData,
+  WorkflowStepEventData,
+} from '../../../api/types';
 import { CLOUD_COMMANDS } from '../../../constants';
+import { JobProgressState } from './progress-state';
+import { getJobDetailHtml } from './detail-html';
 
 // ============================================================================
-// Types
+// Constants
 // ============================================================================
 
-/** Messages sent from the detail webview to the extension */
-type DetailWebviewMessage =
-  | { type: 'ready' }
-  | { type: 'refresh' }
-  | { type: 'pin' }
-  | { type: 'openAgent'; agentId: string };
+/** Debounce delay for step events (ms) */
+const STEP_DEBOUNCE_MS = 200;
+
+/** Polling interval when SSE is disconnected (ms) */
+const POLLING_FALLBACK_INTERVAL_MS = 5000;
+
+/** Statuses that indicate a job is terminal (no live updates needed) */
+const TERMINAL_STATUSES: QueueStatus[] = ['completed', 'failed', 'cancelled'];
 
 // ============================================================================
-// WorkItemDetailPanel
+// JobDetailPanel
 // ============================================================================
 
 /**
- * Webview panel for displaying detailed information about a queue work item.
+ * Webview panel for displaying detailed job progress with live phase/step updates.
  *
  * Supports a preview/pin workflow:
  * - `showPreview()` reuses an existing unpinned panel or creates a new one
  * - `pin()` freezes the current panel in place so subsequent selections open a fresh preview
  */
-export class WorkItemDetailPanel {
+export class JobDetailPanel {
   /** The singleton unpinned preview instance */
-  private static previewInstance: WorkItemDetailPanel | undefined;
+  private static previewInstance: JobDetailPanel | undefined;
 
   private readonly panel: vscode.WebviewPanel;
   private readonly disposables: vscode.Disposable[] = [];
@@ -45,19 +64,42 @@ export class WorkItemDetailPanel {
   private isPinned = false;
   private isDisposed = false;
 
+  /** State manager for incremental progress merge */
+  private readonly progressState: JobProgressState;
+
+  /** Timer for debouncing step events */
+  private stepDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Timer for polling fallback when SSE disconnects */
+  private pollingFallbackTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** Whether the SSE connection is currently active */
+  private isSSEConnected = true;
+
   private constructor(
     panel: vscode.WebviewPanel,
-    item: QueueItem
+    item: QueueItem,
+    progress: JobProgress | null
   ) {
     this.panel = panel;
     this.queueItem = item;
+    this.progressState = new JobProgressState();
 
-    // Set initial content
-    this.panel.webview.html = this.generateHtml(item);
+    if (progress) {
+      this.progressState.applySnapshot(progress);
+    }
+
+    // Set initial HTML shell (the webview JS will receive data via postMessage)
+    this.panel.webview.html = getJobDetailHtml({
+      item,
+      progress,
+      expandedPhases: this.progressState.getExpandedPhases(),
+      isPinned: this.isPinned,
+    });
 
     // Listen for messages from webview
     this.panel.webview.onDidReceiveMessage(
-      (message: DetailWebviewMessage) => this.handleMessage(message),
+      (message: JobDetailWebviewMessage) => this.handleMessage(message),
       null,
       this.disposables
     );
@@ -69,8 +111,10 @@ export class WorkItemDetailPanel {
       this.disposables
     );
 
-    // Subscribe to SSE for real-time updates
-    this.subscribeSSE();
+    // Only subscribe to SSE for non-terminal jobs
+    if (!TERMINAL_STATUSES.includes(item.status)) {
+      this.subscribeSSE();
+    }
   }
 
   // ==========================================================================
@@ -82,14 +126,15 @@ export class WorkItemDetailPanel {
    *
    * - If an unpinned preview exists, it is reused with updated content.
    * - If no unpinned preview exists (or the current one is pinned), a new panel is created.
+   * - Fetches both the queue item and progress data in parallel on creation.
    */
-  public static showPreview(item: QueueItem, extensionUri: vscode.Uri): WorkItemDetailPanel {
+  public static showPreview(item: QueueItem, extensionUri: vscode.Uri): JobDetailPanel {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
     // Reuse existing unpinned preview
-    if (WorkItemDetailPanel.previewInstance && !WorkItemDetailPanel.previewInstance.isDisposed) {
-      const instance = WorkItemDetailPanel.previewInstance;
-      instance.updateContent(item);
+    if (JobDetailPanel.previewInstance && !JobDetailPanel.previewInstance.isDisposed) {
+      const instance = JobDetailPanel.previewInstance;
+      instance.switchToItem(item);
       instance.panel.reveal(column);
       return instance;
     }
@@ -108,8 +153,12 @@ export class WorkItemDetailPanel {
 
     panel.iconPath = new vscode.ThemeIcon('list-selection');
 
-    const instance = new WorkItemDetailPanel(panel, item);
-    WorkItemDetailPanel.previewInstance = instance;
+    const instance = new JobDetailPanel(panel, item, null);
+    JobDetailPanel.previewInstance = instance;
+
+    // Kick off initial data loading
+    void instance.loadInitialData();
+
     return instance;
   }
 
@@ -129,8 +178,8 @@ export class WorkItemDetailPanel {
     this.isPinned = true;
 
     // Clear ourselves from the preview slot so the next selection opens a new panel
-    if (WorkItemDetailPanel.previewInstance === this) {
-      WorkItemDetailPanel.previewInstance = undefined;
+    if (JobDetailPanel.previewInstance === this) {
+      JobDetailPanel.previewInstance = undefined;
     }
 
     // Update the title to indicate pinned state
@@ -157,27 +206,113 @@ export class WorkItemDetailPanel {
   /**
    * Get the singleton preview instance (if any).
    */
-  public static getPreviewInstance(): WorkItemDetailPanel | undefined {
-    return WorkItemDetailPanel.previewInstance;
+  public static getPreviewInstance(): JobDetailPanel | undefined {
+    return JobDetailPanel.previewInstance;
   }
 
   // ==========================================================================
-  // Content
+  // Content & Data Loading
   // ==========================================================================
 
   /**
-   * Update the panel with a new queue item's data.
+   * Switch to displaying a different queue item.
+   * Clears previous state, sets new content, and loads fresh data.
    */
-  private updateContent(item: QueueItem): void {
+  private switchToItem(item: QueueItem): void {
+    // Clear previous subscriptions and timers
+    this.clearTimers();
+    this.disposeSubscriptions();
+
     this.queueItem = item;
+    this.progressState.reset();
+
     this.panel.title = this.isPinned
       ? `$(pin) Queue: ${item.workflowName}`
       : `Queue: ${item.workflowName}`;
-    this.panel.webview.html = this.generateHtml(item);
+
+    // Generate fresh HTML
+    this.panel.webview.html = getJobDetailHtml({
+      item,
+      progress: null,
+      expandedPhases: this.progressState.getExpandedPhases(),
+      isPinned: this.isPinned,
+    });
+
+    // Re-subscribe to SSE for the new item if not terminal
+    if (!TERMINAL_STATUSES.includes(item.status)) {
+      this.subscribeSSE();
+    }
+
+    // Load fresh data
+    void this.loadInitialData();
   }
 
   /**
-   * Refresh the panel by re-fetching the item from the API.
+   * Load initial data by fetching item and progress in parallel.
+   *
+   * Sends a loading placeholder first, then fetches fresh data and sends
+   * the full update with expanded phases. For terminal jobs (completed,
+   * failed, cancelled), this is a one-shot static load with no SSE.
+   */
+  private async loadInitialData(): Promise<void> {
+    if (this.isDisposed) {
+      return;
+    }
+
+    const logger = getLogger();
+    const itemId = this.queueItem.id;
+
+    // Send loading placeholder so the webview can show a loading state
+    this.postMessage({
+      type: 'update',
+      data: {
+        item: this.queueItem,
+        progress: null,
+      },
+    });
+
+    try {
+      const [freshItem, progress] = await Promise.all([
+        queueApi.getQueueItem(itemId).catch((error) => {
+          logger.error(`Failed to fetch queue item: ${itemId}`, error);
+          return this.queueItem; // Fallback to cached
+        }),
+        queueApi.getJobProgress(itemId).catch(() => {
+          logger.debug(`No progress data available for: ${itemId}`);
+          return null;
+        }),
+      ]);
+
+      if (this.isDisposed || this.queueItem.id !== itemId) {
+        return; // Panel disposed or switched to different item
+      }
+
+      this.queueItem = freshItem;
+
+      if (progress) {
+        this.progressState.applySnapshot(progress);
+      }
+
+      // Send full update with expanded phases set
+      this.postMessage({
+        type: 'update',
+        data: {
+          item: freshItem,
+          progress: this.progressState.getProgress(),
+          expandedPhases: [...this.progressState.getExpandedPhases()],
+        },
+      });
+    } catch (error) {
+      logger.error(`Failed to load initial data for: ${itemId}`, error);
+      this.postMessage({
+        type: 'error',
+        message: 'Failed to load job details. Click Refresh to try again.',
+      });
+    }
+  }
+
+  /**
+   * Refresh the panel by re-fetching item and progress from the API.
    */
   private async refresh(): Promise<void> {
     if (this.isDisposed) {
@@ -187,8 +322,25 @@ export class WorkItemDetailPanel {
     const logger = getLogger();
 
     try {
-      const freshItem = await queueApi.getQueueItem(this.queueItem.id);
-      this.updateContent(freshItem);
+      const [freshItem, progress] = await Promise.all([
+        queueApi.getQueueItem(this.queueItem.id),
+        queueApi.getJobProgress(this.queueItem.id).catch(() => null),
+      ]);
+
+      this.queueItem = freshItem;
+
+      if (progress) {
+        this.progressState.applySnapshot(progress);
+      }
+
+      this.postMessage({
+        type: 'update',
+        data: {
+          item: freshItem,
+          progress: this.progressState.getProgress(),
+          expandedPhases: [...this.progressState.getExpandedPhases()],
+        },
+      });
     } catch (error) {
       logger.error(`Failed to refresh queue item: ${this.queueItem.id}`, error);
     }
@@ -199,36 +351,283 @@ export class WorkItemDetailPanel {
   // ==========================================================================
 
   /**
-   * Subscribe to SSE queue events to keep the panel up-to-date.
+   * Subscribe to SSE workflows channel for real-time progress updates.
+   * Also monitors SSE connection state for polling fallback.
    */
   private subscribeSSE(): void {
     const sseManager = getSSEManager();
 
-    const subscription = sseManager.subscribe('queue', (event: SSEEvent) => {
-      const itemData = event.data as Partial<QueueItem> & { id?: string; itemId?: string };
-      const itemId = itemData.id ?? itemData.itemId;
+    // Subscribe to workflows channel for phase/step events
+    const workflowsSub = sseManager.subscribe('workflows', (event: SSEEvent) => {
+      this.handleWorkflowEvent(event);
+    });
+    this.disposables.push(workflowsSub);
 
-      // Only react to events for the item we're displaying
-      if (itemId !== this.queueItem.id) {
+    // Also keep the queue channel subscription for item-level updates (status changes)
+    const queueSub = sseManager.subscribe('queue', (event: SSEEvent) => {
+      this.handleQueueEvent(event);
+    });
+    this.disposables.push(queueSub);
+
+    // Monitor connection state for polling fallback
+    const connectionSub = sseManager.onDidChangeConnectionState(
+      (state: SSEConnectionState) => this.handleConnectionStateChange(state)
+    );
+    this.disposables.push(connectionSub);
+  }
+
+  /**
+   * Handle workflow SSE events with tiered debounce.
+   * Phase events are sent immediately (high signal).
+   * Step events are debounced at 200ms (high frequency).
+   */
+  private handleWorkflowEvent(event: SSEEvent): void {
+    const data = event.data as { jobId?: string; workflowId?: string };
+
+    // Filter: only process events for this job
+    if (data.jobId !== this.queueItem.id && data.workflowId !== this.queueItem.workflowId) {
+      return;
+    }
+
+    switch (event.event) {
+      case 'workflow:progress': {
+        // Full snapshot — apply and send immediately
+        const progress = event.data as JobProgress;
+        this.progressState.applySnapshot(progress);
+        this.sendProgressUpdate();
+        break;
+      }
+
+      case 'workflow:phase:start':
+      case 'workflow:phase:complete': {
+        // Phase events — send immediately (high signal)
+        const phaseEvent = event.data as WorkflowPhaseEventData;
+        this.progressState.applyPhaseEvent(phaseEvent);
+        this.sendProgressUpdate();
+        break;
+      }
+
+      case 'workflow:step:start':
+      case 'workflow:step:complete': {
+        // Step events — debounce 200ms
+        const stepEvent = event.data as WorkflowStepEventData;
+        this.progressState.applyStepEvent(stepEvent);
+        this.debouncedSendProgressUpdate();
+        break;
+      }
+    }
+  }
+
+  /**
+   * Handle queue SSE events for item-level status changes.
+   * When a job transitions to a terminal status (completed/failed/cancelled),
+   * cleans up SSE subscriptions and timers since no further live updates are needed.
+   */
+  private handleQueueEvent(event: SSEEvent): void {
+    const itemData = event.data as Partial<QueueItem> & { id?: string; itemId?: string };
+    const itemId = itemData.id ?? itemData.itemId;
+
+    if (itemId !== this.queueItem.id) {
+      return;
+    }
+
+    // Merge partial update into current item
+    this.queueItem = { ...this.queueItem, ...itemData } as QueueItem;
+
+    // If the job just became terminal, switch to static rendering mode:
+    // stop SSE subscriptions, clear timers, and do a final progress fetch
+    if (TERMINAL_STATUSES.includes(this.queueItem.status)) {
+      this.clearTimers();
+      void this.loadFinalProgress();
+      return;
+    }
+
+    this.postMessage({
+      type: 'update',
+      data: {
+        item: this.queueItem,
+        progress: this.progressState.getProgress(),
+        expandedPhases: [...this.progressState.getExpandedPhases()],
+      },
+    });
+  }
+
+  /**
+   * Fetch the final progress snapshot for a job that just reached terminal status.
+   * Sends a static update to the webview with all final data.
+   */
+  private async loadFinalProgress(): Promise<void> {
+    if (this.isDisposed) {
+      return;
+    }
+
+    const logger = getLogger();
+
+    try {
+      const progress = await queueApi.getJobProgress(this.queueItem.id).catch(() => null);
+
+      if (this.isDisposed) {
         return;
       }
 
-      // Merge partial update into current item and refresh the HTML
-      const updatedItem = { ...this.queueItem, ...itemData } as QueueItem;
-      this.updateContent(updatedItem);
-    });
+      if (progress) {
+        this.progressState.applySnapshot(progress);
+      }
+    } catch (error) {
+      logger.debug(`Failed to fetch final progress for: ${this.queueItem.id}`);
+    }
 
-    this.disposables.push(subscription);
+    this.postMessage({
+      type: 'update',
+      data: {
+        item: this.queueItem,
+        progress: this.progressState.getProgress(),
+        expandedPhases: [...this.progressState.getExpandedPhases()],
+      },
+    });
+  }
+
+  /**
+   * Send the current progress state to the webview immediately.
+   */
+  private sendProgressUpdate(): void {
+    const progress = this.progressState.getProgress();
+    if (!progress) {
+      return;
+    }
+
+    this.postMessage({
+      type: 'progressUpdate',
+      progress,
+      expandedPhases: [...this.progressState.getExpandedPhases()],
+    });
+  }
+
+  /**
+   * Debounced version of sendProgressUpdate for step events.
+   */
+  private debouncedSendProgressUpdate(): void {
+    if (this.stepDebounceTimer) {
+      clearTimeout(this.stepDebounceTimer);
+    }
+
+    this.stepDebounceTimer = setTimeout(() => {
+      this.stepDebounceTimer = undefined;
+      this.sendProgressUpdate();
+    }, STEP_DEBOUNCE_MS);
+  }
+
+  // ==========================================================================
+  // SSE Connection Monitoring & Polling Fallback
+  // ==========================================================================
+
+  /**
+   * Handle SSE connection state changes.
+   * Starts polling fallback on disconnect, stops on reconnect.
+   */
+  private handleConnectionStateChange(state: SSEConnectionState): void {
+    if (this.isDisposed) {
+      return;
+    }
+
+    // Only relevant for non-terminal jobs
+    if (TERMINAL_STATUSES.includes(this.queueItem.status)) {
+      return;
+    }
+
+    if (state === 'connected') {
+      this.isSSEConnected = true;
+      this.stopPollingFallback();
+      this.postMessage({
+        type: 'connectionStatus',
+        connected: true,
+      });
+    } else if (state === 'disconnected' || state === 'error') {
+      this.isSSEConnected = false;
+      this.startPollingFallback();
+      this.postMessage({
+        type: 'connectionStatus',
+        connected: false,
+        reconnecting: true,
+      });
+    }
+  }
+
+  /**
+   * Start polling for progress when SSE is disconnected.
+   */
+  private startPollingFallback(): void {
+    if (this.pollingFallbackTimer) {
+      return; // Already polling
+    }
+
+    const logger = getLogger();
+    logger.debug(`Starting polling fallback for job: ${this.queueItem.id}`);
+
+    this.pollingFallbackTimer = setInterval(() => {
+      void this.pollProgress();
+    }, POLLING_FALLBACK_INTERVAL_MS);
+  }
+
+  /**
+   * Stop the polling fallback.
+   */
+  private stopPollingFallback(): void {
+    if (this.pollingFallbackTimer) {
+      clearInterval(this.pollingFallbackTimer);
+      this.pollingFallbackTimer = undefined;
+    }
+  }
+
+  /**
+   * Poll progress data from the REST API.
+   */
+  private async pollProgress(): Promise<void> {
+    if (this.isDisposed || this.isSSEConnected) {
+      this.stopPollingFallback();
+      return;
+    }
+
+    const logger = getLogger();
+
+    try {
+      const progress = await queueApi.getJobProgress(this.queueItem.id);
+      this.progressState.applySnapshot(progress);
+      this.sendProgressUpdate();
+    } catch (error) {
+      logger.debug(`Polling fallback failed for job: ${this.queueItem.id}`);
+    }
   }
 
   // ==========================================================================
   // Message Handling
   // ==========================================================================
 
-  private handleMessage(message: DetailWebviewMessage): void {
+  /**
+   * Post a typed message to the webview.
+   */
+  private postMessage(message: JobDetailExtensionMessage): void {
+    if (this.isDisposed) {
+      return;
+    }
+    void this.panel.webview.postMessage(message);
+  }
+
+  /**
+   * Handle messages from the webview.
+   */
+  private handleMessage(message: JobDetailWebviewMessage): void {
     switch (message.type) {
       case 'ready':
-        // Webview loaded — could send initial data if using postMessage pattern
+        // Webview loaded — send current state
+        this.postMessage({
+          type: 'update',
+          data: {
+            item: this.queueItem,
+            progress: this.progressState.getProgress(),
+            expandedPhases: [...this.progressState.getExpandedPhases()],
+          },
+        });
         break;
 
       case 'refresh':
@@ -237,6 +636,16 @@ export class WorkItemDetailPanel {
 
       case 'pin':
         this.pin();
+        break;
+
+      case 'togglePhase':
+        // Phase toggle is managed by the webview locally; we just log
+        break;
+
+      case 'openPR':
+        if (message.url) {
+          void vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
         break;
 
       case 'openAgent':
@@ -248,324 +657,33 @@ export class WorkItemDetailPanel {
   }
 
   // ==========================================================================
-  // HTML Generation
-  // ==========================================================================
-
-  private generateHtml(item: QueueItem): string {
-    const nonce = this.getNonce();
-
-    const statusColors: Record<QueueStatus, string> = {
-      pending: '#f0ad4e',
-      running: '#5bc0de',
-      completed: '#5cb85c',
-      failed: '#d9534f',
-      cancelled: '#777',
-    };
-
-    const priorityColors: Record<QueuePriority, string> = {
-      low: '#777',
-      normal: '#5bc0de',
-      high: '#f0ad4e',
-      urgent: '#d9534f',
-    };
-
-    const formatDateTime = (dateStr: string | undefined): string => {
-      if (!dateStr) return 'N/A';
-      return new Date(dateStr).toLocaleString();
-    };
-
-    const calculateDuration = (
-      startStr: string | undefined,
-      endStr: string | undefined
-    ): string => {
-      if (!startStr) return 'N/A';
-      const start = new Date(startStr);
-      const end = endStr ? new Date(endStr) : new Date();
-      const diffMs = end.getTime() - start.getTime();
-      const diffSec = Math.floor(diffMs / 1000);
-
-      if (diffSec < 60) {
-        return `${diffSec} second${diffSec !== 1 ? 's' : ''}`;
-      }
-      const diffMin = Math.floor(diffSec / 60);
-      if (diffMin < 60) {
-        return `${diffMin} minute${diffMin !== 1 ? 's' : ''} ${diffSec % 60}s`;
-      }
-      const diffHour = Math.floor(diffMin / 60);
-      return `${diffHour} hour${diffHour !== 1 ? 's' : ''} ${diffMin % 60}m`;
-    };
-
-    const statusColor = statusColors[item.status];
-    const priorityColor = priorityColors[item.priority];
-    const pinButtonLabel = this.isPinned ? 'Pinned' : 'Pin';
-    const pinButtonDisabled = this.isPinned ? 'disabled' : '';
-
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}';">
-  <title>Queue Item Details</title>
-  <style nonce="${nonce}">
-    body {
-      font-family: var(--vscode-font-family);
-      font-size: var(--vscode-font-size);
-      color: var(--vscode-foreground);
-      background-color: var(--vscode-editor-background);
-      padding: 20px;
-      line-height: 1.6;
-      margin: 0;
-    }
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 20px;
-      padding-bottom: 12px;
-      border-bottom: 1px solid var(--vscode-panel-border);
-    }
-    h1 {
-      margin: 0;
-      font-size: 1.4em;
-    }
-    .actions {
-      display: flex;
-      gap: 8px;
-    }
-    .actions button {
-      background-color: var(--vscode-button-secondaryBackground);
-      color: var(--vscode-button-secondaryForeground);
-      border: none;
-      padding: 4px 12px;
-      font-size: 12px;
-      cursor: pointer;
-      border-radius: 4px;
-    }
-    .actions button:hover:not(:disabled) {
-      background-color: var(--vscode-button-secondaryHoverBackground);
-    }
-    .actions button:disabled {
-      opacity: 0.5;
-      cursor: default;
-    }
-    .section {
-      margin-bottom: 24px;
-    }
-    .section-title {
-      font-weight: 600;
-      font-size: 1.1em;
-      margin-bottom: 12px;
-      color: var(--vscode-textLink-foreground);
-    }
-    .field {
-      display: flex;
-      margin-bottom: 8px;
-    }
-    .field-label {
-      font-weight: 500;
-      min-width: 140px;
-      color: var(--vscode-descriptionForeground);
-    }
-    .field-value {
-      flex: 1;
-    }
-    .badge {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-weight: 500;
-      text-transform: uppercase;
-      font-size: 0.85em;
-    }
-    .error-section {
-      background-color: var(--vscode-inputValidation-errorBackground);
-      border: 1px solid var(--vscode-inputValidation-errorBorder);
-      border-radius: 4px;
-      padding: 12px;
-      margin-top: 16px;
-    }
-    .error-title {
-      color: var(--vscode-inputValidation-errorForeground);
-      font-weight: 600;
-      margin-bottom: 8px;
-    }
-    .error-message {
-      font-family: var(--vscode-editor-font-family);
-      white-space: pre-wrap;
-      word-break: break-word;
-    }
-    code {
-      font-family: var(--vscode-editor-font-family);
-      background-color: var(--vscode-textCodeBlock-background);
-      padding: 2px 6px;
-      border-radius: 3px;
-    }
-    .timeline {
-      position: relative;
-      padding-left: 20px;
-    }
-    .timeline::before {
-      content: '';
-      position: absolute;
-      left: 6px;
-      top: 4px;
-      bottom: 4px;
-      width: 2px;
-      background-color: var(--vscode-panel-border);
-    }
-    .timeline-entry {
-      position: relative;
-      margin-bottom: 12px;
-    }
-    .timeline-entry::before {
-      content: '';
-      position: absolute;
-      left: -18px;
-      top: 6px;
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background-color: var(--vscode-textLink-foreground);
-    }
-    .timeline-entry.inactive::before {
-      background-color: var(--vscode-panel-border);
-    }
-    .timeline-label {
-      font-weight: 500;
-      color: var(--vscode-descriptionForeground);
-    }
-    .timeline-value {
-      margin-left: 8px;
-    }
-    .agent-link {
-      color: var(--vscode-textLink-foreground);
-      cursor: pointer;
-      text-decoration: underline;
-    }
-    .agent-link:hover {
-      color: var(--vscode-textLink-activeForeground);
-    }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>${escapeHtml(item.workflowName)}</h1>
-    <div class="actions">
-      <button onclick="pinPanel()" ${pinButtonDisabled}>${pinButtonLabel}</button>
-      <button onclick="refreshPanel()">Refresh</button>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Status</div>
-    <div class="field">
-      <span class="field-label">Current Status</span>
-      <span class="field-value">
-        <span class="badge" style="background-color: ${statusColor}; color: white;">
-          ${item.status.toUpperCase()}
-        </span>
-      </span>
-    </div>
-    <div class="field">
-      <span class="field-label">Priority</span>
-      <span class="field-value">
-        <span class="badge" style="background-color: ${priorityColor}; color: white;">
-          ${item.priority.toUpperCase()}
-        </span>
-      </span>
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-title">Workflow Details</div>
-    <div class="field">
-      <span class="field-label">Workflow ID</span>
-      <span class="field-value"><code>${escapeHtml(item.workflowId)}</code></span>
-    </div>
-    <div class="field">
-      <span class="field-label">Queue Item ID</span>
-      <span class="field-value"><code>${escapeHtml(item.id)}</code></span>
-    </div>
-    ${item.repository ? `<div class="field">
-      <span class="field-label">Repository</span>
-      <span class="field-value"><code>${escapeHtml(item.repository)}</code></span>
-    </div>` : ''}
-    ${item.assigneeId ? `<div class="field">
-      <span class="field-label">Assigned Agent</span>
-      <span class="field-value">
-        <span class="agent-link" onclick="openAgent('${escapeHtml(item.assigneeId)}')">${escapeHtml(item.assigneeId)}</span>
-      </span>
-    </div>` : ''}
-  </div>
-
-  <div class="section">
-    <div class="section-title">Timeline</div>
-    <div class="timeline">
-      <div class="timeline-entry">
-        <span class="timeline-label">Queued</span>
-        <span class="timeline-value">${formatDateTime(item.queuedAt)}</span>
-      </div>
-      <div class="timeline-entry ${item.startedAt ? '' : 'inactive'}">
-        <span class="timeline-label">Started</span>
-        <span class="timeline-value">${formatDateTime(item.startedAt)}</span>
-      </div>
-      <div class="timeline-entry ${item.completedAt ? '' : 'inactive'}">
-        <span class="timeline-label">${item.status === 'failed' ? 'Failed' : item.status === 'cancelled' ? 'Cancelled' : 'Completed'}</span>
-        <span class="timeline-value">${formatDateTime(item.completedAt)}</span>
-      </div>
-    </div>
-    <div class="field" style="margin-top: 8px;">
-      <span class="field-label">Duration</span>
-      <span class="field-value">${calculateDuration(item.startedAt, item.completedAt)}</span>
-    </div>
-  </div>
-
-  ${item.error ? `<div class="error-section">
-    <div class="error-title">Error Details</div>
-    <div class="error-message">${escapeHtml(item.error)}</div>
-  </div>` : ''}
-
-  <script nonce="${nonce}">
-    const vscode = acquireVsCodeApi();
-
-    function pinPanel() {
-      vscode.postMessage({ type: 'pin' });
-    }
-
-    function refreshPanel() {
-      vscode.postMessage({ type: 'refresh' });
-    }
-
-    function openAgent(agentId) {
-      vscode.postMessage({ type: 'openAgent', agentId: agentId });
-    }
-
-    // Notify extension that webview is ready
-    vscode.postMessage({ type: 'ready' });
-  </script>
-</body>
-</html>`;
-  }
-
-  /**
-   * Generate a CSP nonce.
-   */
-  private getNonce(): string {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    for (let i = 0; i < 32; i++) {
-      text += possible.charAt(Math.floor(Math.random() * possible.length));
-    }
-    return text;
-  }
-
-  // ==========================================================================
   // Disposal
   // ==========================================================================
 
   /**
-   * Dispose the panel and clean up resources.
+   * Clear all timers (debounce + polling).
+   */
+  private clearTimers(): void {
+    if (this.stepDebounceTimer) {
+      clearTimeout(this.stepDebounceTimer);
+      this.stepDebounceTimer = undefined;
+    }
+    this.stopPollingFallback();
+  }
+
+  /**
+   * Dispose SSE subscriptions without disposing the panel.
+   * Used when switching to a different item.
+   */
+  private disposeSubscriptions(): void {
+    while (this.disposables.length) {
+      const disposable = this.disposables.pop();
+      disposable?.dispose();
+    }
+  }
+
+  /**
+   * Dispose the panel and clean up all resources.
    */
   public dispose(): void {
     if (this.isDisposed) {
@@ -575,9 +693,11 @@ export class WorkItemDetailPanel {
     this.isDisposed = true;
 
     // Clear singleton reference if this is the preview instance
-    if (WorkItemDetailPanel.previewInstance === this) {
-      WorkItemDetailPanel.previewInstance = undefined;
+    if (JobDetailPanel.previewInstance === this) {
+      JobDetailPanel.previewInstance = undefined;
     }
+
+    this.clearTimers();
 
     this.panel.dispose();
 
@@ -586,22 +706,6 @@ export class WorkItemDetailPanel {
       disposable?.dispose();
     }
   }
-}
-
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/**
- * Escape HTML special characters.
- */
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
 }
 
 // ============================================================================
@@ -615,7 +719,7 @@ function escapeHtml(str: string): string {
 export function registerDetailPanelCommands(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand(CLOUD_COMMANDS.pinDetail, () => {
-      const instance = WorkItemDetailPanel.getPreviewInstance();
+      const instance = JobDetailPanel.getPreviewInstance();
       if (instance && !instance.pinned) {
         instance.pin();
       }
