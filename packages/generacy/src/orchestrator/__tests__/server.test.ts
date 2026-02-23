@@ -314,6 +314,158 @@ describe('OrchestratorServer', () => {
         const data = await response.json();
         expect(data.error.code).toBe('WORKER_NOT_FOUND');
       });
+
+      describe('maxConcurrent enforcement', () => {
+        it('should not assign job when worker is at maxConcurrent capacity', async () => {
+          // Register a fresh worker with maxConcurrent: 1
+          const regResponse = await fetch(`${baseUrl}/api/workers/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: `capacity-worker-${Date.now()}`,
+              name: 'Capacity Worker',
+              capabilities: ['*'],
+              maxConcurrent: 1,
+            }),
+          });
+          const { workerId: capWorkerId } = await regResponse.json();
+
+          // Submit 2 jobs
+          await server.submitJob({
+            name: 'Capacity Job 1',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+          await server.submitJob({
+            name: 'Capacity Job 2',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+
+          // First poll gets a job
+          const poll1 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${capWorkerId}`);
+          const poll1Data = await poll1.json();
+          expect(poll1Data.job).toBeDefined();
+          expect(poll1Data.job.status).toBe('assigned');
+          expect(poll1Data.job.workerId).toBe(capWorkerId);
+
+          // Second poll should return no job — worker is at capacity
+          const poll2 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${capWorkerId}`);
+          const poll2Data = await poll2.json();
+          expect(poll2Data.job).toBeUndefined();
+          expect(poll2Data.retryAfter).toBe(5);
+        });
+
+        it('should assign next job after first job is completed', async () => {
+          // Register a fresh worker with maxConcurrent: 1
+          const regResponse = await fetch(`${baseUrl}/api/workers/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: `complete-worker-${Date.now()}`,
+              name: 'Complete Worker',
+              capabilities: ['*'],
+              maxConcurrent: 1,
+            }),
+          });
+          const { workerId: compWorkerId } = await regResponse.json();
+
+          // Submit 2 jobs
+          await server.submitJob({
+            name: 'Complete Job 1',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+          await server.submitJob({
+            name: 'Complete Job 2',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+
+          // First poll gets a job
+          const poll1 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${compWorkerId}`);
+          const poll1Data = await poll1.json();
+          expect(poll1Data.job).toBeDefined();
+          const firstJobId = poll1Data.job.id;
+
+          // Report result for the first job (completes it and unassigns from worker)
+          await fetch(`${baseUrl}/api/jobs/${firstJobId}/result`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              jobId: firstJobId,
+              status: 'completed',
+              outputs: {},
+              duration: 100,
+            }),
+          });
+
+          // Now poll again — should get another job since worker has capacity
+          const poll2 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${compWorkerId}`);
+          const poll2Data = await poll2.json();
+          expect(poll2Data.job).toBeDefined();
+          expect(poll2Data.job.status).toBe('assigned');
+          expect(poll2Data.job.workerId).toBe(compWorkerId);
+          expect(poll2Data.job.id).not.toBe(firstJobId);
+        });
+
+        it('should respect maxConcurrent: 2 allowing two concurrent jobs', async () => {
+          // Register a fresh worker with maxConcurrent: 2
+          const regResponse = await fetch(`${baseUrl}/api/workers/register`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: `multi-worker-${Date.now()}`,
+              name: 'Multi Worker',
+              capabilities: ['*'],
+              maxConcurrent: 2,
+            }),
+          });
+          const { workerId: multiWorkerId } = await regResponse.json();
+
+          // Submit 3 jobs
+          await server.submitJob({
+            name: 'Multi Job 1',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+          await server.submitJob({
+            name: 'Multi Job 2',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+          await server.submitJob({
+            name: 'Multi Job 3',
+            workflow: 'test.yaml',
+            inputs: {},
+            priority: 'normal' as JobPriority,
+          });
+
+          // First poll gets a job
+          const poll1 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${multiWorkerId}`);
+          const poll1Data = await poll1.json();
+          expect(poll1Data.job).toBeDefined();
+          expect(poll1Data.job.status).toBe('assigned');
+
+          // Second poll gets another job (still under maxConcurrent: 2)
+          const poll2 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${multiWorkerId}`);
+          const poll2Data = await poll2.json();
+          expect(poll2Data.job).toBeDefined();
+          expect(poll2Data.job.status).toBe('assigned');
+
+          // Third poll should return no job — worker at capacity (2/2)
+          const poll3 = await fetch(`${baseUrl}/api/jobs/poll?workerId=${multiWorkerId}`);
+          const poll3Data = await poll3.json();
+          expect(poll3Data.job).toBeUndefined();
+          expect(poll3Data.retryAfter).toBe(5);
+        });
+      });
     });
 
     describe('GET /api/jobs/:jobId', () => {

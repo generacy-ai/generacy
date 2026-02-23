@@ -12,13 +12,13 @@
 
 ## Phase 1: Add `requeue()` to JobQueue
 
-### T001 Add `requeue` method to `JobQueue` interface
+### T001 [DONE] Add `requeue` method to `JobQueue` interface
 **File**: `packages/generacy/src/orchestrator/job-queue.ts`
 - Add `requeue(jobId: string): Promise<void>` to the `JobQueue` interface (after `cancelJob`, ~line 53)
 - Include JSDoc: requeues a dequeued-but-unassignable job back to pending at its correct priority position
 - Document that it throws if job not found or not in `assigned` status
 
-### T002 Implement `requeue` on `InMemoryJobQueue`
+### T002 [DONE] Implement `requeue` on `InMemoryJobQueue`
 **File**: `packages/generacy/src/orchestrator/job-queue.ts`
 - Add `async requeue(jobId: string): Promise<void>` method to `InMemoryJobQueue` (after `cancelJob`, ~line 278)
 - Validate job exists — throw `Error('Job not found: ${jobId}')` if not
@@ -32,7 +32,7 @@
 
 ## Phase 2: Fix `pollJob` handler
 
-### T003 Add capacity pre-check and safety-net requeue to `pollJob` handler
+### T003 [DONE] Add capacity pre-check and safety-net requeue to `pollJob` handler
 **File**: `packages/generacy/src/orchestrator/server.ts`
 - **Pre-check** (~line 372, before `jobQueue.poll()`): check `worker.currentJobs.length >= worker.maxConcurrent`; if at capacity, log at `debug` level and return `{ job: undefined, retryAfter: 5 }` early
 - **Safety-net** (after `jobQueue.poll()` returns a job): capture the boolean return value of `workerRegistry.assignJob(workerId, job.id)`; if `false`, log at `warn` level, call `await jobQueue.requeue(job.id)`, and return `{ job: undefined, retryAfter: 5 }`
@@ -43,7 +43,7 @@
 
 ## Phase 3: Unit Tests for `requeue()`
 
-### T004 [P] Write unit tests for `requeue` method
+### T004 [DONE] [P] Write unit tests for `requeue` method
 **File**: `packages/generacy/src/orchestrator/__tests__/job-queue.test.ts`
 - Add a new `describe('requeue', ...)` block inside the existing `InMemoryJobQueue` describe
 - Follow existing test patterns: use `createJob()` helper, `beforeEach` queue reset
@@ -59,7 +59,7 @@
 
 ## Phase 4: Integration Tests for Capacity Enforcement
 
-### T005 [P] Write HTTP integration tests for maxConcurrent enforcement on poll
+### T005 [DONE] [P] Write HTTP integration tests for maxConcurrent enforcement on poll
 **File**: `packages/generacy/src/orchestrator/__tests__/server.test.ts`
 - Add tests within the existing `GET /api/jobs/poll` describe block (or a new nested describe)
 - Follow existing test patterns: use the shared `server`/`baseUrl` from `beforeAll`, register workers with `fetch`, submit jobs via `server.submitJob()`
@@ -72,7 +72,7 @@
 
 ## Phase 5: Verification
 
-### T006 Run all existing + new tests to verify no regressions
+### T006 [DONE] Run all existing + new tests to verify no regressions
 **Files**:
 - `packages/generacy/src/orchestrator/__tests__/job-queue.test.ts`
 - `packages/generacy/src/orchestrator/__tests__/server.test.ts`
