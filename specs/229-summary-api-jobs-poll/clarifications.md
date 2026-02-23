@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -10,7 +10,7 @@
 **Options**:
 - A) Use `insertIntoQueue()`: Requeued jobs are placed at their correct priority position (after other jobs of the same priority, but before lower-priority jobs). This preserves the queue's invariant and is consistent with how `updateStatus('pending')` already works.
 - B) Push to end of queue: Requeued jobs go to the very back regardless of priority. This penalizes capacity-rejected jobs but breaks priority ordering.
-**Answer**:
+**Answer**: A — Use `insertIntoQueue()`. The requeued job didn't fail — it was rejected due to worker capacity. It should go back at its correct priority position, not be penalized. Pushing to the end breaks the priority sort invariant.
 
 ---
 
@@ -21,7 +21,7 @@
 - A) Throw on not-found, no-op on wrong status: Throw `Error('Job not found: ...')` if the job doesn't exist (matching `updateStatus`/`cancelJob` patterns), but silently return if the job is in a non-assigned status (defensive).
 - B) Throw on both: Throw if the job doesn't exist OR if it's not in `assigned` status. This makes misuse visible immediately.
 - C) Silent no-op for all cases: Match the spec as written — silently return for any unexpected input. This is the most defensive but hides bugs.
-**Answer**:
+**Answer**: B — Throw on both. A requeue of a non-existent job or a job in `completed`/`pending`/`running` status is a programming error that should surface immediately. Matches the existing `updateStatus()`/`cancelJob()` throw-on-not-found pattern.
 
 ---
 
@@ -31,7 +31,7 @@
 **Options**:
 - A) Clear both fields: Reset the job to a clean pending state with no worker association. Simple and consistent with the initial pending state.
 - B) Preserve workerId in metadata: Clear `workerId` from the primary field but store it in `job.metadata.lastWorkerId` for debugging. Adds minor complexity but aids troubleshooting.
-**Answer**:
+**Answer**: A — Clear both fields. The job returns to a clean pending state. The orchestrator logs already record which worker was assigned the job, so `lastWorkerId` metadata adds complexity for marginal debugging value.
 
 ---
 
@@ -41,7 +41,7 @@
 **Options**:
 - A) No explicit unassign: `requeue()` already clears the job's `workerId`, and the worker registry never added the job to `currentJobs`. An unnecessary `unassignJob()` call adds confusion.
 - B) Add explicit unassign as defense-in-depth: Call `unassignJob()` before `requeue()`. It's a no-op if the job isn't tracked, but makes the intent clear and is safe against future changes.
-**Answer**:
+**Answer**: A — No explicit unassign. `assignJob()` returned `false`, so the worker registry never tracked the job. Calling `unassignJob()` would be a misleading no-op that implies the assignment happened. `requeue()` already clears `workerId` on the job itself.
 
 ---
 
@@ -52,7 +52,7 @@
 - A) `debug`: Capacity rejections are a normal, expected event during healthy operation. Only visible when debugging is enabled. Avoids log noise.
 - B) `info`: Makes capacity rejections visible in standard production logs, useful for operators monitoring worker utilization without enabling debug.
 - C) `warn` for first occurrence per worker, `debug` for subsequent: Highlights the first time a worker hits capacity (potentially unexpected), then quiets down. Adds implementation complexity.
-**Answer**:
+**Answer**: A — `debug`. Capacity rejections are normal operation — the worker is busy and polls frequently. `info` would be noisy in production. The safety-net `warn` is correct because that path is an unexpected anomaly.
 
 ---
 
@@ -62,7 +62,7 @@
 **Options**:
 - A) HTTP integration tests: Follow the existing `server.test.ts` pattern — spin up the server, use `fetch()` to call `/api/jobs/poll`, assert on HTTP responses. Tests the full request path including routing and serialization.
 - B) Both: Add HTTP integration tests for the handler behavior AND unit tests for the `requeue()` method in `job-queue.test.ts`. This is what the spec's file list implies (changes to both test files).
-**Answer**:
+**Answer**: B — Both. HTTP integration tests for the handler (matching existing `server.test.ts` patterns) plus unit tests for the `requeue()` method in `job-queue.test.ts`. The spec's file list implies both.
 
 ---
 
@@ -72,7 +72,7 @@
 **Options**:
 - A) Require registration (spec as written): Workers must register before polling. The 404 error for unregistered workers is intentional. This ensures all workers have a `maxConcurrent` limit.
 - B) Allow unregistered workers with explicit capabilities: If a worker provides capabilities in the query string, allow polling even without registration. Skip the capacity check for unregistered workers (no limit enforceable). This preserves backward compatibility.
-**Answer**:
+**Answer**: A — Require registration (spec as written). The existing handler already returns 404 for unregistered workers (server.ts:363-366). This isn't a behavior change — it's the current behavior.
 
 ---
 
@@ -82,4 +82,4 @@
 **Options**:
 - A) Keep `undefined` (omitted from JSON): Match existing behavior. Clients already handle this since it's the current response format.
 - B) Change to `null`: Use `{ job: null, retryAfter: 5 }` so the field is explicitly present in the JSON response. This is a more explicit API contract but changes the existing response shape.
-**Answer**:
+**Answer**: A — Keep `undefined` (omitted from JSON). This is the existing behavior. Changing to `null` would be a breaking API change for clients, not appropriate for a bug fix.
