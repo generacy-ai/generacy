@@ -7,6 +7,7 @@ import type { ActionContext } from '../../../../types/index.js';
 import type { ImplementInput, ImplementOutput } from '../types.js';
 import { executeCommand } from '../../../cli-utils.js';
 import { exists, readFile, writeFile } from '../lib/fs.js';
+import { StreamBatcher } from '../lib/stream-batcher.js';
 
 /**
  * Task parsed from tasks.md
@@ -240,11 +241,31 @@ export async function executeImplement(
     const prompt = buildTaskPrompt(task, input.feature_dir, specContent, planContent);
 
     try {
+      // Set up streaming batchers for real-time log output (per-task)
+      const stdoutBatcher = new StreamBatcher((content) => {
+        context.emitEvent?.({
+          type: 'log:append',
+          data: { stream: 'stdout', stepName: `implement:${task.id}`, content },
+        });
+      });
+      const stderrBatcher = new StreamBatcher((content) => {
+        context.emitEvent?.({
+          type: 'log:append',
+          data: { stream: 'stderr', stepName: `implement:${task.id}`, content },
+        });
+      });
+
       const result = await executeCommand('claude', ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'], {
         cwd: input.feature_dir,
         timeout,
         signal: context.signal,
+        onStdout: (chunk) => stdoutBatcher.append(chunk),
+        onStderr: (chunk) => stderrBatcher.append(chunk),
       });
+
+      // Flush remaining batched content
+      stdoutBatcher.flush();
+      stderrBatcher.flush();
 
       if (result.exitCode === 0) {
         completedTasks.push(task.id);

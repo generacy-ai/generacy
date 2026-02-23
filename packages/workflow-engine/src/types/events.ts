@@ -21,7 +21,8 @@ export type ExecutionEventType =
   | 'action:start'
   | 'action:complete'
   | 'action:error'
-  | 'action:retry';
+  | 'action:retry'
+  | 'log:append';
 
 /**
  * Execution event data

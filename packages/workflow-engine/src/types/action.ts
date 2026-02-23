@@ -119,6 +119,11 @@ export interface ActionContext {
   signal: AbortSignal;
   /** Logger for action execution */
   logger: Logger;
+  /** Emit a streaming event (log output or step output) */
+  emitEvent?: (event: {
+    type: 'log:append' | 'step:output';
+    data: Record<string, unknown>;
+  }) => void;
 }
 
 /**

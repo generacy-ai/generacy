@@ -4,6 +4,7 @@
 import type { ServerResponse } from 'node:http';
 import type { Job, JobEvent, EventFilters } from './types.js';
 import type { JobQueue } from './job-queue.js';
+import type { LogBufferManager } from './log-buffer.js';
 
 /**
  * A fixed-capacity circular buffer that evicts oldest items when full.
@@ -136,6 +137,9 @@ export interface EventBusOptions {
   /** Job queue used for filter evaluation on global subscribers */
   jobQueue: JobQueue;
 
+  /** Optional LogBufferManager for routing log:append events to a separate buffer */
+  logBufferManager?: LogBufferManager;
+
   /** Optional logger */
   logger?: {
     info: (message: string, data?: Record<string, unknown>) => void;
@@ -190,6 +194,7 @@ export class EventBus {
   private readonly gracePeriod: number;
   private readonly heartbeatInterval: number;
   private readonly jobQueue: JobQueue;
+  private readonly logBufferManager?: LogBufferManager;
   private readonly logger?: EventBusOptions['logger'];
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -199,6 +204,7 @@ export class EventBus {
     this.gracePeriod = options.gracePeriod ?? 300_000;
     this.heartbeatInterval = options.heartbeatInterval ?? 30_000;
     this.jobQueue = options.jobQueue;
+    this.logBufferManager = options.logBufferManager;
     this.logger = options.logger;
   }
 
@@ -221,13 +227,27 @@ export class EventBus {
 
     const fullEvent: JobEvent = { ...event, id: String(counter) };
 
-    // Get or create the per-job ring buffer
-    let buffer = this.buffers.get(jobId);
-    if (!buffer) {
-      buffer = new RingBuffer<JobEvent>(this.bufferSize);
-      this.buffers.set(jobId, buffer);
+    // Route log:append events to the dedicated LogBuffer (separate from lifecycle
+    // events) to avoid drowning out lifecycle events in the per-job RingBuffer.
+    if (event.type === 'log:append' && this.logBufferManager) {
+      const data = (event.data ?? {}) as Record<string, unknown>;
+      this.logBufferManager.getOrCreate(jobId).append({
+        timestamp: event.timestamp,
+        stream: data.stream as string,
+        stepName: data.stepName as string,
+        content: data.content as string,
+        taskIndex: data.taskIndex as number | undefined,
+        taskTitle: data.taskTitle as string | undefined,
+      });
+    } else {
+      // Store lifecycle events in the per-job ring buffer
+      let buffer = this.buffers.get(jobId);
+      if (!buffer) {
+        buffer = new RingBuffer<JobEvent>(this.bufferSize);
+        this.buffers.set(jobId, buffer);
+      }
+      buffer.push(fullEvent);
     }
-    buffer.push(fullEvent);
 
     // Broadcast to per-job subscribers
     const frame = formatSSE(fullEvent);
@@ -413,6 +433,9 @@ export class EventBus {
     }, this.gracePeriod);
 
     this.cleanupTimers.set(jobId, timer);
+
+    // Also schedule cleanup for the log buffer
+    this.logBufferManager?.scheduleCleanup(jobId);
   }
 
   /**

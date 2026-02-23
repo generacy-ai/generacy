@@ -20,6 +20,7 @@ import { WorkerRegistry } from './worker-registry.js';
 import { InMemoryJobQueue, type JobQueue } from './job-queue.js';
 import { createRouter, pathToRegex, parseJsonBody, sendJson, sendError } from './router.js';
 import { EventBus } from './event-bus.js';
+import { LogBufferManager } from './log-buffer.js';
 
 /**
  * Orchestrator server options
@@ -129,11 +130,16 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
 
   const jobQueue = options.jobQueue ?? new InMemoryJobQueue();
 
+  const logBufferManager = new LogBufferManager({
+    gracePeriod: eventGracePeriod,
+  });
+
   const eventBus = new EventBus({
     bufferSize: eventBufferSize,
     gracePeriod: eventGracePeriod,
     heartbeatInterval: sseHeartbeatInterval,
     jobQueue,
+    logBufferManager,
     logger,
   });
 
@@ -170,6 +176,7 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
   const resultRoute = pathToRegex('/api/jobs/:jobId/result');
   const cancelRoute = pathToRegex('/api/jobs/:jobId/cancel');
   const jobEventsRoute = pathToRegex('/api/jobs/:jobId/events');
+  const jobLogsRoute = pathToRegex('/api/jobs/:jobId/logs');
   const globalEventsRoute = pathToRegex('/api/events');
 
   const router = createRouter([
@@ -180,6 +187,7 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
     { method: 'POST', pattern: submitJobRoute.regex, handler: 'submitJob', paramNames: submitJobRoute.paramNames },
     { method: 'GET', pattern: pollRoute.regex, handler: 'pollJob', paramNames: pollRoute.paramNames },
     { method: 'GET', pattern: globalEventsRoute.regex, handler: 'subscribeAllEvents', paramNames: globalEventsRoute.paramNames },
+    { method: 'GET', pattern: jobLogsRoute.regex, handler: 'getJobLogs', paramNames: jobLogsRoute.paramNames },
     { method: 'GET', pattern: jobEventsRoute.regex, handler: 'subscribeJobEvents', paramNames: jobEventsRoute.paramNames },
     { method: 'POST', pattern: jobEventsRoute.regex, handler: 'publishEvent', paramNames: jobEventsRoute.paramNames },
     { method: 'GET', pattern: getJobRoute.regex, handler: 'getJob', paramNames: getJobRoute.paramNames },
@@ -453,6 +461,61 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
 
       // Subscribe to the event bus (handles replay and live events)
       eventBus.subscribe(jobId, res, lastEventId);
+    },
+
+    /**
+     * GET /api/jobs/:jobId/logs - Retrieve buffered log output
+     */
+    async getJobLogs(req: IncomingMessage, res: ServerResponse, params: Record<string, string>) {
+      const { jobId } = params;
+
+      if (!jobId) {
+        sendError(res, 400, 'INVALID_REQUEST', 'Missing jobId parameter');
+        return;
+      }
+
+      const url = new URL(req.url!, `http://${req.headers.host}`);
+      const sinceParam = url.searchParams.get('since');
+      const streamParam = url.searchParams.get('stream');
+
+      const logBuffer = logBufferManager.get(jobId);
+
+      // SSE streaming mode
+      if (streamParam === 'true') {
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        });
+        res.flushHeaders();
+
+        // Send existing entries first
+        if (logBuffer) {
+          const entries = sinceParam
+            ? logBuffer.getAfterId(parseInt(sinceParam, 10))
+            : logBuffer.getAll();
+          for (const entry of entries) {
+            res.write(`event: log:append\nid: ${entry.id}\ndata: ${JSON.stringify(entry)}\n\n`);
+          }
+        }
+
+        // Subscribe to live log events via EventBus
+        eventBus.subscribe(jobId, res);
+        return;
+      }
+
+      // JSON mode: return buffered entries
+      if (!logBuffer) {
+        sendJson(res, 200, { entries: [], total: 0 });
+        return;
+      }
+
+      const entries = sinceParam
+        ? logBuffer.getAfterId(parseInt(sinceParam, 10))
+        : logBuffer.getAll();
+
+      sendJson(res, 200, { entries, total: logBuffer.size });
     },
 
     /**
@@ -781,6 +844,7 @@ export function createOrchestratorServer(options: OrchestratorServerOptions = {}
       }
 
       eventBus.destroy();
+      logBufferManager.destroy();
 
       return new Promise((resolve, reject) => {
         server.close((err) => {

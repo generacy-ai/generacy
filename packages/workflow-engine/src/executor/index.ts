@@ -9,6 +9,7 @@ import type {
   ExecutionResult,
   ExecutionStatus,
   ExecutionEventListener,
+  ExecutionEventType,
   PhaseResult,
   StepResult,
   StepDefinition,
@@ -588,6 +589,17 @@ export class WorkflowExecutor {
       workdir: options.cwd ?? process.cwd(),
       signal: this.abortController?.signal ?? new AbortController().signal,
       logger: actionLogger,
+      emitEvent: (event) => {
+        this.eventEmitter.emitEvent(
+          event.type as ExecutionEventType,
+          workflow.name,
+          {
+            phaseName: phase.name,
+            stepName: step.name,
+            data: event.data,
+          }
+        );
+      },
     };
   }
 

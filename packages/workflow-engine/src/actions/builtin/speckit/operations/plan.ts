@@ -7,6 +7,7 @@ import type { ActionContext } from '../../../../types/index.js';
 import type { PlanInput, PlanOutput } from '../types.js';
 import { executeCommand } from '../../../cli-utils.js';
 import { exists, readFile, readDir } from '../lib/fs.js';
+import { StreamBatcher } from '../lib/stream-batcher.js';
 
 /**
  * Build the prompt for plan generation
@@ -201,11 +202,31 @@ export async function executePlan(
     const args: string[] = ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'];
     const timeout = (input.timeout ?? 600) * 1000;
 
+    // Set up streaming batchers for real-time log output
+    const stdoutBatcher = new StreamBatcher((content) => {
+      context.emitEvent?.({
+        type: 'log:append',
+        data: { stream: 'stdout', stepName: 'plan', content },
+      });
+    });
+    const stderrBatcher = new StreamBatcher((content) => {
+      context.emitEvent?.({
+        type: 'log:append',
+        data: { stream: 'stderr', stepName: 'plan', content },
+      });
+    });
+
     const result = await executeCommand('claude', args, {
       cwd: input.feature_dir,
       timeout,
       signal: context.signal,
+      onStdout: (chunk) => stdoutBatcher.append(chunk),
+      onStderr: (chunk) => stderrBatcher.append(chunk),
     });
+
+    // Flush remaining batched content
+    stdoutBatcher.flush();
+    stderrBatcher.flush();
 
     if (result.exitCode !== 0) {
       return {

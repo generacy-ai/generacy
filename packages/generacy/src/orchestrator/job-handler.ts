@@ -23,7 +23,8 @@ import {
   type PhaseResult,
 } from '@generacy-ai/workflow-engine';
 import type { OrchestratorClient } from './client.js';
-import type { Job, JobResult } from './types.js';
+import type { Job, JobResult, JobEventType } from './types.js';
+import { AsyncEventQueue } from './async-event-queue.js';
 
 /**
  * Mapping from YAML phase names to completed:* label suffixes.
@@ -60,6 +61,20 @@ const PHASE_ORDER = [
 const PHASE_GATES: Record<string, string> = {
   clarification: 'waiting-for:clarification',
 };
+
+/**
+ * Event types to forward from the workflow executor to the orchestrator.
+ * Lifecycle events (phase/step) needed for real-time monitoring (#175).
+ * Log events for stdout/stderr streaming. Action-level events are too granular.
+ */
+const FORWARD_EVENT_TYPES = new Set<string>([
+  'phase:start',
+  'phase:complete',
+  'step:start',
+  'step:complete',
+  'step:output',
+  'log:append',
+]);
 
 /**
  * Register built-in workflow files from the generacy package's .generacy/ directory.
@@ -270,6 +285,15 @@ export class JobHandler {
     this.logger.info(`Starting job: ${job.id} (${job.name})`);
     this.onJobStart?.(job);
 
+    // Set up event forwarding to orchestrator for real-time monitoring
+    const eventQueue = new AsyncEventQueue(async (jobId, event) => {
+      await this.client.publishEvent(jobId, event as {
+        type: JobEventType;
+        data: Record<string, unknown>;
+        timestamp?: number;
+      });
+    });
+
     try {
       // Update job status to running
       await this.client.updateJobStatus(job.id, 'running', {
@@ -326,36 +350,49 @@ export class JobHandler {
       let gatedPhaseName: string | undefined;
       const phasesWithFailedSteps = new Set<string>();
 
-      if (owner && repo && issueNumber) {
-        executor.addEventListener((event) => {
-          // Track step failures so we can label phases accurately
-          if (event.type === 'step:error' && event.phaseName) {
-            phasesWithFailedSteps.add(event.phaseName);
+      executor.addEventListener((event) => {
+        // Forward matching events to orchestrator
+        if (FORWARD_EVENT_TYPES.has(event.type)) {
+          eventQueue.push(job.id, {
+            type: event.type,
+            timestamp: event.timestamp,
+            data: {
+              phaseName: event.phaseName,
+              stepName: event.stepName,
+              message: event.message,
+              ...(event.data as Record<string, unknown> ?? {}),
+            },
+          });
+        }
+
+        // Track step failures so we can label phases accurately
+        if (event.type === 'step:error' && event.phaseName) {
+          phasesWithFailedSteps.add(event.phaseName);
+        }
+
+        if (!owner || !repo || !issueNumber) return;
+        if (event.type !== 'phase:complete' || !event.phaseName) return;
+
+        const gateLabel = PHASE_GATES[event.phaseName];
+        if (gateLabel) {
+          // Check if the gated phase posted questions (needs developer input)
+          const stepOutput = executor.getExecutionContext()?.getStepOutput('clarify');
+          const parsed = stepOutput?.parsed as Record<string, unknown> | null;
+          const postedQuestions = parsed?.posted_to_issue === true
+            && (parsed?.questions_count as number) > 0;
+
+          if (postedQuestions) {
+            shouldPauseForGate = true;
+            gatedPhaseName = event.phaseName;
+            executor.cancel(); // stops before next phase starts
+            return; // don't add completed label for gated phase
           }
+        }
 
-          if (event.type !== 'phase:complete' || !event.phaseName) return;
-
-          const gateLabel = PHASE_GATES[event.phaseName];
-          if (gateLabel) {
-            // Check if the gated phase posted questions (needs developer input)
-            const stepOutput = executor.getExecutionContext()?.getStepOutput('clarify');
-            const parsed = stepOutput?.parsed as Record<string, unknown> | null;
-            const postedQuestions = parsed?.posted_to_issue === true
-              && (parsed?.questions_count as number) > 0;
-
-            if (postedQuestions) {
-              shouldPauseForGate = true;
-              gatedPhaseName = event.phaseName;
-              executor.cancel(); // stops before next phase starts
-              return; // don't add completed label for gated phase
-            }
-          }
-
-          // Add completed:* or failed:* label based on whether steps had errors
-          const hasFailed = phasesWithFailedSteps.has(event.phaseName);
-          void this.addPhaseLabel(owner, repo, issueNumber, event.phaseName, !hasFailed);
-        });
-      }
+        // Add completed:* or failed:* label based on whether steps had errors
+        const hasFailed = phasesWithFailedSteps.has(event.phaseName);
+        void this.addPhaseLabel(owner, repo, issueNumber, event.phaseName, !hasFailed);
+      });
 
       // Execute workflow
       const result = await executor.execute(
@@ -414,6 +451,9 @@ export class JobHandler {
 
       this.onJobComplete?.(job, failureResult);
     } finally {
+      // Flush any remaining queued events before cleanup
+      await eventQueue.flush();
+
       // Restore the original branch so the repo is clean for the next job
       if (originalBranch) {
         try {
