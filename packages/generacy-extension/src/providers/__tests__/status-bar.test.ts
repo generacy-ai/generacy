@@ -50,7 +50,7 @@ vi.mock('vscode', () => ({
 
 // Mock the runner module
 const mockExecutor = {
-  addEventListener: vi.fn(() => ({ dispose: vi.fn() })),
+  addEventListener: vi.fn((_listener: (event: unknown) => void) => ({ dispose: vi.fn() })),
   getStatus: vi.fn(() => 'idle'),
   isRunning: vi.fn(() => false),
   getCurrentExecution: vi.fn(() => undefined),
@@ -76,6 +76,7 @@ import {
   ExecutionStatusBarProvider,
   getExecutionStatusBarProvider,
   initializeExecutionStatusBar,
+  CloudJobStatusBarProvider,
 } from '../status-bar';
 
 describe('ExecutionStatusBarProvider', () => {
@@ -272,5 +273,149 @@ describe('initializeExecutionStatusBar', () => {
       'generacy.showExecutionOutput',
       expect.any(Function)
     );
+  });
+});
+
+describe('CloudJobStatusBarProvider', () => {
+  let provider: CloudJobStatusBarProvider;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    mockStatusBarItem.text = '';
+    mockStatusBarItem.tooltip = '';
+    mockStatusBarItem.backgroundColor = undefined;
+    provider = new CloudJobStatusBarProvider();
+  });
+
+  afterEach(() => {
+    provider.dispose();
+    vi.useRealTimers();
+  });
+
+  describe('flash()', () => {
+    it('should set completed flash appearance', () => {
+      provider.flash('completed');
+
+      expect(mockStatusBarItem.text).toBe('$(check) Job completed');
+      expect(mockStatusBarItem.backgroundColor).toBeUndefined();
+      expect(mockStatusBarItem.show).toHaveBeenCalled();
+    });
+
+    it('should set failed flash appearance with error background', () => {
+      provider.flash('failed');
+
+      expect(mockStatusBarItem.text).toBe('$(error) Job failed');
+      expect(mockStatusBarItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+      expect((mockStatusBarItem.backgroundColor as vscode.ThemeColor).id).toBe(
+        'statusBarItem.errorBackground'
+      );
+      expect(mockStatusBarItem.show).toHaveBeenCalled();
+    });
+
+    it('should set cancelled flash appearance with warning background', () => {
+      provider.flash('cancelled');
+
+      expect(mockStatusBarItem.text).toBe('$(stop) Job cancelled');
+      expect(mockStatusBarItem.backgroundColor).toBeInstanceOf(vscode.ThemeColor);
+      expect((mockStatusBarItem.backgroundColor as vscode.ThemeColor).id).toBe(
+        'statusBarItem.warningBackground'
+      );
+      expect(mockStatusBarItem.show).toHaveBeenCalled();
+    });
+
+    it('should revert to previous text and background after 3000ms', () => {
+      // Set up initial state via updateCount
+      provider.updateCount(2);
+      const previousText = mockStatusBarItem.text;
+      const previousBg = mockStatusBarItem.backgroundColor;
+
+      provider.flash('completed');
+
+      // During flash
+      expect(mockStatusBarItem.text).toBe('$(check) Job completed');
+
+      // Advance timer to trigger revert
+      vi.advanceTimersByTime(3000);
+
+      expect(mockStatusBarItem.text).toBe(previousText);
+      expect(mockStatusBarItem.backgroundColor).toBe(previousBg);
+    });
+
+    it('should hide status bar after flash revert when currentCount is 0', () => {
+      // currentCount defaults to 0 (no updateCount called)
+      provider.flash('completed');
+
+      vi.advanceTimersByTime(3000);
+
+      expect(mockStatusBarItem.hide).toHaveBeenCalled();
+    });
+
+    it('should not hide status bar after flash revert when currentCount > 0', () => {
+      provider.updateCount(3);
+      mockStatusBarItem.hide.mockClear();
+
+      provider.flash('failed');
+
+      vi.advanceTimersByTime(3000);
+
+      expect(mockStatusBarItem.hide).not.toHaveBeenCalled();
+    });
+
+    it('should clear previous flash timer on rapid sequential flashes', () => {
+      provider.updateCount(1);
+
+      // First flash
+      provider.flash('completed');
+      expect(mockStatusBarItem.text).toBe('$(check) Job completed');
+
+      // Advance partway (not enough to trigger revert)
+      vi.advanceTimersByTime(1500);
+
+      // Second flash before first reverts
+      provider.flash('failed');
+      expect(mockStatusBarItem.text).toBe('$(error) Job failed');
+
+      // Advance past what would have been the first timer's revert
+      vi.advanceTimersByTime(1500);
+
+      // Should still show the second flash (first timer was cleared)
+      expect(mockStatusBarItem.text).toBe('$(error) Job failed');
+
+      // Advance to complete the second flash timer
+      vi.advanceTimersByTime(1500);
+
+      // Now should revert to the state captured by the second flash call
+      // (which was the 'completed' flash text, since that was active when flash('failed') was called)
+      expect(mockStatusBarItem.text).not.toBe('$(error) Job failed');
+    });
+
+    it('should force show status bar item during flash even when count is 0', () => {
+      // Count is 0, status bar is hidden
+      expect(mockStatusBarItem.show).not.toHaveBeenCalled();
+
+      provider.flash('cancelled');
+
+      expect(mockStatusBarItem.show).toHaveBeenCalled();
+    });
+  });
+
+  describe('dispose()', () => {
+    it('should clear active flash timer on dispose', () => {
+      provider.flash('completed');
+
+      // Dispose before timer fires
+      provider.dispose();
+
+      // Advance past the flash timeout — should not throw or cause issues
+      vi.advanceTimersByTime(3000);
+
+      expect(mockStatusBarItem.dispose).toHaveBeenCalled();
+    });
+
+    it('should dispose status bar item', () => {
+      provider.dispose();
+      expect(mockStatusBarItem.dispose).toHaveBeenCalled();
+    });
   });
 });

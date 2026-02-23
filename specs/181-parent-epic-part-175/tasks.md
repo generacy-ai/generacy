@@ -12,7 +12,7 @@
 
 ## Phase 1: Configuration & Constants
 
-### T001 [P] Add notification configuration settings to package.json
+### T001 [DONE] [P] Add notification configuration settings to package.json
 **File**: `packages/generacy-extension/package.json`
 - Add `generacy.notifications.enabled` (boolean, default: `true`) — master toggle for job completion/failure notifications
 - Add `generacy.notifications.onComplete` (boolean, default: `true`) — notify on successful completion
@@ -21,7 +21,7 @@
 - Place new settings after the existing `generacy.dashboard.notifications` setting
 - Update `generacy.dashboard.notifications` description to clarify its scope: "Notification level for orchestration activity events (workflow progress, agent connections). For job completion/failure alerts, see generacy.notifications.* settings."
 
-### T002 [P] Add notification config key constants
+### T002 [DONE] [P] Add notification config key constants
 **File**: `packages/generacy-extension/src/constants.ts`
 - Add to `CONFIG_KEYS` object:
   - `notificationsEnabled: 'notifications.enabled'`
@@ -32,7 +32,7 @@
 
 ## Phase 2: Status Bar Enhancement
 
-### T003 Enhance CloudJobStatusBarProvider with flash method
+### T003 [DONE] Enhance CloudJobStatusBarProvider with flash method
 **File**: `packages/generacy-extension/src/providers/status-bar.ts`
 - Add `private currentCount = 0` instance field to track job count state
 - Add `private flashTimer: ReturnType<typeof setTimeout> | undefined` for flash timeout management
@@ -52,7 +52,7 @@
 
 ## Phase 3: Core Notification Service
 
-### T004 Create JobNotificationService — SSE subscription and event filtering
+### T004 [DONE] Create JobNotificationService — SSE subscription and event filtering
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts` (new)
 - Create `JobNotificationService` class implementing `vscode.Disposable`
 - Constructor parameters: `cloudStatusBar: CloudJobStatusBarProvider`, `queueProvider: QueueTreeProvider`, `extensionUri: vscode.Uri`
@@ -60,21 +60,21 @@
 - Filter events: only process `queue:updated` events where `data.status` is `'completed'`, `'failed'`, or `'cancelled'`
 - Implement `dispose()`: dispose all SSE subscriptions, clear all timers
 
-### T005 Add event deduplication logic
+### T005 [DONE] Add event deduplication logic
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Add `private readonly seenEventIds = new Set<string>()` and `private readonly seenEventIdOrder: string[] = []`
 - On each qualifying event, check if `event.id` is in `seenEventIds`; skip if already seen
 - Add new event IDs to both `seenEventIds` and `seenEventIdOrder`
 - When `seenEventIds.size > 100`, evict the oldest ID (shift from `seenEventIdOrder`, delete from `seenEventIds`)
 
-### T006 Add configuration checking
+### T006 [DONE] Add configuration checking
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Read `generacy.notifications.enabled` via `vscode.workspace.getConfiguration('generacy')` — skip all notifications if `false`
 - Read `generacy.notifications.onComplete` — skip completed job notifications if `false`
 - Read `generacy.notifications.onError` — skip failed/cancelled job notifications if `false`
 - Configuration is read on each event (no caching needed — `getConfiguration` is fast)
 
-### T007 Add data enrichment via JobProgress API
+### T007 [DONE] Add data enrichment via JobProgress API
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - On terminal events, call `queueApi.getJobProgress(jobId)` to fetch full progress details
 - Extract from `JobProgress`:
@@ -84,7 +84,7 @@
 - Gracefully degrade if `getJobProgress()` fails: show notification without PR button or step details, fall back to `QueueItem.error` field
 - Add `private formatDuration(ms: number): string` helper (e.g., "31m 22s", "1h 5m")
 
-### T008 Add notification display and action handling
+### T008 [DONE] Add notification display and action handling
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - **Completed jobs**: `vscode.window.showInformationMessage` with:
   - Message: `"✅ {workflowName} completed ({duration})"` with PR info if available (e.g., `"→ PR #{number}: {title}"`)
@@ -100,7 +100,7 @@
   - `"View Details"` / `"View Logs"` → `vscode.commands.executeCommand('generacy.queue.viewProgress', jobId)` (use `viewJobProgress` command since `viewDetails` expects a `QueueTreeItem`, not a raw ID)
 - Trigger `cloudStatusBar.flash(status)` on every terminal event
 
-### T009 Add rate limiting (batch when 3+ events in 10s)
+### T009 [DONE] Add rate limiting (batch when 3+ events in 10s)
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Define `PendingNotification` interface: `{ queueItem: QueueItem, status: 'completed' | 'failed' | 'cancelled', progress?: JobProgress, timestamp: number }`
 - Add `private pendingNotifications: PendingNotification[]` and `private batchTimer: ReturnType<typeof setTimeout> | undefined`
@@ -110,7 +110,7 @@
   - When timer fires: if 3+ pending, show single summary notification (e.g., "3 jobs completed, 1 failed") with "View Queue" action → `generacy.queue.focus`; if <3, show individual notifications
 - Clear `batchTimer` in `dispose()`
 
-### T010 Add focus batching (queue notifications when VS Code unfocused)
+### T010 [DONE] Add focus batching (queue notifications when VS Code unfocused)
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Add `private unfocusedQueue: PendingNotification[]`
 - Track `vscode.window.state.focused` via `vscode.window.onDidChangeWindowState`
@@ -118,7 +118,7 @@
 - On refocus: if 3+ queued, show single summary notification; if <3, show individually
 - Clear `unfocusedQueue` and listener in `dispose()`
 
-### T011 Add continueOnError step-failure handling
+### T011 [DONE] Add continueOnError step-failure handling
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Subscribe to `workflows` channel in addition to `queue` channel
 - Listen for `workflow:step:complete` events where `data.step.status === 'failed'`
@@ -130,7 +130,7 @@
 
 ## Phase 4: Service Wiring
 
-### T012 Wire JobNotificationService into cloud initialization
+### T012 [DONE] Wire JobNotificationService into cloud initialization
 **File**: `packages/generacy-extension/src/commands/cloud.ts`
 - Import `JobNotificationService` from `../services/job-notification-service`
 - After the existing `NotificationManager` initialization (after line 208), instantiate:
@@ -149,7 +149,7 @@
 
 ## Phase 5: Testing
 
-### T013 [P] Write unit tests for CloudJobStatusBarProvider.flash()
+### T013 [DONE] [P] Write unit tests for CloudJobStatusBarProvider.flash()
 **File**: `packages/generacy-extension/src/providers/__tests__/status-bar.test.ts`
 - Test flash with `'completed'` status: verify icon text set to `$(check) Job completed`, background color reset, item shown
 - Test flash with `'failed'` status: verify icon text set to `$(error) Job failed`, background color set to `statusBarItem.errorBackground`
@@ -159,7 +159,7 @@
 - Test that rapid sequential flashes clear previous timer (no stale revert)
 - Follow existing mock pattern in `status-bar.test.ts` for `vscode.window.createStatusBarItem`
 
-### T014 [P] Write unit tests for JobNotificationService
+### T014 [DONE] [P] Write unit tests for JobNotificationService
 **File**: `packages/generacy-extension/src/services/__tests__/job-notification-service.test.ts` (new)
 - **Deduplication tests**:
   - Duplicate event IDs are ignored (no duplicate notification)
@@ -200,13 +200,13 @@
 
 ## Phase 6: Validation
 
-### T015 Verify TypeScript compilation
+### T015 [DONE] Verify TypeScript compilation
 **Files**:
 - All modified and new files
 - Run `pnpm --filter generacy-extension exec tsc --noEmit` to ensure no type errors
 - Fix any compilation issues
 
-### T016 Run existing test suite
+### T016 [DONE] Run existing test suite
 **Files**:
 - `packages/generacy-extension/src/**/*.test.ts`
 - Run `pnpm --filter generacy-extension test` to ensure no regressions

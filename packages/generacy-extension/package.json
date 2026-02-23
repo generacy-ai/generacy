@@ -597,7 +597,27 @@
             "summary",
             "none"
           ],
-          "description": "Notification level for orchestration events: 'all' shows each event immediately, 'summary' batches events into periodic summaries, 'none' suppresses notifications"
+          "description": "Notification level for orchestration activity events (workflow progress, agent connections). For job completion/failure alerts, see generacy.notifications.* settings."
+        },
+        "generacy.notifications.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable notifications when cloud jobs complete or fail. This controls job completion toasts specifically — see generacy.dashboard.notifications for dashboard-level event notifications."
+        },
+        "generacy.notifications.onComplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a cloud job completes successfully."
+        },
+        "generacy.notifications.onError": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a cloud job fails."
+        },
+        "generacy.notifications.sound": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Play a sound when a job completes or fails. *(Not yet implemented — reserved for future use.)*"
         }
       }
     },

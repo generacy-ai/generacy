@@ -20,6 +20,7 @@ import { createQueueTreeProvider } from '../views/cloud/queue';
 import { registerOrchestratorSidebar, OrchestratorDashboardPanel } from '../views/cloud/orchestrator';
 import { NotificationManager } from '../utils/notifications';
 import { CloudJobStatusBarProvider } from '../providers/status-bar';
+import { JobNotificationService } from '../services/job-notification-service';
 import { CLOUD_COMMANDS as ORCH_COMMANDS, CONTEXT_KEYS } from '../constants';
 
 /**
@@ -206,6 +207,15 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
   const notificationManager = new NotificationManager();
   context.subscriptions.push(notificationManager);
   logger.info('Notification manager initialized');
+
+  // Initialize job notification service (terminal status alerts)
+  const jobNotificationService = new JobNotificationService(
+    cloudStatusBar,
+    queueProvider,
+    context.extensionUri,
+  );
+  context.subscriptions.push(jobNotificationService);
+  logger.info('Job notification service initialized');
 
   logger.info('Cloud services initialized');
 }

@@ -487,6 +487,8 @@ export function initializeExecutionStatusBar(context: vscode.ExtensionContext): 
  */
 export class CloudJobStatusBarProvider implements vscode.Disposable {
   private statusBarItem: vscode.StatusBarItem;
+  private currentCount = 0;
+  private flashTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -504,6 +506,8 @@ export class CloudJobStatusBarProvider implements vscode.Disposable {
    * Hides the status bar item when count is 0.
    */
   public updateCount(count: number): void {
+    this.currentCount = count;
+
     if (count === 0) {
       this.statusBarItem.hide();
       return;
@@ -513,7 +517,43 @@ export class CloudJobStatusBarProvider implements vscode.Disposable {
     this.statusBarItem.show();
   }
 
+  /**
+   * Temporarily flash the status bar to indicate a job terminal event.
+   * Changes the icon and background color for 3 seconds, then reverts.
+   */
+  public flash(status: 'completed' | 'failed' | 'cancelled'): void {
+    const previousText = this.statusBarItem.text;
+    const previousBg = this.statusBarItem.backgroundColor;
+
+    if (status === 'completed') {
+      this.statusBarItem.text = '$(check) Job completed';
+      this.statusBarItem.backgroundColor = undefined;
+    } else if (status === 'failed') {
+      this.statusBarItem.text = '$(error) Job failed';
+      this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    } else {
+      this.statusBarItem.text = '$(stop) Job cancelled';
+      this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+    }
+    this.statusBarItem.show();
+
+    if (this.flashTimer !== undefined) {
+      clearTimeout(this.flashTimer);
+    }
+    this.flashTimer = setTimeout(() => {
+      this.flashTimer = undefined;
+      this.statusBarItem.text = previousText;
+      this.statusBarItem.backgroundColor = previousBg;
+      if (this.currentCount === 0) {
+        this.statusBarItem.hide();
+      }
+    }, 3000);
+  }
+
   public dispose(): void {
+    if (this.flashTimer !== undefined) {
+      clearTimeout(this.flashTimer);
+    }
     this.statusBarItem.dispose();
   }
 }
