@@ -1,0 +1,251 @@
+# Job Progress API Contract
+# Feature: 179-parent-epic-part-175
+
+openapi: 3.0.3
+info:
+  title: Job Progress API
+  version: 1.0.0
+  description: API endpoint for fetching job execution progress with phase/step detail
+
+paths:
+  /queue/{id}/progress:
+    get:
+      operationId: getJobProgress
+      summary: Get full job progress with phase and step detail
+      description: |
+        Returns the complete progress breakdown for a queue item, including
+        all phases and their individual steps with status, timing, and output.
+
+        For running jobs, this reflects the latest known state.
+        For completed/failed jobs, this reflects the final state.
+        For pending jobs, this returns phases with all statuses set to 'pending'.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The queue item ID
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Job progress data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobProgress"
+              example:
+                jobId: "abc-123"
+                currentPhaseIndex: 4
+                totalPhases: 8
+                completedPhases: 4
+                skippedPhases: 0
+                phases:
+                  - id: "setup"
+                    name: "Setup"
+                    status: "completed"
+                    startedAt: "2026-02-23T10:00:00Z"
+                    completedAt: "2026-02-23T10:00:00Z"
+                    durationMs: 32
+                    steps: []
+                  - id: "specification"
+                    name: "Specification"
+                    status: "completed"
+                    startedAt: "2026-02-23T10:00:00Z"
+                    completedAt: "2026-02-23T10:03:19Z"
+                    durationMs: 199000
+                    steps: []
+                  - id: "implementation"
+                    name: "Implementation"
+                    status: "running"
+                    startedAt: "2026-02-23T10:09:36Z"
+                    steps:
+                      - id: "T001"
+                        name: "Extract conversion function"
+                        status: "completed"
+                        startedAt: "2026-02-23T10:09:36Z"
+                        completedAt: "2026-02-23T10:11:36Z"
+                        durationMs: 120000
+                        output: "Created src/utils/convert.ts"
+                      - id: "T003"
+                        name: "Clear baseline.rec"
+                        status: "running"
+                        startedAt: "2026-02-23T10:14:36Z"
+                  - id: "commit-push"
+                    name: "Commit & Push"
+                    status: "pending"
+                    steps: []
+                updatedAt: "2026-02-23T10:14:36Z"
+        "404":
+          description: Queue item not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    JobProgress:
+      type: object
+      required:
+        - jobId
+        - currentPhaseIndex
+        - totalPhases
+        - completedPhases
+        - skippedPhases
+        - phases
+        - updatedAt
+      properties:
+        jobId:
+          type: string
+          description: Queue item / job ID
+        currentPhaseIndex:
+          type: integer
+          minimum: 0
+          description: Current phase index (0-based)
+        totalPhases:
+          type: integer
+          minimum: 0
+          description: Total number of phases
+        completedPhases:
+          type: integer
+          minimum: 0
+          description: Number of completed phases
+        skippedPhases:
+          type: integer
+          minimum: 0
+          description: Number of skipped phases
+        phases:
+          type: array
+          items:
+            $ref: "#/components/schemas/PhaseProgress"
+          description: All phases with step-level detail
+        pullRequestUrl:
+          type: string
+          format: uri
+          description: PR URL when pr-creation phase completes
+        updatedAt:
+          type: string
+          format: date-time
+          description: Last update timestamp
+
+    PhaseProgress:
+      type: object
+      required:
+        - id
+        - name
+        - status
+        - steps
+      properties:
+        id:
+          type: string
+          description: Phase identifier (e.g., "setup", "implementation")
+        name:
+          type: string
+          description: Phase display name
+        status:
+          type: string
+          enum: [pending, running, completed, failed, skipped]
+          description: Current phase status
+        startedAt:
+          type: string
+          format: date-time
+          description: Phase start timestamp
+        completedAt:
+          type: string
+          format: date-time
+          description: Phase completion timestamp
+        durationMs:
+          type: number
+          minimum: 0
+          description: Duration in milliseconds
+        steps:
+          type: array
+          items:
+            $ref: "#/components/schemas/StepProgress"
+          description: Steps within this phase
+        error:
+          type: string
+          description: Error message if phase failed
+
+    StepProgress:
+      type: object
+      required:
+        - id
+        - name
+        - status
+      properties:
+        id:
+          type: string
+          description: Step identifier (e.g., "T001")
+        name:
+          type: string
+          description: Step display name
+        status:
+          type: string
+          enum: [pending, running, completed, failed, skipped]
+          description: Current step status
+        startedAt:
+          type: string
+          format: date-time
+          description: Step start timestamp
+        completedAt:
+          type: string
+          format: date-time
+          description: Step completion timestamp
+        durationMs:
+          type: number
+          minimum: 0
+          description: Duration in milliseconds
+        output:
+          type: string
+          description: Single-line summary output
+        error:
+          type: string
+          description: Error message if step failed
+
+    QueueItemProgressSummary:
+      type: object
+      description: Lightweight progress summary included in queue list responses
+      properties:
+        currentPhase:
+          type: string
+          description: Current phase name
+        phaseProgress:
+          type: string
+          description: Progress display string (e.g., "Phase 5/8")
+        totalPhases:
+          type: integer
+          minimum: 0
+        completedPhases:
+          type: integer
+          minimum: 0
+        skippedPhases:
+          type: integer
+          minimum: 0
+
+    ErrorResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
