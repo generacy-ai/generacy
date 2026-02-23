@@ -4,6 +4,8 @@
  */
 import { getApiClient } from '../client';
 import {
+  JobProgress,
+  JobProgressSchema,
   QueueItem,
   QueueListResponse,
   QueueListResponseSchema,
@@ -92,6 +94,15 @@ export const queueApi = {
   async retryQueueItem(id: string): Promise<QueueItem> {
     const client = getApiClient();
     const response = await client.postValidated(`/queue/${id}/retry`, QueueItemSchema);
+    return response.data;
+  },
+
+  /**
+   * Get detailed progress for a job (phase/step breakdown)
+   */
+  async getJobProgress(id: string): Promise<JobProgress> {
+    const client = getApiClient();
+    const response = await client.getValidated(`/queue/${id}/progress`, JobProgressSchema);
     return response.data;
   },
 

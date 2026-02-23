@@ -480,3 +480,40 @@ export function initializeExecutionStatusBar(context: vscode.ExtensionContext): 
   const provider = getExecutionStatusBarProvider();
   provider.initialize(context);
 }
+
+/**
+ * Status bar provider for cloud job count.
+ * Shows the number of currently running cloud jobs.
+ */
+export class CloudJobStatusBarProvider implements vscode.Disposable {
+  private statusBarItem: vscode.StatusBarItem;
+
+  constructor() {
+    this.statusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      99
+    );
+    this.statusBarItem.name = 'Generacy Cloud Jobs';
+    this.statusBarItem.command = 'generacy.queue.focus';
+    this.statusBarItem.tooltip = 'Running cloud jobs';
+    this.statusBarItem.hide();
+  }
+
+  /**
+   * Update the displayed count of running cloud jobs.
+   * Hides the status bar item when count is 0.
+   */
+  public updateCount(count: number): void {
+    if (count === 0) {
+      this.statusBarItem.hide();
+      return;
+    }
+
+    this.statusBarItem.text = `$(cloud) ${count} job${count !== 1 ? 's' : ''}`;
+    this.statusBarItem.show();
+  }
+
+  public dispose(): void {
+    this.statusBarItem.dispose();
+  }
+}

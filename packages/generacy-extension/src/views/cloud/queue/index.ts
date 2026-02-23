@@ -23,6 +23,12 @@ export {
   type QueueExplorerItem,
 } from './tree-item';
 
+// Detail Panel
+export { JobDetailPanel } from './detail-panel';
+
+// Progress State
+export { JobProgressState } from './progress-state';
+
 // Actions
 export {
   cancelQueueItem,

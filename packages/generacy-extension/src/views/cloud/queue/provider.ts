@@ -8,7 +8,13 @@ import { getLogger } from '../../../utils/logger';
 import { getAuthService } from '../../../api/auth';
 import { queueApi, QueueFilterOptions } from '../../../api/endpoints/queue';
 import { getSSEManager } from '../../../api/sse';
-import type { QueueItem, QueueStatus, SSEEvent } from '../../../api/types';
+import type {
+  QueueItem,
+  QueueItemProgressSummary,
+  QueueStatus,
+  SSEEvent,
+  WorkflowPhaseEventData,
+} from '../../../api/types';
 import { VIEWS } from '../../../constants';
 import {
   QueueTreeItem,
@@ -59,6 +65,7 @@ export class QueueTreeProvider
   private queueItems: QueueItem[] = [];
   private pollingTimer: ReturnType<typeof setInterval> | undefined;
   private sseDebounceTimer: ReturnType<typeof setTimeout> | undefined;
+  private workflowsDebounceTimer: ReturnType<typeof setTimeout> | undefined;
   private isLoading = false;
   private loadError: Error | undefined;
   private viewMode: QueueViewMode;
@@ -66,6 +73,10 @@ export class QueueTreeProvider
   private readonly pollingInterval: number;
   private readonly pageSize: number;
   private isPaused = false;
+  private elapsedTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** Progress summaries keyed by job ID, updated from workflows SSE and REST responses */
+  private progressSummaries = new Map<string, QueueItemProgressSummary>();
 
   constructor(options: QueueTreeProviderOptions = {}) {
     const logger = getLogger();
@@ -187,7 +198,7 @@ export class QueueTreeProvider
 
     switch (this.viewMode) {
       case 'flat':
-        return this.queueItems.map((item) => new QueueTreeItem(item));
+        return this.queueItems.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id)));
 
       case 'byStatus':
         return this.getStatusGroups();
@@ -199,7 +210,7 @@ export class QueueTreeProvider
         return this.getAssigneeGroups();
 
       default:
-        return this.queueItems.map((item) => new QueueTreeItem(item));
+        return this.queueItems.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id)));
     }
   }
 
@@ -311,7 +322,7 @@ export class QueueTreeProvider
         filtered = [];
     }
 
-    return filtered.map((item) => new QueueTreeItem(item));
+    return filtered.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id)));
   }
 
   // ==========================================================================
@@ -319,18 +330,23 @@ export class QueueTreeProvider
   // ==========================================================================
 
   /**
-   * Subscribe to SSE queue channel for real-time updates
+   * Subscribe to SSE queue and workflows channels for real-time updates
    */
   private subscribeSSE(): void {
     const logger = getLogger();
     const sseManager = getSSEManager();
 
-    const subscription = sseManager.subscribe('queue', (event: SSEEvent) => {
+    const queueSubscription = sseManager.subscribe('queue', (event: SSEEvent) => {
       this.handleSSEEvent(event);
     });
-
-    this.disposables.push(subscription);
+    this.disposables.push(queueSubscription);
     logger.debug('Subscribed to SSE queue channel');
+
+    const workflowsSubscription = sseManager.subscribe('workflows', (event: SSEEvent) => {
+      this.handleWorkflowEvent(event);
+    });
+    this.disposables.push(workflowsSubscription);
+    logger.debug('Subscribed to SSE workflows channel');
   }
 
   /**
@@ -408,6 +424,97 @@ export class QueueTreeProvider
     }
     this.sseDebounceTimer = setTimeout(() => {
       this.sseDebounceTimer = undefined;
+      this.updateElapsedTimer();
+      this._onDidChangeTreeData.fire();
+    }, 200);
+  }
+
+  /**
+   * Handle an SSE event on the workflows channel.
+   * Updates progress summaries for tracked jobs and fires debounced tree refresh.
+   */
+  private handleWorkflowEvent(event: SSEEvent): void {
+    const logger = getLogger();
+
+    switch (event.event) {
+      case 'workflow:progress': {
+        // Full progress snapshot — extract summary and store
+        const data = event.data as {
+          jobId?: string;
+          currentPhaseIndex?: number;
+          totalPhases?: number;
+          completedPhases?: number;
+          skippedPhases?: number;
+          phases?: Array<{ name?: string; status?: string }>;
+        };
+        const jobId = data.jobId;
+        if (!jobId) break;
+
+        // Ignore events for jobs not in our queue
+        if (!this.queueItems.some((i) => i.id === jobId)) break;
+
+        const currentPhaseIndex = data.currentPhaseIndex ?? 0;
+        const currentPhaseName = data.phases?.[currentPhaseIndex]?.name;
+
+        const summary: QueueItemProgressSummary = {
+          currentPhase: currentPhaseName,
+          phaseProgress: `Phase ${(data.completedPhases ?? 0) + 1}/${data.totalPhases ?? 0}`,
+          totalPhases: data.totalPhases,
+          completedPhases: data.completedPhases,
+          skippedPhases: data.skippedPhases,
+        };
+
+        this.progressSummaries.set(jobId, summary);
+        logger.debug(`Workflow progress updated for job ${jobId}`);
+        this.debouncedRefreshTreeForWorkflows();
+        break;
+      }
+
+      case 'workflow:phase:start':
+      case 'workflow:phase:complete': {
+        const data = event.data as WorkflowPhaseEventData;
+        const jobId = data.jobId;
+        if (!jobId) break;
+
+        // Ignore events for jobs not in our queue
+        if (!this.queueItems.some((i) => i.id === jobId)) break;
+
+        // Update existing summary or create a new one from the phase event
+        const existing = this.progressSummaries.get(jobId);
+        const phaseName = data.phase?.name;
+        const isStart = event.event === 'workflow:phase:start';
+
+        const summary: QueueItemProgressSummary = {
+          currentPhase: isStart ? phaseName : existing?.currentPhase,
+          phaseProgress: `Phase ${data.phaseIndex + 1}/${data.totalPhases}`,
+          totalPhases: data.totalPhases ?? existing?.totalPhases,
+          completedPhases: isStart
+            ? existing?.completedPhases
+            : (existing?.completedPhases ?? 0) + 1,
+          skippedPhases: existing?.skippedPhases,
+        };
+
+        this.progressSummaries.set(jobId, summary);
+        logger.debug(`Workflow phase ${event.event} for job ${jobId}: ${phaseName}`);
+        this.debouncedRefreshTreeForWorkflows();
+        break;
+      }
+
+      default:
+        // Ignore step-level and other workflow events at the tree level
+        break;
+    }
+  }
+
+  /**
+   * Debounce tree refresh for workflow events (separate timer from queue SSE debounce)
+   */
+  private debouncedRefreshTreeForWorkflows(): void {
+    if (this.workflowsDebounceTimer) {
+      clearTimeout(this.workflowsDebounceTimer);
+    }
+    this.workflowsDebounceTimer = setTimeout(() => {
+      this.workflowsDebounceTimer = undefined;
       this._onDidChangeTreeData.fire();
     }, 200);
   }
@@ -509,6 +616,16 @@ export class QueueTreeProvider
 
       this.queueItems = response.items;
       this.loadError = undefined;
+
+      // Populate progress summaries from REST response (initial/fallback data)
+      for (const item of response.items) {
+        if (item.progress) {
+          this.progressSummaries.set(item.id, item.progress);
+        }
+      }
+
+      // Update elapsed timer based on current running state
+      this.updateElapsedTimer();
 
       if (hasChanges) {
         logger.debug(`Queue updated: ${response.items.length} items`);
@@ -661,9 +778,33 @@ export class QueueTreeProvider
     return this.queueItems.filter((item) => item.status === status);
   }
 
+  /**
+   * Get the progress summary for a specific job
+   */
+  public getProgressSummary(jobId: string): QueueItemProgressSummary | undefined {
+    return this.progressSummaries.get(jobId);
+  }
+
   // ==========================================================================
   // Utility Methods
   // ==========================================================================
+
+  /**
+   * Start or stop the elapsed time refresh timer based on whether any jobs are running.
+   * When running jobs exist, fires a tree refresh every 10 seconds so elapsed time
+   * descriptions stay current. Clears the timer when no jobs are running.
+   */
+  private updateElapsedTimer(): void {
+    const hasRunning = this.queueItems.some((i) => i.status === 'running');
+    if (hasRunning && !this.elapsedTimer) {
+      this.elapsedTimer = setInterval(() => {
+        this._onDidChangeTreeData.fire();
+      }, 10_000);
+    } else if (!hasRunning && this.elapsedTimer) {
+      clearInterval(this.elapsedTimer);
+      this.elapsedTimer = undefined;
+    }
+  }
 
   /**
    * Capitalize first letter
@@ -677,12 +818,20 @@ export class QueueTreeProvider
    */
   public dispose(): void {
     this.stopPolling();
+    if (this.elapsedTimer) {
+      clearInterval(this.elapsedTimer);
+      this.elapsedTimer = undefined;
+    }
     if (this.sseDebounceTimer) {
       clearTimeout(this.sseDebounceTimer);
+    }
+    if (this.workflowsDebounceTimer) {
+      clearTimeout(this.workflowsDebounceTimer);
     }
     this._onDidChangeTreeData.dispose();
     this.disposables.forEach((d) => d.dispose());
     this.queueItems = [];
+    this.progressSummaries.clear();
   }
 }
 

@@ -61,6 +61,8 @@ export const CLOUD_COMMANDS = {
   assignWorkItem: 'generacy.queue.assign',
   setPriority: 'generacy.queue.setPriority',
   pinDetail: 'generacy.queue.pinDetail',
+  viewJobProgress: 'generacy.queue.viewProgress',
+  focusQueue: 'generacy.queue.focus',
 } as const;
 
 /**

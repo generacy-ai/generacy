@@ -283,6 +283,8 @@ export interface QueueItem {
   completedAt?: string;
   /** Error message if failed */
   error?: string;
+  /** Lightweight progress summary (present for running/completed items) */
+  progress?: QueueItemProgressSummary;
 }
 
 /**
@@ -300,6 +302,7 @@ export const QueueItemSchema = z.object({
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
   error: z.string().optional(),
+  progress: z.lazy(() => QueueItemProgressSummarySchema).optional(),
 });
 
 /**
@@ -325,6 +328,233 @@ export const QueueListResponseSchema = z.object({
   page: z.number().int().positive(),
   pageSize: z.number().int().positive(),
 });
+
+// ============================================================================
+// Job Progress Types
+// ============================================================================
+
+/**
+ * Execution status of a workflow phase
+ */
+export type PhaseStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+/**
+ * Execution status of a workflow step within a phase
+ */
+export type StepStatus = 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+
+/**
+ * Progress detail for a single step within a phase
+ */
+export interface StepProgress {
+  /** Step identifier (e.g., "T001") */
+  id: string;
+  /** Step display name */
+  name: string;
+  /** Current status */
+  status: StepStatus;
+  /** Start timestamp (ISO datetime) */
+  startedAt?: string;
+  /** Completion timestamp (ISO datetime) */
+  completedAt?: string;
+  /** Duration in milliseconds (set on completion) */
+  durationMs?: number;
+  /** Single-line summary output (e.g., "Generated 3 files") */
+  output?: string;
+  /** Error message if failed */
+  error?: string;
+}
+
+/**
+ * Progress detail for a workflow phase containing steps
+ */
+export interface PhaseProgress {
+  /** Phase identifier (e.g., "setup", "implementation") */
+  id: string;
+  /** Phase display name */
+  name: string;
+  /** Current status */
+  status: PhaseStatus;
+  /** Start timestamp (ISO datetime) */
+  startedAt?: string;
+  /** Completion timestamp (ISO datetime) */
+  completedAt?: string;
+  /** Duration in milliseconds (set on completion) */
+  durationMs?: number;
+  /** Steps within this phase */
+  steps: StepProgress[];
+  /** Error message if phase failed */
+  error?: string;
+}
+
+/**
+ * Full progress snapshot for a job, returned by GET /queue/:id/progress
+ * and sent in workflow:progress SSE snapshot events
+ */
+export interface JobProgress {
+  /** Queue item / job ID */
+  jobId: string;
+  /** Current phase index (0-based) */
+  currentPhaseIndex: number;
+  /** Total number of phases */
+  totalPhases: number;
+  /** Number of completed phases */
+  completedPhases: number;
+  /** Number of skipped phases */
+  skippedPhases: number;
+  /** All phases with their step-level detail */
+  phases: PhaseProgress[];
+  /** PR URL when pr-creation phase completes */
+  pullRequestUrl?: string;
+  /** Last updated timestamp */
+  updatedAt: string;
+}
+
+/**
+ * Lightweight progress summary for tree view display.
+ * Avoids fetching full progress for every item in the queue list.
+ */
+export interface QueueItemProgressSummary {
+  /** Current phase name (e.g., "implementation") */
+  currentPhase?: string;
+  /** Progress string for display (e.g., "Phase 5/8") */
+  phaseProgress?: string;
+  /** Total phases count */
+  totalPhases?: number;
+  /** Completed phases count */
+  completedPhases?: number;
+  /** Skipped phases count */
+  skippedPhases?: number;
+}
+
+/**
+ * Zod schema for step status
+ */
+export const StepStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
+
+/**
+ * Zod schema for phase status
+ */
+export const PhaseStatusSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
+
+/**
+ * Zod schema for step progress
+ */
+export const StepProgressSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: StepStatusSchema,
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  durationMs: z.number().nonnegative().optional(),
+  output: z.string().optional(),
+  error: z.string().optional(),
+});
+
+/**
+ * Zod schema for phase progress
+ */
+export const PhaseProgressSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: PhaseStatusSchema,
+  startedAt: z.string().datetime().optional(),
+  completedAt: z.string().datetime().optional(),
+  durationMs: z.number().nonnegative().optional(),
+  steps: z.array(StepProgressSchema),
+  error: z.string().optional(),
+});
+
+/**
+ * Zod schema for job progress
+ */
+export const JobProgressSchema = z.object({
+  jobId: z.string(),
+  currentPhaseIndex: z.number().int().nonnegative(),
+  totalPhases: z.number().int().nonnegative(),
+  completedPhases: z.number().int().nonnegative(),
+  skippedPhases: z.number().int().nonnegative(),
+  phases: z.array(PhaseProgressSchema),
+  pullRequestUrl: z.string().url().optional(),
+  updatedAt: z.string().datetime(),
+});
+
+/**
+ * Zod schema for queue item progress summary
+ */
+export const QueueItemProgressSummarySchema = z.object({
+  currentPhase: z.string().optional(),
+  phaseProgress: z.string().optional(),
+  totalPhases: z.number().int().nonnegative().optional(),
+  completedPhases: z.number().int().nonnegative().optional(),
+  skippedPhases: z.number().int().nonnegative().optional(),
+});
+
+// ============================================================================
+// SSE Workflow Event Payloads
+// ============================================================================
+
+/**
+ * Payload for workflow:phase:start and workflow:phase:complete SSE events
+ */
+export interface WorkflowPhaseEventData {
+  /** Workflow ID */
+  workflowId: string;
+  /** Queue item / job ID */
+  jobId: string;
+  /** Full phase progress snapshot */
+  phase: PhaseProgress;
+  /** 0-based index of the phase */
+  phaseIndex: number;
+  /** Total number of phases in the workflow */
+  totalPhases: number;
+}
+
+/**
+ * Payload for workflow:step:start and workflow:step:complete SSE events
+ */
+export interface WorkflowStepEventData {
+  /** Workflow ID */
+  workflowId: string;
+  /** Queue item / job ID */
+  jobId: string;
+  /** Phase ID containing this step */
+  phaseId: string;
+  /** 0-based index of the phase */
+  phaseIndex: number;
+  /** Full step progress snapshot */
+  step: StepProgress;
+  /** 0-based index of the step within its phase */
+  stepIndex: number;
+  /** Total number of steps in the phase */
+  totalSteps: number;
+}
+
+// ============================================================================
+// Job Detail Webview Message Types
+// ============================================================================
+
+/**
+ * Messages sent from the JobDetailPanel webview to the extension host.
+ */
+export type JobDetailWebviewMessage =
+  | { type: 'ready' }
+  | { type: 'refresh' }
+  | { type: 'pin' }
+  | { type: 'togglePhase'; phaseId: string }
+  | { type: 'openPR'; url: string }
+  | { type: 'openAgent'; agentId: string };
+
+/**
+ * Messages sent from the extension host to the JobDetailPanel webview.
+ */
+export type JobDetailExtensionMessage =
+  | { type: 'update'; data: { item: QueueItem; progress: JobProgress | null; expandedPhases?: string[] } }
+  | { type: 'progressUpdate'; progress: JobProgress; expandedPhases?: string[] }
+  | { type: 'phaseEvent'; event: WorkflowPhaseEventData }
+  | { type: 'stepEvent'; event: WorkflowStepEventData }
+  | { type: 'connectionStatus'; connected: boolean; reconnecting?: boolean }
+  | { type: 'error'; message: string };
 
 // ============================================================================
 // Integration Types
