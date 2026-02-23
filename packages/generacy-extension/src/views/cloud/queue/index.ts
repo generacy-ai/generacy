@@ -36,5 +36,9 @@ export {
   increasePriority,
   decreasePriority,
   viewQueueItemDetails,
+  viewJobLogs,
   registerQueueActions,
 } from './actions';
+
+// Log Viewer (re-exported for convenience)
+export { JobLogChannel } from '../log-viewer';

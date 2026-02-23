@@ -12,12 +12,12 @@
 
 ## Phase 1: Type Definitions and API Layer
 
-### T001 Add `'jobs'` to SSEChannel type and Zod schema
+### T001 [DONE] Add `'jobs'` to SSEChannel type and Zod schema
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `'jobs'` to the `SSEChannel` type union at line 920: `'workflows' | 'queue' | 'agents' | 'jobs'`
 - Add `'jobs'` to the `SSEEventSchema` Zod `z.enum` at line 944: `z.enum(['workflows', 'queue', 'agents', 'jobs'])`
 
-### T002 [P] Add job log types and Zod schemas
+### T002 [DONE] [P] Add job log types and Zod schemas
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `JobLogLine` interface after the Agent Log Types section (~line 911):
   - `content: string` — the log line text (pre-cleaned, no ANSI)
@@ -32,15 +32,15 @@
 - Add `JobLogLineSchema` Zod schema
 - Add `JobLogsResponseSchema` Zod schema
 
-### T003 [P] Add `viewLogs` message type to JobDetailWebviewMessage
+### T003 [DONE] [P] Add `viewLogs` message type to JobDetailWebviewMessage
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `| { type: 'viewLogs' }` to the `JobDetailWebviewMessage` union at line 546
 
-### T004 Add `'jobs'` to ALL_CHANNELS array in SSE manager
+### T004 [DONE] Add `'jobs'` to ALL_CHANNELS array in SSE manager
 **File**: `packages/generacy-extension/src/api/sse.ts`
 - Update `ALL_CHANNELS` at line 30: `const ALL_CHANNELS: SSEChannel[] = ['workflows', 'queue', 'agents', 'jobs']`
 
-### T005 Add `getJobLogs` endpoint method
+### T005 [DONE] Add `getJobLogs` endpoint method
 **File**: `packages/generacy-extension/src/api/endpoints/queue.ts`
 - Add `getJobLogs(id: string, options?: { limit?: number }): Promise<JobLogsResponse>` method to `queueApi`
 - Calls `GET /queue/${id}/logs?limit=${options?.limit ?? 10000}`
@@ -51,11 +51,11 @@
 
 ## Phase 2: Constants and Command Registration
 
-### T006 Add `viewJobLogs` command constant
+### T006 [DONE] Add `viewJobLogs` command constant
 **File**: `packages/generacy-extension/src/constants.ts`
 - Add `viewJobLogs: 'generacy.queue.viewLogs'` to the `CLOUD_COMMANDS` object (after `viewJobProgress` at line 64)
 
-### T007 Register command in package.json
+### T007 [DONE] Register command in package.json
 **File**: `packages/generacy-extension/package.json`
 - Add command definition to the `contributes.commands` array:
   ```json
@@ -87,7 +87,7 @@
 
 ## Phase 3: Core Implementation — JobLogChannel
 
-### T008 Create JobLogChannel class
+### T008 [DONE] Create JobLogChannel class
 **File**: `packages/generacy-extension/src/views/cloud/log-viewer/log-channel.ts` (new)
 - Create the main `JobLogChannel` class implementing `vscode.Disposable`
 - Follow the `AgentLogChannel` pattern from `views/cloud/agents/log-channel.ts`
@@ -151,7 +151,7 @@
   - Iterate and dispose all channels in `activeChannels`
   - Clear the map
 
-### T009 [P] Create log-viewer module index
+### T009 [DONE] [P] Create log-viewer module index
 **File**: `packages/generacy-extension/src/views/cloud/log-viewer/index.ts` (new)
 - Export `JobLogChannel` from `./log-channel`
 
@@ -159,7 +159,7 @@
 
 ## Phase 4: Integration — Command Handlers and UI
 
-### T010 Add `viewJobLogs` command handler and registration
+### T010 [DONE] Add `viewJobLogs` command handler and registration
 **File**: `packages/generacy-extension/src/views/cloud/queue/actions.ts`
 - Import `JobLogChannel` from `../log-viewer`
 - Import `CLOUD_COMMANDS` if not already imported
@@ -177,7 +177,7 @@
   );
   ```
 
-### T011 [P] Handle `viewLogs` message in JobDetailPanel
+### T011 [DONE] [P] Handle `viewLogs` message in JobDetailPanel
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-panel.ts`
 - Import `JobLogChannel` from `../log-viewer`
 - Add case in `handleMessage()` method (where other message types are handled):
@@ -187,14 +187,14 @@
     break;
   ```
 
-### T012 [P] Add "View Logs" button to job detail HTML
+### T012 [DONE] [P] Add "View Logs" button to job detail HTML
 **File**: `packages/generacy-extension/src/views/cloud/queue/detail-html.ts`
 - Add a "View Logs" button in the header/actions section (alongside pin/refresh)
 - Use `$(terminal)` codicon icon for consistency with tree context menu
 - Button sends `{ type: 'viewLogs' }` via `postMessage` on click
 - Visible for all job states (pending, running, completed, failed, cancelled — per decision D6)
 
-### T013 [P] Re-export from queue index if needed
+### T013 [DONE] [P] Re-export from queue index if needed
 **File**: `packages/generacy-extension/src/views/cloud/queue/index.ts`
 - Verify current exports and add re-export for `viewJobLogs` from actions if the pattern requires it
 
@@ -202,7 +202,7 @@
 
 ## Phase 5: Extension Lifecycle
 
-### T014 Add JobLogChannel cleanup to extension deactivation
+### T014 [DONE] Add JobLogChannel cleanup to extension deactivation
 **File**: `packages/generacy-extension/src/extension.ts`
 - Import `JobLogChannel` from `./views/cloud/log-viewer`
 - Add `JobLogChannel.disposeAll()` to the `deactivate()` function alongside existing cleanup
@@ -211,7 +211,7 @@
 
 ## Phase 6: Testing
 
-### T015 Write unit tests for JobLogChannel
+### T015 [DONE] Write unit tests for JobLogChannel
 **File**: `packages/generacy-extension/src/views/cloud/log-viewer/__tests__/log-channel.test.ts` (new)
 - **Channel creation**: Verify `OutputChannel` is created with correct name format `"Job: workflow-name (a1b2c3d4)"`
 - **Channel reuse**: Same `jobId` returns existing channel instance (no duplicate)
@@ -227,7 +227,7 @@
 - **Dispose**: Cleans up SSE subscription, removes from activeChannels map
 - **disposeAll**: Disposes all active channels and clears the map
 
-### T016 [P] Extend queue actions tests for viewJobLogs command
+### T016 [DONE] [P] Extend queue actions tests for viewJobLogs command
 **File**: `packages/generacy-extension/src/views/cloud/queue/__tests__/actions.test.ts`
 - Add test for `viewJobLogs` command registration
 - Test that command calls `JobLogChannel.openJobLogs` with correct `id` and `workflowName`

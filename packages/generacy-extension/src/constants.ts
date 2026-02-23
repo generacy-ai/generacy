@@ -63,6 +63,7 @@ export const CLOUD_COMMANDS = {
   pinDetail: 'generacy.queue.pinDetail',
   viewJobProgress: 'generacy.queue.viewProgress',
   focusQueue: 'generacy.queue.focus',
+  viewJobLogs: 'generacy.queue.viewLogs',
 } as const;
 
 /**

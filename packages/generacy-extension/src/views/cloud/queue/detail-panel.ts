@@ -29,6 +29,7 @@ import type {
 import { CLOUD_COMMANDS } from '../../../constants';
 import { JobProgressState } from './progress-state';
 import { getJobDetailHtml } from './detail-html';
+import { JobLogChannel } from '../log-viewer';
 
 // ============================================================================
 // Constants
@@ -652,6 +653,10 @@ export class JobDetailPanel {
         if (message.agentId) {
           void vscode.commands.executeCommand('generacy.agents.reveal', message.agentId);
         }
+        break;
+
+      case 'viewLogs':
+        void JobLogChannel.openJobLogs(this.queueItem.id, this.queueItem.workflowName);
         break;
     }
   }

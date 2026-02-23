@@ -299,6 +299,12 @@
         "command": "generacy.queue.focus",
         "title": "Focus Queue View",
         "category": "Generacy"
+      },
+      {
+        "command": "generacy.queue.viewLogs",
+        "title": "View Logs",
+        "category": "Generacy",
+        "icon": "$(terminal)"
       }
     ],
     "viewsContainers": {
@@ -526,6 +532,16 @@
           "command": "generacy.queue.setPriority",
           "when": "view == generacy.queue && viewItem =~ /^queueItem-/",
           "group": "2_priority@1"
+        },
+        {
+          "command": "generacy.queue.viewLogs",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem/",
+          "group": "inline@4"
+        },
+        {
+          "command": "generacy.queue.viewLogs",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem/",
+          "group": "navigation@2"
         }
       ]
     },
