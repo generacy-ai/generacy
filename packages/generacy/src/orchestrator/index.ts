@@ -33,6 +33,11 @@ export type { OrchestratorServer, OrchestratorServerOptions } from './server.js'
 export { EventBus } from './event-bus.js';
 export type { EventBusOptions } from './event-bus.js';
 
+export { LogBuffer, LogBufferManager } from './log-buffer.js';
+export type { LogEntry } from './log-buffer.js';
+
+export { AsyncEventQueue } from './async-event-queue.js';
+
 export type {
   Job,
   JobStatus,

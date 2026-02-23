@@ -65,6 +65,7 @@ const PHASE_GATES: Record<string, string> = {
 /**
  * Map executor event types to orchestrator JobEventType.
  * Returns undefined for events we don't forward (execution:*, phase:error, step:error, action:start/complete).
+ * Includes log:append for stdout/stderr streaming (#178).
  */
 const EVENT_TYPE_MAP: Partial<Record<string, JobEventType>> = {
   'phase:start': 'phase:start',
@@ -74,6 +75,7 @@ const EVENT_TYPE_MAP: Partial<Record<string, JobEventType>> = {
   'step:output': 'step:output',
   'action:error': 'action:error',
   'action:retry': 'action:error',
+  'log:append': 'log:append',
 };
 
 /**
@@ -444,36 +446,35 @@ export class JobHandler {
       let gatedPhaseName: string | undefined;
       const phasesWithFailedSteps = new Set<string>();
 
-      if (owner && repo && issueNumber) {
-        executor.addEventListener((event) => {
-          // Track step failures so we can label phases accurately
-          if (event.type === 'step:error' && event.phaseName) {
-            phasesWithFailedSteps.add(event.phaseName);
+      executor.addEventListener((event) => {
+        // Track step failures so we can label phases accurately
+        if (event.type === 'step:error' && event.phaseName) {
+          phasesWithFailedSteps.add(event.phaseName);
+        }
+
+        if (!owner || !repo || !issueNumber) return;
+        if (event.type !== 'phase:complete' || !event.phaseName) return;
+
+        const gateLabel = PHASE_GATES[event.phaseName];
+        if (gateLabel) {
+          // Check if the gated phase posted questions (needs developer input)
+          const stepOutput = executor.getExecutionContext()?.getStepOutput('clarify');
+          const parsed = stepOutput?.parsed as Record<string, unknown> | null;
+          const postedQuestions = parsed?.posted_to_issue === true
+            && (parsed?.questions_count as number) > 0;
+
+          if (postedQuestions) {
+            shouldPauseForGate = true;
+            gatedPhaseName = event.phaseName;
+            executor.cancel(); // stops before next phase starts
+            return; // don't add completed label for gated phase
           }
+        }
 
-          if (event.type !== 'phase:complete' || !event.phaseName) return;
-
-          const gateLabel = PHASE_GATES[event.phaseName];
-          if (gateLabel) {
-            // Check if the gated phase posted questions (needs developer input)
-            const stepOutput = executor.getExecutionContext()?.getStepOutput('clarify');
-            const parsed = stepOutput?.parsed as Record<string, unknown> | null;
-            const postedQuestions = parsed?.posted_to_issue === true
-              && (parsed?.questions_count as number) > 0;
-
-            if (postedQuestions) {
-              shouldPauseForGate = true;
-              gatedPhaseName = event.phaseName;
-              executor.cancel(); // stops before next phase starts
-              return; // don't add completed label for gated phase
-            }
-          }
-
-          // Add completed:* or failed:* label based on whether steps had errors
-          const hasFailed = phasesWithFailedSteps.has(event.phaseName);
-          void this.addPhaseLabel(owner, repo, issueNumber, event.phaseName, !hasFailed);
-        });
-      }
+        // Add completed:* or failed:* label based on whether steps had errors
+        const hasFailed = phasesWithFailedSteps.has(event.phaseName);
+        void this.addPhaseLabel(owner, repo, issueNumber, event.phaseName, !hasFailed);
+      });
 
       // Execute workflow
       const result = await executor.execute(

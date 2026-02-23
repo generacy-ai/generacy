@@ -5,6 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { ServerResponse } from 'node:http';
 import { RingBuffer, EventBus } from '../event-bus.js';
+import { LogBufferManager } from '../log-buffer.js';
 import type { JobQueue } from '../job-queue.js';
 import type { Job, JobEvent, JobEventType } from '../types.js';
 
@@ -1508,6 +1509,342 @@ describe('EventBus', () => {
       expect(parsed.id).toBe('1');
       expect(parsed.type).toBe('job:status');
       expect(parsed.jobId).toBe('job-1');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T022: EventBus log routing — log:append → LogBufferManager
+  // ---------------------------------------------------------------------------
+
+  describe('log routing (log:append → LogBufferManager)', () => {
+    let logBufferManager: LogBufferManager;
+    let logBus: EventBus;
+
+    beforeEach(() => {
+      logBufferManager = new LogBufferManager();
+      logBus = new EventBus({
+        jobQueue,
+        logBufferManager,
+        bufferSize: 100,
+        gracePeriod: 5000,
+        heartbeatInterval: 60_000,
+      });
+    });
+
+    afterEach(() => {
+      logBus.destroy();
+      logBufferManager.destroy();
+    });
+
+    it('should route log:append events to LogBufferManager instead of RingBuffer', async () => {
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: {
+          stream: 'stdout',
+          stepName: 'specify',
+          content: 'Reading files...',
+        },
+      }));
+
+      // Log event should be in the LogBufferManager
+      const logBuffer = logBufferManager.get('job-1');
+      expect(logBuffer).toBeDefined();
+      expect(logBuffer!.size).toBe(1);
+
+      const entries = logBuffer!.getAll();
+      expect(entries[0]).toMatchObject({
+        stream: 'stdout',
+        stepName: 'specify',
+        content: 'Reading files...',
+      });
+
+      // Log event should NOT be in the per-job RingBuffer
+      expect(logBus.getBufferedEvents('job-1')).toHaveLength(0);
+    });
+
+    it('should store lifecycle events in the per-job RingBuffer (not LogBufferManager)', async () => {
+      await logBus.publish('job-1', createEventPayload({
+        type: 'step:start',
+        jobId: 'job-1',
+        data: { step: 'compile' },
+      }));
+
+      await logBus.publish('job-1', createEventPayload({
+        type: 'phase:complete',
+        jobId: 'job-1',
+        data: { phase: 'build' },
+      }));
+
+      // Lifecycle events should be in the RingBuffer
+      const buffered = logBus.getBufferedEvents('job-1');
+      expect(buffered).toHaveLength(2);
+      expect(buffered[0].type).toBe('step:start');
+      expect(buffered[1].type).toBe('phase:complete');
+
+      // No log buffer created (no log:append events)
+      expect(logBufferManager.get('job-1')).toBeUndefined();
+    });
+
+    it('should broadcast log:append events via SSE to per-job subscribers', async () => {
+      const res = createMockResponse();
+      logBus.subscribe('job-1', res);
+
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: {
+          stream: 'stdout',
+          stepName: 'plan',
+          content: 'Planning step...',
+        },
+      }));
+
+      // SSE broadcast should still happen for log:append events
+      expect(res.write).toHaveBeenCalledTimes(1);
+      const frame = parseSSEFrame(res.writtenData[0]!);
+      expect(frame.event).toBe('log:append');
+      expect(frame.data?.type).toBe('log:append');
+    });
+
+    it('should broadcast lifecycle events via SSE to per-job subscribers', async () => {
+      const res = createMockResponse();
+      logBus.subscribe('job-1', res);
+
+      await logBus.publish('job-1', createEventPayload({
+        type: 'step:complete',
+        jobId: 'job-1',
+        data: { step: 'compile' },
+      }));
+
+      expect(res.write).toHaveBeenCalledTimes(1);
+      const frame = parseSSEFrame(res.writtenData[0]!);
+      expect(frame.event).toBe('step:complete');
+    });
+
+    it('should broadcast both log and lifecycle events to the same SSE subscriber', async () => {
+      const res = createMockResponse();
+      logBus.subscribe('job-1', res);
+
+      await logBus.publish('job-1', createEventPayload({
+        type: 'step:start',
+        jobId: 'job-1',
+      }));
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: { stream: 'stdout', stepName: 'specify', content: 'output' },
+      }));
+      await logBus.publish('job-1', createEventPayload({
+        type: 'step:complete',
+        jobId: 'job-1',
+      }));
+
+      expect(res.write).toHaveBeenCalledTimes(3);
+      const frames = res.writtenData.map(parseSSEFrame);
+      expect(frames[0]!.event).toBe('step:start');
+      expect(frames[1]!.event).toBe('log:append');
+      expect(frames[2]!.event).toBe('step:complete');
+    });
+
+    it('should broadcast log:append events to global SSE subscribers', async () => {
+      const res = createMockResponse();
+      await logBus.subscribeAll(res, {});
+
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: { stream: 'stderr', stepName: 'implement', content: 'error output' },
+      }));
+
+      expect(res.write).toHaveBeenCalledTimes(1);
+      const frame = parseSSEFrame(res.writtenData[0]!);
+      expect(frame.event).toBe('log:append');
+    });
+
+    it('should extract all log fields from event data into LogBuffer entry', async () => {
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        timestamp: 1700000000000,
+        data: {
+          stream: 'stderr',
+          stepName: 'implement',
+          content: 'Compiling task...',
+          taskIndex: 3,
+          taskTitle: 'Add error handling',
+        },
+      }));
+
+      const entries = logBufferManager.get('job-1')!.getAll();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        timestamp: 1700000000000,
+        stream: 'stderr',
+        stepName: 'implement',
+        content: 'Compiling task...',
+        taskIndex: 3,
+        taskTitle: 'Add error handling',
+      });
+    });
+
+    it('should assign monotonic event IDs across both log and lifecycle events', async () => {
+      const e1 = await logBus.publish('job-1', createEventPayload({
+        type: 'step:start',
+        jobId: 'job-1',
+      }));
+      const e2 = await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: { stream: 'stdout', stepName: 'specify', content: 'chunk' },
+      }));
+      const e3 = await logBus.publish('job-1', createEventPayload({
+        type: 'step:complete',
+        jobId: 'job-1',
+      }));
+
+      expect(e1.id).toBe('1');
+      expect(e2.id).toBe('2');
+      expect(e3.id).toBe('3');
+    });
+
+    it('should route multiple log:append events to the same LogBuffer', async () => {
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: { stream: 'stdout', stepName: 'specify', content: 'first' },
+      }));
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: { stream: 'stdout', stepName: 'specify', content: 'second' },
+      }));
+      await logBus.publish('job-1', createEventPayload({
+        type: 'log:append',
+        jobId: 'job-1',
+        data: { stream: 'stderr', stepName: 'specify', content: 'third' },
+      }));
+
+      const entries = logBufferManager.get('job-1')!.getAll();
+      expect(entries).toHaveLength(3);
+      expect(entries[0].content).toBe('first');
+      expect(entries[1].content).toBe('second');
+      expect(entries[2].content).toBe('third');
+
+      // RingBuffer should remain empty
+      expect(logBus.getBufferedEvents('job-1')).toHaveLength(0);
+    });
+
+    describe('scheduleCleanup with LogBufferManager', () => {
+      beforeEach(() => {
+        vi.useFakeTimers();
+      });
+
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      it('should trigger LogBufferManager.scheduleCleanup when EventBus.scheduleCleanup is called', async () => {
+        const scheduleSpy = vi.spyOn(logBufferManager, 'scheduleCleanup');
+
+        await logBus.publish('job-1', createEventPayload({
+          type: 'log:append',
+          jobId: 'job-1',
+          data: { stream: 'stdout', stepName: 'specify', content: 'data' },
+        }));
+
+        logBus.scheduleCleanup('job-1');
+
+        expect(scheduleSpy).toHaveBeenCalledWith('job-1');
+        expect(scheduleSpy).toHaveBeenCalledTimes(1);
+      });
+
+      it('should clean up both lifecycle RingBuffer and LogBuffer after grace period', async () => {
+        // Recreate with fake timers active
+        logBus.destroy();
+        logBufferManager.destroy();
+        logBufferManager = new LogBufferManager({ gracePeriod: 5000 });
+        logBus = new EventBus({
+          jobQueue,
+          logBufferManager,
+          bufferSize: 100,
+          gracePeriod: 5000,
+          heartbeatInterval: 60_000,
+        });
+
+        await logBus.publish('job-1', createEventPayload({
+          type: 'step:start',
+          jobId: 'job-1',
+        }));
+        await logBus.publish('job-1', createEventPayload({
+          type: 'log:append',
+          jobId: 'job-1',
+          data: { stream: 'stdout', stepName: 'specify', content: 'output' },
+        }));
+
+        // Both should exist before cleanup
+        expect(logBus.getBufferedEvents('job-1')).toHaveLength(1);
+        expect(logBufferManager.get('job-1')!.size).toBe(1);
+
+        logBus.scheduleCleanup('job-1');
+
+        // Both still exist before grace period
+        vi.advanceTimersByTime(4999);
+        expect(logBus.getBufferedEvents('job-1')).toHaveLength(1);
+        expect(logBufferManager.get('job-1')).toBeDefined();
+
+        // After grace period — both cleaned up
+        vi.advanceTimersByTime(1);
+        expect(logBus.getBufferedEvents('job-1')).toHaveLength(0);
+        expect(logBufferManager.get('job-1')).toBeUndefined();
+      });
+
+      it('should handle scheduleCleanup for jobs with only log events', async () => {
+        logBus.destroy();
+        logBufferManager.destroy();
+        logBufferManager = new LogBufferManager({ gracePeriod: 5000 });
+        logBus = new EventBus({
+          jobQueue,
+          logBufferManager,
+          bufferSize: 100,
+          gracePeriod: 5000,
+          heartbeatInterval: 60_000,
+        });
+
+        await logBus.publish('job-1', createEventPayload({
+          type: 'log:append',
+          jobId: 'job-1',
+          data: { stream: 'stdout', stepName: 'plan', content: 'planning...' },
+        }));
+
+        logBus.scheduleCleanup('job-1');
+        vi.advanceTimersByTime(5000);
+
+        expect(logBufferManager.get('job-1')).toBeUndefined();
+      });
+    });
+
+    it('should fall back to RingBuffer for log:append when no LogBufferManager is provided', async () => {
+      const busWithoutLogManager = new EventBus({
+        jobQueue,
+        bufferSize: 100,
+        heartbeatInterval: 60_000,
+      });
+
+      try {
+        await busWithoutLogManager.publish('job-1', createEventPayload({
+          type: 'log:append',
+          jobId: 'job-1',
+          data: { stream: 'stdout', stepName: 'specify', content: 'fallback' },
+        }));
+
+        // Without LogBufferManager, log events go to the RingBuffer
+        const buffered = busWithoutLogManager.getBufferedEvents('job-1');
+        expect(buffered).toHaveLength(1);
+        expect(buffered[0].type).toBe('log:append');
+      } finally {
+        busWithoutLogManager.destroy();
+      }
     });
   });
 });

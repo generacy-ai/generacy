@@ -7,6 +7,7 @@ import type { ActionContext } from '../../../../types/index.js';
 import type { ClarifyInput, ClarifyOutput, ClarificationQuestion } from '../types.js';
 import { executeCommand, extractJSON } from '../../../cli-utils.js';
 import { exists, readFile, writeFile } from '../lib/fs.js';
+import { StreamBatcher } from '../lib/stream-batcher.js';
 
 /**
  * Build the prompt for initial clarification question generation
@@ -212,11 +213,31 @@ export async function executeClarify(
     const args: string[] = ['-p', prompt, '--output-format', 'json', '--dangerously-skip-permissions'];
     const timeout = (input.timeout ?? 300) * 1000;
 
+    // Set up streaming batchers for real-time log output
+    const stdoutBatcher = new StreamBatcher((content) => {
+      context.emitEvent?.({
+        type: 'log:append',
+        data: { stream: 'stdout', stepName: 'clarify', content },
+      });
+    });
+    const stderrBatcher = new StreamBatcher((content) => {
+      context.emitEvent?.({
+        type: 'log:append',
+        data: { stream: 'stderr', stepName: 'clarify', content },
+      });
+    });
+
     const result = await executeCommand('claude', args, {
       cwd: input.feature_dir,
       timeout,
       signal: context.signal,
+      onStdout: (chunk) => stdoutBatcher.append(chunk),
+      onStderr: (chunk) => stderrBatcher.append(chunk),
     });
+
+    // Flush remaining batched content
+    stdoutBatcher.flush();
+    stderrBatcher.flush();
 
     if (result.exitCode !== 0) {
       return {

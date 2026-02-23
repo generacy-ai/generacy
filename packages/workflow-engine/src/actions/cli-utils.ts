@@ -3,6 +3,7 @@
  * Provides command execution and CLI availability checks.
  */
 import { execFile, spawn } from 'node:child_process';
+import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +20,10 @@ export interface CommandOptions {
   timeout?: number;
   /** Abort signal for cancellation */
   signal?: AbortSignal;
+  /** Callback for stdout chunks (for real-time streaming) */
+  onStdout?: (chunk: string) => void;
+  /** Callback for stderr chunks */
+  onStderr?: (chunk: string) => void;
 }
 
 /**
@@ -106,7 +111,7 @@ export async function executeCommand(
   args: string[],
   options: CommandOptions = {}
 ): Promise<CommandResult> {
-  const { cwd, env, timeout, signal } = options;
+  const { cwd, env, timeout, signal, onStdout, onStderr } = options;
 
   // If already aborted before we start, resolve immediately
   if (signal?.aborted) {
@@ -124,6 +129,10 @@ export async function executeCommand(
     let stdout = '';
     let stderr = '';
     let killed = false;
+
+    // Use StringDecoder to handle multi-byte UTF-8 characters across chunk boundaries
+    const stdoutDecoder = new StringDecoder('utf8');
+    const stderrDecoder = new StringDecoder('utf8');
 
     /** Kill the entire process group (negative PID) */
     const killProcessGroup = () => {
@@ -150,11 +159,15 @@ export async function executeCommand(
     }
 
     proc.stdout.on('data', (data: Buffer) => {
-      stdout += data.toString();
+      const decoded = stdoutDecoder.write(data);
+      stdout += decoded;
+      onStdout?.(decoded);
     });
 
     proc.stderr.on('data', (data: Buffer) => {
-      stderr += data.toString();
+      const decoded = stderrDecoder.write(data);
+      stderr += decoded;
+      onStderr?.(decoded);
     });
 
     proc.on('error', (error) => {
@@ -164,6 +177,18 @@ export async function executeCommand(
 
     proc.on('close', (code) => {
       if (timeoutId) clearTimeout(timeoutId);
+
+      // Flush remaining bytes from decoders
+      const stdoutRemaining = stdoutDecoder.end();
+      const stderrRemaining = stderrDecoder.end();
+      if (stdoutRemaining) {
+        stdout += stdoutRemaining;
+        onStdout?.(stdoutRemaining);
+      }
+      if (stderrRemaining) {
+        stderr += stderrRemaining;
+        onStderr?.(stderrRemaining);
+      }
 
       if (killed) {
         resolve({
