@@ -156,6 +156,8 @@ export interface CreateFeatureOutput {
   parent_epic_branch?: string;
   /** SHA of the commit the feature branch was based on */
   base_commit?: string;
+  /** Descriptive error message when success is false */
+  error?: string;
 }
 
 /**

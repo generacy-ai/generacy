@@ -30,6 +30,8 @@ import { ExecutionContext, interpolate, interpolateValue } from '../interpolatio
 import { RetryManager, withTimeout, type RetryState } from '../retry/index.js';
 import { ExecutionEventEmitter } from './events.js';
 import { FilesystemWorkflowStore } from '../store/filesystem-store.js';
+import { simpleGit } from 'simple-git';
+import { getDefaultBranch } from '../actions/builtin/speckit/lib/feature.js';
 
 // Ensure built-in actions are registered
 let actionsRegistered = false;
@@ -198,6 +200,11 @@ export class WorkflowExecutor {
         );
 
         this.currentExecution.phaseResults.push(phaseResult);
+
+        // After setup phase, validate we're on a feature branch (not default)
+        if (phase.name === 'setup' && phaseResult.status === 'completed' && options.cwd) {
+          await this.validateBranchState(options.cwd);
+        }
 
         // Stop if phase failed and not continuing on error
         if (phaseResult.status === 'failed') {
@@ -861,6 +868,23 @@ export class WorkflowExecutor {
     this.eventEmitter.removeAllListeners();
     this.currentExecution = undefined;
     this.executionContext = undefined;
+  }
+
+  /**
+   * Validate that the working directory is not on the default branch.
+   * Called after the setup phase to catch failed branch creation early.
+   */
+  private async validateBranchState(cwd: string): Promise<void> {
+    const git = simpleGit(cwd);
+    const currentBranch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+    const defaultBranch = await getDefaultBranch(git);
+
+    if (currentBranch === defaultBranch) {
+      throw new Error(
+        `Branch validation failed: still on default branch "${currentBranch}" after setup phase. ` +
+        `The create-feature step likely failed to create/checkout the feature branch.`
+      );
+    }
   }
 
   /**

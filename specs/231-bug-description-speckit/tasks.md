@@ -12,12 +12,12 @@
 
 ## Phase 1: Type & Library Fixes (Root Cause)
 
-### T001 [US2] Add `error` field to `CreateFeatureOutput` type
+### T001 [DONE] [US2] Add `error` field to `CreateFeatureOutput` type
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/types.ts`
 - Add optional `error?: string` field to `CreateFeatureOutput` interface (after `base_commit` at line ~158)
 - This enables descriptive error messages on branch checkout failures without breaking existing callers
 
-### T002 [US2] Fix `createFeature` resume path — missing else clause
+### T002 [DONE] [US2] Fix `createFeature` resume path — missing else clause
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 - Depends on T001 (uses the new `error` field)
 - At line ~347, after the `if (remoteBranchExists)` block, add an `else` clause for the case where neither local nor remote branch exists
@@ -25,14 +25,14 @@
 - Introduce `let gitBranchCreated = false;` at the start of the resume path scope (around line ~329) so it can be set to `true` in the new else clause
 - Update the resume return statement (line ~366) to use `gitBranchCreated` instead of hardcoded `false`
 
-### T003 [US2] Add post-checkout branch verification to `createFeature`
+### T003 [DONE] [US2] Add post-checkout branch verification to `createFeature`
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 - Depends on T001 and T002
 - After all git operations in the resume path (before the return at line ~360), add a `revparse(['--abbrev-ref', 'HEAD'])` check
 - If the current branch does not match `branchName`, return `{ success: false, error: "Branch checkout failed: ..." }`
 - Add the same verification to the new-creation path (before the final return at line ~453)
 
-### T004 [P] [US2] Log `git.fetch` failures as warnings
+### T004 [DONE] [P] [US2] Log `git.fetch` failures as warnings
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/feature.ts`
 - Can run in parallel with T002/T003 (touches different lines)
 - Replace the empty catch blocks at lines ~334-337 (resume path) and ~385-389 (new-creation path) with `console.warn` calls
@@ -42,14 +42,14 @@
 
 ## Phase 2: Executor Branch Validation
 
-### T005 [US1] Add `validateBranchState` method to `WorkflowExecutor`
+### T005 [DONE] [US1] Add `validateBranchState` method to `WorkflowExecutor`
 **File**: `packages/workflow-engine/src/executor/index.ts`
 - Depends on Phase 1 (conceptually, though could be coded in parallel)
 - Add imports for `simpleGit` from `simple-git` and `getDefaultBranch` from `../actions/builtin/speckit/lib/feature.js`
 - Add a `private async validateBranchState(cwd: string): Promise<void>` method to the `WorkflowExecutor` class
 - Method should: instantiate `simpleGit(cwd)`, get current branch via `revparse`, get default branch via `getDefaultBranch`, throw an `Error` if they match
 
-### T006 [US1] Call branch validation after setup phase completes
+### T006 [DONE] [US1] Call branch validation after setup phase completes
 **File**: `packages/workflow-engine/src/executor/index.ts`
 - Depends on T005
 - After `this.currentExecution.phaseResults.push(phaseResult)` at line ~200, add a conditional block
@@ -60,7 +60,7 @@
 
 ## Phase 3: Workflow YAML Hardening
 
-### T007 [P] [US3] Harden `speckit-feature.yaml`
+### T007 [DONE] [P] [US3] Harden `speckit-feature.yaml`
 **File**: `.generacy/speckit-feature.yaml`
 - Can run in parallel with T008
 - Add a `validate-branch` step after `create-feature` in the setup phase (after line ~63): shell step that compares `git rev-parse --abbrev-ref HEAD` against `${{ steps.create-feature.output.branch_name }}`
@@ -68,7 +68,7 @@
 - Change `push-spec` command (line ~83) from `git push --force-with-lease -u origin HEAD` to `git push --force-with-lease -u origin ${{ steps.create-feature.output.branch_name }}`
 - Update other push steps (`push-clarifications`, `push-plan`, `push-tasks`, `push-implementation`) to use explicit branch: `git push origin ${{ steps.create-feature.output.branch_name }}`
 
-### T008 [P] [US3] Harden `speckit-bugfix.yaml`
+### T008 [DONE] [P] [US3] Harden `speckit-bugfix.yaml`
 **File**: `.generacy/speckit-bugfix.yaml`
 - Can run in parallel with T007
 - Apply identical changes as T007:
@@ -81,7 +81,7 @@
 
 ## Phase 4: Unit Tests
 
-### T009 [US2] Add resume-path edge case tests for `createFeature`
+### T009 [DONE] [US2] Add resume-path edge case tests for `createFeature`
 **File**: `packages/workflow-engine/src/actions/builtin/speckit/lib/__tests__/feature.test.ts`
 - Depends on Phase 1 (T002, T003, T004)
 - Add test: "creates branch from default when dir exists but no local or remote branch" — verify `success: true`, `git_branch_created: true`, and correct git command sequence (checkout default → reset --hard → checkoutLocalBranch)
@@ -90,7 +90,7 @@
 - Add test: "logs a warning when git fetch fails in resume path" — spy on `console.warn`, mock `fetch` to reject, assert warning logged with "git fetch failed"
 - Follow existing patterns: use `vi.hoisted()` mocks, `existsFor()` helper, `callLog` for git operation ordering
 
-### T010 [P] [US1] Add executor branch validation tests
+### T010 [DONE] [P] [US1] Add executor branch validation tests
 **File**: `packages/workflow-engine/src/executor/__tests__/branch-validation.test.ts` (new file)
 - Can run in parallel with T009 (different files)
 - Depends on Phase 2 (T005, T006)
@@ -104,14 +104,14 @@
 
 ## Phase 5: Verification
 
-### T011 Run existing test suite to verify no regressions
+### T011 [DONE] Run existing test suite to verify no regressions
 **Command**: `pnpm -C packages/workflow-engine test`
 - Depends on all previous phases
 - All existing tests in `feature.test.ts` and `executor.test.ts` must continue to pass
 - All new tests from T009 and T010 must pass
 - Fix any failures before marking complete
 
-### T012 Verify YAML syntax is valid
+### T012 [DONE] Verify YAML syntax is valid
 **Command**: Validate that `speckit-feature.yaml` and `speckit-bugfix.yaml` parse correctly
 - Depends on T007, T008
 - Ensure the `validate-branch` step interpolation syntax is correct

@@ -328,12 +328,13 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
   if (await exists(featureDir)) {
     // Feature dir already exists — this is a resume/requeue.
     // Ensure we're on the right branch and pull latest from remote.
+    let gitBranchCreated = false;
     if (await isGitRepo(repoRoot)) {
       const git = simpleGit(repoRoot);
       try {
         await git.fetch(['--all', '--prune']);
-      } catch {
-        // Continue even if fetch fails
+      } catch (err) {
+        console.warn(`[createFeature] git fetch failed, continuing with possibly stale refs: ${err}`);
       }
       const branches = await git.branchLocal();
       if (branches.all.includes(branchName)) {
@@ -353,7 +354,28 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
         );
         if (remoteBranchExists) {
           await git.checkout(['-b', branchName, `origin/${branchName}`]);
+        } else {
+          // Branch doesn't exist anywhere — create it from default branch HEAD
+          const defaultBranch = await getDefaultBranch(git);
+          await git.checkout(defaultBranch);
+          await git.reset(['--hard', `origin/${defaultBranch}`]);
+          await git.checkoutLocalBranch(branchName);
+          gitBranchCreated = true;
         }
+      }
+
+      // Verify we're actually on the expected branch
+      const currentBranch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+      if (currentBranch !== branchName) {
+        return {
+          success: false,
+          branch_name: branchName,
+          feature_num: featureNum,
+          spec_file: '',
+          feature_dir: featureDir,
+          git_branch_created: false,
+          error: `Branch checkout failed: expected "${branchName}" but on "${currentBranch}"`,
+        };
       }
     }
     const specFile = join(featureDir, 'spec.md');
@@ -363,7 +385,7 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       feature_num: featureNum,
       spec_file: (await exists(specFile)) ? specFile : '',
       feature_dir: featureDir,
-      git_branch_created: false,
+      git_branch_created: gitBranchCreated,
     };
   }
 
@@ -384,8 +406,8 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       // Fetch remote refs so we can detect existing remote branches
       try {
         await git.fetch(['--all', '--prune']);
-      } catch {
-        // Continue even if fetch fails
+      } catch (err) {
+        console.warn(`[createFeature] git fetch failed, continuing with possibly stale refs: ${err}`);
       }
 
       // Check if the branch already exists on remote (resume in fresh workspace)
@@ -442,6 +464,20 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       } catch {
         // Continue even if pull fails (e.g., no upstream set)
       }
+    }
+
+    // Verify we're actually on the expected branch
+    const currentBranch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
+    if (currentBranch !== branchName) {
+      return {
+        success: false,
+        branch_name: branchName,
+        feature_num: featureNum,
+        spec_file: '',
+        feature_dir: featureDir,
+        git_branch_created: false,
+        error: `Branch checkout failed: expected "${branchName}" but on "${currentBranch}"`,
+      };
     }
   }
 
