@@ -158,14 +158,21 @@ describe('AI-Dependent Operations', () => {
   describe('executeClarify', () => {
     it('should generate clarification questions', async () => {
       const { executeCommand } = await import('../../../src/actions/cli-utils.js');
-      const { readFile } = await import('../../../src/actions/builtin/speckit/lib/fs.js');
+      const { readFile, exists } = await import('../../../src/actions/builtin/speckit/lib/fs.js');
 
       vi.mocked(executeCommand).mockResolvedValue({
         exitCode: 0,
         stdout: '{}',
         stderr: '',
       });
-      vi.mocked(readFile).mockResolvedValueOnce('# Spec content').mockResolvedValueOnce(`
+      // exists calls: 1) isResume(clarifications.md)=false, 2) specFile=true, 3) post-agent clarifications.md=true
+      vi.mocked(exists)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(true);
+      vi.mocked(readFile)
+        .mockResolvedValueOnce('# Spec content')
+        .mockResolvedValueOnce(`
 # Clarification Questions
 
 ### Q1: Authentication Method
@@ -193,14 +200,21 @@ describe('AI-Dependent Operations', () => {
 
     it('should post questions to GitHub issue when issue_number provided', async () => {
       const { executeCommand } = await import('../../../src/actions/cli-utils.js');
-      const { readFile } = await import('../../../src/actions/builtin/speckit/lib/fs.js');
+      const { readFile, exists } = await import('../../../src/actions/builtin/speckit/lib/fs.js');
 
       vi.mocked(executeCommand).mockResolvedValue({
         exitCode: 0,
         stdout: '{}',
         stderr: '',
       });
-      vi.mocked(readFile).mockResolvedValueOnce('# Spec content').mockResolvedValueOnce(`
+      // exists calls: 1) isResume(clarifications.md)=false, 2) specFile=true, 3) post-agent clarifications.md=true
+      vi.mocked(exists)
+        .mockResolvedValueOnce(false)
+        .mockResolvedValueOnce(true)
+        .mockResolvedValueOnce(true);
+      vi.mocked(readFile)
+        .mockResolvedValueOnce('# Spec content')
+        .mockResolvedValueOnce(`
 # Clarification Questions
 
 ### Q1: Test Question

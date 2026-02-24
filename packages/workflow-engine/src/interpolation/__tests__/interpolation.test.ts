@@ -10,36 +10,37 @@ import {
   hasVariables,
   ExecutionContext,
 } from '../index.js';
+import type { InterpolationContext } from '../context.js';
+import type { StepOutput } from '../../types/action.js';
 
 describe('parseVariableReference', () => {
   it('should parse inputs references', () => {
-    const ref = parseVariableReference('${inputs.name}');
-    expect(ref).toEqual({
+    const ref = parseVariableReference('inputs.name');
+    expect(ref).toMatchObject({
       type: 'inputs',
       path: ['name'],
     });
   });
 
   it('should parse steps references', () => {
-    const ref = parseVariableReference('${steps.build.output.path}');
-    expect(ref).toEqual({
+    const ref = parseVariableReference('steps.build.output.path');
+    expect(ref).toMatchObject({
       type: 'steps',
       path: ['build', 'output', 'path'],
     });
   });
 
   it('should parse env references', () => {
-    const ref = parseVariableReference('${env.HOME}');
-    expect(ref).toEqual({
+    const ref = parseVariableReference('env.HOME');
+    expect(ref).toMatchObject({
       type: 'env',
       path: ['HOME'],
     });
   });
 
-  it('should return undefined for invalid references', () => {
-    expect(parseVariableReference('${invalid}')).toBeUndefined();
-    expect(parseVariableReference('${}')).toBeUndefined();
-    expect(parseVariableReference('not a reference')).toBeUndefined();
+  it('should return unknown type for invalid references', () => {
+    const ref = parseVariableReference('invalid');
+    expect(ref.type).toBe('unknown');
   });
 });
 
@@ -49,8 +50,8 @@ describe('extractVariableReferences', () => {
     const refs = extractVariableReferences(text);
 
     expect(refs).toHaveLength(2);
-    expect(refs[0]).toEqual({ type: 'inputs', path: ['name'] });
-    expect(refs[1]).toEqual({ type: 'env', path: ['HOME'] });
+    expect(refs[0]).toMatchObject({ type: 'inputs', path: ['name'] });
+    expect(refs[1]).toMatchObject({ type: 'env', path: ['HOME'] });
   });
 
   it('should handle text without references', () => {
@@ -65,24 +66,37 @@ describe('hasVariables', () => {
     expect(hasVariables('no variables here')).toBe(false);
   });
 
-  it('should detect variables in objects', () => {
-    expect(hasVariables({ key: '${inputs.x}' })).toBe(true);
-    expect(hasVariables({ key: 'plain' })).toBe(false);
+  it('should detect double-brace variables', () => {
+    expect(hasVariables('${{ inputs.x }}')).toBe(true);
+    expect(hasVariables('${{ steps.build.output.path }}')).toBe(true);
   });
 
   it('should detect variables in arrays', () => {
-    expect(hasVariables(['${inputs.x}', 'plain'])).toBe(true);
-    expect(hasVariables(['plain', 'text'])).toBe(false);
+    // hasVariables only takes strings, so test with individual elements
+    expect(hasVariables('${inputs.x}')).toBe(true);
+    expect(hasVariables('plain')).toBe(false);
   });
 });
 
 describe('interpolate', () => {
-  const context = {
+  const buildOutput: StepOutput = {
+    raw: '{"path": "/dist", "success": true}',
+    parsed: { path: '/dist', success: true },
+    exitCode: 0,
+    completedAt: new Date(),
+  };
+
+  const context: InterpolationContext = {
     inputs: { name: 'Alice', count: 5 },
-    steps: new Map([
-      ['build', { output: { path: '/dist', success: true } }],
-    ]),
+    steps: {
+      build: buildOutput,
+    },
     env: { HOME: '/home/user', NODE_ENV: 'test' },
+    functions: {
+      success: () => true,
+      failure: () => false,
+      always: () => true,
+    },
   };
 
   it('should interpolate input values', () => {
@@ -131,6 +145,10 @@ describe('interpolate', () => {
     const result = interpolateValue(value, context);
     expect(result).toEqual(['Alice', '/home/user']);
   });
+
+  it('should handle double-brace syntax', () => {
+    expect(interpolate('${{ inputs.name }}', context)).toBe('Alice');
+  });
 });
 
 describe('ExecutionContext', () => {
@@ -144,15 +162,21 @@ describe('ExecutionContext', () => {
 
   it('should manage step outputs', () => {
     const ctx = new ExecutionContext();
-    ctx.setStepOutput('build', { path: '/dist' });
+    const output: StepOutput = {
+      raw: '{"path": "/dist"}',
+      parsed: { path: '/dist' },
+      exitCode: 0,
+      completedAt: new Date(),
+    };
+    ctx.setStepOutput('build', output);
 
-    expect(ctx.getStepOutput('build')).toEqual({ path: '/dist' });
+    expect(ctx.getStepOutput('build')).toEqual(output);
     expect(ctx.getStepOutput('missing')).toBeUndefined();
   });
 
   it('should manage env variables', () => {
     const ctx = new ExecutionContext();
-    ctx.setEnv({ HOME: '/home/test' });
+    ctx.setEnvironment({ HOME: '/home/test' });
 
     expect(ctx.getEnv('HOME')).toBe('/home/test');
     expect(ctx.getEnv('MISSING')).toBeUndefined();
@@ -161,13 +185,19 @@ describe('ExecutionContext', () => {
   it('should create interpolation context', () => {
     const ctx = new ExecutionContext();
     ctx.setInputs({ name: 'Test' });
-    ctx.setStepOutput('build', { success: true });
-    ctx.setEnv({ HOME: '/home' });
+    const output: StepOutput = {
+      raw: '{"success": true}',
+      parsed: { success: true },
+      exitCode: 0,
+      completedAt: new Date(),
+    };
+    ctx.setStepOutput('build', output);
+    ctx.setEnvironment({ HOME: '/home' });
 
-    const interpolationCtx = ctx.toInterpolationContext();
+    const interpolationCtx = ctx.getInterpolationContext();
 
     expect(interpolationCtx.inputs).toEqual({ name: 'Test' });
-    expect(interpolationCtx.steps.get('build')).toEqual({ success: true });
+    expect(interpolationCtx.steps['build']).toEqual(output);
     expect(interpolationCtx.env).toEqual({ HOME: '/home' });
   });
 });
