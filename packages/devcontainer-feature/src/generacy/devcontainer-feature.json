@@ -1,0 +1,38 @@
+{
+  "id": "generacy",
+  "version": "0.1.0",
+  "name": "Generacy AI Development Tools",
+  "documentationURL": "https://github.com/generacy-ai/generacy",
+  "description": "Installs Generacy workflow tooling, Agency MCP server, Claude Code, and GitHub CLI for AI-driven development",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "latest",
+      "description": "Version of @generacy-ai/generacy to install"
+    },
+    "agencyVersion": {
+      "type": "string",
+      "default": "latest",
+      "description": "Version of @generacy-ai/agency to install"
+    },
+    "installAgency": {
+      "type": "boolean",
+      "default": true,
+      "description": "Also install @generacy-ai/agency MCP server"
+    },
+    "installClaudeCode": {
+      "type": "boolean",
+      "default": true,
+      "description": "Install Claude Code AI agent"
+    },
+    "nodeVersion": {
+      "type": "string",
+      "default": "22",
+      "description": "Node.js major version to install (skip if already present)"
+    }
+  },
+  "installsAfter": [
+    "ghcr.io/devcontainers/features/common-utils",
+    "ghcr.io/devcontainers/features/node"
+  ]
+}

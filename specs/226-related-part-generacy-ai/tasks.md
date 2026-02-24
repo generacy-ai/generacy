@@ -12,7 +12,7 @@
 
 ## Phase 1: Feature Metadata
 
-### T001 Create `devcontainer-feature.json`
+### T001 [DONE] Create `devcontainer-feature.json`
 **File**: `packages/devcontainer-feature/src/generacy/devcontainer-feature.json`
 - Create directory structure `packages/devcontainer-feature/src/generacy/`
 - Define feature metadata: `id`, `version` (0.1.0), `name`, `description`, `documentationURL`
@@ -28,7 +28,7 @@
 
 ## Phase 2: Install Script
 
-### T002 Write install script — non-root user resolution
+### T002 [DONE] Write install script — non-root user resolution
 **File**: `packages/devcontainer-feature/src/generacy/install.sh`
 - Add shebang `#!/bin/sh` and `set -e`
 - Implement non-root user detection:
@@ -36,12 +36,12 @@
   - Fallback: first user with UID >= 1000 and < 65534 in `/etc/passwd`
   - Last resort: `root`
 
-### T003 Write install script — Node.js conditional install
+### T003 [DONE] Write install script — Node.js conditional install
 **File**: `packages/devcontainer-feature/src/generacy/install.sh`
 - Check `command -v node` — skip if present (any version, per Q3)
 - If not found, install via NodeSource: `curl -fsSL "https://deb.nodesource.com/setup_${NODEVERSION}.x" | bash -` then `apt-get install -y nodejs`
 
-### T004 Write install script — GitHub CLI conditional install
+### T004 [DONE] Write install script — GitHub CLI conditional install
 **File**: `packages/devcontainer-feature/src/generacy/install.sh`
 - Check `command -v gh` — skip if present (any version, per Q4)
 - If not found, install from GitHub's apt repository:
@@ -49,17 +49,17 @@
   - Add apt source for GitHub CLI
   - `apt-get update && apt-get install -y gh`
 
-### T005 Write install script — Claude Code conditional install
+### T005 [DONE] Write install script — Claude Code conditional install
 **File**: `packages/devcontainer-feature/src/generacy/install.sh`
 - Guard with `if [ "$INSTALLCLAUDECODE" = "true" ]`
 - Install via `npm install -g @anthropic-ai/claude-code` (per Q2: npm, not curl script)
 
-### T006 Write install script — Generacy + Agency npm installs
+### T006 [DONE] Write install script — Generacy + Agency npm installs
 **File**: `packages/devcontainer-feature/src/generacy/install.sh`
 - Always install: `npm install -g "@generacy-ai/generacy@${VERSION}"`
 - Conditionally install Agency: `npm install -g "@generacy-ai/agency@${AGENCYVERSION}"` (guarded by `$INSTALLAGENCY`)
 
-### T007 Write install script — verification step
+### T007 [DONE] Write install script — verification step
 **File**: `packages/devcontainer-feature/src/generacy/install.sh`
 - Verify all expected binaries with `--version` checks
 - Conditional checks for Claude Code (if `$INSTALLCLAUDECODE` true) and Agency (if `$INSTALLAGENCY` true)
@@ -72,7 +72,7 @@
 
 ## Phase 3: Test Suite
 
-### T008 [P] Write default test script
+### T008 [DONE] [P] Write default test script
 **File**: `packages/devcontainer-feature/test/generacy/test.sh`
 - Create directory structure `packages/devcontainer-feature/test/generacy/`
 - Add shebang `#!/bin/sh` and `set -e`
@@ -80,7 +80,7 @@
 - Print success message
 - Ensure script is executable
 
-### T009 [P] Write test scenarios configuration
+### T009 [DONE] [P] Write test scenarios configuration
 **File**: `packages/devcontainer-feature/test/generacy/scenarios.json`
 - Define 6 scenarios per Q11 resolution:
   1. `defaults_python` — Python 3.12 base, all defaults
@@ -101,7 +101,7 @@
 
 ## Phase 4: GitHub Actions Workflow
 
-### T010 [P] Create publish workflow
+### T010 [DONE] [P] Create publish workflow
 **File**: `.github/workflows/publish-devcontainer-feature.yml`
 - Create `.github/workflows/` directory
 - Trigger on `push.tags: ['feature/v*']`
@@ -116,7 +116,7 @@
 
 ## Phase 5: Documentation
 
-### T011 Write README
+### T011 [DONE] Write README
 **File**: `packages/devcontainer-feature/README.md`
 - Quick Start section with minimal `devcontainer.json` example
 - Options table (all 5 options with types, defaults, descriptions)
