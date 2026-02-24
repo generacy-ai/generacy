@@ -1,0 +1,47 @@
+{
+  "defaults_python": {
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "features": {
+      "generacy": {}
+    }
+  },
+  "defaults_ubuntu": {
+    "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "features": {
+      "generacy": {}
+    }
+  },
+  "all_disabled": {
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "features": {
+      "generacy": {
+        "installAgency": false,
+        "installClaudeCode": false
+      }
+    }
+  },
+  "no_claude_code": {
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "features": {
+      "generacy": {
+        "installClaudeCode": false
+      }
+    }
+  },
+  "no_agency": {
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "features": {
+      "generacy": {
+        "installAgency": false
+      }
+    }
+  },
+  "node_20": {
+    "image": "mcr.microsoft.com/devcontainers/python:3.12",
+    "features": {
+      "generacy": {
+        "nodeVersion": "20"
+      }
+    }
+  }
+}
