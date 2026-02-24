@@ -1,0 +1,389 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "version": "1.0.0",
+  "timestamp": "2026-02-24T00:00:00Z",
+  "summary": {
+    "totalFiles": 209,
+    "totalExports": 1159,
+    "sourceRepository": "/workspaces/contracts",
+    "destinations": {
+      "latency": {
+        "repository": "/workspaces/latency/packages/latency",
+        "exportCount": 362,
+        "percentage": 31.2
+      },
+      "agency": {
+        "repository": "/workspaces/agency/packages/agency",
+        "exportCount": 797,
+        "percentage": 68.8
+      }
+    }
+  },
+  "sources": [
+    {
+      "path": "contracts/src/common",
+      "destination": "latency/packages/latency/src/common",
+      "fileCount": 15,
+      "exportCount": 77,
+      "testCount": 12,
+      "dependencies": ["ulid", "zod"],
+      "description": "Shared foundation types (IDs, errors, timestamps, versioning)",
+      "keyFiles": [
+        "ids.ts",
+        "timestamps.ts",
+        "pagination.ts",
+        "errors.ts",
+        "urgency.ts",
+        "config.ts",
+        "message-envelope.ts",
+        "version.ts",
+        "capability.ts",
+        "extended-meta.ts"
+      ]
+    },
+    {
+      "path": "contracts/src/orchestration",
+      "destination": "latency/packages/latency/src/orchestration",
+      "fileCount": 10,
+      "exportCount": 50,
+      "testCount": 10,
+      "dependencies": ["zod"],
+      "description": "Work distribution and agent coordination types",
+      "keyFiles": [
+        "work-item.ts",
+        "agent-info.ts",
+        "events.ts",
+        "status.ts"
+      ]
+    },
+    {
+      "path": "contracts/src/version-compatibility",
+      "destination": "latency/packages/latency/src/versioning",
+      "fileCount": 4,
+      "exportCount": 23,
+      "testCount": 4,
+      "dependencies": ["zod"],
+      "description": "Version compatibility and capability negotiation",
+      "keyFiles": [
+        "capability-registry.ts",
+        "versioned-schemas.ts",
+        "deprecation-warnings.ts"
+      ]
+    },
+    {
+      "path": "contracts/src/agency-generacy",
+      "destination": "latency/packages/latency/src/types/agency-generacy",
+      "fileCount": 15,
+      "exportCount": 70,
+      "testCount": 12,
+      "dependencies": ["zod"],
+      "description": "Agent ↔ Orchestrator cross-component contracts"
+    },
+    {
+      "path": "contracts/src/agency-humancy",
+      "destination": "latency/packages/latency/src/types/agency-humancy",
+      "fileCount": 15,
+      "exportCount": 72,
+      "testCount": 12,
+      "dependencies": ["zod"],
+      "description": "Agent ↔ Human cross-component contracts"
+    },
+    {
+      "path": "contracts/src/generacy-humancy",
+      "destination": "latency/packages/latency/src/types/generacy-humancy",
+      "fileCount": 10,
+      "exportCount": 42,
+      "testCount": 8,
+      "dependencies": ["zod"],
+      "description": "Orchestrator ↔ Human cross-component contracts"
+    },
+    {
+      "path": "contracts/src/schemas/decision-model",
+      "destination": "latency/packages/latency/src/types/decision-model",
+      "fileCount": 20,
+      "exportCount": 101,
+      "testCount": 18,
+      "dependencies": ["zod"],
+      "description": "Decision model schemas for workflow coordination"
+    },
+    {
+      "path": "contracts/src/schemas/extension-comms",
+      "destination": "latency/packages/latency/src/types/extension-comms",
+      "fileCount": 25,
+      "exportCount": 148,
+      "testCount": 22,
+      "dependencies": ["zod"],
+      "description": "Extension communication protocols and schemas",
+      "subdirectories": [
+        "workflow",
+        "sse",
+        "coaching",
+        "decision-queue"
+      ]
+    },
+    {
+      "path": "contracts/src/schemas/knowledge-store",
+      "destination": "latency/packages/latency/src/types/knowledge-store",
+      "fileCount": 18,
+      "exportCount": 113,
+      "testCount": 16,
+      "dependencies": ["zod"],
+      "description": "Knowledge management schemas"
+    },
+    {
+      "path": "contracts/src/schemas/learning-loop",
+      "destination": "latency/packages/latency/src/types/learning-loop",
+      "fileCount": 15,
+      "exportCount": 83,
+      "testCount": 14,
+      "dependencies": ["zod"],
+      "description": "Learning loop schemas for continuous improvement"
+    },
+    {
+      "path": "contracts/src/schemas/attribution-metrics",
+      "destination": "latency/packages/latency/src/types/attribution-metrics",
+      "fileCount": 12,
+      "exportCount": 74,
+      "testCount": 10,
+      "dependencies": ["zod"],
+      "description": "Attribution tracking and metrics"
+    },
+    {
+      "path": "contracts/src/schemas/data-export",
+      "destination": "latency/packages/latency/src/types/data-export",
+      "fileCount": 14,
+      "exportCount": 82,
+      "testCount": 12,
+      "dependencies": ["zod"],
+      "description": "Data export utilities and schemas"
+    },
+    {
+      "path": "contracts/src/schemas/github-app",
+      "destination": "latency/packages/latency/src/types/github-app",
+      "fileCount": 8,
+      "exportCount": 44,
+      "testCount": 8,
+      "dependencies": ["zod"],
+      "description": "GitHub app integration schemas"
+    },
+    {
+      "path": "contracts/src/schemas/platform-api/auth",
+      "destination": "latency/packages/latency/src/api/auth",
+      "fileCount": 6,
+      "exportCount": 30,
+      "testCount": 6,
+      "dependencies": ["zod"],
+      "description": "Platform API authentication schemas"
+    },
+    {
+      "path": "contracts/src/schemas/platform-api/organization",
+      "destination": "latency/packages/latency/src/api/organization",
+      "fileCount": 7,
+      "exportCount": 32,
+      "testCount": 6,
+      "dependencies": ["zod"],
+      "description": "Platform API organization management schemas"
+    },
+    {
+      "path": "contracts/src/schemas/platform-api/subscription",
+      "destination": "latency/packages/latency/src/api/subscription",
+      "fileCount": 8,
+      "exportCount": 40,
+      "testCount": 7,
+      "dependencies": ["zod"],
+      "description": "Platform API subscription schemas"
+    },
+    {
+      "path": "contracts/src/schemas/tool-naming",
+      "destination": "agency/packages/agency/src/tools/naming",
+      "fileCount": 5,
+      "exportCount": 32,
+      "testCount": 5,
+      "dependencies": ["zod"],
+      "description": "Tool naming conventions and validation",
+      "keyFiles": [
+        "tool-name.schema.ts",
+        "tool-prefix.schema.ts",
+        "parser.ts",
+        "index.ts"
+      ]
+    },
+    {
+      "path": "contracts/src/telemetry",
+      "destination": "agency/packages/agency/src/telemetry/events",
+      "fileCount": 6,
+      "exportCount": 20,
+      "testCount": 6,
+      "dependencies": ["zod"],
+      "description": "Tool call event tracking and telemetry",
+      "keyFiles": [
+        "tool-call-event.ts",
+        "tool-stats.ts",
+        "error-category.ts",
+        "time-window.ts",
+        "anonymous-tool-metric.ts"
+      ]
+    },
+    {
+      "path": "contracts/src/schemas/tool-result",
+      "destination": "agency/packages/agency/src/output/schemas.ts",
+      "fileCount": 2,
+      "exportCount": 15,
+      "testCount": 2,
+      "dependencies": ["zod"],
+      "description": "Terse tool result schemas",
+      "notes": "Merge with existing agency/output module"
+    },
+    {
+      "path": "contracts/src/generated",
+      "destination": "agency/packages/agency/src/schemas",
+      "fileCount": 3,
+      "exportCount": 8,
+      "testCount": 0,
+      "dependencies": ["zod-to-json-schema"],
+      "description": "Generated JSON schemas from Zod types",
+      "notes": "Include schema generation scripts"
+    }
+  ],
+  "dependencies": {
+    "shared": {
+      "zod": {
+        "version": "^3.23.8",
+        "purpose": "Runtime schema validation",
+        "usedBy": ["latency", "agency"]
+      }
+    },
+    "latency": {
+      "ulid": {
+        "version": "^3.0.2",
+        "purpose": "ULID-based ID generation",
+        "requiredBy": ["common/ids.ts"]
+      }
+    },
+    "agency": {
+      "zod-to-json-schema": {
+        "version": "^3.23.5",
+        "purpose": "JSON Schema export from Zod types",
+        "requiredBy": ["schemas/"]
+      }
+    }
+  },
+  "migrationOrder": [
+    {
+      "phase": 1,
+      "name": "Audit and Categorization",
+      "tasks": ["T001", "T002", "T003", "T004", "T005"],
+      "duration": "2 days"
+    },
+    {
+      "phase": 2,
+      "name": "Prepare Destinations",
+      "tasks": ["T006", "T007", "T008", "T009", "T010", "T011", "T012"],
+      "duration": "2 days",
+      "blockedBy": [1]
+    },
+    {
+      "phase": 3,
+      "name": "Migrate to Latency",
+      "tasks": ["T013-T040"],
+      "duration": "3 days",
+      "blockedBy": [2],
+      "migrationOrder": [
+        "common",
+        "orchestration",
+        "version-compatibility",
+        "agency-generacy",
+        "agency-humancy",
+        "generacy-humancy",
+        "schemas/decision-model",
+        "schemas/extension-comms",
+        "schemas/knowledge-store",
+        "schemas/learning-loop",
+        "schemas/attribution-metrics",
+        "schemas/data-export",
+        "schemas/github-app",
+        "schemas/platform-api"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "Migrate to Agency",
+      "tasks": ["T041-T055"],
+      "duration": "2 days",
+      "blockedBy": [3],
+      "notes": "Requires latency exports to be available"
+    },
+    {
+      "phase": 5,
+      "name": "Verification and Cleanup",
+      "tasks": ["T056-T075"],
+      "duration": "2 days",
+      "blockedBy": [3, 4]
+    }
+  ],
+  "verification": {
+    "exportCountValidation": {
+      "expected": 1159,
+      "tolerance": 10,
+      "command": "rg '^export' --type ts | wc -l"
+    },
+    "buildValidation": {
+      "latency": "cd /workspaces/latency/packages/latency && pnpm build",
+      "agency": "cd /workspaces/agency/packages/agency && pnpm build"
+    },
+    "testValidation": {
+      "latency": "cd /workspaces/latency/packages/latency && pnpm test",
+      "agency": "cd /workspaces/agency/packages/agency && pnpm test"
+    }
+  },
+  "activeDependencies": {
+    "count": 0,
+    "note": "Zero active dependencies - only humancy/extension has file: dependency (deferred)",
+    "verifiedRepos": [
+      "latency",
+      "agency",
+      "generacy",
+      "generacy-cloud"
+    ]
+  },
+  "postMigrationActions": [
+    {
+      "action": "Update latency README.md",
+      "file": "/workspaces/latency/packages/latency/README.md"
+    },
+    {
+      "action": "Update agency README.md",
+      "file": "/workspaces/agency/packages/agency/README.md"
+    },
+    {
+      "action": "Create migration guide",
+      "file": "/workspaces/generacy/specs/246-1-9-migrate-contracts/contracts-migration-guide.md"
+    },
+    {
+      "action": "Create export verification script",
+      "file": "/workspaces/generacy/specs/246-1-9-migrate-contracts/verify-exports.sh"
+    },
+    {
+      "action": "Create import update script",
+      "file": "/workspaces/generacy/specs/246-1-9-migrate-contracts/update-contracts-imports.sh"
+    },
+    {
+      "action": "Document humancy migration path",
+      "file": "/workspaces/generacy/specs/246-1-9-migrate-contracts/humancy-migration-notes.md"
+    },
+    {
+      "action": "Update contracts README with archive notice",
+      "file": "/workspaces/contracts/README.md"
+    },
+    {
+      "action": "Archive contracts repository",
+      "command": "gh repo archive generacy-ai/contracts --yes"
+    }
+  ],
+  "rollbackProcedure": {
+    "trigger": "Multiple test failures or fundamental structural issues",
+    "phases1-2": "Delete new directories, revert package.json, pnpm install",
+    "phases3-4": "Git revert migration commits, rebuild packages",
+    "phase5": "Unarchive repo, revert all changes in latency/agency/contracts"
+  }
+}

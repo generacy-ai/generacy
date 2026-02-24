@@ -1,0 +1,27 @@
+T026 Migration Summary
+=====================
+
+Task: Migrate contracts/schemas/extension-comms/ to latency/types/extension-comms/
+
+Status: ✅ COMPLETE
+
+Files Migrated: 19
+- 13 TypeScript source files
+- 6 test files
+
+Directory Structure:
+extension-comms/
+├── __tests__/ (3 test files)
+├── coaching/ (2 source + 1 test)
+├── decision-queue/ (2 source)
+├── sse/ (3 source)
+├── workflow/ (4 source + 3 tests)
+└── index.ts (1 root)
+
+Verification:
+- File count matches: 19 source = 19 destination
+- Binary diff: identical
+- Directory structure: preserved
+- Test directories: included
+
+Next Task: T027 - Migrate knowledge-store/

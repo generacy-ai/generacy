@@ -11,14 +11,14 @@
 
 ## Phase 1: Audit and Categorization
 
-### T001 Generate export inventory for contracts package
+### T001 [DONE] Generate export inventory for contracts package
 **Action**: Count and categorize all exports
 - Run `rg "^export" src/ --type ts | wc -l` in contracts repo
 - Count exports by directory (common/, orchestration/, telemetry/, etc.)
 - Document total export count (~1152 expected)
 - Generate per-directory export counts
 
-### T002 Create migration manifest JSON
+### T002 [DONE] Create migration manifest JSON
 **File**: `/workspaces/generacy/specs/246-1-9-migrate-contracts/migration-manifest.json`
 - Define schema with version, timestamp, sources array
 - Document each source directory with:
@@ -30,7 +30,7 @@
   - dependencies array
 - Include all directories: common/, orchestration/, version-compatibility/, telemetry/, schemas/, etc.
 
-### T003 Verify zero active dependencies
+### T003 [DONE] Verify zero active dependencies
 **Action**: Search all repos for contracts imports
 - Search latency repo: `rg "@generacy-ai/contracts" /workspaces/latency/src/`
 - Search agency repo: `rg "@generacy-ai/contracts" /workspaces/agency/src/`
@@ -39,7 +39,7 @@
 - Verify humancy only has `file:` dependency
 - Document findings in audit report
 
-### T004 Document test coverage baseline
+### T004 [DONE] Document test coverage baseline
 **Files**:
 - `/workspaces/generacy/specs/246-1-9-migrate-contracts/test-baseline.json`
 - `/workspaces/generacy/specs/246-1-9-migrate-contracts/coverage-baseline.txt`
@@ -49,7 +49,7 @@
 - Document test-to-source ratio per module
 - Identify cross-module test dependencies
 
-### T005 Create audit report
+### T005 [DONE] Create audit report
 **File**: `/workspaces/generacy/specs/246-1-9-migrate-contracts/audit-report.md`
 - Summarize export counts by module
 - List dependencies (ulid, zod, zod-to-json-schema)
@@ -61,7 +61,7 @@
 
 ## Phase 2: Prepare Destination Repositories
 
-### T006 [P] Create latency directory structure
+### T006 [DONE] [P] Create latency directory structure
 **Directories**: `/workspaces/latency/packages/latency/src/`
 - Create `common/` directory
 - Create `orchestration/` directory
@@ -82,7 +82,7 @@
   - `organization/`
   - `subscription/`
 
-### T007 [P] Add README files to latency directories
+### T007 [DONE] [P] Add README files to latency directories
 **Files**: Multiple README.md files in latency/src/
 - Create `common/README.md` with purpose statement
 - Create `orchestration/README.md` with purpose statement
@@ -90,32 +90,32 @@
 - Create `types/README.md` with purpose statement
 - Create `api/README.md` with purpose statement
 
-### T008 [P] Create agency directory structure
+### T008 [DONE] [P] Create agency directory structure
 **Directories**: `/workspaces/agency/packages/agency/src/`
 - Create `tools/naming/` directory
 - Create `telemetry/events/` directory
 - Create `output/schemas/` directory (if doesn't exist)
 - Create `schemas/` directory
 
-### T009 [P] Add README files to agency directories
+### T009 [DONE] [P] Add README files to agency directories
 **Files**: Multiple README.md files in agency/src/
 - Create `tools/naming/README.md` with purpose statement
 - Create `telemetry/events/README.md` with purpose statement
 - Create `schemas/README.md` with purpose statement
 
-### T010 Update latency package.json dependencies
+### T010 [DONE] Update latency package.json dependencies
 **File**: `/workspaces/latency/packages/latency/package.json`
 - Add `"ulid": "^3.0.2"` to dependencies
 - Verify `"zod": "^3.23.8"` is present (or higher version)
 - Run `pnpm install` in latency package
 
-### T011 Update agency package.json dependencies
+### T011 [DONE] Update agency package.json dependencies
 **File**: `/workspaces/agency/packages/agency/package.json`
 - Verify `"zod"` is present (should be 3.24.1 or compatible)
 - Add `"zod-to-json-schema": "^3.23.5"` to dependencies
 - Run `pnpm install` in agency package
 
-### T012 [P] Verify TypeScript configurations
+### T012 [DONE] [P] Verify TypeScript configurations
 **Files**:
 - `/workspaces/latency/packages/latency/tsconfig.json`
 - `/workspaces/agency/packages/agency/tsconfig.json`
@@ -127,7 +127,7 @@
 
 ## Phase 3: Migrate Shared Foundation to Latency
 
-### T013 Migrate contracts/common/ to latency
+### T013 [DONE] Migrate contracts/common/ to latency
 **Source**: `/workspaces/contracts/src/common/`
 **Destination**: `/workspaces/latency/packages/latency/src/common/`
 - Copy all .ts files from common/ directory
@@ -144,14 +144,14 @@
   - `capability.ts` (Capability system)
   - `extended-meta.ts` (Plugin metadata)
 
-### T014 Fix imports in latency/common/
+### T014 [DONE] Fix imports in latency/common/
 **Directory**: `/workspaces/latency/packages/latency/src/common/`
 - Update relative import paths within common/
 - Remove or update .js extensions to match conventions
 - Add imports from '@generacy-ai/latency' if needed for cross-module refs
 - Verify all imports resolve correctly
 
-### T015 Create latency/common/index.ts
+### T015 [DONE] Create latency/common/index.ts
 **File**: `/workspaces/latency/packages/latency/src/common/index.ts`
 - Export all types and utilities from ids.ts
 - Export all from timestamps.ts
@@ -164,7 +164,7 @@
 - Export all from capability.ts
 - Export all from extended-meta.ts
 
-### T016 Migrate contracts/orchestration/ to latency
+### T016 [DONE] Migrate contracts/orchestration/ to latency
 **Source**: `/workspaces/contracts/src/orchestration/`
 **Destination**: `/workspaces/latency/packages/latency/src/orchestration/`
 - Copy all .ts files from orchestration/ directory
@@ -175,20 +175,20 @@
   - `events.ts` (Orchestration events)
   - `status.ts` (Status enums)
 
-### T017 Fix imports in latency/orchestration/
+### T017 [DONE] Fix imports in latency/orchestration/
 **Directory**: `/workspaces/latency/packages/latency/src/orchestration/`
 - Update imports from contracts/common to ../common or @generacy-ai/latency
 - Update relative import paths within orchestration/
 - Verify all imports resolve correctly
 
-### T018 Create latency/orchestration/index.ts
+### T018 [DONE] Create latency/orchestration/index.ts
 **File**: `/workspaces/latency/packages/latency/src/orchestration/index.ts`
 - Export all from work-item.ts
 - Export all from agent-info.ts
 - Export all from events.ts
 - Export all from status.ts
 
-### T019 Migrate contracts/version-compatibility/ to latency
+### T019 [DONE] Migrate contracts/version-compatibility/ to latency
 **Source**: `/workspaces/contracts/src/version-compatibility/`
 **Destination**: `/workspaces/latency/packages/latency/src/versioning/`
 - Copy all .ts files from version-compatibility/ directory
@@ -198,89 +198,89 @@
   - `versioned-schemas.ts`
   - `deprecation-warnings.ts`
 
-### T020 Fix imports in latency/versioning/
+### T020 [DONE] Fix imports in latency/versioning/
 **Directory**: `/workspaces/latency/packages/latency/src/versioning/`
 - Update imports from contracts/common to ../common or @generacy-ai/latency
 - Update relative import paths
 - Verify all imports resolve correctly
 
-### T021 Create latency/versioning/index.ts
+### T021 [DONE] Create latency/versioning/index.ts
 **File**: `/workspaces/latency/packages/latency/src/versioning/index.ts`
 - Export all from capability-registry.ts
 - Export all from versioned-schemas.ts
 - Export all from deprecation-warnings.ts
 
-### T022 Migrate contracts/agency-generacy/ to latency/types/
+### T022 [DONE] Migrate contracts/agency-generacy/ to latency/types/
 **Source**: `/workspaces/contracts/src/agency-generacy/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/agency-generacy/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T023 Migrate contracts/agency-humancy/ to latency/types/
+### T023 [DONE] Migrate contracts/agency-humancy/ to latency/types/
 **Source**: `/workspaces/contracts/src/agency-humancy/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/agency-humancy/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T024 Migrate contracts/generacy-humancy/ to latency/types/
+### T024 [DONE] Migrate contracts/generacy-humancy/ to latency/types/
 **Source**: `/workspaces/contracts/src/generacy-humancy/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/generacy-humancy/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T025 Migrate contracts/schemas/decision-model/ to latency/types/
+### T025 [DONE] Migrate contracts/schemas/decision-model/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/decision-model/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/decision-model/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T026 Migrate contracts/schemas/extension-comms/ to latency/types/
+### T026 [DONE] Migrate contracts/schemas/extension-comms/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/extension-comms/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/extension-comms/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T027 Migrate contracts/schemas/knowledge-store/ to latency/types/
+### T027 [DONE] Migrate contracts/schemas/knowledge-store/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/knowledge-store/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/knowledge-store/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T028 Migrate contracts/schemas/learning-loop/ to latency/types/
+### T028 [DONE] Migrate contracts/schemas/learning-loop/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/learning-loop/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/learning-loop/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T029 Migrate contracts/schemas/attribution-metrics/ to latency/types/
+### T029 [DONE] Migrate contracts/schemas/attribution-metrics/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/attribution-metrics/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/attribution-metrics/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T030 Migrate contracts/schemas/data-export/ to latency/types/
+### T030 [DONE] Migrate contracts/schemas/data-export/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/data-export/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/data-export/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T031 Migrate contracts/schemas/github-app/ to latency/types/
+### T031 [DONE] Migrate contracts/schemas/github-app/ to latency/types/
 **Source**: `/workspaces/contracts/src/schemas/github-app/`
 **Destination**: `/workspaces/latency/packages/latency/src/types/github-app/`
 - Copy entire directory structure
 - Copy all .ts files
 - Copy __tests__ directory if exists
 
-### T032 Migrate contracts/schemas/platform-api/ to latency/api/
+### T032 [DONE] Migrate contracts/schemas/platform-api/ to latency/api/
 **Source**: `/workspaces/contracts/src/schemas/platform-api/`
 **Destination**: `/workspaces/latency/packages/latency/src/api/`
 - Copy subdirectories: auth/, organization/, subscription/

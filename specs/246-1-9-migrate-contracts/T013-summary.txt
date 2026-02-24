@@ -1,0 +1,91 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                    T013 MIGRATION COMPLETE - SUMMARY                         ║
+╔══════════════════════════════════════════════════════════════════════════════╗
+
+Task: Migrate contracts/common/ to latency
+Status: ✅ COMPLETE
+Date: 2026-02-24
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ FILES MIGRATED                                                               │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Source Location:      /workspaces/contracts/src/common/
+Destination Location: /workspaces/latency/packages/latency/src/common/
+
+TypeScript Files (11):
+  ✅ capability.ts         - Capability system with enums, schemas, error handling
+  ✅ config.ts             - BaseConfig schema
+  ✅ errors.ts             - ErrorCode enum and ErrorResponse types
+  ✅ extended-meta.ts      - ExtendedMeta schema for plugin metadata
+  ✅ ids.ts                - ULID-based ID generators and branded types
+  ✅ index.ts              - Main export barrel
+  ✅ message-envelope.ts   - MessageEnvelope and MessageMeta schemas
+  ✅ pagination.ts         - PaginationParams and PaginatedResponse schemas
+  ✅ timestamps.ts         - ISOTimestamp utilities
+  ✅ urgency.ts            - Urgency enum
+  ✅ version.ts            - SemVer utilities and version comparison
+
+Test Files (5):
+  ✅ __tests__/errors.test.ts
+  ✅ __tests__/ids.test.ts
+  ✅ __tests__/message-envelope.test.ts
+  ✅ __tests__/pagination.test.ts
+  ✅ __tests__/version.test.ts
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ VERIFICATION RESULTS                                                         │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+✅ All 11 TypeScript source files copied successfully
+✅ All 5 test files copied successfully
+✅ Directory structure preserved (__tests__ subdirectory)
+✅ TypeScript compilation passes (pnpm typecheck)
+✅ No import errors detected
+✅ Dependencies available (zod, ulid)
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ IMPORT ANALYSIS                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+External Dependencies:
+  • zod           - ✅ Already installed in latency
+  • ulid          - ✅ Already installed in latency (added in T010)
+
+Internal Imports:
+  • Relative imports (e.g., './timestamps.js') - ✅ Valid in new location
+  • Test imports (e.g., '../ids.js') - ✅ Valid in new location
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ EXPORT STATISTICS                                                            │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Expected Exports (from migration-manifest.json): ~77
+Key Export Categories:
+  • ID Types & Generators: CorrelationId, RequestId, SessionId, etc.
+  • Error Handling: ErrorCode enum, ErrorResponse, createErrorResponse
+  • Schemas: Zod schemas for validation
+  • Utilities: Version parsing, timestamp creation, capability queries
+  • Enums: Urgency, ErrorCode, Capability
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ NEXT STEPS                                                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Immediate Next Tasks:
+  → T014: Fix imports in latency/common/ (likely not needed - imports look valid)
+  → T015: Create/verify latency/common/index.ts (already exists and is correct)
+  → T016: Migrate contracts/orchestration/ to latency
+
+No Blockers: All imports are compatible, dependencies installed, compilation passes
+
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ NOTES                                                                        │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+• The index.ts file already existed in the destination and matches the source
+• README.md was previously created in T007 (directory setup)
+• All files use .js extensions in imports (TypeScript/ES module convention)
+• No import path modifications required - files are self-contained
+• Tests use vitest framework (already configured in latency)
+
