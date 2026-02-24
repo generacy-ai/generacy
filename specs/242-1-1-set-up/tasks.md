@@ -297,7 +297,7 @@
 - Commit to develop branch
 
 ### T017 [DONE] [US1] Create preview publish workflow for agency
-**File**: `/workspaces/agency/.github/workflows/publish-preview.yml`
+**File**: `/workspaces/tetrad-development/packages/agency/.github/workflows/publish-preview.yml`
 
 **Depends on**: T012, T014
 
@@ -314,7 +314,7 @@
 - Test with dry-run or test branch
 - Commit to develop branch
 
-### T018 [US1] Create preview publish workflow for generacy
+### T018 [DONE] [US1] Create preview publish workflow for generacy
 **File**: `/workspaces/generacy/.github/workflows/publish-preview.yml`
 
 **Depends on**: T013, T015
@@ -336,8 +336,8 @@
 
 ## Phase 3C: Stable Release Workflows
 
-### T019 [P] [US1] Create stable release workflow for latency
-**File**: `/workspaces/tetrad-development/packages/latency/.github/workflows/release.yml`
+### T019 [DONE] [P] [US1] Create stable release workflow for latency
+**File**: `/workspaces/latency/.github/workflows/release.yml`
 
 **Depends on**: T016
 
