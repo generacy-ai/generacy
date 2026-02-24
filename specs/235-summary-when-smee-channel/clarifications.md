@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Follow-up Required
+## Status: Resolved
 
 ## Questions
 
@@ -103,7 +103,7 @@ The following new questions were raised based on the clarification answers:
 - A) Existing dedup is sufficient: The `processLabelEvent()` deduplication already handles this — no spec changes needed.
 - B) Disable direct webhook route when Smee is active: If `SMEE_CHANNEL_URL` is set, don't register the direct `/webhooks/github` route to avoid duplicate processing.
 - C) Document the expected behavior: Keep both paths active but explicitly document in the spec that deduplication handles concurrent delivery.
-**Answer**:
+**Answer**: A) Existing dedup is sufficient. Since scope is CLI only (`orchestrator.ts`), the direct webhook route (`/webhooks/github`) lives in `server.ts` and won't be active in the same process. Both paths feed into the same `processLabelEvent()` with Redis-backed phase tracker dedup. Even if both were somehow active, the dedup key `resume:${phaseName}` would prevent double-processing.
 
 ### Q12: Webhook Secret Reuse vs. Separate Secrets
 **Context**: The spec uses `config.monitor.webhookSecret` (loaded from `WEBHOOK_SECRET`) as the secret for both the direct webhook HMAC verification AND the auto-created webhook config. However, Smee.io proxies events as raw SSE data — it does not forward GitHub's HMAC signature headers in a way that allows server-side verification. The `SmeeWebhookReceiver` does not verify signatures. Setting a webhook secret on auto-created Smee webhooks means GitHub will sign the payloads, but Smee strips/doesn't forward the `X-Hub-Signature-256` header, making the secret effectively unused on the receive side.
@@ -112,7 +112,7 @@ The following new questions were raised based on the clarification answers:
 - A) Always set secret if available: Configure the secret on the webhook anyway — it doesn't hurt, and if the architecture changes to direct webhooks later, verification is already in place.
 - B) Skip secret for Smee webhooks: Don't set `config.secret` on webhooks pointing to Smee URLs, since signature verification is impossible through the Smee proxy.
 - C) Add a separate env var: Introduce `SMEE_WEBHOOK_SECRET` to allow different secrets for Smee-created vs. direct webhooks.
-**Answer**:
+**Answer**: A) Always set secret if available. It's harmless to set it. The webhook will be correctly signed on GitHub's end. If the architecture evolves to direct webhooks later (bypassing Smee), HMAC verification is already configured. No downside.
 
 ### Q13: PR Feedback Events Through Smee
 **Context**: The `SmeeWebhookReceiver` currently only handles `issues.labeled` events and feeds them into `LabelMonitorService`. The webhook events configured include `pull_request_review` and `pull_request_review_comment`, but the Smee receiver ignores these event types (line 189 of `smee-receiver.ts`: `if (!body || githubEvent !== 'issues') return`). The spec lists this as "Out of Scope" but the auto-configured webhooks will subscribe to PR review events that are received but silently dropped.
@@ -120,7 +120,7 @@ The following new questions were raised based on the clarification answers:
 **Options**:
 - A) All three events (as specified): Subscribe to `issues`, `pull_request_review`, and `pull_request_review_comment` to avoid needing a webhook update when PR feedback via Smee is added later.
 - B) Only `issues` for now: Subscribe only to events the Smee receiver actually processes, and update the webhook when PR feedback support is added.
-**Answer**:
+**Answer**: B) Only `issues` for now. The Smee receiver explicitly filters `if (githubEvent !== 'issues') return`. Subscribing to events that get silently dropped wastes GitHub webhook delivery quota and adds confusion. When PR feedback via Smee is actually implemented, update the webhook then.
 
 ### Q14: Startup Ordering — Webhook Config Before or After Redis
 **Context**: The spec places webhook auto-config (step 5) before Redis init (step 6), but the spec also says it's non-blocking. Currently in `server.ts`, label sync (step 4) runs before Redis. Webhook config requires network calls to GitHub API via `gh api`, which could be slow if there are many repos or API latency. Placing it before Redis means Redis init is delayed until webhook config completes (even though webhook config failures don't block startup, the sequential ordering does).
@@ -129,7 +129,7 @@ The following new questions were raised based on the clarification answers:
 - A) Before Redis (as specified): Keep webhook config before Redis init to ensure webhooks are configured before the server starts accepting events. Acceptable latency for < 10 repos.
 - B) In onReady hook (fire-and-forget): Move webhook config to the `onReady` hook alongside polling start, so it doesn't delay Redis or other startup steps.
 - C) Parallel with Redis: Run webhook config concurrently with Redis init using `Promise.all()` to avoid blocking either.
-**Answer**:
+**Answer**: N/A for CLI scope. This question references `server.ts` and Redis, but previous answers scoped this feature to CLI only (`orchestrator.ts`). The CLI path has no Redis dependency. For the CLI path: webhook auto-config should run before the Smee receiver starts (consistent with original Q7 answer: blocking with no timeout). If the spec's step ordering mentions Redis, that section should be marked N/A for the CLI-only scope.
 
 ### Q15: Smee Receiver Reconnect Behavior on Repeated Failures
 **Context**: The `SmeeWebhookReceiver` has auto-reconnect with a fixed 5-second delay. If smee.io is down or the channel URL is invalid, it will reconnect indefinitely every 5 seconds, logging warnings each time. The spec doesn't mention a maximum retry limit or exponential backoff.
@@ -138,7 +138,7 @@ The following new questions were raised based on the clarification answers:
 - A) Infinite retry (current behavior): Keep reconnecting forever with a 5-second fixed delay. Smee downtime is transient, and polling covers the gap.
 - B) Exponential backoff: Add exponential backoff (e.g., 5s → 10s → 20s → ... capped at 5min) to reduce log noise during extended outages.
 - C) Max retries then stop: After N failed reconnections (e.g., 10), stop the receiver and log an error. Rely on polling only.
-**Answer**:
+**Answer**: B) Exponential backoff. Infinite retry with fixed 5s delay fills logs during extended Smee outages. Exponential backoff (5s → 10s → 20s → ... capped at 5min) reduces noise while still retrying. Polling covers the gap regardless. Minor improvement that pays for itself in log readability.
 
 ### Q16: Webhook Event Type Update for Existing Webhooks
 **Context**: The spec explicitly states under "Out of Scope" that existing webhooks with different event types won't be updated — only URL matching is checked. However, if a webhook already exists for the Smee URL but was created with only `["issues"]` events (from a previous version), the auto-config will report "already exists" even though it's missing `pull_request_review` events. This is a silent misconfiguration.
@@ -147,7 +147,7 @@ The following new questions were raised based on the clarification answers:
 - A) Silent skip (as specified): If the URL matches, report "already exists" with no further checks.
 - B) Warn on event mismatch: Check the existing webhook's events and log a warning if they differ from the desired list, but don't update.
 - C) Update events on mismatch: Use the GitHub API to PATCH the existing webhook's events to match the desired list.
-**Answer**:
+**Answer**: B) Warn on event mismatch. Silent skip risks a confusing failure mode where webhooks exist but don't deliver the right events. A warning log like `"Existing webhook for smee.io/xxx has events [push] but expected [issues] — events not updated"` costs nothing and saves debugging time. No update needed — just visibility.
 
 ### Q17: Testing Requirements for Integration Code
 **Context**: The spec lists the existing unit tests for `WebhookConfigService` and `WebhookClient` as already complete, and states "No Changes Needed" for those files. However, the new integration code in `server.ts` (wiring services together, startup/shutdown, config loading) has no specified test requirements. The server startup involves conditional logic (Smee enabled/disabled), error handling, and shutdown ordering that could regress.
@@ -157,7 +157,7 @@ The following new questions were raised based on the clarification answers:
 - B) Integration test for startup: Add a test that creates a server with `SMEE_CHANNEL_URL` set (using mocked services) and verifies the Smee receiver is started and stopped correctly.
 - C) Config loader tests only: Add unit tests for the new `SMEE_CHANNEL_URL` config loading in `loader.ts` and schema validation, but skip server integration tests.
 - D) Both integration and config tests: Add tests for both the config loader changes and the server startup wiring.
-**Answer**:
+**Answer**: A) No new tests needed. With CLI-only scope, there are no `server.ts` wiring changes to test. The `WebhookSetupService` itself should have unit tests (already covered in original Q9 answer). The CLI's `orchestrator.ts` integration is a few lines of wiring — manual verification is fine.
 
 ### Q18: Smee Channel URL Validation Strictness
 **Context**: The spec defines the Zod schema as `z.string().url().optional()`, which accepts any valid URL. However, Smee channel URLs have a specific format (`https://smee.io/XXXXX`). Passing a non-Smee URL would create webhooks pointing to an arbitrary endpoint. The `WebhookConfigService` would successfully create the webhook, but events would be sent to the wrong URL.
@@ -166,4 +166,4 @@ The following new questions were raised based on the clarification answers:
 - A) Any valid URL: Accept any URL to support self-hosted Smee proxies or alternative webhook forwarding services.
 - B) Smee.io URLs only: Validate that the URL starts with `https://smee.io/` to prevent misconfiguration.
 - C) Warn on non-Smee URLs: Accept any URL but log a warning at startup if it doesn't match the `smee.io` domain.
-**Answer**:
+**Answer**: C) Warn on non-Smee URLs. Accept any URL (supports self-hosted smee-client proxies or alternatives like webhook.site for debugging) but log a warning if the domain isn't `smee.io`. Catches typos without blocking legitimate use cases.
