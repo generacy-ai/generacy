@@ -78,13 +78,17 @@ export class LabelManager {
   async onGateHit(phase: WorkflowPhase, gateLabel: string): Promise<void> {
     await this.retryWithBackoff(async () => {
       const phaseLabel = `phase:${phase}`;
+      const completedLabel = `completed:${phase}`;
 
       this.logger.info(
         { phase, gateLabel, issue: this.issueNumber },
-        `Gate hit: removing ${phaseLabel}, adding ${gateLabel} and agent:paused`,
+        `Gate hit: removing ${phaseLabel} and ${completedLabel}, adding ${gateLabel} and agent:paused`,
       );
 
-      await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
+      await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [
+        phaseLabel,
+        completedLabel,
+      ]);
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, [
         gateLabel,
         'agent:paused',

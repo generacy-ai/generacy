@@ -103,13 +103,14 @@ describe('LabelManager', () => {
   });
 
   describe('onGateHit', () => {
-    it('removes phase:clarify and adds waiting-for:clarification and agent:paused', async () => {
+    it('removes phase:clarify and completed:clarify, adds waiting-for:clarification and agent:paused', async () => {
       const lm = createLabelManager();
 
       await lm.onGateHit('clarify', 'waiting-for:clarification');
 
       expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'phase:clarify',
+        'completed:clarify',
       ]);
       expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'waiting-for:clarification',
