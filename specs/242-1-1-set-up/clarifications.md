@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -15,7 +15,9 @@
 - C) Commit-based: `1.0.0-preview.abc1234` - Traceable to exact commit, but less readable for freshness
 - D) Sequential: `1.0.0-preview.0`, `1.0.0-preview.1` - Clean version ordering, but requires state tracking
 
-**Answer**:
+**Answer**: **B (Datetime-based)** - `1.0.0-preview.20260224143022`
+
+This aligns with changesets' built-in snapshot mode which produces timestamp-based versions. It's human-readable for freshness, traceable, and avoids same-day publish conflicts. Changesets snapshot will generate this format natively with `--snapshot preview`.
 
 ---
 
@@ -30,7 +32,14 @@
 - C) Changeset files required: Only merges that include `.changeset/*.md` files trigger the version/publish workflow
 - D) Tag-based: Stable releases only happen when git tags are pushed (e.g., `v1.0.0`)
 
-**Answer**:
+**Answer**: **C (Changeset files required)**
+
+This is the standard changesets workflow:
+1. Developers include `.changeset/*.md` files in their PRs describing the change
+2. On merge to `main`, the changesets GitHub Action creates a "Version Packages" PR
+3. Merging that PR triggers the actual publish
+
+This gives maintainers control over when versions bump and what the changelog says, while still being automated.
 
 ---
 
@@ -45,7 +54,9 @@
 - C) Changeset-based: Only publish preview when `.changeset/*.md` files are present
 - D) Manual trigger: Preview publishes only when explicitly triggered via workflow_dispatch
 
-**Answer**:
+**Answer**: **C (Changeset-based)**
+
+Only publish preview versions when `.changeset/*.md` files are present in the merge. This avoids noise from docs-only or config-only changes, while still being automated. On merge to develop, the CI runs `changeset version --snapshot preview` + publish, but only if pending changesets exist. No changesets = no publish = no noise.
 
 ---
 
@@ -60,7 +71,9 @@
 - C) Build + Tests + Lint: Build, tests, and linting must all pass
 - D) All workflows: Every configured workflow must pass before merge
 
-**Answer**:
+**Answer**: **C (Build + Tests + Lint)**
+
+The buildout plan already specifies "lint, test, build on PR" for every repo. All three should be required. This is standard practice and all three checks will already exist in the CI workflows.
 
 ---
 
@@ -75,7 +88,9 @@
 - C) Reset main to develop: Hard reset main to match develop exactly (simplest, rewrites main history)
 - D) Cherry-pick stable commits: Manually select stable commits from develop (most control, most effort)
 
-**Answer**:
+**Answer**: **C (Reset main to develop)**
+
+Main currently only has 2 commits ("Added empty readme" and "Add autodev configuration"). There's nothing to preserve. A force-push of develop to main is the cleanest approach — it sets up a clean baseline for the release streams. This is a one-time operation before branch protection is enabled.
 
 ---
 
@@ -90,7 +105,9 @@
 - C) Count-based retention: Keep only the last N preview versions per package
 - D) Manual cleanup: Document process for maintainers to manually unpublish old previews
 
-**Answer**:
+**Answer**: **A (No cleanup)**
+
+npm packages are small metadata and cost nothing. npm's unpublish policy (72-hour window) makes automated cleanup impractical anyway. Preview versions accumulate slowly — this won't be a problem for a long time, if ever. Revisit if it becomes an issue.
 
 ---
 
@@ -105,7 +122,9 @@
 - C) Rollback on failure: Any failure triggers automatic unpublish and version rollback
 - D) Continue from failure: Workflow can be re-run and skips already-completed steps
 
-**Answer**:
+**Answer**: **D (Continue from failure)**
+
+Design workflows to be idempotent. Use `npm publish --provenance` with `--skip-duplicate` (or catch "already published" errors gracefully). If a workflow fails mid-publish, re-running it should skip already-published packages and continue with the rest. This is the simplest and most reliable approach.
 
 ---
 
@@ -120,7 +139,9 @@
 - C) Range-based: Use version ranges like `^1.0.0-preview` to automatically get latest
 - D) Pinned previews: Explicitly pin to specific preview versions, update via PR when needed
 
-**Answer**:
+**Answer**: **A (Automatic updates)**
+
+When latency publishes a new preview version, a follow-up workflow should create a PR in agency/generacy bumping the dependency. This keeps each repo's CI green with explicit version pins rather than relying on npm ranges (which don't work reliably with prerelease versions). The PR gives maintainers visibility and a chance to catch breakage before merging.
 
 ---
 
@@ -135,7 +156,9 @@
 - C) Dependency checks: Workflows check that dependencies are published before publishing
 - D) Monorepo migration: Move packages to monorepo to handle ordering automatically (out of scope per spec)
 
-**Answer**:
+**Answer**: **C (Dependency checks)**
+
+Each repo's publish workflow should verify its `@generacy-ai/*` dependencies are published at the expected version before proceeding. This is lightweight, works across repos, and fails fast with a clear error message. Full workflow dependency orchestration across repos would be over-engineering at this stage.
 
 ---
 
@@ -150,7 +173,9 @@
 - C) Package-specific: Allow some packages to be public and others private based on needs
 - D) Initially private: Start with private packages and make public later
 
-**Answer**:
+**Answer**: **A (All public)**
+
+All three public repos (latency, agency, generacy) should publish with `--access public`. Scoped packages on npm default to restricted, so this must be explicit. The packages correspond to public repos and are intended for external developer consumption — there's no reason to restrict access.
 
 ---
 
@@ -165,7 +190,9 @@
 - C) Slack integration: Post publish status to dedicated Slack channel
 - D) Multiple channels: Combine PR comments for success + Slack for failures
 
-**Answer**:
+**Answer**: **B (PR comments)**
+
+Comment on the associated PR with the published version(s) on success, or the failure details on error. This keeps notifications where the work happens, is zero-config, and doesn't require additional integrations. Slack integration can be added later if needed but isn't required for the MVP.
 
 ---
 
@@ -180,5 +207,13 @@
 - C) Automated PRs: Configure changesets to automatically create "Version Packages" PRs
 - D) Custom config: Specific changelog format, commit message format, and version bump rules (needs specification)
 
-**Answer**:
+**Answer**: **C (Automated PRs)**
+
+Use the standard `@changesets/cli` + `changesets/action` GitHub Action workflow:
+- Developers add changeset files in PRs (`pnpm changeset`)
+- On develop: snapshot versions are published automatically
+- On main: the changesets bot creates a "Version Packages" PR with changelogs and version bumps
+- Merging that PR triggers the stable publish
+
+This is the recommended, well-documented changesets workflow and works well with monorepos using pnpm workspaces.
 
