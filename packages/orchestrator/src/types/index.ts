@@ -135,3 +135,11 @@ export {
   type EventIdComponents,
   parseEventId,
 } from './sse.js';
+
+// Webhook Types
+export {
+  type GitHubWebhook,
+  type WebhookSetupSummary,
+  type WebhookSetupResult,
+  type RepositoryConfig,
+} from './webhook.js';

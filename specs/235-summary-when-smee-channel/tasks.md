@@ -12,7 +12,7 @@
 
 ## Phase 1: Core Service Implementation
 
-### T001 Create WebhookSetupService class structure
+### T001 [DONE] Create WebhookSetupService class structure
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Create class with pino-style logger constructor
 - Define main method signature: `ensureWebhooks(smeeChannelUrl, repositories)`
@@ -24,7 +24,7 @@
 - Define return types: `WebhookSetupSummary`, `WebhookSetupResult`
 - Add JSDoc comments for public methods
 
-### T002 Implement webhook listing logic
+### T002 [DONE] Implement webhook listing logic
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Implement `listRepoWebhooks()` using `executeCommand` utility
 - Call `gh api GET /repos/{owner}/{repo}/hooks`
@@ -32,14 +32,14 @@
 - Handle parse errors gracefully
 - Return empty array on error
 
-### T003 Implement webhook matching logic
+### T003 [DONE] Implement webhook matching logic
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Add case-insensitive URL comparison helper
 - Match on `config.url` field only
 - Return matching webhook or undefined
 - No URL normalization (simple string comparison)
 
-### T004 Implement webhook creation logic
+### T004 [DONE] Implement webhook creation logic
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Implement `createRepoWebhook()` using `executeCommand`
 - Call `gh api POST /repos/{owner}/{repo}/hooks`
@@ -47,7 +47,7 @@
 - Return webhook ID on success
 - Throw error on failure (caught by caller)
 
-### T005 Implement webhook reactivation with event merge
+### T005 [DONE] Implement webhook reactivation with event merge
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Implement `updateRepoWebhook()` using `executeCommand`
 - Call `gh api PATCH /repos/{owner}/{repo}/hooks/{hook_id}`
@@ -55,7 +55,7 @@
 - Single PATCH call updates both `active: true` and merged events
 - Return success/failure
 
-### T006 Implement per-repo orchestration logic
+### T006 [DONE] Implement per-repo orchestration logic
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Implement `ensureWebhookForRepo()`:
   - List existing webhooks
@@ -67,7 +67,7 @@
 - Per-repo error handling with try/catch
 - Return `WebhookSetupResult` for each repo
 
-### T007 Implement ensureWebhooks main method
+### T007 [DONE] Implement ensureWebhooks main method
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Loop through all repositories
 - Call `ensureWebhookForRepo()` for each
@@ -76,7 +76,7 @@
 - Count totals: created, skipped, reactivated, failed
 - Return summary
 
-### T008 Add error handling and logging
+### T008 [DONE] Add error handling and logging
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Handle 403/404 errors: log warning with "Insufficient permissions (admin:repo_hook required)"
 - Handle 500 errors: log warning with "GitHub API error"
@@ -87,14 +87,14 @@
   - `warn`: permissions, event mismatches, errors
   - `error`: unexpected failures
 
-### T009 Add Smee URL validation warning
+### T009 [DONE] Add Smee URL validation warning
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Check if URL starts with `https://smee.io/`
 - If not: log warning: "SMEE_CHANNEL_URL does not point to smee.io — ensure this URL is correct"
 - Continue with auto-config (support self-hosted proxies)
 - Add check to `ensureWebhooks()` method
 
-### T010 [P] Define webhook types
+### T010 [DONE] [P] Define webhook types
 **File**: `packages/orchestrator/src/types/index.ts`
 - Define `GitHubWebhook` interface:
   - `id: number`
@@ -104,13 +104,13 @@
 - Add JSDoc comments
 - Export type
 
-### T011 [P] Export WebhookSetupService
+### T011 [DONE] [P] Export WebhookSetupService
 **File**: `packages/orchestrator/src/services/index.ts`
 - Export `WebhookSetupService` class
 - Export `WebhookSetupSummary` type
 - Export `WebhookSetupResult` type
 
-### T012 Write unit tests for webhook listing
+### T012 [DONE] Write unit tests for webhook listing
 **File**: `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
 - Mock `executeCommand` utility
 - Test `listRepoWebhooks()`:
@@ -119,7 +119,7 @@
   - Network error: returns empty array
 - Assert correct `gh api` arguments
 
-### T013 Write unit tests for webhook creation
+### T013 [DONE] Write unit tests for webhook creation
 **File**: `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
 - Mock `executeCommand` utility
 - Test `createRepoWebhook()`:
@@ -128,14 +128,14 @@
   - 500 error: throws with API error message
 - Assert correct POST body structure
 
-### T014 Write unit tests for webhook matching
+### T014 [DONE] Write unit tests for webhook matching
 **File**: `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
 - Test case-insensitive URL matching
 - Test exact match found
 - Test no match (different URL)
 - Test partial match ignored
 
-### T015 Write unit tests for webhook reactivation
+### T015 [DONE] Write unit tests for webhook reactivation
 **File**: `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
 - Mock `executeCommand` utility
 - Test `updateRepoWebhook()`:
@@ -144,7 +144,7 @@
   - Single PATCH call with both updates
 - Assert correct PATCH body
 
-### T016 Write unit tests for ensureWebhooks
+### T016 [DONE] Write unit tests for ensureWebhooks
 **File**: `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
 - Test scenarios:
   - No webhooks exist → creates new (action: 'created')
@@ -161,19 +161,19 @@
 
 ## Phase 2: Smee Receiver Exponential Backoff
 
-### T017 Add exponential backoff state tracking
+### T017 [DONE] Add exponential backoff state tracking
 **File**: `packages/orchestrator/src/services/smee-receiver.ts`
 - Add `reconnectAttempt` counter to class state
 - Add constants: `BASE_RECONNECT_DELAY_MS = 5000`, `MAX_BACKOFF_MS = 300000`
 - Initialize attempt counter to 0
 
-### T018 Implement exponential backoff calculation
+### T018 [DONE] Implement exponential backoff calculation
 **File**: `packages/orchestrator/src/services/smee-receiver.ts`
 - Add helper method: `calculateBackoffDelay(attempt: number): number`
 - Formula: `Math.min(BASE_RECONNECT_DELAY_MS * Math.pow(2, attempt), MAX_BACKOFF_MS)`
 - Progression: 5s → 10s → 20s → 40s → 80s → 160s → 300s (capped)
 
-### T019 Update reconnection loop with backoff
+### T019 [DONE] Update reconnection loop with backoff
 **File**: `packages/orchestrator/src/services/smee-receiver.ts`
 - Modify reconnection while loop:
   - On successful connection: reset `reconnectAttempt = 0`
@@ -183,7 +183,7 @@
   - Sleep for calculated delay
 - Update log message to include attempt number
 
-### T020 Update constructor options
+### T020 [DONE] Update constructor options
 **File**: `packages/orchestrator/src/services/smee-receiver.ts`
 - Rename `reconnectDelayMs` → `baseReconnectDelayMs` (if exists)
 - Default: 5000 ms
@@ -201,12 +201,12 @@
 
 ## Phase 3: CLI Integration
 
-### T022 Import WebhookSetupService in CLI command
+### T022 [DONE] Import WebhookSetupService in CLI command
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - Add dynamic import: `const { WebhookSetupService } = await import('@generacy-ai/orchestrator')`
 - Place in `setupLabelMonitor()` function after monitor service creation (after line 286)
 
-### T023 Add webhook setup logic to setupLabelMonitor
+### T023 [DONE] Add webhook setup logic to setupLabelMonitor
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - After monitor service creation, add conditional block: `if (useSmee)`
 - Instantiate `WebhookSetupService` with `monitorLogger`
@@ -215,7 +215,7 @@
 - Log summary at `info` level with aggregate counts
 - Log errors at `warn` level with fallback message
 
-### T024 Verify startup ordering
+### T024 [DONE] Verify startup ordering
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - Ensure webhook setup runs:
   - ✓ After monitor service creation
@@ -223,7 +223,7 @@
 - Blocking execution (await the promise)
 - No artificial timeout added
 
-### T025 Update log statements for clarity
+### T025 [DONE] Update log statements for clarity
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - Add log before webhook setup: "Configuring GitHub webhooks..."
 - Success log: "Webhook auto-configuration complete" with summary fields
@@ -234,7 +234,7 @@
 
 ## Phase 4: Documentation and Verification
 
-### T026 [P] Add JSDoc to WebhookSetupService
+### T026 [DONE] [P] Add JSDoc to WebhookSetupService
 **File**: `packages/orchestrator/src/services/webhook-setup-service.ts`
 - Comprehensive JSDoc for `ensureWebhooks()`:
   - Purpose and behavior
@@ -244,13 +244,13 @@
   - Graceful degradation notes
 - JSDoc for helper methods (if public)
 
-### T027 [P] Verify exports in package index
+### T027 [DONE] [P] Verify exports in package index
 **File**: `packages/orchestrator/src/services/index.ts`
 - Verify `WebhookSetupService` exported
 - Verify `WebhookSetupSummary` type exported
 - Verify `WebhookSetupResult` type exported
 
-### T028 [P] Verify type exports
+### T028 [DONE] [P] Verify type exports
 **File**: `packages/orchestrator/src/types/index.ts`
 - Verify `GitHubWebhook` interface exported
 - Check no conflicts with existing types
@@ -259,7 +259,7 @@
 
 ## Phase 5: Integration Testing
 
-### T029 Manual test: Create new webhooks
+### T029 [DONE] Manual test: Create new webhooks
 **Environment**: Local development with real GitHub repo
 - Set `SMEE_CHANNEL_URL` env var
 - Set `MONITORED_REPOS` to test repo without webhook
@@ -268,7 +268,7 @@
 - Check GitHub repo settings: webhook exists, points to Smee URL, events include "issues"
 - Verify orchestrator continues startup successfully
 
-### T030 Manual test: Skip existing webhooks
+### T030 [DONE] Manual test: Skip existing webhooks
 **Environment**: Local development with webhook already configured
 - Use same test repo from T029
 - Restart CLI

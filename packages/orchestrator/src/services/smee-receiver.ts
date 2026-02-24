@@ -25,8 +25,13 @@ export interface SmeeReceiverOptions {
   channelUrl: string;
   /** Set of "owner/repo" strings to filter events */
   watchedRepos: Set<string>;
-  /** Delay before reconnecting after disconnect (ms) */
-  reconnectDelayMs?: number;
+  /**
+   * Base delay before reconnecting after disconnect (ms).
+   * Uses exponential backoff: 5s → 10s → 20s → 40s → 80s → 160s → 300s (capped).
+   * Resets to base delay on successful connection.
+   * @default 5000
+   */
+  baseReconnectDelayMs?: number;
 }
 
 /**
@@ -34,11 +39,15 @@ export interface SmeeReceiverOptions {
  * Feeds label events directly into the LabelMonitorService.
  */
 export class SmeeWebhookReceiver {
+  private static readonly BASE_RECONNECT_DELAY_MS = 5000;
+  private static readonly MAX_BACKOFF_MS = 300000; // 5 minutes
+
   private readonly channelUrl: string;
   private readonly watchedRepos: Set<string>;
-  private readonly reconnectDelayMs: number;
+  private readonly baseReconnectDelayMs: number;
   private abortController: AbortController | null = null;
   private running = false;
+  private reconnectAttempt = 0;
 
   constructor(
     private readonly logger: Logger,
@@ -47,7 +56,7 @@ export class SmeeWebhookReceiver {
   ) {
     this.channelUrl = options.channelUrl;
     this.watchedRepos = options.watchedRepos;
-    this.reconnectDelayMs = options.reconnectDelayMs ?? 5000;
+    this.baseReconnectDelayMs = options.baseReconnectDelayMs ?? SmeeWebhookReceiver.BASE_RECONNECT_DELAY_MS;
   }
 
   /**
@@ -72,12 +81,18 @@ export class SmeeWebhookReceiver {
     while (this.running && !signal.aborted) {
       try {
         await this.connect(signal);
+        // Reset backoff counter on successful connection
+        this.reconnectAttempt = 0;
       } catch (error) {
         if (signal.aborted) break;
+        const reconnectMs = this.reconnectDelayMs;
         this.logger.warn(
-          { err: String(error), reconnectMs: this.reconnectDelayMs },
+          { err: String(error), reconnectMs, attempt: this.reconnectAttempt },
           'Smee connection lost, reconnecting...',
         );
+
+        // Increment attempt counter for exponential backoff
+        this.reconnectAttempt++;
       }
 
       // Wait before reconnecting
@@ -259,6 +274,27 @@ export class SmeeWebhookReceiver {
         'Error processing smee webhook event',
       );
     }
+  }
+
+  /**
+   * Get the current reconnect delay based on the number of attempts.
+   * Uses exponential backoff with the current attempt count.
+   */
+  private get reconnectDelayMs(): number {
+    return this.calculateBackoffDelay(this.reconnectAttempt);
+  }
+
+  /**
+   * Calculate exponential backoff delay for reconnection attempts.
+   * Formula: BASE_RECONNECT_DELAY_MS * 2^attempt, capped at MAX_BACKOFF_MS.
+   * Progression: 5s → 10s → 20s → 40s → 80s → 160s → 300s (capped).
+   *
+   * @param attempt - The current reconnection attempt number (0-indexed)
+   * @returns Delay in milliseconds before next reconnection attempt
+   */
+  private calculateBackoffDelay(attempt: number): number {
+    const delay = this.baseReconnectDelayMs * Math.pow(2, attempt);
+    return Math.min(delay, SmeeWebhookReceiver.MAX_BACKOFF_MS);
   }
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {

@@ -198,7 +198,7 @@ async function setupLabelMonitor(
   logger: ReturnType<typeof getLogger>,
 ) {
   // Dynamic import to avoid loading orchestrator deps when label monitor is disabled
-  const { LabelMonitorService, SmeeWebhookReceiver, PhaseTrackerService } = await import('@generacy-ai/orchestrator');
+  const { LabelMonitorService, SmeeWebhookReceiver, PhaseTrackerService, WebhookSetupService } = await import('@generacy-ai/orchestrator');
   const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
   const { Redis: IORedis } = await import('ioredis');
 
@@ -304,6 +304,41 @@ async function setupLabelMonitor(
       { channelUrl: smeeChannelUrl, pollFallbackMs: pollIntervalMs },
       'Smee.io webhook receiver configured (polling reduced to fallback)',
     );
+
+    // Auto-configure GitHub webhooks for all monitored repositories
+    logger.info('Configuring GitHub webhooks...');
+
+    try {
+      const webhookService = new WebhookSetupService(monitorLogger);
+      const summary = await webhookService.ensureWebhooks(smeeChannelUrl, repositories);
+
+      logger.info(
+        {
+          total: summary.total,
+          created: summary.created,
+          skipped: summary.skipped,
+          reactivated: summary.reactivated,
+          failed: summary.failed,
+        },
+        'Webhook auto-configuration complete',
+      );
+
+      // Warn if any webhooks failed to set up
+      if (summary.failed > 0) {
+        const failedRepos = summary.results
+          .filter((r) => r.action === 'failed')
+          .map((r) => `${r.owner}/${r.repo}`);
+        logger.warn(
+          { failedRepos },
+          'Some webhooks failed to configure - these repos will use polling fallback',
+        );
+      }
+    } catch (error) {
+      logger.warn(
+        { error: String(error) },
+        'Webhook auto-configuration failed (falling back to polling)',
+      );
+    }
   }
 
   logger.info(
