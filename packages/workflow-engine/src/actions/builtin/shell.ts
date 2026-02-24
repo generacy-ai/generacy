@@ -73,19 +73,27 @@ export class ShellAction extends BaseAction {
       const parsedOutput = extractJSON(result.stdout);
 
       // Check exit code
-      if (result.exitCode !== 0 && !step.continueOnError) {
-        return this.failureResult(
-          `Command failed with exit code ${result.exitCode}`,
-          {
-            output: parsedOutput ?? result.stdout,
-            exitCode: result.exitCode,
-            stdout: result.stdout,
-            stderr: result.stderr,
-          }
+      if (result.exitCode !== 0) {
+        if (!step.continueOnError) {
+          return this.failureResult(
+            `Command failed with exit code ${result.exitCode}`,
+            {
+              output: parsedOutput ?? result.stdout,
+              exitCode: result.exitCode,
+              stdout: result.stdout,
+              stderr: result.stderr,
+            }
+          );
+        }
+        // Log the failure even when continueOnError suppresses it
+        const stderrSnippet = result.stderr?.trim().split('\n').slice(-3).join('\n');
+        context.logger.warn(
+          `Shell command failed with exit code ${result.exitCode} (continueOnError=true)` +
+          (stderrSnippet ? `\n${stderrSnippet}` : '')
         );
+      } else {
+        context.logger.info('Shell command completed');
       }
-
-      context.logger.info('Shell command completed');
 
       return this.successResult(parsedOutput ?? result.stdout, {
         exitCode: result.exitCode,
