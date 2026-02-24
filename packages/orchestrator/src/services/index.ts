@@ -45,3 +45,5 @@ export {
   EpicCompletionMonitorService,
   type EpicMonitorConfig,
 } from './epic-completion-monitor-service.js';
+
+export { WebhookSetupService } from './webhook-setup-service.js';

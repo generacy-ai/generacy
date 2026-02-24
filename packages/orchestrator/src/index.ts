@@ -139,6 +139,13 @@ export { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 
 export { WorkerDispatcher } from './services/worker-dispatcher.js';
 
+export {
+  WebhookSetupService,
+  type WebhookSetupSummary,
+  type WebhookSetupResult,
+  type GitHubWebhook,
+} from './services/webhook-setup-service.js';
+
 // Auth
 export {
   API_KEY_HEADER,
