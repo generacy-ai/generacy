@@ -11,7 +11,7 @@
 
 ## Phase 1: Azure DevOps Organization Setup
 
-### T001 Create Azure DevOps Organization
+### T001 [DONE] Create Azure DevOps Organization
 **Manual Setup** (Web Interface)
 - Navigate to https://dev.azure.com
 - Sign in with chris@generacy.ai Microsoft account
@@ -19,7 +19,7 @@
 - Record organization URL (https://dev.azure.com/generacy-ai)
 - Verify organization accessible
 
-### T002 Add Co-Administrator to Azure DevOps
+### T002 [DONE] Add Co-Administrator to Azure DevOps
 **Manual Setup** (Web Interface)
 - In Azure DevOps organization settings
 - Add @mikezouhri as organization administrator
@@ -30,7 +30,7 @@
 
 ## Phase 2: VS Code Marketplace Publisher Registration
 
-### T003 Register Publisher Account
+### T003 [DONE] Register Publisher Account
 **Manual Setup** (Web Interface)
 - Navigate to https://marketplace.visualstudio.com/manage
 - Sign in with chris@generacy.ai (same Microsoft account)
@@ -44,7 +44,7 @@
 - Link to Azure DevOps organization `generacy-ai`
 - Complete email verification if prompted
 
-### T004 Verify Publisher Registration
+### T004 [DONE] Verify Publisher Registration
 **Manual Verification** (Web Interface)
 - Confirm publisher profile visible at https://marketplace.visualstudio.com/publishers/generacy-ai
 - Verify display name shows "Generacy"
@@ -56,7 +56,7 @@
 
 ## Phase 3: Personal Access Token (PAT) Generation
 
-### T005 Generate Marketplace Publishing PAT
+### T005 [DONE] Generate Marketplace Publishing PAT
 **Manual Setup** (Web Interface)
 - Navigate to https://dev.azure.com/generacy-ai/_usersSettings/tokens
 - Click "New Token"
@@ -73,7 +73,7 @@
 
 ## Phase 4: GitHub Organization Secret Configuration
 
-### T006 Create GitHub Organization Secret
+### T006 [DONE] Create GitHub Organization Secret
 **Manual Setup** (Web Interface)
 - Navigate to https://github.com/organizations/generacy-ai/settings/secrets/actions
 - Click "New organization secret"
@@ -85,7 +85,7 @@
 - Verify secret appears in organization secrets list
 - Verify repository access shows "All repositories"
 
-### T007 Secure PAT Cleanup
+### T007 [DONE] Secure PAT Cleanup
 **Manual Security Task**
 - Delete PAT value from clipboard
 - Delete PAT from any temporary notes/files
@@ -96,12 +96,12 @@
 
 ## Phase 5: Documentation
 
-### T008 Create Publishing Documentation Directory
+### T008 [DONE] Create Publishing Documentation Directory
 **File**: `/docs/publishing/` (in generacy repo)
 - Create `/docs/publishing/` directory structure
 - Ensure directory is in correct repo (generacy, not agency)
 
-### T009 Write Marketplace Setup Documentation
+### T009 [DONE] Write Marketplace Setup Documentation
 **File**: `/docs/publishing/vscode-marketplace-setup.md`
 - Create comprehensive setup documentation with sections:
   - **Overview**: Purpose and scope of publisher account
@@ -126,13 +126,13 @@
     - Branding additions
     - Automated PAT rotation
 
-### T010 [P] Update Generacy Repo README
+### T010 [DONE] [P] Update Generacy Repo README
 **File**: `README.md` (in generacy repo)
 - Check if publishing documentation section exists
 - If yes, add link to `/docs/publishing/vscode-marketplace-setup.md`
 - If no, skip or create minimal section linking to docs
 
-### T011 Document PAT Rotation Process
+### T011 [DONE] Document PAT Rotation Process
 **File**: `/docs/publishing/vscode-marketplace-setup.md`
 - Add detailed PAT rotation checklist to documentation:
   - Navigate to Azure DevOps tokens page
@@ -148,13 +148,13 @@
 
 ## Phase 6: Verification & PAT Rotation Setup
 
-### T012 Install and Verify vsce CLI
+### T012 [DONE] Install and Verify vsce CLI
 **Command Line** (Local Machine)
 - Install vsce globally: `npm install -g @vscode/vsce`
 - Verify installation: `vsce --version`
 - Confirm vsce is accessible in PATH
 
-### T013 Test Publisher Authentication
+### T013 [DONE] Test Publisher Authentication
 **Command Line** (Local Machine)
 - Run: `vsce login generacy-ai`
 - When prompted, paste VSCE_PAT value from GitHub secret
@@ -162,7 +162,7 @@
 - Run: `vsce ls-publishers`
 - Confirm `generacy-ai` appears in publishers list
 
-### T014 [Optional] Dry-Run Publish Test
+### T014 [DONE] [Optional] Dry-Run Publish Test
 **Command Line** (Local Machine)
 - Create or navigate to test extension directory
 - If needed, create sample extension: `yo code`
@@ -170,7 +170,7 @@
 - Verify package validation completes without errors
 - Confirm no actual publish occurs (dry-run only)
 
-### T015 Calculate PAT Expiration Date
+### T015 [DONE] Calculate PAT Expiration Date
 **Manual Task**
 - From T005, retrieve PAT creation date
 - Calculate expiration: creation date + 365 days
@@ -178,7 +178,7 @@
 - Format dates as YYYY-MM-DD
 - Record both dates for T016
 
-### T016 Create PAT Rotation Tracking Issue
+### T016 [DONE] Create PAT Rotation Tracking Issue
 **GitHub Issue** (generacy repo)
 - Create new issue with details:
   - Title: "Rotate VSCE_PAT — expires [YYYY-MM-DD]"
@@ -197,7 +197,7 @@
 
 ## Phase 7: Post-Implementation Verification
 
-### T017 Validate All Success Criteria
+### T017 [DONE] Validate All Success Criteria
 **Verification Checklist**
 - [ ] Publisher account `generacy-ai` (or alternate) registered and accessible
 - [ ] Azure DevOps organization `generacy-ai` exists with 2 admins
@@ -207,7 +207,7 @@
 - [ ] Documentation complete at `/docs/publishing/vscode-marketplace-setup.md` (from T009)
 - [ ] PAT rotation tracking issue created with due date (from T016)
 
-### T018 Verify Documentation Quality
+### T018 [DONE] Verify Documentation Quality
 **Documentation Review**
 - Review `/docs/publishing/vscode-marketplace-setup.md`:
   - All sections completed with accurate information
@@ -218,7 +218,7 @@
   - Markdown renders properly in GitHub
   - No sensitive information (PAT values) in documentation
 
-### T019 Security Audit
+### T019 [DONE] Security Audit
 **Security Verification**
 - Confirm PAT has minimal required scopes (Marketplace: Manage only)
 - Verify PAT limited to generacy-ai organization (not "All accessible organizations")
@@ -227,7 +227,7 @@
 - Check no PAT values committed to git history
 - Confirm both admins have access recovery mechanisms
 
-### T020 Notify Stakeholders and Update Dependencies
+### T020 [DONE] Notify Stakeholders and Update Dependencies
 **Communication and Tracking**
 - Notify @christrudelpw and @mikezouhri of completion
 - Record actual publisher ID in project notes (if different from generacy-ai)
