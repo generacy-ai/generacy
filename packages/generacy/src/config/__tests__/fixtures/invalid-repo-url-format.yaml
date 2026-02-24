@@ -1,0 +1,9 @@
+# Invalid config fixture - malformed repository URL
+# Repository URL must match format: github.com/{owner}/{repo}
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "https://github.com/test/repo"  # Should not include protocol

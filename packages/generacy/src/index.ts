@@ -60,5 +60,33 @@ export type { CLIConfig } from './cli/utils/config.js';
 // CLI entry point (for programmatic use)
 export { createProgram, run } from './cli/index.js';
 
+// Config schema and validation
+export {
+  ProjectConfigSchema,
+  ReposConfigSchema,
+  DefaultsConfigSchema,
+  OrchestratorSettingsSchema,
+  GeneracyConfigSchema,
+  validateConfig as validateGeneracyConfig,
+  ConfigValidationError,
+  validateNoDuplicateRepos,
+  validateSemantics,
+  loadConfig,
+  findConfigFile,
+  parseConfig,
+  ConfigNotFoundError,
+  ConfigParseError,
+  ConfigSchemaError,
+} from './config/index.js';
+
+export type {
+  ProjectConfig,
+  ReposConfig,
+  DefaultsConfig,
+  OrchestratorSettings,
+  GeneracyConfig,
+  LoadConfigOptions,
+} from './config/index.js';
+
 // Re-export workflow engine
 export * from '@generacy-ai/workflow-engine';

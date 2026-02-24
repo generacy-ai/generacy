@@ -1,0 +1,9 @@
+# Invalid config fixture - malformed project ID
+# Project ID doesn't match required format: proj_{alphanumeric}
+
+project:
+  id: "invalid_id"  # Must start with proj_
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"

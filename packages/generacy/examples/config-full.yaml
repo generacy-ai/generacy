@@ -1,0 +1,46 @@
+# Full .generacy/config.yaml example
+# Complete configuration with all available fields
+
+schemaVersion: "1"
+
+project:
+  # Unique project ID from generacy.ai (format: proj_{alphanumeric}, min 12 chars)
+  id: "proj_complete123"
+
+  # Human-readable project name (max 255 characters)
+  name: "Complete Example Project"
+
+repos:
+  # Primary repository - the "main" repo for the project
+  # Format: github.com/{owner}/{repo} (no protocol, no .git suffix)
+  primary: "github.com/example/main-repo"
+
+  # Development repositories (optional) - cloned for active development
+  # These repos can receive PRs from workflows
+  dev:
+    - "github.com/example/shared-library"
+    - "github.com/example/microservice-a"
+    - "github.com/example/microservice-b"
+
+  # Clone-only repositories (optional) - cloned for reference only
+  # No PRs will be created in these repos
+  clone:
+    - "github.com/example/design-system"
+    - "github.com/example/internal-docs"
+    - "github.com/public/external-api"
+
+defaults:
+  # Default agent for workflow execution
+  # Format: kebab-case (e.g., "claude-code", "cursor-agent")
+  agent: claude-code
+
+  # Default base branch for creating feature branches
+  # Branch existence is not validated (checked at runtime)
+  baseBranch: main
+
+orchestrator:
+  # Polling interval in milliseconds (minimum 5000ms)
+  pollIntervalMs: 5000
+
+  # Maximum number of concurrent workers (range: 1-20)
+  workerCount: 3

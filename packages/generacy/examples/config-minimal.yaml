@@ -1,0 +1,11 @@
+# Minimal .generacy/config.yaml example
+# Bare minimum required fields to get started
+
+schemaVersion: "1"
+
+project:
+  id: "proj_abc12345"
+  name: "My Project"
+
+repos:
+  primary: "github.com/myorg/my-repo"

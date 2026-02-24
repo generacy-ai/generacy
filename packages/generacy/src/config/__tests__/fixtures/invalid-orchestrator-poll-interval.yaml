@@ -1,0 +1,13 @@
+# Invalid config fixture - poll interval too low
+# Poll interval must be at least 5000ms (5 seconds)
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+
+orchestrator:
+  pollIntervalMs: 1000  # Must be at least 5000
+  workerCount: 3

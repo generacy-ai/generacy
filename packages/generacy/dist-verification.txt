@@ -1,0 +1,24 @@
+PACKAGE.JSON EXPORTS vs DIST/ STRUCTURE VERIFICATION
+====================================================
+
+Package.json exports configuration:
+-----------------------------------
+{
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./config": {
+      "types": "./dist/config/index.d.ts",
+      "import": "./dist/config/index.js"
+    }
+  }
+}
+
+Dist/ file verification:
+-------------------------
+-rw-r--r-- 1 node node  741 Feb 24 22:43 dist/config/index.d.ts
+-rw-r--r-- 1 node node  698 Feb 24 22:43 dist/config/index.js
+-rw-r--r-- 1 node node 1.9K Feb 24 22:43 dist/index.d.ts
+-rw-r--r-- 1 node node 1.3K Feb 24 22:43 dist/index.js

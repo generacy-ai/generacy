@@ -1,0 +1,53 @@
+# Multi-repo .generacy/config.yaml example
+# Project spanning multiple repositories with coordinated development
+# This demonstrates a typical microservices or monorepo-adjacent architecture
+
+schemaVersion: "1"
+
+project:
+  # Unique project ID from generacy.ai (format: proj_{alphanumeric})
+  id: "proj_acme789xyz"
+
+  # Human-readable project name
+  name: "ACME Multi-Repo Project"
+
+repos:
+  # Primary repository - the "main" repo for the project
+  # Typically your API gateway, main service, or orchestration layer
+  # This is where the onboarding PR will be created
+  primary: "github.com/acme/main-api"
+
+  # Development repositories - cloned for active development
+  # Workflows can create PRs in these repos
+  # Include repos where you expect to make coordinated changes across the stack
+  dev:
+    - "github.com/acme/shared-lib"       # Shared utilities and types
+    - "github.com/acme/worker-service"   # Background job processor
+    - "github.com/acme/frontend-app"     # Client-facing web application
+    - "github.com/acme/admin-dashboard"  # Internal admin tools
+    - "github.com/acme/mobile-api"       # Mobile-specific API adapter
+
+  # Clone-only repositories - cloned for reference only
+  # No PRs will be created, but code is available for context/imports
+  # Include design systems, docs, infrastructure, or third-party integrations
+  clone:
+    - "github.com/acme/design-system"    # UI components and brand guidelines
+    - "github.com/acme/documentation"    # Technical documentation
+    - "github.com/acme/infrastructure"   # Terraform/CloudFormation (read-only)
+    - "github.com/public/api-docs"       # External API specifications
+
+defaults:
+  # Default agent for workflow execution
+  agent: claude-code
+
+  # Default base branch for creating feature branches
+  # Using 'develop' for a GitFlow-style workflow
+  baseBranch: develop
+
+orchestrator:
+  # Polling interval in milliseconds (minimum 5000ms)
+  pollIntervalMs: 5000
+
+  # Maximum number of concurrent workers (range: 1-20)
+  # Consider increasing for multi-repo projects with parallel work
+  workerCount: 3

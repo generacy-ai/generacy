@@ -1,0 +1,13 @@
+# Invalid config fixture - worker count out of range
+# Worker count must be between 1 and 20
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+
+orchestrator:
+  pollIntervalMs: 5000
+  workerCount: 25  # Must be between 1 and 20

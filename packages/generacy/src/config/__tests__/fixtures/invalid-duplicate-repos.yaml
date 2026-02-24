@@ -1,0 +1,13 @@
+# Invalid config fixture - duplicate repositories
+# Primary repo appears in dev list (should fail validation)
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+  dev:
+    - "github.com/test/shared"
+  clone:
+    - "github.com/test/shared"  # Duplicate with dev list

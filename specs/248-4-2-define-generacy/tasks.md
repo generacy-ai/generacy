@@ -12,7 +12,7 @@
 
 ## Phase 1: Schema Definition and Validation
 
-### T001 Create Zod schema types
+### T001 [DONE] Create Zod schema types
 **File**: `packages/generacy/src/config/schema.ts`
 - Define `ProjectConfigSchema` with id and name validation
 - Define `ReposConfigSchema` with primary, dev, and clone arrays
@@ -30,7 +30,7 @@
   - `orchestrator.workerCount`: Min 1, max 20
   - `schemaVersion`: Default to "1" if omitted
 
-### T002 Create custom validators
+### T002 [DONE] Create custom validators
 **File**: `packages/generacy/src/config/validator.ts`
 - Implement repository deduplication check
 - Check primary repo not in dev list
@@ -38,7 +38,7 @@
 - Check no overlap between dev and clone lists
 - Return clear error messages with conflicting repo URLs
 
-### T003 Create config module exports
+### T003 [DONE] Create config module exports
 **File**: `packages/generacy/src/config/index.ts`
 - Export all schemas from schema.ts
 - Export all types from schema.ts
@@ -49,7 +49,7 @@
 
 ## Phase 2: Config Discovery and Loading
 
-### T004 Implement config file discovery
+### T004 [DONE] Implement config file discovery
 **File**: `packages/generacy/src/config/loader.ts`
 - Implement `findConfigFile()` function
 - Walk up directory tree from startDir
@@ -58,7 +58,7 @@
 - Return config path or null if not found
 - Support `GENERACY_CONFIG_PATH` env var override
 
-### T005 Implement config loader
+### T005 [DONE] Implement config loader
 **File**: `packages/generacy/src/config/loader.ts`
 - Implement `loadConfig()` function
 - Use findConfigFile() for discovery
@@ -69,7 +69,7 @@
 - Implement `parseConfig()` helper for YAML string parsing
 - Implement `validateConfig()` helper for object validation
 
-### T006 Update config exports with loader
+### T006 [DONE] Update config exports with loader
 **File**: `packages/generacy/src/config/index.ts`
 - Export `loadConfig` function
 - Export `findConfigFile` function
@@ -81,7 +81,7 @@
 
 ## Phase 3: CLI Integration and Subpath Exports
 
-### T007 Configure package.json subpath exports
+### T007 [DONE] Configure package.json subpath exports
 **File**: `packages/generacy/package.json`
 - Add subpath exports configuration
 - Export main entry: `"."` → `./dist/index.js`
@@ -89,7 +89,7 @@
 - Include TypeScript types in exports
 - Ensure build output structure supports subpaths
 
-### T008 Create validate-config CLI command
+### T008 [DONE] Create validate-config CLI command
 **File**: `packages/generacy/src/cli/commands/validate.ts`
 - Implement `validate-config` command
 - Accept optional `--config <path>` flag
@@ -99,13 +99,13 @@
 - Exit with code 0 for valid, 1 for invalid
 - Handle file not found errors gracefully
 
-### T009 Register validate command in CLI
+### T009 [DONE] Register validate command in CLI
 **File**: `packages/generacy/src/cli/index.ts` (or equivalent)
 - Register `validate-config` command
 - Wire up command handler
 - Add command help text
 
-### T010 Update main package exports
+### T010 [DONE] Update main package exports
 **File**: `packages/generacy/src/index.ts`
 - Ensure config module is re-exported for subpath access
 - Verify TypeScript types are properly exported
@@ -115,7 +115,7 @@
 
 ## Phase 4: Documentation and Examples
 
-### T011 [P] Write config schema documentation
+### T011 [DONE] [P] Write config schema documentation
 **File**: `packages/generacy/src/config/README.md`
 - Document complete schema reference
 - Describe each field with type and constraints
@@ -125,19 +125,19 @@
 - Document environment variables
 - Include migration notes for schema versioning
 
-### T012 [P] Create example: minimal config
+### T012 [DONE] [P] Create example: minimal config
 **File**: `packages/generacy/examples/config-minimal.yaml`
 - Create minimal valid configuration
 - Include only required fields (project + primary repo)
 - Add comments explaining required fields
 
-### T013 [P] Create example: single-repo project
+### T013 [DONE] [P] Create example: single-repo project
 **File**: `packages/generacy/examples/config-single-repo.yaml`
 - Create single-repo project with all optional fields
 - Include defaults and orchestrator settings
 - Add comments explaining each section
 
-### T014 [P] Create example: multi-repo project
+### T014 [DONE] [P] Create example: multi-repo project
 **File**: `packages/generacy/examples/config-multi-repo.yaml`
 - Create multi-repo project with dev and clone lists
 - Include multiple repos in each list
@@ -147,7 +147,7 @@
 
 ## Phase 5: Testing
 
-### T015 [P] Write schema validation unit tests
+### T015 [DONE] [P] Write schema validation unit tests
 **File**: `packages/generacy/src/config/__tests__/schema.test.ts`
 - Test valid config parsing (all fields)
 - Test valid config parsing (minimal fields)
@@ -161,7 +161,7 @@
 - Test pollIntervalMs minimum value
 - Test workerCount range validation
 
-### T016 [P] Write validator unit tests
+### T016 [DONE] [P] Write validator unit tests
 **File**: `packages/generacy/src/config/__tests__/validator.test.ts`
 - Test duplicate: primary in dev list
 - Test duplicate: primary in clone list
@@ -171,7 +171,7 @@
 - Test valid: same owner, different repos
 - Test error messages include conflicting URLs
 
-### T017 [P] Write loader unit tests
+### T017 [DONE] [P] Write loader unit tests
 **File**: `packages/generacy/src/config/__tests__/loader.test.ts`
 - Test find config in current directory
 - Test find config in parent directory
@@ -184,7 +184,7 @@
 - Test `loadConfig` with explicit configPath option
 - Test helpful error messages for common mistakes
 
-### T018 [P] Write CLI command tests
+### T018 [DONE] [P] Write CLI command tests
 **File**: `packages/generacy/src/cli/__tests__/validate.test.ts`
 - Test valid config returns exit code 0
 - Test invalid config returns exit code 1
@@ -193,7 +193,7 @@
 - Test success message printed to stdout
 - Test `--config` flag override
 
-### T019 [P] Write subpath export integration tests
+### T019 [DONE] [P] Write subpath export integration tests
 **File**: `packages/generacy/__tests__/exports.test.ts`
 - Test import from `@generacy-ai/generacy/config`
 - Test TypeScript types available
@@ -202,7 +202,7 @@
 - Test validator functions exported
 - Test types can be used in type annotations
 
-### T020 Create test fixtures
+### T020 [DONE] Create test fixtures
 **Files**:
 - `packages/generacy/src/config/__tests__/fixtures/valid-minimal.yaml`
 - `packages/generacy/src/config/__tests__/fixtures/valid-full.yaml`
@@ -218,14 +218,14 @@
 
 ## Phase 6: Integration and Verification
 
-### T021 Verify package builds correctly
+### T021 [DONE] Verify package builds correctly
 **Commands**:
 - `pnpm build` in packages/generacy
 - `tsc --noEmit` to check types
 - Test coverage: `pnpm test --coverage`
 - Verify dist/ output structure matches exports
 
-### T022 Manual CLI testing
+### T022 [DONE] Manual CLI testing
 **Tasks**:
 - Test `generacy validate-config` in real project
 - Test discovery from nested directories

@@ -1,0 +1,12 @@
+# Invalid config fixture - primary repo in clone list
+# Primary repository should not appear in clone list
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+  clone:
+    - "github.com/test/repo"  # Duplicate with primary
+    - "github.com/test/docs"
