@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -15,7 +15,7 @@
 - Logo/icon (file path or URL if available, or should we skip for initial setup?)
 - Website URL (if applicable)
 
-**Answer**:
+**Answer**: Minimal setup for now. Publisher ID: `generacy-ai` (matching GitHub org and npm scope). Display name: "Generacy". Use a brief placeholder description like "AI-powered development workflow tooling". No logo initially — branding, tagline, and logo will be updated later once finalized.
 
 ---
 
@@ -29,7 +29,7 @@
 - B) Create new organization: [please specify desired name, e.g., "generacy" or "generacy-ai"]
 - C) Use personal account: (not recommended for organizational use, but viable for initial setup)
 
-**Answer**:
+**Answer**: **Option B** — Create a new Azure DevOps organization named `generacy-ai` to keep identity consistent across platforms (GitHub org, npm scope, publisher ID).
 
 ---
 
@@ -45,7 +45,7 @@
 
 **If repository-level**, which repository/repositories should have access?
 
-**Answer**:
+**Answer**: **Option A** — Organization-level secret. The plan explicitly states "Store as GitHub org secret (`VSCE_PAT`)", and both the `agency` repo (issue 1.6) and `generacy` repo (issue 1.7) need it for their respective extension CI/CD pipelines.
 
 ---
 
@@ -60,7 +60,7 @@
 - C) Maximum (currently 1 year for Azure DevOps): Minimize rotation overhead
 - D) Custom duration: [please specify]
 
-**Answer**:
+**Answer**: **Option B** — 1 year. Annual rotation is a reasonable balance for initial setup. We can tighten the rotation policy later once we have infrastructure for automated rotation/alerting.
 
 ---
 
@@ -75,7 +75,7 @@
 - C) Repository README or Wiki: More discoverable for team members
 - D) Other location: [please specify]
 
-**Answer**:
+**Answer**: **Option A** — `/docs/publishing/vscode-marketplace-setup.md` in the `generacy` repo. This is the primary public repo for org-level coordination (as stated in plan issue 1.1), and the `/docs/publishing/` path leaves room for npm publishing docs alongside it.
 
 ---
 
@@ -90,7 +90,7 @@
 - C) Authentication-only test: Just verify `vsce login` succeeds, skip publish test for now
 - D) Skip verification: Trust that authentication setup is sufficient (not recommended)
 
-**Answer**:
+**Answer**: **Option B** — Dry-run with `vsce publish --dry-run`. Validates authentication and packaging without polluting the marketplace. Full end-to-end publish will happen naturally when the Agency extension (issue 1.6) and Generacy extension (issue 1.7) CI/CD pipelines are built.
 
 ---
 
@@ -104,7 +104,7 @@
 - Additional admin emails (if any)
 - Should multiple team members have direct publisher access, or only through CI/CD?
 
-**Answer**:
+**Answer**: **@christrudelpw** and **@mikezouhri** should both have access as org owners/admins on the publisher account and Azure DevOps organization. Document both individuals in the setup docs.
 
 ---
 
@@ -121,7 +121,7 @@
 
 **Responsible party**: [please specify role/person]
 
-**Answer**:
+**Answer**: **Option B** — Create a GitHub issue with a due date when the PAT is generated (e.g., "Rotate VSCE_PAT — expires YYYY-MM-DD"). Keeps tracking in the same system we already use. Automated alerting (option D) can be a follow-up improvement.
 
 ---
 
@@ -137,7 +137,7 @@
 
 Should we verify name availability before proceeding with registration?
 
-**Answer**:
+**Answer**: Priority order: `generacy-ai` (preferred — matches GitHub org and required for extension IDs `generacy-ai.agency`, `generacy-ai.generacy`), then `generacy`, then `generacyai`.
 
 ---
 
@@ -151,5 +151,5 @@ Should we verify name availability before proceeding with registration?
 - Should this be linked to an organizational Microsoft account or personal account?
 - Is this the same account that owns the Azure DevOps organization?
 
-**Answer**:
+**Answer**: Use `chris@generacy.ai` for initial publisher registration and Microsoft/Azure account. This will be changed later to a shared team email (e.g., `dev@generacy.ai` or `extensions@generacy.ai`) once one is set up.
 
