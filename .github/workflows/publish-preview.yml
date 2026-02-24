@@ -1,0 +1,75 @@
+name: Publish Preview
+
+on:
+  push:
+    branches: [develop]
+
+jobs:
+  publish-preview:
+    name: Publish Preview to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for pending changesets
+        id: check-changesets
+        run: |
+          if pnpm changeset status --since=origin/main 2>&1 | grep -q "No changesets present"; then
+            echo "has_changesets=false" >> $GITHUB_OUTPUT
+            echo "No changesets found, skipping publish"
+          else
+            echo "has_changesets=true" >> $GITHUB_OUTPUT
+            echo "Changesets found, proceeding with publish"
+          fi
+
+      - name: Verify dependencies
+        if: steps.check-changesets.outputs.has_changesets == 'true'
+        run: ./scripts/verify-deps.sh preview
+
+      - name: Create snapshot versions
+        if: steps.check-changesets.outputs.has_changesets == 'true'
+        run: |
+          pnpm changeset version --snapshot preview
+          echo "Generated snapshot versions:"
+          git diff
+
+      - name: Build packages
+        if: steps.check-changesets.outputs.has_changesets == 'true'
+        run: pnpm build
+
+      - name: Publish to npm
+        if: steps.check-changesets.outputs.has_changesets == 'true'
+        run: pnpm changeset publish --no-git-tag --tag preview
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Summary
+        if: steps.check-changesets.outputs.has_changesets == 'true'
+        run: |
+          echo "## Preview Publish Complete! :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Packages have been published to npm with the \`@preview\` dist-tag." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Install with:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "pnpm add @generacy-ai/generacy@preview" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
