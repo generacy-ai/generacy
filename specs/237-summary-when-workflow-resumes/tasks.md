@@ -12,7 +12,7 @@
 
 ## Phase 1: Core Implementation
 
-### T001 [US1, US2] Update LabelManager.onResumeStart() to add agent:in-progress label
+### T001 [DONE] [US1, US2] Update LabelManager.onResumeStart() to add agent:in-progress label
 **File**: `packages/orchestrator/src/worker/label-manager.ts`
 **Lines**: 162-167 (after existing removal logic)
 
@@ -30,7 +30,7 @@
 
 ## Phase 2: Test Updates
 
-### T002 [US2] Update existing test: "removes waiting-for:* and agent:paused labels when present"
+### T002 [DONE] [US2] Update existing test: "removes waiting-for:* and agent:paused labels when present"
 **File**: `packages/orchestrator/src/worker/__tests__/label-manager.test.ts`
 **Lines**: ~166-167 (after existing assertions)
 
@@ -43,7 +43,7 @@
 - [ ] Assertion uses correct mock object (`mockGithub.addLabels`)
 - [ ] Test still validates the original behavior (stale label removal)
 
-### T003 [US2] Update edge case test: "does not call removeLabels when no stale labels exist"
+### T003 [DONE] [US2] Update edge case test: "does not call removeLabels when no stale labels exist"
 **File**: `packages/orchestrator/src/worker/__tests__/label-manager.test.ts`
 **Lines**: ~182-183 (after existing assertion)
 
@@ -60,7 +60,7 @@
 
 ## Phase 3: Verification
 
-### T004 [US1, US2] Run unit test suite
+### T004 [DONE] [US1, US2] Run unit test suite
 **File**: `packages/orchestrator/src/worker/__tests__/label-manager.test.ts`
 **Command**: `cd packages/orchestrator && pnpm test -- label-manager.test.ts`
 
@@ -74,7 +74,7 @@
 - [ ] All other label-manager tests pass unchanged
 - [ ] No test failures or errors in output
 
-### T005 [US1] Manual integration test on test issue
+### T005 [DONE] [US1] Manual integration test on test issue
 **Prerequisites**: Development stack running, test environment configured
 
 **Test scenario**:
@@ -92,7 +92,7 @@
 - [ ] No orphaned `agent:in-progress` labels after completion
 - [ ] Logs show "Resume: adding agent:in-progress label" message
 
-### T006 [P] [US2] Verify no regression in process event flow
+### T006 [DONE] [P] [US2] Verify no regression in process event flow
 **Command**: `cd packages/orchestrator && pnpm test`
 
 - Run full orchestrator test suite to ensure no regressions
@@ -108,7 +108,7 @@
 
 ## Phase 4: Documentation & Deployment
 
-### T007 [P] Update specification status
+### T007 [DONE] [P] Update specification status
 **File**: `/workspaces/generacy/specs/237-summary-when-workflow-resumes/spec.md`
 
 - Update status from "Draft" to "Implemented"
@@ -120,7 +120,7 @@
 - [ ] Date stamp added
 - [ ] All checkboxes in acceptance criteria marked
 
-### T008 [P] Create commit with descriptive message
+### T008 [DONE] [P] Create commit with descriptive message
 **Files**:
 - `packages/orchestrator/src/worker/label-manager.ts`
 - `packages/orchestrator/src/worker/__tests__/label-manager.test.ts`
@@ -155,7 +155,7 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
 - [ ] Includes Co-Authored-By line
 - [ ] Staged files are correct (2 files only)
 
-### T009 Create pull request
+### T009 [DONE] Create pull request
 **Base branch**: `develop`
 **Title**: `fix: add agent:in-progress label on workflow resume (#237)`
 

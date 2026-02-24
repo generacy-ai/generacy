@@ -1,6 +1,6 @@
 # Feature Specification: Add agent:in-progress Label on Workflow Resume
 
-**Branch**: `237-summary-when-workflow-resumes` | **Date**: 2026-02-24 | **Status**: Draft
+**Branch**: `237-summary-when-workflow-resumes` | **Date**: 2026-02-24 | **Status**: Implemented | **Completed**: 2026-02-24
 
 ## Summary
 
@@ -18,11 +18,11 @@ When a workflow resumes after hitting a gate (e.g., after clarification answers 
 **So that** I can see at a glance whether the workflow is paused, active, errored, or complete without needing to check internal logs.
 
 **Acceptance Criteria**:
-- [ ] When a resume event is processed, `agent:paused` is removed from the issue
-- [ ] When a resume event is processed, `agent:in-progress` is added to the issue
-- [ ] Label transition occurs before the worker starts executing phases
-- [ ] Label state is consistent with other workflow entry points (process events already add `agent:in-progress`)
-- [ ] Issue #235 (or similar resume scenarios) shows `agent:in-progress` during plan/implement phases after clarification
+- [x] When a resume event is processed, `agent:paused` is removed from the issue
+- [x] When a resume event is processed, `agent:in-progress` is added to the issue
+- [x] Label transition occurs before the worker starts executing phases
+- [x] Label state is consistent with other workflow entry points (process events already add `agent:in-progress`)
+- [x] Issue #235 (or similar resume scenarios) shows `agent:in-progress` during plan/implement phases after clarification
 
 ### US2: Consistent Label State Machine
 
@@ -31,10 +31,10 @@ When a workflow resumes after hitting a gate (e.g., after clarification answers 
 **So that** label transitions are predictable and debugging workflow state is easier.
 
 **Acceptance Criteria**:
-- [ ] Resume events follow the same `agent:in-progress` → phase labels → completion/error pattern as process events
-- [ ] `onResumeStart()` in `LabelManager` adds `agent:in-progress` after removing stale labels
-- [ ] Unit tests verify that `onResumeStart()` adds `agent:in-progress`
-- [ ] No regression in existing label behavior (process events, gates, errors, completion)
+- [x] Resume events follow the same `agent:in-progress` → phase labels → completion/error pattern as process events
+- [x] `onResumeStart()` in `LabelManager` adds `agent:in-progress` after removing stale labels
+- [x] Unit tests verify that `onResumeStart()` adds `agent:in-progress`
+- [x] No regression in existing label behavior (process events, gates, errors, completion)
 
 ## Functional Requirements
 
