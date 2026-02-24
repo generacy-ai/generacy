@@ -213,26 +213,23 @@
 - Test workflow on a test branch/PR
 - Commit to develop branch
 
-### T012 [P] [US1] Create CI workflow for agency ✅
+### T012 [DONE] [P] [US1] Create CI workflow for agency
 **File**: `/workspaces/tetrad-development/packages/agency/.github/workflows/ci.yml`
-
-**Status**: COMPLETED (2026-02-24)
-**Commit**: f5e783a
 
 **Depends on**: T009
 
-- ✅ Create `.github/workflows/` directory if not exists
-- ✅ Create `ci.yml` with complete CI workflow:
+- Create `.github/workflows/` directory if not exists
+- Create `ci.yml` with complete CI workflow:
   - Triggers: PRs to all branches, push to develop/main
-  - Jobs: lint, typecheck, test, build, ci-success
+  - Jobs: lint, test, build
   - Use pnpm action setup
   - Node.js version: 20
   - Frozen lockfile installation
-- ✅ Verify workflow syntax with GitHub Actions validator
-- ⏭️ Test workflow on a test branch/PR (to be done after push)
-- ✅ Commit to develop branch
+- Verify workflow syntax with GitHub Actions validator
+- Test workflow on a test branch/PR
+- Commit to develop branch
 
-### T013 [P] [US1] Create CI workflow for generacy
+### T013 [DONE] [P] [US1] Create CI workflow for generacy
 **File**: `/workspaces/generacy/.github/workflows/ci.yml`
 
 **Depends on**: T010
@@ -252,7 +249,7 @@
 
 ## Phase 3B: Preview Publish Workflows
 
-### T014 [US1] Create dependency verification script for agency
+### T014 [DONE] [US1] Create dependency verification script for agency
 **File**: `/workspaces/tetrad-development/packages/agency/scripts/verify-deps.sh`
 
 **Depends on**: T012
@@ -267,7 +264,7 @@
 - Test script manually with both tags
 - Commit to develop branch
 
-### T015 [US1] Create dependency verification script for generacy
+### T015 [DONE] [US1] Create dependency verification script for generacy
 **File**: `/workspaces/generacy/scripts/verify-deps.sh`
 
 **Depends on**: T013
@@ -282,7 +279,7 @@
 - Test script manually with both tags
 - Commit to develop branch
 
-### T016 [US1] Create preview publish workflow for latency
+### T016 [DONE] [US1] Create preview publish workflow for latency
 **File**: `/workspaces/tetrad-development/packages/latency/.github/workflows/publish-preview.yml`
 
 **Depends on**: T011
@@ -299,8 +296,8 @@
 - Test with dry-run or test branch
 - Commit to develop branch
 
-### T017 [US1] Create preview publish workflow for agency
-**File**: `/workspaces/tetrad-development/packages/agency/.github/workflows/publish-preview.yml`
+### T017 [DONE] [US1] Create preview publish workflow for agency
+**File**: `/workspaces/agency/.github/workflows/publish-preview.yml`
 
 **Depends on**: T012, T014
 
