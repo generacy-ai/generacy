@@ -409,7 +409,7 @@
 - Verify package.json is valid JSON
 - Commit to develop branch
 
-### T023 [P] [US1] Update package.json for agency publishing
+### T023 [DONE] [P] [US1] Update package.json for agency publishing
 **File**: `/workspaces/tetrad-development/packages/agency/package.json`
 
 **Depends on**: T009
@@ -425,7 +425,7 @@
 - Verify package.json is valid JSON
 - Commit to develop branch
 
-### T024 [P] [US1] Update package.json for generacy publishing
+### T024 [DONE] [P] [US1] Update package.json for generacy publishing
 **File**: `/workspaces/generacy/package.json`
 
 **Depends on**: T010
@@ -445,7 +445,7 @@
 
 ## Phase 4: Branch Protection
 
-### T025 [US1] Enable branch protection for latency/main
+### T025 [DONE] [US1] Enable branch protection for latency/main
 **Manual Task** - Depends on: T019
 
 - Navigate to latency repo Settings → Branches on GitHub
@@ -462,7 +462,7 @@
 - Save changes
 - Test by attempting to push directly to main (should fail)
 
-### T026 [US1] Enable branch protection for agency/main
+### T026 [DONE] [US1] Enable branch protection for agency/main
 **Manual Task** - Depends on: T020
 
 - Navigate to agency repo Settings → Branches on GitHub
