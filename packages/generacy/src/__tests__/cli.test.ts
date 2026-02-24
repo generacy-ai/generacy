@@ -15,13 +15,87 @@ describe('CLI Program', () => {
     expect(program.name()).toBe('generacy');
   });
 
-  it('should have run, worker, and agent commands', () => {
+  it('should have run, worker, agent, orchestrator, and setup commands', () => {
     const program = createProgram();
     const commands = program.commands.map(cmd => cmd.name());
 
     expect(commands).toContain('run');
     expect(commands).toContain('worker');
     expect(commands).toContain('agent');
+    expect(commands).toContain('orchestrator');
+    expect(commands).toContain('setup');
+  });
+
+  it('should have setup command with auth, workspace, build, and services subcommands', () => {
+    const program = createProgram();
+    const setupCmd = program.commands.find(cmd => cmd.name() === 'setup');
+
+    expect(setupCmd).toBeDefined();
+    const subcommands = setupCmd!.commands.map(cmd => cmd.name());
+    expect(subcommands).toContain('auth');
+    expect(subcommands).toContain('workspace');
+    expect(subcommands).toContain('build');
+    expect(subcommands).toContain('services');
+    expect(subcommands).toHaveLength(4);
+  });
+
+  describe('setup --help output', () => {
+    let setupCmd: ReturnType<typeof createProgram>['commands'][number];
+
+    beforeEach(() => {
+      const program = createProgram();
+      setupCmd = program.commands.find(cmd => cmd.name() === 'setup')!;
+    });
+
+    it('should show description and all 4 subcommands in setup --help', () => {
+      expect(setupCmd.description()).toBe('Dev container setup commands');
+
+      const helpText = setupCmd.helpInformation();
+      expect(helpText).toContain('auth');
+      expect(helpText).toContain('workspace');
+      expect(helpText).toContain('build');
+      expect(helpText).toContain('services');
+    });
+
+    it('should show --email and --username options in setup auth --help', () => {
+      const authCmd = setupCmd.commands.find(cmd => cmd.name() === 'auth')!;
+      expect(authCmd).toBeDefined();
+
+      const helpText = authCmd.helpInformation();
+      expect(helpText).toContain('--email');
+      expect(helpText).toContain('--username');
+    });
+
+    it('should show --repos, --branch, --workdir, --clean options in setup workspace --help', () => {
+      const wsCmd = setupCmd.commands.find(cmd => cmd.name() === 'workspace')!;
+      expect(wsCmd).toBeDefined();
+
+      const helpText = wsCmd.helpInformation();
+      expect(helpText).toContain('--repos');
+      expect(helpText).toContain('--branch');
+      expect(helpText).toContain('--workdir');
+      expect(helpText).toContain('--clean');
+    });
+
+    it('should show --skip-cleanup, --skip-agency, --skip-generacy options in setup build --help', () => {
+      const buildCmd = setupCmd.commands.find(cmd => cmd.name() === 'build')!;
+      expect(buildCmd).toBeDefined();
+
+      const helpText = buildCmd.helpInformation();
+      expect(helpText).toContain('--skip-cleanup');
+      expect(helpText).toContain('--skip-agency');
+      expect(helpText).toContain('--skip-generacy');
+    });
+
+    it('should show --only, --skip-api, --timeout options in setup services --help', () => {
+      const svcCmd = setupCmd.commands.find(cmd => cmd.name() === 'services')!;
+      expect(svcCmd).toBeDefined();
+
+      const helpText = svcCmd.helpInformation();
+      expect(helpText).toContain('--only');
+      expect(helpText).toContain('--skip-api');
+      expect(helpText).toContain('--timeout');
+    });
   });
 
   it('should accept global options', () => {
@@ -38,6 +112,19 @@ describe('Config Resolution', () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
+    // Clear env vars that affect config resolution so we can test defaults
+    delete process.env['LOG_LEVEL'];
+    delete process.env['HEALTH_PORT'];
+    delete process.env['HEARTBEAT_INTERVAL'];
+    delete process.env['POLL_INTERVAL'];
+    delete process.env['ORCHESTRATOR_URL'];
+    delete process.env['WORKER_ID'];
+    delete process.env['AGENCY_MODE'];
+    delete process.env['AGENCY_URL'];
+    delete process.env['AGENCY_COMMAND'];
+    delete process.env['GENERACY_PRETTY_LOG'];
+    delete process.env['GENERACY_WORKFLOW_FILE'];
+    delete process.env['GENERACY_WORKDIR'];
   });
 
   afterEach(() => {

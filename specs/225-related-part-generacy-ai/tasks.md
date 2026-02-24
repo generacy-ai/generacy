@@ -12,7 +12,7 @@
 
 ## Phase 1: Shared Infrastructure
 
-### T001 [US5] Create shell execution utility (`utils/exec.ts`)
+### T001 [DONE] [US5] Create shell execution utility (`utils/exec.ts`)
 **File**: `packages/generacy/src/cli/utils/exec.ts`
 - Implement `exec(cmd, options)` — synchronous execution via `execSync`, returns trimmed stdout string, throws on non-zero exit
 - Implement `execSafe(cmd, options)` — synchronous execution, returns `{ ok: boolean; stdout: string; stderr: string }`, never throws
@@ -21,14 +21,14 @@
 - All functions log via `getLogger()` at debug level; `exec` logs errors at error level before re-throwing
 - Use `node:child_process` imports (ESM style with `.js` extensions for internal imports)
 
-### T002 [P] [US5] Create parent `setup` command group
+### T002 [DONE] [P] [US5] Create parent `setup` command group
 **File**: `packages/generacy/src/cli/commands/setup.ts`
 - Export `setupCommand(): Command` factory function
 - Create `setup` Commander.js command with description `'Dev container setup commands'`
 - Import and add all 4 subcommands via `command.addCommand()`: `setupAuthCommand`, `setupWorkspaceCommand`, `setupBuildCommand`, `setupServicesCommand`
 - Note: subcommand imports will initially fail until Phase 2–5 files exist; create stub exports first if needed
 
-### T003 [P] [US5] Register `setup` command in CLI index
+### T003 [DONE] [P] [US5] Register `setup` command in CLI index
 **File**: `packages/generacy/src/cli/index.ts`
 - Add `import { setupCommand } from './commands/setup.js';`
 - Add `program.addCommand(setupCommand());` after existing command registrations (after `orchestratorCommand()`)
@@ -37,7 +37,7 @@
 
 ## Phase 2: `setup auth` Command
 
-### T004 [US1] Implement `setup auth` subcommand
+### T004 [DONE] [US1] Implement `setup auth` subcommand
 **File**: `packages/generacy/src/cli/commands/setup/auth.ts`
 - Define `AuthConfig` interface: `email?: string`, `username?: string`, `token?: string`
 - Implement `resolveAuthConfig(cliArgs)` — three-tier merge: defaults → env vars (`GH_EMAIL`, `GH_USERNAME`, `GH_TOKEN`) → CLI args
@@ -61,7 +61,7 @@
 
 ## Phase 3: `setup workspace` Command
 
-### T005 [US2] Implement `setup workspace` subcommand
+### T005 [DONE] [US2] Implement `setup workspace` subcommand
 **File**: `packages/generacy/src/cli/commands/setup/workspace.ts`
 - Define `WorkspaceConfig` interface: `repos: string[]`, `branch: string`, `workdir: string`, `clean: boolean`, `githubOrg: string`
 - Define `DEFAULT_REPOS` constant array: `['tetrad-development', 'contracts', 'latency', 'agency', 'generacy', 'humancy', 'generacy-cloud', 'humancy-cloud']`
@@ -89,7 +89,7 @@
 
 ## Phase 4: `setup build` Command
 
-### T006 [US3] Implement `setup build` subcommand
+### T006 [DONE] [US3] Implement `setup build` subcommand
 **File**: `packages/generacy/src/cli/commands/setup/build.ts`
 - Define `BuildConfig` interface: `skipCleanup`, `skipAgency`, `skipGeneracy`, `agencyDir`, `generacyDir`, `latencyDir`
 - Implement `resolveBuildConfig(cliArgs)` — defaults point to `/workspaces/<name>` directories
@@ -119,7 +119,7 @@
 
 ## Phase 5: `setup services` Command
 
-### T007 [US4] Implement `setup services` subcommand
+### T007 [DONE] [US4] Implement `setup services` subcommand
 **File**: `packages/generacy/src/cli/commands/setup/services.ts`
 - Define `ServicesConfig` interface: `only: 'all' | 'generacy' | 'humancy'`, `skipApi: boolean`, `timeout: number`, `logDir: string`
 - Define `SERVICES` constant with port allocations and directory paths for generacy and humancy
@@ -158,7 +158,7 @@
 
 ## Phase 6: Unit Tests
 
-### T008 [P] [US5] Write exec utility tests
+### T008 [DONE] [P] [US5] Write exec utility tests
 **File**: `packages/generacy/src/__tests__/setup/exec.test.ts`
 - Mock `child_process.execSync` and `child_process.spawn`
 - Test `exec()` returns trimmed stdout for successful commands
@@ -169,7 +169,7 @@
 - Test `spawnBackground()` returns a ChildProcess and calls spawn with correct args
 - Test logger debug/error calls on exec/failure
 
-### T009 [P] [US1] Write auth command tests
+### T009 [DONE] [P] [US1] Write auth command tests
 **File**: `packages/generacy/src/__tests__/setup/auth.test.ts`
 - Mock `child_process.execSync`, `fs.writeFileSync`, `fs.mkdirSync`
 - Test config resolution: CLI args override env vars
@@ -182,7 +182,7 @@
 - Test gh auth: pipes token to `gh auth login --with-token` when not authenticated
 - Test exit code 1 when final `gh auth status` verification fails
 
-### T010 [P] [US2] Write workspace command tests
+### T010 [DONE] [P] [US2] Write workspace command tests
 **File**: `packages/generacy/src/__tests__/setup/workspace.test.ts`
 - Mock `child_process.execSync`, `fs.existsSync`, `fs.mkdirSync`, `fs.readdirSync`
 - Test config resolution: default 8 repos, env var `REPOS` override (comma-separated → array), CLI override
@@ -197,7 +197,7 @@
 - Test dependency install: correct package manager command called per repo
 - Test summary: failure count > 0 triggers exit code 1
 
-### T011 [P] [US3] Write build command tests
+### T011 [DONE] [P] [US3] Write build command tests
 **File**: `packages/generacy/src/__tests__/setup/build.test.ts`
 - Mock `child_process.execSync`, `fs.rmSync`, `fs.writeFileSync`, `fs.readFileSync`, `fs.existsSync`, `fs.mkdirSync`
 - Test `--skip-cleanup` skips Phase 1 entirely
@@ -215,7 +215,7 @@
 - Test Phase 3: `npm link` called in `packages/generacy` directory
 - Test Phase 3: missing `packages/generacy/dist/cli/index.js` causes exit code 1
 
-### T012 [P] [US4] Write services command tests
+### T012 [DONE] [P] [US4] Write services command tests
 **File**: `packages/generacy/src/__tests__/setup/services.test.ts`
 - Mock `child_process.spawn`, `fs.mkdirSync`, `fs.createWriteStream`, `net.Socket`
 - Test `--only generacy` spawns only generacy emulator + API
@@ -235,13 +235,13 @@
 
 ## Phase 7: Integration & Verification
 
-### T013 [US5] Update existing CLI integration tests
+### T013 [DONE] [US5] Update existing CLI integration tests
 **File**: `packages/generacy/src/__tests__/cli.test.ts`
 - Add test: `setup` command is registered in the program
 - Add test: `setup` command has 4 subcommands (`auth`, `workspace`, `build`, `services`)
 - Verify `createProgram().commands.map(c => c.name())` includes `'setup'`
 
-### T014 [US5] Build verification
+### T014 [DONE] [US5] Build verification
 **Files**:
 - All new source files in `packages/generacy/src/cli/`
 - Run `pnpm build` in `packages/generacy` — ensure zero TypeScript compilation errors
@@ -249,7 +249,7 @@
 - Verify ESM import paths all use `.js` extensions
 - Verify no circular dependencies introduced
 
-### T015 [US5] CLI help output verification
+### T015 [DONE] [US5] CLI help output verification
 - Verify `generacy setup --help` shows description and all 4 subcommands
 - Verify `generacy setup auth --help` shows `--email` and `--username` options
 - Verify `generacy setup workspace --help` shows `--repos`, `--branch`, `--workdir`, `--clean` options

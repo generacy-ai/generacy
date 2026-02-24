@@ -304,6 +304,31 @@ export class RedisJobQueue implements JobQueue {
     await this.redis.set(key, JSON.stringify(job));
     await this.redis.zrem(PENDING_QUEUE, jobId);
   }
+
+  async requeue(jobId: string): Promise<void> {
+    const key = JOB_KEY(jobId);
+    const raw = await this.redis.get(key);
+    if (!raw) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+
+    const job = JSON.parse(raw) as Job;
+
+    if (job.status !== 'assigned') {
+      throw new Error(`Cannot requeue job ${jobId}: expected status 'assigned', got '${job.status}'`);
+    }
+
+    // Reset to clean pending state
+    job.status = 'pending';
+    job.workerId = undefined;
+    job.assignedAt = undefined;
+
+    await this.redis.set(key, JSON.stringify(job));
+
+    // Re-insert into pending queue at correct priority position
+    const score = this.computeScore(job.priority);
+    await this.redis.zadd(PENDING_QUEUE, score.toString(), jobId);
+  }
 }
 
 /**
