@@ -12,7 +12,7 @@
 
 ## Phase 1: Package Setup & Schema Definition
 
-### T001 Create package directory structure
+### T001 [DONE] Create package directory structure
 **Files**:
 - `packages/templates/package.json`
 - `packages/templates/tsconfig.json`
@@ -23,7 +23,7 @@
 - Configure tsconfig for library build
 - Create placeholder README
 
-### T002 Define Zod schemas and TypeScript types
+### T002 [DONE] Define Zod schemas and TypeScript types
 **File**: `packages/templates/src/schema.ts`
 - Define `ProjectContext` schema (id, name)
 - Define `ReposContext` schema (isMultiRepo, primary, dev[], clone[])
@@ -35,7 +35,7 @@
 - Export TypeScript types from schemas
 - Add JSDoc comments for all exported types
 
-### T003 Add package to workspace
+### T003 [DONE] Add package to workspace
 **File**: `/workspaces/generacy/package.json` (workspace root)
 - Add `packages/templates` to workspace packages array
 - Run `pnpm install` to link workspace dependencies
@@ -44,7 +44,7 @@
 
 ## Phase 2: Shared Templates
 
-### T004 [P] Create config.yaml.hbs template
+### T004 [DONE] [P] Create config.yaml.hbs template
 **File**: `packages/templates/src/shared/config.yaml.hbs`
 - Add YAML header comment with generation timestamp
 - Add project metadata section (id, name)
@@ -55,7 +55,7 @@
 - Use Handlebars conditionals for multi-repo vs single-repo
 - Use `{{#each}}` loops for repo arrays
 
-### T005 [P] Create generacy.env.template.hbs
+### T005 [DONE] [P] Create generacy.env.template.hbs
 **File**: `packages/templates/src/shared/generacy.env.template.hbs`
 - Add header comment explaining this is a template
 - Add GITHUB_TOKEN variable with description
@@ -65,14 +65,14 @@
 - Add LOG_LEVEL variable with default
 - Include comments explaining where to get each value
 
-### T006 [P] Create .gitignore static file
+### T006 [DONE] [P] Create .gitignore static file
 **File**: `packages/templates/src/shared/.gitignore`
 - Ignore `generacy.env` (secrets)
 - Ignore `.agent-state/` directory
 - Add comment explaining purpose
 - Static file (no Handlebars templating)
 
-### T007 [P] Create extensions.json.hbs template
+### T007 [DONE] [P] Create extensions.json.hbs template
 **File**: `packages/templates/src/shared/extensions.json.hbs`
 - Create recommendations array with Agency extension
 - Add Generacy extension to recommendations
@@ -82,7 +82,7 @@
 
 ## Phase 3: Single-Repo Templates
 
-### T008 Create single-repo devcontainer.json.hbs
+### T008 [DONE] Create single-repo devcontainer.json.hbs
 **File**: `packages/templates/src/single-repo/devcontainer.json.hbs`
 - Set name from `{{project.name}}`
 - Set image from `{{devcontainer.baseImage}}`
@@ -96,7 +96,7 @@
 
 ## Phase 4: Multi-Repo Templates
 
-### T009 [P] Create multi-repo devcontainer.json.hbs
+### T009 [DONE] [P] Create multi-repo devcontainer.json.hbs
 **File**: `packages/templates/src/multi-repo/devcontainer.json.hbs`
 - Set name from `{{project.name}}`
 - Reference docker-compose.yml
@@ -107,7 +107,7 @@
 - Add customizations.vscode.extensions array
 - Format as valid JSON
 
-### T010 [P] Create docker-compose.yml.hbs
+### T010 [DONE] [P] Create docker-compose.yml.hbs
 **File**: `packages/templates/src/multi-repo/docker-compose.yml.hbs`
 - Define Redis service (ephemeral, no volumes)
 - Define orchestrator service with Generacy feature
@@ -123,7 +123,7 @@
 
 ## Phase 5: Rendering Engine
 
-### T011 Implement template rendering functions
+### T011 [DONE] Implement template rendering functions
 **File**: `packages/templates/src/renderer.ts`
 - Import Handlebars and file system utilities
 - Implement `loadTemplate(templatePath: string): string` helper
@@ -134,14 +134,14 @@
 - Handle static files (copy without rendering)
 - Add error handling with clear messages
 
-### T012 Register Handlebars helpers
+### T012 [DONE] Register Handlebars helpers
 **File**: `packages/templates/src/renderer.ts`
 - Register `repoName` helper (extracts repo name from `owner/repo`)
 - Register `json` helper (pretty-prints objects)
 - Register `urlEncode` helper (URL-encodes strings)
 - Add helper tests in comments/documentation
 
-### T013 Implement extensions.json merge logic
+### T013 [DONE] Implement extensions.json merge logic
 **File**: `packages/templates/src/renderer.ts`
 - Implement `renderExtensionsJson(context: TemplateContext, existingContent?: string): Promise<string>`
 - Parse existing JSON if provided
@@ -154,7 +154,7 @@
 
 ## Phase 6: Validation
 
-### T014 Implement pre-render validation
+### T014 [DONE] Implement pre-render validation
 **File**: `packages/templates/src/validators.ts`
 - Import Zod schemas from schema.ts
 - Implement `validateContext(context: unknown): TemplateContext`
@@ -162,7 +162,7 @@
 - Transform Zod errors into readable messages
 - Return validated context or throw descriptive error
 
-### T015 [P] Implement post-render validation
+### T015 [DONE] [P] Implement post-render validation
 **File**: `packages/templates/src/validators.ts`
 - Implement `validateRenderedConfig(yaml: string): void`
 - Parse YAML and check required fields (project.id, repos)
@@ -175,7 +175,7 @@
 
 ## Phase 7: Context Builder Helpers
 
-### T016 Implement context builder utilities
+### T016 [DONE] Implement context builder utilities
 **File**: `packages/templates/src/builders.ts`
 - Implement `buildSingleRepoContext(options): TemplateContext`
 - Implement `buildMultiRepoContext(options): TemplateContext`
@@ -188,7 +188,7 @@
 
 ## Phase 8: Public API
 
-### T017 Export public API
+### T017 [DONE] Export public API
 **File**: `packages/templates/src/index.ts`
 - Export `renderProject` from renderer.ts
 - Export `renderTemplate` from renderer.ts
@@ -203,7 +203,7 @@
 
 ## Phase 9: Testing
 
-### T018 Create test fixtures
+### T018 [DONE] Create test fixtures
 **Files**:
 - `packages/templates/tests/fixtures/single-repo-context.json`
 - `packages/templates/tests/fixtures/multi-repo-context.json`
@@ -214,7 +214,7 @@
 - Create invalid contexts for validation testing
 - Create existing extensions.json for merge testing
 
-### T019 Write renderer unit tests
+### T019 [DONE] Write renderer unit tests
 **File**: `packages/templates/tests/unit/renderer.test.ts`
 - Test `renderTemplate` with each template file
 - Test Handlebars helper functions (repoName, json, urlEncode)
@@ -223,7 +223,7 @@
 - Test static file copying (.gitignore)
 - Target: 80%+ coverage of renderer.ts
 
-### T020 Write validator unit tests
+### T020 [DONE] Write validator unit tests
 **File**: `packages/templates/tests/unit/validators.test.ts`
 - Test `validateContext` with valid contexts
 - Test `validateContext` with invalid contexts (missing fields)
@@ -232,7 +232,7 @@
 - Test `validateRenderedDevContainer` with valid/invalid JSON
 - Target: 80%+ coverage of validators.ts
 
-### T021 Write builder unit tests
+### T021 [DONE] Write builder unit tests
 **File**: `packages/templates/tests/unit/builders.test.ts`
 - Test `buildSingleRepoContext` with minimal options
 - Test `buildMultiRepoContext` with all options
@@ -240,7 +240,7 @@
 - Test metadata generation (timestamp format)
 - Verify built contexts pass validation
 
-### T022 Write integration tests
+### T022 [DONE] Write integration tests
 **File**: `packages/templates/tests/integration/render-project.test.ts`
 - Test `renderProject` for single-repo project
 - Verify correct number of files generated
@@ -251,7 +251,7 @@
 - Verify all generated files parse correctly (YAML/JSON)
 - Test error propagation from validation failures
 
-### T023 Write snapshot tests
+### T023 [DONE] Write snapshot tests
 **File**: `packages/templates/tests/integration/snapshots.test.ts`
 - Create snapshot for config.yaml (single-repo)
 - Create snapshot for config.yaml (multi-repo)
@@ -262,7 +262,7 @@
 - Configure Jest/Vitest snapshot testing
 - Commit initial snapshots to version control
 
-### T024 Configure test runner and coverage
+### T024 [DONE] Configure test runner and coverage
 **Files**:
 - `packages/templates/package.json`
 - `packages/templates/vitest.config.ts` or `jest.config.js`
@@ -276,7 +276,7 @@
 
 ## Phase 10: Documentation
 
-### T025 Write package README
+### T025 [DONE] Write package README
 **File**: `packages/templates/README.md`
 - Add package overview and purpose
 - Document installation (`npm install @generacy-ai/templates`)
@@ -289,7 +289,7 @@
 - Document Handlebars helpers
 - Add contributing guidelines
 
-### T026 Add inline documentation
+### T026 [DONE] Add inline documentation
 **Files**:
 - `packages/templates/src/schema.ts`
 - `packages/templates/src/renderer.ts`
@@ -305,7 +305,7 @@
 
 ## Phase 11: Build and Publish Setup
 
-### T027 Configure package build
+### T027 [DONE] Configure package build
 **Files**:
 - `packages/templates/package.json`
 - `packages/templates/tsconfig.json`
@@ -316,7 +316,7 @@
 - Add prepublish script
 - Configure source maps
 
-### T028 Add package metadata
+### T028 [DONE] Add package metadata
 **File**: `packages/templates/package.json`
 - Set package name: `@generacy-ai/templates`
 - Set version: `0.1.0`

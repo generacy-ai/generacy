@@ -1,0 +1,32 @@
+{
+  "project": {
+    "id": "proj_preview456",
+    "name": "Beta Testing Project"
+  },
+  "repos": {
+    "primary": "beta-org/experimental-app",
+    "dev": [],
+    "clone": [],
+    "hasDevRepos": false,
+    "hasCloneRepos": false,
+    "isMultiRepo": false
+  },
+  "defaults": {
+    "agent": "claude-code",
+    "baseBranch": "develop",
+    "releaseStream": "preview"
+  },
+  "orchestrator": {
+    "pollIntervalMs": 5000,
+    "workerCount": 0
+  },
+  "devcontainer": {
+    "baseImage": "mcr.microsoft.com/devcontainers/python:3.11",
+    "featureTag": ":preview"
+  },
+  "metadata": {
+    "timestamp": "2026-02-24T12:30:15.000Z",
+    "generatedBy": "generacy-cli",
+    "version": "1.0.0"
+  }
+}
