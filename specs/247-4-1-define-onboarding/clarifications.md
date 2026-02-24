@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -15,7 +15,9 @@
 - C) Custom implementation: Maximum control, minimal dependencies. Requires writing and maintaining custom parser for `{{variable.path}}` syntax.
 - D) Template literals (JS): Use ES6 template strings with a function wrapper. Simple but requires escaping for JSON/YAML special characters.
 
-**Answer**:
+**Answer**: **A) Handlebars**
+
+The existing codebase uses simple regex replacement for workflow templates, but onboarding templates need conditionals (single vs multi-repo), loops (iterating repo lists in config.yaml), and nested variable paths. Handlebars provides all of this with a well-known syntax. It works both server-side (generacy-cloud PR generation) and in the CLI (`generacy init`). Mustache is too limited for the conditional file logic we need. Custom is unnecessary maintenance burden.
 
 ---
 
@@ -29,7 +31,9 @@
 - B) Conditional blocks within templates: Use template conditionals (`{{#if multi-repo}}`) within files. Single source of truth but more complex templates.
 - C) Hybrid approach: Separate devcontainer.json and docker-compose.yml, shared config.yaml and extensions.json. Balances duplication and complexity.
 
-**Answer**:
+**Answer**: **C) Hybrid approach**
+
+The files that differ substantially between single-repo and multi-repo are `devcontainer.json` and `docker-compose.yml` (which only exists for multi-repo). The shared files — `config.yaml`, `generacy.env.template`, `extensions.json`, `.gitignore` — are identical or nearly so. Maintain separate `devcontainer.json` variants, conditionally include `docker-compose.yml`, and share everything else. This avoids full duplication while keeping templates readable.
 
 ---
 
@@ -44,7 +48,9 @@
 - C) Separate .generacy/.gitignore: Add a `.generacy/.gitignore` file containing `generacy.env`. Avoids modifying user's .gitignore but requires Git 2.x features.
 - D) Manual instruction only: Include instructions in PR body for user to add entry manually. No automated modification.
 
-**Answer**:
+**Answer**: **C) Separate `.generacy/.gitignore`**
+
+Add a `.generacy/.gitignore` containing `generacy.env`. This is scoped, doesn't touch the user's root `.gitignore`, and avoids any merge/duplication logic. Git 2.x is universal and supports nested `.gitignore` files. This is the cleanest approach with zero risk of conflicting with existing patterns.
 
 ---
 
@@ -59,7 +65,9 @@
 - C) User choice during onboarding: Ask user during project creation which release stream they prefer.
 - D) Environment-based: Use `:preview` for dev environments, `:1` for production, determined by branch or environment variable.
 
-**Answer**:
+**Answer**: **A) Project-level setting**
+
+Add `releaseStream: "stable" | "preview"` to the project configuration, defaulting to `stable` (`:1` tag). The project creation wizard on generacy.ai already has multiple steps — this fits naturally as a setting. Early adopters and beta testers can opt into `:preview`. This keeps it explicit and auditable per-project rather than buried in environment logic.
 
 ---
 
@@ -74,7 +82,9 @@
 - C) Auto-detect from repo: PR generation service scans primary repo for package.json, requirements.txt, etc. and selects base image. Smart but complex.
 - D) Template variable: Include `{{base.image}}` variable with sensible default, allow override via API/UI during project creation.
 
-**Answer**:
+**Answer**: **D) Template variable with sensible default**
+
+Use `{{baseImage}}` in the devcontainer.json template with a default of `mcr.microsoft.com/devcontainers/base:ubuntu`. The devcontainer feature already handles installing all Generacy tooling on top of any Debian/Ubuntu base. The project creation API can optionally accept a base image override, and the project detail page can expose it for editing later. Auto-detection is over-engineering for MVP.
 
 ---
 
@@ -89,7 +99,9 @@
 - C) Workers have no workspace mount: Workers only access code via Redis/API from orchestrator. Orchestrator handles all file operations.
 - D) Configurable per project: Add `orchestrator.workerVolumeAccess: "none" | "readonly" | "readwrite"` to config.yaml template.
 
-**Answer**:
+**Answer**: **C) Workers have no shared workspace mount**
+
+Looking at the existing tetrad-development docker-compose, workers clone repos independently via `REPO_URL` and `REPO_BRANCH` env vars. Each worker gets assigned an issue, clones the relevant repo into its own ephemeral workspace, does the work, commits, and pushes. No shared volume with the orchestrator. This avoids conflicts between concurrent workers and matches the existing proven architecture.
 
 ---
 
@@ -104,7 +116,9 @@
 - C) Git URLs: `git@github.com:owner/repo.git`. Traditional Git format. Requires SSH keys.
 - D) Flexible: Support all formats, normalize during parsing. User-friendly but requires more validation logic.
 
-**Answer**:
+**Answer**: **B) Shorthand `owner/repo`**
+
+Since Generacy is GitHub-first and the GitHub App provides all auth context, `owner/repo` is concise and natural. The CLI and cloud service can expand to full HTTPS URLs using the GitHub App installation token. This matches how developers think about GitHub repos and keeps config files clean.
 
 ---
 
@@ -119,7 +133,9 @@
 - C) Dev Container Feature validation: The Feature itself validates on container start and displays errors in VS Code UI.
 - D) Optional validation service: PR includes a validation script users can run: `./generacy/validate-env.sh`.
 
-**Answer**:
+**Answer**: **B) CLI validation via `generacy doctor`**
+
+This aligns directly with issue #254 (`generacy doctor`) which is already planned. Templates should stay simple — just provide the `.env.template` with comments explaining each variable. Validation happens at runtime when the user runs `generacy doctor`, which gives clear pass/fail output with fix suggestions. The devcontainer feature can also do basic checks on container start.
 
 ---
 
@@ -134,7 +150,9 @@
 - C) Aggressive defaults: `pollIntervalMs: 2000` (2s), `workerCount: 5`. Fast but higher resource usage.
 - D) Project-type based: Small projects (1-3 repos) get `workerCount: 1`, large projects (4+ repos) get `workerCount: 3`. Poll interval fixed at 5000ms.
 
-**Answer**:
+**Answer**: **B) Balanced defaults: `pollIntervalMs: 5000`, `workerCount: 3`**
+
+These are the exact values shown in the buildout plan's config.yaml example, and the existing tetrad standalone docker-compose also defaults to 3 workers. 5s polling is responsive without hammering the API. 3 workers handles typical parallel workloads. Users can tune these in config.yaml after onboarding.
 
 ---
 
@@ -149,7 +167,9 @@
 - C) User choice during creation: Let user specify target branch during project creation on generacy.ai.
 - D) Smart detection: Check if default branch is protected via GitHub API. If protected, ask user for target branch. If not, use default.
 
-**Answer**:
+**Answer**: **A) Always default branch**
+
+The onboarding PR is a one-time setup that the developer manually reviews and merges. They understand their own branch protection rules. Adding complexity to detect protection or prompt for alternatives is unnecessary — the developer can always retarget the PR themselves in GitHub's UI if needed. Keep the automation simple.
 
 ---
 
@@ -164,7 +184,9 @@
 - C) ISO 8601 local: `2026-02-24T10:30:00-05:00`. Shows user's timezone but assumes server knows it.
 - D) Unix timestamp: `1740407400`. Machine-readable but not human-friendly.
 
-**Answer**:
+**Answer**: **A) ISO 8601 UTC (`2026-02-24T15:30:00Z`)**
+
+Standard, unambiguous, machine-readable. This appears in config metadata and PR descriptions, not in user-facing dashboards. ISO 8601 UTC is the universal choice for generated configuration files.
 
 ---
 
@@ -179,7 +201,9 @@
 - C) Separate templates repo: Create `generacy-templates` repo. Versioned independently with semver tags. Maximum flexibility but adds maintenance overhead.
 - D) Embedded in multiple repos: Templates in both generacy (for CLI) and generacy-cloud (for web service). Risk of drift but allows independent operation.
 
-**Answer**:
+**Answer**: **A) Main generacy repo (`packages/templates/`)**
+
+Templates need to be consumable by both the CLI (`generacy init`) and the cloud service (PR generation). Storing in `generacy/packages/templates/` means they're published as an npm package the cloud service can depend on, directly available to the CLI, and publicly visible to adopters. This follows the existing pattern where the generacy repo already contains workflow templates in `packages/generacy-extension/resources/templates/`.
 
 ---
 
@@ -194,7 +218,9 @@
 - C) Create .vscode/extensions.generacy.json: Separate file for Generacy-specific extensions. Avoids conflicts but non-standard.
 - D) Manual instruction: Don't modify existing file, include instructions in PR body for user to add extensions manually.
 
-**Answer**:
+**Answer**: **B) Append to recommendations array**
+
+Parse the existing `.vscode/extensions.json`, add Generacy extension IDs (`generacy-ai.agency`, `generacy-ai.generacy`) to the `recommendations` array if not already present. If no file exists, create it. JSON parsing is trivial, and this preserves the developer's existing extension recommendations. Much better UX than replacing or requiring manual edits.
 
 ---
 
@@ -209,7 +235,9 @@
 - C) RDB snapshots only: Redis saves periodic snapshots to volume. Balance between persistence and performance.
 - D) Configurable: Add `orchestrator.redisPersistence: boolean` to config.yaml template, default false.
 
-**Answer**:
+**Answer**: **A) Ephemeral (no persistence)**
+
+For a dev container, the orchestrator rescans open GitHub issues on startup and repopulates the work queue. Persisting stale queue data across restarts could actually cause issues (duplicate work, stale references). The existing tetrad standalone compose doesn't persist Redis data. Keep it simple — ephemeral is the right default for development environments.
 
 ---
 
@@ -224,5 +252,7 @@
 - C) Clone repos in separate directory: Dev repos in `/workspace/dev/`, clone repos in `/workspace/reference/`. Clear separation.
 - D) Dev repos only in worker scope: Workers only access dev repos. Clone repos only accessible from orchestrator. Enforces separation.
 
-**Answer**:
+**Answer**: **A) All cloned equally (into `/workspaces/`)**
+
+All repos — primary, dev, and clone — are cloned side-by-side under `/workspaces/` (e.g., `/workspaces/main-api/`, `/workspaces/shared-lib/`, `/workspaces/design-system/`). This matches the existing tetrad-development pattern where all repos live as siblings under `/workspaces/`. The distinction between dev and clone is enforced at the orchestrator/worker level — workers only create branches and PRs on repos listed in `repos.dev`, while `repos.clone` are available for agent context but not targeted for modifications. No directory-level separation needed.
 
