@@ -438,13 +438,11 @@ export function parseActionType(step: StepDefinition): ActionType {
   // Check 'uses' field first (preferred for action specification)
   const uses = step.uses;
   if (uses) {
-    // Check for namespaced actions first (e.g., 'github.preflight', 'workflow.update_phase')
-    if (isNamespacedAction(uses)) {
-      // Return the namespaced action directly if it's a known type
-      return uses as ActionType;
+    // Check for compound namespace patterns first - these map to a base action type
+    // (e.g., 'speckit.create_feature' → 'speckit', not the full identifier)
+    if (uses.startsWith('speckit.') || uses.startsWith('speckit/')) {
+      return 'speckit';
     }
-
-    // Map uses values to action types
     if (uses.includes('workspace.prepare') || uses.includes('workspace/prepare')) {
       return 'workspace.prepare';
     }
@@ -460,20 +458,21 @@ export function parseActionType(step: StepDefinition): ActionType {
     if (uses.includes('humancy.request_review') || uses.includes('humancy/request_review') || uses.includes('humancy')) {
       return 'humancy.request_review';
     }
-    // Check for speckit actions (speckit.* or speckit/*)
-    if (uses.startsWith('speckit.') || uses.startsWith('speckit/')) {
-      return 'speckit';
+
+    // For other namespaced actions (e.g., 'github.preflight', 'workflow.update_phase'),
+    // return the full identifier as the action type
+    if (isNamespacedAction(uses)) {
+      return uses as ActionType;
     }
   }
 
   // Check 'action' field as fallback
   const action = step.action;
   if (action) {
-    // Check for namespaced actions (e.g., 'github.preflight')
-    if (isNamespacedAction(action)) {
-      return action as ActionType;
+    // Check for compound namespace patterns first
+    if (action.startsWith('speckit.') || action.startsWith('speckit/')) {
+      return 'speckit';
     }
-
     if (action === 'workspace.prepare' || action === 'workspace-prepare') {
       return 'workspace.prepare';
     }
@@ -492,9 +491,10 @@ export function parseActionType(step: StepDefinition): ActionType {
     if (action === 'shell' || action === 'run') {
       return 'shell';
     }
-    // Check for speckit actions (speckit.* or speckit/*)
-    if (action.startsWith('speckit.') || action.startsWith('speckit/')) {
-      return 'speckit';
+
+    // For other namespaced actions, return the full identifier
+    if (isNamespacedAction(action)) {
+      return action as ActionType;
     }
   }
 

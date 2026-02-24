@@ -443,9 +443,10 @@ describe('ExponentialBackoffPolicy', () => {
       const fn = vi.fn().mockRejectedValue(createCodedError('Always fails', 'RATE_LIMIT'));
 
       const resultPromise = policy.execute(fn);
+      const assertion = expect(resultPromise).rejects.toThrow('Always fails');
       await vi.runAllTimersAsync();
 
-      await expect(resultPromise).rejects.toThrow('Always fails');
+      await assertion;
       // Initial attempt + 2 retries = 3 total calls
       expect(fn).toHaveBeenCalledTimes(3);
     });
@@ -459,10 +460,7 @@ describe('ExponentialBackoffPolicy', () => {
 
       const fn = vi.fn().mockRejectedValue(createCodedError('Fails', 'RATE_LIMIT'));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Fails');
+      await expect(policy.execute(fn)).rejects.toThrow('Fails');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -494,10 +492,7 @@ describe('ExponentialBackoffPolicy', () => {
       const policy = new ExponentialBackoffPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(createCodedError('Unknown error', 'UNKNOWN_ERROR'));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Unknown error');
+      await expect(policy.execute(fn)).rejects.toThrow('Unknown error');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -505,10 +500,7 @@ describe('ExponentialBackoffPolicy', () => {
       const policy = new ExponentialBackoffPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(new Error('Plain error'));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Plain error');
+      await expect(policy.execute(fn)).rejects.toThrow('Plain error');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -516,10 +508,7 @@ describe('ExponentialBackoffPolicy', () => {
       const policy = new ExponentialBackoffPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue('string error');
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('string error');
+      await expect(policy.execute(fn)).rejects.toThrow('string error');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -531,9 +520,10 @@ describe('ExponentialBackoffPolicy', () => {
         .mockRejectedValueOnce(createCodedError('Do not retry', 'FATAL_ERROR'));
 
       const resultPromise = policy.execute(fn);
+      const assertion = expect(resultPromise).rejects.toThrow('Do not retry');
       await vi.runAllTimersAsync();
 
-      await expect(resultPromise).rejects.toThrow('Do not retry');
+      await assertion;
       expect(fn).toHaveBeenCalledTimes(2);
     });
   });
@@ -796,10 +786,7 @@ describe('StatusCodeRetryPolicy', () => {
       const policy = new StatusCodeRetryPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(createHttpError('Bad request', 400));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Bad request');
+      await expect(policy.execute(fn)).rejects.toThrow('Bad request');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -807,10 +794,7 @@ describe('StatusCodeRetryPolicy', () => {
       const policy = new StatusCodeRetryPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(createHttpError('Unauthorized', 401));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Unauthorized');
+      await expect(policy.execute(fn)).rejects.toThrow('Unauthorized');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -818,10 +802,7 @@ describe('StatusCodeRetryPolicy', () => {
       const policy = new StatusCodeRetryPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(createHttpError('Forbidden', 403));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Forbidden');
+      await expect(policy.execute(fn)).rejects.toThrow('Forbidden');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -829,10 +810,7 @@ describe('StatusCodeRetryPolicy', () => {
       const policy = new StatusCodeRetryPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(createHttpError('Not found', 404));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Not found');
+      await expect(policy.execute(fn)).rejects.toThrow('Not found');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -840,10 +818,7 @@ describe('StatusCodeRetryPolicy', () => {
       const policy = new StatusCodeRetryPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(createHttpError('Validation error', 422));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Validation error');
+      await expect(policy.execute(fn)).rejects.toThrow('Validation error');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -851,10 +826,7 @@ describe('StatusCodeRetryPolicy', () => {
       const policy = new StatusCodeRetryPolicy(defaultConfig);
       const fn = vi.fn().mockRejectedValue(new Error('Plain error'));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Plain error');
+      await expect(policy.execute(fn)).rejects.toThrow('Plain error');
       expect(fn).toHaveBeenCalledTimes(1);
     });
   });
@@ -871,9 +843,10 @@ describe('StatusCodeRetryPolicy', () => {
       const fn = vi.fn().mockRejectedValue(createHttpError('Always fails', 500));
 
       const resultPromise = policy.execute(fn);
+      const assertion = expect(resultPromise).rejects.toThrow('Always fails');
       await vi.runAllTimersAsync();
 
-      await expect(resultPromise).rejects.toThrow('Always fails');
+      await assertion;
       // Initial attempt + 2 retries = 3 total calls
       expect(fn).toHaveBeenCalledTimes(3);
     });
@@ -888,10 +861,8 @@ describe('StatusCodeRetryPolicy', () => {
 
       const fn = vi.fn().mockRejectedValue(createHttpError('Fails', 500));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Fails');
+      // maxRetries=0 means no retry, so it throws immediately (non-retryable path)
+      await expect(policy.execute(fn)).rejects.toThrow('Fails');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -950,10 +921,7 @@ describe('StatusCodeRetryPolicy', () => {
 
       const fn = vi.fn().mockRejectedValue(createHttpError('Bad gateway', 502));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Bad gateway');
+      await expect(policy.execute(fn)).rejects.toThrow('Bad gateway');
       expect(fn).toHaveBeenCalledTimes(1);
     });
 
@@ -967,10 +935,7 @@ describe('StatusCodeRetryPolicy', () => {
 
       const fn = vi.fn().mockRejectedValue(createHttpError('Server error', 500));
 
-      const resultPromise = policy.execute(fn);
-      await vi.runAllTimersAsync();
-
-      await expect(resultPromise).rejects.toThrow('Server error');
+      await expect(policy.execute(fn)).rejects.toThrow('Server error');
       expect(fn).toHaveBeenCalledTimes(1);
     });
   });
@@ -1077,10 +1042,11 @@ describe('RetryPolicy interface compliance', () => {
       it('propagates rejection on non-retryable error', async () => {
         const fn = vi.fn().mockRejectedValue(new Error('Unretryable'));
         const resultPromise = policy.execute(fn);
+        const assertion = expect(resultPromise).rejects.toThrow('Unretryable');
 
         await vi.runAllTimersAsync();
 
-        await expect(resultPromise).rejects.toThrow('Unretryable');
+        await assertion;
       });
     });
   }

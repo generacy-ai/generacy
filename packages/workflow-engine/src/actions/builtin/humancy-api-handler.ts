@@ -234,6 +234,7 @@ export class HumancyApiDecisionHandler implements HumanDecisionHandler {
       question: request.title,
       context,
       options: options.length > 0 ? options : undefined,
+      expiresAt: new Date(Date.now() + timeout + EXPIRY_BUFFER_MS).toISOString(),
     };
 
     if (this.config.projectId) {

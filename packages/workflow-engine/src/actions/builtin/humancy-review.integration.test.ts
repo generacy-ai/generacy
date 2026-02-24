@@ -307,9 +307,9 @@ describe('HumancyReviewAction Integration', () => {
 
       expect(result.status).toBe('completed');
 
-      // The review step should have captured the approval
+      // The review step should have captured the approval (keyed by step name)
       const context = executor.getExecutionContext();
-      const reviewOutput = context?.getStepOutput('review-step');
+      const reviewOutput = context?.getStepOutput('Review Step');
       expect(reviewOutput).toBeDefined();
       expect(reviewOutput?.parsed).toMatchObject({
         approved: true,

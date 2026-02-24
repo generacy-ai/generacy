@@ -100,9 +100,10 @@ describe('retry', () => {
     const fn = vi.fn().mockRejectedValue(new Error('always fails'));
 
     const resultPromise = retry({ fn, maxAttempts: 3, initialDelay: 100, backoffFactor: 2, maxDelay: 1000 });
+    const assertion = expect(resultPromise).rejects.toThrow(MaxRetriesExceededError);
     await vi.runAllTimersAsync();
 
-    await expect(resultPromise).rejects.toThrow(MaxRetriesExceededError);
+    await assertion;
     expect(fn).toHaveBeenCalledTimes(3);
   });
 

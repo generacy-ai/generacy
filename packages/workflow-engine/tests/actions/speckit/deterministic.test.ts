@@ -25,24 +25,55 @@ vi.mock('../../../src/actions/builtin/speckit/lib/fs.js', async () => {
   };
 });
 
-// Mock simple-git
+// Shared mock git instance so tests can control behavior
+const mockGit: Record<string, ReturnType<typeof vi.fn>> = {
+  branchLocal: vi.fn(),
+  checkoutLocalBranch: vi.fn(),
+  checkout: vi.fn(),
+  status: vi.fn(),
+  fetch: vi.fn(),
+  branch: vi.fn(),
+  pull: vi.fn(),
+  reset: vi.fn(),
+  revparse: vi.fn(),
+  raw: vi.fn(),
+  listRemote: vi.fn(),
+};
+
+// Mock simple-git to always return the shared instance
 vi.mock('simple-git', () => ({
-  simpleGit: vi.fn(() => ({
-    branchLocal: vi.fn().mockResolvedValue({ all: [], current: 'main' }),
-    checkoutLocalBranch: vi.fn().mockResolvedValue(undefined),
-    checkout: vi.fn().mockResolvedValue(undefined),
-    status: vi.fn().mockResolvedValue({ current: '001-test-feature' }),
-    fetch: vi.fn().mockResolvedValue(undefined),
-    branch: vi.fn().mockResolvedValue({ all: [] }),
-    pull: vi.fn().mockResolvedValue(undefined),
-  })),
+  simpleGit: vi.fn(() => mockGit),
 }));
 
 describe('Deterministic Operations', () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Default mock implementations
+    // Configure shared git mock defaults
+    mockGit.branchLocal.mockResolvedValue({ all: [], current: 'main' });
+    mockGit.checkoutLocalBranch.mockResolvedValue(undefined);
+    mockGit.checkout.mockResolvedValue(undefined);
+    mockGit.status.mockResolvedValue({ current: '001-test-feature' });
+    mockGit.fetch.mockResolvedValue(undefined);
+    mockGit.branch.mockResolvedValue({ all: [] });
+    mockGit.pull.mockResolvedValue(undefined);
+    mockGit.reset.mockResolvedValue(undefined);
+    mockGit.listRemote.mockResolvedValue('ref: refs/heads/main\tHEAD');
+    mockGit.raw.mockResolvedValue('refs/remotes/origin/main');
+    // Smart revparse: return branch name for --abbrev-ref, commit hash otherwise
+    mockGit.revparse.mockImplementation(async (args: string[]) => {
+      if (Array.isArray(args) && args.includes('--abbrev-ref')) {
+        // Return the branch that was last checked out via checkoutLocalBranch
+        const calls = mockGit.checkoutLocalBranch.mock.calls;
+        if (calls.length > 0) {
+          return calls[calls.length - 1][0];
+        }
+        return 'main';
+      }
+      return 'abc123';
+    });
+
+    // Default fs mock implementations
     vi.mocked(fs.exists).mockResolvedValue(false);
     vi.mocked(fs.findRepoRoot).mockResolvedValue('/repo');
     vi.mocked(fs.resolveSpecsPath).mockResolvedValue('/repo/specs');

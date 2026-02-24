@@ -15,7 +15,9 @@ describe('CorrelationManager', () => {
   });
 
   afterEach(() => {
-    manager.cancelAll();
+    // Suppress unhandled rejections from cancelling pending correlations during cleanup.
+    // Tests that need to assert on cancellation behaviour do so explicitly.
+    try { manager.cancelAll(); } catch { /* ignore */ }
     vi.useRealTimers();
   });
 
@@ -77,7 +79,7 @@ describe('CorrelationManager', () => {
 
     it('throws when correlation is already pending', async () => {
       const request = createRequest('corr-1');
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
 
       await expect(manager.waitForResponse(request, 5000)).rejects.toThrow(
         'Correlation corr-1 is already pending'
@@ -112,7 +114,7 @@ describe('CorrelationManager', () => {
       const request = createRequest('corr-1');
       const response = createResponse('corr-1');
 
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
 
       expect(manager.correlate('corr-1', response)).toBe(true);
     });
@@ -149,7 +151,7 @@ describe('CorrelationManager', () => {
 
     it('removes correlation after cancellation', () => {
       const request = createRequest('corr-1');
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
       manager.cancel('corr-1');
 
       expect(manager.isPending('corr-1')).toBe(false);
@@ -175,7 +177,7 @@ describe('CorrelationManager', () => {
   describe('isPending', () => {
     it('returns true for pending correlation', () => {
       const request = createRequest('corr-1');
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
 
       expect(manager.isPending('corr-1')).toBe(true);
     });
@@ -189,10 +191,10 @@ describe('CorrelationManager', () => {
     it('returns correct count', () => {
       expect(manager.pendingCount).toBe(0);
 
-      manager.waitForResponse(createRequest('corr-1'), 5000);
+      manager.waitForResponse(createRequest('corr-1'), 5000).catch(() => {});
       expect(manager.pendingCount).toBe(1);
 
-      manager.waitForResponse(createRequest('corr-2'), 5000);
+      manager.waitForResponse(createRequest('corr-2'), 5000).catch(() => {});
       expect(manager.pendingCount).toBe(2);
 
       manager.cancel('corr-1');
@@ -203,7 +205,7 @@ describe('CorrelationManager', () => {
   describe('getPendingInfo', () => {
     it('returns info about pending correlations', () => {
       const request = createRequest('corr-1');
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
 
       const info = manager.getPendingInfo();
 
@@ -220,7 +222,7 @@ describe('CorrelationManager', () => {
       const startedHandler = vi.fn();
       manager.on('correlation:started', startedHandler);
 
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
 
       expect(startedHandler).toHaveBeenCalledWith('corr-1', request);
     });
@@ -231,7 +233,7 @@ describe('CorrelationManager', () => {
       const completedHandler = vi.fn();
       manager.on('correlation:completed', completedHandler);
 
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
       manager.correlate('corr-1', response);
 
       expect(completedHandler).toHaveBeenCalledWith('corr-1', request, response);
@@ -265,7 +267,7 @@ describe('CorrelationManager', () => {
 
       manager.on('correlation:started', startedHandler);
       manager.off('correlation:started', startedHandler);
-      manager.waitForResponse(request, 5000);
+      manager.waitForResponse(request, 5000).catch(() => {});
 
       expect(startedHandler).not.toHaveBeenCalled();
     });
