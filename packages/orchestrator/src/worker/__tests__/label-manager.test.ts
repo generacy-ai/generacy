@@ -164,6 +164,7 @@ describe('LabelManager', () => {
         'waiting-for:clarification',
         'agent:paused',
       ]);
+      expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, ['agent:in-progress']);
     });
 
     it('does not call removeLabels when no stale labels exist', async () => {
@@ -180,6 +181,7 @@ describe('LabelManager', () => {
 
       expect(mockGithub.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
       expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+      expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, ['agent:in-progress']);
     });
   });
 

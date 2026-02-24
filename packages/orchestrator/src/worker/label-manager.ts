@@ -140,7 +140,8 @@ export class LabelManager {
    * Called at the start of a resume (continue command) before the phase loop.
    *
    * Removes stale `waiting-for:*` and `agent:paused` labels that were set
-   * when the workflow paused at a gate.
+   * when the workflow paused at a gate, and adds `agent:in-progress` to
+   * reflect the active workflow state.
    */
   async onResumeStart(): Promise<void> {
     await this.retryWithBackoff(async () => {
@@ -160,6 +161,13 @@ export class LabelManager {
         );
         await this.github.removeLabels(this.owner, this.repo, this.issueNumber, labelsToRemove);
       }
+
+      // Add agent:in-progress to reflect active workflow state
+      this.logger.info(
+        { issue: this.issueNumber },
+        'Resume: adding agent:in-progress label',
+      );
+      await this.github.addLabels(this.owner, this.repo, this.issueNumber, ['agent:in-progress']);
     });
   }
 
