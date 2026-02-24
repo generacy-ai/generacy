@@ -337,7 +337,7 @@
 ## Phase 3C: Stable Release Workflows
 
 ### T019 [DONE] [P] [US1] Create stable release workflow for latency
-**File**: `/workspaces/latency/.github/workflows/release.yml`
+**File**: `/workspaces/tetrad-development/packages/latency/.github/workflows/release.yml`
 
 **Depends on**: T016
 
@@ -353,20 +353,20 @@
 - Verify workflow syntax
 - Commit to develop branch
 
-### T020 [P] [US1] Create stable release workflow for agency
-**File**: `/workspaces/tetrad-development/packages/agency/.github/workflows/release.yml`
+### T020 [DONE] [P] [US1] Create stable release workflow for agency
+**File**: `/workspaces/agency/.github/workflows/release.yml`
 
 **Depends on**: T017
 
 - Create `release.yml` workflow:
   - Trigger: push to main branch
-  - Run dependency verification: `./scripts/verify-deps.sh latest` (before publish step)
+  - Run dependency verification: `./packages/agency/scripts/verify-deps.sh latest` (before publish step)
   - Use changesets/action@v1
   - Version command: `pnpm changeset version`
   - Publish command: `pnpm changeset publish`
   - Commit message: "chore: version packages"
   - PR title: "chore: version packages"
-  - Permissions: contents: write, pull-requests: write
+  - Permissions: contents: write, pull-requests: write, id-token: write
   - Use GITHUB_TOKEN and NPM_TOKEN
 - Verify workflow syntax
 - Commit to develop branch
