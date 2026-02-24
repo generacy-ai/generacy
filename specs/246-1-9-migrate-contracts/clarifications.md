@@ -1,6 +1,8 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
+
+**Key finding:** `@generacy-ai/contracts` has only ONE consumer: `humancy/extension` (via `file:../../contracts`), and even there many imports are commented out. The active repos (generacy, agency, latency, generacy-cloud) have zero dependency. Since humancy is "Deferred for release" per the buildout plan, this is effectively unused for repos in scope. The package itself is substantial (~1,152 exports, 209 TS files) so there IS meaningful content worth migrating.
 
 ## Questions
 
@@ -15,7 +17,7 @@
 - C) **Partially Used**: Only some repos use it, or it's used in nested packages (audit required to identify actual consumers)
 - D) **Future Dependency**: The package was created in preparation for future use (clarify roadmap before deciding)
 
-**Answer**:
+**Answer**: C) Partially Used — but barely. Only `humancy/extension` has a `file:../../contracts` dependency, and many of its imports are commented out. The active repos (generacy, agency, latency, generacy-cloud) have no dependency whatsoever. Since humancy is deferred for release, this is effectively B (Legacy/Unused) for the repos in scope. The package itself is substantial though (~1,152 exports, 209 TS files) so there IS meaningful content worth migrating to its proper homes.
 
 ---
 
@@ -30,7 +32,7 @@
 - C) **By Type Nature**: Abstract interfaces → latency, Zod schemas → agency, everything else case-by-case
 - D) **Predefined Mapping**: A specific mapping document or list exists that defines where each type should go
 
-**Answer**:
+**Answer**: A) By Directory Structure — The contracts repo is already organized by cross-component domain (`agency-generacy/`, `agency-humancy/`, `generacy-humancy/`, `common/`, `orchestration/`, `schemas/`, `telemetry/`). This existing structure maps directly to destinations. Combine with C as a secondary heuristic: Zod schemas for tool invocation go to agency, abstract orchestration types to latency, cross-component communication types to latency as the shared foundation.
 
 ---
 
@@ -45,7 +47,7 @@
 - C) **Feature Branches**: Long-lived feature branches across all repos, merged together when complete
 - D) **Monorepo Migration First**: Move all repos to a monorepo structure, then migrate types internally
 
-**Answer**:
+**Answer**: A) Coordinated Release — Since no active repo depends on contracts today, there is no breaking change window to manage. This is a "move types to their future home" migration, not a "swap live dependencies" migration. Humancy is deferred and can be updated when it comes back into scope. No backward-compatible bridge needed.
 
 ---
 
@@ -60,7 +62,7 @@
 - C) **Domain-Organized**: Organize by domain/feature (e.g., agency/src/tools/schemas/, latency/src/orchestration/types/)
 - D) **Separate Package**: Create new internal packages (e.g., @generacy-ai/latency-types, @generacy-ai/agency-schemas)
 
-**Answer**:
+**Answer**: C) Domain-Organized — Latency already uses a facet/plugin architecture. Migrated types should follow the existing conventions of each destination repo, organized by domain (e.g., `latency/src/orchestration/`, `agency/src/tools/schemas/`). Don't mirror the contracts structure since it was organized for a standalone package.
 
 ---
 
@@ -75,7 +77,7 @@
 - C) **Shared Validation Package**: Create a new shared validation package that both repos depend on
 - D) **Per-Repo Validation**: Each consuming repo implements its own validation for migrated types
 
-**Answer**:
+**Answer**: A) Migrate Everything — The Zod schemas provide runtime validation, not just types. They are integral to the contracts they define. Each destination repo should get the full type + schema + validation for its domain.
 
 ---
 
@@ -90,7 +92,7 @@
 - C) **Keep Centralized**: Keep generation in contracts temporarily, output to multiple repos
 - D) **Build-time Generation**: Set up build scripts in each repo to generate their own schemas
 
-**Answer**:
+**Answer**: A) Migrate Scripts — Move the generation scripts (e.g., `generate-tool-result-schema.ts`) to the repo that owns the source schemas (likely agency for tool schemas). Generated JSON schema files should be regenerated from the new location rather than copied.
 
 ---
 
@@ -105,7 +107,7 @@
 - C) **Archive Tests**: Keep tests in contracts as historical reference, don't migrate
 - D) **Integration Tests Only**: Keep unit tests archived, create new integration tests in consuming repos
 
-**Answer**:
+**Answer**: A) Migrate Tests — Tests validate the correctness of the types and schemas. They should travel with their types. Adapt them to the test conventions of the destination repo (all repos already use vitest).
 
 ---
 
@@ -120,7 +122,7 @@
 - C) **Consumer Owns**: The component that receives/validates the message owns the schema
 - D) **Keep Contracts for These**: Only migrate single-repo types, keep cross-repo types in a renamed contracts-lite package
 
-**Answer**:
+**Answer**: A) Latency as Common — Latency is explicitly defined as "shared facet interfaces, plugin abstractions" in the buildout plan. Cross-component types (`agency-generacy/`, `agency-humancy/`, `generacy-humancy/`) are the textbook definition of shared contracts. They belong in the shared foundation layer. The latency README already notes that abstract plugin interfaces were migrated there from contracts.
 
 ---
 
@@ -135,7 +137,7 @@
 - C) **External Developers**: Third-party developers using Generacy platform APIs
 - D) **All Stakeholders**: Comprehensive documentation for all current and future audiences
 
-**Answer**:
+**Answer**: A) Internal Team Only — Humancy is deferred, no external developers interact with contracts, and this is plumbing work. A brief internal migration note is sufficient. External-facing documentation (Epic 6) will reference the final package locations.
 
 ---
 
@@ -150,7 +152,7 @@
 - C) **New Type Checking**: Add type compatibility checks between repos to prevent drift
 - D) **Workspace Configuration**: Update monorepo tools (if applicable) or cross-repo references
 
-**Answer**:
+**Answer**: A) Dependency Updates Only — Since no active repo currently depends on contracts, the CI/CD impact is minimal. The main change is adding the new types/schemas to the build of latency and agency, which is just updating their source tree. No cross-repo build order changes needed.
 
 ---
 
@@ -165,7 +167,7 @@
 - C) **Opportunistic Migration (3+ months)**: Migrate types as they're needed or touched by other work
 - D) **Parallel Phases**: Multiple phases run concurrently with different types to accelerate completion
 
-**Answer**:
+**Answer**: A) Fast Migration (1-2 weeks) — The low active-dependency count makes this straightforward. The main work is auditing 1,152 exports, categorizing them, moving them to latency/agency, and running tests. No complex coordination needed since nothing actively consumes contracts.
 
 ---
 
@@ -180,7 +182,7 @@
 - C) **Partial Test**: Test individual repo rollback but not coordinated cross-repo rollback
 - D) **No Formal Test**: Rely on git revert capability and proceed without explicit rollback testing
 
-**Answer**:
+**Answer**: D) No Formal Test — Given that no active repo depends on contracts, the rollback risk is extremely low. Standard git revert capability is sufficient. The only consumer (humancy) is deferred and wouldn't be affected.
 
 ---
 
@@ -195,7 +197,7 @@
 - C) **Developer Knowledge**: Ask team members which types are single-consumer based on experience
 - D) **Conservative Approach**: Only inline types with obvious single use; treat ambiguous cases as shared
 
-**Answer**:
+**Answer**: A) Static Analysis — Use grep/ripgrep across all repos for import paths. Given the `file:` dependency model, static analysis will catch everything. The TypeScript compiler API is overkill when grep gives full coverage.
 
 ---
 
@@ -210,7 +212,7 @@
 - C) **Archive Version**: Publish final version with deprecation notice, leave published indefinitely
 - D) **Not Published**: Package is private/internal only, no npm concerns
 
-**Answer**:
+**Answer**: D) Not Published — The only reference is a `file:../../contracts` path in humancy/extension. There's no evidence of npm publication. No npm deprecation/unpublishing needed.
 
 ---
 
@@ -225,7 +227,7 @@
 - C) **Emergency Only**: Only critical bug fixes allowed, documented as exceptions
 - D) **Cancel Migration**: Pause or cancel migration if active type changes are needed
 
-**Answer**:
+**Answer**: A) Freeze Contracts — Since there are no active consumers and humancy is deferred, a freeze has zero cost. Any needed type evolution happens in the destination repos after migration.
 
 ---
 
@@ -240,6 +242,6 @@
 - C) **Non-Implementation**: Any type definition without runtime logic (interfaces, types, schemas)
 - D) **Core Domain Models**: The essential domain entities and contracts regardless of TypeScript construct
 
-**Answer**:
+**Answer**: D) Core Domain Models — The contracts repo contains interfaces, type aliases, Zod schemas, ID generators, and utility functions. All of these define the "contract" between components. The migration should be inclusive — anything that defines a cross-component agreement, regardless of TypeScript construct (interface, type, schema, or helper function).
 
 ---
