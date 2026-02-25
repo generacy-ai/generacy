@@ -1,0 +1,9 @@
+# Config for discovery testing
+# Should be found from nested subdirectories
+
+project:
+  id: "proj_discovery"
+  name: "Discovery Test Project"
+
+repos:
+  primary: "github.com/test/discovery"

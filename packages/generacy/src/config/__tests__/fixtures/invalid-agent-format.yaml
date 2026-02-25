@@ -1,0 +1,13 @@
+# Invalid config fixture - invalid agent name format
+# Agent name must be kebab-case (lowercase alphanumeric with hyphens)
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+
+defaults:
+  agent: "Claude_Code"  # Should be kebab-case, not snake_case or PascalCase
+  baseBranch: main

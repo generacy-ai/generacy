@@ -1,0 +1,33 @@
+# Single-repo .generacy/config.yaml example
+# Project with only one repository and default settings
+# This is ideal for standalone projects without dependencies on other repos
+
+schemaVersion: "1"
+
+project:
+  # Unique project ID from generacy.ai (format: proj_{alphanumeric})
+  id: "proj_myproject456"
+
+  # Human-readable project name
+  name: "My Single Repo Project"
+
+repos:
+  # Primary repository - the only repo for this project
+  # Format: github.com/{owner}/{repo} (no protocol, no .git suffix)
+  primary: "github.com/myorg/main-app"
+
+  # No dev or clone repos needed for a single-repo project
+  # dev: []    # Optional: other repos to clone for active development
+  # clone: []  # Optional: other repos to clone for reference only
+
+defaults:
+  # Default agent for workflow execution
+  agent: claude-code
+
+  # Default base branch for creating feature branches
+  baseBranch: main
+
+# Optional: orchestrator settings can be omitted to use defaults
+# orchestrator:
+#   pollIntervalMs: 5000  # How often to check for new workflows (min 5000ms)
+#   workerCount: 3        # Max concurrent workflow executions (1-20)

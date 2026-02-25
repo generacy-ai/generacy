@@ -1,0 +1,10 @@
+# Invalid config fixture - YAML syntax error
+# Unclosed array bracket should cause parse error
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+  invalid: [unclosed
+
+repos:
+  primary: "github.com/test/repo"

@@ -1,0 +1,12 @@
+# Invalid config fixture - primary repo in dev list
+# Primary repository should not appear in dev list
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+  dev:
+    - "github.com/test/repo"  # Duplicate with primary
+    - "github.com/test/shared"

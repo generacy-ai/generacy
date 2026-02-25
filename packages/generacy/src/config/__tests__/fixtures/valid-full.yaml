@@ -1,0 +1,25 @@
+# Full valid config fixture
+# Used for testing complete config with all optional fields
+
+schemaVersion: "1"
+
+project:
+  id: "proj_abc123xyz"
+  name: "My Full Project"
+
+repos:
+  primary: "github.com/acme/main-api"
+  dev:
+    - "github.com/acme/shared-lib"
+    - "github.com/acme/worker-service"
+  clone:
+    - "github.com/acme/design-system"
+    - "github.com/public/api-docs"
+
+defaults:
+  agent: claude-code
+  baseBranch: main
+
+orchestrator:
+  pollIntervalMs: 5000
+  workerCount: 3
