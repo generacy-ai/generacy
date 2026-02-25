@@ -39,3 +39,6 @@ coverage/
 
 # VS Code extension packages
 *.vsix
+
+# Gitleaks
+gitleaks-report.json

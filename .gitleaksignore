@@ -1,0 +1,11 @@
+# .gitleaksignore
+# Gitleaks false positive allowlist
+# Format: one fingerprint hash per line (from gitleaks report JSON "Fingerprint" field)
+#
+# To add a false positive:
+# 1. Run: gitleaks detect --source . --verbose --report-format json --report-path /tmp/gitleaks-report.json
+# 2. Find the false positive in the report
+# 3. Copy the "Fingerprint" value and paste it below with a comment explaining why it is a false positive
+#
+# No false positives identified during initial audit (2026-02-25).
+# Scan: gitleaks v8.22.1 — 225 commits scanned, 0 findings.

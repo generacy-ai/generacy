@@ -14,14 +14,14 @@
 
 These three files are independent of each other and can be created in parallel.
 
-### T001 [P] Add LICENSE file
+### T001 [DONE] [P] Add LICENSE file
 **File**: `LICENSE` (new)
 - Create MIT license file at repository root
 - Use copyright line: `Copyright (c) 2026 The Generacy AI Authors`
 - Use standard MIT license text (matches `"license": "MIT"` already in `package.json`)
 - Verify the full license text matches the OSI-approved MIT template
 
-### T002 [P] Add SECURITY.md
+### T002 [DONE] [P] Add SECURITY.md
 **File**: `SECURITY.md` (new)
 - Create security policy document at repository root
 - Include "Reporting a Vulnerability" section with:
@@ -32,7 +32,7 @@ These three files are independent of each other and can be created in parallel.
 - Include "Response Timeline" section: acknowledgment within 48 hours, target fix within 90 days
 - Include "Disclosure Policy" section: coordinated disclosure after patch is available
 
-### T003 [P] Add .github/CODEOWNERS
+### T003 [DONE] [P] Add .github/CODEOWNERS
 **File**: `.github/CODEOWNERS` (new)
 - Create CODEOWNERS file in `.github/` directory (directory already exists)
 - Add default owner: `* @generacy-ai/core`
@@ -59,7 +59,7 @@ These three files are independent of each other and can be created in parallel.
 
 ## Phase 2: Tool-Config Directory Audit
 
-### T004 Audit tool-config directories for sensitive content
+### T004 [DONE] Audit tool-config directories for sensitive content
 **Directories**:
 - `.agency/` — `agency.config.json`
 - `.claude/` — `autodev.json`
@@ -75,20 +75,20 @@ These three files are independent of each other and can be created in parallel.
 
 This phase must run after Phase 1 so that the new files are committed and included in the scan. Tasks within Phase 3 are sequential.
 
-### T005 Install gitleaks binary
+### T005 [DONE] Install gitleaks binary
 **Action**: Download and install gitleaks
 - Download pre-built Linux amd64 binary from gitleaks GitHub releases (v8.22.x)
 - Extract to `/tmp/gitleaks` (or similar local path)
 - Verify binary runs: `/tmp/gitleaks version`
 
-### T006 Create .gitleaks.toml configuration
+### T006 [DONE] Create .gitleaks.toml configuration
 **File**: `.gitleaks.toml` (new)
 - Create gitleaks configuration at repository root
 - Extend default gitleaks rules
 - Set project title: `"Generacy Gitleaks Configuration"`
 - Add allowlist paths: `node_modules`, `pnpm-lock.yaml`, `package-lock.json`, `.env.example`
 
-### T007 Run full git history scan
+### T007 [DONE] Run full git history scan
 **Action**: Execute gitleaks scan
 - Run: `/tmp/gitleaks detect --source /workspaces/generacy --verbose --report-format json --report-path /tmp/gitleaks-report.json`
 - Review all findings in the report
@@ -96,13 +96,13 @@ This phase must run after Phase 1 so that the new files are committed and includ
 - **If true positives found**: remediate with `git filter-repo` or BFG Repo Cleaner (blocks T008)
 - **If only false positives**: proceed to T008
 
-### T008 Create .gitleaksignore with false positive fingerprints
+### T008 [DONE] Create .gitleaksignore with false positive fingerprints
 **File**: `.gitleaksignore` (new)
 - Populate with fingerprint hashes from confirmed false positives in the gitleaks report
 - Add comments explaining each false positive (e.g., placeholder values in `.env.example`)
 - Re-run gitleaks scan to confirm clean output with the ignore file in place
 
-### T009 Update .gitignore with gitleaks report exclusion
+### T009 [DONE] Update .gitignore with gitleaks report exclusion
 **File**: `.gitignore` (modified)
 - Add `gitleaks-report.json` entry to `.gitignore`
 - Place under a new `# Gitleaks` comment section
@@ -111,7 +111,7 @@ This phase must run after Phase 1 so that the new files are committed and includ
 
 ## Phase 4: Verification & PR
 
-### T010 Run final verification
+### T010 [DONE] Run final verification
 **Action**: Verify all deliverables
 - [ ] `LICENSE` file exists at repo root with correct MIT text, year (2026), and holder ("The Generacy AI Authors")
 - [ ] `SECURITY.md` exists at repo root with GitHub Security Advisories link, `security@generacy.ai`, and early-development version policy
