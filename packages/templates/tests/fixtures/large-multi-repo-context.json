@@ -1,0 +1,50 @@
+{
+  "project": {
+    "id": "proj_large999",
+    "name": "Enterprise Microservices Platform"
+  },
+  "repos": {
+    "primary": "enterprise/platform-orchestrator",
+    "dev": [
+      "enterprise/auth-service",
+      "enterprise/user-service",
+      "enterprise/payment-service",
+      "enterprise/notification-service",
+      "enterprise/analytics-service",
+      "enterprise/admin-dashboard",
+      "enterprise/customer-portal",
+      "enterprise/mobile-backend",
+      "enterprise/reporting-service",
+      "enterprise/search-service"
+    ],
+    "clone": [
+      "enterprise/shared-schemas",
+      "enterprise/common-lib",
+      "enterprise/proto-defs",
+      "enterprise/api-contracts",
+      "enterprise/test-fixtures",
+      "enterprise/internal-tools"
+    ],
+    "hasDevRepos": true,
+    "hasCloneRepos": true,
+    "isMultiRepo": true
+  },
+  "defaults": {
+    "agent": "claude-code",
+    "baseBranch": "main",
+    "releaseStream": "preview"
+  },
+  "orchestrator": {
+    "pollIntervalMs": 2000,
+    "workerCount": 8
+  },
+  "devcontainer": {
+    "baseImage": "mcr.microsoft.com/devcontainers/base:ubuntu",
+    "featureTag": ":preview"
+  },
+  "metadata": {
+    "timestamp": "2026-02-24T20:15:45.678Z",
+    "generatedBy": "generacy-cloud",
+    "version": "1.0.0"
+  }
+}

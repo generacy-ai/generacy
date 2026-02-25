@@ -1,0 +1,15 @@
+{
+  "name": "{{project.name}}",
+  "image": "{{devcontainer.baseImage}}",
+  "features": {
+    "ghcr.io/generacy-ai/generacy/generacy{{devcontainer.featureTag}}": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "generacy-ai.agency",
+        "generacy-ai.generacy"
+      ]
+    }
+  }
+}
