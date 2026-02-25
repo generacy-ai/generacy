@@ -1,235 +1,228 @@
 # Feature Specification: Define .generacy/config.yaml Schema
 
-**Branch**: `248-4-2-define-generacy` | **Date**: 2026-02-24 | **Status**: Draft
+**Branch**: `248-4-2-define-generacy` | **Date**: 2026-02-25 | **Status**: Complete
 
 ## Summary
 
-Define the schema for `.generacy/config.yaml`, the central configuration file for Generacy projects. This file establishes the connection between a local development environment and the generacy.ai platform, specifies which repositories are involved in development, configures workflow defaults, and sets orchestrator behavior. The schema must be well-documented, validated by the Generacy CLI, and support both simple and complex multi-repository project structures.
+Define and implement the `.generacy/config.yaml` configuration schema that serves as the project-level configuration file for Generacy. This schema links a local repository to a generacy.ai project, declares repository relationships (primary, dev, clone-only), sets workflow defaults (agent, base branch), and configures orchestrator runtime settings. The Generacy CLI reads, discovers, and validates this config file using Zod schemas with two-layer validation (structural + semantic).
+
+The config file lives at `.generacy/config.yaml` in the primary repository root and is placed there by the onboarding PR (Epic 4.3). Other packages in the ecosystem (orchestrator, VS Code extension, generacy-cloud) consume the schema types via the `@generacy-ai/generacy/config` subpath export.
+
+### Config Schema Overview
+
+```yaml
+schemaVersion: "1"          # Optional, defaults to "1"
+project:
+  id: "proj_abc123xyz"      # Required — server-issued project ID
+  name: "My Project"        # Required — human-readable name
+
+repos:
+  primary: "github.com/acme/main-api"  # Required — repo where config lives
+  dev:                                  # Optional — active development repos
+    - "github.com/acme/shared-lib"
+    - "github.com/acme/worker-service"
+  clone:                                # Optional — read-only reference repos
+    - "github.com/acme/design-system"
+    - "github.com/public/api-docs"
+
+defaults:                    # Optional section
+  agent: claude-code         # Optional — default agent (kebab-case)
+  baseBranch: main           # Optional — default base branch
+
+orchestrator:                # Optional section
+  pollIntervalMs: 5000       # Optional — min 5000ms
+  workerCount: 3             # Optional — range 1–20
+```
+
+---
 
 ## User Stories
 
 ### US1: Project Configuration
 
-**As a** developer initializing a Generacy project,
-**I want** to configure my project ID and name in `.generacy/config.yaml`,
-**So that** my local environment is linked to the correct generacy.ai project and I can manage project metadata in one place.
+**As a** developer onboarding a project to Generacy,
+**I want** a config file that links my repository to my generacy.ai project,
+**So that** the CLI and orchestrator know which project context to operate in.
 
 **Acceptance Criteria**:
-- [ ] Config file includes `project.id` field for generacy.ai linking
-- [ ] Config file includes `project.name` field for human-readable identification
-- [ ] Generacy CLI validates that `project.id` follows the format `proj_[alphanumeric]`
-- [ ] Generacy CLI validates that `project.name` is a non-empty string
+- [ ] Config file contains `project.id` (format: `proj_{alphanumeric}`, min 12 chars) and `project.name` (non-empty, max 255 chars)
+- [ ] Config file is placed at `.generacy/config.yaml` in the repository root
+- [ ] CLI validates the project section on load and reports clear errors for invalid IDs or missing fields
 
-### US2: Repository Organization
+### US2: Multi-Repository Declaration
 
-**As a** developer working across multiple repositories,
-**I want** to specify which repositories are primary, dev, or clone-only,
-**So that** Generacy knows which repos to actively develop in versus clone for reference only.
+**As a** developer working on a multi-repo project,
+**I want** to declare which repositories are for active development and which are reference-only,
+**So that** the dev container clones the right repos with the right access levels.
 
 **Acceptance Criteria**:
-- [ ] Config supports `repos.primary` field for the main repository URL
-- [ ] Config supports `repos.dev` array for repositories actively developed
-- [ ] Config supports `repos.clone` array for reference-only repositories
-- [ ] Generacy CLI validates that all repository URLs follow valid format (e.g., `github.com/org/repo`)
-- [ ] Generacy CLI ensures `repos.primary` is specified if `repos` section exists
-- [ ] Documentation clarifies the distinction between dev and clone repositories
+- [ ] `repos.primary` identifies the main repository (required, format: `github.com/{owner}/{repo}`)
+- [ ] `repos.dev` lists 0..N repositories for active development (optional, defaults to `[]`)
+- [ ] `repos.clone` lists 0..N repositories for read-only reference (optional, defaults to `[]`)
+- [ ] No repository may appear in more than one list (semantic validation rejects duplicates with clear error)
+- [ ] Repository URLs use protocol-agnostic format without `.git` suffix
 
 ### US3: Workflow Defaults
 
-**As a** team lead standardizing workflows,
-**I want** to set default agent and base branch in the config,
-**So that** all developers on my team use consistent settings without manual configuration.
+**As a** team lead configuring Generacy for my team,
+**I want** to set default workflow settings in config,
+**So that** team members don't need to specify agent and branch on every operation.
 
 **Acceptance Criteria**:
-- [ ] Config supports `defaults.agent` field for specifying default AI agent (e.g., `claude-code`)
-- [ ] Config supports `defaults.baseBranch` field for specifying default base branch (e.g., `main`, `develop`)
-- [ ] Generacy CLI validates that `defaults.agent` is one of the supported agent types
-- [ ] Generacy CLI validates that `defaults.baseBranch` is a valid git branch name format
+- [ ] `defaults.agent` accepts kebab-case agent names (e.g., `claude-code`, `cursor-agent`)
+- [ ] `defaults.baseBranch` accepts any branch name string (existence validated at PR creation time, not config load)
+- [ ] Both fields are optional — omitting them does not cause validation errors
 
 ### US4: Orchestrator Configuration
 
-**As a** developer optimizing orchestrator performance,
-**I want** to configure poll interval and worker count,
-**So that** I can balance responsiveness with system resource usage.
+**As a** platform operator deploying Generacy,
+**I want** orchestrator settings in the project config,
+**So that** I can tune polling interval and worker concurrency per project.
 
 **Acceptance Criteria**:
-- [ ] Config supports `orchestrator.pollIntervalMs` field for polling frequency in milliseconds
-- [ ] Config supports `orchestrator.workerCount` field for number of concurrent workers
-- [ ] Generacy CLI validates that `pollIntervalMs` is a positive integer
-- [ ] Generacy CLI validates that `workerCount` is a positive integer between 1 and reasonable max (e.g., 10)
-- [ ] Default values are provided when orchestrator settings are omitted
+- [ ] `orchestrator.pollIntervalMs` accepts integers >= 5000 (minimum 5-second interval)
+- [ ] `orchestrator.workerCount` accepts integers in range 1–20
+- [ ] Both fields are optional — sensible defaults are used when omitted
+- [ ] Settings can be overridden by environment variables in production deployments
 
-### US5: Schema Validation
+### US5: Config Discovery
 
-**As a** developer editing `.generacy/config.yaml`,
-**I want** immediate validation feedback from the CLI,
-**So that** I can catch configuration errors before running Generacy commands.
+**As a** developer running CLI commands from any subdirectory,
+**I want** the CLI to automatically find my project config,
+**So that** I don't have to specify the config path every time.
 
 **Acceptance Criteria**:
-- [ ] Generacy CLI reads and parses `.generacy/config.yaml` on all relevant commands
-- [ ] CLI provides clear error messages for invalid YAML syntax
-- [ ] CLI provides clear error messages for schema validation failures
-- [ ] CLI indicates which field failed validation and why
-- [ ] CLI exits with non-zero code when config is invalid
+- [ ] CLI discovers `.generacy/config.yaml` by walking up the directory tree from the current directory
+- [ ] Discovery stops at the repository root (detected via `.git/` directory)
+- [ ] `GENERACY_CONFIG_PATH` environment variable overrides discovery (highest priority)
+- [ ] Explicit `--config` option overrides discovery (second priority)
+- [ ] Clear error message when config not found, showing all searched paths
+
+---
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Schema must define `project.id` as required string field | P0 | Format: `proj_[alphanumeric]`, links to generacy.ai |
-| FR-002 | Schema must define `project.name` as required string field | P0 | Human-readable project name |
-| FR-003 | Schema must define `repos.primary` as required string field | P0 | Primary repository URL in format `github.com/org/repo` |
-| FR-004 | Schema must define `repos.dev` as optional string array | P1 | Repositories cloned for active development |
-| FR-005 | Schema must define `repos.clone` as optional string array | P1 | Repositories cloned read-only for reference |
-| FR-006 | Schema must define `defaults.agent` as optional string field | P1 | Default agent identifier, e.g., `claude-code` |
-| FR-007 | Schema must define `defaults.baseBranch` as optional string field | P1 | Default base branch name, e.g., `main` or `develop` |
-| FR-008 | Schema must define `orchestrator.pollIntervalMs` as optional integer field | P1 | Polling interval in milliseconds, default 5000 |
-| FR-009 | Schema must define `orchestrator.workerCount` as optional integer field | P1 | Concurrent worker count, default 3, max 10 |
-| FR-010 | CLI must validate YAML syntax and provide parse error details | P0 | Exit with non-zero code on invalid YAML |
-| FR-011 | CLI must validate all required fields are present | P0 | List missing required fields in error message |
-| FR-012 | CLI must validate field types match schema | P0 | E.g., string vs integer vs array |
-| FR-013 | CLI must validate repository URL format | P1 | Support `github.com/org/repo` pattern, allow other hosts |
-| FR-014 | CLI must validate project ID format matches `proj_[alphanumeric]` | P1 | Prevent invalid project IDs |
-| FR-015 | CLI must validate orchestrator values are within acceptable ranges | P1 | pollIntervalMs > 0, workerCount between 1-10 |
-| FR-016 | Schema documentation must include complete example config | P0 | Show all fields with realistic values |
-| FR-017 | Schema documentation must specify which fields are required vs optional | P0 | Clear indication in docs |
-| FR-018 | Schema documentation must document default values for optional fields | P1 | Users need to know implicit defaults |
+| FR-001 | Define Zod schema for `project` section with `id` and `name` fields | P1 | `id`: regex `^proj_[a-z0-9]+$`, min 12 chars; `name`: non-empty, max 255 chars |
+| FR-002 | Define Zod schema for `repos` section with `primary`, `dev`, `clone` fields | P1 | `primary` required; `dev`/`clone` optional, default `[]` |
+| FR-003 | Validate repository URL format: `github.com/{owner}/{repo}` | P1 | No protocol prefix, no `.git` suffix, regex-validated |
+| FR-004 | Define Zod schema for `defaults` section with `agent` and `baseBranch` | P2 | Both optional; `agent` must be kebab-case |
+| FR-005 | Define Zod schema for `orchestrator` section with `pollIntervalMs` and `workerCount` | P2 | Both optional; `pollIntervalMs` >= 5000, `workerCount` 1–20 |
+| FR-006 | Implement `GeneracyConfigSchema` root schema composing all sections | P1 | `project` and `repos` required; `defaults` and `orchestrator` optional |
+| FR-007 | Add optional `schemaVersion` field with default `"1"` | P2 | For future migration support |
+| FR-008 | Implement semantic validator: no duplicate repos across lists | P1 | Primary cannot appear in dev/clone; no overlap between dev and clone; no duplicates within a list |
+| FR-009 | Implement config file discovery via directory tree walking | P1 | Walk up from startDir, check `.generacy/config.yaml` at each level, stop at `.git/` |
+| FR-010 | Support `GENERACY_CONFIG_PATH` environment variable override | P1 | Highest priority in discovery chain |
+| FR-011 | Support explicit `configPath` option in `loadConfig()` | P1 | Second priority after env var |
+| FR-012 | Implement YAML parsing with clear error messages | P1 | `ConfigParseError` with file path and parse error details |
+| FR-013 | Implement schema validation error reporting with field paths | P1 | `ConfigSchemaError` with dotted paths (e.g., `repos.primary`) |
+| FR-014 | Export `validateConfig()` function for structural validation | P1 | Returns typed `GeneracyConfig` or throws `ZodError` |
+| FR-015 | Export `loadConfig()` function with full discovery + validation pipeline | P1 | Env var → explicit path → auto-discovery → parse → validate → semantic check |
+| FR-016 | Export `parseConfig()` for validating YAML string content | P2 | For testing and programmatic use |
+| FR-017 | Export `findConfigFile()` for standalone discovery | P2 | Returns path or `null` |
+| FR-018 | Export all types and schemas via `@generacy-ai/generacy/config` subpath | P1 | Allows orchestrator and other consumers to import types without full CLI |
+| FR-019 | Define custom error classes: `ConfigNotFoundError`, `ConfigParseError`, `ConfigSchemaError`, `ConfigValidationError` | P1 | Each error includes context (file path, search path, conflicting repos) |
 
-## Technical Specification
+---
 
-### Schema Structure
+## Technical Design
 
-```yaml
-# Required section
-project:
-  id: string                # Required, format: proj_[alphanumeric]
-  name: string              # Required, human-readable project name
+### Validation Layers
 
-# Required section
-repos:
-  primary: string           # Required, format: github.com/org/repo
-  dev: string[]             # Optional, default: []
-  clone: string[]           # Optional, default: []
+1. **Structural Validation (Zod)** — Type correctness, required fields, format patterns, range constraints
+2. **Semantic Validation (Custom)** — Cross-field rules (repository deduplication across lists)
+3. **Not Validated** — Branch existence (checked at PR creation), repository accessibility (checked at clone), agent registry (format-only)
 
-# Optional section
-defaults:
-  agent: string             # Optional, default: "claude-code"
-  baseBranch: string        # Optional, default: "main"
+### Config Discovery Priority
 
-# Optional section
-orchestrator:
-  pollIntervalMs: integer   # Optional, default: 5000, min: 100
-  workerCount: integer      # Optional, default: 3, min: 1, max: 10
+```
+1. GENERACY_CONFIG_PATH env var  →  absolute path
+2. LoadConfigOptions.configPath  →  explicit path
+3. findConfigFile(startDir)      →  walk up directories
+   └─ Check .generacy/config.yaml at each level
+   └─ Stop at .git/ boundary
+   └─ Return null if not found
 ```
 
-### Validation Rules
+### Public API Surface
 
-1. **Project Section**
-   - `project.id`: Must match regex `^proj_[a-zA-Z0-9]+$`
-   - `project.name`: Non-empty string, max 200 characters
+```typescript
+// Types
+export type GeneracyConfig    // Root config type
+export type ProjectConfig     // Project section
+export type ReposConfig       // Repos section
+export type DefaultsConfig    // Defaults section
+export type OrchestratorSettings // Orchestrator section
 
-2. **Repos Section**
-   - `repos.primary`: Must be valid repository URL (e.g., `github.com/org/repo` or `gitlab.com/group/project`)
-   - `repos.dev`: Each entry must be valid repository URL
-   - `repos.clone`: Each entry must be valid repository URL
-   - No duplicate URLs across `primary`, `dev`, and `clone`
+// Schemas (Zod)
+export const GeneracyConfigSchema
+export const ProjectConfigSchema
+export const ReposConfigSchema
+export const DefaultsConfigSchema
+export const OrchestratorSettingsSchema
 
-3. **Defaults Section**
-   - `defaults.agent`: Must be one of supported agents (initially: `claude-code`)
-   - `defaults.baseBranch`: Must be valid git branch name (alphanumeric, hyphens, underscores, slashes)
+// Functions
+export function loadConfig(options?: LoadConfigOptions): GeneracyConfig
+export function findConfigFile(startDir?: string): string | null
+export function parseConfig(yamlContent: string): GeneracyConfig
+export function validateConfig(config: unknown): GeneracyConfig
+export function validateSemantics(config: GeneracyConfig): void
+export function validateNoDuplicateRepos(config: GeneracyConfig): void
 
-4. **Orchestrator Section**
-   - `orchestrator.pollIntervalMs`: Integer >= 100 and <= 60000 (1 minute max)
-   - `orchestrator.workerCount`: Integer >= 1 and <= 10
-
-### Example Configuration
-
-```yaml
-# .generacy/config.yaml
-project:
-  id: "proj_abc123"
-  name: "My Project"
-
-repos:
-  primary: "github.com/acme/main-api"
-  dev:
-    - "github.com/acme/shared-lib"
-    - "github.com/acme/worker-service"
-  clone:
-    - "github.com/acme/design-system"
-    - "github.com/public/api-docs"
-
-defaults:
-  agent: claude-code
-  baseBranch: main
-
-orchestrator:
-  pollIntervalMs: 5000
-  workerCount: 3
+// Error classes
+export class ConfigNotFoundError    // Config file not found (includes search path)
+export class ConfigParseError       // Invalid YAML syntax
+export class ConfigSchemaError      // Zod validation failure (includes field paths)
+export class ConfigValidationError  // Semantic validation failure (includes conflicting repos)
 ```
 
-### Minimal Configuration
+### Key Files
 
-```yaml
-# Minimal valid .generacy/config.yaml
-project:
-  id: "proj_xyz789"
-  name: "Simple Project"
+| File | Purpose |
+|------|---------|
+| `packages/generacy/src/config/schema.ts` | Zod schemas and `validateConfig()` |
+| `packages/generacy/src/config/validator.ts` | Semantic validators (`validateNoDuplicateRepos`, `validateSemantics`) |
+| `packages/generacy/src/config/loader.ts` | Discovery, YAML parsing, `loadConfig()`, error classes |
+| `packages/generacy/src/config/index.ts` | Public API re-exports for subpath `@generacy-ai/generacy/config` |
 
-repos:
-  primary: "github.com/user/my-repo"
-```
+---
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Schema documentation completeness | 100% of fields documented | Review documentation covers all schema fields |
-| SC-002 | CLI validation coverage | 100% of validation rules implemented | Test suite covers all validation scenarios |
-| SC-003 | Error message clarity | 90%+ user comprehension | User testing with invalid configs |
-| SC-004 | Config parse time | < 100ms for typical config | Performance benchmark |
-| SC-005 | Validation error identification | 100% accuracy | All invalid configs correctly identified |
-
-## Assumptions
-
-- The `.generacy/config.yaml` file will be located in the root of the project workspace
-- Repository URLs will primarily use GitHub, but should support other Git hosting providers
-- The `project.id` will be generated by generacy.ai and provided to users during project setup
-- Only one primary repository is needed per Generacy project
-- All developers on a project will use the same `.generacy/config.yaml` (committed to version control)
-- The orchestrator runs locally in the developer's environment, not on generacy.ai servers
-- Default values are reasonable for most use cases and can be overridden when needed
-- YAML is an acceptable configuration format for the target developer audience
-- Configuration validation should happen early (at CLI startup) rather than failing mid-execution
-
-## Out of Scope
-
-- Automatic config generation or interactive setup wizard (may be added in future)
-- Migration tools for config format changes (will be needed when schema evolves)
-- Environment-specific overrides (e.g., `.generacy/config.local.yaml`)
-- Secrets management or credential storage (should use separate secure storage)
-- Repository authentication configuration (handled separately by Git)
-- Advanced orchestrator features (priority queues, resource limits, scheduling)
-- Config validation web UI or generacy.ai dashboard integration
-- Automated config syncing between team members
-- Config templates for different project types
-- Schema versioning or backward compatibility (first version, no legacy to support)
-- Dynamic config reloading without CLI restart
-- Config encryption or obfuscation
-- Multi-environment support (dev, staging, prod configs)
-
-## Dependencies
-
-None (can start immediately)
-
-## Plan Reference
-
-[onboarding-buildout-plan.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/onboarding-buildout-plan.md) — Issue 4.2
+| SC-001 | Schema validation coverage | All fields validated with correct constraints | Unit tests for every field's valid/invalid cases |
+| SC-002 | Semantic validation coverage | Duplicate repos detected across all list combinations | Unit tests for primary↔dev, primary↔clone, dev↔clone, within-list duplicates |
+| SC-003 | Config discovery reliability | Finds config from any subdirectory depth | Unit tests for current dir, parent, grandparent, and .git boundary |
+| SC-004 | Error message clarity | Every error type includes actionable context | Errors include file path, field path, search path, or conflicting repos as appropriate |
+| SC-005 | Test coverage | ≥ 60 test cases across schema, validator, and loader | Automated test suite in `__tests__/` directory |
+| SC-006 | Example configs | Minimal, single-repo, multi-repo, and full examples provided | Example YAML files in `packages/generacy/examples/` |
+| SC-007 | Subpath export works | Other packages can import from `@generacy-ai/generacy/config` | TypeScript compilation succeeds for orchestrator imports |
 
 ---
 
-**Phase:** 1 — Foundation (no blockers)
-**Blocked by:** None — can start immediately
+## Assumptions
+
+- Project IDs are server-issued by generacy.ai and follow the `proj_{alphanumeric}` format — the CLI validates format only, not existence
+- The `.generacy/config.yaml` file lives in the primary repository root and is placed by the onboarding PR (Epic 4.3)
+- Repository URLs use GitHub-only format (`github.com/{owner}/{repo}`) — support for other Git hosts (GitLab, Bitbucket) is out of scope
+- Authentication for repository access is handled externally (GitHub App tokens via generacy-cloud, `GITHUB_TOKEN` for local dev) — config stores identifiers only
+- In monorepos, a single config at the repository root covers all packages
+- Orchestrator settings can be overridden by environment variables in production (following the existing orchestrator config pattern)
+- Config changes require manual restart of running services (no hot-reloading in Phase 1)
+
+## Out of Scope
+
+- **Repository authentication** — Config stores identifiers, not credentials. Auth handled at runtime by orchestrator/CLI
+- **Branch existence validation** — `defaults.baseBranch` is a string reference, validated at PR creation time
+- **Repository accessibility checks** — No network calls during config validation. Accessibility checked at clone time
+- **Agent registry validation** — Agent names are format-validated (kebab-case) but not checked against a registry
+- **Config hot-reloading** — Phase 1 requires manual restart after config changes
+- **Per-package config in monorepos** — Single root config only; hierarchical merge not supported
+- **Non-GitHub repository hosts** — Only `github.com` URLs supported in this phase
+- **CLI `validate-config` command** — The validation library is implemented; the CLI command wrapper is a separate task
+- **Config file generation / `generacy init`** — Config file creation is part of the onboarding PR flow (Epic 4.3)
 
 ---
 
