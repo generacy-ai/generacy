@@ -1,0 +1,14 @@
+[extend]
+# Use the default gitleaks rules
+# https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+
+title = "Generacy Gitleaks Configuration"
+
+# Additional paths to ignore (beyond .gitleaksignore)
+[allowlist]
+  paths = [
+    '''node_modules''',
+    '''pnpm-lock\.yaml''',
+    '''package-lock\.json''',
+    '''\.env\.example''',
+  ]

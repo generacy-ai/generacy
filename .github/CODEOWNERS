@@ -1,0 +1,31 @@
+# CODEOWNERS — Generacy
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @generacy-ai/core
+
+# Core packages
+/packages/generacy/                    @generacy-ai/core
+/packages/orchestrator/                @generacy-ai/core
+/packages/workflow-engine/             @generacy-ai/core
+/packages/knowledge-store/             @generacy-ai/core
+/packages/generacy-extension/          @generacy-ai/core
+/packages/devcontainer-feature/        @generacy-ai/core
+
+# Plugin packages
+/packages/generacy-plugin-claude-code/ @generacy-ai/plugins
+/packages/generacy-plugin-cloud-build/ @generacy-ai/plugins
+/packages/generacy-plugin-copilot/     @generacy-ai/plugins
+/packages/github-actions/              @generacy-ai/plugins
+/packages/github-issues/               @generacy-ai/plugins
+/packages/jira/                        @generacy-ai/plugins
+/packages/templates/                   @generacy-ai/plugins
+
+# Core source and infrastructure
+/src/                                  @generacy-ai/core
+/docs/                                 @generacy-ai/core
+/docker/                               @generacy-ai/core
+/scripts/                              @generacy-ai/core
+/tests/                                @generacy-ai/core
+/specs/                                @generacy-ai/core
+/.github/                              @generacy-ai/core
