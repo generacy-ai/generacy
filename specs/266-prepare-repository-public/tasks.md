@@ -121,7 +121,7 @@ This phase must run after Phase 1 so that the new files are committed and includ
 - [ ] `.gitignore` updated with `gitleaks-report.json`
 - [ ] Gitleaks scan completed against full git history with zero unresolved true positives
 
-### T011 Prepare PR description with scan summary
+### T011 [DONE] Prepare PR description with scan summary
 **Action**: Create PR
 - Summarize gitleaks scan findings in PR description (per plan: summary only, not raw JSON)
 - List all new/modified files
