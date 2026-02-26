@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -11,7 +11,7 @@
 - A) `GET /v1/models` (Recommended): List models endpoint — free, read-only, confirms authentication without incurring usage costs. If this endpoint returns 401, the key is invalid.
 - B) `POST /v1/messages` with minimal payload: Send a trivial request (`max_tokens: 1`, short prompt). Guarantees full auth validation but costs a small amount per doctor run.
 - C) `GET /v1/organizations`: Check organization endpoint if available — free, confirms auth.
-**Answer**:
+**Answer**: A — `GET /v1/models`. Free, read-only, no cost per doctor run. A 401 response definitively proves the key is invalid. If the endpoint ever changes, it's a simple fix.
 
 ---
 
@@ -21,7 +21,7 @@
 **Options**:
 - A) Add `dotenv` dependency (Recommended): Handles edge cases (quoted values, comments, multiline) consistently with how the env file will be consumed at runtime.
 - B) Simple custom parser: Split on `=`, trim whitespace, skip comments. Zero new dependencies but may miss edge cases.
-**Answer**:
+**Answer**: A — Add `dotenv`. The env file template renders into standard dotenv-format with comments, quoted values, and conditional sections. `dotenv` handles all of these correctly and is the de facto standard. A custom parser would just be a worse version of dotenv.
 
 ---
 
@@ -32,7 +32,7 @@
 - A) Three-way detection (Recommended): Distinguish "not installed" (command not found), "daemon not running" (daemon connection error), and "permission denied" (socket permission error). Each gets a tailored suggestion.
 - B) Two-way detection: Distinguish "not installed" vs "other failure". Keep suggestion generic for non-installation failures.
 - C) Single failure mode: Any `docker info` failure = fail with a combined suggestion message covering all cases.
-**Answer**:
+**Answer**: A — Three-way detection. The error messages from `docker info` are distinct and easy to parse: command not found vs. "Cannot connect to the Docker daemon" vs. "permission denied". Each has a fundamentally different fix (install Docker, start Docker Desktop, `sudo usermod -aG docker $USER`). The implementation cost is minimal — just pattern matching on stderr.
 
 ---
 
@@ -43,7 +43,7 @@
 - A) Multiple values via repetition (Recommended): Allow `--check github-token --check anthropic-key`. Commander.js supports this with `.option('--check <name...>')` or collecting into an array.
 - B) Single value only: Each flag takes exactly one check name. To run multiple specific checks, users must run the command multiple times.
 - C) Comma-separated: Accept `--check github-token,anthropic-key` as a single string and split on commas.
-**Answer**:
+**Answer**: A — Multiple values via repetition. This is the standard CLI convention and Commander.js supports it natively with `.option('--check <name...>')`. Users expect `--check foo --check bar` to work.
 
 ---
 
@@ -54,7 +54,7 @@
 - A) `http://localhost:3001`: Common convention for local development services alongside the main app.
 - B) `http://localhost:8080`: Match the health check port default already in config.
 - C) No default — skip check if `AGENCY_URL` not set: If the env var isn't configured, skip the check with a message explaining it needs `AGENCY_URL`.
-**Answer**:
+**Answer**: C — No default, skip if `AGENCY_URL` not set. `agencyMode` defaults to `subprocess` and `agencyUrl` is only required in network mode. Assuming a port would be wrong for subprocess-mode setups. The check should skip gracefully with a message like: "Agency MCP check skipped — `AGENCY_URL` not set (only needed for network mode)."
 
 ---
 
@@ -65,7 +65,7 @@
 - A) Direct stdout/stderr (Recommended): Use `process.stdout.write()` / `console.log()` for all presentational output. Matches the spec's example output exactly. Use Pino only for `--verbose` debug-level diagnostics.
 - B) Pino logger only: Use `logger.info()` for all output. Consistent with other commands but output will include timestamps and may not match the spec's visual format.
 - C) Hybrid: Use direct output for the formatted report and Pino for error/debug messages.
-**Answer**:
+**Answer**: A — Direct stdout/stderr (with Pino for `--verbose`). The validate command already uses `console.log()` for presentational output. The doctor command's color-coded, symbol-based format would be mangled by Pino's JSON wrappers and timestamps. Use `process.stdout.write()`/`console.log()` for the formatted report, and Pino only for `--verbose` debug diagnostics.
 
 ---
 
@@ -76,7 +76,7 @@
 - A) Concurrent within category, 5s timeout (Recommended): Run `github-token` and `anthropic-key` concurrently (both depend on `env-file`, not each other). Set a 5-second timeout per network check to stay within the 15-second budget.
 - B) Sequential, 10s timeout: Run all checks sequentially. Simpler implementation but risks exceeding 15 seconds.
 - C) All concurrent, 5s timeout: Run all independent checks concurrently regardless of category. Fastest but makes output order non-deterministic.
-**Answer**:
+**Answer**: A — Concurrent within category, 5s per-check timeout. `github-token` and `anthropic-key` both depend on `env-file` but not on each other — run them concurrently after env-file passes. 5s timeout per network check gives headroom while staying within the 15s budget. Output order remains deterministic because results are collected and displayed in the predefined category order regardless of completion order.
 
 ---
 
@@ -87,7 +87,7 @@
 - A) Always relative to config file (Recommended): Resolve env file as `path.dirname(configPath) + '/generacy.env'`. Works for both standard (`.generacy/config.yaml` -> `.generacy/generacy.env`) and custom paths.
 - B) Always in `.generacy/` directory: Walk up from CWD to find `.generacy/` directory regardless of where config was loaded from.
 - C) Check both locations: Try adjacent to config first, then fall back to `.generacy/` directory discovery.
-**Answer**:
+**Answer**: A — Always relative to config file. `path.dirname(configPath) + '/generacy.env'` is simple, predictable, and works for both standard discovery and `GENERACY_CONFIG_PATH` overrides. Walking up from CWD would break when the user is in a subdirectory. Checking both locations adds ambiguity about which file takes precedence.
 
 ---
 
@@ -98,7 +98,7 @@
 - A) Show all executed checks (Recommended): Display dependency checks and the targeted check in the normal category-grouped format. The user sees what was actually validated.
 - B) Show only targeted check: Run dependencies silently and only display the result of the requested check. Cleaner output but hides context.
 - C) Show dependencies as dimmed/secondary: Display dependency results in a reduced format (e.g., gray text) and the targeted check prominently.
-**Answer**:
+**Answer**: A — Show all executed checks. If a user runs `--check github-token` and the dependency `env-file` fails, they need to see that — otherwise they'd get a confusing failure with no context. Show all executed checks in the normal category-grouped format. Transparency is more valuable than minimal output.
 
 ---
 
@@ -109,7 +109,7 @@
 - A) Inspect `node_modules` directly (Recommended): Read `node_modules/@generacy-ai/generacy/package.json` for the installed version. Fast, no subprocess needed, package-manager agnostic.
 - B) Use detected package manager CLI: Call `pnpm ls @generacy-ai/generacy --json` or `npm ls @generacy-ai/generacy --json`. More accurate (validates integrity) but slower and requires package manager to be installed.
 - C) Both: Try `node_modules` first for speed, fall back to CLI for accuracy if `node_modules` is missing.
-**Answer**:
+**Answer**: A — Inspect `node_modules` directly. Reading `node_modules/@generacy-ai/generacy/package.json` is fast (no subprocess), package-manager agnostic, and gives the exact installed version. The doctor command just needs "what version is installed?", not integrity verification.
 
 ---
 
@@ -120,7 +120,7 @@
 - A) Suggest `generacy init` (Recommended): The init command generates a properly rendered template. Message: "Run `generacy init` to generate the env file, or create `.generacy/generacy.env` manually with required keys: GITHUB_TOKEN, ANTHROPIC_API_KEY."
 - B) Suggest copying rendered template: Reference `.generacy/generacy.env.template` assuming `generacy init` has already been run and left the rendered template in place.
 - C) Suggest manual creation: List the required keys and tell the user to create the file manually. No dependency on init or templates.
-**Answer**:
+**Answer**: A — Suggest `generacy init`. The message "Run `generacy init` to generate the env file, or create `.generacy/generacy.env` manually with required keys: GITHUB_TOKEN, ANTHROPIC_API_KEY" covers both paths. Note: `generacy init` (Epic 4.3) may not be implemented when doctor first ships, but the suggestion is still correct since the manual fallback is included. The raw `.hbs` template can't be copied directly.
 
 ---
 
@@ -130,7 +130,7 @@
 **Options**:
 - A) Presence only (Recommended): Just confirm the feature reference exists. Version management is handled by dependabot/renovate and is out of scope for doctor.
 - B) Presence + version warning: Confirm presence, and if a version is pinned, warn if it doesn't match the installed `@generacy-ai/generacy` package version.
-**Answer**:
+**Answer**: A — Presence only. Version pinning and updates are managed by dependabot/renovate. The doctor command's job is "is the feature referenced?" not "is it the right version?". Version checking would require knowing the "expected" version, which is a moving target and out of scope.
 
 ---
 
@@ -140,5 +140,4 @@
 **Options**:
 - A) Only internal errors (Recommended): Exit code 2 for bugs in the doctor command itself (unhandled exceptions, invalid check configuration, file system errors during output). All check-level failures (including network errors, API 500s) are exit code 1 since they represent environment problems.
 - B) Network/infrastructure errors: Exit code 2 when the doctor command itself can't function properly (e.g., can't write output, can't resolve check dependencies) OR when external services are unreachable. Exit code 1 only for definitive check failures (wrong scopes, missing files).
-**Answer**:
-
+**Answer**: A — Only internal errors. Exit code 2 means "the doctor command itself is broken" — unhandled exceptions, corrupt check registry, file system errors during output. All check-level failures, including network errors and API 500s, are exit code 1 because they indicate environment problems the user can act on. This gives CI/CD pipelines a clear signal: `0` = healthy, `1` = environment needs fixing, `2` = doctor itself needs fixing.
