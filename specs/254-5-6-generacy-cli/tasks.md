@@ -12,12 +12,12 @@
 
 ## Phase 1: Project Setup & Core Types
 
-### T001 Add `dotenv` dependency
+### T001 [DONE] Add `dotenv` dependency
 **File**: `packages/generacy/package.json`
 - Add `dotenv` as a runtime dependency (for parsing `.generacy/generacy.env`)
 - Run `pnpm install` to update lockfile
 
-### T002 [P] Define core type interfaces
+### T002 [DONE] [P] Define core type interfaces
 **File**: `packages/generacy/src/cli/commands/doctor/types.ts`
 - Define `CheckCategory` type (`'system' | 'config' | 'credentials' | 'packages' | 'services'`)
 - Define `CheckDefinition` interface (id, label, category, dependencies, priority, run, fix?)
@@ -31,7 +31,7 @@
 
 ## Phase 2: Core Framework
 
-### T003 Implement check registry with dependency resolution
+### T003 [DONE] Implement check registry with dependency resolution
 **File**: `packages/generacy/src/cli/commands/doctor/registry.ts`
 - Implement `CheckRegistry` class with:
   - `register(check: CheckDefinition): void` — adds check to internal map
@@ -42,7 +42,7 @@
 - Throw on unknown check names in `--check`/`--skip`
 - Detect and throw on circular dependencies
 
-### T004 [P] Implement check runner / execution engine
+### T004 [DONE] [P] Implement check runner / execution engine
 **File**: `packages/generacy/src/cli/commands/doctor/runner.ts`
 - Implement `runChecks(checks: CheckDefinition[], options: DoctorOptions): Promise<DoctorReport>`
 - Build execution tiers from dependency graph (checks with no unresolved deps run concurrently via `Promise.all`)
@@ -52,7 +52,7 @@
 - Track duration per check
 - Compute summary counts (passed, failed, warnings, skipped) and exit code (0/1/2)
 
-### T005 [P] Implement output formatter
+### T005 [DONE] [P] Implement output formatter
 **File**: `packages/generacy/src/cli/commands/doctor/formatter.ts`
 - Implement `formatText(report: DoctorReport, checks: CheckDefinition[], verbose: boolean): string`
   - Category-grouped output with header per category
@@ -64,7 +64,7 @@
 - Use ANSI escape codes directly (no `chalk` dependency)
 - Respect `NO_COLOR` env var and `--no-pretty` flag to disable colors
 
-### T006 Create barrel re-exports
+### T006 [DONE] Create barrel re-exports
 **File**: `packages/generacy/src/cli/commands/doctor/index.ts`
 - Re-export types, registry, runner, formatter for clean imports
 
@@ -72,7 +72,7 @@
 
 ## Phase 3: Individual Health Checks
 
-### T007 [P] Implement Docker check
+### T007 [DONE] [P] Implement Docker check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/docker.ts`
 - id: `docker`, category: `system`, deps: `[]`, priority: `P1`
 - Run `docker info` via `execSafe()`
@@ -82,7 +82,7 @@
   - "permission denied" in stderr → fail: "Insufficient permissions" / suggest `sudo usermod -aG docker $USER`
 - On success → pass with Docker version extracted from stdout
 
-### T008 [P] Implement config file check
+### T008 [DONE] [P] Implement config file check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/config.ts`
 - id: `config`, category: `config`, deps: `[]`, priority: `P1`
 - Use `findConfigFile()` to locate config
@@ -91,7 +91,7 @@
 - Provide targeted suggestion per error type
 - On pass, store `configPath`, `projectRoot`, and parsed `config` in context
 
-### T009 [P] Implement env file check
+### T009 [DONE] [P] Implement env file check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/env-file.ts`
 - id: `env-file`, category: `config`, deps: `['config']`, priority: `P1`
 - Resolve env file path: `path.dirname(context.configPath) + '/generacy.env'`
@@ -102,7 +102,7 @@
 - Store parsed env vars in `context.envVars`
 - On missing: suggest "Run `generacy init` to generate the env file, or create `.generacy/generacy.env` manually with required keys: GITHUB_TOKEN, ANTHROPIC_API_KEY"
 
-### T010 [P] Implement devcontainer check
+### T010 [DONE] [P] Implement devcontainer check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/devcontainer.ts`
 - id: `devcontainer`, category: `system`, deps: `[]`, priority: `P2`
 - Check `.devcontainer/devcontainer.json` exists (relative to project root or CWD)
@@ -111,7 +111,7 @@
 - Fail if no devcontainer.json → suggest "Run `generacy init` to generate dev container configuration"
 - Warn if devcontainer exists but missing Generacy feature
 
-### T011 [P] Implement GitHub token check
+### T011 [DONE] [P] Implement GitHub token check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/github-token.ts`
 - id: `github-token`, category: `credentials`, deps: `['env-file']`, priority: `P1`
 - Read `GITHUB_TOKEN` from `context.envVars`
@@ -122,7 +122,7 @@
 - On missing scopes → warn with list of missing scopes
 - On network error → fail with connection error detail
 
-### T012 [P] Implement Anthropic API key check
+### T012 [DONE] [P] Implement Anthropic API key check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/anthropic-key.ts`
 - id: `anthropic-key`, category: `credentials`, deps: `['env-file']`, priority: `P1`
 - Read `ANTHROPIC_API_KEY` from `context.envVars`
@@ -132,7 +132,7 @@
 - On success → pass
 - On network error → fail with network error detail
 
-### T013 [P] Implement npm packages check
+### T013 [DONE] [P] Implement npm packages check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/npm-packages.ts`
 - id: `npm-packages`, category: `packages`, deps: `[]`, priority: `P2`
 - Read `node_modules/@generacy-ai/generacy/package.json` directly (no subprocess)
@@ -140,7 +140,7 @@
 - If `node_modules` not found → fail: "Packages not installed" / suggest "Run `pnpm install`"
 - If version mismatch → warn with installed vs expected
 
-### T014 [P] Implement Agency MCP check
+### T014 [DONE] [P] Implement Agency MCP check
 **File**: `packages/generacy/src/cli/commands/doctor/checks/agency-mcp.ts`
 - id: `agency-mcp`, category: `services`, deps: `[]`, priority: `P2`
 - Check if `AGENCY_URL` env var is set (from `process.env`, not `.generacy/generacy.env`)
@@ -153,7 +153,7 @@
 
 ## Phase 4: Command Wiring & Registration
 
-### T015 Implement doctor command definition
+### T015 [DONE] Implement doctor command definition
 **File**: `packages/generacy/src/cli/commands/doctor.ts`
 - Create `doctorCommand(): Command` function following existing command pattern
 - Configure Commander.js options:
@@ -170,7 +170,7 @@
   - Write to stdout
   - Exit with appropriate code (0/1/2)
 
-### T016 Register doctor command in CLI entry point
+### T016 [DONE] Register doctor command in CLI entry point
 **File**: `packages/generacy/src/cli/index.ts`
 - Add `import { doctorCommand } from './commands/doctor.js'`
 - Add `program.addCommand(doctorCommand())` alongside existing commands
@@ -179,7 +179,7 @@
 
 ## Phase 5: Unit Tests
 
-### T017 [P] Write registry unit tests
+### T017 [DONE] [P] Write registry unit tests
 **File**: `packages/generacy/src/cli/commands/doctor/__tests__/registry.test.ts`
 - Test check registration and retrieval
 - Test topological sort with valid dependency chains
@@ -189,7 +189,7 @@
 - Test unknown check name rejection
 - Test empty registry behavior
 
-### T018 [P] Write runner unit tests
+### T018 [DONE] [P] Write runner unit tests
 **File**: `packages/generacy/src/cli/commands/doctor/__tests__/runner.test.ts`
 - Test concurrent execution of independent checks within a tier
 - Test timeout handling (check exceeding 5s timeout)
@@ -199,7 +199,7 @@
 - Test exit code 0 (all pass), exit code 1 (any fail), exit code 2 (internal error)
 - Mock check functions to control behavior
 
-### T019 [P] Write formatter unit tests
+### T019 [DONE] [P] Write formatter unit tests
 **File**: `packages/generacy/src/cli/commands/doctor/__tests__/formatter.test.ts`
 - Test text output includes correct symbols (✓, ✗, !, -)
 - Test category grouping and headers
@@ -210,7 +210,7 @@
 - Test `NO_COLOR` disables ANSI escape codes
 - Test empty results handling
 
-### T020 [P] Write individual check unit tests
+### T020 [DONE] [P] Write individual check unit tests
 **Files**:
 - `packages/generacy/src/cli/commands/doctor/__tests__/checks/docker.test.ts`
 - `packages/generacy/src/cli/commands/doctor/__tests__/checks/config.test.ts`
@@ -251,7 +251,7 @@ For each check, test:
 
 ## Phase 7: Build Verification & Polish
 
-### T022 Verify TypeScript compilation
+### T022 [DONE] Verify TypeScript compilation
 **Files**: All new files
 - Run `pnpm build` in `packages/generacy/` — ensure zero compilation errors
 - Verify `dist/` output includes all new doctor files
