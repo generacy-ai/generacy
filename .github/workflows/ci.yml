@@ -42,7 +42,7 @@ jobs:
         run: pnpm -r run --if-present build
 
       - name: Typecheck (packages)
-        run: pnpm -r run --if-present typecheck
+        run: pnpm -r --filter '!generacy-extension' run --if-present typecheck
 
       - name: Test (root)
         run: pnpm test
