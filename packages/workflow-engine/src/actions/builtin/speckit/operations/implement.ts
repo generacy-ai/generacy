@@ -70,7 +70,7 @@ function parseTasks(content: string): ParsedTask[] {
       }
 
       // Match subtasks (lines starting with - or * that aren't files)
-      const subtaskMatch = line.match(/^[-*]\s+(?![`\[])(.+)/);
+      const subtaskMatch = line.match(/^[-*]\s+(?![`[])(.+)/);
       if (subtaskMatch?.[1] && !inFiles) {
         currentTask.subtasks.push(subtaskMatch[1].trim());
       }

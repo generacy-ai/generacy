@@ -48,22 +48,17 @@ export class IntegrationHandler {
 
     const effectiveTimeout = timeout ?? this.config.defaultTimeout;
 
-    try {
-      const result = await Promise.race([
-        plugin.execute(action, params),
-        new Promise<never>((_, reject) => {
-          setTimeout(() => reject(new Error('Integration timeout')), effectiveTimeout);
-        }),
-      ]);
+    const result = await Promise.race([
+      plugin.execute(action, params),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Integration timeout')), effectiveTimeout);
+      }),
+    ]);
 
-      return {
-        success: true,
-        output: result.output,
-        statusCode: result.statusCode,
-      };
-    } catch (error) {
-      // Re-throw timeout and other errors
-      throw error;
-    }
+    return {
+      success: true,
+      output: result.output,
+      statusCode: result.statusCode,
+    };
   }
 }

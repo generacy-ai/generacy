@@ -11,7 +11,7 @@ import { requireRead } from '../auth/middleware.js';
 /**
  * SSE connection tracking for graceful shutdown
  */
-let activeConnections: Set<string> = new Set();
+const activeConnections: Set<string> = new Set();
 
 /**
  * Get active connection count

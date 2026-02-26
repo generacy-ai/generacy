@@ -275,7 +275,7 @@ describe('WorkflowExecutor Integration', () => {
     });
 
     it('should continue on error when continueOnError is true', async () => {
-      let stepExecutions: string[] = [];
+      const stepExecutions: string[] = [];
       const handler = createMockHandler('test-action', async (step) => {
         stepExecutions.push(step.name);
         if (step.name === 'step1') {
@@ -314,7 +314,7 @@ describe('WorkflowExecutor Integration', () => {
     });
 
     it('should stop execution on failure when continueOnError is false', async () => {
-      let stepExecutions: string[] = [];
+      const stepExecutions: string[] = [];
       const handler = createMockHandler('test-action', async (step) => {
         stepExecutions.push(step.name);
         if (step.name === 'step1') {

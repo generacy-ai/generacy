@@ -171,7 +171,7 @@ export class SmeeWebhookReceiver {
    */
   private async processSSEEvent(eventBlock: string): Promise<void> {
     let eventType = '';
-    let dataLines: string[] = [];
+    const dataLines: string[] = [];
 
     for (const line of eventBlock.split('\n')) {
       if (line.startsWith('event:')) {

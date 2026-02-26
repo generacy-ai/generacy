@@ -140,6 +140,15 @@ export class GitHubIssuesPlugin extends AbstractIssueTrackerPlugin {
     return this.mapToLatencyComment(ghComment);
   }
 
+  /**
+   * List comments for an issue (implements abstract method)
+   */
+  protected async doListComments(issueId: string): Promise<LatencyComment[]> {
+    const issueNumber = this.parseIssueNumber(issueId);
+    const comments = await this.commentOps.list(issueNumber);
+    return comments.map((c) => this.mapToLatencyComment(c));
+  }
+
   // ==========================================================================
   // GitHub-specific public API (for backwards compatibility)
   // ==========================================================================
@@ -226,9 +235,9 @@ export class GitHubIssuesPlugin extends AbstractIssueTrackerPlugin {
   }
 
   /**
-   * List comments on an issue
+   * List comments on an issue (GitHub-specific version with numeric issue number)
    */
-  async listComments(issueNumber: number): Promise<Comment[]> {
+  async listGitHubComments(issueNumber: number): Promise<Comment[]> {
     return this.commentOps.list(issueNumber);
   }
 

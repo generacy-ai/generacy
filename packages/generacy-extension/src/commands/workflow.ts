@@ -225,7 +225,7 @@ export async function duplicateWorkflow(uri?: vscode.Uri): Promise<void> {
   let counter = 1;
   let newUri = vscode.Uri.file(path.join(directory, `${newName}${extension}`));
 
-  while (true) {
+  for (;;) {
     try {
       await vscode.workspace.fs.stat(newUri);
       // File exists, try next number

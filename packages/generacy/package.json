@@ -63,5 +63,13 @@
     "dist",
     "bin",
     "README.md"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/generacy"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

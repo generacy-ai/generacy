@@ -89,7 +89,7 @@ async function loadBranchConfig(repoRoot: string): Promise<BranchConfig> {
  */
 function generateConfigurableSlug(description: string, options: BranchConfig['slugOptions']): string {
   // Normalize: lowercase and replace non-alphanumeric with spaces
-  let normalized = description
+  const normalized = description
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, ' ')
     .trim();
