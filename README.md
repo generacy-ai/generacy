@@ -117,7 +117,7 @@ Generacy is built as a monorepo with multiple packages:
 
 ## Contributing
 
-This is a private repository for Generacy AI development. For team members:
+We welcome contributions! To get started:
 
 1. Create feature branches from `develop`
 2. Follow existing code style and linting rules
