@@ -180,6 +180,14 @@ export class JiraPlugin extends AbstractIssueTrackerPlugin {
     return this.mapToLatencyComment(jiraComment);
   }
 
+  /**
+   * List comments for an issue (implements abstract method)
+   */
+  protected async doListComments(issueId: string): Promise<LatencyComment[]> {
+    const comments = await this.commentOps.list(issueId);
+    return comments.map((c) => this.mapToLatencyComment(c));
+  }
+
   // ==========================================================================
   // Jira-specific public API (for backwards compatibility)
   // ==========================================================================

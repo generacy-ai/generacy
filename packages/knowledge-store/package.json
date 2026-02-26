@@ -38,6 +38,11 @@
     "generacy"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/knowledge-store"
+  },
   "publishConfig": {
     "access": "public"
   }

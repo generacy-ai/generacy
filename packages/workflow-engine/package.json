@@ -58,6 +58,11 @@
     "dist",
     "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/workflow-engine"
+  },
   "publishConfig": {
     "access": "public"
   }

@@ -5,6 +5,9 @@
  * Processes jobs from the scheduler queue using type-specific handlers.
  */
 
+import { createWorkerConfig as _createWorkerConfig } from './config/index.js';
+import { WorkerProcessor as _WorkerProcessor } from './worker-processor.js';
+
 // Types
 export type {
   WorkerConfig,
@@ -89,10 +92,7 @@ export function createWorker(
   agentRegistry: import('./worker-processor.js').AgentRegistryLike,
   router: import('./worker-processor.js').MessageRouterLike,
   config?: Partial<import('./types.js').WorkerConfig>
-): import('./worker-processor.js').WorkerProcessor {
-  const { createWorkerConfig } = require('./config/index.js');
-  const { WorkerProcessor } = require('./worker-processor.js');
-
-  const fullConfig = createWorkerConfig(config || {});
-  return new WorkerProcessor(scheduler, agentRegistry, router, fullConfig);
+): _WorkerProcessor {
+  const fullConfig = _createWorkerConfig(config || {});
+  return new _WorkerProcessor(scheduler, agentRegistry, router, fullConfig);
 }

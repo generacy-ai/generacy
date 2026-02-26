@@ -422,7 +422,7 @@ export function findUndefinedVariables(content: string): string[] {
   const pattern = /\{\{?\{?\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}?\}?\}/g;
   const matches = content.matchAll(pattern);
 
-  const undefined: string[] = [];
+  const undefinedVars: string[] = [];
 
   for (const match of matches) {
     const varName = match[1];
@@ -430,13 +430,13 @@ export function findUndefinedVariables(content: string): string[] {
       // Check if this looks like an unrendered variable
       // Rendered content shouldn't have {{ }} syntax
       if (match[0].includes('{{')) {
-        undefined.push(varName);
+        undefinedVars.push(varName);
       }
     }
   }
 
   // Return unique variable names
-  return [...new Set(undefined)];
+  return [...new Set(undefinedVars)];
 }
 
 /**

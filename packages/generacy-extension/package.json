@@ -8,7 +8,8 @@
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/generacy-ai/generacy"
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/generacy-extension"
   },
   "engines": {
     "vscode": "^1.108.0"

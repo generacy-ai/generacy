@@ -1199,14 +1199,11 @@ describe('WorkerProcessor', () => {
         // Wait a tiny bit for job to start
         await new Promise((resolve) => setTimeout(resolve, 10));
 
-        // Capture status right before/during stop
-        let statusDuringShutdown: WorkerStatus | undefined;
-
         // Call stop while job is still processing
         const stopPromise = localProcessor.stop();
 
         // Check status immediately after stop is called but before it completes
-        statusDuringShutdown = localProcessor.getStatus();
+        const statusDuringShutdown = localProcessor.getStatus();
 
         await Promise.all([processPromise, stopPromise]);
 
