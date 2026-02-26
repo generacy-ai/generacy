@@ -11,10 +11,13 @@ concurrency:
 permissions:
   contents: read
   id-token: write
+  packages: write
 
 jobs:
-  publish-preview:
+  publish-npm:
     runs-on: ubuntu-latest
+    outputs:
+      has_changesets: ${{ steps.changesets.outputs.has_changesets }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,7 +41,8 @@ jobs:
       - name: Check for changesets
         id: changesets
         run: |
-          if ls .changeset/*.md 1>/dev/null 2>&1; then
+          CHANGESET_FILES=$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)
+          if [ -n "$CHANGESET_FILES" ]; then
             echo "has_changesets=true" >> $GITHUB_OUTPUT
           else
             echo "has_changesets=false" >> $GITHUB_OUTPUT
@@ -50,6 +54,14 @@ jobs:
 
       - name: Publish preview
         if: steps.changesets.outputs.has_changesets == 'true'
-        run: pnpm -r --filter '!generacy-extension' publish --tag preview --no-git-checks
+        run: pnpm -r --filter '!generacy-extension' publish --tag preview --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-devcontainer-feature:
+    needs: publish-npm
+    if: needs.publish-npm.outputs.has_changesets == 'true'
+    uses: ./.github/workflows/publish-devcontainer-feature.yml
+    with:
+      mode: preview
+    secrets: inherit
