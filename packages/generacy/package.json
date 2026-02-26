@@ -63,5 +63,8 @@
     "dist",
     "bin",
     "README.md"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+  push:
+    branches: [develop, main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (root)
+        run: pnpm lint
+
+      - name: Lint (packages)
+        run: pnpm -r run --if-present lint
+
+      - name: Build (root)
+        run: pnpm build
+
+      - name: Build (packages)
+        run: pnpm -r run --if-present build
+
+      - name: Test (root)
+        run: pnpm test
+
+      - name: Test (packages)
+        run: pnpm -r run --if-present test

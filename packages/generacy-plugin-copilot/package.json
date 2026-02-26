@@ -46,5 +46,8 @@
     "github",
     "generacy"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

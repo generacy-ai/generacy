@@ -1,0 +1,54 @@
+name: Publish Preview
+
+on:
+  push:
+    branches: [develop]
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (root)
+        run: pnpm build
+
+      - name: Build (packages)
+        run: pnpm -r run --if-present build
+
+      - name: Check for changesets
+        id: changesets
+        run: |
+          if ls .changeset/*.md 1>/dev/null 2>&1; then
+            echo "has_changesets=true" >> $GITHUB_OUTPUT
+          else
+            echo "has_changesets=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Version (snapshot)
+        if: steps.changesets.outputs.has_changesets == 'true'
+        run: pnpm changeset version --snapshot preview
+
+      - name: Publish preview
+        if: steps.changesets.outputs.has_changesets == 'true'
+        run: pnpm -r --filter '!generacy-extension' publish --tag preview --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

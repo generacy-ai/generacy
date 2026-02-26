@@ -12,7 +12,7 @@
 
 ## Phase 1: Changesets Initialization
 
-### T001 Create `.changeset/config.json`
+### T001 [DONE] Create `.changeset/config.json`
 **File**: `.changeset/config.json`
 - Create the `.changeset/` directory
 - Add `config.json` with `baseBranch: "develop"`, `access: "public"`
@@ -22,19 +22,19 @@
 - Add `"ignore": ["generacy-extension"]` to exclude VS Code extension from npm publishing
 - Include `$schema` for editor validation
 
-### T002 Add `packageManager` field to root `package.json`
+### T002 [DONE] Add `packageManager` field to root `package.json`
 **File**: `package.json` (root)
 - Add `"packageManager": "pnpm@9.15.9"` to root package.json
 - This enables auto-detection by `pnpm/action-setup@v4` and Corepack
 - Do NOT modify any existing fields (scripts, dependencies, etc.)
 
-### T003 Add `@changesets/cli` to root devDependencies
+### T003 [DONE] Add `@changesets/cli` to root devDependencies
 **File**: `package.json` (root)
 - Add `@changesets/cli` to root `devDependencies`
 - Do NOT modify any other dependencies or scripts per spec requirements
 - Note: T002 and T003 both modify root package.json — apply sequentially
 
-### T004 Update lockfile
+### T004 [DONE] Update lockfile
 **File**: `pnpm-lock.yaml`
 - Run `pnpm install` to update the lockfile with the new `@changesets/cli` dependency
 - Verify lockfile is valid with `pnpm install --frozen-lockfile` (should pass)
@@ -44,27 +44,27 @@
 
 ## Phase 2: Package Configuration
 
-### T005 [P] Add `publishConfig` to `@generacy-ai/generacy`
+### T005 [DONE] [P] Add `publishConfig` to `@generacy-ai/generacy`
 **File**: `packages/generacy/package.json`
 - Add `"publishConfig": { "access": "public" }` to package.json
 - Package currently lacks this field
 
-### T006 [P] Add `publishConfig` to `@generacy-ai/orchestrator`
+### T006 [DONE] [P] Add `publishConfig` to `@generacy-ai/orchestrator`
 **File**: `packages/orchestrator/package.json`
 - Add `"publishConfig": { "access": "public" }` to package.json
 - Package currently lacks this field
 
-### T007 [P] Add `publishConfig` to `@generacy-ai/workflow-engine`
+### T007 [DONE] [P] Add `publishConfig` to `@generacy-ai/workflow-engine`
 **File**: `packages/workflow-engine/package.json`
 - Add `"publishConfig": { "access": "public" }` to package.json
 - Package currently lacks this field
 
-### T008 [P] Add `publishConfig` to `@generacy-ai/knowledge-store`
+### T008 [DONE] [P] Add `publishConfig` to `@generacy-ai/knowledge-store`
 **File**: `packages/knowledge-store/package.json`
 - Add `"publishConfig": { "access": "public" }` to package.json
 - Package currently lacks this field
 
-### T009 [P] Add `publishConfig` to excluded workspace packages
+### T009 [DONE] [P] Add `publishConfig` to excluded workspace packages
 **Files**:
 - `packages/github-actions/package.json`
 - `packages/generacy-plugin-cloud-build/package.json`
@@ -80,7 +80,7 @@
 
 ## Phase 3: CI Workflow
 
-### T010 Create `.github/workflows/ci.yml`
+### T010 [DONE] Create `.github/workflows/ci.yml`
 **File**: `.github/workflows/ci.yml`
 - Trigger on PRs to `develop`/`main` and pushes to `develop`/`main`
 - Set `concurrency` with `cancel-in-progress: true` to abort stale builds
@@ -99,7 +99,7 @@
 
 ## Phase 4: Preview Publish Workflow
 
-### T011 Create `.github/workflows/publish-preview.yml`
+### T011 [DONE] Create `.github/workflows/publish-preview.yml`
 **File**: `.github/workflows/publish-preview.yml`
 - Trigger on push to `develop` only
 - Set `concurrency` with `cancel-in-progress: false` (prevent partial publishes)
@@ -119,7 +119,7 @@
 
 ## Phase 5: Stable Release Workflow
 
-### T012 Create `.github/workflows/release.yml`
+### T012 [DONE] Create `.github/workflows/release.yml`
 **File**: `.github/workflows/release.yml`
 - Trigger on push to `main` only
 - Set `concurrency` with `cancel-in-progress: false` (prevent partial publishes)
@@ -140,7 +140,7 @@
 
 ## Phase 6: Verification
 
-### T013 Validate workflow YAML syntax
+### T013 [DONE] Validate workflow YAML syntax
 **Files**:
 - `.github/workflows/ci.yml`
 - `.github/workflows/publish-preview.yml`
@@ -149,17 +149,17 @@
 - Check that GitHub Actions expressions use correct syntax (`${{ }}`)
 - Verify all action versions are pinned (`@v4`, `@v1`)
 
-### T014 Verify lockfile integrity
+### T014 [DONE] Verify lockfile integrity
 **File**: `pnpm-lock.yaml`
 - Run `pnpm install --frozen-lockfile` to confirm lockfile is consistent
 - Ensure `@changesets/cli` is properly installed and resolvable
 
-### T015 Verify existing workflows are unmodified
+### T015 [DONE] Verify existing workflows are unmodified
 **File**: `.github/workflows/publish-devcontainer-feature.yml`
 - Confirm the existing devcontainer feature workflow is untouched
 - No files outside the scope of this feature should be modified
 
-### T016 Verify build and lint still pass
+### T016 [DONE] Verify build and lint still pass
 - Run `pnpm lint` (root) to confirm linting passes
 - Run `pnpm build` (root) to confirm build passes
 - Run `pnpm test` (root) to confirm tests pass
@@ -171,7 +171,7 @@
 
 ## Phase 7: Manual Steps (Post-Merge Documentation)
 
-### T017 Document manual setup steps
+### T017 [DONE] Document manual setup steps
 - These steps cannot be automated in the PR and must be performed by a human:
   1. **Configure `NPM_TOKEN` secret**: Create granular npm access token scoped to `@generacy-ai/*` with read-write publish permissions; add as `NPM_TOKEN` in GitHub repo Settings → Secrets and variables → Actions
   2. **Branch protection on `main`**: Require PR reviews, require `ci` status check to pass; configure in GitHub repo Settings → Branches → Branch protection rules

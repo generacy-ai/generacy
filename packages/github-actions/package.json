@@ -55,5 +55,8 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {},
-  "peerDependenciesMeta": {}
+  "peerDependenciesMeta": {},
+  "publishConfig": {
+    "access": "public"
+  }
 }
