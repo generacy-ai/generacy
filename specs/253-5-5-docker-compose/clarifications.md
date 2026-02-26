@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -11,7 +11,7 @@
 - A) Move to devcontainer.json: Add the `features` block to `multi-repo/devcontainer.json.hbs` (standard Dev Container spec behavior — the CLI processes features when building/starting the service targeted by `devcontainer.json`)
 - B) Use a custom Dockerfile build step: Replace the `features` key in compose with a `build` directive that installs the feature during image build
 - C) Keep in both places: Add features to `devcontainer.json` AND keep the compose `features` key as documentation/metadata that Dev Container tooling may process
-**Answer**:
+**Answer**: **A — Move to devcontainer.json.** The `features` key is invalid Docker Compose syntax and will error or be silently ignored. Add the `features` block to `multi-repo/devcontainer.json.hbs` — the Dev Container CLI will install it on the orchestrator (the target service). For workers, since they're not the devcontainer target service, the feature will need to be baked into the base image or installed via a custom Dockerfile build step — this can be addressed as a follow-up.
 
 ---
 
@@ -22,7 +22,7 @@
 - A) Range 1–20, default 2: Match the spec exactly. Workers are always required in multi-repo mode.
 - B) Range 1–20, default 3: Keep the current schema default of 3 but enforce minimum of 1.
 - C) Range 0–20, default 2: Allow 0 workers for orchestrator-only mode (useful for debugging/development).
-**Answer**:
+**Answer**: **A — Range 1–20, default 2.** Match the spec. Multi-repo mode always requires at least one worker — 0 workers is meaningless when you have an orchestrator/worker architecture. Default of 2 aligns with spec. Fix the schema: change `.nonnegative()` to `.min(1).max(20)` and default to `2`.
 
 ---
 
@@ -33,7 +33,7 @@
 - A) Minimum 5000ms: Match the spec. Update fixtures to use values >= 5000ms. This prevents aggressive polling that could overload Redis.
 - B) Minimum 1000ms: Allow faster polling for responsive setups but prevent sub-second values. Update spec.
 - C) No practical minimum (positive integer): Keep current schema behavior. Trust users to set reasonable values.
-**Answer**:
+**Answer**: **A — Minimum 5000ms.** Match the spec. Sub-5000ms polling wastes resources and risks Redis overload with no practical benefit. Update fixtures (`multi-repo-context.json` from 3000→5000, `large-multi-repo-context.json` from 2000→5000). Change schema to `.min(5000)`.
 
 ---
 
@@ -44,7 +44,7 @@
 - A) Keep `:cached` (read-write): Workers/orchestrator may need to build or install dependencies in clone repos even if they don't create PRs. Read-only would break `npm install`, `go build`, etc.
 - B) Use `:cached,ro` (read-only): Enforce the "clone-only" contract at the mount level. If code needs build artifacts, it should use a separate build output directory.
 - C) Make it configurable per-repo: Add a `readOnly` flag to clone repo entries so users can choose per-repository.
-**Answer**:
+**Answer**: **A — Keep `:cached` (read-write).** "Clone-only" means Generacy won't create PRs for these repos, not that they should be read-only at the filesystem level. Workers need to `npm install`, build, run tests, etc. in clone repos. Read-only mounts would break standard development workflows.
 
 ---
 
@@ -55,7 +55,7 @@
 - A) Remove host port mapping: Only expose within the Docker network. Developers can use `docker exec` for debugging. Eliminates port conflicts entirely.
 - B) Keep static `6379:6379`: Accept that only one project's compose stack can run at a time. Simple and matches common expectations.
 - C) Use dynamic host port: Map to `0:6379` (Docker assigns a random host port) to avoid conflicts. Developers use `docker compose port redis 6379` to discover the port.
-**Answer**:
+**Answer**: **A — Remove host port mapping.** Remove the `ports:` section entirely and only expose Redis within the Docker network. This eliminates port conflicts in multi-project environments and is more secure. Developers can use `docker exec -it <container> redis-cli` for debugging. An auto-generated config should default to the safest option.
 
 ---
 
@@ -65,7 +65,7 @@
 **Options**:
 - A) Remove `version` field: Eliminates the deprecation warning. Compose V2 ignores it anyway. This is the modern best practice.
 - B) Keep `version: "3.8"`: Maintains backward compatibility with older Compose V1 installations, even though the spec assumes V2.
-**Answer**:
+**Answer**: **A — Remove `version` field.** Compose V2 is the standard. The `version` key triggers a deprecation warning on every `docker compose` invocation — bad UX for an auto-generated "just works" file. Remove it.
 
 ---
 
@@ -76,7 +76,7 @@
 - A) Add worker health check: Mirror the orchestrator's `/home/vscode/.generacy/ready` check. This ensures workers are fully initialized before they appear healthy to monitoring tools, but it doesn't affect startup order (workers already wait for orchestrator).
 - B) No worker health check needed: Workers wait for the orchestrator (which means features are already cached/available). The `sleep infinity` command keeps them running. No downstream service depends on worker health.
 - C) Add health check with simpler probe: Use a lightweight check (e.g., test for a specific binary or process) rather than the ready file, since workers may have different initialization.
-**Answer**:
+**Answer**: **A — Add worker health check.** Mirror the orchestrator's `/home/vscode/.generacy/ready` check. Even though workers wait for the orchestrator, their own health check ensures they're fully initialized before reporting healthy. This helps monitoring and diagnostics. Note: the specific health check probe depends on Q1's resolution (how features get installed on workers).
 
 ---
 
@@ -87,7 +87,7 @@
 - A) Remove from workers: Workers don't run VS Code. Removing the shared volume eliminates potential corruption and reduces the worker's mount surface.
 - B) Keep shared: Workers may run VS Code extensions headlessly (e.g., language servers, linters) that are installed in `.vscode-server`. Sharing avoids duplicate extension installs.
 - C) Give workers a separate volume: Each worker gets its own `vscode-server-worker` volume to avoid conflicts while still caching extensions.
-**Answer**:
+**Answer**: **A — Remove from workers.** Workers are headless — they don't run VS Code. Sharing the `vscode-server` volume risks file locking issues and extension corruption from concurrent writes. Remove it from the worker service. If workers need language servers or linters in the future, give them their own volume at that point.
 
 ---
 
@@ -98,7 +98,7 @@
 - A) Validate at context creation time: Add a Zod `.refine()` that rejects contexts where any two repos resolve to the same `repoName`. This is the simplest approach — fail fast with a clear error.
 - B) Use `owner-repo` format for mounts: Change the mount path to `/workspaces/{owner}-{repo}` to eliminate collisions. This changes the workspace layout for all users.
 - C) Use `owner/repo` nested paths: Mount at `/workspaces/{owner}/{repo}` for disambiguation. More natural but deeper nesting.
-**Answer**:
+**Answer**: **A — Validate at context creation time.** Add a Zod `.refine()` that rejects contexts where any two repos across primary, dev, and clone arrays resolve to the same repo name. Fail fast with a clear error message like `"Repos 'acme/utils' and 'other-org/utils' both resolve to mount path '/workspaces/utils'"`. This handles the rare edge case without changing the workspace layout for everyone.
 
 ---
 
@@ -109,7 +109,7 @@
 - A) Current template is correct: Workers get `REDIS_URL`, `ROLE=worker`, `POLL_INTERVAL_MS`, and `PROJECT_ID`. The spec's FR-016 listing is just noting what to *omit*, not what to include.
 - B) Workers should also get `PROJECT_NAME`: Workers may need the human-readable project name for logging or error messages. Add it to the worker service.
 - C) Workers should be minimal: Only `REDIS_URL`, `ROLE=worker`, and `PROJECT_ID`. Remove `POLL_INTERVAL_MS` — workers should get their polling interval from the orchestrator via Redis, not from environment config.
-**Answer**:
+**Answer**: **A — Current template is correct.** Workers get `REDIS_URL`, `ROLE=worker`, `POLL_INTERVAL_MS`, and `PROJECT_ID`. `POLL_INTERVAL_MS` as an env var is simpler and more reliable than fetching it from the orchestrator via Redis at runtime. FR-016 lists what to *omit* (orchestrator-only vars like `WORKER_COUNT`, `PROJECT_NAME`, `PRIMARY_REPO`), not an exhaustive list of what to include.
 
 ---
 
@@ -120,7 +120,7 @@
 - A) Use `..` for primary repo: `.devcontainer/` is inside the primary repo, so `..` is the primary repo root. Dev/clone repos should use `../../{repo-name}` relative to `.devcontainer/`.
 - B) Keep `../..` as workspace root: The intent is to mount the workspace root as the primary repo workspace, giving access to all files. This is intentional for the orchestrator's broader view.
 - C) Clarify the directory layout: Document the expected directory structure explicitly in the spec and adjust mounts accordingly.
-**Answer**:
+**Answer**: **A — Use `..` for primary repo.** `.devcontainer/` lives inside the primary repo, so `..` correctly resolves to the primary repo root. The current `../..` would mount the entire workspace root (containing all sibling repos) as the primary repo — that's incorrect. Dev/clone repos should use `../../{repo-name}` to reach sibling directories.
 
 ---
 
@@ -131,4 +131,4 @@
 - A) Set `noEscape: true` for YAML templates: Since these aren't HTML, escaping is never wanted. Apply globally or per-template based on output format.
 - B) Use triple-brace `{{{variable}}}` in YAML templates: Keep the safe default but explicitly opt out of escaping where needed. More verbose but explicit.
 - C) Validate that context values don't contain special characters: Add Zod constraints that reject `&`, `<`, `>` in project names/IDs. Simplest but restrictive.
-**Answer**:
+**Answer**: **A — Set `noEscape: true` for YAML templates.** These templates produce YAML and Docker Compose files, not HTML. HTML escaping will corrupt output (e.g., `PROJECT_NAME=Acme &amp; Co`). Since none of our templates are HTML, set `noEscape: true` globally in the renderer. Add input validation on context values (e.g., project names) as a separate concern if needed.
