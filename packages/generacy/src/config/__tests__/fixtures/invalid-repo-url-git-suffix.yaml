@@ -1,0 +1,9 @@
+# Invalid config fixture - repository URL with .git suffix
+# Repository URL should not end with .git
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo.git"  # Should not end with .git

@@ -86,7 +86,7 @@ export class UpdateStatusAction extends BaseAction {
       const existingComment = comments.find(c => c.body.includes(marker));
 
       let commentId: number;
-      let updated = true;
+      const updated = true;
 
       if (existingComment) {
         // Update existing comment

@@ -1,0 +1,13 @@
+# Valid config fixture with defaults section only
+# Tests that defaults work independently
+
+project:
+  id: "proj_defaults1"
+  name: "Defaults Test Project"
+
+repos:
+  primary: "github.com/test/defaults"
+
+defaults:
+  agent: my-custom-agent
+  baseBranch: develop

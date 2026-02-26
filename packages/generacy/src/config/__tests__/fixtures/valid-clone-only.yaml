@@ -1,0 +1,12 @@
+# Valid config fixture with clone repos only
+# Tests that dev array can be omitted
+
+project:
+  id: "proj_cloneoly"
+  name: "Clone Only Project"
+
+repos:
+  primary: "github.com/test/primary"
+  clone:
+    - "github.com/public/lib1"
+    - "github.com/public/lib2"

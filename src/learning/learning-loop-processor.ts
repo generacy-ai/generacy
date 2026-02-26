@@ -133,7 +133,7 @@ export class LearningLoopProcessor {
     const { decision, learningEvents } = captureResult;
 
     // Step 2: Process coaching if this was an override
-    let suggestedUpdates: KnowledgeUpdate[] = [];
+    const suggestedUpdates: KnowledgeUpdate[] = [];
     let appliedUpdates: KnowledgeUpdate[] = [];
     const allLearningEvents = [...learningEvents];
 

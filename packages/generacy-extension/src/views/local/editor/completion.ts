@@ -895,7 +895,7 @@ export class WorkflowCompletionProvider implements vscode.CompletionItemProvider
         );
         break;
 
-      case 'uses':
+      case 'uses': {
         // Common actions/agents
         const usesOptions: CompletionItemData[] = [
           {
@@ -919,6 +919,7 @@ export class WorkflowCompletionProvider implements vscode.CompletionItemProvider
         ];
         items.push(...usesOptions.map((o) => this.createCompletionItem(o)));
         break;
+      }
     }
 
     return items;

@@ -97,7 +97,7 @@ export class UpdatePhaseAction extends BaseAction {
           }
           break;
 
-        case 'complete':
+        case 'complete': {
           // Add completed label for review gates
           const completedLabel = `completed:${phase}`;
           await client.addLabels(repoInfo.owner, repoInfo.repo, issueNumber, [completedLabel]);
@@ -112,6 +112,7 @@ export class UpdatePhaseAction extends BaseAction {
             }
           }
           break;
+        }
 
         case 'block':
           // Add waiting-for label

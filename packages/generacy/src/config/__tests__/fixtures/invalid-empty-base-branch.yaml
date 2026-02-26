@@ -1,0 +1,13 @@
+# Invalid config fixture - empty base branch
+# Base branch cannot be empty string
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"
+
+defaults:
+  agent: claude-code
+  baseBranch: ""  # Cannot be empty

@@ -1,0 +1,9 @@
+# Minimal valid config fixture
+# Used for testing basic config loading and validation
+
+project:
+  id: "proj_test123"
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"

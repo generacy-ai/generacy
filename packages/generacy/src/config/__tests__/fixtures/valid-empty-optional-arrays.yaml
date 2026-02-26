@@ -1,0 +1,11 @@
+# Valid config fixture with explicitly empty arrays
+# Tests that empty dev and clone arrays are valid
+
+project:
+  id: "proj_empty123"
+  name: "Empty Arrays Test"
+
+repos:
+  primary: "github.com/test/empty"
+  dev: []
+  clone: []

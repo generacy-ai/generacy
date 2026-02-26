@@ -1,0 +1,29 @@
+name: Changeset Bot
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [develop]
+
+jobs:
+  changeset-check:
+    name: Changeset Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check for changesets
+        run: |
+          CHANGESET_FILES=$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)
+          if [ -z "$CHANGESET_FILES" ]; then
+            echo "::warning::No changeset found. If this PR includes user-facing changes, run 'pnpm changeset' to add one."
+          else
+            echo "Changeset found — ready for release."
+          fi

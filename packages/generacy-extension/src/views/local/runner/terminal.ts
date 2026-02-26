@@ -200,7 +200,7 @@ export class WorkflowTerminal {
 
     return new Promise((resolve) => {
       const disposables: vscode.Disposable[] = [];
-      let output = '';
+      const output = '';
 
       // Listen for task end
       disposables.push(

@@ -83,8 +83,8 @@ vi.mock('vscode', () => ({
     }
   },
   EventEmitter: class {
-    private listeners: Function[] = [];
-    event = (listener: Function) => {
+    private listeners: ((...args: unknown[]) => void)[] = [];
+    event = (listener: (...args: unknown[]) => void) => {
       this.listeners.push(listener);
       return { dispose: () => {} };
     };

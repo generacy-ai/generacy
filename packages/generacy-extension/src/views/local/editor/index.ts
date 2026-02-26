@@ -4,6 +4,10 @@
  */
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils';
+import { registerCompletionProvider as _registerCompletion } from './completion';
+import { registerDiagnosticProvider as _registerDiagnostics } from './diagnostics';
+import { registerHoverProvider as _registerHover } from './hover';
+import { registerFormattingProvider as _registerFormatting } from './yaml-formatter';
 
 // CodeLens and Code Action providers
 export {
@@ -47,20 +51,16 @@ export function registerEditorFeatures(context: vscode.ExtensionContext): vscode
   logger.info('Registering workflow editor features');
 
   // Register completion provider
-  const { registerCompletionProvider } = require('./completion');
-  disposables.push(...registerCompletionProvider(context));
+  disposables.push(..._registerCompletion(context));
 
   // Register diagnostic provider
-  const { registerDiagnosticProvider } = require('./diagnostics');
-  disposables.push(registerDiagnosticProvider(context));
+  disposables.push(_registerDiagnostics(context));
 
   // Register hover provider
-  const { registerHoverProvider } = require('./hover');
-  disposables.push(...registerHoverProvider(context));
+  disposables.push(..._registerHover(context));
 
   // Register formatting provider
-  const { registerFormattingProvider } = require('./yaml-formatter');
-  disposables.push(...registerFormattingProvider(context));
+  disposables.push(..._registerFormatting(context));
 
   logger.info('Workflow editor features registered');
 

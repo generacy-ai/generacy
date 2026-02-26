@@ -1,0 +1,9 @@
+# Invalid config fixture - project ID too short
+# Project ID must be at least 12 characters total
+
+project:
+  id: "proj_abc"  # Too short - must be at least 12 characters
+  name: "Test Project"
+
+repos:
+  primary: "github.com/test/repo"

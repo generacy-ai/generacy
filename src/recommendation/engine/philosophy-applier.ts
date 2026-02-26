@@ -245,7 +245,7 @@ export class PhilosophyApplierService implements IPhilosophyApplierService {
     startStep: number
   ): Record<string, number> {
     const scores: Record<string, number> = {};
-    let stepNumber = startStep;
+    const stepNumber = startStep;
 
     for (const optionId of validOptions) {
       scores[optionId] = 0;

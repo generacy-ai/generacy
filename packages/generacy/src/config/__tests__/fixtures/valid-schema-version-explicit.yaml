@@ -1,0 +1,11 @@
+# Valid config fixture with explicit schema version
+# Tests that schemaVersion field is properly handled
+
+schemaVersion: "1"
+
+project:
+  id: "proj_version1"
+  name: "Version Test Project"
+
+repos:
+  primary: "github.com/test/versioned"

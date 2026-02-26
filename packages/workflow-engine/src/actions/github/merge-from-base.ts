@@ -87,7 +87,7 @@ export class MergeFromBaseAction extends BaseAction {
 
       // Handle conflicts
       let conflictsRemaining: ConflictInfo[] = [];
-      let conflictsResolved = 0;
+      const conflictsResolved = 0;
 
       if (!mergeResult.success && mergeResult.conflicts.length > 0) {
         if (abortOnConflict) {

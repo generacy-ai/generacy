@@ -219,9 +219,9 @@ describe('SSE Events Routes', () => {
 });
 
 describe('SSE Event Format', () => {
-  it('should format events correctly', () => {
+  it('should format events correctly', async () => {
     // Test that events follow SSE spec
-    const { formatSSEEvent } = require('../../../src/sse/events.js');
+    const { formatSSEEvent } = await import('../../../src/sse/events.js');
 
     const event = {
       event: 'workflow:started',
@@ -239,8 +239,8 @@ describe('SSE Event Format', () => {
     expect(formatted).toEndWith('\n\n');
   });
 
-  it('should format heartbeats as comments', () => {
-    const { formatHeartbeat } = require('../../../src/sse/events.js');
+  it('should format heartbeats as comments', async () => {
+    const { formatHeartbeat } = await import('../../../src/sse/events.js');
 
     const heartbeat = formatHeartbeat();
 

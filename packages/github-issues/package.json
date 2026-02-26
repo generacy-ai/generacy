@@ -41,8 +41,8 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@generacy-ai/latency": "workspace:*",
-    "@generacy-ai/latency-plugin-issue-tracker": "workspace:*",
+    "@generacy-ai/latency": "^0.1.0",
+    "@generacy-ai/latency-plugin-issue-tracker": "^0.1.0",
     "@octokit/auth-app": "^7.1.1",
     "@octokit/rest": "^21.0.2",
     "@octokit/webhooks": "^13.4.1",
@@ -55,5 +55,8 @@
     "vitest": "^3.2.4"
   },
   "peerDependencies": {},
-  "peerDependenciesMeta": {}
+  "peerDependenciesMeta": {},
+  "publishConfig": {
+    "access": "public"
+  }
 }

@@ -1717,7 +1717,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
 
     // Mock process for Claude CLI
-    const EventEmitter = require('node:events');
+    const { default: EventEmitter } = await import('node:events');
     mockProcess = {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),

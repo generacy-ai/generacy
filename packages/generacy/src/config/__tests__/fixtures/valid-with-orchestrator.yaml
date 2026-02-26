@@ -1,0 +1,13 @@
+# Valid config fixture with orchestrator section only
+# Tests that orchestrator settings work independently
+
+project:
+  id: "proj_orchestr"
+  name: "Orchestrator Test Project"
+
+repos:
+  primary: "github.com/test/orchestrator"
+
+orchestrator:
+  pollIntervalMs: 10000
+  workerCount: 5
