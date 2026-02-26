@@ -305,7 +305,7 @@ export class QueueFilterGroupItem extends vscode.TreeItem {
 
   private getFilterIcon(): vscode.ThemeIcon {
     switch (this.filterType) {
-      case 'status':
+      case 'status': {
         const statusConfig = STATUS_ICONS[this.filterValue as QueueStatus];
         if (statusConfig) {
           const color = statusConfig.color
@@ -314,6 +314,7 @@ export class QueueFilterGroupItem extends vscode.TreeItem {
           return new vscode.ThemeIcon(statusConfig.icon, color);
         }
         return new vscode.ThemeIcon('filter');
+      }
       case 'repository':
         return new vscode.ThemeIcon('repo');
       case 'assignee':
