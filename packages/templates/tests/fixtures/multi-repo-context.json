@@ -24,8 +24,8 @@
     "releaseStream": "stable"
   },
   "orchestrator": {
-    "pollIntervalMs": 3000,
-    "workerCount": 3
+    "pollIntervalMs": 5000,
+    "workerCount": 2
   },
   "devcontainer": {
     "baseImage": "mcr.microsoft.com/devcontainers/base:ubuntu",

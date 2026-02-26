@@ -9,6 +9,7 @@ import { describe, test, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { validateContext } from '../../src/validators.js';
+import { MultiRepoInputSchema } from '../../src/schema.js';
 import type { TemplateContext } from '../../src/schema.js';
 
 // ============================================================================
@@ -56,7 +57,7 @@ describe('Valid Context Fixtures', () => {
     expect(validated.repos.clone).toHaveLength(2);
     expect(validated.repos.hasDevRepos).toBe(true);
     expect(validated.repos.hasCloneRepos).toBe(true);
-    expect(validated.orchestrator.workerCount).toBe(3);
+    expect(validated.orchestrator.workerCount).toBe(2);
     expect(validated.metadata.generatedBy).toBe('generacy-cloud');
   });
 
@@ -129,6 +130,10 @@ describe('Invalid Context Fixtures', () => {
     expect(Object.keys(invalidContexts)).toContain('emptyProjectName');
     expect(Object.keys(invalidContexts)).toContain('invalidDevRepoFormat');
     expect(Object.keys(invalidContexts)).toContain('zeroPollInterval');
+    expect(Object.keys(invalidContexts)).toContain('multiRepoZeroWorkerCount');
+    expect(Object.keys(invalidContexts)).toContain('lowPollInterval');
+    expect(Object.keys(invalidContexts)).toContain('repoNameCollision');
+    expect(Object.keys(invalidContexts)).toContain('workerCountExceedsMax');
   });
 
   test('missingProjectId throws validation error', () => {
@@ -238,8 +243,113 @@ describe('Invalid Context Fixtures', () => {
     try {
       validateContext(testCase.context);
     } catch (error: any) {
-      expect(error.message.toLowerCase()).toContain('greater than 0');
+      expect(error.message.toLowerCase()).toContain('greater than or equal to 5000');
     }
+  });
+
+  test('multiRepoZeroWorkerCount throws validation error on MultiRepoInputSchema', () => {
+    const testCase = invalidContexts.multiRepoZeroWorkerCount;
+
+    // workerCount: 0 is valid in OrchestratorContextSchema (.nonnegative()),
+    // but MultiRepoInputSchema enforces .min(1) for multi-repo projects
+    const multiRepoInput = {
+      projectId: testCase.context.project.id,
+      projectName: testCase.context.project.name,
+      primaryRepo: testCase.context.repos.primary,
+      devRepos: testCase.context.repos.dev,
+      workerCount: testCase.context.orchestrator.workerCount,
+    };
+
+    expect(() => MultiRepoInputSchema.parse(multiRepoInput)).toThrow(
+      testCase.expectedError
+    );
+  });
+
+  test('lowPollInterval throws validation error', () => {
+    const testCase = invalidContexts.lowPollInterval;
+
+    expect(() => validateContext(testCase.context))
+      .toThrow();
+
+    try {
+      validateContext(testCase.context);
+    } catch (error: any) {
+      expect(error.message.toLowerCase()).toContain('greater than or equal to 5000');
+    }
+  });
+
+  test('repoNameCollision throws validation error', () => {
+    const testCase = invalidContexts.repoNameCollision;
+
+    expect(() => validateContext(testCase.context))
+      .toThrow();
+
+    try {
+      validateContext(testCase.context);
+    } catch (error: any) {
+      expect(error.message.toLowerCase()).toContain('same mount path');
+    }
+  });
+
+  test('workerCountExceedsMax throws validation error', () => {
+    const testCase = invalidContexts.workerCountExceedsMax;
+
+    expect(() => validateContext(testCase.context))
+      .toThrow();
+
+    try {
+      validateContext(testCase.context);
+    } catch (error: any) {
+      expect(error.message.toLowerCase()).toContain('less than or equal to 20');
+    }
+  });
+});
+
+// ============================================================================
+// Schema Constraint Verification Tests
+// ============================================================================
+
+describe('Schema Constraint Verification', () => {
+  test('all multi-repo fixtures satisfy pollIntervalMs >= 5000', () => {
+    const multiRepo = loadFixture<TemplateContext>('multi-repo-context.json');
+    const largeMultiRepo = loadFixture<TemplateContext>('large-multi-repo-context.json');
+
+    expect(multiRepo.orchestrator.pollIntervalMs).toBeGreaterThanOrEqual(5000);
+    expect(largeMultiRepo.orchestrator.pollIntervalMs).toBeGreaterThanOrEqual(5000);
+  });
+
+  test('all fixtures satisfy workerCount 0–20 range', () => {
+    const singleRepo = loadFixture<TemplateContext>('single-repo-context.json');
+    const multiRepo = loadFixture<TemplateContext>('multi-repo-context.json');
+    const largeMultiRepo = loadFixture<TemplateContext>('large-multi-repo-context.json');
+
+    // Single-repo: workerCount 0 is valid
+    expect(singleRepo.orchestrator.workerCount).toBeGreaterThanOrEqual(0);
+    expect(singleRepo.orchestrator.workerCount).toBeLessThanOrEqual(20);
+
+    // Multi-repo: workerCount >= 1
+    expect(multiRepo.orchestrator.workerCount).toBeGreaterThanOrEqual(1);
+    expect(multiRepo.orchestrator.workerCount).toBeLessThanOrEqual(20);
+
+    expect(largeMultiRepo.orchestrator.workerCount).toBeGreaterThanOrEqual(1);
+    expect(largeMultiRepo.orchestrator.workerCount).toBeLessThanOrEqual(20);
+  });
+
+  test('all multi-repo fixtures have unique repo names (no collision)', () => {
+    const multiRepo = loadFixture<TemplateContext>('multi-repo-context.json');
+    const largeMultiRepo = loadFixture<TemplateContext>('large-multi-repo-context.json');
+
+    for (const fixture of [multiRepo, largeMultiRepo]) {
+      const allRepos = [fixture.repos.primary, ...fixture.repos.dev, ...fixture.repos.clone];
+      const names = allRepos.map(r => r.split('/')[1]);
+      const uniqueNames = new Set(names);
+      expect(uniqueNames.size).toBe(names.length);
+    }
+  });
+
+  test('multi-repo fixture workerCount matches new default of 2', () => {
+    const multiRepo = loadFixture<TemplateContext>('multi-repo-context.json');
+    expect(multiRepo.orchestrator.workerCount).toBe(2);
   });
 });
 

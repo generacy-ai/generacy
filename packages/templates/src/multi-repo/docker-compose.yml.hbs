@@ -6,8 +6,6 @@
 # Multi-repo development environment for {{project.name}}
 # Orchestrator + Workers architecture for parallel task execution
 
-version: "3.8"
-
 services:
   # ==========================================================================
   # Redis - Message queue for orchestrator/worker communication
@@ -16,8 +14,6 @@ services:
     image: redis:7-alpine
     container_name: {{project.id}}-redis
     command: redis-server --appendonly no --save ""
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -32,10 +28,6 @@ services:
   orchestrator:
     image: {{devcontainer.baseImage}}
     container_name: {{project.id}}-orchestrator
-
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy{{devcontainer.featureTag}}: {}
 
     # Load environment variables from .generacy/generacy.env
     env_file:
@@ -58,7 +50,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/{{repoName repos.primary}}:cached
+      - ..:/workspaces/{{repoName repos.primary}}:cached
       {{#if repos.hasDevRepos}}
 
       # Development repositories
@@ -103,10 +95,6 @@ services:
   worker:
     image: {{devcontainer.baseImage}}
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy{{devcontainer.featureTag}}: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -125,7 +113,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/{{repoName repos.primary}}:cached
+      - ..:/workspaces/{{repoName repos.primary}}:cached
       {{#if repos.hasDevRepos}}
 
       # Development repositories
@@ -141,13 +129,17 @@ services:
       {{/each}}
       {{/if}}
 
-      # Worker-specific state (isolated from orchestrator)
-      - vscode-server:/home/vscode/.vscode-server
-
     working_dir: /workspaces/{{repoName repos.primary}}
 
     # Keep container running
     command: sleep infinity
+
+    healthcheck:
+      test: ["CMD", "test", "-f", "/home/vscode/.generacy/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
     # Scale workers based on configuration
     deploy:

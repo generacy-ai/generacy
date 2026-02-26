@@ -194,7 +194,7 @@ export function buildMultiRepoContext(options: MultiRepoInput): TemplateContext 
   const baseImage =
     validated.baseImage ?? 'mcr.microsoft.com/devcontainers/base:ubuntu';
   const baseBranch = validated.baseBranch ?? inferBaseBranch(validated.primaryRepo);
-  const workerCount = validated.workerCount ?? 3;
+  const workerCount = validated.workerCount ?? 2;
   const pollIntervalMs = validated.pollIntervalMs ?? 5000;
   const cloneRepos = validated.cloneRepos ?? [];
 

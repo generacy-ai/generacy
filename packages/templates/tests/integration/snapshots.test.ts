@@ -248,7 +248,7 @@ describe('Snapshot: Special Values', () => {
     const dockerComposeYml = files.get('.devcontainer/docker-compose.yml')!;
 
     // Verify worker replicas match context
-    expect(dockerComposeYml).toContain('replicas: 3');
+    expect(dockerComposeYml).toContain('replicas: 2');
 
     expect(dockerComposeYml).toMatchSnapshot();
   });

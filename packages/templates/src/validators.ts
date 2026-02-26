@@ -264,7 +264,7 @@ export function validateRenderedDevContainer(jsonContent: string): void {
   if (hasFeatures) {
     const featureKeys = Object.keys(parsed.features);
     const hasGeneracyFeature = featureKeys.some((key) =>
-      key.includes('generacy-ai/generacy')
+      /generacy-ai\/.*\/generacy/.test(key)
     );
 
     if (!hasGeneracyFeature) {
@@ -311,7 +311,7 @@ export function validateRenderedDockerCompose(yamlContent: string): void {
   const services = parsed.services;
 
   // Required services for multi-repo setup
-  const requiredServices = ['redis', 'orchestrator'];
+  const requiredServices = ['redis', 'orchestrator', 'worker'];
   const missing: string[] = [];
 
   for (const service of requiredServices) {

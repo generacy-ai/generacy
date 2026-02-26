@@ -287,7 +287,7 @@
     "expectedError": "Invalid"
   },
   "zeroPollInterval": {
-    "description": "Context with zero poll interval (should be positive)",
+    "description": "Context with zero poll interval (must be >= 5000ms)",
     "context": {
       "project": {
         "id": "proj_123",
@@ -320,6 +320,150 @@
         "version": "1.0.0"
       }
     },
-    "expectedError": "Number must be greater than 0"
+    "expectedError": "Number must be greater than or equal to 5000"
+  },
+  "multiRepoZeroWorkerCount": {
+    "description": "Context with zero worker count in multi-repo (should fail MultiRepoInputSchema min(1))",
+    "context": {
+      "project": {
+        "id": "proj_123",
+        "name": "Test Project"
+      },
+      "repos": {
+        "primary": "test/repo",
+        "dev": ["test/dev1"],
+        "clone": [],
+        "hasDevRepos": true,
+        "hasCloneRepos": false,
+        "isMultiRepo": true
+      },
+      "defaults": {
+        "agent": "claude-code",
+        "baseBranch": "main",
+        "releaseStream": "stable"
+      },
+      "orchestrator": {
+        "pollIntervalMs": 5000,
+        "workerCount": 0
+      },
+      "devcontainer": {
+        "baseImage": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "featureTag": ":1"
+      },
+      "metadata": {
+        "timestamp": "2026-02-24T10:00:00.000Z",
+        "generatedBy": "generacy-cli",
+        "version": "1.0.0"
+      }
+    },
+    "expectedError": "Number must be greater than or equal to 1"
+  },
+  "lowPollInterval": {
+    "description": "Context with poll interval below 5000ms minimum",
+    "context": {
+      "project": {
+        "id": "proj_123",
+        "name": "Test Project"
+      },
+      "repos": {
+        "primary": "test/repo",
+        "dev": ["test/dev1"],
+        "clone": [],
+        "hasDevRepos": true,
+        "hasCloneRepos": false,
+        "isMultiRepo": true
+      },
+      "defaults": {
+        "agent": "claude-code",
+        "baseBranch": "main",
+        "releaseStream": "stable"
+      },
+      "orchestrator": {
+        "pollIntervalMs": 1000,
+        "workerCount": 2
+      },
+      "devcontainer": {
+        "baseImage": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "featureTag": ":1"
+      },
+      "metadata": {
+        "timestamp": "2026-02-24T10:00:00.000Z",
+        "generatedBy": "generacy-cli",
+        "version": "1.0.0"
+      }
+    },
+    "expectedError": "Number must be greater than or equal to 5000"
+  },
+  "repoNameCollision": {
+    "description": "Context with duplicate repo names across different orgs (same mount path)",
+    "context": {
+      "project": {
+        "id": "proj_123",
+        "name": "Test Project"
+      },
+      "repos": {
+        "primary": "org-a/shared-lib",
+        "dev": ["org-b/shared-lib"],
+        "clone": [],
+        "hasDevRepos": true,
+        "hasCloneRepos": false,
+        "isMultiRepo": true
+      },
+      "defaults": {
+        "agent": "claude-code",
+        "baseBranch": "main",
+        "releaseStream": "stable"
+      },
+      "orchestrator": {
+        "pollIntervalMs": 5000,
+        "workerCount": 2
+      },
+      "devcontainer": {
+        "baseImage": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "featureTag": ":1"
+      },
+      "metadata": {
+        "timestamp": "2026-02-24T10:00:00.000Z",
+        "generatedBy": "generacy-cli",
+        "version": "1.0.0"
+      }
+    },
+    "expectedError": "Multiple repos resolve to the same mount path"
+  },
+  "workerCountExceedsMax": {
+    "description": "Context with worker count exceeding maximum of 20",
+    "context": {
+      "project": {
+        "id": "proj_123",
+        "name": "Test Project"
+      },
+      "repos": {
+        "primary": "test/repo",
+        "dev": ["test/dev1"],
+        "clone": [],
+        "hasDevRepos": true,
+        "hasCloneRepos": false,
+        "isMultiRepo": true
+      },
+      "defaults": {
+        "agent": "claude-code",
+        "baseBranch": "main",
+        "releaseStream": "stable"
+      },
+      "orchestrator": {
+        "pollIntervalMs": 5000,
+        "workerCount": 25
+      },
+      "devcontainer": {
+        "baseImage": "mcr.microsoft.com/devcontainers/base:ubuntu",
+        "featureTag": ":1"
+      },
+      "metadata": {
+        "timestamp": "2026-02-24T10:00:00.000Z",
+        "generatedBy": "generacy-cli",
+        "version": "1.0.0"
+      }
+    },
+    "expectedError": "Number must be less than or equal to 20"
   }
 }
