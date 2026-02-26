@@ -12,7 +12,7 @@
 
 ## Phase 1: Convert Dev Container Feature Workflow to Reusable
 
-### T001 [US5] Add `workflow_call` trigger and preview mode to `publish-devcontainer-feature.yml`
+### T001 [DONE] [US5] Add `workflow_call` trigger and preview mode to `publish-devcontainer-feature.yml`
 **File**: `.github/workflows/publish-devcontainer-feature.yml`
 - Add `workflow_call` trigger with `mode` input (type: `string`, required: `true`)
 - Keep existing `push.tags: ['feature/v*']` trigger as fallback (treated as stable)
@@ -40,7 +40,7 @@ jobs:
 
 ## Phase 2: Fix and Extend Preview Publishing
 
-### T002 [US3] Fix changeset detection bug in `publish-preview.yml`
+### T002 [DONE] [US3] Fix changeset detection bug in `publish-preview.yml`
 **File**: `.github/workflows/publish-preview.yml`
 - Replace `ls .changeset/*.md` (line 41) with `find .changeset -name '*.md' ! -name 'README.md'`
 - Current code matches `README.md` which always exists, causing false positives (changesets always detected even when none exist)
@@ -50,21 +50,21 @@ jobs:
 
 **Spec coverage**: FR-008
 
-### T003 [US3] Add `--provenance` flag to preview npm publish
+### T003 [DONE] [US3] Add `--provenance` flag to preview npm publish
 **File**: `.github/workflows/publish-preview.yml`
 - Add `--provenance` to the publish command (line 53): `pnpm -r --filter '!generacy-extension' publish --tag preview --no-git-checks --provenance`
 - The `id-token: write` permission is already set (line 13), so this is a one-line change
 
 **Spec coverage**: FR-009 (enhanced)
 
-### T004 [US3] Add `packages: write` permission to `publish-preview.yml`
+### T004 [DONE] [US3] Add `packages: write` permission to `publish-preview.yml`
 **File**: `.github/workflows/publish-preview.yml`
 - Add `packages: write` to the top-level `permissions` block (after line 13)
 - Required for the reusable workflow to push to GHCR
 
 **Spec coverage**: FR-015, FR-019
 
-### T005 [US3] [US5] Restructure `publish-preview.yml` to call reusable Dev Container Feature workflow
+### T005 [DONE] [US3] [US5] Restructure `publish-preview.yml` to call reusable Dev Container Feature workflow
 **File**: `.github/workflows/publish-preview.yml`
 - Rename existing job from `publish-preview` to `publish-npm`
 - Add `outputs` to the `publish-npm` job: `has_changesets: ${{ steps.changesets.outputs.has_changesets }}`
@@ -82,35 +82,35 @@ jobs:
 
 ## Phase 3: Fix and Extend Release Publishing
 
-### T006 [US4] Add `registry-url` to `setup-node` step in `release.yml`
+### T006 [DONE] [US4] Add `registry-url` to `setup-node` step in `release.yml`
 **File**: `.github/workflows/release.yml`
 - Add `registry-url: 'https://registry.npmjs.org'` to the `actions/setup-node@v4` step (after line 27)
 - **Bug fix**: Without `registry-url`, `actions/setup-node` does not configure the `.npmrc` file, so `NODE_AUTH_TOKEN` has no effect and `npm publish` cannot authenticate
 
 **Spec coverage**: FR-013
 
-### T007 [P] [US4] Fix npm auth env var in `release.yml`
+### T007 [DONE] [P] [US4] Fix npm auth env var in `release.yml`
 **File**: `.github/workflows/release.yml`
 - Change `NPM_TOKEN` to `NODE_AUTH_TOKEN` in the `changesets/action` env block (line 48)
 - **Bug fix**: `actions/setup-node` with `registry-url` creates an `.npmrc` that references `NODE_AUTH_TOKEN`, not `NPM_TOKEN`. The current env var name means the token is set but never read by npm.
 
 **Spec coverage**: FR-013
 
-### T008 [P] [US4] Add `--provenance` flag to release npm publish
+### T008 [DONE] [P] [US4] Add `--provenance` flag to release npm publish
 **File**: `.github/workflows/release.yml`
 - Add `--provenance` to the publish command in the changesets action (line 43): `pnpm -r --filter '!generacy-extension' publish --no-git-checks --provenance`
 - The `id-token: write` permission is already set (line 14)
 
 **Spec coverage**: FR-013 (enhanced)
 
-### T009 [US4] Add `packages: write` permission to `release.yml`
+### T009 [DONE] [US4] Add `packages: write` permission to `release.yml`
 **File**: `.github/workflows/release.yml`
 - Add `packages: write` to the top-level `permissions` block (after line 14)
 - Required for the reusable workflow to push to GHCR
 
 **Spec coverage**: FR-015, FR-019
 
-### T010 [US4] [US5] Add Dev Container Feature publish job to `release.yml`
+### T010 [DONE] [US4] [US5] Add Dev Container Feature publish job to `release.yml`
 **File**: `.github/workflows/release.yml`
 - Add `outputs` to the `release` job: `published: ${{ steps.changesets.outputs.published }}`
 - Add new job `publish-devcontainer-feature` that:
@@ -127,7 +127,7 @@ jobs:
 
 ## Phase 4: Defense-in-Depth
 
-### T011 [P] [US3] [US4] Create `packages/devcontainer-feature/package.json` with `"private": true`
+### T011 [DONE] [P] [US3] [US4] Create `packages/devcontainer-feature/package.json` with `"private": true`
 **File**: `packages/devcontainer-feature/package.json` (new)
 - Create minimal `package.json` with `"private": true` to prevent accidental npm publishing
 - Content:
@@ -146,7 +146,7 @@ jobs:
 
 ## Phase 5: Verification
 
-### T012 [US1] Verify `ci.yml` matches specification
+### T012 [DONE] [US1] Verify `ci.yml` matches specification
 **File**: `.github/workflows/ci.yml`
 - Confirm no changes needed (already verified in plan)
 - Checklist:
@@ -163,7 +163,7 @@ jobs:
 
 **Spec coverage**: FR-001 through FR-005, US1
 
-### T013 [P] [US2] Verify `changeset-bot.yml` matches specification
+### T013 [DONE] [P] [US2] Verify `changeset-bot.yml` matches specification
 **File**: `.github/workflows/changeset-bot.yml`
 - Confirm no changes needed (already verified in plan)
 - Checklist:
@@ -174,7 +174,7 @@ jobs:
 
 **Spec coverage**: FR-006, US2
 
-### T014 [US1] [US2] Verify `.changeset/config.json` matches specification
+### T014 [DONE] [US1] [US2] Verify `.changeset/config.json` matches specification
 **File**: `.changeset/config.json`
 - Confirm settings:
   - [x] `baseBranch` is `develop` (FR-017)
@@ -183,7 +183,7 @@ jobs:
 
 **Spec coverage**: FR-017
 
-### T015 Validate all workflow YAML syntax
+### T015 [DONE] Validate all workflow YAML syntax
 **Files**:
 - `.github/workflows/publish-devcontainer-feature.yml`
 - `.github/workflows/publish-preview.yml`

@@ -1,0 +1,5 @@
+{
+  "name": "devcontainer-feature",
+  "private": true,
+  "description": "Generacy Dev Container Feature (published to GHCR, not npm)"
+}
