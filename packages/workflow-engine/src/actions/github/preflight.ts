@@ -28,7 +28,7 @@ import { join } from 'node:path';
  * Parse a GitHub issue URL into owner, repo, and number
  */
 export function parseGitHubIssueUrl(url: string): ParsedIssueUrl {
-  const match = url.match(/https?:\/\/github\.com\/([^\/]+)\/([^\/]+)\/issues\/(\d+)/);
+  const match = url.match(/https?:\/\/github\.com\/([^/]+)\/([^/]+)\/issues\/(\d+)/);
   if (!match) {
     throw new Error(`Invalid GitHub issue URL: ${url}`);
   }
