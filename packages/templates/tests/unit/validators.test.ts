@@ -574,7 +574,7 @@ describe('Post-Render Validation', () => {
           name: 'Test Project',
           image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
           features: {
-            'ghcr.io/generacy-ai/features/generacy:1': {},
+            'ghcr.io/generacy-ai/generacy/generacy:1': {},
           },
           customizations: {
             vscode: {
@@ -593,7 +593,7 @@ describe('Post-Render Validation', () => {
           service: 'orchestrator',
           workspaceFolder: '/workspaces/primary',
           features: {
-            'ghcr.io/generacy-ai/features/generacy:1': {},
+            'ghcr.io/generacy-ai/generacy/generacy:1': {},
           },
         });
 
@@ -647,7 +647,7 @@ describe('Post-Render Validation', () => {
           dockerComposeFile: 'docker-compose.yml',
           // Missing service
           features: {
-            'ghcr.io/generacy-ai/features/generacy:1': {},
+            'ghcr.io/generacy-ai/generacy/generacy:1': {},
           },
         });
 
@@ -689,9 +689,9 @@ describe('Post-Render Validation', () => {
     describe('edge cases', () => {
       it('should accept Generacy feature with different version tags', () => {
         const featureTags = [
-          'ghcr.io/generacy-ai/features/generacy:1',
-          'ghcr.io/generacy-ai/features/generacy:preview',
-          'ghcr.io/generacy-ai/features/generacy:latest',
+          'ghcr.io/generacy-ai/generacy/generacy:1',
+          'ghcr.io/generacy-ai/generacy/generacy:preview',
+          'ghcr.io/generacy-ai/generacy/generacy:latest',
         ];
 
         for (const featureTag of featureTags) {
@@ -714,7 +714,7 @@ describe('Post-Render Validation', () => {
           dockerComposeFile: 'docker-compose.yml',
           service: 'orchestrator',
           features: {
-            'ghcr.io/generacy-ai/features/generacy:1': {},
+            'ghcr.io/generacy-ai/generacy/generacy:1': {},
           },
         });
 
@@ -1117,7 +1117,7 @@ repos:
           JSON.stringify({
             name: 'Test',
             image: 'ubuntu',
-            features: { 'ghcr.io/generacy-ai/features/generacy:1': {} },
+            features: { 'ghcr.io/generacy-ai/generacy/generacy:1': {} },
           }),
         ],
         [
@@ -1147,7 +1147,7 @@ repos:
             name: 'Test',
             dockerComposeFile: 'docker-compose.yml',
             service: 'orchestrator',
-            features: { 'ghcr.io/generacy-ai/features/generacy:1': {} },
+            features: { 'ghcr.io/generacy-ai/generacy/generacy:1': {} },
           }),
         ],
         [

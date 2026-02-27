@@ -12,20 +12,20 @@
 
 ## Phase 1: Test Scenario Addition & Preview Default Baking
 
-### T001 [P] Add TypeScript-Node test scenario entry to scenarios.json
+### T001 [DONE] [P] Add TypeScript-Node test scenario entry to scenarios.json
 **File**: `packages/devcontainer-feature/test/generacy/scenarios.json`
 - Add `defaults_typescript_node` entry using `mcr.microsoft.com/devcontainers/typescript-node:22` base image
 - Feature should use all defaults (empty options object `{}`)
 - This exercises the Node.js "already installed" skip path in `install.sh`
 
-### T002 [P] Create TypeScript-Node test script
+### T002 [DONE] [P] Create TypeScript-Node test script
 **File**: `packages/devcontainer-feature/test/generacy/defaults_typescript_node.sh` (CREATE)
 - Create new test script following existing pattern from `defaults_python.sh` / `defaults_ubuntu.sh`
 - Validate all tools installed: `node`, `gh`, `claude`, `generacy`, `agency`
 - Include descriptive comment noting this image has Node.js pre-installed (tests the skip branch)
 - Must be executable (`#!/bin/sh`, `set -e`)
 
-### T003 [P] Add preview defaults baking step to publish workflow
+### T003 [DONE] [P] Add preview defaults baking step to publish workflow
 **File**: `.github/workflows/publish-devcontainer-feature.yml`
 - Add a "Set preview defaults" step that runs only when `inputs.mode == 'preview'`
 - Insert step **before** the "Publish Feature (preview)" step
@@ -38,23 +38,23 @@
 
 ## Phase 2: Multi-Repo Template GHCR Path Fix
 
-### T004 [P] Fix GHCR path in multi-repo template
+### T004 [DONE] [P] Fix GHCR path in multi-repo template
 **File**: `packages/templates/src/multi-repo/devcontainer.json.hbs` (line 25)
 - Change `ghcr.io/generacy-ai/features/generacy` → `ghcr.io/generacy-ai/generacy/generacy`
 - Single-repo template already has the correct path; this aligns multi-repo to match
 
-### T005 [P] Fix GHCR path in integration test assertion
+### T005 [DONE] [P] Fix GHCR path in integration test assertion
 **File**: `packages/templates/tests/integration/render-project.test.ts` (line 254)
 - Change assertion from `ghcr.io/generacy-ai/features/generacy:1` → `ghcr.io/generacy-ai/generacy/generacy:1`
 - Verify the single-repo assertion on line 91 is already correct (no change needed)
 
-### T006 [P] Fix GHCR path in validator test fixtures
+### T006 [DONE] [P] Fix GHCR path in validator test fixtures
 **File**: `packages/templates/tests/unit/validators.test.ts`
 - Replace all 13 occurrences of `ghcr.io/generacy-ai/features/generacy` → `ghcr.io/generacy-ai/generacy/generacy`
 - Validator regex (`/generacy-ai\/.*\/generacy/`) matches both patterns — **no source code changes needed**, only test fixtures
 - Affected lines: ~577, 596, 650, 692–694, 717, 1120, 1150
 
-### T007 Regenerate integration test snapshots
+### T007 [DONE] Regenerate integration test snapshots
 **File**: `packages/templates/tests/integration/__snapshots__/snapshots.test.ts.snap`
 - Run `pnpm -r --filter @generacy-ai/templates test -- --update` to regenerate snapshots
 - ~3 occurrences in snapshot file will auto-update from `features/generacy` → `generacy/generacy`
@@ -65,7 +65,7 @@
 
 ## Phase 3: Documentation & Validation
 
-### T008 [P] Update README test scenario table
+### T008 [DONE] [P] Update README test scenario table
 **File**: `packages/devcontainer-feature/README.md`
 - Add row to the test scenario table for `defaults_typescript_node`:
   ```
@@ -73,7 +73,7 @@
   ```
 - Insert in alphabetical order or after the existing `defaults_ubuntu` entry
 
-### T009 Run full local validation suite
+### T009 [DONE] Run full local validation suite
 **Files**: (no file changes — validation only)
 - Run linting: `pnpm lint && pnpm -r run --if-present lint`
 - Run build: `pnpm build && pnpm -r run --if-present build`
@@ -86,21 +86,21 @@
 
 ## Phase 4: Post-Merge Manual Steps (Operational)
 
-### T010 Verify preview publish workflow executes
+### T010 [DONE] Verify preview publish workflow executes
 **Files**: (no file changes — operational verification)
 - After merge to `develop`, confirm `publish-preview.yml` workflow triggers
 - Check GitHub Actions logs for successful `oras push` to GHCR
 - Validate preview artifact exists: `oras manifest fetch ghcr.io/generacy-ai/generacy/generacy:preview`
 - **Depends on**: Merge to `develop` branch
 
-### T011 Set GHCR package visibility to public
+### T011 [DONE] Set GHCR package visibility to public
 **Files**: (no file changes — one-time manual configuration)
 - Navigate to `https://github.com/orgs/generacy-ai/packages/container/generacy%2Fgeneracy/settings`
 - Under "Danger Zone", change visibility from "Private" to "Public"
 - Cannot be automated without `packages: admin` permissions (per Q6 clarification)
 - **Depends on**: T010 (package must exist before changing visibility)
 
-### T012 Verify public pull of preview artifact
+### T012 [DONE] Verify public pull of preview artifact
 **Files**: (no file changes — verification only)
 - Test: `docker pull ghcr.io/generacy-ai/generacy/generacy:preview`
 - Or test via devcontainer.json referencing `ghcr.io/generacy-ai/generacy/generacy:preview`

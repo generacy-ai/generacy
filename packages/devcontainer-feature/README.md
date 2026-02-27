@@ -163,6 +163,7 @@ devcontainer features test \
 | Scenario | Base Image | Options | Validates |
 |----------|-----------|---------|-----------|
 | `defaults_python` | Python 3.12 | All defaults | All tools installed |
+| `defaults_typescript_node` | TypeScript-Node 22 | All defaults | All tools installed, Node skip path |
 | `defaults_ubuntu` | Ubuntu base | All defaults | All tools installed |
 | `all_disabled` | Python 3.12 | Agency + Claude Code off | Only core tools present |
 | `no_claude_code` | Python 3.12 | Claude Code off | Claude Code absent |
@@ -182,6 +183,7 @@ packages/devcontainer-feature/
 │       ├── test.sh                     # Default scenario test
 │       ├── scenarios.json              # Test scenario definitions
 │       ├── defaults_python.sh          # Python base image test
+│       ├── defaults_typescript_node.sh # TypeScript-Node base image test
 │       ├── defaults_ubuntu.sh          # Ubuntu base image test
 │       ├── all_disabled.sh             # Disabled components test
 │       ├── no_claude_code.sh           # No Claude Code test

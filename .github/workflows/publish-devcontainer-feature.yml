@@ -30,6 +30,14 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Preview: use oras to push :preview tag
+      - name: Set preview defaults
+        if: inputs.mode == 'preview'
+        run: |
+          cd packages/devcontainer-feature/src/generacy
+          # Rewrite option defaults from "latest" to "preview" for preview artifacts
+          jq '.options.version.default = "preview" | .options.agencyVersion.default = "preview"' \
+            devcontainer-feature.json > tmp.json && mv tmp.json devcontainer-feature.json
+
       - name: Install oras (preview)
         if: inputs.mode == 'preview'
         run: |
