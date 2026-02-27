@@ -41,7 +41,7 @@ import { checkConflicts, showDiff, resolveConflicts } from '../conflicts.js';
 /** Build a minimal InitOptions with sensible defaults for testing. */
 function makeOptions(overrides: Partial<InitOptions> = {}): InitOptions {
   return {
-    projectId: null,
+    projectId: 'proj_test123456',
     projectName: 'test-project',
     primaryRepo: 'acme/app',
     devRepos: [],
@@ -53,7 +53,6 @@ function makeOptions(overrides: Partial<InitOptions> = {}): InitOptions {
     dryRun: false,
     skipGithubCheck: false,
     yes: false,
-    verbose: false,
     ...overrides,
   };
 }
@@ -261,6 +260,57 @@ describe('resolveConflicts', () => {
       expect(actions.get('.generacy/config.yaml')).toBe('overwrite');
       expect(actions.get('.devcontainer/devcontainer.json')).toBe('overwrite');
       expect(actions.get('new-file.txt')).toBe('overwrite');
+      expect(mockSelect).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // --yes flag (accept defaults without prompting)
+  // -------------------------------------------------------------------------
+
+  describe('--yes flag', () => {
+    it('overwrites non-merge conflicts without prompting', async () => {
+      const files = new Map([
+        ['.generacy/config.yaml', 'new-content'],
+        ['.devcontainer/devcontainer.json', 'new-content'],
+        ['new-file.txt', 'new-content'],
+      ]);
+      const conflicts = new Map([
+        ['.generacy/config.yaml', 'old-content'],
+        ['.devcontainer/devcontainer.json', 'old-content'],
+      ]);
+
+      const actions = await resolveConflicts(
+        files,
+        conflicts,
+        makeOptions({ yes: true }),
+      );
+
+      expect(actions.size).toBe(3);
+      expect(actions.get('.generacy/config.yaml')).toBe('overwrite');
+      expect(actions.get('.devcontainer/devcontainer.json')).toBe('overwrite');
+      expect(actions.get('new-file.txt')).toBe('overwrite');
+      expect(mockSelect).not.toHaveBeenCalled();
+    });
+
+    it('uses merge for .vscode/extensions.json even with --yes', async () => {
+      const files = new Map([
+        ['.vscode/extensions.json', 'new'],
+        ['.generacy/config.yaml', 'new'],
+      ]);
+      const conflicts = new Map([
+        ['.vscode/extensions.json', 'old'],
+        ['.generacy/config.yaml', 'old'],
+      ]);
+
+      const actions = await resolveConflicts(
+        files,
+        conflicts,
+        makeOptions({ yes: true }),
+      );
+
+      expect(actions.get('.vscode/extensions.json')).toBe('merge');
+      expect(actions.get('.generacy/config.yaml')).toBe('overwrite');
       expect(mockSelect).not.toHaveBeenCalled();
     });
   });

@@ -121,7 +121,6 @@ describe('resolveOptions', () => {
           dryRun: true,
           skipGithubCheck: true,
           yes: true,
-          verbose: true,
         },
         GIT_ROOT,
       );
@@ -137,7 +136,6 @@ describe('resolveOptions', () => {
       expect(result.dryRun).toBe(true);
       expect(result.skipGithubCheck).toBe(true);
       expect(result.yes).toBe(true);
-      expect(result.verbose).toBe(true);
     });
 
     it('CLI flags override existing config values', async () => {
@@ -546,15 +544,15 @@ describe('resolveOptions', () => {
     it('generates local placeholder ID when no project ID provided', async () => {
       const result = await resolveOptions(fullFlags(), GIT_ROOT);
 
-      expect(result.projectId).toMatch(/^proj_local_[0-9a-f]{8}$/);
+      expect(result.projectId).toMatch(/^proj_local[0-9a-f]{8}$/);
     });
 
     it('generates unique local IDs on each call', async () => {
       const result1 = await resolveOptions(fullFlags(), GIT_ROOT);
       const result2 = await resolveOptions(fullFlags(), GIT_ROOT);
 
-      expect(result1.projectId).toMatch(/^proj_local_/);
-      expect(result2.projectId).toMatch(/^proj_local_/);
+      expect(result1.projectId).toMatch(/^proj_local/);
+      expect(result2.projectId).toMatch(/^proj_local/);
       // Technically could collide, but astronomically unlikely with 4 random bytes
       expect(result1.projectId).not.toBe(result2.projectId);
     });
@@ -802,12 +800,6 @@ describe('resolveOptions', () => {
       const result = await resolveOptions(fullFlags(), GIT_ROOT);
 
       expect(result.skipGithubCheck).toBe(false);
-    });
-
-    it('defaults verbose to false', async () => {
-      const result = await resolveOptions(fullFlags(), GIT_ROOT);
-
-      expect(result.verbose).toBe(false);
     });
 
     it('defaults devRepos to empty array', async () => {

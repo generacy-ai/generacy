@@ -322,7 +322,7 @@ describe('Template Rendering', () => {
       // Check substituted values
       expect(result).toContain('id: "proj_abc123xyz"');
       expect(result).toContain('name: "E-Commerce API"');
-      expect(result).toContain('primary: "acme-corp/ecommerce-api"');
+      expect(result).toContain('primary: "github.com/acme-corp/ecommerce-api"');
       expect(result).toContain('agent: "claude-code"');
       expect(result).toContain('baseBranch: "main"');
 
@@ -343,18 +343,18 @@ describe('Template Rendering', () => {
       // Check substituted values
       expect(result).toContain('id: "proj_xyz789def"');
       expect(result).toContain('name: "Acme Platform"');
-      expect(result).toContain('primary: "acme-corp/platform-orchestrator"');
+      expect(result).toContain('primary: "github.com/acme-corp/platform-orchestrator"');
 
       // Should include dev repos
       expect(result).toContain('dev:');
-      expect(result).toContain('- "acme-corp/api-service"');
-      expect(result).toContain('- "acme-corp/frontend-app"');
-      expect(result).toContain('- "acme-corp/worker-service"');
+      expect(result).toContain('- "github.com/acme-corp/api-service"');
+      expect(result).toContain('- "github.com/acme-corp/frontend-app"');
+      expect(result).toContain('- "github.com/acme-corp/worker-service"');
 
       // Should include clone repos
       expect(result).toContain('clone:');
-      expect(result).toContain('- "acme-corp/shared-lib"');
-      expect(result).toContain('- "acme-corp/proto-definitions"');
+      expect(result).toContain('- "github.com/acme-corp/shared-lib"');
+      expect(result).toContain('- "github.com/acme-corp/proto-definitions"');
 
       // Should include orchestrator section
       expect(result).toContain('orchestrator:');

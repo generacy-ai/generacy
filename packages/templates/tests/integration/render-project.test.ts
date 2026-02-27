@@ -62,7 +62,7 @@ describe('Integration: renderProject - Single Repo', () => {
     expect(config.project.name).toBe('E-Commerce API');
 
     // Verify repos
-    expect(config.repos.primary).toBe('acme-corp/ecommerce-api');
+    expect(config.repos.primary).toBe('github.com/acme-corp/ecommerce-api');
     expect(config.repos.dev).toBeUndefined(); // Empty arrays not rendered
     expect(config.repos.clone).toBeUndefined();
 
@@ -202,16 +202,16 @@ describe('Integration: renderProject - Multi Repo', () => {
     expect(config.project.name).toBe('Acme Platform');
 
     // Verify repos
-    expect(config.repos.primary).toBe('acme-corp/platform-orchestrator');
+    expect(config.repos.primary).toBe('github.com/acme-corp/platform-orchestrator');
     expect(config.repos.dev).toBeDefined();
     expect(config.repos.dev).toHaveLength(3);
-    expect(config.repos.dev).toContain('acme-corp/api-service');
-    expect(config.repos.dev).toContain('acme-corp/frontend-app');
-    expect(config.repos.dev).toContain('acme-corp/worker-service');
+    expect(config.repos.dev).toContain('github.com/acme-corp/api-service');
+    expect(config.repos.dev).toContain('github.com/acme-corp/frontend-app');
+    expect(config.repos.dev).toContain('github.com/acme-corp/worker-service');
     expect(config.repos.clone).toBeDefined();
     expect(config.repos.clone).toHaveLength(2);
-    expect(config.repos.clone).toContain('acme-corp/shared-lib');
-    expect(config.repos.clone).toContain('acme-corp/proto-definitions');
+    expect(config.repos.clone).toContain('github.com/acme-corp/shared-lib');
+    expect(config.repos.clone).toContain('github.com/acme-corp/proto-definitions');
 
     // Verify defaults
     expect(config.defaults.agent).toBe('claude-code');
@@ -523,7 +523,7 @@ describe('Integration: renderProject - Builder Integration', () => {
 
     expect(config.project.id).toBe('proj_test123');
     expect(config.project.name).toBe('Test Project');
-    expect(config.repos.primary).toBe('test-org/test-repo');
+    expect(config.repos.primary).toBe('github.com/test-org/test-repo');
   });
 
   it('should work with buildMultiRepoContext output', async () => {
@@ -758,7 +758,7 @@ describe('Integration: renderProject - Edge Cases', () => {
     const configYaml = files.get('.generacy/config.yaml')!;
     const config: any = yaml.load(configYaml);
 
-    expect(config.repos.primary).toBe('org-name.io/repo-name_v2');
+    expect(config.repos.primary).toBe('github.com/org-name.io/repo-name_v2');
   });
 
   it('should handle large number of repos in multi-repo', async () => {

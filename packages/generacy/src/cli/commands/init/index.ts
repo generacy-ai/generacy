@@ -54,7 +54,6 @@ export function initCommand(): Command {
     .option('--dry-run', 'Preview files without writing')
     .option('--skip-github-check', 'Skip GitHub access validation')
     .option('-y, --yes', 'Accept defaults without prompting')
-    .option('-v, --verbose', 'Verbose output')
     .action(async (_opts, cmd) => {
       await initAction(cmd.opts());
     });
@@ -93,7 +92,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
   await runGitHubValidation(initOptions);
 
   // ── 4. Build template context ──────────────────────────────────────────
-  const projectId = initOptions.projectId!;
+  const projectId = initOptions.projectId;
   const isMultiRepo = initOptions.devRepos.length > 0;
 
   // TODO: [FR-017] When API integration is available, fetch project details
@@ -110,6 +109,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
         primaryRepo: initOptions.primaryRepo,
         devRepos: initOptions.devRepos,
         cloneRepos: initOptions.cloneRepos,
+        agent: initOptions.agent,
         baseBranch: initOptions.baseBranch,
         releaseStream: initOptions.releaseStream,
       });
@@ -118,6 +118,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
         projectId,
         projectName: initOptions.projectName,
         primaryRepo: initOptions.primaryRepo,
+        agent: initOptions.agent,
         baseBranch: initOptions.baseBranch,
         releaseStream: initOptions.releaseStream,
       });

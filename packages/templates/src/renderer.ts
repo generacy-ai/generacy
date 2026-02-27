@@ -69,6 +69,28 @@ function registerHelpers(): void {
   });
 
   /**
+   * Convert shorthand repo format to config schema format
+   *
+   * The template context stores repos as "owner/repo" shorthand (used by
+   * devcontainer.json, docker-compose.yml). The config.yaml schema requires
+   * "github.com/owner/repo" format. This helper bridges the gap.
+   *
+   * @param shorthand - Repository in "owner/repo" format
+   * @returns Repository in "github.com/owner/repo" format
+   * @example {{configRepoUrl "acme/main-api"}} → "github.com/acme/main-api"
+   */
+  Handlebars.registerHelper('configRepoUrl', (shorthand: unknown): string => {
+    if (typeof shorthand !== 'string' || !shorthand) {
+      return '';
+    }
+    // Already has a github.com prefix — return as-is
+    if (shorthand.startsWith('github.com/')) {
+      return shorthand;
+    }
+    return `github.com/${shorthand}`;
+  });
+
+  /**
    * Pretty-print JSON object
    *
    * @param obj - Any object to serialize

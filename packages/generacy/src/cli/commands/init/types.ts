@@ -4,8 +4,8 @@
 
 /** Fully resolved options for the `generacy init` command. */
 export interface InitOptions {
-  /** Server-issued project ID, or null to generate a local placeholder. */
-  projectId: string | null;
+  /** Server-issued project ID, or a generated local placeholder. */
+  projectId: string;
 
   /** Human-readable project display name. */
   projectName: string;
@@ -39,9 +39,6 @@ export interface InitOptions {
 
   /** Accept all defaults without interactive prompts. */
   yes: boolean;
-
-  /** Enable verbose diagnostic output. */
-  verbose: boolean;
 }
 
 // ---------------------------------------------------------------------------

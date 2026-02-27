@@ -126,6 +126,18 @@ export async function resolveConflicts(
     return actions;
   }
 
+  // --yes: accept defaults without prompting (overwrite, but smart-merge where applicable)
+  if (options.yes) {
+    for (const relativePath of conflicts.keys()) {
+      if (MERGE_FILES.has(relativePath)) {
+        actions.set(relativePath, 'merge');
+      } else {
+        actions.set(relativePath, 'overwrite');
+      }
+    }
+    return actions;
+  }
+
   // Resolve each conflict
   for (const [relativePath, existingContent] of conflicts) {
     // Smart merge for known merge-able files

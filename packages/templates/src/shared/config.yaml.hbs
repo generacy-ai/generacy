@@ -23,13 +23,13 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "{{repos.primary}}"
+  primary: "{{configRepoUrl repos.primary}}"
   {{#if repos.hasDevRepos}}
 
   # Development repositories (Generacy can create PRs here)
   dev:
     {{#each repos.dev}}
-    - "{{this}}"
+    - "{{configRepoUrl this}}"
     {{/each}}
   {{/if}}
   {{#if repos.hasCloneRepos}}
@@ -37,7 +37,7 @@ repos:
   # Clone-only repositories (read-only access, no PRs created)
   clone:
     {{#each repos.clone}}
-    - "{{this}}"
+    - "{{configRepoUrl this}}"
     {{/each}}
   {{/if}}
 

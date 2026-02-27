@@ -69,7 +69,7 @@ import {
 /** Build a minimal InitOptions with sensible defaults for testing. */
 function makeOptions(overrides: Partial<InitOptions> = {}): InitOptions {
   return {
-    projectId: null,
+    projectId: 'proj_test123456',
     projectName: 'test-project',
     primaryRepo: 'acme/app',
     devRepos: [],
@@ -81,7 +81,6 @@ function makeOptions(overrides: Partial<InitOptions> = {}): InitOptions {
     dryRun: false,
     skipGithubCheck: false,
     yes: false,
-    verbose: false,
     ...overrides,
   };
 }

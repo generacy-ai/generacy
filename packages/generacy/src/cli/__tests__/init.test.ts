@@ -128,7 +128,7 @@ describe('init CLI command', () => {
         join(testDir, '.generacy', 'config.yaml'),
         'utf-8',
       );
-      expect(config).toMatch(/id: "proj_local_[a-f0-9]{8}"/);
+      expect(config).toMatch(/id: "proj_local[a-f0-9]{8}"/);
     });
 
     it('should print a summary listing all created files', () => {

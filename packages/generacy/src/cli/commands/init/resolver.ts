@@ -92,7 +92,6 @@ function extractFlags(flags: Record<string, unknown>): Partial<InitOptions> {
   if (typeof flags.dryRun === 'boolean') partial.dryRun = flags.dryRun;
   if (typeof flags.skipGithubCheck === 'boolean') partial.skipGithubCheck = flags.skipGithubCheck;
   if (typeof flags.yes === 'boolean') partial.yes = flags.yes;
-  if (typeof flags.verbose === 'boolean') partial.verbose = flags.verbose;
 
   return partial;
 }
@@ -126,11 +125,12 @@ function validateProjectId(id: string): void {
 
 /**
  * Generate a local placeholder project ID.
- * Format: `proj_local_<8 random hex chars>`
+ * Format: `proj_local<8 random hex chars>` (e.g. proj_locala1b2c3d4)
+ * Matches config schema regex: /^proj_[a-z0-9]+$/
  */
 function generateLocalProjectId(): string {
   const hex = crypto.randomBytes(4).toString('hex');
-  return `proj_local_${hex}`;
+  return `proj_local${hex}`;
 }
 
 /**
@@ -269,8 +269,8 @@ export async function resolveOptions(
   }
 
   // ── 4. Project ID ─────────────────────────────────────────────────────
-  let projectId: string | null;
-  if (merged.projectId !== undefined && merged.projectId !== null) {
+  let projectId: string;
+  if (merged.projectId !== undefined) {
     validateProjectId(merged.projectId);
     projectId = merged.projectId;
   } else {
@@ -300,7 +300,6 @@ export async function resolveOptions(
     dryRun: merged.dryRun ?? false,
     skipGithubCheck: merged.skipGithubCheck ?? false,
     yes: merged.yes ?? false,
-    verbose: merged.verbose ?? false,
   };
 
   logger.debug({ resolved }, 'Resolved init options');

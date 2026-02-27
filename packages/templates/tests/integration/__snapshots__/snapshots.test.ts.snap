@@ -115,7 +115,7 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/ecommerce-api"
+  primary: "github.com/acme-corp/ecommerce-api"
 
 # ============================================================================
 # Default Settings
@@ -177,7 +177,7 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/ecommerce-api"
+  primary: "github.com/acme-corp/ecommerce-api"
 
 # ============================================================================
 # Default Settings
@@ -218,18 +218,18 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/platform-orchestrator"
+  primary: "github.com/acme-corp/platform-orchestrator"
 
   # Development repositories (Generacy can create PRs here)
   dev:
-    - "acme-corp/api-service"
-    - "acme-corp/frontend-app"
-    - "acme-corp/worker-service"
+    - "github.com/acme-corp/api-service"
+    - "github.com/acme-corp/frontend-app"
+    - "github.com/acme-corp/worker-service"
 
   # Clone-only repositories (read-only access, no PRs created)
   clone:
-    - "acme-corp/shared-lib"
-    - "acme-corp/proto-definitions"
+    - "github.com/acme-corp/shared-lib"
+    - "github.com/acme-corp/proto-definitions"
 
 # ============================================================================
 # Default Settings
@@ -528,7 +528,7 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/ecommerce-api"
+  primary: "github.com/acme-corp/ecommerce-api"
 
 # ============================================================================
 # Default Settings
@@ -569,18 +569,18 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/platform-orchestrator"
+  primary: "github.com/acme-corp/platform-orchestrator"
 
   # Development repositories (Generacy can create PRs here)
   dev:
-    - "acme-corp/api-service"
-    - "acme-corp/frontend-app"
-    - "acme-corp/worker-service"
+    - "github.com/acme-corp/api-service"
+    - "github.com/acme-corp/frontend-app"
+    - "github.com/acme-corp/worker-service"
 
   # Clone-only repositories (read-only access, no PRs created)
   clone:
-    - "acme-corp/shared-lib"
-    - "acme-corp/proto-definitions"
+    - "github.com/acme-corp/shared-lib"
+    - "github.com/acme-corp/proto-definitions"
 
 # ============================================================================
 # Default Settings
@@ -644,18 +644,18 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/platform-orchestrator"
+  primary: "github.com/acme-corp/platform-orchestrator"
 
   # Development repositories (Generacy can create PRs here)
   dev:
-    - "acme-corp/api-service"
-    - "acme-corp/frontend-app"
-    - "acme-corp/worker-service"
+    - "github.com/acme-corp/api-service"
+    - "github.com/acme-corp/frontend-app"
+    - "github.com/acme-corp/worker-service"
 
   # Clone-only repositories (read-only access, no PRs created)
   clone:
-    - "acme-corp/shared-lib"
-    - "acme-corp/proto-definitions"
+    - "github.com/acme-corp/shared-lib"
+    - "github.com/acme-corp/proto-definitions"
 
 # ============================================================================
 # Default Settings
@@ -1037,7 +1037,7 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/ecommerce-api"
+  primary: "github.com/acme-corp/ecommerce-api"
 
 # ============================================================================
 # Default Settings
@@ -1271,7 +1271,7 @@ project:
 
 repos:
   # Primary repository (receives onboarding PR)
-  primary: "acme-corp/ecommerce-api"
+  primary: "github.com/acme-corp/ecommerce-api"
 
 # ============================================================================
 # Default Settings
