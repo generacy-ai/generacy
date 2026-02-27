@@ -11,6 +11,7 @@ import * as vscode from 'vscode';
 import { getLogger } from '../../../utils/logger';
 import { queueApi } from '../../../api/endpoints/queue';
 import { SSESubscriptionManager } from '../../../api/sse';
+import type { SSEConnectionState } from '../../../api/sse';
 import type { JobLogLine, SSEEvent } from '../../../api/types';
 
 /** Maximum number of historical log lines to fetch */
@@ -37,6 +38,7 @@ export class JobLogChannel implements vscode.Disposable {
   private readonly jobId: string;
   private readonly workflowName: string;
   private sseDisposable: vscode.Disposable | undefined;
+  private connectionStateDisposable: vscode.Disposable | undefined;
   private disposed = false;
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -117,14 +119,25 @@ export class JobLogChannel implements vscode.Disposable {
    * Routes events to appropriate handlers based on event type.
    */
   private subscribeToSSE(cursor?: string): void {
-    // Clean up previous subscription if any
+    // Clean up previous subscriptions if any
     this.sseDisposable?.dispose();
+    this.connectionStateDisposable?.dispose();
 
     const sseManager = SSESubscriptionManager.getInstance();
 
     // Note: cursor is available for server-side filtering via Last-Event-ID;
     // the SSESubscriptionManager handles this at the connection level.
     void cursor;
+
+    // Listen to connection state changes for status indicator
+    this.connectionStateDisposable = sseManager.onDidChangeConnectionState(
+      (state: SSEConnectionState) => {
+        if (this.disposed) {
+          return;
+        }
+        this.handleConnectionStateChange(state);
+      }
+    );
 
     this.sseDisposable = sseManager.subscribe('jobs', (event: SSEEvent) => {
       if (this.disposed) {
@@ -184,9 +197,32 @@ export class JobLogChannel implements vscode.Disposable {
     this.outputChannel.appendLine('');
     this.outputChannel.appendLine(`--- Job ${status} ---`);
 
-    // Stop listening for further events
+    // Stop listening for further events and connection state changes
     this.sseDisposable?.dispose();
     this.sseDisposable = undefined;
+    this.connectionStateDisposable?.dispose();
+    this.connectionStateDisposable = undefined;
+  }
+
+  /**
+   * Handle SSE connection state changes — display status in the output channel
+   * so the user can see when the connection is reconnecting or lost.
+   */
+  private handleConnectionStateChange(state: SSEConnectionState): void {
+    switch (state) {
+      case 'connecting':
+        this.outputChannel.appendLine('[SSE] Reconnecting...');
+        break;
+      case 'connected':
+        this.outputChannel.appendLine('[SSE] Connected');
+        break;
+      case 'error':
+        this.outputChannel.appendLine('[SSE] Connection error — will retry');
+        break;
+      case 'disconnected':
+        this.outputChannel.appendLine('[SSE] Disconnected');
+        break;
+    }
   }
 
   /**
@@ -252,6 +288,8 @@ export class JobLogChannel implements vscode.Disposable {
     this.disposed = true;
     this.sseDisposable?.dispose();
     this.sseDisposable = undefined;
+    this.connectionStateDisposable?.dispose();
+    this.connectionStateDisposable = undefined;
     if (this.retryTimer !== undefined) {
       clearTimeout(this.retryTimer);
       this.retryTimer = undefined;

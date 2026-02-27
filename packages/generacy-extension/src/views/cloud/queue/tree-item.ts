@@ -12,6 +12,7 @@ import { TREE_ITEM_CONTEXT } from '../../../constants';
 const STATUS_ICONS: Record<QueueStatus, { icon: string; color?: string }> = {
   pending: { icon: 'clock', color: 'charts.yellow' },
   running: { icon: 'sync~spin', color: 'charts.blue' },
+  waiting: { icon: 'bell', color: 'charts.orange' },
   completed: { icon: 'check', color: 'charts.green' },
   failed: { icon: 'error', color: 'charts.red' },
   cancelled: { icon: 'circle-slash', color: 'charts.gray' },
@@ -89,6 +90,11 @@ export class QueueTreeItem extends vscode.TreeItem {
     // Add repository if present
     if (this.queueItem.repository) {
       parts.push(this.queueItem.repository);
+    }
+
+    // Add waitingFor label for waiting items
+    if (this.queueItem.status === 'waiting' && this.queueItem.waitingFor) {
+      parts.push(this.queueItem.waitingFor);
     }
 
     // Add progress info for running jobs
@@ -189,6 +195,8 @@ export class QueueTreeItem extends vscode.TreeItem {
         return completedAt ? formatRelativeTime(completedAt) : undefined;
       case 'failed':
         return completedAt ? `failed ${formatRelativeTime(completedAt)}` : 'failed';
+      case 'waiting':
+        return startedAt ? `waiting for ${formatDuration(startedAt)}` : 'waiting';
       case 'cancelled':
         return completedAt ? `cancelled ${formatRelativeTime(completedAt)}` : 'cancelled';
       default:
@@ -213,6 +221,11 @@ export class QueueTreeItem extends vscode.TreeItem {
     // Priority
     const priorityIcon = PRIORITY_ICONS[priority];
     md.appendMarkdown(`**Priority:** $(${priorityIcon}) ${this.capitalizeFirst(priority)}\n\n`);
+
+    // Waiting for info
+    if (this.queueItem.waitingFor) {
+      md.appendMarkdown(`**Waiting for:** ${this.queueItem.waitingFor}\n\n`);
+    }
 
     // Repository
     if (repository) {

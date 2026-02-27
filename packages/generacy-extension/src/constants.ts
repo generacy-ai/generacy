@@ -72,6 +72,7 @@ export const CLOUD_COMMANDS = {
 export const CONTEXT_KEYS = {
   isAuthenticated: 'generacy.isAuthenticated',
   hasWorkspace: 'generacy.hasWorkspace',
+  hasProjectConfig: 'generacy.hasProjectConfig',
   isDebugging: 'generacy.isDebugging',
   orchestratorConnected: 'generacy.orchestratorConnected',
 } as const;
@@ -83,11 +84,22 @@ export const CONFIG_KEYS = {
   workflowDirectory: 'workflowDirectory',
   defaultTemplate: 'defaultTemplate',
   cloudEndpoint: 'cloudEndpoint',
+  projectConfig: 'projectConfig',
   telemetryEnabled: 'telemetry.enabled',
   notificationsEnabled: 'notifications.enabled',
   notificationsOnComplete: 'notifications.onComplete',
   notificationsOnError: 'notifications.onError',
 } as const;
+
+/**
+ * Project config file path relative to workspace root
+ */
+export const PROJECT_CONFIG_FILE = '.generacy/config.yaml';
+
+/**
+ * Glob pattern for watching project config changes
+ */
+export const PROJECT_CONFIG_GLOB = '**/.generacy/config.yaml';
 
 /**
  * Default configuration values

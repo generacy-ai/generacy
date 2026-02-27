@@ -5,6 +5,7 @@
 import * as vscode from 'vscode';
 import { getLogger, getConfig, GeneracyError, ErrorCode } from '../utils';
 import { CONTEXT_KEYS } from '../constants';
+import { userApi, type UserProfile, type UserOrg } from './endpoints/user';
 
 /**
  * Authentication tiers for progressive authentication
@@ -38,6 +39,8 @@ export interface AuthUser {
   organizationId?: string;
   /** Organization name (if org member) */
   organizationName?: string;
+  /** Organization memberships from user profile */
+  organizations?: UserOrg[];
 }
 
 /**
@@ -189,6 +192,14 @@ export class AuthService {
   }
 
   /**
+   * Get the organization ID for the authenticated user.
+   * Returns the first org ID, or undefined if not authenticated or no orgs.
+   */
+  public getOrganizationId(): string | undefined {
+    return this.currentState.user?.organizationId;
+  }
+
+  /**
    * Check if user has at least the specified tier
    */
   public hasMinimumTier(tier: AuthTier): boolean {
@@ -334,6 +345,66 @@ export class AuthService {
   }
 
   /**
+   * Fetch user profile from the API and update auth state with org memberships.
+   * Called after token exchange and during session restore when org data is missing.
+   */
+  private async fetchUserProfile(): Promise<void> {
+    const logger = getLogger();
+
+    try {
+      logger.info('Fetching user profile for org resolution');
+      const profile: UserProfile = await userApi.getProfile();
+
+      if (!this.currentState.user) {
+        return;
+      }
+
+      // Resolve organization: use first org or match against project config
+      const orgs = profile.organizations ?? [];
+      let orgId: string | undefined;
+      let orgName: string | undefined;
+
+      const firstOrg = orgs[0];
+      if (firstOrg) {
+        orgId = firstOrg.id;
+        orgName = firstOrg.name;
+      }
+
+      // Update auth user with org data
+      this.currentState.user = {
+        ...this.currentState.user,
+        organizations: orgs,
+        organizationId: orgId,
+        organizationName: orgName,
+        tier: (profile.tier as AuthTier) || this.currentState.user.tier,
+      };
+
+      // Persist updated user
+      await this.globalState?.update(STORAGE_KEYS.user, this.currentState.user);
+
+      // Update tier if org membership changes it
+      if (orgId && this.currentState.tier !== AuthTier.Organization) {
+        const previousState = { ...this.currentState };
+        this.currentState.tier = AuthTier.Organization;
+
+        this.notifyListeners({
+          previousState,
+          newState: { ...this.currentState },
+          reason: 'tier_change',
+        });
+      }
+
+      logger.info('User profile fetched', {
+        organizationId: orgId,
+        orgCount: orgs.length,
+      });
+    } catch (error) {
+      // Profile fetch is non-fatal — user stays authenticated with token-exchange data
+      logger.error('Failed to fetch user profile for org resolution', error);
+    }
+  }
+
+  /**
    * Handle OAuth callback URI
    */
   private async handleOAuthCallback(uri: vscode.Uri): Promise<void> {
@@ -461,6 +532,9 @@ export class AuthService {
     // Schedule token refresh
     this.scheduleTokenRefresh();
 
+    // Fetch full user profile to get org memberships
+    await this.fetchUserProfile();
+
     // Notify listeners
     this.notifyListeners({
       previousState,
@@ -468,7 +542,10 @@ export class AuthService {
       reason: 'login',
     });
 
-    logger.info('Tokens exchanged successfully', { tier: user.tier });
+    logger.info('Tokens exchanged successfully', {
+      tier: this.currentState.user?.tier ?? user.tier,
+      organizationId: this.currentState.user?.organizationId,
+    });
   }
 
   /**
@@ -668,6 +745,12 @@ export class AuthService {
         lastAuthTime: Date.now(),
       };
       logger.info('Session restored', { tier: user.tier });
+
+      // Re-fetch profile if org data is missing (e.g., upgraded from older version)
+      if (!user.organizationId && !user.organizations?.length) {
+        logger.info('Org data missing from stored session, fetching user profile');
+        await this.fetchUserProfile();
+      }
     }
   }
 

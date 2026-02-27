@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { EXTENSION_ID, COMMANDS } from './constants';
+import { EXTENSION_ID, COMMANDS, CONTEXT_KEYS } from './constants';
 import { getConfig, getLogger, getTelemetry, withErrorHandling, ErrorCode, GeneracyError } from './utils';
 import {
   WorkflowTreeProvider,
@@ -21,7 +21,8 @@ import {
   initializeRunner,
 } from './commands/runner';
 import { createWorkflow } from './commands/workflow';
-import { initializeExecutionStatusBar } from './providers';
+import { initializeExecutionStatusBar, ProjectStatusBarProvider } from './providers';
+import { getProjectConfigService } from './services/project-config-service';
 import { registerDebugAdapter } from './debug';
 import { registerCloudCommands, initializeCloudServices } from './commands/cloud';
 import { JobLogChannel } from './views/cloud/log-viewer';
@@ -75,6 +76,9 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize execution status bar
   initializeExecutionStatusBar(context);
   logger.info('Execution status bar initialized');
+
+  // Initialize project config service (reads .generacy/config.yaml)
+  void initializeProjectConfig(context);
 
   // Register debug adapter
   registerDebugAdapter(context);
@@ -609,6 +613,54 @@ async function handleSubmitJob(): Promise<void> {
     vscode.window.showErrorMessage(`Failed to submit job: ${msg}`);
     throw new GeneracyError(ErrorCode.ApiConnectionError, `Failed to submit job: ${msg}`);
   }
+}
+
+/**
+ * Initialize ProjectConfigService: parse .generacy/config.yaml, set context
+ * key, and wire up the project status bar provider.
+ */
+async function initializeProjectConfig(context: vscode.ExtensionContext): Promise<void> {
+  const logger = getLogger();
+
+  const configService = getProjectConfigService();
+
+  try {
+    await configService.initialize();
+  } catch (error) {
+    logger.warn('Failed to initialize project config service', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Set the context key so when-clauses can react to project config presence
+  void vscode.commands.executeCommand(
+    'setContext',
+    CONTEXT_KEYS.hasProjectConfig,
+    configService.isConfigured,
+  );
+
+  // Keep context key in sync when the config file changes
+  context.subscriptions.push(
+    configService.onDidChange((config) => {
+      void vscode.commands.executeCommand(
+        'setContext',
+        CONTEXT_KEYS.hasProjectConfig,
+        config !== undefined,
+      );
+    }),
+  );
+
+  // Show project name in the status bar
+  const projectStatusBar = new ProjectStatusBarProvider(configService);
+  context.subscriptions.push(projectStatusBar);
+
+  // Ensure the service is disposed with the extension
+  context.subscriptions.push(configService);
+
+  logger.info('Project config service initialized', {
+    isConfigured: configService.isConfigured,
+    projectName: configService.projectName,
+  });
 }
 
 /**

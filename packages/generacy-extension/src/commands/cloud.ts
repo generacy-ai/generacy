@@ -16,11 +16,12 @@ import {
 } from '../views/cloud/publish';
 import { SSESubscriptionManager } from '../api/sse';
 import { createAgentTreeProvider } from '../views/cloud/agents';
-import { createQueueTreeProvider } from '../views/cloud/queue';
+import { createQueueTreeProvider, registerQueueActions } from '../views/cloud/queue';
 import { registerOrchestratorSidebar, OrchestratorDashboardPanel } from '../views/cloud/orchestrator';
 import { NotificationManager } from '../utils/notifications';
 import { CloudJobStatusBarProvider } from '../providers/status-bar';
 import { JobNotificationService } from '../services/job-notification-service';
+import { getProjectConfigService } from '../services/project-config-service';
 import { CLOUD_COMMANDS as ORCH_COMMANDS, CONTEXT_KEYS } from '../constants';
 
 /**
@@ -132,14 +133,17 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
     }),
   );
 
-  // Connect SSE when authenticated, disconnect when not
+  // Connect SSE when authenticated, disconnect when not.
+  // When orgId is available (Organization tier), SSE connects to the org-scoped
+  // endpoint; otherwise it falls back to the local orchestrator endpoint.
   context.subscriptions.push(
     authService.onDidChange(async (event) => {
       if (event.newState.isAuthenticated) {
         const orchestratorUrl = vscode.workspace.getConfiguration('generacy').get<string>('orchestratorUrl', 'http://localhost:3100');
         const token = await authService.getAccessToken();
         if (token) {
-          sseManager.connect(orchestratorUrl, token);
+          const orgId = authService.getOrganizationId();
+          sseManager.connect(orchestratorUrl, token, orgId);
         }
       } else {
         sseManager.disconnect();
@@ -152,7 +156,8 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
     const orchestratorUrl = vscode.workspace.getConfiguration('generacy').get<string>('orchestratorUrl', 'http://localhost:3100');
     const token = await authService.getAccessToken();
     if (token) {
-      sseManager.connect(orchestratorUrl, token);
+      const orgId = authService.getOrganizationId();
+      sseManager.connect(orchestratorUrl, token, orgId);
     }
   }
 
@@ -174,7 +179,8 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
 
   // Register queue tree view — this also creates the `generacy.queue.focus`
   // command automatically via createTreeView, used by the status bar to reveal the view
-  const queueProvider = createQueueTreeProvider(context);
+  const queueProvider = createQueueTreeProvider(context, undefined, getProjectConfigService());
+  registerQueueActions(context, queueProvider);
   logger.info('Queue tree view registered');
 
   const cloudStatusBar = new CloudJobStatusBarProvider();
@@ -213,6 +219,7 @@ export async function initializeCloudServices(context: vscode.ExtensionContext):
     cloudStatusBar,
     queueProvider,
     context.extensionUri,
+    getProjectConfigService(),
   );
   context.subscriptions.push(jobNotificationService);
   logger.info('Job notification service initialized');

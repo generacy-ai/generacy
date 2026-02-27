@@ -12,12 +12,12 @@
 
 ## Phase 1: Project Config Detection (US3)
 
-### T001 [US3] Add context keys and constants for project config
+### T001 [DONE] [US3] Add context keys and constants for project config
 **File**: `packages/generacy-extension/src/constants.ts`
 - Add `hasProjectConfig: 'generacy.hasProjectConfig'` to `CONTEXT_KEYS`
 - Add `projectConfig: 'projectConfig'` to `CONFIG_KEYS` (if needed for settings)
 
-### T002 [US3] Create ProjectConfigService
+### T002 [DONE] [US3] Create ProjectConfigService
 **File**: `packages/generacy-extension/src/services/project-config-service.ts` (NEW)
 - Create `ProjectConfig` interface: `project: { id: string; name: string }`, `repos?: { primary?: string }`
 - Create `ProjectConfigSchema` using Zod for runtime validation (use `.passthrough()` for forward compat)
@@ -30,14 +30,14 @@
   - `initialize()` method that reads config and sets up watcher
   - `dispose()` method for cleanup
 
-### T003 [P] [US3] Add project name to status bar
+### T003 [DONE] [P] [US3] Add project name to status bar
 **File**: `packages/generacy-extension/src/providers/status-bar.ts`
 - Add a new `ProjectStatusBarProvider` class (or extend `CloudJobStatusBarProvider`)
 - Create a status bar item showing `$(project) ProjectName` when config is detected
 - Subscribe to `ProjectConfigService.onDidChange` to update display
 - Hide when no config exists
 
-### T004 [US3] Wire ProjectConfigService into extension activation
+### T004 [DONE] [US3] Wire ProjectConfigService into extension activation
 **File**: `packages/generacy-extension/src/extension.ts`
 - Import and initialize `ProjectConfigService` during `activate()`
 - Call `projectConfigService.initialize()` after workspace is available
@@ -46,7 +46,7 @@
 - Pass `ProjectConfigService` to cloud commands initialization (for Phase 4)
 - Add to `context.subscriptions` for disposal
 
-### T005 [P] [US3] Write ProjectConfigService unit tests
+### T005 [DONE] [P] [US3] Write ProjectConfigService unit tests
 **File**: `packages/generacy-extension/src/services/__tests__/project-config-service.test.ts` (NEW)
 - Test: valid config YAML parsing extracts `project.id`, `project.name`, `repos.primary`
 - Test: missing config file returns `isConfigured = false` gracefully
@@ -59,26 +59,26 @@
 
 ## Phase 2: Waiting Queue Status (US4, US7)
 
-### T006 [US4] Extend QueueStatus type and schema with `waiting`
+### T006 [DONE] [US4] Extend QueueStatus type and schema with `waiting`
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `'waiting'` to `QueueStatus` type union: `'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled'`
 - Add `'waiting'` to `QueueItemSchema` `status` z.enum
 - Add `waitingFor?: string` field to `QueueItem` interface
 - Add `waitingFor: z.string().optional()` to `QueueItemSchema`
 
-### T007 [P] [US4] Add waiting status icon to queue tree item
+### T007 [DONE] [P] [US4] Add waiting status icon to queue tree item
 **File**: `packages/generacy-extension/src/views/cloud/queue/tree-item.ts`
 - Add `waiting` entry to `STATUS_ICONS` record: `{ icon: 'bell', color: 'charts.orange' }`
 - Update `getTimeInfo()` to handle `'waiting'` case — show `waitingFor` label and time waiting
 - Update `getDescription()` to include `waitingFor` as description text for waiting items
 
-### T008 [P] [US4] Add waiting status to queue tree provider
+### T008 [DONE] [P] [US4] Add waiting status to queue tree provider
 **File**: `packages/generacy-extension/src/views/cloud/queue/provider.ts`
 - Add `'waiting'` to the `statusOrder` array in `getStatusGroups()`: `['running', 'waiting', 'pending', ...]`
 - Add `'waiting'` to the `statuses` quick pick list in the `filterByStatus` command
 - Ensure `handleSSEEvent` correctly processes `queue:updated` events with `status === 'waiting'`
 
-### T009 [US4] Add waiting count to dashboard QueueStats and webview
+### T009 [DONE] [US4] Add waiting count to dashboard QueueStats and webview
 **Files**:
 - `packages/generacy-extension/src/views/cloud/orchestrator/webview.ts`
 - `packages/generacy-extension/src/views/cloud/orchestrator/panel.ts`
@@ -91,7 +91,7 @@
 - In `sidebar-view.ts` `computeQueueStats()`: add `case 'waiting': stats.waiting++; break;`
 - In `getSidebarQueueSummary()`: add waiting count to sidebar summary parts
 
-### T010 [US7] Add waiting notification to JobNotificationService
+### T010 [DONE] [US7] Add waiting notification to JobNotificationService
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Extend `TerminalStatus` type to include `'waiting'`: `type NotifiableStatus = 'completed' | 'failed' | 'cancelled' | 'waiting'`
 - In `handleQueueEvent()`: add `status === 'waiting'` to the status check (it's not terminal, so handle separately)
@@ -100,7 +100,7 @@
 - Add deduplication for waiting events (same pattern as terminal events)
 - Respect `generacy.notifications.enabled` setting
 
-### T011 [P] [US4] Update existing tests for waiting status
+### T011 [DONE] [P] [US4] Update existing tests for waiting status
 **Files**:
 - `packages/generacy-extension/src/views/cloud/queue/__tests__/tree-item.test.ts`
 - `packages/generacy-extension/src/views/cloud/queue/__tests__/provider.test.ts`
@@ -113,7 +113,7 @@
 
 ## Phase 3: User Profile & Org Resolution (US2)
 
-### T012 [US2] Create user profile API endpoint
+### T012 [DONE] [US2] Create user profile API endpoint
 **File**: `packages/generacy-extension/src/api/endpoints/user.ts` (NEW)
 - Define `UserOrg` interface: `{ id: string; name: string; role: 'owner' | 'admin' | 'member' }`
 - Define `UserProfile` interface: `{ id, username, displayName, email, avatarUrl?, tier, organizations: UserOrg[] }`
@@ -121,13 +121,13 @@
 - Implement `getUserProfile()` function calling `GET /users/me` via `ApiClient`
 - Export as `userApi` object with `getProfile` method (consistent with other endpoint modules)
 
-### T013 [US2] Extend User type with organizations
+### T013 [DONE] [US2] Extend User type with organizations
 **File**: `packages/generacy-extension/src/api/types.ts`
 - Add `UserOrg` interface and `UserOrgSchema` to types (or re-export from user endpoint)
 - Add `organizations?: UserOrg[]` to existing `User` interface
 - Add `organizations: z.array(UserOrgSchema).optional()` to `UserSchema`
 
-### T014 [US2] Fetch user profile after OAuth token exchange
+### T014 [DONE] [US2] Fetch user profile after OAuth token exchange
 **File**: `packages/generacy-extension/src/api/auth.ts`
 - After successful `exchangeCodeForTokens()`, call `userApi.getProfile()` to get org memberships
 - Store `organizationId` from first org (or org matching project config's project.id) in auth state
@@ -139,7 +139,7 @@
 
 ## Phase 4: SSE Endpoint & Project Scoping (US4, US7)
 
-### T015 [US4] Update SSE connection to org-scoped endpoint
+### T015 [DONE] [US4] Update SSE connection to org-scoped endpoint
 **File**: `packages/generacy-extension/src/api/sse.ts`
 - Update `connect()` signature to accept optional `orgId` parameter
 - Change URL construction in `openConnection()`:
@@ -148,20 +148,20 @@
   - Fall back to current path when no orgId (local orchestrator mode)
 - Store `orgId` for reconnection
 
-### T016 [US4] Pass orgId from auth to SSE connection
+### T016 [DONE] [US4] Pass orgId from auth to SSE connection
 **File**: `packages/generacy-extension/src/commands/cloud.ts`
 - After auth state changes to authenticated, retrieve `orgId` from `AuthService.getOrganizationId()`
 - Pass `orgId` to `sseManager.connect(baseUrl, token, orgId)`
 - On auth state change to unauthenticated, call `sseManager.disconnect()`
 
-### T017 [US7] Add project-scoped notification filtering
+### T017 [DONE] [US7] Add project-scoped notification filtering
 **File**: `packages/generacy-extension/src/services/job-notification-service.ts`
 - Accept `ProjectConfigService` in constructor (new parameter)
 - In `handleQueueEvent()`, after building `queueItem`: check if `queueItem.repository` matches `projectConfig.reposPrimary` or `projectConfig.projectName`
 - If project config exists but job doesn't match project, skip notification (status bar flash only)
 - If no project config exists, show all notifications (fallback)
 
-### T018 [P] [US4] Add project-scoped default filter to queue tree view
+### T018 [DONE] [P] [US4] Add project-scoped default filter to queue tree view
 **File**: `packages/generacy-extension/src/views/cloud/queue/provider.ts`
 - Accept optional `ProjectConfigService` in constructor options
 - When project config is detected, default filter shows items matching current project's repository
@@ -172,7 +172,7 @@
 
 ## Phase 5: Dashboard Polish & Waiting-for-Input UX (US4, US5)
 
-### T019 [US4] Add waiting-for-input jobs list to dashboard webview
+### T019 [DONE] [US4] Add waiting-for-input jobs list to dashboard webview
 **File**: `packages/generacy-extension/src/views/cloud/orchestrator/webview.ts`
 - Rename "Pending" stat card label to "Active" (maps to `running` count per spec)
 - Add new `getWaitingJobsSection()` function rendering a list of waiting jobs:
@@ -182,7 +182,7 @@
 - Accept `waitingItems: QueueItem[]` in `DashboardData` for rendering the list
 - Add CSS for `.waiting-jobs-list` section
 
-### T020 [P] [US5] Verify and add label badges to job detail view
+### T020 [DONE] [P] [US5] Verify and add label badges to job detail view
 **Files**:
 - `packages/generacy-extension/src/views/cloud/queue/detail-html.ts`
 - `packages/generacy-extension/src/api/types.ts`
@@ -191,7 +191,7 @@
 - Style with `display: inline-flex`, rounded corners, theme colors
 - Position below status/priority badges area
 
-### T021 [US4] Pass waiting items data to dashboard panel
+### T021 [DONE] [US4] Pass waiting items data to dashboard panel
 **File**: `packages/generacy-extension/src/views/cloud/orchestrator/panel.ts`
 - When loading data, filter queue items with `status === 'waiting'` into separate array
 - Pass waiting items to webview via `DashboardData`
@@ -201,7 +201,7 @@
 
 ## Phase 6: Live Log Streaming Validation (US6)
 
-### T022 [US6] Verify log streaming context menu action
+### T022 [DONE] [US6] Verify log streaming context menu action
 **Files**:
 - `packages/generacy-extension/src/views/cloud/queue/tree-item.ts`
 - `packages/generacy-extension/package.json`
@@ -210,7 +210,7 @@
 - Verify "View Logs" command is registered and works for both running and completed jobs
 - If any binding is missing, add it
 
-### T023 [P] [US6] Verify SSE reconnection with Last-Event-ID
+### T023 [DONE] [P] [US6] Verify SSE reconnection with Last-Event-ID
 **File**: `packages/generacy-extension/src/views/cloud/log-viewer/log-channel.ts`
 - Verify that `Last-Event-ID` header is sent on SSE reconnection for log streams
 - Verify connection status indicator is displayed to user (connection/reconnection/disconnection states)
@@ -221,7 +221,7 @@
 
 ## Phase 7: Notifications Verification (US7)
 
-### T024 [US7] Verify notification settings and delivery
+### T024 [DONE] [US7] Verify notification settings and delivery
 **Files**:
 - `packages/generacy-extension/src/services/job-notification-service.ts`
 - `packages/generacy-extension/package.json`
@@ -232,7 +232,7 @@
 - Verify rate limiting works (3+ notifications in 10s → summary)
 - Run existing notification tests: `src/services/__tests__/job-notification-service.test.ts`
 
-### T025 [P] [US7] Ensure notification sounds setting is reserved
+### T025 [DONE] [P] [US7] Ensure notification sounds setting is reserved
 **File**: `packages/generacy-extension/package.json`
 - Verify `generacy.notifications.sound` setting exists in `contributes.configuration` (reserved for future)
 - If missing, add it as a boolean with default `false` and description noting it's reserved

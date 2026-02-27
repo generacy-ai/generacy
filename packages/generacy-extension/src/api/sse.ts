@@ -48,11 +48,20 @@ const RECONNECT_MULTIPLIER = 2;
 
 /**
  * Centralized SSE client that maintains a single connection to the orchestrator's
- * `/events` endpoint and dispatches events to channel-based subscribers.
+ * events endpoint and dispatches events to channel-based subscribers.
+ *
+ * Supports two endpoint modes:
+ * - **Org-scoped** (cloud): `/api/orgs/{orgId}/orchestrator/events?channels=...`
+ * - **Local** (no orgId): `/events?channels=...`
  *
  * Usage:
  * ```typescript
  * const manager = SSESubscriptionManager.getInstance();
+ *
+ * // Cloud mode (org-scoped)
+ * manager.connect('https://api.generacy.ai', 'auth-token', 'org-123');
+ *
+ * // Local orchestrator mode
  * manager.connect('http://localhost:3100', 'auth-token');
  *
  * const disposable = manager.subscribe('queue', (event) => {
@@ -74,6 +83,7 @@ export class SSESubscriptionManager implements vscode.Disposable {
   private lastEventId: string | undefined;
   private baseUrl: string | undefined;
   private authToken: string | undefined;
+  private orgId: string | undefined;
   private disposed = false;
 
   private readonly _onDidChangeConnectionState = new vscode.EventEmitter<SSEConnectionState>();
@@ -116,10 +126,16 @@ export class SSESubscriptionManager implements vscode.Disposable {
    * Open an SSE connection to the orchestrator's events endpoint.
    * If already connected, disconnects first before reconnecting.
    *
+   * When `orgId` is provided, connects to the org-scoped endpoint:
+   *   `{baseUrl}/api/orgs/{orgId}/orchestrator/events?channels=...`
+   * Otherwise falls back to the local orchestrator endpoint:
+   *   `{baseUrl}/events?channels=...`
+   *
    * @param baseUrl - Orchestrator base URL (e.g., 'http://localhost:3100')
    * @param authToken - Authentication token for the connection
+   * @param orgId - Organization ID for org-scoped SSE (optional, omit for local orchestrator)
    */
-  public connect(baseUrl: string, authToken: string): void {
+  public connect(baseUrl: string, authToken: string, orgId?: string): void {
     if (this.disposed) {
       return;
     }
@@ -127,6 +143,7 @@ export class SSESubscriptionManager implements vscode.Disposable {
     // Store for reconnection
     this.baseUrl = baseUrl.replace(/\/+$/, '');
     this.authToken = authToken;
+    this.orgId = orgId;
 
     // Disconnect existing connection first
     this.closeConnection();
@@ -144,6 +161,7 @@ export class SSESubscriptionManager implements vscode.Disposable {
     this.clearReconnectTimer();
     this.baseUrl = undefined;
     this.authToken = undefined;
+    this.orgId = undefined;
     this.lastEventId = undefined;
     this.reconnectAttempts = 0;
     this.setConnectionState('disconnected');
@@ -220,7 +238,10 @@ export class SSESubscriptionManager implements vscode.Disposable {
     this.setConnectionState('connecting');
 
     const channelsParam = ALL_CHANNELS.join(',');
-    const urlString = `${this.baseUrl}/events?channels=${channelsParam}`;
+    const eventsPath = this.orgId
+      ? `/api/orgs/${this.orgId}/orchestrator/events`
+      : '/events';
+    const urlString = `${this.baseUrl}${eventsPath}?channels=${channelsParam}`;
     const url = new URL(urlString);
 
     const requestModule = url.protocol === 'https:' ? https : http;
