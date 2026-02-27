@@ -459,7 +459,7 @@ exports[`Snapshot: Edge Cases > should match snapshot for multi-repo devcontaine
     
   ],
   "features": {
-    "ghcr.io/generacy-ai/features/generacy:1": {}
+    "ghcr.io/generacy-ai/generacy/generacy:1": {}
   },
   "customizations": {
     "vscode": {
@@ -716,7 +716,7 @@ exports[`Snapshot: Multi-Repo Templates > should match snapshot for devcontainer
     
   ],
   "features": {
-    "ghcr.io/generacy-ai/features/generacy:1": {}
+    "ghcr.io/generacy-ai/generacy/generacy:1": {}
   },
   "customizations": {
     "vscode": {
@@ -1231,7 +1231,7 @@ exports[`Snapshot: Special Values > should correctly render base images in devco
     
   ],
   "features": {
-    "ghcr.io/generacy-ai/features/generacy:1": {}
+    "ghcr.io/generacy-ai/generacy/generacy:1": {}
   },
   "customizations": {
     "vscode": {

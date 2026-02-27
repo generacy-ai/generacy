@@ -60,7 +60,6 @@ jobs:
 
   publish-devcontainer-feature:
     needs: publish-npm
-    if: needs.publish-npm.outputs.has_changesets == 'true'
     uses: ./.github/workflows/publish-devcontainer-feature.yml
     with:
       mode: preview

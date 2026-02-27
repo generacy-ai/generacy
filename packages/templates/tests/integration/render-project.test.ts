@@ -251,7 +251,7 @@ describe('Integration: renderProject - Multi Repo', () => {
 
     // Verify features block (moved from docker-compose services to devcontainer.json)
     expect(devcontainer.features).toBeDefined();
-    expect(devcontainer.features['ghcr.io/generacy-ai/features/generacy:1']).toBeDefined();
+    expect(devcontainer.features['ghcr.io/generacy-ai/generacy/generacy:1']).toBeDefined();
 
     // Verify extensions
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.agency');

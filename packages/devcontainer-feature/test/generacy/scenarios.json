@@ -43,5 +43,11 @@
         "nodeVersion": "20"
       }
     }
+  },
+  "defaults_typescript_node": {
+    "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
+    "features": {
+      "generacy": {}
+    }
   }
 }
