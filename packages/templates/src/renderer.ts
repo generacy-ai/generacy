@@ -258,7 +258,7 @@ export async function renderTemplate(
     // Compile and render with Handlebars
     const template = Handlebars.compile(templateContent, {
       strict: true, // Throw on undefined variables
-      noEscape: false, // Allow HTML escaping (safer default)
+      noEscape: true, // Templates produce YAML/JSON, not HTML
     });
 
     const rendered = template(context);

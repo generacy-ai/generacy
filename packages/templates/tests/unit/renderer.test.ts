@@ -88,12 +88,22 @@ describe('Handlebars Helper Functions', () => {
 
   describe('json helper', () => {
     it('should pretty-print JSON object', () => {
+      // Direct Handlebars.compile uses default escaping; renderTemplate uses noEscape: true
       const template = Handlebars.compile('{{json obj}}');
       const result = template({ obj: { name: 'test', value: 123 } });
-      // Handlebars HTML-escapes by default, so quotes become &quot;
+      // Handlebars HTML-escapes by default with double braces
       expect(result).toContain('&quot;name&quot;: &quot;test&quot;');
       expect(result).toContain('&quot;value&quot;: 123');
       expect(result).toContain('\n'); // Should be formatted
+    });
+
+    it('should pretty-print JSON without escaping when noEscape is true', () => {
+      // This mirrors the renderer behavior (noEscape: true for YAML/JSON output)
+      const template = Handlebars.compile('{{json obj}}', { noEscape: true });
+      const result = template({ obj: { name: 'test', value: 123 } });
+      expect(result).toContain('"name": "test"');
+      expect(result).toContain('"value": 123');
+      expect(result).toContain('\n');
     });
 
     it('should handle arrays', () => {
@@ -348,8 +358,8 @@ describe('Template Rendering', () => {
 
       // Should include orchestrator section
       expect(result).toContain('orchestrator:');
-      expect(result).toContain('pollIntervalMs: 3000');
-      expect(result).toContain('workerCount: 3');
+      expect(result).toContain('pollIntervalMs: 5000');
+      expect(result).toContain('workerCount: 2');
     });
 
     it('should render generacy.env.template with project ID', async () => {
@@ -448,7 +458,7 @@ describe('Template Rendering', () => {
       expect(result).toContain('WORKER_COUNT');
 
       // Check deploy replicas for worker
-      expect(result).toContain('replicas: 3');
+      expect(result).toContain('replicas: 2');
     });
 
     it('should return static file content unchanged', async () => {
@@ -833,5 +843,35 @@ describe('Edge Cases', () => {
     const template = Handlebars.compile('{{json value}}');
     const result = template({ value: undefined });
     expect(result).toBe(''); // undefined serializes to empty in JSON.stringify
+  });
+
+  it('should not HTML-escape special characters (noEscape: true)', async () => {
+    // With noEscape: true, Handlebars should not convert & to &amp;,
+    // < to &lt;, > to &gt;, or " to &quot;
+    const result = await renderTemplate(
+      'shared/config.yaml.hbs',
+      {
+        ...singleRepoContext,
+        project: {
+          ...singleRepoContext.project,
+          name: 'Acme & Co',
+        },
+      } as TemplateContext
+    );
+
+    // The ampersand should appear as-is, not HTML-escaped
+    expect(result).toContain('name: "Acme & Co"');
+    expect(result).not.toContain('&amp;');
+  });
+
+  it('should preserve quotes in rendered JSON output', async () => {
+    const result = await renderTemplate(
+      'shared/extensions.json.hbs',
+      singleRepoContext as TemplateContext
+    );
+
+    // JSON should contain real double quotes, not &quot;
+    expect(result).not.toContain('&quot;');
+    expect(() => JSON.parse(result)).not.toThrow();
   });
 });

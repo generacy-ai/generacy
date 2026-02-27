@@ -394,7 +394,7 @@ describe('Multi-Repo Context Builder', () => {
         expect(context.defaults.baseBranch).toBe('main');
       });
 
-      it('should apply default workerCount (3) when not provided', () => {
+      it('should apply default workerCount (2) when not provided', () => {
         const input: MultiRepoInput = {
           projectId: 'proj_123',
           projectName: 'Test',
@@ -404,7 +404,7 @@ describe('Multi-Repo Context Builder', () => {
 
         const context = buildMultiRepoContext(input);
 
-        expect(context.orchestrator.workerCount).toBe(3);
+        expect(context.orchestrator.workerCount).toBe(2);
       });
 
       it('should apply default pollIntervalMs (5000) when not provided', () => {
@@ -497,12 +497,12 @@ describe('Multi-Repo Context Builder', () => {
           projectName: 'Test',
           primaryRepo: 'acme/orch',
           devRepos: ['acme/api'],
-          pollIntervalMs: 3000,
+          pollIntervalMs: 10000,
         };
 
         const context = buildMultiRepoContext(input);
 
-        expect(context.orchestrator.pollIntervalMs).toBe(3000);
+        expect(context.orchestrator.pollIntervalMs).toBe(10000);
       });
 
       it('should use provided baseImage', () => {
@@ -561,7 +561,7 @@ describe('Multi-Repo Context Builder', () => {
           releaseStream: 'preview',
           baseBranch: 'develop',
           workerCount: 5,
-          pollIntervalMs: 2000,
+          pollIntervalMs: 8000,
         };
 
         const context = buildMultiRepoContext(input);
@@ -579,7 +579,7 @@ describe('Multi-Repo Context Builder', () => {
         expect(context.defaults.releaseStream).toBe('preview');
         expect(context.defaults.baseBranch).toBe('develop');
         expect(context.orchestrator.workerCount).toBe(5);
-        expect(context.orchestrator.pollIntervalMs).toBe(2000);
+        expect(context.orchestrator.pollIntervalMs).toBe(8000);
       });
     });
 
@@ -1047,7 +1047,7 @@ describe('Quick Builder Helpers', () => {
       expect(context.defaults.releaseStream).toBe('stable');
       expect(context.defaults.baseBranch).toBe('main');
       expect(context.devcontainer.featureTag).toBe(':1');
-      expect(context.orchestrator.workerCount).toBe(3);
+      expect(context.orchestrator.workerCount).toBe(2);
       expect(context.orchestrator.pollIntervalMs).toBe(5000);
       expect(context.repos.clone).toEqual([]);
     });
@@ -1156,7 +1156,7 @@ describe('Edge Cases and Integration', () => {
           primaryRepo: 'enterprise/orchestrator',
           devRepos: ['enterprise/api', 'enterprise/frontend'],
           workerCount: 5,
-          pollIntervalMs: 2000,
+          pollIntervalMs: 10000,
         }),
         'generacy-cloud'
       );

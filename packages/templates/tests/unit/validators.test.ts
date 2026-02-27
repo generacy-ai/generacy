@@ -16,6 +16,7 @@ import {
   validateAllRenderedFiles,
   ValidationError,
 } from '../../src/validators.js';
+import { MultiRepoInputSchema } from '../../src/schema.js';
 import type { TemplateContext } from '../../src/schema.js';
 import yaml from 'js-yaml';
 
@@ -181,6 +182,63 @@ describe('Pre-Render Validation', () => {
         expect(() => validateContext(context)).toThrow(expectedError);
       });
 
+      it('should reject context with low poll interval (below 5000ms)', () => {
+        const { context, expectedError } = invalidContexts.lowPollInterval;
+
+        expect(() => validateContext(context)).toThrow(ValidationError);
+        expect(() => validateContext(context)).toThrow(expectedError);
+      });
+
+      it('should reject repo name collisions', () => {
+        const context = {
+          ...multiRepoContext,
+          repos: {
+            primary: 'org-a/shared-lib',
+            dev: ['org-b/shared-lib'],
+            clone: [],
+            hasDevRepos: true,
+            hasCloneRepos: false,
+            isMultiRepo: true,
+          },
+        };
+
+        expect(() => validateContext(context)).toThrow(ValidationError);
+        expect(() => validateContext(context)).toThrow(/Multiple repos resolve to the same mount path "shared-lib"/);
+      });
+
+      it('should reject repo name collisions across dev and clone arrays', () => {
+        const context = {
+          ...multiRepoContext,
+          repos: {
+            primary: 'org/primary',
+            dev: ['org-a/utils'],
+            clone: ['org-b/utils'],
+            hasDevRepos: true,
+            hasCloneRepos: true,
+            isMultiRepo: true,
+          },
+        };
+
+        expect(() => validateContext(context)).toThrow(ValidationError);
+        expect(() => validateContext(context)).toThrow(/Multiple repos resolve to the same mount path "utils"/);
+      });
+
+      it('should accept repos with same org but different names', () => {
+        const context = {
+          ...multiRepoContext,
+          repos: {
+            primary: 'acme/frontend',
+            dev: ['acme/backend', 'acme/shared'],
+            clone: [],
+            hasDevRepos: true,
+            hasCloneRepos: false,
+            isMultiRepo: true,
+          },
+        };
+
+        expect(() => validateContext(context)).not.toThrow();
+      });
+
       it('should reject completely missing context', () => {
         expect(() => validateContext(undefined)).toThrow(ValidationError);
       });
@@ -286,6 +344,63 @@ describe('Pre-Render Validation', () => {
         }
       });
     });
+  });
+});
+
+describe('MultiRepoInputSchema Validation', () => {
+  it('should reject workerCount: 0 for multi-repo input', () => {
+    const input = {
+      projectId: 'proj_123',
+      projectName: 'Test Project',
+      primaryRepo: 'test/repo',
+      devRepos: ['test/dev1'],
+      workerCount: 0,
+    };
+
+    expect(() => MultiRepoInputSchema.parse(input)).toThrow(
+      'Number must be greater than or equal to 1'
+    );
+  });
+
+  it('should reject workerCount > 20 for multi-repo input', () => {
+    const input = {
+      projectId: 'proj_123',
+      projectName: 'Test Project',
+      primaryRepo: 'test/repo',
+      devRepos: ['test/dev1'],
+      workerCount: 21,
+    };
+
+    expect(() => MultiRepoInputSchema.parse(input)).toThrow(
+      'Number must be less than or equal to 20'
+    );
+  });
+
+  it('should reject pollIntervalMs below 5000 for multi-repo input', () => {
+    const input = {
+      projectId: 'proj_123',
+      projectName: 'Test Project',
+      primaryRepo: 'test/repo',
+      devRepos: ['test/dev1'],
+      pollIntervalMs: 1000,
+    };
+
+    expect(() => MultiRepoInputSchema.parse(input)).toThrow(
+      'Number must be greater than or equal to 5000'
+    );
+  });
+
+  it('should accept valid multi-repo input', () => {
+    const input = {
+      projectId: 'proj_123',
+      projectName: 'Test Project',
+      primaryRepo: 'test/repo',
+      devRepos: ['test/dev1'],
+      workerCount: 2,
+      pollIntervalMs: 5000,
+    };
+
+    expect(() => MultiRepoInputSchema.parse(input)).not.toThrow();
   });
 });
 
@@ -459,7 +574,7 @@ describe('Post-Render Validation', () => {
           name: 'Test Project',
           image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
           features: {
-            'ghcr.io/generacy-ai/generacy/devcontainer-feature:1': {},
+            'ghcr.io/generacy-ai/features/generacy:1': {},
           },
           customizations: {
             vscode: {
@@ -478,7 +593,7 @@ describe('Post-Render Validation', () => {
           service: 'orchestrator',
           workspaceFolder: '/workspaces/primary',
           features: {
-            'ghcr.io/generacy-ai/generacy/devcontainer-feature:1': {},
+            'ghcr.io/generacy-ai/features/generacy:1': {},
           },
         });
 
@@ -532,7 +647,7 @@ describe('Post-Render Validation', () => {
           dockerComposeFile: 'docker-compose.yml',
           // Missing service
           features: {
-            'ghcr.io/generacy-ai/generacy/devcontainer-feature:1': {},
+            'ghcr.io/generacy-ai/features/generacy:1': {},
           },
         });
 
@@ -574,9 +689,9 @@ describe('Post-Render Validation', () => {
     describe('edge cases', () => {
       it('should accept Generacy feature with different version tags', () => {
         const featureTags = [
-          'ghcr.io/generacy-ai/generacy/devcontainer-feature:1',
-          'ghcr.io/generacy-ai/generacy/devcontainer-feature:preview',
-          'ghcr.io/generacy-ai/generacy/devcontainer-feature:latest',
+          'ghcr.io/generacy-ai/features/generacy:1',
+          'ghcr.io/generacy-ai/features/generacy:preview',
+          'ghcr.io/generacy-ai/features/generacy:latest',
         ];
 
         for (const featureTag of featureTags) {
@@ -599,7 +714,7 @@ describe('Post-Render Validation', () => {
           dockerComposeFile: 'docker-compose.yml',
           service: 'orchestrator',
           features: {
-            'ghcr.io/generacy-ai/generacy/devcontainer-feature:1': {},
+            'ghcr.io/generacy-ai/features/generacy:1': {},
           },
         });
 
@@ -613,12 +728,15 @@ describe('Post-Render Validation', () => {
     describe('valid YAML', () => {
       it('should accept valid docker-compose.yml', () => {
         const validYaml = yaml.dump({
-          version: '3.8',
           services: {
             redis: {
               image: 'redis:7-alpine',
             },
             orchestrator: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
+              depends_on: ['redis'],
+            },
+            worker: {
               image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
               depends_on: ['redis'],
             },
@@ -640,13 +758,16 @@ describe('Post-Render Validation', () => {
                 dockerfile: 'Dockerfile',
               },
             },
+            worker: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
+            },
           },
         });
 
         expect(() => validateRenderedDockerCompose(validYaml)).not.toThrow();
       });
 
-      it('should accept docker-compose with additional services', () => {
+      it('should accept docker-compose with additional services beyond required', () => {
         const validYaml = yaml.dump({
           services: {
             redis: {
@@ -694,6 +815,9 @@ describe('Post-Render Validation', () => {
             orchestrator: {
               image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
             },
+            worker: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
+            },
           },
         });
 
@@ -706,10 +830,28 @@ describe('Post-Render Validation', () => {
             redis: {
               image: 'redis:7-alpine',
             },
+            worker: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
+            },
           },
         });
 
         expect(() => validateRenderedDockerCompose(yamlMissingOrchestrator)).toThrow(/missing required services.*orchestrator/);
+      });
+
+      it('should reject YAML missing worker service', () => {
+        const yamlMissingWorker = yaml.dump({
+          services: {
+            redis: {
+              image: 'redis:7-alpine',
+            },
+            orchestrator: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
+            },
+          },
+        });
+
+        expect(() => validateRenderedDockerCompose(yamlMissingWorker)).toThrow(/missing required services.*worker/);
       });
 
       it('should reject orchestrator without image or build', () => {
@@ -720,6 +862,9 @@ describe('Post-Render Validation', () => {
             },
             orchestrator: {
               command: 'echo hello',
+            },
+            worker: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
             },
           },
         });
@@ -734,6 +879,9 @@ describe('Post-Render Validation', () => {
               command: 'redis-server',
             },
             orchestrator: {
+              image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
+            },
+            worker: {
               image: 'mcr.microsoft.com/devcontainers/base:ubuntu',
             },
           },
@@ -969,7 +1117,7 @@ repos:
           JSON.stringify({
             name: 'Test',
             image: 'ubuntu',
-            features: { 'ghcr.io/generacy-ai/generacy/devcontainer-feature:1': {} },
+            features: { 'ghcr.io/generacy-ai/features/generacy:1': {} },
           }),
         ],
         [
@@ -990,7 +1138,7 @@ repos:
           yaml.dump({
             project: { id: 'proj_123', name: 'Test' },
             repos: { primary: 'owner/repo', isMultiRepo: true, dev: ['owner/dev1'] },
-            orchestrator: { pollIntervalMs: 5000, workerCount: 3 },
+            orchestrator: { pollIntervalMs: 5000, workerCount: 2 },
           }),
         ],
         [
@@ -999,7 +1147,7 @@ repos:
             name: 'Test',
             dockerComposeFile: 'docker-compose.yml',
             service: 'orchestrator',
-            features: { 'ghcr.io/generacy-ai/generacy/devcontainer-feature:1': {} },
+            features: { 'ghcr.io/generacy-ai/features/generacy:1': {} },
           }),
         ],
         [
@@ -1008,6 +1156,7 @@ repos:
             services: {
               redis: { image: 'redis:7-alpine' },
               orchestrator: { image: 'ubuntu' },
+              worker: { image: 'ubuntu' },
             },
           }),
         ],

@@ -53,6 +53,28 @@ export const ReposContextSchema = z.object({
 
   /** Computed: true if project has multiple development repos */
   isMultiRepo: z.boolean(),
+}).superRefine((repos, ctx) => {
+  const allRepos = [repos.primary, ...repos.dev, ...repos.clone];
+  const nameToRepos: Record<string, string[]> = {};
+
+  for (const repo of allRepos) {
+    // Regex guarantees "owner/repo" format, so split always has index 1
+    const name = repo.split('/')[1]!;
+    if (nameToRepos[name]) {
+      nameToRepos[name].push(repo);
+    } else {
+      nameToRepos[name] = [repo];
+    }
+  }
+
+  for (const [name, repos] of Object.entries(nameToRepos)) {
+    if (repos.length > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Multiple repos resolve to the same mount path "${name}": ${repos.join(', ')}`,
+      });
+    }
+  }
 });
 
 export type ReposContext = z.infer<typeof ReposContextSchema>;
@@ -87,19 +109,20 @@ export type DefaultsContext = z.infer<typeof DefaultsContextSchema>;
  * Orchestrator configuration (multi-repo only)
  */
 export const OrchestratorContextSchema = z.object({
-  /** Poll interval in milliseconds for checking new tasks */
+  /** Poll interval in milliseconds for checking new tasks (minimum 5000ms) */
   pollIntervalMs: z.number()
     .int()
-    .positive()
+    .min(5000)
     .default(5000)
-    .describe('How often orchestrator checks for new work (ms)'),
+    .describe('How often orchestrator checks for new work (ms, minimum 5000)'),
 
-  /** Number of worker containers to spawn */
+  /** Number of worker containers to spawn (0–20) */
   workerCount: z.number()
     .int()
     .nonnegative()
-    .default(3)
-    .describe('Number of parallel workers (0 for single-repo)'),
+    .max(20)
+    .default(2)
+    .describe('Number of parallel workers (0 for single-repo, max 20)'),
 });
 
 export type OrchestratorContext = z.infer<typeof OrchestratorContextSchema>;
@@ -211,8 +234,8 @@ export const MultiRepoInputSchema = z.object({
   baseImage: z.string().optional(),
   releaseStream: z.enum(['stable', 'preview']).optional(),
   baseBranch: z.string().optional(),
-  workerCount: z.number().int().positive().optional(),
-  pollIntervalMs: z.number().int().positive().optional(),
+  workerCount: z.number().int().min(1).max(20).optional(),
+  pollIntervalMs: z.number().int().min(5000).optional(),
 });
 
 export type MultiRepoInput = z.infer<typeof MultiRepoInputSchema>;

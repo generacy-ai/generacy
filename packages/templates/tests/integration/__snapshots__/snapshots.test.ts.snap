@@ -248,10 +248,10 @@ defaults:
 
 orchestrator:
   # How often the orchestrator checks for new tasks (milliseconds)
-  pollIntervalMs: 3000
+  pollIntervalMs: 5000
 
   # Number of parallel worker containers to spawn
-  workerCount: 3
+  workerCount: 2
 "
 `;
 
@@ -264,8 +264,6 @@ exports[`Snapshot: Edge Cases > should match snapshot for docker-compose.yml wit
 # Multi-repo development environment for Acme Platform
 # Orchestrator + Workers architecture for parallel task execution
 
-version: "3.8"
-
 services:
   # ==========================================================================
   # Redis - Message queue for orchestrator/worker communication
@@ -274,8 +272,6 @@ services:
     image: redis:7-alpine
     container_name: proj_xyz789def-redis
     command: redis-server --appendonly no --save ""
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -291,10 +287,6 @@ services:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     container_name: proj_xyz789def-orchestrator
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy:1: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -305,8 +297,8 @@ services:
 
       # Orchestrator-specific settings
       - ROLE=orchestrator
-      - WORKER_COUNT=3
-      - POLL_INTERVAL_MS=3000
+      - WORKER_COUNT=2
+      - POLL_INTERVAL_MS=5000
 
       # Project metadata
       - PROJECT_ID=proj_xyz789def
@@ -316,7 +308,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/platform-orchestrator:cached
+      - ..:/workspaces/platform-orchestrator:cached
 
       # Development repositories
       - ../../api-service:/workspaces/api-service:cached
@@ -356,10 +348,6 @@ services:
   worker:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy:1: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -370,7 +358,7 @@ services:
 
       # Worker-specific settings
       - ROLE=worker
-      - POLL_INTERVAL_MS=3000
+      - POLL_INTERVAL_MS=5000
 
       # Project metadata
       - PROJECT_ID=proj_xyz789def
@@ -378,7 +366,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/platform-orchestrator:cached
+      - ..:/workspaces/platform-orchestrator:cached
 
       # Development repositories
       - ../../api-service:/workspaces/api-service:cached
@@ -389,17 +377,21 @@ services:
       - ../../shared-lib:/workspaces/shared-lib:cached
       - ../../proto-definitions:/workspaces/proto-definitions:cached
 
-      # Worker-specific state (isolated from orchestrator)
-      - vscode-server:/home/vscode/.vscode-server
-
     working_dir: /workspaces/platform-orchestrator
 
     # Keep container running
     command: sleep infinity
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/home/vscode/.generacy/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
     # Scale workers based on configuration
     deploy:
-      replicas: 3
+      replicas: 2
 
     depends_on:
       redis:
@@ -466,6 +458,9 @@ exports[`Snapshot: Edge Cases > should match snapshot for multi-repo devcontaine
     }
     
   ],
+  "features": {
+    "ghcr.io/generacy-ai/features/generacy:1": {}
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -604,10 +599,10 @@ defaults:
 
 orchestrator:
   # How often the orchestrator checks for new tasks (milliseconds)
-  pollIntervalMs: 3000
+  pollIntervalMs: 5000
 
   # Number of parallel worker containers to spawn
-  workerCount: 3
+  workerCount: 2
 "
 `;
 
@@ -679,10 +674,10 @@ defaults:
 
 orchestrator:
   # How often the orchestrator checks for new tasks (milliseconds)
-  pollIntervalMs: 3000
+  pollIntervalMs: 5000
 
   # Number of parallel worker containers to spawn
-  workerCount: 3
+  workerCount: 2
 "
 `;
 
@@ -720,6 +715,9 @@ exports[`Snapshot: Multi-Repo Templates > should match snapshot for devcontainer
     }
     
   ],
+  "features": {
+    "ghcr.io/generacy-ai/features/generacy:1": {}
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -741,8 +739,6 @@ exports[`Snapshot: Multi-Repo Templates > should match snapshot for docker-compo
 # Multi-repo development environment for Acme Platform
 # Orchestrator + Workers architecture for parallel task execution
 
-version: "3.8"
-
 services:
   # ==========================================================================
   # Redis - Message queue for orchestrator/worker communication
@@ -751,8 +747,6 @@ services:
     image: redis:7-alpine
     container_name: proj_xyz789def-redis
     command: redis-server --appendonly no --save ""
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -768,10 +762,6 @@ services:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     container_name: proj_xyz789def-orchestrator
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy:1: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -782,8 +772,8 @@ services:
 
       # Orchestrator-specific settings
       - ROLE=orchestrator
-      - WORKER_COUNT=3
-      - POLL_INTERVAL_MS=3000
+      - WORKER_COUNT=2
+      - POLL_INTERVAL_MS=5000
 
       # Project metadata
       - PROJECT_ID=proj_xyz789def
@@ -793,7 +783,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/platform-orchestrator:cached
+      - ..:/workspaces/platform-orchestrator:cached
 
       # Development repositories
       - ../../api-service:/workspaces/api-service:cached
@@ -833,10 +823,6 @@ services:
   worker:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy:1: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -847,7 +833,7 @@ services:
 
       # Worker-specific settings
       - ROLE=worker
-      - POLL_INTERVAL_MS=3000
+      - POLL_INTERVAL_MS=5000
 
       # Project metadata
       - PROJECT_ID=proj_xyz789def
@@ -855,7 +841,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/platform-orchestrator:cached
+      - ..:/workspaces/platform-orchestrator:cached
 
       # Development repositories
       - ../../api-service:/workspaces/api-service:cached
@@ -866,17 +852,21 @@ services:
       - ../../shared-lib:/workspaces/shared-lib:cached
       - ../../proto-definitions:/workspaces/proto-definitions:cached
 
-      # Worker-specific state (isolated from orchestrator)
-      - vscode-server:/home/vscode/.vscode-server
-
     working_dir: /workspaces/platform-orchestrator
 
     # Keep container running
     command: sleep infinity
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/home/vscode/.generacy/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
     # Scale workers based on configuration
     deploy:
-      replicas: 3
+      replicas: 2
 
     depends_on:
       redis:
@@ -1000,8 +990,8 @@ LOG_LEVEL=info
 
 # Poll interval for orchestrator task queue (milliseconds)
 # How often workers check for new tasks
-# Default: 3000ms (configured in config.yaml)
-# POLL_INTERVAL_MS=3000
+# Default: 5000ms (configured in config.yaml)
+# POLL_INTERVAL_MS=5000
 
 # Worker timeout for long-running tasks (seconds)
 # Adjust if your tasks typically take longer than 30 minutes
@@ -1240,6 +1230,9 @@ exports[`Snapshot: Special Values > should correctly render base images in devco
     }
     
   ],
+  "features": {
+    "ghcr.io/generacy-ai/features/generacy:1": {}
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -1379,8 +1372,6 @@ exports[`Snapshot: Special Values > should correctly render worker count in dock
 # Multi-repo development environment for Acme Platform
 # Orchestrator + Workers architecture for parallel task execution
 
-version: "3.8"
-
 services:
   # ==========================================================================
   # Redis - Message queue for orchestrator/worker communication
@@ -1389,8 +1380,6 @@ services:
     image: redis:7-alpine
     container_name: proj_xyz789def-redis
     command: redis-server --appendonly no --save ""
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -1406,10 +1395,6 @@ services:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
     container_name: proj_xyz789def-orchestrator
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy:1: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -1420,8 +1405,8 @@ services:
 
       # Orchestrator-specific settings
       - ROLE=orchestrator
-      - WORKER_COUNT=3
-      - POLL_INTERVAL_MS=3000
+      - WORKER_COUNT=2
+      - POLL_INTERVAL_MS=5000
 
       # Project metadata
       - PROJECT_ID=proj_xyz789def
@@ -1431,7 +1416,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/platform-orchestrator:cached
+      - ..:/workspaces/platform-orchestrator:cached
 
       # Development repositories
       - ../../api-service:/workspaces/api-service:cached
@@ -1471,10 +1456,6 @@ services:
   worker:
     image: mcr.microsoft.com/devcontainers/base:ubuntu
 
-    # Install Generacy Dev Container Feature
-    features:
-      ghcr.io/generacy-ai/features/generacy:1: {}
-
     # Load environment variables from .generacy/generacy.env
     env_file:
       - ../.generacy/generacy.env
@@ -1485,7 +1466,7 @@ services:
 
       # Worker-specific settings
       - ROLE=worker
-      - POLL_INTERVAL_MS=3000
+      - POLL_INTERVAL_MS=5000
 
       # Project metadata
       - PROJECT_ID=proj_xyz789def
@@ -1493,7 +1474,7 @@ services:
     # Mount all repositories as workspace folders
     volumes:
       # Primary repository
-      - ../..:/workspaces/platform-orchestrator:cached
+      - ..:/workspaces/platform-orchestrator:cached
 
       # Development repositories
       - ../../api-service:/workspaces/api-service:cached
@@ -1504,17 +1485,21 @@ services:
       - ../../shared-lib:/workspaces/shared-lib:cached
       - ../../proto-definitions:/workspaces/proto-definitions:cached
 
-      # Worker-specific state (isolated from orchestrator)
-      - vscode-server:/home/vscode/.vscode-server
-
     working_dir: /workspaces/platform-orchestrator
 
     # Keep container running
     command: sleep infinity
 
+    healthcheck:
+      test: ["CMD", "test", "-f", "/home/vscode/.generacy/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
     # Scale workers based on configuration
     deploy:
-      replicas: 3
+      replicas: 2
 
     depends_on:
       redis:

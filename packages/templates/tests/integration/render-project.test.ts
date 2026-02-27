@@ -218,8 +218,8 @@ describe('Integration: renderProject - Multi Repo', () => {
     expect(config.defaults.baseBranch).toBe('develop');
 
     // Verify orchestrator
-    expect(config.orchestrator.workerCount).toBe(3);
-    expect(config.orchestrator.pollIntervalMs).toBe(3000);
+    expect(config.orchestrator.workerCount).toBe(2);
+    expect(config.orchestrator.pollIntervalMs).toBe(5000);
   });
 
   it('should render valid devcontainer.json for multi-repo', async () => {
@@ -249,6 +249,10 @@ describe('Integration: renderProject - Multi Repo', () => {
     expect(workspacePaths).toContain('/workspaces/shared-lib');
     expect(workspacePaths).toContain('/workspaces/proto-definitions');
 
+    // Verify features block (moved from docker-compose services to devcontainer.json)
+    expect(devcontainer.features).toBeDefined();
+    expect(devcontainer.features['ghcr.io/generacy-ai/features/generacy:1']).toBeDefined();
+
     // Verify extensions
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.agency');
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.generacy');
@@ -273,12 +277,28 @@ describe('Integration: renderProject - Multi Repo', () => {
     // Verify Redis service
     expect(dockerCompose.services.redis.image).toContain('redis');
 
+    // Verify no version field (obsolete in modern docker-compose)
+    expect(dockerCompose.version).toBeUndefined();
+
+    // Verify Redis has no exposed ports
+    expect(dockerCompose.services.redis.ports).toBeUndefined();
+
     // Verify orchestrator service
     const orchestrator = dockerCompose.services.orchestrator;
     expect(orchestrator.image).toBe('mcr.microsoft.com/devcontainers/base:ubuntu');
     expect(orchestrator.volumes).toBeDefined();
     expect(orchestrator.environment).toBeDefined();
-    expect(orchestrator.features).toBeDefined();
+
+    // Features belong in devcontainer.json, not docker-compose services
+    expect(orchestrator.features).toBeUndefined();
+
+    // Verify primary repo mount uses '..' (not '../..')
+    const primaryMount = orchestrator.volumes.find((v: string) =>
+      v.includes('/workspaces/platform-orchestrator')
+    );
+    expect(primaryMount).toBeDefined();
+    expect(primaryMount).toMatch(/^\.\.\:/);
+    expect(primaryMount).not.toContain('../..');
 
     // Verify all repos are mounted
     const volumePaths = orchestrator.volumes.map((v: string) => v.split(':')[1]);
@@ -289,11 +309,27 @@ describe('Integration: renderProject - Multi Repo', () => {
     expect(volumePaths).toContain('/workspaces/shared-lib');
     expect(volumePaths).toContain('/workspaces/proto-definitions');
 
+    // Verify orchestrator health check
+    expect(orchestrator.healthcheck).toBeDefined();
+
     // Verify worker service
     const worker = dockerCompose.services.worker;
     expect(worker.image).toBe('mcr.microsoft.com/devcontainers/base:ubuntu');
-    expect(worker.deploy?.replicas).toBe(3);
+    expect(worker.deploy?.replicas).toBe(2);
     expect(worker.environment).toBeDefined();
+
+    // Workers should not have features
+    expect(worker.features).toBeUndefined();
+
+    // Workers should have health check
+    expect(worker.healthcheck).toBeDefined();
+
+    // Workers should not have vscode-server volume
+    const workerVolumes = worker.volumes || [];
+    const hasVscodeServer = workerVolumes.some((v: string) =>
+      v.includes('vscode-server')
+    );
+    expect(hasVscodeServer).toBe(false);
 
     // Environment variables can be in array or object format in docker-compose
     // Check for REDIS_URL in the environment
