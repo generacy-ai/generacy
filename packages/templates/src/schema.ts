@@ -58,7 +58,8 @@ export const ReposContextSchema = z.object({
   const nameToRepos: Record<string, string[]> = {};
 
   for (const repo of allRepos) {
-    const name = repo.split('/')[1];
+    // Regex guarantees "owner/repo" format, so split always has index 1
+    const name = repo.split('/')[1]!;
     if (nameToRepos[name]) {
       nameToRepos[name].push(repo);
     } else {
@@ -66,11 +67,11 @@ export const ReposContextSchema = z.object({
     }
   }
 
-  for (const name of Object.keys(nameToRepos)) {
-    if (nameToRepos[name].length > 1) {
+  for (const [name, repos] of Object.entries(nameToRepos)) {
+    if (repos.length > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `Multiple repos resolve to the same mount path "${name}": ${nameToRepos[name].join(', ')}`,
+        message: `Multiple repos resolve to the same mount path "${name}": ${repos.join(', ')}`,
       });
     }
   }
