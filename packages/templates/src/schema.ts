@@ -218,6 +218,7 @@ export const SingleRepoInputSchema = z.object({
   baseImage: z.string().optional(),
   releaseStream: z.enum(['stable', 'preview']).optional(),
   baseBranch: z.string().optional(),
+  agent: z.string().optional(),
 });
 
 export type SingleRepoInput = z.infer<typeof SingleRepoInputSchema>;
@@ -234,6 +235,7 @@ export const MultiRepoInputSchema = z.object({
   baseImage: z.string().optional(),
   releaseStream: z.enum(['stable', 'preview']).optional(),
   baseBranch: z.string().optional(),
+  agent: z.string().optional(),
   workerCount: z.number().int().min(1).max(20).optional(),
   pollIntervalMs: z.number().int().min(5000).optional(),
 });

@@ -134,7 +134,7 @@ export function buildSingleRepoContext(options: SingleRepoInput): TemplateContex
       isMultiRepo: false,
     },
     defaults: {
-      agent: 'claude-code',
+      agent: validated.agent ?? 'claude-code',
       baseBranch,
       releaseStream,
     },
@@ -213,7 +213,7 @@ export function buildMultiRepoContext(options: MultiRepoInput): TemplateContext 
       isMultiRepo: true,
     },
     defaults: {
-      agent: 'claude-code',
+      agent: validated.agent ?? 'claude-code',
       baseBranch,
       releaseStream,
     },
