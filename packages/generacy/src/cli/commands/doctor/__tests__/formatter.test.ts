@@ -543,6 +543,7 @@ describe('formatText', () => {
       const output = formatText(report, checks, false);
 
       // Should contain at least one ANSI escape code
+      // eslint-disable-next-line no-control-regex
       expect(output).toMatch(/\x1b\[/);
     });
 
@@ -622,6 +623,7 @@ describe('formatText', () => {
       const output = formatText(report, checks, false);
 
       // Should NOT contain any ANSI escape codes
+      // eslint-disable-next-line no-control-regex
       expect(output).not.toMatch(/\x1b\[/);
     });
 
@@ -634,6 +636,7 @@ describe('formatText', () => {
       const output = formatText(report, checks, false);
 
       // NO_COLOR spec says presence of the var is enough, even if empty
+      // eslint-disable-next-line no-control-regex
       expect(output).not.toMatch(/\x1b\[/);
     });
   });

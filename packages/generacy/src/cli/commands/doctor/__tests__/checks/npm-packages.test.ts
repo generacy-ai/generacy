@@ -209,7 +209,6 @@ describe('npmPackagesCheck', () => {
   it('passes with info when own package.json is unreadable', async () => {
     mockedExistsSync.mockReturnValue(true);
 
-    let callCount = 0;
     mockedReadFileSync.mockImplementation((path: any) => {
       const pathStr = String(path);
       if (pathStr.includes('node_modules')) {
