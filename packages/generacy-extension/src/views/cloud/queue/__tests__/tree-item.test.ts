@@ -34,7 +34,10 @@ vi.mock('vscode', () => ({
     }
   },
   MarkdownString: class {
-    value = '';
+    value: string;
+    constructor(value = '') {
+      this.value = value;
+    }
     appendMarkdown(text: string) {
       this.value += text;
       return this;

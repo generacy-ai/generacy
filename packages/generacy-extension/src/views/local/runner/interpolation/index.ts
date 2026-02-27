@@ -50,7 +50,7 @@ export function parseVariableReference(expression: string): VariableReference {
   if (type === 'inputs') refType = 'inputs';
   else if (type === 'steps') refType = 'steps';
   else if (type === 'env') refType = 'env';
-  else if (['success', 'failure', 'always'].includes(type || '')) {
+  else if (['success', 'failure', 'always'].includes((type || '').replace(/\(\)$/, ''))) {
     refType = 'function';
   }
 

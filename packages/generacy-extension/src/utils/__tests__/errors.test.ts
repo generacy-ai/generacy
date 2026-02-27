@@ -37,8 +37,12 @@ describe('GeneracyError', () => {
     it('should create error with code and default message', () => {
       const error = new GeneracyError(ErrorCode.FileNotFound);
       expect(error.code).toBe(ErrorCode.FileNotFound);
-      expect(error.message).toBe('File not found');
-      expect(error.userMessage).toBe('File not found');
+      expect(error.message).toBe(
+        'File not found. The requested file may have been moved, renamed, or deleted. Check the file path and try refreshing the explorer to reload the file list.'
+      );
+      expect(error.userMessage).toBe(
+        'File not found. The requested file may have been moved, renamed, or deleted. Check the file path and try refreshing the explorer to reload the file list.'
+      );
     });
 
     it('should create error with custom message', () => {

@@ -95,6 +95,15 @@ vi.mock('../breakpoints', () => ({
   }),
 }));
 
+// Mock executor
+vi.mock('../../runner/executor', () => ({
+  WorkflowExecutor: {
+    getInstance: () => ({
+      getExecutionContext: vi.fn().mockReturnValue(undefined),
+    }),
+  },
+}));
+
 // Mock session
 const mockSession = {
   start: vi.fn(),
@@ -112,6 +121,20 @@ const mockSession = {
     { name: 'Variables', variablesReference: 2 },
   ]),
   getVariables: vi.fn().mockReturnValue({ NODE_ENV: 'test' }),
+  getPosition: vi.fn().mockReturnValue({
+    phaseIndex: 0,
+    stepIndex: 0,
+    phaseName: 'build',
+    stepName: 'setup',
+    atPhaseStart: false,
+  }),
+  getContext: vi.fn().mockReturnValue({
+    env: { NODE_ENV: 'test' },
+    variables: {},
+    outputs: {},
+    phaseOutputs: {},
+  }),
+  getState: vi.fn().mockReturnValue('paused'),
   addEventListener: vi.fn().mockReturnValue({ dispose: vi.fn() }),
 };
 
@@ -285,13 +308,16 @@ describe('WorkflowDebugAdapter', () => {
   });
 
   describe('variables', () => {
-    it('should return variables for environment scope', () => {
+    it('should return variables for environment scope', async () => {
       adapter.handleMessage({
         type: 'request',
         command: 'variables',
         seq: 1,
         arguments: { variablesReference: 1 },
       } as any);
+
+      // Wait for async handling
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       const response = sentMessages.find((m: any) => m.command === 'variables') as any;
       expect(response.success).toBe(true);
