@@ -10,6 +10,7 @@ import { orchestratorCommand } from './commands/orchestrator.js';
 import { setupCommand } from './commands/setup.js';
 import { validateCommand } from './commands/validate.js';
 import { doctorCommand } from './commands/doctor.js';
+import { initCommand } from './commands/init/index.js';
 import { createLogger, setLogger } from './utils/logger.js';
 import type { LogLevel } from './utils/logger.js';
 
@@ -45,6 +46,7 @@ export function createProgram(): Command {
   program.addCommand(setupCommand());
   program.addCommand(validateCommand());
   program.addCommand(doctorCommand());
+  program.addCommand(initCommand());
 
   return program;
 }

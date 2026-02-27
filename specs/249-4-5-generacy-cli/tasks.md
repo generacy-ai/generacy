@@ -12,7 +12,7 @@
 
 ## Phase 1: Dependencies & Scaffolding
 
-### T001 [INFRA] Install new dependencies
+### T001 [DONE] [INFRA] Install new dependencies
 **File**: `packages/generacy/package.json`
 - Add `@generacy-ai/templates@workspace:*` as production dependency
 - Add `@clack/prompts` (^0.9) as production dependency
@@ -21,7 +21,7 @@
 - Run `pnpm install` to update lockfile
 - Verify workspace link resolves correctly for `@generacy-ai/templates`
 
-### T002 [P] [INFRA] Define shared types
+### T002 [DONE] [P] [INFRA] Define shared types
 **File**: `packages/generacy/src/cli/commands/init/types.ts`
 - Define `InitOptions` interface with all resolved fields:
   - `projectId: string | null` (null = generate local placeholder)
@@ -35,7 +35,7 @@
 - Define `FileResult` interface: `{ path, action, size }`
 - Define `RepoAccessResult` interface: `{ repo, accessible, writable, error? }`
 
-### T003 [P] [INFRA] Create command skeleton and register in CLI
+### T003 [DONE] [P] [INFRA] Create command skeleton and register in CLI
 **Files**:
 - `packages/generacy/src/cli/commands/init/index.ts` (new)
 - `packages/generacy/src/cli/index.ts` (modify)
@@ -55,7 +55,7 @@
 
 ## Phase 2: Repo URL Utilities
 
-### T004 [US1] Implement repo URL parsing and normalization
+### T004 [DONE] [US1] Implement repo URL parsing and normalization
 **File**: `packages/generacy/src/cli/commands/init/repo-utils.ts`
 - `parseRepoUrl(input: string): { owner: string; repo: string }` — handles:
   - `owner/repo` shorthand
@@ -74,7 +74,7 @@
 
 ## Phase 3: Interactive Prompts
 
-### T005 [US1] Implement interactive prompt flow
+### T005 [DONE] [US1] Implement interactive prompt flow
 **File**: `packages/generacy/src/cli/commands/init/prompts.ts`
 - `runInteractivePrompts(defaults: Partial<InitOptions>): Promise<Partial<InitOptions>>` using `@clack/prompts`:
   1. `p.intro('generacy init')` with version banner
@@ -92,7 +92,7 @@
 
 ## Phase 4: Options Resolver
 
-### T006 [US1, US2] Implement options resolver
+### T006 [DONE] [US1, US2] Implement options resolver
 **File**: `packages/generacy/src/cli/commands/init/resolver.ts`
 - `resolveOptions(flags: Record<string, unknown>, gitRoot: string): Promise<InitOptions>`
 - Priority chain: CLI flags > existing config > interactive prompts > auto-detection > defaults
@@ -116,7 +116,7 @@
 
 ## Phase 5: GitHub Access Validation
 
-### T007 [US4] Implement GitHub access validation
+### T007 [DONE] [US4] Implement GitHub access validation
 **File**: `packages/generacy/src/cli/commands/init/github.ts`
 - `discoverGitHubToken(): string | null`
   - Check `process.env.GITHUB_TOKEN` first
@@ -140,7 +140,7 @@
 
 ## Phase 6: File Conflict Handling
 
-### T008 [US5] Implement file conflict detection and resolution
+### T008 [DONE] [US5] Implement file conflict detection and resolution
 **File**: `packages/generacy/src/cli/commands/init/conflicts.ts`
 - `checkConflicts(files: Map<string, string>, gitRoot: string): Map<string, string>`
   - For each rendered file path, check if `join(gitRoot, path)` exists
@@ -162,7 +162,7 @@
 
 ## Phase 7: File Writer
 
-### T009 [P] [US1, US2] Implement file writer with dry-run support
+### T009 [DONE] [P] [US1, US2] Implement file writer with dry-run support
 **File**: `packages/generacy/src/cli/commands/init/writer.ts`
 - `writeFiles(files: Map<string, string>, actions: Map<string, FileAction>, gitRoot: string, dryRun: boolean): Promise<FileResult[]>`
   - For each file in rendered map:
@@ -181,7 +181,7 @@
 
 ## Phase 8: Summary & Next Steps
 
-### T010 [P] [US1] Implement completion summary and next steps output
+### T010 [DONE] [P] [US1] Implement completion summary and next steps output
 **File**: `packages/generacy/src/cli/commands/init/summary.ts`
 - `printSummary(results: FileResult[], dryRun: boolean): void`
   - Use `@clack/prompts` log helpers for styled output
@@ -202,7 +202,7 @@
 
 ## Phase 9: Wire Everything Together
 
-### T011 [US1, US2, US3, US4, US5] Implement full command action
+### T011 [DONE] [US1, US2, US3, US4, US5] Implement full command action
 **File**: `packages/generacy/src/cli/commands/init/index.ts`
 - Replace placeholder action with full `initAction()` implementation
 - Wire the complete flow in order:
@@ -227,7 +227,7 @@
 
 ## Phase 10: Unit Tests
 
-### T012 [P] [US1] Write unit tests for repo-utils
+### T012 [DONE] [P] [US1] Write unit tests for repo-utils
 **File**: `packages/generacy/src/cli/commands/init/__tests__/repo-utils.test.ts`
 - Test `parseRepoUrl()` with all supported formats:
   - `owner/repo` → `{ owner: 'owner', repo: 'repo' }`
@@ -241,7 +241,7 @@
 - Test `detectGitRoot()` — mock `execSafe` for git repo and non-repo cases
 - Test `detectPrimaryRepo()` — mock `execSafe` for various remote URL formats and missing remote
 
-### T013 [P] [US1] Write unit tests for prompts
+### T013 [DONE] [P] [US1] Write unit tests for prompts
 **File**: `packages/generacy/src/cli/commands/init/__tests__/prompts.test.ts`
 - Mock `@clack/prompts` module
 - Test prompt flow runs all prompts when no defaults provided
@@ -250,7 +250,7 @@
 - Test existing config detection loads and normalizes values as defaults
 - Test validation of repo URL input during prompt
 
-### T014 [P] [US1, US2] Write unit tests for resolver
+### T014 [DONE] [P] [US1, US2] Write unit tests for resolver
 **File**: `packages/generacy/src/cli/commands/init/__tests__/resolver.test.ts`
 - Test CLI flags take priority over all other sources
 - Test `--yes` auto-derives project name from directory name and primary repo from git remote
@@ -261,7 +261,7 @@
 - Test all repo URLs normalized consistently
 - Test duplicate repo name detection
 
-### T015 [P] [US4] Write unit tests for github validation
+### T015 [DONE] [P] [US4] Write unit tests for github validation
 **File**: `packages/generacy/src/cli/commands/init/__tests__/github.test.ts`
 - Test `discoverGitHubToken()` priority: env var > `gh auth token`
 - Test `discoverGitHubToken()` returns `null` when neither available
@@ -274,7 +274,7 @@
 - Test `runGitHubValidation()` warns (not errors) when no token found
 - Test warning output for inaccessible and read-only repos
 
-### T016 [P] [US5] Write unit tests for conflicts
+### T016 [DONE] [P] [US5] Write unit tests for conflicts
 **File**: `packages/generacy/src/cli/commands/init/__tests__/conflicts.test.ts`
 - Test `checkConflicts()` returns empty map when no files exist
 - Test `checkConflicts()` detects existing files and returns their content
@@ -284,7 +284,7 @@
 - Test interactive prompting for each conflicting file (mock `p.select`)
 - Test "Show diff" option re-prompts after displaying diff
 
-### T017 [P] [US1] Write unit tests for writer
+### T017 [DONE] [P] [US1] Write unit tests for writer
 **File**: `packages/generacy/src/cli/commands/init/__tests__/writer.test.ts`
 - Test files written to correct paths in temp directory
 - Test parent directories created recursively
@@ -293,7 +293,7 @@
 - Test `FileResult` array matches expected actions and sizes
 - Test `collectExistingFiles()` reads `.vscode/extensions.json` when present
 
-### T018 [P] [US1] Write unit tests for summary
+### T018 [DONE] [P] [US1] Write unit tests for summary
 **File**: `packages/generacy/src/cli/commands/init/__tests__/summary.test.ts`
 - Test `printSummary()` outputs all file results with correct labels
 - Test dry-run prefix ("Would create" etc.)
@@ -304,7 +304,7 @@
 
 ## Phase 11: Integration Tests
 
-### T019 [US1, US2, US5] Write integration tests for full init command
+### T019 [DONE] [US1, US2, US5] Write integration tests for full init command
 **File**: `packages/generacy/src/cli/__tests__/init.test.ts`
 - Follow subprocess execution pattern from `validate.test.ts` and `doctor.test.ts`
 - Use temp directories with `mkdtempSync()`, initialize git repos with `git init`
