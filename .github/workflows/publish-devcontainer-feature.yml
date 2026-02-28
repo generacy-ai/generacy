@@ -49,7 +49,7 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
           cd packages/devcontainer-feature/src/generacy
-          tar czf /tmp/generacy-feature.tgz .
+          tar czf generacy-feature.tgz .
           oras push ghcr.io/generacy-ai/generacy/generacy:preview \
             --config /dev/null:application/vnd.devcontainers \
-            /tmp/generacy-feature.tgz:application/vnd.devcontainers.layer.v1+tar
+            generacy-feature.tgz:application/vnd.devcontainers.layer.v1+tar
