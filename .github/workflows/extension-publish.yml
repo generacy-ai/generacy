@@ -1,0 +1,138 @@
+name: Publish Extension
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'packages/generacy-extension/**'
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: 'Publish channel'
+        required: true
+        type: choice
+        options:
+          - preview
+          - stable
+
+concurrency:
+  group: extension-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine publish channel
+        id: channel
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ inputs.channel }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "value=stable" >> $GITHUB_OUTPUT
+          else
+            echo "value=preview" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate branch-channel pairing
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          CHANNEL="${{ steps.channel.outputs.value }}"
+          BRANCH="${{ github.ref }}"
+
+          if [ "$CHANNEL" = "stable" ] && [ "$BRANCH" != "refs/heads/main" ]; then
+            echo "::error::Channel 'stable' can only be published from the 'main' branch (current: $BRANCH)"
+            exit 1
+          fi
+
+          if [ "$CHANNEL" = "preview" ] && [ "$BRANCH" != "refs/heads/develop" ]; then
+            echo "::error::Channel 'preview' can only be published from the 'develop' branch (current: $BRANCH)"
+            exit 1
+          fi
+
+          echo "Branch-channel validation passed: $CHANNEL on $BRANCH"
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm --filter generacy-extension... run build
+
+      - name: Test
+        run: pnpm --filter generacy-extension run test
+
+      - name: Get extension version
+        id: version
+        run: echo "version=$(node -p "require('./packages/generacy-extension/package.json').version")" >> $GITHUB_OUTPUT
+
+      - name: Check marketplace version
+        id: version-check
+        run: |
+          CURRENT="${{ steps.version.outputs.version }}"
+          MARKETPLACE=$(npx vsce show generacy-ai.generacy --json 2>/dev/null \
+            | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).versions[0].version" 2>/dev/null \
+            || echo "")
+
+          if [ -n "$MARKETPLACE" ] && [ "$CURRENT" = "$MARKETPLACE" ]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "::notice::Version $CURRENT already published on marketplace. Skipping publish."
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Local version: $CURRENT, Marketplace version: ${MARKETPLACE:-unknown}. Proceeding."
+          fi
+
+      - name: Package extension
+        run: npx vsce package --no-dependencies
+        working-directory: packages/generacy-extension
+
+      - name: Publish extension
+        if: steps.version-check.outputs.skip != 'true'
+        run: |
+          if [ "${{ steps.channel.outputs.value }}" = "preview" ]; then
+            npx vsce publish --no-dependencies --pre-release
+          else
+            npx vsce publish --no-dependencies
+          fi
+        working-directory: packages/generacy-extension
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+      - name: Create git tag
+        if: steps.channel.outputs.value == 'stable' && steps.version-check.outputs.skip != 'true'
+        run: |
+          TAG="extension-v${{ steps.version.outputs.version }}"
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Tag $TAG already exists. Skipping tag creation."
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.channel.outputs.value == 'stable' && steps.version-check.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: extension-v${{ steps.version.outputs.version }}
+          name: Generacy Extension v${{ steps.version.outputs.version }}
+          files: packages/generacy-extension/*.vsix
+          generate_release_notes: true
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generacy-extension-${{ steps.version.outputs.version }}.vsix
+          path: packages/generacy-extension/*.vsix
+          retention-days: 30
