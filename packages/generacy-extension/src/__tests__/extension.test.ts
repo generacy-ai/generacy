@@ -123,6 +123,12 @@ vi.mock('vscode', () => {
       showInputBox: vi.fn(),
       createTreeView: vi.fn(() => ({
         dispose: vi.fn(),
+        onDidChangeVisibility: vi.fn(() => ({ dispose: vi.fn() })),
+        onDidChangeSelection: vi.fn(() => ({ dispose: vi.fn() })),
+        onDidCollapseElement: vi.fn(() => ({ dispose: vi.fn() })),
+        onDidExpandElement: vi.fn(() => ({ dispose: vi.fn() })),
+        reveal: vi.fn(),
+        visible: true,
       })),
       registerFileDecorationProvider: vi.fn(() => ({ dispose: vi.fn() })),
       activeTextEditor: undefined,
@@ -141,6 +147,10 @@ vi.mock('vscode', () => {
         tooltip: '',
         command: '',
       })),
+      registerUriHandler: vi.fn(() => ({ dispose: vi.fn() })),
+      registerWebviewViewProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      state: { focused: true },
+      onDidChangeWindowState: vi.fn(() => ({ dispose: vi.fn() })),
     },
     commands: {
       registerCommand: vi.fn((_command: string, _callback: () => void) => ({
@@ -168,6 +178,8 @@ vi.mock('vscode', () => {
         copy: vi.fn(),
       },
       openTextDocument: vi.fn(),
+      registerTextDocumentContentProvider: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidSaveTextDocument: vi.fn(() => ({ dispose: vi.fn() })),
     },
     extensions: {
       getExtension: vi.fn(() => ({
@@ -312,6 +324,7 @@ describe('Generacy Extension', () => {
     mockContext = {
       subscriptions: [],
       extensionPath: '/mock/extension/path',
+      extensionUri: { fsPath: '/mock/extension/path', path: '/mock/extension/path', toString: () => 'file:///mock/extension/path' },
       globalState: {
         get: vi.fn(),
         update: vi.fn(),
@@ -322,6 +335,12 @@ describe('Generacy Extension', () => {
         get: vi.fn(),
         update: vi.fn(),
         keys: vi.fn(() => []),
+      },
+      secrets: {
+        get: vi.fn(),
+        store: vi.fn(),
+        delete: vi.fn(),
+        onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
       },
     } as unknown as vscode.ExtensionContext;
   });

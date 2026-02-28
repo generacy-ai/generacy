@@ -116,6 +116,27 @@ export const OAuthCallbackResponseSchema = z.object({
 // ============================================================================
 
 /**
+ * User's organization membership (lightweight, embedded in User)
+ */
+export interface UserOrg {
+  /** Organization ID */
+  id: string;
+  /** Organization name */
+  name: string;
+  /** User's role in the organization */
+  role: 'owner' | 'admin' | 'member';
+}
+
+/**
+ * Zod schema for user organization membership
+ */
+export const UserOrgSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  role: z.enum(['owner', 'admin', 'member']),
+});
+
+/**
  * User profile
  */
 export interface User {
@@ -131,6 +152,8 @@ export interface User {
   githubUsername?: string;
   /** Account creation date */
   createdAt: string;
+  /** Organization memberships (populated from /users/me) */
+  organizations?: UserOrg[];
 }
 
 /**
@@ -143,6 +166,7 @@ export const UserSchema = z.object({
   avatarUrl: z.string().url().optional(),
   githubUsername: z.string().optional(),
   createdAt: z.string().datetime(),
+  organizations: z.array(UserOrgSchema).optional(),
 });
 
 // ============================================================================
@@ -250,7 +274,7 @@ export const OrgUsageSchema = z.object({
 /**
  * Queue item status
  */
-export type QueueStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type QueueStatus = 'pending' | 'running' | 'waiting' | 'completed' | 'failed' | 'cancelled';
 
 /**
  * Queue item priority
@@ -283,8 +307,12 @@ export interface QueueItem {
   completedAt?: string;
   /** Error message if failed */
   error?: string;
+  /** Description of what the job is waiting for (present when status is 'waiting') */
+  waitingFor?: string;
   /** Lightweight progress summary (present for running/completed items) */
   progress?: QueueItemProgressSummary;
+  /** Labels/tags associated with the job */
+  labels?: string[];
 }
 
 /**
@@ -294,7 +322,7 @@ export const QueueItemSchema = z.object({
   id: z.string(),
   workflowId: z.string(),
   workflowName: z.string(),
-  status: z.enum(['pending', 'running', 'completed', 'failed', 'cancelled']),
+  status: z.enum(['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled']),
   priority: z.enum(['low', 'normal', 'high', 'urgent']),
   repository: z.string().optional(),
   assigneeId: z.string().optional(),
@@ -302,7 +330,9 @@ export const QueueItemSchema = z.object({
   startedAt: z.string().datetime().optional(),
   completedAt: z.string().datetime().optional(),
   error: z.string().optional(),
+  waitingFor: z.string().optional(),
   progress: z.lazy(() => QueueItemProgressSummarySchema).optional(),
+  labels: z.array(z.string()).optional(),
 });
 
 /**

@@ -31,6 +31,49 @@ vi.mock('vscode', () => ({
     }
     dispose() {}
   },
+  TreeItem: class {
+    label: string;
+    collapsibleState: number;
+    contextValue?: string;
+    iconPath?: unknown;
+    description?: string;
+    tooltip?: unknown;
+    id?: string;
+    command?: unknown;
+    constructor(label: string, collapsibleState: number = 0) {
+      this.label = label;
+      this.collapsibleState = collapsibleState;
+    }
+  },
+  TreeItemCollapsibleState: {
+    None: 0,
+    Collapsed: 1,
+    Expanded: 2,
+  },
+  ThemeIcon: class {
+    id: string;
+    color?: unknown;
+    constructor(id: string, color?: unknown) {
+      this.id = id;
+      this.color = color;
+    }
+  },
+  ThemeColor: class {
+    id: string;
+    constructor(id: string) {
+      this.id = id;
+    }
+  },
+  MarkdownString: class {
+    private content = '';
+    appendMarkdown(text: string) {
+      this.content += text;
+      return this;
+    }
+    toString() {
+      return this.content;
+    }
+  },
 }));
 
 // Mock logger
@@ -59,6 +102,49 @@ vi.mock('../../runner/output-channel', () => ({
     writeStepStart: vi.fn(),
     writeStepComplete: vi.fn(),
   }),
+}));
+
+// Mock event bridge
+vi.mock('../event-bridge', () => ({
+  ExecutorEventBridge: class {
+    connect() {}
+    disconnect() {}
+  },
+}));
+
+// Mock executor
+vi.mock('../../runner/executor', () => ({
+  WorkflowExecutor: {
+    getInstance: () => ({
+      getExecutionContext: vi.fn().mockReturnValue(undefined),
+      executeSingleStep: vi.fn().mockResolvedValue({
+        success: true,
+        output: 'mock output',
+        duration: 100,
+        skipped: false,
+      }),
+    }),
+  },
+}));
+
+// Mock debug integration
+vi.mock('../../runner/debug-integration', () => ({
+  getDebugHooks: () => ({
+    enable: vi.fn(),
+    disable: vi.fn(),
+    setBreakpointManagerDelegate: vi.fn(),
+    clearBreakpointManagerDelegate: vi.fn(),
+  }),
+}));
+
+// Mock debug execution state
+vi.mock('../../../../debug', () => ({
+  getDebugExecutionState: () => ({}),
+}));
+
+// Mock error analysis
+vi.mock('../error-analysis', () => ({
+  getErrorAnalysisManager: () => ({}),
 }));
 
 import { DebugSession, getDebugSession, type DebugSessionConfig } from '../session';

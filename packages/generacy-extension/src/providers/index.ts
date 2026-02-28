@@ -8,4 +8,5 @@ export {
   getExecutionStatusBarProvider,
   initializeExecutionStatusBar,
   CloudJobStatusBarProvider,
+  ProjectStatusBarProvider,
 } from './status-bar';

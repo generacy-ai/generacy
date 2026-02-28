@@ -18,6 +18,11 @@ export {
 export { ApiClient, getApiClient } from './client';
 export type { RequestInterceptor, ResponseInterceptor } from './client';
 
+// Endpoints
+export { userApi, getUserApi } from './endpoints/user';
+export type { UserProfile } from './endpoints/user';
+export { UserProfileSchema } from './endpoints/user';
+
 // Types
 export type {
   // Common
@@ -31,6 +36,7 @@ export type {
   OAuthCallbackResponse,
   // User
   User,
+  UserOrg,
   // Organization
   OrgTier,
   OrgRole,
@@ -62,6 +68,7 @@ export {
   OAuthCallbackResponseSchema,
   // User
   UserSchema,
+  UserOrgSchema,
   // Organization
   OrganizationSchema,
   OrgMemberSchema,

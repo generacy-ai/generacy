@@ -50,7 +50,10 @@ vi.mock('../../../../api/endpoints/queue', () => ({
 
 /** Captured SSE handler from the most recent subscribe() call */
 let capturedSSEHandler: ((event: SSEEvent) => void) | undefined;
+/** Captured connection state handler from onDidChangeConnectionState */
+let capturedConnectionStateHandler: ((state: string) => void) | undefined;
 const mockSSEDisposable = { dispose: vi.fn() };
+const mockConnectionStateDisposable = { dispose: vi.fn() };
 const mockSSESubscribe = vi.fn((
   _channel: string,
   handler: (event: SSEEvent) => void,
@@ -58,11 +61,18 @@ const mockSSESubscribe = vi.fn((
   capturedSSEHandler = handler;
   return mockSSEDisposable;
 });
+const mockOnDidChangeConnectionState = vi.fn((
+  handler: (state: string) => void,
+): Disposable => {
+  capturedConnectionStateHandler = handler;
+  return mockConnectionStateDisposable;
+});
 
 vi.mock('../../../../api/sse', () => ({
   SSESubscriptionManager: {
     getInstance: vi.fn(() => ({
       subscribe: mockSSESubscribe,
+      onDidChangeConnectionState: mockOnDidChangeConnectionState,
     })),
   },
 }));
@@ -116,6 +126,7 @@ describe('JobLogChannel', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     capturedSSEHandler = undefined;
+    capturedConnectionStateHandler = undefined;
     // Reset the static activeChannels map between tests
     JobLogChannel.disposeAll();
   });
@@ -415,6 +426,70 @@ describe('JobLogChannel', () => {
       const calls = mockOutputChannel.appendLine.mock.calls.map((c: unknown[]) => c[0]);
       const logCall = calls.find((c: string) => c.includes('42'));
       expect(logCall).toBeDefined();
+    });
+  });
+
+  // =========================================================================
+  // Connection status indicator
+  // =========================================================================
+
+  describe('connection status indicator', () => {
+    beforeEach(async () => {
+      mockGetJobLogs.mockResolvedValueOnce(createLogsResponse());
+      await JobLogChannel.openJobLogs(JOB_ID, WORKFLOW_NAME);
+      mockOutputChannel.appendLine.mockClear();
+    });
+
+    it('should subscribe to connection state changes', () => {
+      expect(mockOnDidChangeConnectionState).toHaveBeenCalledWith(expect.any(Function));
+    });
+
+    it('should display reconnecting status on "connecting" state', () => {
+      expect(capturedConnectionStateHandler).toBeDefined();
+      capturedConnectionStateHandler!('connecting');
+
+      const calls = mockOutputChannel.appendLine.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContainEqual('[SSE] Reconnecting...');
+    });
+
+    it('should display connected status on "connected" state', () => {
+      capturedConnectionStateHandler!('connected');
+
+      const calls = mockOutputChannel.appendLine.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContainEqual('[SSE] Connected');
+    });
+
+    it('should display error status on "error" state', () => {
+      capturedConnectionStateHandler!('error');
+
+      const calls = mockOutputChannel.appendLine.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContainEqual('[SSE] Connection error — will retry');
+    });
+
+    it('should display disconnected status on "disconnected" state', () => {
+      capturedConnectionStateHandler!('disconnected');
+
+      const calls = mockOutputChannel.appendLine.mock.calls.map((c: unknown[]) => c[0]);
+      expect(calls).toContainEqual('[SSE] Disconnected');
+    });
+
+    it('should not display status after dispose', () => {
+      const handler = capturedConnectionStateHandler!;
+      JobLogChannel.disposeAll();
+      mockOutputChannel.appendLine.mockClear();
+
+      handler('connecting');
+
+      expect(mockOutputChannel.appendLine).not.toHaveBeenCalled();
+    });
+
+    it('should dispose connection state listener on job:log:end', () => {
+      capturedSSEHandler!(createSSEEvent({
+        event: 'job:log:end',
+        data: { jobId: JOB_ID, status: 'completed' },
+      }));
+
+      expect(mockConnectionStateDisposable.dispose).toHaveBeenCalled();
     });
   });
 

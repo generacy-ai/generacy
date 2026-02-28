@@ -209,6 +209,47 @@ describe('QueueTreeProvider', () => {
       expect(children.every((c) => c instanceof QueueFilterGroupItem)).toBe(true);
     });
 
+    it('should include waiting status in byStatus groups', async () => {
+      const items = [
+        createMockQueueItem({ status: 'running' }),
+        createMockQueueItem({ status: 'waiting', waitingFor: 'human approval' }),
+        createMockQueueItem({ status: 'pending' }),
+      ];
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse(items));
+      provider = new QueueTreeProvider({ viewMode: 'byStatus' });
+
+      await vi.advanceTimersByTimeAsync(0);
+      const children = await provider.getChildren();
+
+      // Should have 3 groups: running (1), waiting (1), pending (1)
+      expect(children).toHaveLength(3);
+      expect(children.every((c) => c instanceof QueueFilterGroupItem)).toBe(true);
+
+      // Verify ordering: running > waiting > pending
+      const labels = children.map((c) => (c as QueueFilterGroupItem).filterValue);
+      expect(labels).toEqual(['running', 'waiting', 'pending']);
+    });
+
+    it('should return waiting items under waiting status group', async () => {
+      const items = [
+        createMockQueueItem({ status: 'waiting', workflowName: 'Wait 1', waitingFor: 'approval' }),
+        createMockQueueItem({ status: 'waiting', workflowName: 'Wait 2', waitingFor: 'review' }),
+        createMockQueueItem({ status: 'running', workflowName: 'Run 1' }),
+      ];
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse(items));
+      provider = new QueueTreeProvider({ viewMode: 'byStatus' });
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Get children of the waiting filter group
+      const filterGroup = new QueueFilterGroupItem('Waiting', 'status', 'waiting', 2);
+      const children = await provider.getChildren(filterGroup);
+
+      expect(children).toHaveLength(2);
+      expect(children.every((c) => c instanceof QueueTreeItem)).toBe(true);
+      expect(children.every((c) => (c as QueueTreeItem).queueItem.status === 'waiting')).toBe(true);
+    });
+
     it('should return repository groups in byRepository mode', async () => {
       const items = [
         createMockQueueItem({ repository: 'owner/repo1' }),
@@ -278,6 +319,20 @@ describe('QueueTreeProvider', () => {
 
       expect(mockQueueApi.getQueue).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'running' })
+      );
+    });
+
+    it('should apply waiting status filter', async () => {
+      provider = new QueueTreeProvider();
+
+      await vi.advanceTimersByTimeAsync(0);
+      vi.clearAllMocks();
+
+      provider.setStatusFilter('waiting');
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockQueueApi.getQueue).toHaveBeenCalledWith(
+        expect.objectContaining({ status: 'waiting' })
       );
     });
 
@@ -428,6 +483,169 @@ describe('QueueTreeProvider', () => {
       const pendingItems = provider.getItemsByStatus('pending');
       expect(pendingItems).toHaveLength(2);
     });
+
+    it('should return waiting items by status', async () => {
+      const items = [
+        createMockQueueItem({ status: 'waiting', waitingFor: 'approval' }),
+        createMockQueueItem({ status: 'running' }),
+        createMockQueueItem({ status: 'waiting', waitingFor: 'review' }),
+      ];
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse(items));
+      provider = new QueueTreeProvider();
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      const waitingItems = provider.getItemsByStatus('waiting');
+      expect(waitingItems).toHaveLength(2);
+    });
+  });
+
+  describe('project-scoped filtering', () => {
+    const createMockProjectConfig = (overrides: {
+      isConfigured?: boolean;
+      reposPrimary?: string;
+      projectName?: string;
+    } = {}) => {
+      const listeners: Array<(data: unknown) => void> = [];
+      return {
+        get isConfigured() { return overrides.isConfigured ?? true; },
+        get reposPrimary() { return overrides.reposPrimary; },
+        get projectName() { return overrides.projectName ?? 'my-project'; },
+        onDidChange: (listener: (data: unknown) => void) => {
+          listeners.push(listener);
+          return { dispose: () => {} };
+        },
+        _fire: (data: unknown) => listeners.forEach((l) => l(data)),
+      };
+    };
+
+    it('should apply default repository filter when project config has reposPrimary', async () => {
+      const projectConfig = createMockProjectConfig({ reposPrimary: 'acme/backend' });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockQueueApi.getQueue).toHaveBeenCalledWith(
+        expect.objectContaining({ repository: 'acme/backend' })
+      );
+      expect(provider.isProjectScoped).toBe(true);
+    });
+
+    it('should fall back to project name when no reposPrimary', async () => {
+      const projectConfig = createMockProjectConfig({
+        reposPrimary: undefined,
+        projectName: 'my-project',
+      });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockQueueApi.getQueue).toHaveBeenCalledWith(
+        expect.objectContaining({ repository: 'my-project' })
+      );
+      expect(provider.isProjectScoped).toBe(true);
+    });
+
+    it('should not apply project filter when config is not configured', async () => {
+      const projectConfig = createMockProjectConfig({ isConfigured: false });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(provider.isProjectScoped).toBe(false);
+      expect(provider.getFilters().repository).toBeUndefined();
+    });
+
+    it('should not apply project filter when no project config provided', async () => {
+      provider = new QueueTreeProvider();
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(provider.isProjectScoped).toBe(false);
+      expect(provider.getFilters().repository).toBeUndefined();
+    });
+
+    it('should toggle from project scope to all org jobs', async () => {
+      const projectConfig = createMockProjectConfig({ reposPrimary: 'acme/backend' });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(provider.isProjectScoped).toBe(true);
+
+      vi.clearAllMocks();
+
+      // Toggle off — should show all org jobs
+      provider.toggleProjectScope();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(provider.isProjectScoped).toBe(false);
+      expect(provider.getFilters().repository).toBeUndefined();
+      expect(mockQueueApi.getQueue).toHaveBeenCalledWith(
+        expect.not.objectContaining({ repository: 'acme/backend' })
+      );
+    });
+
+    it('should toggle from all org jobs back to project scope', async () => {
+      const projectConfig = createMockProjectConfig({ reposPrimary: 'acme/backend' });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Toggle off
+      provider.toggleProjectScope();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(provider.isProjectScoped).toBe(false);
+
+      vi.clearAllMocks();
+
+      // Toggle back on
+      provider.toggleProjectScope();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(provider.isProjectScoped).toBe(true);
+      expect(mockQueueApi.getQueue).toHaveBeenCalledWith(
+        expect.objectContaining({ repository: 'acme/backend' })
+      );
+    });
+
+    it('should re-apply project filter on clearFilters when project scope is active', async () => {
+      const projectConfig = createMockProjectConfig({ reposPrimary: 'acme/backend' });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Add an extra filter
+      provider.setStatusFilter('running');
+      await vi.advanceTimersByTimeAsync(0);
+
+      vi.clearAllMocks();
+
+      // Clear filters — should still have project repo filter
+      provider.clearFilters();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(provider.isProjectScoped).toBe(true);
+      const filters = provider.getFilters();
+      expect(filters.repository).toBe('acme/backend');
+      expect(filters.status).toBeUndefined();
+    });
+
+    it('should clear project scope when config file is deleted', async () => {
+      const projectConfig = createMockProjectConfig({ reposPrimary: 'acme/backend' });
+      provider = new QueueTreeProvider({}, projectConfig as never);
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(provider.isProjectScoped).toBe(true);
+
+      vi.clearAllMocks();
+
+      // Simulate config deletion
+      projectConfig._fire(undefined);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(provider.isProjectScoped).toBe(false);
+      expect(provider.getFilters().repository).toBeUndefined();
+    });
   });
 
   describe('change detection', () => {
@@ -450,6 +668,42 @@ describe('QueueTreeProvider', () => {
       await vi.advanceTimersByTimeAsync(10000);
       items = provider.getAllItems();
       expect(items[0]?.status).toBe('running');
+    });
+
+    it('should detect when status changes to waiting', async () => {
+      const initialItems = [createMockQueueItem({ id: '1', status: 'running' })];
+      const updatedItems = [createMockQueueItem({ id: '1', status: 'waiting', waitingFor: 'human approval' })];
+
+      mockQueueApi.getQueue
+        .mockResolvedValueOnce(createMockResponse(initialItems))
+        .mockResolvedValueOnce(createMockResponse(updatedItems));
+
+      provider = new QueueTreeProvider({ pollingInterval: 10000 });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(provider.getAllItems()[0]?.status).toBe('running');
+
+      await vi.advanceTimersByTimeAsync(10000);
+      const items = provider.getAllItems();
+      expect(items[0]?.status).toBe('waiting');
+      expect(items[0]?.waitingFor).toBe('human approval');
+    });
+
+    it('should detect when waitingFor field changes', async () => {
+      const initialItems = [createMockQueueItem({ id: '1', status: 'waiting', waitingFor: 'approval' })];
+      const updatedItems = [createMockQueueItem({ id: '1', status: 'waiting', waitingFor: 'review complete' })];
+
+      mockQueueApi.getQueue
+        .mockResolvedValueOnce(createMockResponse(initialItems))
+        .mockResolvedValueOnce(createMockResponse(updatedItems));
+
+      provider = new QueueTreeProvider({ pollingInterval: 10000 });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(provider.getAllItems()[0]?.waitingFor).toBe('approval');
+
+      await vi.advanceTimersByTimeAsync(10000);
+      expect(provider.getAllItems()[0]?.waitingFor).toBe('review complete');
     });
   });
 });

@@ -34,7 +34,10 @@ vi.mock('vscode', () => ({
     }
   },
   MarkdownString: class {
-    value = '';
+    value: string;
+    constructor(value = '') {
+      this.value = value;
+    }
     appendMarkdown(text: string) {
       this.value += text;
       return this;
@@ -146,6 +149,11 @@ describe('QueueTreeItem', () => {
       const treeItem = new QueueTreeItem(createMockQueueItem({ status: 'cancelled' }));
       expect(getIconId(treeItem)).toBe('circle-slash');
     });
+
+    it('should set bell icon for waiting status', () => {
+      const treeItem = new QueueTreeItem(createMockQueueItem({ status: 'waiting' }));
+      expect(getIconId(treeItem)).toBe('bell');
+    });
   });
 
   describe('status icon colors', () => {
@@ -173,6 +181,11 @@ describe('QueueTreeItem', () => {
       const treeItem = new QueueTreeItem(createMockQueueItem({ status: 'cancelled' }));
       expect(getIconColor(treeItem)).toBe('charts.gray');
     });
+
+    it('should use orange for waiting', () => {
+      const treeItem = new QueueTreeItem(createMockQueueItem({ status: 'waiting' }));
+      expect(getIconColor(treeItem)).toBe('charts.orange');
+    });
   });
 
   describe('context value', () => {
@@ -182,7 +195,7 @@ describe('QueueTreeItem', () => {
     });
 
     it('should work for all statuses', () => {
-      const statuses = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
+      const statuses = ['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'] as const;
 
       for (const status of statuses) {
         const treeItem = new QueueTreeItem(createMockQueueItem({ status }));
@@ -211,6 +224,37 @@ describe('QueueTreeItem', () => {
         createMockQueueItem({ repository: 'owner/repo', status: 'pending' })
       );
       expect(treeItem.description).toContain('•');
+    });
+
+    it('should include waitingFor text for waiting items', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({ status: 'waiting', waitingFor: 'human approval' })
+      );
+      expect(treeItem.description).toContain('human approval');
+    });
+
+    it('should not include waitingFor text when not waiting status', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({ status: 'running', waitingFor: 'should not appear' })
+      );
+      expect(treeItem.description).not.toContain('should not appear');
+    });
+
+    it('should combine repository, waitingFor, and time for waiting items', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({
+          status: 'waiting',
+          repository: 'org/project',
+          waitingFor: 'human approval',
+          startedAt: new Date(Date.now() - 120000).toISOString(), // 2 min ago
+        })
+      );
+      const desc = treeItem.description as string;
+      const parts = desc.split(' • ');
+      expect(parts).toHaveLength(3);
+      expect(parts[0]).toBe('org/project');
+      expect(parts[1]).toBe('human approval');
+      expect(parts[2]).toContain('waiting for');
     });
   });
 
@@ -456,6 +500,24 @@ describe('QueueTreeItem', () => {
       expect(treeItem.description).toContain('cancelled');
     });
 
+    it('should show "waiting for" with duration for waiting items with startedAt', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({
+          status: 'waiting',
+          startedAt: new Date(Date.now() - 300000).toISOString(), // 5 min ago
+        })
+      );
+      expect(treeItem.description).toContain('waiting for 5m');
+    });
+
+    it('should show "waiting" without duration when no startedAt', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({ status: 'waiting' })
+      );
+      expect(treeItem.description).toContain('waiting');
+      expect(treeItem.description).not.toContain('waiting for');
+    });
+
     it('should format seconds duration', () => {
       const treeItem = new QueueTreeItem(
         createMockQueueItem({
@@ -620,6 +682,30 @@ describe('QueueTreeItem', () => {
       expect(getTooltipValue(treeItem)).not.toContain('**Error:**');
     });
 
+    it('should include "Waiting for" section when waitingFor is present', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({ status: 'waiting', waitingFor: 'human approval' })
+      );
+      const tooltip = getTooltipValue(treeItem);
+      expect(tooltip).toContain('**Waiting for:** human approval');
+    });
+
+    it('should not include "Waiting for" section when waitingFor is absent', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({ status: 'waiting' })
+      );
+      expect(getTooltipValue(treeItem)).not.toContain('**Waiting for:**');
+    });
+
+    it('should show waiting status icon in tooltip', () => {
+      const treeItem = new QueueTreeItem(
+        createMockQueueItem({ status: 'waiting' })
+      );
+      const tooltip = getTooltipValue(treeItem);
+      expect(tooltip).toContain('$(bell)');
+      expect(tooltip).toContain('Waiting');
+    });
+
     describe('progress in tooltip', () => {
       it('should include progress section when progress is available', () => {
         const item = createMockQueueItem({ status: 'running' });
@@ -755,6 +841,16 @@ describe('QueueFilterGroupItem', () => {
       expect((item.iconPath as { id: string }).id).toBe('sync~spin');
     });
 
+    it('should use bell icon for waiting status filter', () => {
+      const item = new QueueFilterGroupItem('Waiting', 'status', 'waiting', 2);
+      expect((item.iconPath as { id: string }).id).toBe('bell');
+    });
+
+    it('should use orange color for waiting status filter', () => {
+      const item = new QueueFilterGroupItem('Waiting', 'status', 'waiting', 2);
+      expect((item.iconPath as { color?: { id: string } }).color?.id).toBe('charts.orange');
+    });
+
     it('should use repo icon for repository filter', () => {
       const item = new QueueFilterGroupItem('org/repo', 'repository', 'org/repo', 2);
       expect((item.iconPath as { id: string }).id).toBe('repo');
@@ -855,7 +951,7 @@ describe('Type guards', () => {
     });
 
     it('should return true for all statuses', () => {
-      const statuses = ['pending', 'running', 'completed', 'failed', 'cancelled'] as const;
+      const statuses = ['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'] as const;
       for (const status of statuses) {
         const item = new QueueTreeItem(createMockQueueItem({ status }));
         expect(isQueueTreeItem(item)).toBe(true);

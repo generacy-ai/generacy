@@ -120,8 +120,9 @@ export class RetryManager {
     step: WorkflowStep,
     context: ActionContext
   ): Promise<RetryResult<ActionResult>> {
-    const stepConfig = parseRetryConfig(step);
-    const config = { ...this.config, ...stepConfig };
+    const config = step.retry
+      ? { ...this.config, ...parseRetryConfig(step) }
+      : { ...this.config };
     const errors: Error[] = [];
     const startTime = Date.now();
 

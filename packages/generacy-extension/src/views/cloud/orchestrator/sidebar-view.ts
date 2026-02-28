@@ -170,12 +170,15 @@ export class OrchestratorSidebarViewProvider implements vscode.WebviewViewProvid
    * Compute queue stats from queue items by counting statuses.
    */
   private computeQueueStats(items: Array<{ status: string }>): QueueStats {
-    const stats: QueueStats = { pending: 0, running: 0, completed: 0, failed: 0 };
+    const stats: QueueStats = { pending: 0, waiting: 0, running: 0, completed: 0, failed: 0 };
 
     for (const item of items) {
       switch (item.status) {
         case 'pending':
           stats.pending++;
+          break;
+        case 'waiting':
+          stats.waiting++;
           break;
         case 'running':
           stats.running++;

@@ -536,12 +536,12 @@
         },
         {
           "command": "generacy.queue.viewLogs",
-          "when": "view == generacy.queue && viewItem =~ /^queueItem/",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem-(running|completed|failed)/",
           "group": "inline@4"
         },
         {
           "command": "generacy.queue.viewLogs",
-          "when": "view == generacy.queue && viewItem =~ /^queueItem/",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem-(running|completed|failed)/",
           "group": "navigation@2"
         }
       ]
