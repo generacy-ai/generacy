@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -12,7 +12,7 @@
 - B) MDX files for a docs framework: MDX files designed for a specific docs framework (Docusaurus, Nextra, etc.) with component imports
 - C) Single comprehensive Markdown file: One large reference document covering all five sections
 - D) Spec-only (no implementation): This spec is purely a content plan; the actual docs site implementation is tracked in a separate issue
-**Answer**:
+**Answer**: A) Markdown files in `docs/`. The buildout plan (6.1) explicitly states docs "Live in `generacy/docs/` (public, accessible to adopters)." There's already an existing structure at `docs/docs/reference/config/` with a (now outdated) `generacy.md` reference file. The docs site framework is tracked separately — this issue should just produce the Markdown content in the existing directory structure.
 
 ---
 
@@ -23,7 +23,7 @@
 - A) Document fully: Add all `WorkerConfigSchema` fields to the orchestrator config reference section
 - B) Document partially: Document only stable fields (`phaseTimeoutMs`, `workspaceDir`, `shutdownGracePeriodMs`) and mark others as internal
 - C) Omit intentionally: These are internal implementation details not meant for operator configuration
-**Answer**:
+**Answer**: A) Document fully. The buildout plan acceptance criteria for 6.2 is "All configuration options documented with examples." The worker config fields (`phaseTimeoutMs`, `workspaceDir`, `shutdownGracePeriodMs`, `validateCommand`, `maxTurns`, `gates`) are all operator-relevant for tuning worker behavior. Mark any fields that may change with a stability note rather than omitting them.
 
 ---
 
@@ -34,7 +34,7 @@
 - A) Document all: Every environment variable read by any service should be listed, grouped by service
 - B) Document essential + link to source: Document the most important variables and reference the config loader source for the complete list
 - C) Document by audience: Document operator-facing variables fully, mark developer/internal variables as advanced
-**Answer**:
+**Answer**: C) Document by audience. The orchestrator config loader reads ~39 env vars, but `.env.example` only lists 7. Documenting all 39 in equal detail would overwhelm operators. Document operator-facing variables fully (server, Redis, polling, worker config) and group developer/internal variables (auth internals, rate limiting, PR monitor tuning) in an "Advanced" section. Update `.env.example` to include the most common operator-facing ones beyond the current 7.
 
 ---
 
@@ -45,7 +45,7 @@
 - A) Mapping table: Add an explicit table showing which env vars map to which schema fields, with precedence rules
 - B) Unified reference: Merge into a single section that shows each setting with both its env var name and schema path
 - C) Keep separate: Document them independently (as the spec currently does) with a brief note about precedence
-**Answer**:
+**Answer**: A) Mapping table. A reference doc needs to be unambiguous. Add an explicit table showing which env vars map to which schema fields, with a clear precedence rule (e.g., "Environment variables override config file values"). This is the most useful format for operators debugging why a setting isn't taking effect.
 
 ---
 
@@ -55,7 +55,7 @@
 **Options**:
 - A) Include in FR-010: It's a stable feature that should be formally documented
 - B) Omit from reference: It's experimental and should not be documented yet
-**Answer**:
+**Answer**: A) Include in FR-010. The flag exists in the code (`packages/generacy/src/cli/commands/init/index.ts`, line 48-51) with choices `['stable', 'preview']` defaulting to `'stable'`. Release streams are a core concept in the buildout plan (the entire "Release Streams" section defines the stable/preview dual-stream model). This is clearly intentional and stable.
 
 ---
 
@@ -67,7 +67,7 @@
 - B) Document stable fields only: Document top-level structure and only the fields unlikely to change
 - C) Placeholder with link: Provide the current example and link to the Agency extension repo for the latest schema
 - D) Defer entirely: Remove Agency config from this spec and track it under the Agency extension docs
-**Answer**:
+**Answer**: C) Placeholder with link. The buildout plan lists agency#294 (Agency extension MVP) as a blocking dependency for this issue, and the plan itself notes the schema "is still evolving." Provide the current example structure and link to the Agency repo for the latest schema. This avoids documenting a moving target while still giving users something useful.
 
 ---
 
@@ -78,7 +78,7 @@
 - A) REDIS_URL only: `REDIS_HOST`/`REDIS_PORT` in docker-compose are composed into a URL at container level; document only `REDIS_URL`
 - B) Both supported: Services accept either format; document both with precedence rules
 - C) Different per service: Orchestrator uses `REDIS_URL`, workers use `REDIS_HOST`/`REDIS_PORT`; document per-service
-**Answer**:
+**Answer**: C) Different per service. The codebase confirms this: the orchestrator config loader reads `REDIS_URL` / `ORCHESTRATOR_REDIS_URL`, while `docker/docker-compose.worker.yml` sets `REDIS_HOST=redis` and `REDIS_PORT=6379` for workers. Document per-service with a note recommending standardization on `REDIS_URL` in future.
 
 ---
 
@@ -89,7 +89,7 @@
 - A) Automated validation: Build a script that extracts fields from Zod schemas and Commander registrations and compares against docs
 - B) Manual audit with checklist: One-time manual review with a checklist, re-run when schemas change
 - C) CI integration: Add a CI check that fails when docs drift from source schemas
-**Answer**:
+**Answer**: B) Manual audit with checklist. Automated validation is overengineering for the initial documentation pass. A manual checklist comparing docs against Zod schemas and Commander.js registrations is sufficient for v1. Add a note in the issue that CI validation could be a follow-up if docs drift becomes a recurring problem.
 
 ---
 
@@ -100,7 +100,7 @@
 - A) 3000: The Docker Compose / env var default is correct; fix the CLI section
 - B) 3100: The CLI default is correct; the Docker Compose overrides it to 3000
 - C) Both are correct: Docker deployments use 3000, local CLI uses 3100 to avoid conflicts
-**Answer**:
+**Answer**: A) 3000. The actual code confirms it: `ServerConfigSchema` in `packages/orchestrator/src/config/schema.ts` defaults to `3000`. Docker-compose also maps to `3000`. The CLI spec's `3100` reference was an error — fix the CLI section to match the code.
 
 ---
 
@@ -111,7 +111,7 @@
 - A) Self-contained: Each section is standalone; duplicate information where needed for readability
 - B) Cross-referenced: Minimize duplication by linking between sections (e.g., "See Environment Variables > Worker for details")
 - C) Hybrid: Primary definition in one section with brief mentions and links elsewhere
-**Answer**:
+**Answer**: C) Hybrid. Define each setting canonically in one section (e.g., `orchestrator.pollIntervalMs` is primarily documented in the config schema section), with brief mentions and links in related sections (env vars, CLI flags). Avoids duplication drift while keeping sections usable standalone.
 
 ---
 
@@ -121,7 +121,7 @@
 **Options**:
 - A) Add to spec: It's a stable, operator-relevant configuration field
 - B) Omit: It's an internal detail that operators shouldn't need to tune
-**Answer**:
+**Answer**: A) Add to spec. Confirmed in the codebase: `z.number().int().min(5000).default(15000)` in `DispatchConfigSchema`. It controls heartbeat/reaper check intervals — directly relevant for operators tuning dispatch reliability. The rest of the dispatch section is documented; this field was simply missed.
 
 ---
 
@@ -132,7 +132,7 @@
 - A) Document: Gates are user-facing and should be documented with their label-to-gate mappings
 - B) Omit: Gates are internal/experimental and not ready for documentation
 - C) Brief mention: Add a note about gates existing without full schema documentation
-**Answer**:
+**Answer**: C) Brief mention. Gates control workflow gating behavior keyed by issue label, which aligns with the core "label-driven development" model in the buildout plan. However, the full gate schema (phase definitions, label mappings) appears to still be evolving. Add a brief mention that gates exist with a note that full documentation is forthcoming.
 
 ---
 
@@ -143,7 +143,7 @@
 - A) Document fully: Include network name, driver, and which services are attached
 - B) Brief mention: Note that services share a bridge network without detailed config
 - C) Omit: Network config is standard Docker Compose behavior and doesn't need documentation
-**Answer**:
+**Answer**: B) Brief mention. Note that services share a `generacy-network` bridge network. Full network topology documentation is unnecessary since it's standard Docker Compose behavior, but mentioning it helps operators who need to integrate with existing infrastructure or customize network settings.
 
 ---
 
@@ -154,4 +154,4 @@
 - A) Blocked: Wait for both dependencies to be formally completed before starting
 - B) Partially unblocked: Start with sections based on existing code (config.yaml, CLI, Docker, env vars); defer Agency config
 - C) Fully unblocked: All source material exists in the codebase; begin all sections now
-**Answer**:
+**Answer**: B) Partially unblocked. The codebase confirms: `config.yaml` schema exists and is implemented (`packages/generacy/src/config/schema.ts`), CLI commands exist, Docker Compose files exist, env vars are in active use. The only genuinely blocked section is Agency config (`agency.config.json`), since agency#294 (Agency extension MVP) hasn't shipped. Start all sections except Agency config now.
