@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -11,7 +11,7 @@
 - A) Add paths filter: Only trigger when extension files change. Prevents unnecessary marketplace publishes of identical versions, but means you must touch extension files to trigger a publish.
 - B) No paths filter, but add a version-change check: Trigger on all pushes but add an early job step that compares the current `package.json` version against the marketplace version, skipping publish if unchanged.
 - C) No paths filter (trigger on every push): Simpler workflow, but `vsce publish` of an already-published version will fail or no-op, which may cause noisy workflow failures.
-**Answer**:
+**Answer**: **A) Add paths filter.** Add `paths: packages/generacy-extension/**` to the push triggers. The `workflow_dispatch` input provides a manual trigger for cases where a publish is needed without touching extension files.
 
 ### Q2: Removing CI Exclusions — Other Excluded Packages
 **Context**: FR-013 says to remove the `--filter '!generacy-extension'` exclusion from `ci.yml` typecheck and test steps. However, the test step also excludes `@generacy-ai/orchestrator` and `@generacy-ai/generacy` with their own filters. The spec only mentions removing the extension exclusion, but doesn't address whether these other exclusions should remain. Additionally, the extension currently has zero test files — `vitest run` will succeed with "no tests found" but may produce warnings.
@@ -19,7 +19,7 @@
 **Options**:
 - A) Only remove the extension exclusion: Leave other filters as-is. This is the minimal, scoped change described in the spec.
 - B) Remove all exclusions: Clean up CI to run typecheck and test for all packages. This is a broader change and may surface unrelated failures.
-**Answer**:
+**Answer**: **A) Only remove the extension exclusion.** Leave other filters as-is. Minimal, scoped change as described in the spec. Other exclusions should be addressed in their own issues if needed.
 
 ### Q3: Publish Workflow — Duplicate Version Handling
 **Context**: The spec doesn't define what happens if a developer merges to `develop` or `main` without bumping the `package.json` version. Since version bumps are manual, it's plausible that multiple merges occur between version bumps. `vsce publish` will fail if the version already exists on the Marketplace. This would show as a red workflow run on GitHub.
@@ -28,7 +28,7 @@
 - A) Let it fail: Accept that the workflow will fail (red) if the version is unchanged. Developers should only merge extension changes when they've bumped the version.
 - B) Skip publish gracefully: Add a pre-check that queries the Marketplace for the current version and skips the publish step if it already exists, marking the workflow as green/successful.
 - C) Auto-increment patch version: Automatically append a build number or timestamp suffix for preview builds only (e.g., `0.1.0-preview.20260228`). Stable builds still require manual version bumps.
-**Answer**:
+**Answer**: **B) Skip publish gracefully.** Add a pre-check that queries the marketplace version and skips publish if it already exists, marking the run green. Combined with the paths filter from Q1, this will be infrequent, but a green no-op is better than noisy red failures. Red workflow runs should mean something is actually broken.
 
 ### Q4: CI Workflow — Extension-Only Build vs Full Monorepo Build
 **Context**: The spec says `extension-ci.yml` runs lint, build, typecheck, and test for the extension, but doesn't specify whether this is an isolated extension build or a full monorepo build. The extension may depend on other monorepo packages at build time. The existing `ci.yml` does a full `pnpm -r run build` across all packages. Running only `pnpm --filter generacy-extension run build` in the extension CI workflow could fail if dependencies aren't built first.
@@ -37,7 +37,7 @@
 - A) Full monorepo build: Run `pnpm -r run build` (like `ci.yml` does) then run extension-specific lint/typecheck/test. Slower but reliable.
 - B) Scoped build with dependencies: Use `pnpm --filter generacy-extension... run build` (the `...` includes transitive workspace dependencies). Faster, builds only what's needed.
 - C) Extension-only build: Run `pnpm --filter generacy-extension run build`. Fastest but may fail if the extension imports from other workspace packages.
-**Answer**:
+**Answer**: **B) Scoped build with dependencies.** Use `pnpm --filter generacy-extension... run build` (the `...` suffix includes transitive workspace dependencies). This is the pnpm-native way to handle monorepo dependency chains — faster than a full monorepo build, but reliable because it builds everything the extension depends on.
 
 ### Q5: Git Tag Conflict Handling on Stable Publish
 **Context**: The spec says the stable publish creates a git tag `extension-v{version}` (FR-010). If a stable publish fails after tagging but before the marketplace publish succeeds (or if the workflow is re-run via `workflow_dispatch`), the tag may already exist. The spec doesn't define how to handle tag conflicts.
@@ -46,7 +46,7 @@
 - A) Force-update the tag: Use `git tag -f` to overwrite the existing tag. Simple but rewrites history for anyone who pulled the original tag.
 - B) Skip tag creation: If the tag exists, skip the tagging step and continue with the rest of the workflow (publish, release). Log a warning.
 - C) Fail the workflow: If the tag exists, the version has presumably been published before. Fail to prevent accidental republishing.
-**Answer**:
+**Answer**: **B) Skip tag creation.** If the tag already exists, skip tagging and continue with the rest of the workflow. Log a warning. This handles re-runs and `workflow_dispatch` retries gracefully without rewriting tag history.
 
 ### Q6: GitHub Release — Tag Name Format for Monorepo
 **Context**: The spec uses `extension-v{version}` for git tags and GitHub Releases. However, the existing `release.yml` uses Changesets which creates tags like `@generacy-ai/package@version`. The `softprops/action-gh-release` action in the draft workflow uses `v1` while the spec references `v2`. Additionally, the release notes are "auto-generated" but it's unclear whether these should include only extension changes or all changes since the last extension release.
@@ -54,7 +54,7 @@
 **Options**:
 - A) GitHub's default auto-generated notes: Use `generate_release_notes: true` which includes all commits between the previous tag and current tag. Simple, may include unrelated monorepo changes.
 - B) Filtered release notes: Use a custom script or action to filter commits to only those touching `packages/generacy-extension/`. More accurate but adds complexity.
-**Answer**:
+**Answer**: **A) GitHub's default auto-generated notes.** Use `generate_release_notes: true` with default behavior. The extension tag prefix (`extension-v`) will naturally scope commits between extension releases. If release notes become too noisy, filtered notes can be added as a follow-up.
 
 ### Q7: Workflow Dispatch — Branch Selection
 **Context**: The spec says `workflow_dispatch` accepts a `channel` input (preview or stable), but doesn't specify which branch the workflow runs against. By default, `workflow_dispatch` runs on the branch selected in the GitHub Actions UI. A maintainer could accidentally run a "stable" publish from `develop` or a "preview" publish from `main`, potentially publishing untested or incorrect code.
@@ -63,7 +63,7 @@
 - A) Validate branch-channel pairing: Add a check that fails the workflow if `channel=stable` is run from a branch other than `main`, or `channel=preview` from a branch other than `develop`.
 - B) Allow any combination: Trust maintainers to select the correct branch. Provides flexibility for hotfix scenarios where you might publish stable from a release branch.
 - C) Default channel from branch: Ignore the `channel` input and auto-detect based on the branch (`develop` → preview, `main` → stable, other → fail).
-**Answer**:
+**Answer**: **A) Validate branch-channel pairing.** Add a validation step that fails if `channel=stable` runs from anything other than `main`, or `channel=preview` from anything other than `develop`. Cheap safety net that prevents accidental misuse.
 
 ### Q8: Extension Lint Configuration
 **Context**: The extension's `package.json` defines a lint script (`eslint src --ext .ts`), but there is no `.eslintrc` or `eslint.config.*` file in the extension package directory. The lint step may rely on a root-level ESLint config or may simply fail. The spec lists lint as a required CI step (FR-002) but doesn't address missing lint configuration.
@@ -72,7 +72,7 @@
 - A) Lint config exists at root: The extension inherits ESLint configuration from the monorepo root. Verify it works and proceed.
 - B) Create extension-specific lint config: Add an ESLint config to the extension package as part of this spec.
 - C) Skip lint in extension CI for now: Remove lint from the extension CI steps and add it as a follow-up task.
-**Answer**:
+**Answer**: **A) Lint config exists at root.** The root `.eslintrc.json` is configured with `"root": true`, `@typescript-eslint/parser`, and standard rules. ESLint traverses up the directory tree to find configs, so the extension inherits automatically. Verify by running `pnpm --filter generacy-extension run lint` and proceed.
 
 ### Q9: Concurrency Group — Cancel In-Progress Behavior
 **Context**: The spec says to use concurrency groups with `cancel-in-progress: false` to prevent incomplete publishes (FR-012). However, this means if two merges to `develop` happen in quick succession, the second publish will queue and wait for the first to complete. With `cancel-in-progress: true`, the first (now outdated) publish would be cancelled in favor of the newer one. The spec explicitly says `false`, but the reasoning ("avoid race conditions") could also be served by `true` (since cancelling an in-progress publish and running a newer one avoids the race without publishing stale code).
@@ -80,7 +80,7 @@
 **Options**:
 - A) `cancel-in-progress: false` (as specified): Queue publishes sequentially. Ensures every merged version gets published. May be slow if multiple merges stack up.
 - B) `cancel-in-progress: true`: Cancel older in-progress publish in favor of the latest. Faster, but a cancelled publish mid-`vsce publish` could leave the marketplace in an inconsistent state (though `vsce publish` is generally atomic).
-**Answer**:
+**Answer**: **A) `cancel-in-progress: false` (as specified).** Matches the existing pattern in the repo (`release.yml` and `publish-preview.yml` both use `false` for publish workflows). Publishing should be serialized — cancelling a `vsce publish` mid-flight isn't worth the risk.
 
 ### Q10: VSCE PAT Authentication Method
 **Context**: The draft workflow passes the PAT as both a CLI argument (`--pat ${{ secrets.VSCE_PAT }}`) and an environment variable (`VSCE_PAT`). The spec mentions authenticating via `VSCE_PAT` secret (FR-007) but doesn't specify the mechanism. Using `--pat` on the command line may expose the token in workflow logs if debug logging is enabled. The `vsce` CLI also supports authentication via the `VSCE_PAT` environment variable natively.
@@ -88,7 +88,7 @@
 **Options**:
 - A) Environment variable only: Set `VSCE_PAT` as an env var and run `vsce publish` without `--pat`. Avoids any risk of token appearing in logs. This is the `vsce` recommended approach.
 - B) CLI flag: Use `--pat ${{ secrets.VSCE_PAT }}` explicitly. GitHub Actions masks secrets in logs, so the risk is minimal. More explicit about where auth comes from.
-**Answer**:
+**Answer**: **A) Environment variable only.** Set `VSCE_PAT` as an env var and run `vsce publish` without `--pat`. This is the `vsce` recommended approach, avoids token exposure risk in debug logs, and is cleaner.
 
 ### Q11: Extension Publish Path Filter vs Full Rebuild
 **Context**: The `extension-publish.yml` workflow triggers on push to `develop`/`main`, but the spec also says the existing `ci.yml` will be updated to include the extension (FR-013). This means on a push to `develop` with extension changes, both `ci.yml` AND `extension-publish.yml` will run. The extension will be built and tested twice — once in `ci.yml` (as part of monorepo CI) and once in `extension-publish.yml` (before publishing). This is redundant but ensures publish never happens without validation.
@@ -96,4 +96,4 @@
 **Options**:
 - A) Accept redundancy (as specified): Both workflows independently build and test. Simple, no cross-workflow dependencies, publish workflow is self-contained.
 - B) Chain workflows: Make `extension-publish.yml` depend on `ci.yml` success via `workflow_run` trigger or `needs`. Avoids duplicate work but adds complexity and may slow down publishing.
-**Answer**:
+**Answer**: **A) Accept redundancy (as specified).** The publish workflow should be self-contained. Cross-workflow dependencies add complexity and fragility. The duplicate build costs a few minutes of CI time — a small price for independence and reliability. This also means `workflow_dispatch` works without needing `ci.yml` to run first.
