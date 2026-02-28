@@ -12,14 +12,14 @@
 
 ## Phase 1: Preparation — Read & Extract Source Material
 
-### T001 Read and catalog existing overview content
+### T001 [DONE] Read and catalog existing overview content
 **File**: `docs/docs/architecture/overview.md`
 - Read the full 311-line existing overview
 - Identify content to preserve for internals page (Redis, BullMQ, PostgreSQL, deployment topology, design decisions)
 - Identify content to simplify/adapt for the new adopter-focused overview (Triad description, high-level diagrams)
 - Note all internal cross-references (links to contracts, security, other docs)
 
-### T002 [P] Extract adopter-relevant labels from label protocol
+### T002 [DONE] [P] Extract adopter-relevant labels from label protocol
 **File**: `/workspaces/tetrad-development/docs/label-protocol.md`
 - Catalog all trigger labels (`process:*`)
 - Catalog all completion labels (`completed:*`)
@@ -28,14 +28,14 @@
 - Separate adopter-relevant labels from system-internal labels
 - Note the lifecycle pattern: trigger → process → waiting → completed → resume
 
-### T003 [P] Extract workflow structure from speckit-feature.yaml
+### T003 [DONE] [P] Extract workflow structure from speckit-feature.yaml
 **File**: `workflows/speckit-feature.yaml`
 - Map the 7-phase structure (setup, specify, clarify, plan, tasks, implement, verify)
 - Identify a minimal 2-3 phase excerpt suitable for the customization section
 - Document the YAML structure: `name`, `phases[]`, `steps[]`, `uses`, `with`
 - Note built-in action namespaces (`speckit.*`, `verification.*`, `github.*`, `workflow.*`)
 
-### T004 [P] Extract stage comment and phase resolver patterns
+### T004 [DONE] [P] Extract stage comment and phase resolver patterns
 **Files**:
 - `packages/orchestrator/src/worker/stage-comment-manager.ts`
 - `packages/orchestrator/src/worker/phase-resolver.ts`
@@ -43,7 +43,7 @@
 - From phase-resolver: gate-to-phase mapping for each review cycle type
 - Distill into adopter-friendly descriptions (what they see, not how it works internally)
 
-### T005 [P] Review intro page and sidebar for consistency
+### T005 [DONE] [P] Review intro page and sidebar for consistency
 **Files**:
 - `docs/docs/intro.md`
 - `docs/sidebars.ts`
@@ -55,26 +55,26 @@
 
 ## Phase 2: Create Architecture Internals Page
 
-### T006 Create internals.md with frontmatter and introduction
+### T006 [DONE] Create internals.md with frontmatter and introduction
 **File**: `docs/docs/architecture/internals.md`
 - Add frontmatter with `sidebar_position: 4`
 - Write introductory note linking back to adopter overview: "Looking for a high-level understanding? See the Architecture Overview"
 - Add page title and brief description of the page's purpose (internal architecture details for contributors/operators)
 
-### T007 Move infrastructure details to internals.md
+### T007 [DONE] Move infrastructure details to internals.md
 **File**: `docs/docs/architecture/internals.md`
 - Move Redis + BullMQ queue architecture content from existing overview
 - Move PostgreSQL state management details
 - Move message flow / communication channels diagrams
 - Adapt Mermaid diagrams to fit the new context (update cross-references)
 
-### T008 Move deployment architecture to internals.md
+### T008 [DONE] Move deployment architecture to internals.md
 **File**: `docs/docs/architecture/internals.md`
 - Move deployment architecture diagrams (local Level 1-3, cloud Level 4)
 - Move worker pool configuration details
 - Preserve the progressive complexity narrative
 
-### T009 Move design decisions to internals.md
+### T009 [DONE] Move design decisions to internals.md
 **File**: `docs/docs/architecture/internals.md`
 - Move key design decisions section (why Redis, why PostgreSQL, why MCP)
 - Add cross-references to relevant docs (contracts, security)
@@ -84,7 +84,7 @@
 
 ## Phase 3: Rewrite Architecture Overview
 
-### T010 Write overview introduction (Section 1)
+### T010 [DONE] Write overview introduction (Section 1)
 **File**: `docs/docs/architecture/overview.md`
 - Replace existing frontmatter (keep `sidebar_position: 1`)
 - Write one-liner scoping to orchestrated workflow (Level 3+)
@@ -92,7 +92,7 @@
 - List what readers will learn (components, labels, review cycles, customization)
 - Target: ~20 lines
 
-### T011 Create high-level architecture diagram (Section 2)
+### T011 [DONE] Create high-level architecture diagram (Section 2)
 **File**: `docs/docs/architecture/overview.md`
 - Design simplified Mermaid diagram: GitHub (issues + PRs) ↔ Orchestrator ↔ Worker ↔ AI Agent
 - Show labels as the communication mechanism between GitHub and Orchestrator
@@ -101,7 +101,7 @@
 - Add brief prose explaining each component's role
 - Target: ~40 lines
 
-### T012 Write workflow lifecycle walkthrough (Section 3)
+### T012 [DONE] Write workflow lifecycle walkthrough (Section 3)
 **File**: `docs/docs/architecture/overview.md`
 - Write conversational walkthrough of speckit-feature flow:
   1. Label an issue → orchestrator picks it up
@@ -114,7 +114,7 @@
 - Include stage comments explanation: progress appears as structured comments on the issue, updated automatically as phases complete (reference stage-comment-manager patterns from T004)
 - Target: ~80 lines
 
-### T013 Write label protocol section (Section 4)
+### T013 [DONE] Write label protocol section (Section 4)
 **File**: `docs/docs/architecture/overview.md`
 - Create "Labels you add" table: trigger labels (`process:speckit-feature`, `process:speckit-bugfix`), completion signals (`completed:clarification`, `completed:spec-review`, etc.)
 - Create "Labels you'll observe" table: status indicators (`agent:in-progress`, `agent:error`, `waiting-for:*`)
@@ -122,7 +122,7 @@
 - Use adopter-relevant labels only (omit system-internal labels per plan decision Q4)
 - Target: ~60 lines
 
-### T014 Write clarification and review cycles section (Section 5)
+### T014 [DONE] Write clarification and review cycles section (Section 5)
 **File**: `docs/docs/architecture/overview.md`
 - Write unified pattern explanation: system pauses → posts comment → you review → signal via label → system resumes
 - Document each review type with its label pair:
@@ -134,7 +134,7 @@
 - Reference gate-to-phase mapping from T004 for accuracy
 - Target: ~60 lines
 
-### T015 Write customizing workflows section (Section 6)
+### T015 [DONE] Write customizing workflows section (Section 6)
 **File**: `docs/docs/architecture/overview.md`
 - Include real minimal YAML excerpt from `speckit-feature.yaml` (2-3 phases, per T003 extraction)
 - Add note: "Simplified for illustration — see actual workflow files for the full definition"
@@ -147,7 +147,7 @@
 - Link to future workflow authoring guide
 - Target: ~60 lines
 
-### T016 Write configuration essentials section (Section 7)
+### T016 [DONE] Write configuration essentials section (Section 7)
 **File**: `docs/docs/architecture/overview.md`
 - Cover minimal setup only:
   - GitHub webhook URL and required events (concept-level, not step-by-step)
@@ -156,7 +156,7 @@
 - Add "Learn more" link to existing config reference (`/docs/reference/config/generacy`)
 - Target: ~30 lines
 
-### T017 Write error handling section (Section 8)
+### T017 [DONE] Write error handling section (Section 8)
 **File**: `docs/docs/architecture/overview.md`
 - Explain `agent:error` label meaning and error comment format
 - Document retry procedure: remove error label, re-add trigger label
@@ -167,7 +167,7 @@
   - Merge conflicts: resolve conflicts and retry
 - Target: ~40 lines
 
-### T018 Write glossary and next steps sections (Sections 9-10)
+### T018 [DONE] Write glossary and next steps sections (Sections 9-10)
 **File**: `docs/docs/architecture/overview.md`
 - Create glossary table with definitions: Orchestrator, Worker, Phase, Gate, Stage Comment, Workflow, Action
 - Write next steps with links to: Getting Started, Workflow Authoring Guide, Configuration Reference, Architecture Internals
@@ -177,7 +177,7 @@
 
 ## Phase 4: Sidebar Update
 
-### T019 Add internals entry to sidebar
+### T019 [DONE] Add internals entry to sidebar
 **File**: `docs/sidebars.ts`
 - Add `'architecture/internals'` to the Architecture category items array (after `'architecture/overview'`)
 - Resulting order: overview, internals, contracts, security
@@ -186,7 +186,7 @@
 
 ## Phase 5: Verification
 
-### T020 Validate Mermaid diagram syntax
+### T020 [DONE] Validate Mermaid diagram syntax
 **Files**:
 - `docs/docs/architecture/overview.md`
 - `docs/docs/architecture/internals.md`
@@ -194,7 +194,7 @@
 - Check diagram renders correctly in Docusaurus dev server (start with `pnpm --filter docs dev`)
 - Confirm both light and dark theme rendering (configured in `docusaurus.config.ts`)
 
-### T021 [P] Validate internal links
+### T021 [DONE] [P] Validate internal links
 **Files**:
 - `docs/docs/architecture/overview.md`
 - `docs/docs/architecture/internals.md`
@@ -203,14 +203,14 @@
 - Verify links to external docs (getting-started, config reference, contracts, security)
 - Confirm no broken links from content moved out of the old overview
 
-### T022 [P] Validate sidebar renders correctly
+### T022 [DONE] [P] Validate sidebar renders correctly
 **File**: `docs/sidebars.ts`
 - Start Docusaurus dev server
 - Navigate to Architecture section
 - Confirm all four pages appear in correct order: Overview, Internals, Contracts, Security
 - Confirm page navigation (previous/next) works between pages
 
-### T023 Self-containment review
+### T023 [DONE] Self-containment review
 **Files**:
 - `docs/docs/architecture/overview.md`
 - Read the overview end-to-end without clicking any links
@@ -219,7 +219,7 @@
 - Verify the hybrid tone: conversational for walkthroughs, reference-style for tables
 - Check total line count is approximately ~400 lines (not excessively long)
 
-### T024 Cross-reference consistency check
+### T024 [DONE] Cross-reference consistency check
 **Files**:
 - `docs/docs/architecture/overview.md`
 - `docs/docs/architecture/internals.md`
