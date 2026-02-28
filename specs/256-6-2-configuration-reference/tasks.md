@@ -12,7 +12,7 @@
 
 ## Phase 0: Research & Preparation
 
-### T001 Read source schemas and existing docs
+### T001 [DONE] Read source schemas and existing docs
 **Files**:
 - `packages/generacy/src/config/schema.ts`
 - `packages/orchestrator/src/config/schema.ts`
@@ -27,7 +27,7 @@
 - Sub-task 4: Read and catalog every environment variable read in `loader.ts` (~39 vars)
 - Sub-task 5: Read the existing reference docs to understand current Docusaurus frontmatter conventions and documentation style
 
-### T002 Read CLI command sources
+### T002 [DONE] Read CLI command sources
 **Files**:
 - `packages/generacy/src/cli/commands/init.ts`
 - `packages/generacy/src/cli/commands/doctor.ts`
@@ -41,7 +41,7 @@
 - Sub-task 2: Note global options (`-l, --log-level`, `--no-pretty`) from the root CLI setup
 - Sub-task 3: Identify any related environment variables referenced in command files
 
-### T003 [P] Read Docker Compose files
+### T003 [DONE] [P] Read Docker Compose files
 **Files**:
 - `docker-compose.yml`
 - `docker-compose.override.yml`
@@ -50,7 +50,7 @@
 - Sub-task 2: Note differences between main compose, dev override, and standalone worker compose
 - Sub-task 3: Document the `generacy-network` bridge network configuration
 
-### T004 [P] Check for internal links to existing reference pages
+### T004 [DONE] [P] Check for internal links to existing reference pages
 **Files**:
 - `docs/docs/**/*.md`
 - Sub-task 1: Search for any links pointing to reference pages being rewritten (`/docs/reference/config/generacy`, `/docs/reference/cli/commands`, `/docs/reference/config/agency`)
@@ -60,7 +60,7 @@
 
 ## Phase 1: `.generacy/config.yaml` Schema Reference
 
-### T005 Rewrite generacy config reference
+### T005 [DONE] Rewrite generacy config reference
 **File**: `docs/docs/reference/config/generacy.md`
 **Source**: `packages/generacy/src/config/schema.ts`
 - Sub-task 1: Replace all existing content (current docs are entirely speculative and reference non-existent fields)
@@ -80,7 +80,7 @@
 
 ## Phase 2: Orchestrator Config Schema
 
-### T006 Create orchestrator config reference
+### T006 [DONE] Create orchestrator config reference
 **File**: `docs/docs/reference/config/orchestrator.md` (new)
 **Sources**: `packages/orchestrator/src/config/schema.ts`, `packages/orchestrator/src/config/loader.ts`, `packages/orchestrator/src/worker/config.ts`
 - Sub-task 1: Create new file with Docusaurus frontmatter (`sidebar_position` after generacy.md)
@@ -107,7 +107,7 @@
 
 ## Phase 3: Environment Variables Reference
 
-### T007 Create environment variables reference
+### T007 [DONE] Create environment variables reference
 **File**: `docs/docs/reference/config/environment-variables.md` (new)
 **Sources**: `packages/orchestrator/src/config/loader.ts`, `.env.example`, CLI command files
 - Sub-task 1: Create new file with Docusaurus frontmatter
@@ -130,7 +130,7 @@
 
 ## Phase 4: Docker Compose Configuration
 
-### T008 Create Docker Compose configuration reference
+### T008 [DONE] Create Docker Compose configuration reference
 **File**: `docs/docs/reference/config/docker-compose.md` (new)
 **Sources**: `docker-compose.yml`, `docker-compose.override.yml`, `docker/docker-compose.worker.yml`
 - Sub-task 1: Create new file with Docusaurus frontmatter
@@ -148,7 +148,7 @@
 
 ## Phase 5: CLI Command Reference
 
-### T009 Rewrite CLI command reference
+### T009 [DONE] Rewrite CLI command reference
 **File**: `docs/docs/reference/cli/commands.md`
 **Source**: `packages/generacy/src/cli/commands/*.ts`
 - Sub-task 1: Replace all existing content (current docs reference entirely non-existent commands like `generacy start`, `generacy stop`, `agency init`, `humancy workflow`, etc.)
@@ -172,7 +172,7 @@
 
 ## Phase 6: Agency Config Placeholder
 
-### T010 Rewrite agency config as placeholder
+### T010 [DONE] Rewrite agency config as placeholder
 **File**: `docs/docs/reference/config/agency.md`
 - Sub-task 1: Replace all speculative schema content with honest placeholder
 - Sub-task 2: Add Docusaurus frontmatter preserving `sidebar_position`
@@ -184,7 +184,7 @@
 
 ## Phase 7: Update `.env.example`
 
-### T011 Expand `.env.example` with common operator variables
+### T011 [DONE] Expand `.env.example` with common operator variables
 **File**: `.env.example`
 - Sub-task 1: Read current `.env.example` (currently 7 variables)
 - Sub-task 2: Add `ORCHESTRATOR_HOST` with inline comment
@@ -200,7 +200,7 @@
 
 ## Phase 8: Cross-References & Link Fixes
 
-### T012 Update internal cross-references
+### T012 [DONE] Update internal cross-references
 **Files**:
 - `docs/docs/reference/config/generacy.md`
 - `docs/docs/reference/config/orchestrator.md`
@@ -216,7 +216,7 @@
 
 ## Phase 9: Validation Audit
 
-### T013 Validate generacy config docs against source
+### T013 [DONE] Validate generacy config docs against source
 **Files**:
 - `docs/docs/reference/config/generacy.md` (doc)
 - `packages/generacy/src/config/schema.ts` (source)
@@ -224,7 +224,7 @@
 - Sub-task 2: Verify all types, defaults, and constraints match exactly
 - Sub-task 3: Confirm 0 discrepancies
 
-### T014 [P] Validate orchestrator config docs against source
+### T014 [DONE] [P] Validate orchestrator config docs against source
 **Files**:
 - `docs/docs/reference/config/orchestrator.md` (doc)
 - `packages/orchestrator/src/config/schema.ts` (source)
@@ -234,7 +234,7 @@
 - Sub-task 3: Verify the env var → config mapping table is complete and correct
 - Sub-task 4: Verify all types, defaults, and constraints match exactly
 
-### T015 [P] Validate env vars docs against source
+### T015 [DONE] [P] Validate env vars docs against source
 **Files**:
 - `docs/docs/reference/config/environment-variables.md` (doc)
 - `packages/orchestrator/src/config/loader.ts` (source)
@@ -242,7 +242,7 @@
 - Sub-task 2: Ensure all ~39 environment variables are accounted for
 - Sub-task 3: Verify no env vars are documented that don't exist in the code
 
-### T016 [P] Validate CLI docs against source
+### T016 [DONE] [P] Validate CLI docs against source
 **Files**:
 - `docs/docs/reference/cli/commands.md` (doc)
 - `packages/generacy/src/cli/commands/*.ts` (source)
@@ -251,7 +251,7 @@
 - Sub-task 3: Verify `--release-stream` flag on `generacy init` is documented
 - Sub-task 4: Ensure no commands or flags are documented that don't exist
 
-### T017 [P] Validate Docker Compose docs against source
+### T017 [DONE] [P] Validate Docker Compose docs against source
 **Files**:
 - `docs/docs/reference/config/docker-compose.md` (doc)
 - `docker-compose.yml` (source)
@@ -261,7 +261,7 @@
 - Sub-task 2: Verify health check configurations match
 - Sub-task 3: Verify network configuration matches
 
-### T018 Verify all cross-reference links
+### T018 [DONE] Verify all cross-reference links
 **Files**:
 - All docs under `docs/docs/reference/`
 - Sub-task 1: Check every internal link resolves to an existing page

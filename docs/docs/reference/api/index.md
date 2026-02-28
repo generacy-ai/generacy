@@ -306,5 +306,5 @@ await client.gates.approve('gate_123', { comment: 'Approved' });
 
 ## Next Steps
 
-- [Configuration Reference](/docs/reference/config/agency)
+- [Configuration Reference](/docs/reference/config/generacy)
 - [CLI Commands](/docs/reference/cli/commands)

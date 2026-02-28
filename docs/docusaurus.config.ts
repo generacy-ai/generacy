@@ -99,7 +99,7 @@ const config: Config = {
             },
             {
               label: 'Configuration',
-              to: '/docs/reference/config/agency',
+              to: '/docs/reference/config/generacy',
             },
             {
               label: 'Architecture',

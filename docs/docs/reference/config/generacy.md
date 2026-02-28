@@ -4,415 +4,270 @@ sidebar_position: 3
 
 # Generacy Configuration Reference
 
-Complete reference for all Generacy orchestration configuration options.
+Complete reference for the `.generacy/config.yaml` project configuration file.
 
 ## Configuration File
 
-Generacy reads configuration from `generacy.config.json`:
+Generacy reads project configuration from `.generacy/config.yaml` in your repository root:
 
-```json title="generacy.config.json"
-{
-  "version": "1.0",
-  "mode": "local",
-  "environment": "development",
-  "orchestrator": {},
-  "queue": {},
-  "workers": {},
-  "storage": {},
-  "integrations": {},
-  "logging": {}
-}
+```yaml title=".generacy/config.yaml"
+schemaVersion: "1"
+project:
+  id: proj_abc123def
+  name: My Project
+repos:
+  primary: github.com/acme/main-app
+defaults:
+  agent: claude-code
+  baseBranch: develop
+orchestrator:
+  pollIntervalMs: 30000
+  workerCount: 3
 ```
 
-## version
+### File Discovery
+
+The `generacy` CLI walks the directory tree upward from the current working directory looking for `.generacy/config.yaml`. This means you can run commands from any subdirectory of your project.
+
+## Top-Level Structure
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `schemaVersion` | string | No | `"1"` | Schema version for future migration support |
+| `project` | object | Yes | — | Project metadata |
+| `repos` | object | Yes | — | Repository relationships |
+| `defaults` | object | No | — | Workflow execution defaults |
+| `orchestrator` | object | No | — | Runtime settings for the orchestrator |
+
+## schemaVersion
+
+**Type**: `string`
+**Required**: No
+**Default**: `"1"`
+
+Schema version identifier. Used for future migration support. Currently the only valid value is `"1"`. If omitted, defaults to `"1"`.
+
+```yaml
+schemaVersion: "1"
+```
+
+## project
+
+**Type**: `object`
+**Required**: Yes
+
+Project metadata linking this repository to your generacy.ai project.
+
+### project.id
 
 **Type**: `string`
 **Required**: Yes
-**Example**: `"1.0"`
+**Format**: `proj_{alphanumeric}` — must match `^proj_[a-z0-9]+$`
+**Minimum length**: 12 characters
 
-Configuration schema version.
+Unique project ID assigned by generacy.ai. This ID links the local configuration to your project on the platform.
 
-## mode
+```yaml
+project:
+  id: proj_abc123def
+```
 
-**Type**: `"local" | "cloud" | "hybrid"`
-**Default**: `"local"`
+### project.name
 
-Operating mode:
-- `local` - Single machine deployment
-- `cloud` - Distributed cloud deployment
-- `hybrid` - Mixed local/cloud
+**Type**: `string`
+**Required**: Yes
+**Minimum length**: 1 character
+**Maximum length**: 255 characters
 
-## environment
+Human-readable project name.
 
-**Type**: `"development" | "staging" | "production"`
-**Default**: `"development"`
+```yaml
+project:
+  name: My Application
+```
 
-Deployment environment.
+## repos
+
+**Type**: `object`
+**Required**: Yes
+
+Defines repository relationships for the project. All repository URLs use the format `github.com/{owner}/{repo}` — no protocol prefix (`https://`), no `.git` suffix.
+
+### repos.primary
+
+**Type**: `string` (repository URL)
+**Required**: Yes
+**Format**: `github.com/{owner}/{repo}` — must match `^github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9._-]+$`
+
+The primary repository for the project. This is where the onboarding PR will be created.
+
+```yaml
+repos:
+  primary: github.com/acme/main-app
+```
+
+### repos.dev
+
+**Type**: `string[]` (array of repository URLs)
+**Required**: No
+**Default**: `[]`
+
+Development repositories that are cloned for active development. These repos can receive PRs from Generacy.
+
+```yaml
+repos:
+  primary: github.com/acme/main-app
+  dev:
+    - github.com/acme/shared-lib
+    - github.com/acme/api-service
+```
+
+### repos.clone
+
+**Type**: `string[]` (array of repository URLs)
+**Required**: No
+**Default**: `[]`
+
+Clone-only repositories. These are cloned for reference and reading only — Generacy will not create PRs against them.
+
+```yaml
+repos:
+  primary: github.com/acme/main-app
+  clone:
+    - github.com/acme/design-system
+    - github.com/acme/documentation
+```
+
+### Repository URL Validation
+
+All repository URLs (in `primary`, `dev`, and `clone`) must:
+
+- Match the format `github.com/{owner}/{repo}`
+- Not include a protocol prefix (`https://`, `ssh://`)
+- Not end with `.git`
+- Not contain duplicate entries across all three fields
+
+## defaults
+
+**Type**: `object`
+**Required**: No
+
+Default settings for workflow execution. All fields are optional.
+
+### defaults.agent
+
+**Type**: `string`
+**Required**: No
+**Format**: kebab-case — must match `^[a-z0-9]+(-[a-z0-9]+)*$`
+
+Default agent to use for workflow execution (e.g., `claude-code`, `cursor-agent`).
+
+```yaml
+defaults:
+  agent: claude-code
+```
+
+### defaults.baseBranch
+
+**Type**: `string`
+**Required**: No
+**Minimum length**: 1 character
+
+Default base branch for creating feature branches. Branch existence is not validated at config time — it is checked at runtime.
+
+```yaml
+defaults:
+  baseBranch: develop
+```
 
 ## orchestrator
 
-HTTP server configuration.
+**Type**: `object`
+**Required**: No
 
-```json
-{
-  "orchestrator": {
-    "port": 3000,
-    "host": "0.0.0.0",
-    "cors": {
-      "enabled": true,
-      "origins": ["*"],
-      "methods": ["GET", "POST", "PUT", "DELETE"],
-      "headers": ["Content-Type", "Authorization"]
-    },
-    "rateLimit": {
-      "enabled": true,
-      "requests": 1000,
-      "window": "1m"
-    },
-    "auth": {
-      "enabled": true,
-      "type": "bearer",
-      "secret": "$GENERACY_SECRET"
-    }
-  }
-}
+Runtime settings for the orchestrator. These values are used when the orchestrator polls for work and manages workers. For the full orchestrator configuration reference (server, Redis, auth, etc.), see the [Orchestrator Configuration](/docs/reference/config/orchestrator).
+
+### orchestrator.pollIntervalMs
+
+**Type**: `integer`
+**Required**: No
+**Minimum**: `5000`
+
+Polling interval in milliseconds. Controls how frequently the orchestrator checks for new work.
+
+```yaml
+orchestrator:
+  pollIntervalMs: 30000
 ```
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `port` | number | 3000 | HTTP port |
-| `host` | string | "0.0.0.0" | Bind address |
-| `cors` | object | - | CORS configuration |
-| `rateLimit` | object | - | Rate limiting |
-| `auth` | object | - | Authentication |
+### orchestrator.workerCount
 
-## queue
+**Type**: `integer`
+**Required**: No
+**Minimum**: `1`
+**Maximum**: `20`
 
-Job queue configuration.
+Maximum number of concurrent workers the orchestrator will run.
 
-```json
-{
-  "queue": {
-    "type": "redis",
-    "redis": {
-      "url": "redis://localhost:6379",
-      "prefix": "generacy:",
-      "tls": false
-    },
-    "defaults": {
-      "attempts": 3,
-      "backoff": {
-        "type": "exponential",
-        "delay": 1000
-      },
-      "timeout": "30m",
-      "removeOnComplete": 100,
-      "removeOnFail": 1000
-    }
-  }
-}
+```yaml
+orchestrator:
+  workerCount: 5
 ```
 
-### Queue Types
+## Validation
 
-| Type | Description | Use Case |
-|------|-------------|----------|
-| `memory` | In-memory queue | Development |
-| `redis` | Redis-backed queue | Production |
-| `postgres` | PostgreSQL queue | Alternative |
+The configuration file is validated against a Zod schema when loaded. Validation includes:
 
-### Redis Configuration
+- **Schema validation**: All fields are checked for correct types, formats, and constraints
+- **Semantic validation**: No duplicate repository URLs across `primary`, `dev`, and `clone`
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `url` | string | - | Redis connection URL |
-| `prefix` | string | "generacy:" | Key prefix |
-| `tls` | boolean | false | Enable TLS |
-| `maxRetriesPerRequest` | number | 3 | Max retries |
+If validation fails, the CLI will report the specific field and constraint that was violated.
 
-### Default Job Settings
+## Examples
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `attempts` | number | 3 | Retry attempts |
-| `backoff.type` | string | "exponential" | Backoff strategy |
-| `backoff.delay` | number | 1000 | Initial delay (ms) |
-| `timeout` | string | "30m" | Job timeout |
-| `removeOnComplete` | number | 100 | Keep completed jobs |
-| `removeOnFail` | number | 1000 | Keep failed jobs |
+### Minimal Configuration
 
-## workers
+The smallest valid configuration requires only `project` and `repos`:
 
-Worker process configuration.
-
-```json
-{
-  "workers": {
-    "count": 4,
-    "concurrency": 2,
-    "types": ["default", "priority"],
-    "resources": {
-      "memory": "2GB",
-      "cpu": 2
-    },
-    "healthCheck": {
-      "enabled": true,
-      "interval": "30s"
-    }
-  }
-}
+```yaml title=".generacy/config.yaml"
+project:
+  id: proj_abc123def
+  name: My Project
+repos:
+  primary: github.com/acme/main-app
 ```
 
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `count` | number | 4 | Number of workers |
-| `concurrency` | number | 2 | Jobs per worker |
-| `types` | string[] | ["default"] | Worker types |
-| `resources` | object | - | Resource limits |
+### Full Configuration
 
-## storage
+A configuration with all fields populated:
 
-Data storage configuration.
+```yaml title=".generacy/config.yaml"
+schemaVersion: "1"
 
-```json
-{
-  "storage": {
-    "type": "postgres",
-    "postgres": {
-      "url": "$DATABASE_URL",
-      "pool": {
-        "min": 5,
-        "max": 20
-      },
-      "ssl": true
-    },
-    "artifacts": {
-      "type": "s3",
-      "s3": {
-        "bucket": "generacy-artifacts",
-        "region": "us-east-1",
-        "prefix": "artifacts/"
-      }
-    }
-  }
-}
+project:
+  id: proj_abc123def
+  name: My Application
+
+repos:
+  primary: github.com/acme/main-app
+  dev:
+    - github.com/acme/shared-lib
+    - github.com/acme/api-service
+  clone:
+    - github.com/acme/design-system
+
+defaults:
+  agent: claude-code
+  baseBranch: develop
+
+orchestrator:
+  pollIntervalMs: 30000
+  workerCount: 5
 ```
 
-### Storage Types
+## See Also
 
-| Type | Description | Use Case |
-|------|-------------|----------|
-| `memory` | In-memory | Development |
-| `sqlite` | SQLite database | Local/small |
-| `postgres` | PostgreSQL | Production |
-
-### Artifact Storage
-
-| Type | Description |
-|------|-------------|
-| `local` | Local filesystem |
-| `s3` | AWS S3 |
-| `gcs` | Google Cloud Storage |
-
-## integrations
-
-External service integrations.
-
-### github
-
-```json
-{
-  "integrations": {
-    "github": {
-      "enabled": true,
-      "auth": {
-        "type": "app",
-        "appId": "$GITHUB_APP_ID",
-        "privateKey": "$GITHUB_PRIVATE_KEY",
-        "installationId": "$GITHUB_INSTALLATION_ID"
-      },
-      "webhooks": {
-        "enabled": true,
-        "secret": "$GITHUB_WEBHOOK_SECRET",
-        "events": ["issues", "pull_request", "push", "workflow_run"]
-      }
-    }
-  }
-}
-```
-
-### jira
-
-```json
-{
-  "integrations": {
-    "jira": {
-      "enabled": true,
-      "baseUrl": "https://company.atlassian.net",
-      "auth": {
-        "email": "$JIRA_EMAIL",
-        "apiToken": "$JIRA_API_TOKEN"
-      },
-      "projects": ["PROJ1", "PROJ2"],
-      "webhooks": {
-        "enabled": true,
-        "secret": "$JIRA_WEBHOOK_SECRET"
-      }
-    }
-  }
-}
-```
-
-### slack
-
-```json
-{
-  "integrations": {
-    "slack": {
-      "enabled": true,
-      "botToken": "$SLACK_BOT_TOKEN",
-      "signingSecret": "$SLACK_SIGNING_SECRET",
-      "channels": {
-        "default": "#generacy",
-        "alerts": "#generacy-alerts",
-        "errors": "#generacy-errors"
-      }
-    }
-  }
-}
-```
-
-## logging
-
-Logging configuration.
-
-```json
-{
-  "logging": {
-    "level": "info",
-    "format": "json",
-    "outputs": ["stdout", "file"],
-    "file": {
-      "path": "./logs/generacy.log",
-      "maxSize": "10MB",
-      "maxFiles": 5,
-      "compress": true
-    },
-    "redact": ["password", "token", "secret", "apiKey"]
-  }
-}
-```
-
-| Property | Type | Default | Description |
-|----------|------|---------|-------------|
-| `level` | string | "info" | Log level |
-| `format` | string | "json" | Output format |
-| `outputs` | string[] | ["stdout"] | Output destinations |
-| `file` | object | - | File output config |
-| `redact` | string[] | - | Fields to redact |
-
-## Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GENERACY_MODE` | Operating mode | `local` |
-| `GENERACY_ENV` | Environment | `development` |
-| `GENERACY_PORT` | HTTP port | `3000` |
-| `GENERACY_SECRET` | Auth secret | - |
-| `REDIS_URL` | Redis URL | - |
-| `DATABASE_URL` | Database URL | - |
-| `GITHUB_APP_ID` | GitHub App ID | - |
-| `GITHUB_PRIVATE_KEY` | GitHub private key | - |
-| `GITHUB_WEBHOOK_SECRET` | Webhook secret | - |
-
-## Complete Example
-
-```json title="generacy.config.json"
-{
-  "version": "1.0",
-  "mode": "cloud",
-  "environment": "production",
-  "orchestrator": {
-    "port": 3000,
-    "host": "0.0.0.0",
-    "cors": {
-      "enabled": true,
-      "origins": ["https://app.company.com"]
-    },
-    "rateLimit": {
-      "enabled": true,
-      "requests": 1000,
-      "window": "1m"
-    },
-    "auth": {
-      "enabled": true,
-      "type": "bearer",
-      "secret": "$GENERACY_SECRET"
-    }
-  },
-  "queue": {
-    "type": "redis",
-    "redis": {
-      "url": "$REDIS_URL",
-      "tls": true
-    },
-    "defaults": {
-      "attempts": 3,
-      "timeout": "30m"
-    }
-  },
-  "workers": {
-    "count": 10,
-    "concurrency": 5,
-    "types": ["default", "priority"],
-    "resources": {
-      "memory": "4GB",
-      "cpu": 4
-    }
-  },
-  "storage": {
-    "type": "postgres",
-    "postgres": {
-      "url": "$DATABASE_URL",
-      "pool": { "min": 10, "max": 50 },
-      "ssl": true
-    },
-    "artifacts": {
-      "type": "s3",
-      "s3": {
-        "bucket": "company-generacy",
-        "region": "us-east-1"
-      }
-    }
-  },
-  "integrations": {
-    "github": {
-      "enabled": true,
-      "auth": {
-        "type": "app",
-        "appId": "$GITHUB_APP_ID",
-        "privateKey": "$GITHUB_PRIVATE_KEY"
-      },
-      "webhooks": {
-        "enabled": true,
-        "secret": "$GITHUB_WEBHOOK_SECRET"
-      }
-    },
-    "slack": {
-      "enabled": true,
-      "botToken": "$SLACK_BOT_TOKEN",
-      "signingSecret": "$SLACK_SIGNING_SECRET",
-      "channels": {
-        "default": "#engineering",
-        "alerts": "#engineering-alerts"
-      }
-    }
-  },
-  "logging": {
-    "level": "info",
-    "format": "json",
-    "outputs": ["stdout"],
-    "redact": ["password", "token", "secret"]
-  }
-}
-```
+- [Orchestrator Configuration](/docs/reference/config/orchestrator) — Full orchestrator server, Redis, auth, and dispatch configuration
+- [Environment Variables](/docs/reference/config/environment-variables) — All environment variables reference
+- [Docker Compose Configuration](/docs/reference/config/docker-compose) — Service definitions and deployment options
+- [CLI Commands](/docs/reference/cli/commands) — `generacy init` generates this file, `generacy validate` checks it

@@ -89,6 +89,9 @@ const sidebars: SidebarsConfig = {
             'reference/config/agency',
             'reference/config/humancy',
             'reference/config/generacy',
+            'reference/config/orchestrator',
+            'reference/config/environment-variables',
+            'reference/config/docker-compose',
           ],
         },
         {
