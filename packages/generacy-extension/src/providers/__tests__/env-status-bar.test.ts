@@ -77,10 +77,14 @@ import type { EnvConfigService, EnvStatus } from '../../services/env-config-serv
 // Mock EnvConfigService factory
 // ---------------------------------------------------------------------------
 
-function createMockEnvService(initialStatus: EnvStatus = 'missing') {
+interface MockEnvService extends EnvConfigService {
+  _fireChange: (s: EnvStatus) => void;
+}
+
+function createMockEnvService(initialStatus: EnvStatus = 'missing'): MockEnvService {
   const listeners: ((status: EnvStatus) => void)[] = [];
 
-  return {
+  const service = {
     status: initialStatus,
     onDidChange: vi.fn((listener: (status: EnvStatus) => void) => {
       listeners.push(listener);
@@ -92,12 +96,13 @@ function createMockEnvService(initialStatus: EnvStatus = 'missing') {
       };
     }),
     dispose: vi.fn(),
-    // Helper to simulate status change from tests
     _fireChange(newStatus: EnvStatus) {
-      this.status = newStatus;
+      service.status = newStatus;
       listeners.forEach((l) => l(newStatus));
     },
-  } as unknown as EnvConfigService & { _fireChange: (s: EnvStatus) => void };
+  };
+
+  return service as unknown as MockEnvService;
 }
 
 // ---------------------------------------------------------------------------

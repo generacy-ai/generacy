@@ -74,7 +74,7 @@ vi.mock('vscode', () => {
         super(message);
         this.code = 'Unknown';
       }
-      static FileNotFound(uri?: unknown): Error & { code: string } {
+      static FileNotFound(_uri?: unknown): Error & { code: string } {
         const err = new Error('FileNotFound') as Error & { code: string };
         err.code = 'FileNotFound';
         return err;
@@ -110,6 +110,13 @@ import { EnvConfigService, getEnvConfigService } from '../env-config-service';
 
 function encode(content: string): Uint8Array {
   return new TextEncoder().encode(content);
+}
+
+/** Extract the callback registered on a watcher event mock. */
+function getWatcherHandler<T extends (...args: unknown[]) => unknown>(
+  mock: ReturnType<typeof vi.fn>,
+): T {
+  return (mock.mock.calls[0] as unknown[])[0] as T;
 }
 
 const COMPLETE_ENV = `
@@ -299,7 +306,7 @@ describe('EnvConfigService', () => {
 
       expect(service.status).toBe('missing');
 
-      const createHandler = mockWatcher.onDidCreate.mock.calls[0]![0] as () => Promise<void>;
+      const createHandler = getWatcherHandler<() => Promise<void>>(mockWatcher.onDidCreate);
       mockReadFile.mockResolvedValue(encode(COMPLETE_ENV));
 
       await createHandler();
@@ -314,7 +321,7 @@ describe('EnvConfigService', () => {
 
       expect(service.status).toBe('ok');
 
-      const changeHandler = mockWatcher.onDidChange.mock.calls[0]![0] as () => Promise<void>;
+      const changeHandler = getWatcherHandler<() => Promise<void>>(mockWatcher.onDidChange);
       mockReadFile.mockResolvedValue(encode(INCOMPLETE_ENV_GITHUB_ONLY));
 
       await changeHandler();
@@ -329,7 +336,7 @@ describe('EnvConfigService', () => {
 
       expect(service.status).toBe('ok');
 
-      const deleteHandler = mockWatcher.onDidDelete.mock.calls[0]![0] as () => void;
+      const deleteHandler = getWatcherHandler<() => void>(mockWatcher.onDidDelete);
       deleteHandler();
 
       expect(service.status).toBe('missing');
@@ -345,7 +352,7 @@ describe('EnvConfigService', () => {
       const service = EnvConfigService.getInstance();
       await service.initialize();
 
-      const createHandler = mockWatcher.onDidCreate.mock.calls[0]![0] as () => Promise<void>;
+      const createHandler = getWatcherHandler<() => Promise<void>>(mockWatcher.onDidCreate);
       mockReadFile.mockResolvedValue(encode(COMPLETE_ENV));
 
       const changePromise = new Promise<string>((resolve) => {
@@ -363,7 +370,7 @@ describe('EnvConfigService', () => {
       const service = EnvConfigService.getInstance();
       await service.initialize();
 
-      const changeHandler = mockWatcher.onDidChange.mock.calls[0]![0] as () => Promise<void>;
+      const changeHandler = getWatcherHandler<() => Promise<void>>(mockWatcher.onDidChange);
       mockReadFile.mockResolvedValue(encode(INCOMPLETE_ENV_GITHUB_ONLY));
 
       const changePromise = new Promise<string>((resolve) => {
@@ -381,7 +388,7 @@ describe('EnvConfigService', () => {
       const service = EnvConfigService.getInstance();
       await service.initialize();
 
-      const deleteHandler = mockWatcher.onDidDelete.mock.calls[0]![0] as () => void;
+      const deleteHandler = getWatcherHandler<() => void>(mockWatcher.onDidDelete);
 
       const changePromise = new Promise<string>((resolve) => {
         service.onDidChange(resolve);
@@ -398,7 +405,7 @@ describe('EnvConfigService', () => {
       const service = EnvConfigService.getInstance();
       await service.initialize();
 
-      const changeHandler = mockWatcher.onDidChange.mock.calls[0]![0] as () => Promise<void>;
+      const changeHandler = getWatcherHandler<() => Promise<void>>(mockWatcher.onDidChange);
       // File changes but still has both keys
       mockReadFile.mockResolvedValue(encode('GITHUB_TOKEN=new\nANTHROPIC_API_KEY=also-new\n'));
 
@@ -417,7 +424,7 @@ describe('EnvConfigService', () => {
 
       expect(service.status).toBe('missing');
 
-      const deleteHandler = mockWatcher.onDidDelete.mock.calls[0]![0] as () => void;
+      const deleteHandler = getWatcherHandler<() => void>(mockWatcher.onDidDelete);
 
       const listener = vi.fn();
       service.onDidChange(listener);
@@ -447,7 +454,7 @@ describe('EnvConfigService', () => {
       const service = EnvConfigService.getInstance();
       await service.initialize();
 
-      const changeHandler = mockWatcher.onDidChange.mock.calls[0]![0] as () => Promise<void>;
+      const changeHandler = getWatcherHandler<() => Promise<void>>(mockWatcher.onDidChange);
 
       service.dispose();
 
@@ -460,7 +467,7 @@ describe('EnvConfigService', () => {
       const service = EnvConfigService.getInstance();
       await service.initialize();
 
-      const deleteHandler = mockWatcher.onDidDelete.mock.calls[0]![0] as () => void;
+      const deleteHandler = getWatcherHandler<() => void>(mockWatcher.onDidDelete);
 
       service.dispose();
 
