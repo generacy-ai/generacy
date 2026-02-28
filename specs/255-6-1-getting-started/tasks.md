@@ -15,7 +15,7 @@
 
 Sets up the navigation skeleton. All subsequent phases depend on the sidebar and category config being in place.
 
-### T001 [US1] Create hub page `index.md`
+### T001 [DONE] [US1] Create hub page `index.md`
 **File**: `docs/docs/getting-started/index.md`
 - Write welcome paragraph explaining what Generacy is (source from `docs/docs/intro.md`)
 - Add "What you'll set up" bulleted overview
@@ -25,13 +25,13 @@ Sets up the navigation skeleton. All subsequent phases depend on the sidebar and
 - Add time estimate: "~15-30 minutes for Level 1 setup"
 - Add frontmatter: `sidebar_position: 0`, `slug: /docs/getting-started`
 
-### T002 [P] [US1] Update `_category_.json`
+### T002 [DONE] [P] [US1] Update `_category_.json`
 **File**: `docs/docs/getting-started/_category_.json`
 - Change `link.type` from `generated-index` to `doc`
 - Set `link.id` to `getting-started/index`
 - Remove `link.description` (hub page provides its own description)
 
-### T003 [P] [US1] Update `sidebars.ts`
+### T003 [DONE] [P] [US1] Update `sidebars.ts`
 **File**: `docs/sidebars.ts`
 - Replace the Getting Started category `link` from `generated-index` to `{ type: 'doc', id: 'getting-started/index' }`
 - Replace `items` array with new page order:
@@ -50,7 +50,7 @@ Sets up the navigation skeleton. All subsequent phases depend on the sidebar and
   ```
 - Keep `collapsed: false`
 
-### T004 [US1] Verify Phase 1 build
+### T004 [DONE] [US1] Verify Phase 1 build
 **Command**: `cd docs && pnpm build`
 - Expect build failure for missing pages — confirm only "broken link" errors for pages not yet created
 - Validates sidebar config and index.md are wired correctly
@@ -61,7 +61,7 @@ Sets up the navigation skeleton. All subsequent phases depend on the sidebar and
 
 Foundational setup pages. Can be written in parallel since they reference different source material.
 
-### T005 [P] [US1] Create `prerequisites.md`
+### T005 [DONE] [P] [US1] Create `prerequisites.md`
 **File**: `docs/docs/getting-started/prerequisites.md`
 - Add frontmatter with `sidebar_position: 1`
 - System requirements table (absorb from existing `installation.md` lines 18-30):
@@ -72,7 +72,7 @@ Foundational setup pages. Can be written in parallel since they reference differ
 - Optional tools subsection: VS Code, Docker Desktop
 - Source: existing `installation.md` system requirements + `packages/generacy/src/cli/commands/init/` types
 
-### T006 [P] [US1] Rewrite `installation.md`
+### T006 [DONE] [P] [US1] Rewrite `installation.md`
 **File**: `docs/docs/getting-started/installation.md`
 - Replace all existing content (currently ~180 lines covering system requirements + install + init + verify)
 - Update frontmatter: keep `sidebar_position: 2`
@@ -88,7 +88,7 @@ Foundational setup pages. Can be written in parallel since they reference differ
 
 Credential and project initialization pages. Can be written in parallel.
 
-### T007 [P] [US1] Create `authentication.md`
+### T007 [DONE] [P] [US1] Create `authentication.md`
 **File**: `docs/docs/getting-started/authentication.md`
 - Add frontmatter with `sidebar_position: 3`
 - Credentials overview table: credential name, where to get it, which adoption levels need it
@@ -97,7 +97,7 @@ Credential and project initialization pages. Can be written in parallel.
 - **OAuth sign-in** section: text description of generacy.ai web login flow, `<!-- Screenshot placeholder: OAuth sign-in flow -->`
 - **Store credentials securely** callout: mention `.generacy/generacy.env` is gitignored
 
-### T008 [P] [US1] Create `project-setup.md`
+### T008 [DONE] [P] [US1] Create `project-setup.md`
 **File**: `docs/docs/getting-started/project-setup.md`
 - Add frontmatter with `sidebar_position: 4`
 - Step 1: Navigate to project root (`cd your-project`)
@@ -113,7 +113,7 @@ Credential and project initialization pages. Can be written in parallel.
 
 Config and dev container pages. Can be written in parallel.
 
-### T009 [P] [US1] Create `configuration.md`
+### T009 [DONE] [P] [US1] Create `configuration.md`
 **File**: `docs/docs/getting-started/configuration.md`
 - Add frontmatter with `sidebar_position: 5`
 - `.generacy/config.yaml` overview with 4 main blocks (1-2 sentences each):
@@ -130,7 +130,7 @@ Config and dev container pages. Can be written in parallel.
   - Source variable names from `packages/templates/src/shared/generacy.env.template.hbs`
 - Link to full env reference for advanced variables
 
-### T010 [P] [US1] Create `dev-environment.md`
+### T010 [DONE] [P] [US1] Create `dev-environment.md`
 **File**: `docs/docs/getting-started/dev-environment.md`
 - Add frontmatter with `sidebar_position: 6`
 - What the dev container provides (pre-configured Node.js, Docker-in-Docker, extensions)
@@ -146,7 +146,7 @@ Config and dev container pages. Can be written in parallel.
 
 Setup validation and first-use pages. Can be written in parallel.
 
-### T011 [P] [US1] Create `verify-setup.md`
+### T011 [DONE] [P] [US1] Create `verify-setup.md`
 **File**: `docs/docs/getting-started/verify-setup.md`
 - Add frontmatter with `sidebar_position: 7`
 - **Level 1 (config-only)** section:
@@ -158,7 +158,7 @@ Setup validation and first-use pages. Can be written in parallel.
   - Submit a minimal test workflow
   - Verify it appears on dashboard — text description, `<!-- Screenshot placeholder: dashboard -->`
 
-### T012 [P] [US1] Create `first-workflow.md`
+### T012 [DONE] [P] [US1] Create `first-workflow.md`
 **File**: `docs/docs/getting-started/first-workflow.md`
 - Add frontmatter with `sidebar_position: 8`
 - Configure AI agent MCP settings — Claude Code example (absorb from existing `quick-start.md` MCP config section, lines ~67-90)
@@ -172,7 +172,7 @@ Setup validation and first-use pages. Can be written in parallel.
 
 Adoption guide and troubleshooting. Adoption levels absorbs existing content. All four files in this phase can be written in parallel.
 
-### T013 [P] [US1] Create `adoption-levels.md`
+### T013 [DONE] [P] [US1] Create `adoption-levels.md`
 **File**: `docs/docs/getting-started/adoption-levels.md`
 - Add frontmatter with `sidebar_position: 9`
 - Overview table: Level 1-4 with columns for components, capabilities, complexity
@@ -190,7 +190,7 @@ Adoption guide and troubleshooting. Adoption levels absorbs existing content. Al
 - **Level 3: Local Orchestration** — Summary paragraph + link to stub
 - **Level 4: Cloud** — Summary paragraph + link to stub
 
-### T014 [P] [US1] Create `troubleshooting.md`
+### T014 [DONE] [P] [US1] Create `troubleshooting.md`
 **File**: `docs/docs/getting-started/troubleshooting.md`
 - Add frontmatter with `sidebar_position: 10`
 - Format: **Symptom** → **Cause** → **Resolution** for each issue
@@ -206,14 +206,14 @@ Adoption guide and troubleshooting. Adoption levels absorbs existing content. Al
 - Absorb troubleshooting sections from existing `quick-start.md`, `level-1-agency-only.md`, `level-2-agency-humancy.md`
 - "Still stuck?" section with links to GitHub issues and community
 
-### T015 [P] [US1] Create stub `level-3-local-orchestration.md`
+### T015 [DONE] [P] [US1] Create stub `level-3-local-orchestration.md`
 **File**: `docs/docs/getting-started/level-3-local-orchestration.md`
 - Frontmatter with title "Level 3: Local Orchestration"
 - Brief description of what Level 3 provides
 - Admonition: "This guide is coming soon"
 - Link back to adoption levels overview
 
-### T016 [P] [US1] Create stub `level-4-cloud.md`
+### T016 [DONE] [P] [US1] Create stub `level-4-cloud.md`
 **File**: `docs/docs/getting-started/level-4-cloud.md`
 - Frontmatter with title "Level 4: Cloud"
 - Brief description of what Level 4 provides
@@ -224,7 +224,7 @@ Adoption guide and troubleshooting. Adoption levels absorbs existing content. Al
 
 ## Phase 7: Multi-Repo Appendix
 
-### T017 [US1] Create `multi-repo.md`
+### T017 [DONE] [US1] Create `multi-repo.md`
 **File**: `docs/docs/getting-started/multi-repo.md`
 - Add frontmatter with `sidebar_position: 11`
 - When to use multi-repo vs single-repo — decision criteria
@@ -239,7 +239,7 @@ Adoption guide and troubleshooting. Adoption levels absorbs existing content. Al
 
 Replace old pages with redirect notices. All three can be done in parallel.
 
-### T018 [P] [US1] Replace `quick-start.md` with redirect
+### T018 [DONE] [P] [US1] Replace `quick-start.md` with redirect
 **File**: `docs/docs/getting-started/quick-start.md`
 - Replace all content with redirect page
 - Keep frontmatter `slug` to preserve URL
@@ -247,13 +247,13 @@ Replace old pages with redirect notices. All three can be done in parallel.
 - Add `sidebar_class_name: hidden` or remove from sidebar (already removed in T003)
 - Ensure the page is NOT listed in `sidebars.ts` (confirmed removed in T003)
 
-### T019 [P] [US1] Replace `level-1-agency-only.md` with redirect
+### T019 [DONE] [P] [US1] Replace `level-1-agency-only.md` with redirect
 **File**: `docs/docs/getting-started/level-1-agency-only.md`
 - Replace all content with redirect page
 - Add notice: "This page has moved" with link to `adoption-levels.md`
 - Ensure the page is NOT listed in `sidebars.ts` (confirmed removed in T003)
 
-### T020 [P] [US1] Replace `level-2-agency-humancy.md` with redirect
+### T020 [DONE] [P] [US1] Replace `level-2-agency-humancy.md` with redirect
 **File**: `docs/docs/getting-started/level-2-agency-humancy.md`
 - Replace all content with redirect page
 - Add notice: "This page has moved" with link to `adoption-levels.md`
@@ -263,12 +263,12 @@ Replace old pages with redirect notices. All three can be done in parallel.
 
 ## Phase 9: Link Checking and Footer Updates
 
-### T021 [P] [US1] Update footer links in `docusaurus.config.ts`
+### T021 [DONE] [P] [US1] Update footer links in `docusaurus.config.ts`
 **File**: `docs/docusaurus.config.ts`
 - Change footer "Getting Started" link from `/docs/getting-started/quick-start` to `/docs/getting-started` (line 81)
 - Verify all other footer links still resolve
 
-### T022 [P] [US1] Create link checker ignore list
+### T022 [DONE] [P] [US1] Create link checker ignore list
 **File**: `docs/.markdown-link-check.json`
 - Create config for `markdown-link-check`
 - Add ignore patterns for known future/external pages:
@@ -280,20 +280,20 @@ Replace old pages with redirect notices. All three can be done in parallel.
 
 ## Phase 10: Build Verification and Validation
 
-### T023 [US1] Verify Docusaurus build
+### T023 [DONE] [US1] Verify Docusaurus build
 **Command**: `cd docs && pnpm build`
 - Confirm zero broken link errors (`onBrokenLinks: 'throw'` will catch issues)
 - Confirm all 14 getting-started pages render in sidebar
 - Confirm sidebar order matches plan
 - Confirm hub page is the category landing page
 
-### T024 [US1] Verify internal link integrity
+### T024 [DONE] [US1] Verify internal link integrity
 **Command**: Manual review or link checker
 - Check all cross-references between getting-started pages resolve
 - Check links from getting-started to other doc sections (guides, reference, architecture) resolve
 - Check redirect pages link to correct new locations
 
-### T025 [US1] One-developer walkthrough
+### T025 [DONE] [US1] One-developer walkthrough
 - Follow the guide end-to-end from `index.md` through `first-workflow.md`
 - Verify commands are accurate against current CLI behavior
 - Verify config examples match current schema

@@ -16,8 +16,8 @@ function HomepageHeader() {
         <div className={styles.buttons}>
           <Link
             className="button button--secondary button--lg"
-            to="/docs/getting-started/quick-start">
-            Quick Start - 5 min
+            to="/docs/getting-started">
+            Get Started - 15 min
           </Link>
         </div>
       </div>
@@ -32,7 +32,7 @@ const adoptionLevels = [
     description:
       'Start with local agent enhancement. Add tools and context to your AI coding assistant without any external dependencies.',
     components: ['Agency'],
-    link: '/docs/getting-started/level-1-agency-only',
+    link: '/docs/getting-started/adoption-levels',
     difficulty: 'beginner' as const,
   },
   {
@@ -41,7 +41,7 @@ const adoptionLevels = [
     description:
       'Add human oversight to your workflow. Review gates, approvals, and audit trails for your agentic processes.',
     components: ['Agency', 'Humancy'],
-    link: '/docs/getting-started/level-2-agency-humancy',
+    link: '/docs/getting-started/adoption-levels',
     difficulty: 'intermediate' as const,
   },
   {
