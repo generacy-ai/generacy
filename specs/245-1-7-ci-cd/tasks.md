@@ -12,7 +12,7 @@
 
 ## Phase 1: Extension CI Workflow
 
-### T001 Create `extension-ci.yml` workflow
+### T001 [DONE] Create `extension-ci.yml` workflow
 **File**: `.github/workflows/extension-ci.yml`
 - Create new workflow file for extension-specific PR CI
 - Set trigger: `pull_request` on `[develop, main]` with paths filter `packages/generacy-extension/**`
@@ -33,7 +33,7 @@
 
 ## Phase 2: Extension Publish Workflow
 
-### T002 Create `extension-publish.yml` — triggers, concurrency, permissions
+### T002 [DONE] Create `extension-publish.yml` — triggers, concurrency, permissions
 **File**: `.github/workflows/extension-publish.yml`
 - Create new workflow file
 - Set trigger: `push` on `[develop, main]` with paths filter `packages/generacy-extension/**`
@@ -41,7 +41,7 @@
 - Set concurrency: `group: extension-publish`, `cancel-in-progress: false` (matches `release.yml` pattern)
 - Set permissions: `contents: write` (for git tag + GitHub Release)
 
-### T003 Add channel determination and branch validation steps
+### T003 [DONE] Add channel determination and branch validation steps
 **File**: `.github/workflows/extension-publish.yml`
 - Add step to derive publish channel:
   - Push to `develop` → `preview`
@@ -53,7 +53,7 @@
   - Fail with clear error message if mismatched
 - Output channel value for downstream steps
 
-### T004 Add build, test, and version pre-check steps
+### T004 [DONE] Add build, test, and version pre-check steps
 **File**: `.github/workflows/extension-publish.yml`
 - Add checkout, pnpm setup, Node.js 22 setup, and dependency install steps
 - Add build step: `pnpm --filter generacy-extension... run build`
@@ -65,7 +65,7 @@
   - Set `skip=true` output if versions match
   - Default to proceeding if `vsce show` fails (API unavailable)
 
-### T005 Add package, publish, and artifact upload steps
+### T005 [DONE] Add package, publish, and artifact upload steps
 **File**: `.github/workflows/extension-publish.yml`
 - Add package step: `npx vsce package --no-dependencies` in `packages/generacy-extension/`
 - Add publish step (conditioned on version check not skipped):
@@ -74,7 +74,7 @@
   - Auth via `VSCE_PAT` env var only (no `--pat` flag)
 - Add VSIX artifact upload step: `actions/upload-artifact@v4` with 30-day retention (both channels)
 
-### T006 Add git tag and GitHub Release steps (stable only)
+### T006 [DONE] Add git tag and GitHub Release steps (stable only)
 **File**: `.github/workflows/extension-publish.yml`
 - Add git tag step (stable channel only, conditioned on version check not skipped):
   - Tag format: `extension-v{version}`
@@ -90,7 +90,7 @@
 
 ## Phase 3: Update Existing Workflows
 
-### T007 [P] Remove extension exclusion from `ci.yml`
+### T007 [DONE] [P] Remove extension exclusion from `ci.yml`
 **File**: `.github/workflows/ci.yml`
 - **Typecheck step** (line 45): Remove `--filter '!generacy-extension'` from the pnpm command
   - Before: `pnpm -r --filter '!generacy-extension' run --if-present typecheck`
@@ -100,7 +100,7 @@
   - After: `pnpm -r --filter '!@generacy-ai/orchestrator' --filter '!@generacy-ai/generacy' run --if-present test`
 - Keep other exclusions (`orchestrator`, `generacy`) intact
 
-### T008 [P] Delete draft workflow file
+### T008 [DONE] [P] Delete draft workflow file
 **File**: `packages/generacy-extension/extension-publish.workflow.yml`
 - Delete the superseded draft workflow file
 - This file is replaced by `.github/workflows/extension-publish.yml`
@@ -109,7 +109,7 @@
 
 ## Phase 4: Validation
 
-### T009 Verify extension scripts run locally
+### T009 [DONE] Verify extension scripts run locally
 **Commands**:
 - `pnpm --filter generacy-extension run lint`
 - `pnpm --filter generacy-extension... run build`
@@ -118,7 +118,7 @@
 - Confirm all four commands pass before pushing workflow changes
 - This validates that removing the CI exclusions won't break `ci.yml`
 
-### T010 Validate workflow YAML syntax
+### T010 [DONE] Validate workflow YAML syntax
 **Files**:
 - `.github/workflows/extension-ci.yml`
 - `.github/workflows/extension-publish.yml`

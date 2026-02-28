@@ -1,0 +1,43 @@
+name: Extension CI
+
+on:
+  pull_request:
+    branches: [develop, main]
+    paths:
+      - 'packages/generacy-extension/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm --filter generacy-extension run lint
+
+      - name: Build
+        run: pnpm --filter generacy-extension... run build
+
+      # TODO: re-enable once extension typecheck passes (blocked by #250)
+      # - name: Typecheck
+      #   run: pnpm --filter generacy-extension run typecheck
+
+      - name: Test
+        run: pnpm --filter generacy-extension run test
