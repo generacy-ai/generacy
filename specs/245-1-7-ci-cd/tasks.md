@@ -26,8 +26,10 @@
   4. `pnpm install --frozen-lockfile`
   5. `pnpm --filter generacy-extension run lint`
   6. `pnpm --filter generacy-extension... run build` (with `...` for transitive workspace deps)
-  7. `pnpm --filter generacy-extension run typecheck`
+  7. ~~`pnpm --filter generacy-extension run typecheck`~~ — commented out, blocked by #250 (100+ TS errors in extension)
   8. `pnpm --filter generacy-extension run test`
+
+> **Deviation**: Typecheck step is commented out with a TODO referencing #250. Extension typecheck currently fails with 100+ TypeScript errors from the extension MVP. Will be re-enabled once #250 resolves the type errors.
 
 ---
 
@@ -90,15 +92,17 @@
 
 ## Phase 3: Update Existing Workflows
 
-### T007 [DONE] [P] Remove extension exclusion from `ci.yml`
+### T007 [PARTIAL] [P] Remove extension exclusion from `ci.yml`
 **File**: `.github/workflows/ci.yml`
-- **Typecheck step** (line 45): Remove `--filter '!generacy-extension'` from the pnpm command
-  - Before: `pnpm -r --filter '!generacy-extension' run --if-present typecheck`
-  - After: `pnpm -r run --if-present typecheck`
-- **Test step** (line 51): Remove `--filter '!generacy-extension'` from the pnpm command
+- **Typecheck step** (line 45): ~~Remove `--filter '!generacy-extension'`~~ — **kept**, blocked by #250 (extension typecheck fails with 100+ TS errors)
+  - Current: `pnpm -r --filter '!generacy-extension' run --if-present typecheck`
+  - Target (after #250): `pnpm -r run --if-present typecheck`
+- **Test step** (line 51): [DONE] Removed `--filter '!generacy-extension'` from the pnpm command
   - Before: `pnpm -r --filter '!generacy-extension' --filter '!@generacy-ai/orchestrator' --filter '!@generacy-ai/generacy' run --if-present test`
   - After: `pnpm -r --filter '!@generacy-ai/orchestrator' --filter '!@generacy-ai/generacy' run --if-present test`
 - Keep other exclusions (`orchestrator`, `generacy`) intact
+
+> **Deviation**: Typecheck exclusion intentionally retained because removing it would break CI. Extension has 100+ TypeScript errors (blocked by #250). The test exclusion was successfully removed since all extension tests pass.
 
 ### T008 [DONE] [P] Delete draft workflow file
 **File**: `packages/generacy-extension/extension-publish.workflow.yml`
@@ -109,14 +113,14 @@
 
 ## Phase 4: Validation
 
-### T009 [DONE] Verify extension scripts run locally
+### T009 [PARTIAL] Verify extension scripts run locally
 **Commands**:
-- `pnpm --filter generacy-extension run lint`
-- `pnpm --filter generacy-extension... run build`
-- `pnpm --filter generacy-extension run typecheck`
-- `pnpm --filter generacy-extension run test`
-- Confirm all four commands pass before pushing workflow changes
-- This validates that removing the CI exclusions won't break `ci.yml`
+- `pnpm --filter generacy-extension run lint` — [PASS] warnings only, no errors
+- `pnpm --filter generacy-extension... run build` — [PASS]
+- `pnpm --filter generacy-extension run typecheck` — [FAIL] 100+ TS errors (blocked by #250)
+- `pnpm --filter generacy-extension run test` — [PASS] all tests green
+
+> **Deviation**: Typecheck fails due to pre-existing TypeScript errors in extension code (blocked by #250). Lint, build, and test all pass. This informed the decision to keep typecheck excluded/commented out in T001 and T007.
 
 ### T010 [DONE] Validate workflow YAML syntax
 **Files**:
