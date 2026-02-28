@@ -113,6 +113,7 @@ const sidebars: SidebarsConfig = {
       },
       items: [
         'architecture/overview',
+        'architecture/internals',
         'architecture/contracts',
         'architecture/security',
       ],
