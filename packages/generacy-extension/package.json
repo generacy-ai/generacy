@@ -106,6 +106,12 @@
         "icon": "$(folder-opened)"
       },
       {
+        "command": "generacy.configureEnvironment",
+        "title": "Configure Environment",
+        "category": "Generacy",
+        "icon": "$(gear)"
+      },
+      {
         "command": "generacy.login",
         "title": "Sign In",
         "category": "Generacy",
