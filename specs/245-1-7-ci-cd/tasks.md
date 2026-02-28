@@ -130,7 +130,7 @@
   - Secrets reference (`secrets.VSCE_PAT`) is correct
   - Concurrency groups are properly defined
 
-### T011 Push and verify CI triggers
+### T011 [DONE] Push and verify CI triggers
 - Push branch and open PR touching `packages/generacy-extension/**` files
 - Verify `extension-ci.yml` triggers on the PR
 - Verify `ci.yml` now includes extension in typecheck and test steps
