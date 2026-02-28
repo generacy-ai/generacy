@@ -6,16 +6,20 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Getting Started',
-      link: {
-        type: 'generated-index',
-        description: 'Start using Generacy with our progressive guides.',
-      },
+      link: { type: 'doc', id: 'getting-started/index' },
       collapsed: false,
       items: [
-        'getting-started/quick-start',
+        'getting-started/prerequisites',
         'getting-started/installation',
-        'getting-started/level-1-agency-only',
-        'getting-started/level-2-agency-humancy',
+        'getting-started/authentication',
+        'getting-started/project-setup',
+        'getting-started/configuration',
+        'getting-started/dev-environment',
+        'getting-started/verify-setup',
+        'getting-started/first-workflow',
+        'getting-started/adoption-levels',
+        'getting-started/troubleshooting',
+        'getting-started/multi-repo',
       ],
     },
     {
