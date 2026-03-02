@@ -36,7 +36,7 @@
     "headless"
   ],
   "author": "Generacy AI",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "@clack/prompts": "^0.9",
     "@generacy-ai/orchestrator": "workspace:*",
