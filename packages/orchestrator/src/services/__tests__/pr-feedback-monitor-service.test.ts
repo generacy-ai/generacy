@@ -942,4 +942,264 @@ describe('PrFeedbackMonitorService', () => {
       multiRepoService.stopPolling();
     });
   });
+
+  // ==========================================================================
+  // T014: Assignee filtering in processPrReviewEvent
+  // ==========================================================================
+
+  describe('assignee filtering in processPrReviewEvent', () => {
+    it('should process all PR events when clusterGithubUsername is undefined (backward compat)', async () => {
+      // Default service from beforeEach has no clusterGithubUsername
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issueNumber: 42,
+          command: 'address-pr-feedback',
+        }),
+      );
+    });
+
+    it('should not call getIssue for assignee check when clusterGithubUsername is undefined', async () => {
+      // Default service has no clusterGithubUsername.
+      // getIssue is still called by PrLinker.linkPrToIssue() and resolveWorkflowName(),
+      // but NOT for the assignee check path. We verify that the assignee check
+      // doesn't add extra getIssue calls.
+      const event = createPrReviewEvent();
+      await service.processPrReviewEvent(event);
+
+      // PrLinker calls getIssue once (to verify agent:* label),
+      // resolveWorkflowName calls getIssue once.
+      // No extra call from assignee check.
+      expect(mockClient.getIssue).toHaveBeenCalledTimes(2);
+    });
+
+    it('should process PR events when linked issue is assigned to the cluster user', async () => {
+      const serviceWithUser = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'agent:in-progress', color: '' }],
+        assignees: ['my-user'],
+        created_at: '',
+        updated_at: '',
+      });
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithUser.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issueNumber: 42,
+          command: 'address-pr-feedback',
+        }),
+      );
+
+      serviceWithUser.stopPolling();
+    });
+
+    it('should skip PR events when linked issue is not assigned to the cluster user', async () => {
+      const serviceWithUser = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'agent:in-progress', color: '' }],
+        assignees: ['other-user'],
+        created_at: '',
+        updated_at: '',
+      });
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithUser.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(logger.debug).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-org',
+          repo: 'test-repo',
+          issueNumber: 42,
+          prNumber: 10,
+          assignees: ['other-user'],
+        }),
+        expect.stringContaining('not assigned to this cluster'),
+      );
+
+      serviceWithUser.stopPolling();
+    });
+
+    it('should skip PR events when linked issue has no assignees', async () => {
+      const serviceWithUser = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'agent:in-progress', color: '' }],
+        assignees: [],
+        created_at: '',
+        updated_at: '',
+      });
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithUser.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-org',
+          repo: 'test-repo',
+          issueNumber: 42,
+          prNumber: 10,
+        }),
+        expect.stringContaining('no assignees'),
+      );
+
+      serviceWithUser.stopPolling();
+    });
+
+    it('should warn but still process when linked issue has multiple assignees including cluster user', async () => {
+      const serviceWithUser = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'agent:in-progress', color: '' }],
+        assignees: ['my-user', 'other-user'],
+        created_at: '',
+        updated_at: '',
+      });
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithUser.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          issueNumber: 42,
+          command: 'address-pr-feedback',
+        }),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-org',
+          repo: 'test-repo',
+          issueNumber: 42,
+          assignees: ['my-user', 'other-user'],
+        }),
+        expect.stringContaining('multiple assignees'),
+      );
+
+      serviceWithUser.stopPolling();
+    });
+
+    it('should reuse PrLinker issue data for assignee check (no extra getIssue call)', async () => {
+      const serviceWithUser = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'agent:in-progress', color: '' }],
+        assignees: ['my-user'],
+        created_at: '',
+        updated_at: '',
+      });
+
+      const event = createPrReviewEvent();
+      await serviceWithUser.processPrReviewEvent(event);
+
+      // PrLinker calls getIssue once (and returns assignees in the link result),
+      // resolveWorkflowName calls getIssue once = 2 total.
+      // No extra getIssue call for assignee check (reuses PrLinker data per Q4).
+      expect(mockClient.getIssue).toHaveBeenCalledTimes(2);
+
+      serviceWithUser.stopPolling();
+    });
+
+    it('should not check unresolved threads when assignee check skips the PR', async () => {
+      const serviceWithUser = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        number: 42,
+        title: 'Test issue',
+        body: '',
+        state: 'open',
+        labels: [{ name: 'agent:in-progress', color: '' }],
+        assignees: ['other-user'],
+        created_at: '',
+        updated_at: '',
+      });
+
+      const event = createPrReviewEvent();
+      await serviceWithUser.processPrReviewEvent(event);
+
+      // getPRComments should not be called since the assignee check skips early
+      expect(mockClient.getPRComments).not.toHaveBeenCalled();
+
+      serviceWithUser.stopPolling();
+    });
+  });
 });

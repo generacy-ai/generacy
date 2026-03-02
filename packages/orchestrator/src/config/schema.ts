@@ -124,6 +124,8 @@ export const MonitorConfigSchema = z.object({
   maxConcurrentPolls: z.number().int().min(1).max(20).default(5),
   /** Enable adaptive polling frequency */
   adaptivePolling: z.boolean().default(true),
+  /** GitHub username for this cluster — used to filter issues by assignee */
+  clusterGithubUsername: z.string().optional(),
 });
 export type MonitorConfig = z.infer<typeof MonitorConfigSchema>;
 

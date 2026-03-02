@@ -132,6 +132,15 @@ function loadFromEnv(): Record<string, unknown> {
     (config.monitor as Record<string, unknown>).webhookSecret = webhookSecret;
   }
 
+  // Cluster GitHub username for assignee-based issue filtering
+  const clusterGithubUsername = process.env['CLUSTER_GITHUB_USERNAME'];
+  if (clusterGithubUsername) {
+    if (!config.monitor) {
+      config.monitor = {};
+    }
+    (config.monitor as Record<string, unknown>).clusterGithubUsername = clusterGithubUsername;
+  }
+
   // PR Monitor config
   if (process.env['PR_MONITOR_ENABLED']) {
     if (!config.prMonitor) {

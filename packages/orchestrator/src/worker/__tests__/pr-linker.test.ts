@@ -229,6 +229,7 @@ Fixes #99
         prNumber: 10,
         issueNumber: 42,
         linkMethod: 'pr-body',
+        assignees: [],
       });
       expect(github.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
     });
@@ -246,6 +247,7 @@ Fixes #99
         prNumber: 10,
         issueNumber: 42,
         linkMethod: 'branch-name',
+        assignees: [],
       });
     });
 
@@ -274,6 +276,7 @@ Fixes #99
         prNumber: 10,
         issueNumber: 42,
         linkMethod: 'pr-body',
+        assignees: [],
       });
       // Should fetch issue #42, not #99
       expect(github.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
@@ -403,6 +406,7 @@ Fixes #99
         prNumber: 10,
         issueNumber: 7,
         linkMethod: 'pr-body',
+        assignees: [],
       });
     });
 

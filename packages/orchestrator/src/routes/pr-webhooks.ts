@@ -37,6 +37,7 @@ export interface PrWebhookRouteOptions {
   monitorService: PrFeedbackMonitorService;
   webhookSecret?: string;
   watchedRepos: Set<string>;
+  clusterGithubUsername?: string;
 }
 
 /**
