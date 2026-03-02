@@ -41,6 +41,7 @@ export class PrFeedbackMonitorService {
   private readonly queueAdapter: QueueAdapter;
   private readonly options: PrFeedbackMonitorOptions;
   private readonly prLinker: PrLinker;
+  private readonly clusterGithubUsername: string | undefined;
   private abortController: AbortController | null = null;
 
   private state: MonitorState;
@@ -52,11 +53,13 @@ export class PrFeedbackMonitorService {
     queueAdapter: QueueAdapter,
     config: PrMonitorConfig,
     repositories: RepositoryConfig[],
+    clusterGithubUsername?: string,
   ) {
     this.logger = logger;
     this.createClient = createClient;
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
+    this.clusterGithubUsername = clusterGithubUsername;
     this.options = {
       repositories,
       pollIntervalMs: config.pollIntervalMs,
@@ -114,7 +117,32 @@ export class PrFeedbackMonitorService {
 
     const { issueNumber, linkMethod } = link;
 
-    // 2. Fetch review comments and filter for unresolved threads
+    // 2. Assignee check — skip PR feedback for issues not assigned to this cluster
+    if (this.clusterGithubUsername) {
+      const issue = await client.getIssue(owner, repo, issueNumber);
+      if (issue.assignees.length === 0) {
+        this.logger.warn(
+          { owner, repo, issueNumber, prNumber },
+          'Skipping PR feedback: linked issue has no assignees',
+        );
+        return false;
+      }
+      if (!issue.assignees.includes(this.clusterGithubUsername)) {
+        this.logger.debug(
+          { owner, repo, issueNumber, prNumber, assignees: issue.assignees },
+          'Skipping PR feedback: linked issue not assigned to this cluster',
+        );
+        return false;
+      }
+      if (issue.assignees.length > 1) {
+        this.logger.warn(
+          { owner, repo, issueNumber, assignees: issue.assignees },
+          'Issue has multiple assignees — may be processed by multiple clusters',
+        );
+      }
+    }
+
+    // 3. Fetch review comments and filter for unresolved threads
     let unresolvedThreadIds: number[];
     try {
       const comments = await client.getPRComments(owner, repo, prNumber);
@@ -144,7 +172,7 @@ export class PrFeedbackMonitorService {
       `Found ${unresolvedThreadIds.length} unresolved review thread(s)`,
     );
 
-    // 3. Atomic deduplication via tryMarkProcessed (SET NX)
+    // 4. Atomic deduplication via tryMarkProcessed (SET NX)
     const isNew = await this.phaseTracker.tryMarkProcessed(
       owner, repo, issueNumber, DEDUP_PHASE,
     );
@@ -156,10 +184,10 @@ export class PrFeedbackMonitorService {
       return false;
     }
 
-    // 4. Resolve workflow name from issue labels
+    // 5. Resolve workflow name from issue labels
     const workflowName = await this.resolveWorkflowName(owner, repo, issueNumber);
 
-    // 5. Build and enqueue queue item
+    // 6. Build and enqueue queue item
     const metadata: PrFeedbackMetadata = {
       prNumber,
       reviewThreadIds: unresolvedThreadIds,
@@ -182,7 +210,7 @@ export class PrFeedbackMonitorService {
       'PR feedback work enqueued',
     );
 
-    // 6. Add waiting-for label to issue
+    // 7. Add waiting-for label to issue
     try {
       await client.addLabels(owner, repo, issueNumber, [WAITING_FOR_PR_FEEDBACK_LABEL]);
     } catch (error) {

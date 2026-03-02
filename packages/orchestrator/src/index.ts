@@ -146,6 +146,12 @@ export {
   type GitHubWebhook,
 } from './services/webhook-setup-service.js';
 
+export {
+  resolveClusterIdentity,
+  filterByAssignee,
+  type FilterableIssue,
+} from './services/identity.js';
+
 // Auth
 export {
   API_KEY_HEADER,

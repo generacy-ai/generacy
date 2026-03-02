@@ -7,6 +7,7 @@ import type {
   QueueItem,
 } from '../types/index.js';
 import type { RepositoryConfig, MonitorConfig } from '../config/schema.js';
+import { filterByAssignee } from './identity.js';
 
 /**
  * Known process:* and completed:* label names derived from WORKFLOW_LABELS.
@@ -53,6 +54,7 @@ export class LabelMonitorService {
   private readonly phaseTracker: PhaseTracker;
   private readonly queueAdapter: QueueAdapter;
   private readonly options: LabelMonitorOptions;
+  private readonly clusterGithubUsername: string | undefined;
   private abortController: AbortController | null = null;
   private pollCycleCount = 0;
 
@@ -72,11 +74,13 @@ export class LabelMonitorService {
     queueAdapter: QueueAdapter,
     config: MonitorConfig,
     repositories: RepositoryConfig[],
+    clusterGithubUsername?: string,
   ) {
     this.logger = logger;
     this.createClient = createClient;
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
+    this.clusterGithubUsername = clusterGithubUsername;
     this.options = {
       repositories,
       pollIntervalMs: config.pollIntervalMs,
@@ -423,7 +427,8 @@ export class LabelMonitorService {
     try {
       // Check known process:* labels for issues (REST API, 2 calls per repo)
       for (const processLabel of KNOWN_PROCESS_LABELS) {
-        const issues = await client.listIssuesWithLabel(owner, repo, processLabel);
+        const allIssues = await client.listIssuesWithLabel(owner, repo, processLabel);
+        const issues = filterByAssignee(allIssues, this.clusterGithubUsername, this.logger);
         for (const issue of issues) {
           const event = this.parseLabelEvent(
             processLabel,
@@ -443,7 +448,8 @@ export class LabelMonitorService {
       // Only checked periodically to conserve API rate limit
       if (checkCompleted) {
         for (const completedLabel of KNOWN_COMPLETED_LABELS) {
-          const issues = await client.listIssuesWithLabel(owner, repo, completedLabel);
+          const allIssues = await client.listIssuesWithLabel(owner, repo, completedLabel);
+          const issues = filterByAssignee(allIssues, this.clusterGithubUsername, this.logger);
           for (const issue of issues) {
             const issueLabels = issue.labels.map(l => l.name);
             const event = this.parseLabelEvent(

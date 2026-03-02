@@ -47,3 +47,9 @@ export {
 } from './epic-completion-monitor-service.js';
 
 export { WebhookSetupService } from './webhook-setup-service.js';
+
+export {
+  resolveClusterIdentity,
+  filterByAssignee,
+  type FilterableIssue,
+} from './identity.js';

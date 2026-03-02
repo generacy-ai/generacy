@@ -12,18 +12,18 @@
 
 ## Phase 1: Config & Identity Resolution
 
-### T001 [US2] Add `clusterGithubUsername` to config schema
+### T001 [DONE] [US2] Add `clusterGithubUsername` to config schema
 **File**: `packages/orchestrator/src/config/schema.ts`
 - Add `clusterGithubUsername: z.string().optional()` to `MonitorConfigSchema`
 - Type `MonitorConfig` auto-updates via `z.infer`
 
-### T002 [P] [US2] Read `CLUSTER_GITHUB_USERNAME` env var in config loader
+### T002 [DONE] [P] [US2] Read `CLUSTER_GITHUB_USERNAME` env var in config loader
 **File**: `packages/orchestrator/src/config/loader.ts`
 - Add env var read for `CLUSTER_GITHUB_USERNAME` in `loadFromEnv()`
 - Map to `config.monitor.clusterGithubUsername`
 - Follow existing pattern (e.g., `WEBHOOK_SECRET` block)
 
-### T003 [P] [US2, US3, US4] Create identity resolution utility
+### T003 [DONE] [P] [US2, US3, US4] Create identity resolution utility
 **File**: `packages/orchestrator/src/services/identity.ts` (**NEW**)
 - Implement `resolveClusterIdentity(configUsername, logger)` returning `Promise<string | undefined>`
   - Check `configUsername` first (from env var via config)
@@ -37,7 +37,7 @@
   - Warn on multiple assignees but still include the issue
   - Log filtered-out issues at `debug` level with issue number, assignees, and reason
 
-### T004 [US2] Export identity utilities from services index
+### T004 [DONE] [US2] Export identity utilities from services index
 **File**: `packages/orchestrator/src/services/index.ts`
 - Add `export { resolveClusterIdentity, filterByAssignee } from './identity.js';`
 
@@ -45,7 +45,7 @@
 
 ## Phase 2: Update Monitor Services
 
-### T005 [US1] Add assignee filtering to LabelMonitorService
+### T005 [DONE] [US1] Add assignee filtering to LabelMonitorService
 **File**: `packages/orchestrator/src/services/label-monitor-service.ts`
 - Add `import { filterByAssignee } from './identity.js';`
 - Add `clusterGithubUsername?: string` as 7th constructor parameter
@@ -53,7 +53,7 @@
 - In `pollRepo()`, after each `client.listIssuesWithLabel()` call, apply `filterByAssignee()` before the processing loop
 - Apply to both `KNOWN_PROCESS_LABELS` and `KNOWN_COMPLETED_LABELS` iteration paths
 
-### T006 [P] [US1] Add assignee filtering to PrFeedbackMonitorService
+### T006 [DONE] [P] [US1] Add assignee filtering to PrFeedbackMonitorService
 **File**: `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
 - Add `clusterGithubUsername?: string` as 7th constructor parameter
 - Store as `private readonly clusterGithubUsername: string | undefined`
@@ -62,7 +62,7 @@
   - Check `issue.assignees.includes(clusterGithubUsername)`
   - Skip with `debug` log if not assigned; warn if no assignees; warn if multiple assignees
 
-### T007 [P] [US1] Add `assignees` field to `GitHubWebhookPayload.issue` type
+### T007 [DONE] [P] [US1] Add `assignees` field to `GitHubWebhookPayload.issue` type
 **File**: `packages/orchestrator/src/types/monitor.ts`
 - Add `assignees: Array<{ login: string }>` to the `issue` object in `GitHubWebhookPayload`
 
@@ -70,7 +70,7 @@
 
 ## Phase 3: Update Webhook Handlers
 
-### T008 [US1] Add assignee check to label webhook handler
+### T008 [DONE] [US1] Add assignee check to label webhook handler
 **File**: `packages/orchestrator/src/routes/webhooks.ts`
 - Add `clusterGithubUsername?: string` to `WebhookRouteOptions` interface
 - After repo whitelist check and before `parseLabelEvent()`:
@@ -79,7 +79,7 @@
   - Return `{ status: 'ignored', reason: 'not assigned to this cluster' }` for wrong assignee
   - Log skipped issues at appropriate levels (warn for unassigned, debug for wrong assignee)
 
-### T009 [P] [US1] Add assignee support to PR webhook handler
+### T009 [DONE] [P] [US1] Add assignee support to PR webhook handler
 **File**: `packages/orchestrator/src/routes/pr-webhooks.ts`
 - Add `clusterGithubUsername?: string` to `PrWebhookRouteOptions` interface
 - No route-level filtering needed (handled in `PrFeedbackMonitorService.processPrReviewEvent()` from T006)
@@ -89,7 +89,7 @@
 
 ## Phase 4: Wire Up in Server & CLI
 
-### T010 [US1, US2, US3, US4] Wire identity resolution into server.ts
+### T010 [DONE] [US1, US2, US3, US4] Wire identity resolution into server.ts
 **File**: `packages/orchestrator/src/server.ts`
 - Add `import { resolveClusterIdentity } from './services/identity.js';`
 - After Fastify instantiation and config loading, call `resolveClusterIdentity(config.monitor.clusterGithubUsername, server.log)`
@@ -98,7 +98,7 @@
 - Pass resolved `clusterGithubUsername` to `setupWebhookRoutes()` options
 - Pass resolved `clusterGithubUsername` to `setupPrWebhookRoutes()` options
 
-### T011 [P] [US1, US3] Wire identity resolution into CLI orchestrator command
+### T011 [DONE] [P] [US1, US3] Wire identity resolution into CLI orchestrator command
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - Import `resolveClusterIdentity` from `@generacy-ai/orchestrator`
 - In `setupLabelMonitor()`, resolve identity before `LabelMonitorService` construction
@@ -108,7 +108,7 @@
 
 ## Phase 5: Tests
 
-### T012 [US2, US3, US4] Write unit tests for identity resolution
+### T012 [DONE] [US2, US3, US4] Write unit tests for identity resolution
 **File**: `packages/orchestrator/src/services/__tests__/identity.test.ts` (**NEW**)
 - Mock `node:child_process` `execFile` via `vi.mock()`
 - Test `resolveClusterIdentity`:
@@ -125,7 +125,7 @@
   - Warns on multiple assignees but still includes the issue
   - Logs skipped issues at debug level with issue number and assignees
 
-### T013 [P] [US1] Extend LabelMonitorService tests for assignee filtering
+### T013 [DONE] [P] [US1] Extend LabelMonitorService tests for assignee filtering
 **File**: `packages/orchestrator/tests/unit/services/label-monitor-service.test.ts`
 - Add test group for assignee filtering in `pollRepo()`:
   - With `clusterGithubUsername: undefined`, all issues are processed (backward compat)
@@ -134,7 +134,7 @@
   - Unassigned issues are skipped with warning
 - Follow existing test patterns: `createMockLogger()`, `createMockGitHubClient()`, etc.
 
-### T014 [P] [US1] Extend PrFeedbackMonitorService tests for assignee filtering
+### T014 [DONE] [P] [US1] Extend PrFeedbackMonitorService tests for assignee filtering
 **File**: `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.test.ts`
 - Add test group for assignee check in `processPrReviewEvent()`:
   - With `clusterGithubUsername: undefined`, all PR events are processed (backward compat)
@@ -144,7 +144,7 @@
   - Warning logged for multiple assignees
 - Follow existing test patterns: `createMockLogger()`, `createMockGitHubClient()`, etc.
 
-### T015 [P] [US1] Extend webhook handler tests for assignee filtering
+### T015 [DONE] [P] [US1] Extend webhook handler tests for assignee filtering
 **Files**:
 - `packages/orchestrator/src/routes/__tests__/webhooks.test.ts` (**NEW** — no existing label webhook test file)
 - `packages/orchestrator/src/routes/__tests__/pr-webhooks.test.ts` (extend existing)
@@ -162,7 +162,7 @@
 
 ## Phase 6: Verification & Cleanup
 
-### T016 [US1] TypeScript compilation check
+### T016 [DONE] [US1] TypeScript compilation check
 - Run `cd packages/orchestrator && pnpm tsc --noEmit`
 - Fix any type errors
 
@@ -170,7 +170,7 @@
 - Run `cd packages/orchestrator && pnpm test`
 - Fix any failures
 
-### T018 [US1] Verify exports are correct
+### T018 [DONE] [US1] Verify exports are correct
 - Confirm `resolveClusterIdentity` and `filterByAssignee` are exported from `packages/orchestrator/src/services/index.ts`
 - Confirm they're accessible from the package's main entry point if needed by CLI (T011)
 

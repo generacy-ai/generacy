@@ -130,6 +130,7 @@ export interface GitHubWebhookPayload {
     number: number;
     title: string;
     labels: Array<{ name: string }>;
+    assignees: Array<{ login: string }>;
   };
   repository: {
     owner: { login: string };

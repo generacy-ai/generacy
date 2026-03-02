@@ -23,6 +23,7 @@ import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
+import { resolveClusterIdentity } from './services/identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
 
@@ -112,6 +113,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   });
   server.addHook('preHandler', authMiddleware);
 
+  // Resolve cluster identity for assignee-based issue filtering
+  const clusterGithubUsername = await resolveClusterIdentity(
+    config.monitor.clusterGithubUsername,
+    server.log,
+  );
+
   // Sync labels for watched repositories
   if (config.repositories.length > 0) {
     const labelSyncService = new LabelSyncService(server.log, createGitHubClient);
@@ -187,6 +194,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       queueAdapter,
       config.monitor,
       config.repositories,
+      clusterGithubUsername,
     );
 
     // Initialize PR feedback monitor service (if enabled)
@@ -198,6 +206,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         queueAdapter,
         config.prMonitor,
         config.repositories,
+        clusterGithubUsername,
       );
     }
   }
@@ -230,6 +239,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         monitorService: labelMonitorService,
         webhookSecret: config.monitor.webhookSecret,
         watchedRepos,
+        clusterGithubUsername,
       });
     }
 
@@ -242,6 +252,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         monitorService: prFeedbackMonitorService,
         webhookSecret: config.prMonitor.webhookSecret,
         watchedRepos,
+        clusterGithubUsername,
       });
     }
 

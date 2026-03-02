@@ -198,7 +198,7 @@ async function setupLabelMonitor(
   logger: ReturnType<typeof getLogger>,
 ) {
   // Dynamic import to avoid loading orchestrator deps when label monitor is disabled
-  const { LabelMonitorService, SmeeWebhookReceiver, PhaseTrackerService, WebhookSetupService } = await import('@generacy-ai/orchestrator');
+  const { LabelMonitorService, SmeeWebhookReceiver, PhaseTrackerService, WebhookSetupService, resolveClusterIdentity } = await import('@generacy-ai/orchestrator');
   const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
   const { Redis: IORedis } = await import('ioredis');
 
@@ -283,6 +283,12 @@ async function setupLabelMonitor(
   const phaseTracker = new PhaseTrackerService(monitorLogger, phaseTrackerRedis);
   const bridge = new LabelMonitorBridge(server, createGitHubClient, loggerAdapter);
 
+  // Resolve cluster identity for assignee-based issue filtering
+  const clusterGithubUsername = await resolveClusterIdentity(
+    process.env['CLUSTER_GITHUB_USERNAME'],
+    monitorLogger,
+  );
+
   const monitor = new LabelMonitorService(
     monitorLogger,
     createGitHubClient,
@@ -290,6 +296,7 @@ async function setupLabelMonitor(
     bridge,
     { pollIntervalMs, maxConcurrentPolls: 5, adaptivePolling: !useSmee },
     repositories,
+    clusterGithubUsername,
   );
 
   // Create smee receiver if channel URL is configured
