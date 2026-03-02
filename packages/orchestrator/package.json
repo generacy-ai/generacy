@@ -55,7 +55,7 @@
     "fastify",
     "generacy"
   ],
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/generacy-ai/generacy.git",

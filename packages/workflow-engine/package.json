@@ -27,7 +27,7 @@
     "automation"
   ],
   "author": "Generacy AI",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "dependencies": {
     "uuid": "^9.0.0",
     "yaml": "^2.4.0",

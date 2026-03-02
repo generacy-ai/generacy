@@ -1,5 +1,6 @@
 {
   "name": "devcontainer-feature",
   "private": true,
+  "license": "Apache-2.0",
   "description": "Generacy Dev Container Feature (published to GHCR, not npm)"
 }

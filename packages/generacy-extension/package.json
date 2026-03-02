@@ -4,7 +4,7 @@
   "description": "Workflow development IDE for local development and cloud orchestration management",
   "version": "0.1.0",
   "publisher": "generacy-ai",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
