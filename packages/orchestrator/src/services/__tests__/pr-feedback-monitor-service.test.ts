@@ -1138,7 +1138,7 @@ describe('PrFeedbackMonitorService', () => {
       serviceWithUser.stopPolling();
     });
 
-    it('should call getIssue for assignee check when clusterGithubUsername is set', async () => {
+    it('should reuse PrLinker issue data for assignee check (no extra getIssue call)', async () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
@@ -1163,9 +1163,10 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await serviceWithUser.processPrReviewEvent(event);
 
-      // PrLinker calls getIssue once, assignee check calls it once,
-      // resolveWorkflowName calls it once = 3 total
-      expect(mockClient.getIssue).toHaveBeenCalledTimes(3);
+      // PrLinker calls getIssue once (and returns assignees in the link result),
+      // resolveWorkflowName calls getIssue once = 2 total.
+      // No extra getIssue call for assignee check (reuses PrLinker data per Q4).
+      expect(mockClient.getIssue).toHaveBeenCalledTimes(2);
 
       serviceWithUser.stopPolling();
     });

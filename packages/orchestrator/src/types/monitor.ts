@@ -58,6 +58,8 @@ export interface PrToIssueLink {
   issueNumber: number;
   /** How the link was resolved */
   linkMethod: 'pr-body' | 'branch-name';
+  /** Issue assignees (returned from PrLinker to avoid duplicate getIssue calls) */
+  assignees: string[];
 }
 
 /**

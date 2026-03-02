@@ -115,28 +115,28 @@ export class PrFeedbackMonitorService {
       return false;
     }
 
-    const { issueNumber, linkMethod } = link;
+    const { issueNumber, linkMethod, assignees } = link;
 
     // 2. Assignee check — skip PR feedback for issues not assigned to this cluster
+    //    Uses assignees returned by PrLinker to avoid a duplicate getIssue() call
     if (this.clusterGithubUsername) {
-      const issue = await client.getIssue(owner, repo, issueNumber);
-      if (issue.assignees.length === 0) {
+      if (assignees.length === 0) {
         this.logger.warn(
           { owner, repo, issueNumber, prNumber },
           'Skipping PR feedback: linked issue has no assignees',
         );
         return false;
       }
-      if (!issue.assignees.includes(this.clusterGithubUsername)) {
+      if (!assignees.includes(this.clusterGithubUsername)) {
         this.logger.debug(
-          { owner, repo, issueNumber, prNumber, assignees: issue.assignees },
+          { owner, repo, issueNumber, prNumber, assignees },
           'Skipping PR feedback: linked issue not assigned to this cluster',
         );
         return false;
       }
-      if (issue.assignees.length > 1) {
+      if (assignees.length > 1) {
         this.logger.warn(
-          { owner, repo, issueNumber, assignees: issue.assignees },
+          { owner, repo, issueNumber, assignees },
           'Issue has multiple assignees — may be processed by multiple clusters',
         );
       }
