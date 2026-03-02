@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -11,7 +11,7 @@
 - A) Process unassigned issues on all clusters: Unassigned issues bypass the filter entirely, behaving as if filtering is disabled for that issue. This is safer for adoption but reduces the partitioning benefit for issues that haven't been assigned yet.
 - B) Skip unassigned issues on all clusters: Only explicitly assigned issues are processed. This enforces a strict "assign before label" workflow but risks silently dropping issues if developers forget to assign.
 - C) Configurable behavior via env var: Add a `CLUSTER_PROCESS_UNASSIGNED` boolean (default: true) to control whether unassigned issues are processed. More flexible but adds configuration complexity.
-**Answer**:
+**Answer**: **B) Skip unassigned issues.** The whole purpose of this feature is to prevent duplicate processing. Allowing unassigned issues through on all clusters defeats that for any issue someone forgets to assign. The workflow should be explicit: assign first, then label. Good `warn`-level logging when an issue is skipped due to no assignees will catch workflow mistakes quickly.
 
 ---
 
@@ -22,7 +22,7 @@
 - A) Already included: The `Issue` type from workflow-engine includes `assignees` and the GitHub API list endpoint returns it. No additional API calls needed.
 - B) Needs workflow-engine update: The `Issue` type needs `assignees` added. The GitHub Issues API already returns assignees in list responses, so this is just a type/mapping change in workflow-engine.
 - C) Requires per-issue fetch: The list endpoint doesn't return assignees and a separate `getIssue()` call is needed per issue. Consider batching or caching strategies.
-**Answer**:
+**Answer**: **A) Already included.** Verified directly. `gh-cli.ts` already requests `assignees` in the `--json` field list for `listIssuesWithLabel()`, and the `Issue` type already has `assignees: string[]`. No changes needed to workflow-engine.
 
 ---
 
@@ -33,7 +33,7 @@
 - A) No special handling: This is a user workflow error. Document that each issue should be assigned to exactly one cluster identity. Multiple assignments result in duplicate processing (same as current behavior).
 - B) Log a warning: When an issue has multiple assignees, log a warning-level message indicating potential duplicate processing, but still process the issue.
 - C) First-assignee wins: Only process if the cluster's username matches the first assignee in the list. This is fragile and depends on GitHub's ordering.
-**Answer**:
+**Answer**: **B) Log a warning.** Pragmatic approach. The system already handles this scenario (it's the same as today's behavior for that specific issue), so nothing breaks. A `warn`-level log gives visibility without adding complexity. Document that each issue should have one cluster assignee.
 
 ---
 
@@ -44,7 +44,7 @@
 - A) Reuse PrLinker's issue data: Modify `PrLinker.linkPrToIssue()` to return the issue's assignees in its result, avoiding the duplicate fetch. This changes the PrLinker interface.
 - B) Separate fetch as specified: Keep the additional `getIssue()` call. Simpler implementation, but adds one extra API call per PR event.
 - C) Cache at client level: Implement a short-lived cache in the GitHub client so the second `getIssue()` call hits the cache. No interface changes needed.
-**Answer**:
+**Answer**: **A) Reuse PrLinker's issue data.** Making a redundant `getIssue()` call per PR event is wasteful. `PrLinker.linkPrToIssue()` already fetches the issue — just extend its return type to include `assignees`. Minor interface change, saves an API call per PR per poll cycle.
 
 ---
 
@@ -55,7 +55,7 @@
 - A) Shared utility function: Export a `filterByAssignee(issues, username, logger)` function from `services/identity.ts`. Services call the shared function. Single point of maintenance.
 - B) Duplicated private methods as specified: Each service has its own copy. Simpler per-service, but three copies to maintain.
 - C) Base class or mixin: Create a shared base class or mixin that provides the filtering. More structural change but follows OOP patterns.
-**Answer**:
+**Answer**: **A) Shared utility function.** The `services/identity.ts` file is already being created. Adding `filterByAssignee(issues, username, logger)` there is trivial and avoids maintaining three identical copies. This is pure function logic with no state — no reason to duplicate it.
 
 ---
 
@@ -66,7 +66,7 @@
 - A) Simple 10s timeout, generic error: Kill the subprocess after 10s. Log a single warning message regardless of failure type. Keep it simple.
 - B) 10s timeout with error classification: Kill after 10s. Parse stderr to distinguish "gh not found", "not authenticated", and "network error". Log specific warnings for each to aid debugging.
 - C) 5s timeout, strict: Use a shorter timeout since this blocks startup. Log specific errors. If the timeout is hit, suggest setting `CLUSTER_GITHUB_USERNAME` explicitly.
-**Answer**:
+**Answer**: **B) 10s timeout with error classification.** This is a one-time startup cost, so 10s is fine. Distinguishing "gh not found" vs. "not authenticated" vs. "network timeout" in the log output will save significant debugging time when developers set up new environments. Suggest `CLUSTER_GITHUB_USERNAME` in the error message for all failure cases.
 
 ---
 
@@ -77,7 +77,7 @@
 - A) Polling catches it: The polling loop will pick up the issue on its next cycle (since the label is still present and the assignee will be set by then). No extra mechanism needed — the hybrid webhook+polling design already handles this.
 - B) Strict enforcement: Document that "assign before label" is required. If missed, the developer must remove and re-add the label. Simple and explicit.
 - C) Delayed webhook processing: When a webhook fires for an unassigned issue, schedule a delayed retry (e.g., 30s) to re-check assignees. More complex but handles the race condition.
-**Answer**:
+**Answer**: **A) Polling catches it.** The hybrid webhook + polling architecture was specifically designed to handle cases where webhooks have stale/incomplete data. If a developer labels before assigning, the webhook skips it, but the polling loop will detect the label + assignee on the next cycle (within 30s). No new mechanism needed — the existing architecture already solves this.
 
 ---
 
@@ -88,7 +88,7 @@
 - A) Add optional `reason` field: Add `reason?: string` to the response type. Existing consumers ignore unknown fields, so this is backward-compatible.
 - B) Use existing `status: 'ignored'` only: Don't add `reason` to the response. Log the reason server-side at debug level instead. No response contract change.
 - C) New status value: Add `status: 'filtered'` as a distinct status from `'ignored'` to differentiate assignee filtering from other ignore reasons.
-**Answer**:
+**Answer**: **A) Add optional `reason` field (already existing pattern).** The current webhook handler already returns `reason` strings in every response (e.g., `{ status: 'ignored', reason: 'not a labeled event' }`, `{ status: 'ignored', reason: 'not a watched repository' }`). This isn't a contract change — it's following the existing pattern.
 
 ---
 
@@ -99,7 +99,7 @@
 - A) Filter on parent epic assignee: Only the cluster whose identity matches the epic's assignee monitors its completion. Simple and consistent with the other services.
 - B) Filter on child issue assignees: A cluster monitors an epic if any of its child issues are assigned to it. More semantically correct but requires fetching child issues before filtering.
 - C) No filtering on epics: Epic completion monitoring is a lightweight read-only check (no processing/enqueuing). Skip assignee filtering entirely for this service to avoid gaps.
-**Answer**:
+**Answer**: **C) No filtering on epics.** Epic completion monitoring is lightweight and read-only — it checks child states and updates a status comment. The real work (enqueuing `epic-complete`) happens when `LabelMonitorService` detects the `completed:children-complete` label, and **that** will filter by assignee. If we filter at the epic monitor level, we create a gap: an epic assigned to no one (or the wrong person) never gets its completion label added, and the workflow stalls silently. Multiple clusters updating the same status comment is idempotent, so there's no harm.
 
 ---
 
@@ -110,4 +110,4 @@
 - A) Server.ts only: Identity resolution lives in `createOrchestratorServer()`. The CLI just passes config; the server resolves identity internally. Single code path.
 - B) CLI resolves and passes to server: The CLI resolves identity and passes it as a parameter to `createOrchestratorServer()`. This allows the CLI to log the identity before server construction.
 - C) Both paths: The CLI resolves for its own `LabelMonitorService` construction (if it constructs one directly), and `server.ts` resolves for its services. Each entry point handles its own resolution.
-**Answer**:
+**Answer**: **A) Server.ts only.** Single code path. The CLI already delegates to `createOrchestratorServer()` / `server.ts` for service construction. Identity resolution should live there so both entry points (direct server startup and CLI invocation) get it automatically. No duplication.
