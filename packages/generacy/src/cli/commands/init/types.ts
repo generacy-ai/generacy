@@ -1,3 +1,5 @@
+import type { ClusterVariant } from '@generacy-ai/templates';
+
 // ---------------------------------------------------------------------------
 // Resolved init options — all values are concrete (no undefined)
 // ---------------------------------------------------------------------------
@@ -27,6 +29,9 @@ export interface InitOptions {
 
   /** Release stream: stable for production, preview for early access. */
   releaseStream: 'stable' | 'preview';
+
+  /** Cluster variant: "standard" (DooD) or "microservices" (DinD). */
+  variant: ClusterVariant;
 
   /** Overwrite all existing files without prompting. */
   force: boolean;

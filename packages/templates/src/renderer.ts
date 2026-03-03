@@ -187,10 +187,18 @@ function isStaticFile(templatePath: string): boolean {
 /**
  * Select templates to render based on project context
  *
+ * Routes to cluster variant templates based on `context.cluster.variant`.
+ * Shared templates (config, env, gitignore, extensions) are always included.
+ * Each variant gets its own Dockerfile, docker-compose, devcontainer.json,
+ * and .env.template, plus shared static scripts. The microservices variant
+ * additionally includes the Docker-in-Docker setup script.
+ *
  * @param context - Template context
  * @returns Array of template information for rendering
  */
 export function selectTemplates(context: TemplateContext): TemplateInfo[] {
+  const { variant } = context.cluster;
+
   const templates: TemplateInfo[] = [
     // Shared templates (always included)
     {
@@ -217,30 +225,61 @@ export function selectTemplates(context: TemplateContext): TemplateInfo[] {
       requiresMerge: true, // Special handling for merge
       isStatic: false,
     },
-  ];
 
-  // Add type-specific templates
-  if (context.repos.isMultiRepo) {
-    templates.push(
-      {
-        templatePath: 'multi-repo/devcontainer.json.hbs',
-        targetPath: '.devcontainer/devcontainer.json',
-        requiresMerge: false,
-        isStatic: false,
-      },
-      {
-        templatePath: 'multi-repo/docker-compose.yml.hbs',
-        targetPath: '.devcontainer/docker-compose.yml',
-        requiresMerge: false,
-        isStatic: false,
-      }
-    );
-  } else {
-    templates.push({
-      templatePath: 'single-repo/devcontainer.json.hbs',
+    // Cluster variant templates (Handlebars-rendered)
+    {
+      templatePath: `cluster/${variant}/Dockerfile.hbs`,
+      targetPath: '.devcontainer/Dockerfile',
+      requiresMerge: false,
+      isStatic: false,
+    },
+    {
+      templatePath: `cluster/${variant}/docker-compose.yml.hbs`,
+      targetPath: '.devcontainer/docker-compose.yml',
+      requiresMerge: false,
+      isStatic: false,
+    },
+    {
+      templatePath: `cluster/${variant}/devcontainer.json.hbs`,
       targetPath: '.devcontainer/devcontainer.json',
       requiresMerge: false,
       isStatic: false,
+    },
+    {
+      templatePath: `cluster/${variant}/env.template.hbs`,
+      targetPath: '.devcontainer/.env.template',
+      requiresMerge: false,
+      isStatic: false,
+    },
+
+    // Shared static scripts (copied as-is, no Handlebars rendering)
+    {
+      templatePath: 'cluster/shared/scripts/entrypoint-orchestrator.sh',
+      targetPath: '.devcontainer/scripts/entrypoint-orchestrator.sh',
+      requiresMerge: false,
+      isStatic: true,
+    },
+    {
+      templatePath: 'cluster/shared/scripts/entrypoint-worker.sh',
+      targetPath: '.devcontainer/scripts/entrypoint-worker.sh',
+      requiresMerge: false,
+      isStatic: true,
+    },
+    {
+      templatePath: 'cluster/shared/scripts/setup-credentials.sh',
+      targetPath: '.devcontainer/scripts/setup-credentials.sh',
+      requiresMerge: false,
+      isStatic: true,
+    },
+  ];
+
+  // Microservices variant includes Docker-in-Docker setup script
+  if (variant === 'microservices') {
+    templates.push({
+      templatePath: 'cluster/shared/scripts/setup-docker-dind.sh',
+      targetPath: '.devcontainer/scripts/setup-docker-dind.sh',
+      requiresMerge: false,
+      isStatic: true,
     });
   }
 

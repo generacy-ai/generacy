@@ -3,6 +3,9 @@
  *
  * Tests template rendering, Handlebars helpers, template selection logic,
  * error handling, and special cases like extensions.json merging.
+ *
+ * Template selection routes to cluster variant directories based on
+ * context.cluster.variant: "standard" (DooD) or "microservices" (DinD).
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -201,60 +204,34 @@ describe('Handlebars Helper Functions', () => {
 });
 
 describe('Template Selection Logic', () => {
-  describe('selectTemplates', () => {
-    it('should select single-repo templates', () => {
-      const templates = selectTemplates(singleRepoContext as TemplateContext);
-      const templatePaths = templates.map(t => t.templatePath);
-      const targetPaths = templates.map(t => t.targetPath);
+  // Helper to create context with a specific variant
+  function contextWithVariant(
+    base: typeof singleRepoContext,
+    variant: 'standard' | 'microservices'
+  ): TemplateContext {
+    return { ...base, cluster: { variant } } as TemplateContext;
+  }
 
-      // Should include shared templates
-      expect(templatePaths).toContain('shared/config.yaml.hbs');
-      expect(templatePaths).toContain('shared/generacy.env.template.hbs');
-      expect(templatePaths).toContain('shared/gitignore.template');
-      expect(templatePaths).toContain('shared/extensions.json.hbs');
+  describe('selectTemplates - shared templates', () => {
+    it('should always include shared templates regardless of variant', () => {
+      const standardTemplates = selectTemplates(
+        contextWithVariant(singleRepoContext, 'standard')
+      );
+      const microservicesTemplates = selectTemplates(
+        contextWithVariant(singleRepoContext, 'microservices')
+      );
 
-      // Should include single-repo devcontainer
-      expect(templatePaths).toContain('single-repo/devcontainer.json.hbs');
+      const sharedPaths = [
+        'shared/config.yaml.hbs',
+        'shared/generacy.env.template.hbs',
+        'shared/gitignore.template',
+        'shared/extensions.json.hbs',
+      ];
 
-      // Should NOT include multi-repo templates
-      expect(templatePaths).not.toContain('multi-repo/devcontainer.json.hbs');
-      expect(templatePaths).not.toContain('multi-repo/docker-compose.yml.hbs');
-
-      // Check target paths
-      expect(targetPaths).toContain('.generacy/config.yaml');
-      expect(targetPaths).toContain('.devcontainer/devcontainer.json');
-      expect(targetPaths).toContain('.vscode/extensions.json');
-
-      // Should have exactly 5 files for single-repo
-      expect(templates).toHaveLength(5);
-    });
-
-    it('should select multi-repo templates', () => {
-      const templates = selectTemplates(multiRepoContext as TemplateContext);
-      const templatePaths = templates.map(t => t.templatePath);
-      const targetPaths = templates.map(t => t.targetPath);
-
-      // Should include shared templates
-      expect(templatePaths).toContain('shared/config.yaml.hbs');
-      expect(templatePaths).toContain('shared/generacy.env.template.hbs');
-      expect(templatePaths).toContain('shared/gitignore.template');
-      expect(templatePaths).toContain('shared/extensions.json.hbs');
-
-      // Should include multi-repo templates
-      expect(templatePaths).toContain('multi-repo/devcontainer.json.hbs');
-      expect(templatePaths).toContain('multi-repo/docker-compose.yml.hbs');
-
-      // Should NOT include single-repo devcontainer
-      expect(templatePaths).not.toContain('single-repo/devcontainer.json.hbs');
-
-      // Check target paths
-      expect(targetPaths).toContain('.generacy/config.yaml');
-      expect(targetPaths).toContain('.devcontainer/devcontainer.json');
-      expect(targetPaths).toContain('.devcontainer/docker-compose.yml');
-      expect(targetPaths).toContain('.vscode/extensions.json');
-
-      // Should have exactly 6 files for multi-repo
-      expect(templates).toHaveLength(6);
+      for (const path of sharedPaths) {
+        expect(standardTemplates.map(t => t.templatePath)).toContain(path);
+        expect(microservicesTemplates.map(t => t.templatePath)).toContain(path);
+      }
     });
 
     it('should mark extensions.json for merge', () => {
@@ -282,32 +259,251 @@ describe('Template Selection Logic', () => {
     });
   });
 
-  describe('Utility functions', () => {
-    it('getTemplatePaths should return template paths', () => {
-      const paths = getTemplatePaths(singleRepoContext as TemplateContext);
-      expect(paths).toContain('shared/config.yaml.hbs');
-      expect(paths).toContain('single-repo/devcontainer.json.hbs');
-      expect(paths).toHaveLength(5);
+  describe('selectTemplates - standard variant', () => {
+    it('should select standard cluster templates', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+      const templatePaths = templates.map(t => t.templatePath);
+
+      // Cluster variant templates
+      expect(templatePaths).toContain('cluster/standard/Dockerfile.hbs');
+      expect(templatePaths).toContain('cluster/standard/docker-compose.yml.hbs');
+      expect(templatePaths).toContain('cluster/standard/devcontainer.json.hbs');
+      expect(templatePaths).toContain('cluster/standard/env.template.hbs');
+
+      // Should NOT include microservices templates
+      expect(templatePaths).not.toContain('cluster/microservices/Dockerfile.hbs');
+      expect(templatePaths).not.toContain('cluster/microservices/docker-compose.yml.hbs');
+      expect(templatePaths).not.toContain('cluster/microservices/devcontainer.json.hbs');
+      expect(templatePaths).not.toContain('cluster/microservices/env.template.hbs');
     });
 
-    it('getTargetPaths should return target paths', () => {
+    it('should include shared static scripts', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+      const templatePaths = templates.map(t => t.templatePath);
+
+      expect(templatePaths).toContain('cluster/shared/scripts/entrypoint-orchestrator.sh');
+      expect(templatePaths).toContain('cluster/shared/scripts/entrypoint-worker.sh');
+      expect(templatePaths).toContain('cluster/shared/scripts/setup-credentials.sh');
+    });
+
+    it('should NOT include Docker-in-Docker setup script', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+      const templatePaths = templates.map(t => t.templatePath);
+
+      expect(templatePaths).not.toContain('cluster/shared/scripts/setup-docker-dind.sh');
+    });
+
+    it('should have exactly 11 templates for standard variant', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+      // 4 shared + 4 cluster/standard + 3 shared scripts = 11
+      expect(templates).toHaveLength(11);
+    });
+
+    it('should map cluster templates to correct target paths', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+
+      const dockerfileTemplate = templates.find(
+        t => t.templatePath === 'cluster/standard/Dockerfile.hbs'
+      );
+      expect(dockerfileTemplate?.targetPath).toBe('.devcontainer/Dockerfile');
+
+      const composeTemplate = templates.find(
+        t => t.templatePath === 'cluster/standard/docker-compose.yml.hbs'
+      );
+      expect(composeTemplate?.targetPath).toBe('.devcontainer/docker-compose.yml');
+
+      const devcontainerTemplate = templates.find(
+        t => t.templatePath === 'cluster/standard/devcontainer.json.hbs'
+      );
+      expect(devcontainerTemplate?.targetPath).toBe('.devcontainer/devcontainer.json');
+
+      const envTemplate = templates.find(
+        t => t.templatePath === 'cluster/standard/env.template.hbs'
+      );
+      expect(envTemplate?.targetPath).toBe('.devcontainer/.env.template');
+    });
+
+    it('should mark shared scripts as static', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+
+      const scripts = templates.filter(
+        t => t.templatePath.startsWith('cluster/shared/scripts/')
+      );
+      for (const script of scripts) {
+        expect(script.isStatic).toBe(true);
+        expect(script.requiresMerge).toBe(false);
+      }
+    });
+
+    it('should map scripts to .devcontainer/scripts/ target directory', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'standard');
+      const templates = selectTemplates(ctx);
+
+      const scripts = templates.filter(
+        t => t.templatePath.startsWith('cluster/shared/scripts/')
+      );
+      for (const script of scripts) {
+        expect(script.targetPath).toMatch(/^\.devcontainer\/scripts\//);
+      }
+    });
+  });
+
+  describe('selectTemplates - microservices variant', () => {
+    it('should select microservices cluster templates', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'microservices');
+      const templates = selectTemplates(ctx);
+      const templatePaths = templates.map(t => t.templatePath);
+
+      // Cluster variant templates
+      expect(templatePaths).toContain('cluster/microservices/Dockerfile.hbs');
+      expect(templatePaths).toContain('cluster/microservices/docker-compose.yml.hbs');
+      expect(templatePaths).toContain('cluster/microservices/devcontainer.json.hbs');
+      expect(templatePaths).toContain('cluster/microservices/env.template.hbs');
+
+      // Should NOT include standard templates
+      expect(templatePaths).not.toContain('cluster/standard/Dockerfile.hbs');
+      expect(templatePaths).not.toContain('cluster/standard/docker-compose.yml.hbs');
+      expect(templatePaths).not.toContain('cluster/standard/devcontainer.json.hbs');
+      expect(templatePaths).not.toContain('cluster/standard/env.template.hbs');
+    });
+
+    it('should include Docker-in-Docker setup script', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'microservices');
+      const templates = selectTemplates(ctx);
+      const templatePaths = templates.map(t => t.templatePath);
+
+      expect(templatePaths).toContain('cluster/shared/scripts/setup-docker-dind.sh');
+    });
+
+    it('should also include the shared scripts', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'microservices');
+      const templates = selectTemplates(ctx);
+      const templatePaths = templates.map(t => t.templatePath);
+
+      expect(templatePaths).toContain('cluster/shared/scripts/entrypoint-orchestrator.sh');
+      expect(templatePaths).toContain('cluster/shared/scripts/entrypoint-worker.sh');
+      expect(templatePaths).toContain('cluster/shared/scripts/setup-credentials.sh');
+    });
+
+    it('should have exactly 12 templates for microservices variant', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'microservices');
+      const templates = selectTemplates(ctx);
+      // 4 shared + 4 cluster/microservices + 3 shared scripts + 1 DinD script = 12
+      expect(templates).toHaveLength(12);
+    });
+
+    it('should map DinD setup script to .devcontainer/scripts/', () => {
+      const ctx = contextWithVariant(singleRepoContext, 'microservices');
+      const templates = selectTemplates(ctx);
+
+      const dindScript = templates.find(
+        t => t.templatePath === 'cluster/shared/scripts/setup-docker-dind.sh'
+      );
+      expect(dindScript?.targetPath).toBe('.devcontainer/scripts/setup-docker-dind.sh');
+      expect(dindScript?.isStatic).toBe(true);
+    });
+  });
+
+  describe('selectTemplates - variant routing consistency', () => {
+    it('should produce identical shared templates for both variants', () => {
+      const standardCtx = contextWithVariant(singleRepoContext, 'standard');
+      const microservicesCtx = contextWithVariant(singleRepoContext, 'microservices');
+
+      const standardTemplates = selectTemplates(standardCtx);
+      const microservicesTemplates = selectTemplates(microservicesCtx);
+
+      const standardShared = standardTemplates
+        .filter(t => t.templatePath.startsWith('shared/'))
+        .map(t => t.templatePath)
+        .sort();
+      const microservicesShared = microservicesTemplates
+        .filter(t => t.templatePath.startsWith('shared/'))
+        .map(t => t.templatePath)
+        .sort();
+
+      expect(standardShared).toEqual(microservicesShared);
+    });
+
+    it('should produce identical target paths for variant-specific templates', () => {
+      const standardCtx = contextWithVariant(singleRepoContext, 'standard');
+      const microservicesCtx = contextWithVariant(singleRepoContext, 'microservices');
+
+      const standardTargets = selectTemplates(standardCtx)
+        .filter(t => t.templatePath.startsWith('cluster/standard/'))
+        .map(t => t.targetPath)
+        .sort();
+      const microservicesTargets = selectTemplates(microservicesCtx)
+        .filter(t => t.templatePath.startsWith('cluster/microservices/'))
+        .map(t => t.targetPath)
+        .sort();
+
+      // Both variants produce the same output file paths
+      expect(standardTargets).toEqual(microservicesTargets);
+    });
+
+    it('should work identically for single-repo and multi-repo contexts', () => {
+      const singleStandard = selectTemplates(
+        contextWithVariant(singleRepoContext, 'standard')
+      );
+      const multiStandard = selectTemplates(
+        contextWithVariant(multiRepoContext, 'standard')
+      );
+
+      // Template selection is driven by variant, not by repo type
+      expect(singleStandard.map(t => t.templatePath)).toEqual(
+        multiStandard.map(t => t.templatePath)
+      );
+    });
+  });
+
+  describe('Utility functions', () => {
+    it('getTemplatePaths should return template paths for standard', () => {
+      const paths = getTemplatePaths(singleRepoContext as TemplateContext);
+      expect(paths).toContain('shared/config.yaml.hbs');
+      expect(paths).toContain('cluster/standard/Dockerfile.hbs');
+      expect(paths).toContain('cluster/standard/devcontainer.json.hbs');
+      expect(paths).toContain('cluster/shared/scripts/entrypoint-orchestrator.sh');
+      expect(paths).toHaveLength(11);
+    });
+
+    it('getTargetPaths should return target paths for standard', () => {
       const paths = getTargetPaths(singleRepoContext as TemplateContext);
       expect(paths).toContain('.generacy/config.yaml');
+      expect(paths).toContain('.devcontainer/Dockerfile');
       expect(paths).toContain('.devcontainer/devcontainer.json');
-      expect(paths).toHaveLength(5);
+      expect(paths).toContain('.devcontainer/docker-compose.yml');
+      expect(paths).toContain('.devcontainer/.env.template');
+      expect(paths).toContain('.devcontainer/scripts/entrypoint-orchestrator.sh');
+      expect(paths).toHaveLength(11);
+    });
+
+    it('getTemplatePaths should return 12 paths for microservices', () => {
+      const ctx = { ...singleRepoContext, cluster: { variant: 'microservices' } } as TemplateContext;
+      const paths = getTemplatePaths(ctx);
+      expect(paths).toContain('cluster/microservices/Dockerfile.hbs');
+      expect(paths).toContain('cluster/shared/scripts/setup-docker-dind.sh');
+      expect(paths).toHaveLength(12);
     });
 
     it('getTemplateMapping should return template-to-target mapping', () => {
       const mapping = getTemplateMapping(singleRepoContext as TemplateContext);
       expect(mapping.get('shared/config.yaml.hbs')).toBe('.generacy/config.yaml');
       expect(mapping.get('shared/gitignore.template')).toBe('.generacy/.gitignore');
-      expect(mapping.size).toBe(5);
+      expect(mapping.get('cluster/standard/Dockerfile.hbs')).toBe('.devcontainer/Dockerfile');
+      expect(mapping.get('cluster/standard/docker-compose.yml.hbs')).toBe('.devcontainer/docker-compose.yml');
+      expect(mapping.size).toBe(11);
     });
   });
 });
 
 describe('Template Rendering', () => {
-  describe('renderTemplate', () => {
+  describe('renderTemplate - shared templates', () => {
     it('should render config.yaml with single-repo context', async () => {
       const result = await renderTemplate(
         'shared/config.yaml.hbs',
@@ -388,79 +584,6 @@ describe('Template Rendering', () => {
       expect(parsed.recommendations).toHaveLength(GENERACY_EXTENSIONS.length);
     });
 
-    it('should render single-repo devcontainer.json', async () => {
-      const result = await renderTemplate(
-        'single-repo/devcontainer.json.hbs',
-        singleRepoContext as TemplateContext
-      );
-
-      const parsed = JSON.parse(result);
-      expect(parsed.name).toBe('E-Commerce API');
-      expect(parsed.image).toBe('mcr.microsoft.com/devcontainers/typescript-node:20');
-      expect(parsed.features).toBeDefined();
-      expect(parsed.customizations?.vscode?.extensions).toContain('generacy-ai.agency');
-      expect(parsed.customizations?.vscode?.extensions).toContain('generacy-ai.generacy');
-
-      // Should NOT have dockerComposeFile or workspaceFolder
-      expect(parsed.dockerComposeFile).toBeUndefined();
-      expect(parsed.workspaceFolder).toBeUndefined();
-    });
-
-    it('should render multi-repo devcontainer.json', async () => {
-      const result = await renderTemplate(
-        'multi-repo/devcontainer.json.hbs',
-        multiRepoContext as TemplateContext
-      );
-
-      const parsed = JSON.parse(result);
-      expect(parsed.name).toBe('Acme Platform');
-      expect(parsed.dockerComposeFile).toBe('docker-compose.yml');
-      expect(parsed.service).toBe('orchestrator');
-      expect(parsed.workspaceFolder).toBe('/workspaces/platform-orchestrator');
-
-      // Should have workspace folders for all repos
-      expect(parsed.workspaceFolders).toBeDefined();
-      const workspacePaths = parsed.workspaceFolders.map((w: any) => w.path);
-      expect(workspacePaths).toContain('/workspaces/platform-orchestrator');
-      expect(workspacePaths).toContain('/workspaces/api-service');
-      expect(workspacePaths).toContain('/workspaces/frontend-app');
-      expect(workspacePaths).toContain('/workspaces/worker-service');
-      expect(workspacePaths).toContain('/workspaces/shared-lib');
-      expect(workspacePaths).toContain('/workspaces/proto-definitions');
-
-      // Should NOT have image (uses docker-compose instead)
-      expect(parsed.image).toBeUndefined();
-    });
-
-    it('should render multi-repo docker-compose.yml', async () => {
-      const result = await renderTemplate(
-        'multi-repo/docker-compose.yml.hbs',
-        multiRepoContext as TemplateContext
-      );
-
-      // Check for services
-      expect(result).toContain('services:');
-      expect(result).toContain('redis:');
-      expect(result).toContain('orchestrator:');
-      expect(result).toContain('worker:');
-
-      // Check for volume mounts
-      expect(result).toContain('/workspaces/platform-orchestrator');
-      expect(result).toContain('/workspaces/api-service');
-      expect(result).toContain('/workspaces/frontend-app');
-      expect(result).toContain('/workspaces/worker-service');
-      expect(result).toContain('/workspaces/shared-lib');
-      expect(result).toContain('/workspaces/proto-definitions');
-
-      // Check environment variables
-      expect(result).toContain('REDIS_URL');
-      expect(result).toContain('POLL_INTERVAL_MS');
-      expect(result).toContain('WORKER_COUNT');
-
-      // Check deploy replicas for worker
-      expect(result).toContain('replicas: 2');
-    });
-
     it('should return static file content unchanged', async () => {
       const result = await renderTemplate(
         'shared/gitignore.template',
@@ -477,9 +600,6 @@ describe('Template Rendering', () => {
     });
 
     it('should use strict mode for template compilation', async () => {
-      // Verify that templates are compiled with strict mode enabled
-      // Note: The config.yaml template is designed to handle missing optional fields
-      // gracefully using Handlebars conditionals, so we just verify the mode is set
       const result = await renderTemplate(
         'shared/config.yaml.hbs',
         singleRepoContext as TemplateContext
@@ -489,6 +609,168 @@ describe('Template Rendering', () => {
       // with valid context
       expect(result).toBeDefined();
       expect(result).toContain('project:');
+    });
+  });
+
+  describe('renderTemplate - standard cluster templates', () => {
+    it('should render standard devcontainer.json', async () => {
+      const result = await renderTemplate(
+        'cluster/standard/devcontainer.json.hbs',
+        singleRepoContext as TemplateContext
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.name).toBe('E-Commerce API');
+      expect(parsed.dockerComposeFile).toBe('docker-compose.yml');
+      expect(parsed.service).toBe('orchestrator');
+      expect(parsed.workspaceFolder).toBe('/workspaces/ecommerce-api');
+      expect(parsed.customizations?.vscode?.extensions).toContain('generacy-ai.agency');
+      expect(parsed.customizations?.vscode?.extensions).toContain('generacy-ai.generacy');
+    });
+
+    it('should render standard docker-compose.yml', async () => {
+      const result = await renderTemplate(
+        'cluster/standard/docker-compose.yml.hbs',
+        singleRepoContext as TemplateContext
+      );
+
+      expect(result).toContain('services:');
+      expect(result).toContain('redis:');
+      expect(result).toContain('orchestrator:');
+      expect(result).toContain('worker:');
+      expect(result).toContain('Standard cluster (DooD)');
+      expect(result).toContain(singleRepoContext.project.id);
+    });
+
+    it('should render standard Dockerfile', async () => {
+      const result = await renderTemplate(
+        'cluster/standard/Dockerfile.hbs',
+        singleRepoContext as TemplateContext
+      );
+
+      // Standard Dockerfile should NOT include Docker CE
+      expect(result).toContain('GitHub CLI');
+      expect(result).toContain('Generacy CLI');
+      expect(result).not.toContain('Docker CE');
+      expect(result).not.toContain('docker-ce');
+    });
+
+    it('should render standard env.template with repo and branch', async () => {
+      const result = await renderTemplate(
+        'cluster/standard/env.template.hbs',
+        singleRepoContext as TemplateContext
+      );
+
+      expect(result).toContain('GITHUB_TOKEN=');
+      expect(result).toContain('ANTHROPIC_API_KEY=');
+      expect(result).toContain(`REPO_URL=${singleRepoContext.repos.primary}`);
+      expect(result).toContain(`REPO_BRANCH=${singleRepoContext.defaults.baseBranch}`);
+      expect(result).toContain('WORKER_COUNT=3');
+      expect(result).toContain('REDIS_URL=redis://redis:6379');
+      // Standard should NOT have ENABLE_DIND
+      expect(result).not.toContain('ENABLE_DIND');
+    });
+  });
+
+  describe('renderTemplate - microservices cluster templates', () => {
+    const microservicesCtx = {
+      ...singleRepoContext,
+      cluster: { variant: 'microservices' },
+    } as TemplateContext;
+
+    it('should render microservices devcontainer.json', async () => {
+      const result = await renderTemplate(
+        'cluster/microservices/devcontainer.json.hbs',
+        microservicesCtx
+      );
+
+      const parsed = JSON.parse(result);
+      expect(parsed.name).toBe('E-Commerce API');
+      expect(parsed.dockerComposeFile).toBe('docker-compose.yml');
+      expect(parsed.service).toBe('orchestrator');
+      expect(parsed.workspaceFolder).toBe('/workspaces/ecommerce-api');
+    });
+
+    it('should render microservices docker-compose.yml with privileged mode', async () => {
+      const result = await renderTemplate(
+        'cluster/microservices/docker-compose.yml.hbs',
+        microservicesCtx
+      );
+
+      expect(result).toContain('services:');
+      expect(result).toContain('redis:');
+      expect(result).toContain('orchestrator:');
+      expect(result).toContain('worker:');
+      expect(result).toContain('Microservices cluster (DinD)');
+      expect(result).toContain('privileged: true');
+      expect(result).toContain('ENABLE_DIND=true');
+    });
+
+    it('should render microservices Dockerfile with Docker CE', async () => {
+      const result = await renderTemplate(
+        'cluster/microservices/Dockerfile.hbs',
+        microservicesCtx
+      );
+
+      expect(result).toContain('Docker CE');
+      expect(result).toContain('docker-ce');
+      expect(result).toContain('containerd.io');
+      expect(result).toContain('docker');
+    });
+
+    it('should render microservices env.template with ENABLE_DIND', async () => {
+      const result = await renderTemplate(
+        'cluster/microservices/env.template.hbs',
+        microservicesCtx
+      );
+
+      expect(result).toContain('GITHUB_TOKEN=');
+      expect(result).toContain('ANTHROPIC_API_KEY=');
+      expect(result).toContain('ENABLE_DIND=true');
+    });
+  });
+
+  describe('renderTemplate - static scripts', () => {
+    it('should return entrypoint-orchestrator.sh unchanged', async () => {
+      const result = await renderTemplate(
+        'cluster/shared/scripts/entrypoint-orchestrator.sh',
+        singleRepoContext as TemplateContext
+      );
+
+      expect(result).toBeDefined();
+      expect(result.length).toBeGreaterThan(0);
+      // Static files should not have Handlebars substitution
+      expect(result).not.toContain('{{');
+    });
+
+    it('should return entrypoint-worker.sh unchanged', async () => {
+      const result = await renderTemplate(
+        'cluster/shared/scripts/entrypoint-worker.sh',
+        singleRepoContext as TemplateContext
+      );
+
+      expect(result).toBeDefined();
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('should return setup-credentials.sh unchanged', async () => {
+      const result = await renderTemplate(
+        'cluster/shared/scripts/setup-credentials.sh',
+        singleRepoContext as TemplateContext
+      );
+
+      expect(result).toBeDefined();
+      expect(result.length).toBeGreaterThan(0);
+    });
+
+    it('should return setup-docker-dind.sh unchanged', async () => {
+      const result = await renderTemplate(
+        'cluster/shared/scripts/setup-docker-dind.sh',
+        singleRepoContext as TemplateContext
+      );
+
+      expect(result).toBeDefined();
+      expect(result.length).toBeGreaterThan(0);
     });
   });
 
@@ -594,46 +876,90 @@ describe('Template Rendering', () => {
 });
 
 describe('Project Rendering', () => {
-  describe('renderProject', () => {
-    it('should render all single-repo files', async () => {
+  describe('renderProject - standard variant', () => {
+    it('should render all standard variant files', async () => {
       const fileMap = await renderProject(singleRepoContext as TemplateContext);
 
-      // Should have exactly 5 files
-      expect(fileMap.size).toBe(5);
+      // 4 shared + 4 cluster + 3 scripts = 11 files
+      expect(fileMap.size).toBe(11);
 
-      // Check file paths
+      // Shared files
       expect(fileMap.has('.generacy/config.yaml')).toBe(true);
       expect(fileMap.has('.generacy/generacy.env.template')).toBe(true);
       expect(fileMap.has('.generacy/.gitignore')).toBe(true);
       expect(fileMap.has('.vscode/extensions.json')).toBe(true);
-      expect(fileMap.has('.devcontainer/devcontainer.json')).toBe(true);
 
-      // Check content is rendered
+      // Cluster variant files
+      expect(fileMap.has('.devcontainer/Dockerfile')).toBe(true);
+      expect(fileMap.has('.devcontainer/docker-compose.yml')).toBe(true);
+      expect(fileMap.has('.devcontainer/devcontainer.json')).toBe(true);
+      expect(fileMap.has('.devcontainer/.env.template')).toBe(true);
+
+      // Script files
+      expect(fileMap.has('.devcontainer/scripts/entrypoint-orchestrator.sh')).toBe(true);
+      expect(fileMap.has('.devcontainer/scripts/entrypoint-worker.sh')).toBe(true);
+      expect(fileMap.has('.devcontainer/scripts/setup-credentials.sh')).toBe(true);
+
+      // Should NOT have DinD script
+      expect(fileMap.has('.devcontainer/scripts/setup-docker-dind.sh')).toBe(false);
+    });
+
+    it('should render content with context substitution', async () => {
+      const fileMap = await renderProject(singleRepoContext as TemplateContext);
+
       const config = fileMap.get('.generacy/config.yaml')!;
       expect(config).toContain('proj_abc123xyz');
       expect(config).not.toContain('{{');
     });
+  });
 
-    it('should render all multi-repo files', async () => {
+  describe('renderProject - microservices variant', () => {
+    const microservicesCtx = {
+      ...singleRepoContext,
+      cluster: { variant: 'microservices' },
+    } as TemplateContext;
+
+    it('should render all microservices variant files', async () => {
+      const fileMap = await renderProject(microservicesCtx);
+
+      // 4 shared + 4 cluster + 3 scripts + 1 DinD script = 12 files
+      expect(fileMap.size).toBe(12);
+
+      // Should include DinD script
+      expect(fileMap.has('.devcontainer/scripts/setup-docker-dind.sh')).toBe(true);
+    });
+
+    it('should render microservices-specific content', async () => {
+      const fileMap = await renderProject(microservicesCtx);
+
+      const dockerCompose = fileMap.get('.devcontainer/docker-compose.yml')!;
+      expect(dockerCompose).toContain('privileged: true');
+      expect(dockerCompose).toContain('ENABLE_DIND=true');
+      expect(dockerCompose).toContain('Microservices cluster (DinD)');
+    });
+
+    it('should render Dockerfile with Docker CE for microservices', async () => {
+      const fileMap = await renderProject(microservicesCtx);
+
+      const dockerfile = fileMap.get('.devcontainer/Dockerfile')!;
+      expect(dockerfile).toContain('docker-ce');
+      expect(dockerfile).toContain('Docker CE');
+    });
+  });
+
+  describe('renderProject - multi-repo context', () => {
+    it('should render all files for multi-repo with standard variant', async () => {
       const fileMap = await renderProject(multiRepoContext as TemplateContext);
 
-      // Should have exactly 6 files
-      expect(fileMap.size).toBe(6);
+      expect(fileMap.size).toBe(11);
 
-      // Check file paths
-      expect(fileMap.has('.generacy/config.yaml')).toBe(true);
-      expect(fileMap.has('.generacy/generacy.env.template')).toBe(true);
-      expect(fileMap.has('.generacy/.gitignore')).toBe(true);
-      expect(fileMap.has('.vscode/extensions.json')).toBe(true);
-      expect(fileMap.has('.devcontainer/devcontainer.json')).toBe(true);
-      expect(fileMap.has('.devcontainer/docker-compose.yml')).toBe(true);
-
-      // Check content is rendered
       const config = fileMap.get('.generacy/config.yaml')!;
       expect(config).toContain('proj_xyz789def');
       expect(config).toContain('acme-corp/api-service');
     });
+  });
 
+  describe('renderProject - extensions merge', () => {
     it('should merge existing extensions.json', async () => {
       const existingFiles = new Map([
         [
@@ -675,7 +1001,9 @@ describe('Project Rendering', () => {
       const config = fileMap.get('.generacy/config.yaml')!;
       expect(config).toContain('proj_abc123xyz');
     });
+  });
 
+  describe('renderProject - error handling', () => {
     it('should throw error with context when template fails', async () => {
       // Create an invalid context that will fail rendering
       const invalidContext = {
@@ -873,5 +1201,32 @@ describe('Edge Cases', () => {
     // JSON should contain real double quotes, not &quot;
     expect(result).not.toContain('&quot;');
     expect(() => JSON.parse(result)).not.toThrow();
+  });
+
+  it('should render standard docker-compose.yml without privileged mode', async () => {
+    const result = await renderTemplate(
+      'cluster/standard/docker-compose.yml.hbs',
+      singleRepoContext as TemplateContext
+    );
+
+    // Standard variant should NOT have privileged mode
+    expect(result).not.toContain('privileged: true');
+    expect(result).not.toContain('ENABLE_DIND');
+  });
+
+  it('should render microservices docker-compose.yml with DinD config', async () => {
+    const ctx = {
+      ...singleRepoContext,
+      cluster: { variant: 'microservices' },
+    } as TemplateContext;
+
+    const result = await renderTemplate(
+      'cluster/microservices/docker-compose.yml.hbs',
+      ctx
+    );
+
+    // Microservices variant SHOULD have privileged mode and DinD
+    expect(result).toContain('privileged: true');
+    expect(result).toContain('ENABLE_DIND=true');
   });
 });

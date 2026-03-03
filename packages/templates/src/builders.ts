@@ -9,6 +9,7 @@ import {
   type TemplateContext,
   type SingleRepoInput,
   type MultiRepoInput,
+  type ClusterVariant,
   SingleRepoInputSchema,
   MultiRepoInputSchema,
 } from './schema.js';
@@ -151,6 +152,9 @@ export function buildSingleRepoContext(options: SingleRepoInput): TemplateContex
       generatedBy: 'generacy-cli', // Default to CLI, caller can override
       version: '1.0.0',
     },
+    cluster: {
+      variant: validated.variant ?? 'standard',
+    },
   };
 
   // Validate the built context
@@ -229,6 +233,9 @@ export function buildMultiRepoContext(options: MultiRepoInput): TemplateContext 
       timestamp: generateTimestamp(),
       generatedBy: 'generacy-cli', // Default to CLI, caller can override
       version: '1.0.0',
+    },
+    cluster: {
+      variant: validated.variant ?? 'standard',
     },
   };
 
@@ -352,6 +359,34 @@ export function withOrchestrator(
   };
 }
 
+/**
+ * Override the cluster variant
+ *
+ * Useful for switching between standard (DooD) and microservices (DinD) after context is built.
+ *
+ * @param context - Existing template context
+ * @param variant - Cluster variant ('standard' or 'microservices')
+ * @returns New context with updated cluster variant
+ *
+ * @example
+ * ```typescript
+ * const context = buildSingleRepoContext(options);
+ * const dindContext = withVariant(context, 'microservices');
+ * ```
+ */
+export function withVariant(
+  context: TemplateContext,
+  variant: ClusterVariant
+): TemplateContext {
+  return {
+    ...context,
+    cluster: {
+      ...context.cluster,
+      variant,
+    },
+  };
+}
+
 // ============================================================================
 // Quick Builder Helpers
 // ============================================================================
@@ -374,12 +409,14 @@ export function withOrchestrator(
 export function quickSingleRepo(
   projectId: string,
   projectName: string,
-  primaryRepo: string
+  primaryRepo: string,
+  variant?: ClusterVariant
 ): TemplateContext {
   return buildSingleRepoContext({
     projectId,
     projectName,
     primaryRepo,
+    variant,
   });
 }
 
@@ -408,12 +445,14 @@ export function quickMultiRepo(
   projectId: string,
   projectName: string,
   primaryRepo: string,
-  devRepos: string[]
+  devRepos: string[],
+  variant?: ClusterVariant
 ): TemplateContext {
   return buildMultiRepoContext({
     projectId,
     projectName,
     primaryRepo,
     devRepos,
+    variant,
   });
 }

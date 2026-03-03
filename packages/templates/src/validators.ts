@@ -247,21 +247,19 @@ export function validateRenderedDevContainer(jsonContent: string): void {
     );
   }
 
-  // Check for features or customizations (at least one should exist)
+  // For non-compose devcontainers, check for features or customizations
   const hasFeatures = parsed.features && typeof parsed.features === 'object';
   const hasCustomizations =
     parsed.customizations && typeof parsed.customizations === 'object';
 
-  if (!hasFeatures && !hasCustomizations) {
-    // This is a warning scenario, but for strict validation we can throw
-    // Comment out the throw if you want to allow minimal devcontainers
+  if (!hasDockerCompose && !hasFeatures && !hasCustomizations) {
     throw new Error(
       'devcontainer.json should have either "features" or "customizations"'
     );
   }
 
-  // Validate features contain Generacy feature (if features exist)
-  if (hasFeatures) {
+  // Validate features contain Generacy feature for non-compose devcontainers
+  if (!hasDockerCompose && hasFeatures) {
     const featureKeys = Object.keys(parsed.features);
     const hasGeneracyFeature = featureKeys.some((key) =>
       /generacy-ai\/.*\/generacy/.test(key)
@@ -396,6 +394,28 @@ export function validateRenderedExtensionsJson(jsonContent: string): void {
   }
 }
 
+/**
+ * Validate rendered .env.template content
+ *
+ * Checks that the environment template is non-empty and contains
+ * required variable placeholders for cluster operation.
+ *
+ * @param content - Rendered .env.template content
+ * @throws Error if content is empty or missing required variables
+ */
+export function validateRenderedEnvTemplate(content: string): void {
+  if (!content.trim()) {
+    throw new Error('.env.template is empty');
+  }
+
+  const requiredVars = ['GITHUB_TOKEN', 'ANTHROPIC_API_KEY'];
+  for (const varName of requiredVars) {
+    if (!content.includes(varName)) {
+      throw new Error(`.env.template missing required variable: ${varName}`);
+    }
+  }
+}
+
 // ============================================================================
 // Validation Helpers
 // ============================================================================
@@ -467,14 +487,20 @@ export function validateAllRenderedFiles(
         validateRenderedDockerCompose(content);
       } else if (path.endsWith('extensions.json')) {
         validateRenderedExtensionsJson(content);
+      } else if (path.endsWith('.env.template') && path.includes('.devcontainer')) {
+        validateRenderedEnvTemplate(content);
       }
 
       // Check for undefined variables in all files
-      const undefinedVars = findUndefinedVariables(content);
-      if (undefinedVars.length > 0) {
-        throw new Error(
-          `File contains unrendered template variables: ${undefinedVars.join(', ')}`
-        );
+      // Skip .sh files — they use ${VAR} bash syntax, not {{var}} Handlebars syntax,
+      // and are copied as static files without Handlebars rendering
+      if (!path.endsWith('.sh')) {
+        const undefinedVars = findUndefinedVariables(content);
+        if (undefinedVars.length > 0) {
+          throw new Error(
+            `File contains unrendered template variables: ${undefinedVars.join(', ')}`
+          );
+        }
       }
     } catch (error) {
       // Add file path context to error

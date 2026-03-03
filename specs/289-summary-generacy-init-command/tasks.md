@@ -12,7 +12,7 @@
 
 ## Phase 1: Template Schema & Context (Foundation)
 
-### T001 [INFRA] Add ClusterVariant type and ClusterContext schema to templates package
+### T001 [DONE] [INFRA] Add ClusterVariant type and ClusterContext schema to templates package
 **File**: `packages/templates/src/schema.ts`
 - Add `ClusterVariantSchema = z.enum(['standard', 'microservices'])`
 - Add `ClusterVariant` type export
@@ -21,7 +21,7 @@
 - Add `cluster: ClusterContextSchema` to `TemplateContextSchema`
 - Add optional `variant` field to `SingleRepoInput` and `MultiRepoInput` schemas
 
-### T002 [INFRA] Update context builders to accept and propagate variant
+### T002 [DONE] [INFRA] Update context builders to accept and propagate variant
 **File**: `packages/templates/src/builders.ts`
 - Add `variant` parameter to `buildSingleRepoContext()` options
 - Add `variant` parameter to `buildMultiRepoContext()` options
@@ -29,12 +29,12 @@
 - Add `withVariant(context, variant)` modifier function (follows existing `withGeneratedBy` pattern)
 - Update `quickSingleRepo` and `quickMultiRepo` helpers to accept optional variant
 
-### T003 [INFRA] Export new types and helpers from templates package
+### T003 [DONE] [INFRA] Export new types and helpers from templates package
 **File**: `packages/templates/src/index.ts`
 - Export `ClusterVariant`, `ClusterContext`, `ClusterVariantSchema`, `ClusterContextSchema` from schema
 - Export `withVariant` from builders
 
-### T004 [P] [INFRA] Extend CLI config schema with cluster.variant
+### T004 [DONE] [P] [INFRA] Extend CLI config schema with cluster.variant
 **File**: `packages/generacy/src/config/schema.ts`
 - Add `ClusterConfigSchema = z.object({ variant: z.enum(['standard', 'microservices']).default('standard') })`
 - Add `cluster: ClusterConfigSchema.optional()` to `GeneracyConfigSchema`
@@ -43,7 +43,7 @@
 
 ## Phase 2: Cluster Template Files (Content)
 
-### T005 [P] [US1] Create standard variant Dockerfile template
+### T005 [DONE] [P] [US1] Create standard variant Dockerfile template
 **File**: `packages/templates/src/cluster/standard/Dockerfile.hbs`
 - Multi-stage Dockerfile based on `mcr.microsoft.com/devcontainers/typescript-node:22-bookworm`
 - Stage 1: Install GitHub CLI (`gh`)
@@ -51,7 +51,7 @@
 - `COPY --chmod=755` for scripts directory
 - No Docker CE installation (standard = DooD)
 
-### T006 [P] [US1] Create standard variant docker-compose.yml template
+### T006 [DONE] [P] [US1] Create standard variant docker-compose.yml template
 **File**: `packages/templates/src/cluster/standard/docker-compose.yml.hbs`
 - `redis` service with health check (`redis-cli ping`)
 - `orchestrator` service: builds Dockerfile, `ROLE=orchestrator`, port mapping via `${ORCHESTRATOR_PORT:-3100}`
@@ -61,7 +61,7 @@
 - `generacy` bridge network
 - Use Handlebars for `{{project.name}}` in container names
 
-### T007 [P] [US1] Create standard variant devcontainer.json template
+### T007 [DONE] [P] [US1] Create standard variant devcontainer.json template
 **File**: `packages/templates/src/cluster/standard/devcontainer.json.hbs`
 - `"name": "{{project.name}}"`
 - `"dockerComposeFile": "docker-compose.yml"`
@@ -70,7 +70,7 @@
 - `customizations.vscode.extensions` with Generacy extensions
 - No Generacy Dev Container Feature (Dockerfile handles CLI install)
 
-### T008 [P] [US1] Create standard variant .env.template
+### T008 [DONE] [P] [US1] Create standard variant .env.template
 **File**: `packages/templates/src/cluster/standard/env.template.hbs`
 - `GITHUB_TOKEN=` with comment noting `GH_TOKEN` alias
 - `ANTHROPIC_API_KEY=` with comment noting `CLAUDE_API_KEY` alias
@@ -79,57 +79,57 @@
 - `WORKER_COUNT=3`, `ORCHESTRATOR_PORT=3100` as runtime defaults
 - `REDIS_URL=redis://redis:6379`
 
-### T009 [P] [US2] Create microservices variant Dockerfile template
+### T009 [DONE] [P] [US2] Create microservices variant Dockerfile template
 **File**: `packages/templates/src/cluster/microservices/Dockerfile.hbs`
 - Copy standard Dockerfile as base
 - Add additional stage for Docker CE installation (`docker-ce`, `docker-ce-cli`, `containerd.io`)
 - Include Docker group setup for DinD operation
 
-### T010 [P] [US2] Create microservices variant docker-compose.yml template
+### T010 [DONE] [P] [US2] Create microservices variant docker-compose.yml template
 **File**: `packages/templates/src/cluster/microservices/docker-compose.yml.hbs`
 - Copy standard docker-compose.yml as base
 - Add `privileged: true` to worker service
 - Add `ENABLE_DIND=true` environment variable to worker service
 
-### T011 [P] [US2] Create microservices variant devcontainer.json template
+### T011 [DONE] [P] [US2] Create microservices variant devcontainer.json template
 **File**: `packages/templates/src/cluster/microservices/devcontainer.json.hbs`
 - Same structure as standard variant devcontainer.json
 - May reference microservices-specific extensions if needed
 
-### T012 [P] [US2] Create microservices variant .env.template
+### T012 [DONE] [P] [US2] Create microservices variant .env.template
 **File**: `packages/templates/src/cluster/microservices/env.template.hbs`
 - Copy standard env.template as base
 - Add `ENABLE_DIND=true`
 
-### T013 [P] [US1] Create shared entrypoint-orchestrator.sh script
+### T013 [DONE] [P] [US1] Create shared entrypoint-orchestrator.sh script
 **File**: `packages/templates/src/cluster/shared/scripts/entrypoint-orchestrator.sh`
 - Static file (no Handlebars)
 - Source `setup-credentials.sh`
 - Start orchestrator process
 - Proper shebang and error handling (`set -e`)
 
-### T014 [P] [US1] Create shared entrypoint-worker.sh script
+### T014 [DONE] [P] [US1] Create shared entrypoint-worker.sh script
 **File**: `packages/templates/src/cluster/shared/scripts/entrypoint-worker.sh`
 - Static file (no Handlebars)
 - Source `setup-credentials.sh`
 - Conditionally source `setup-docker-dind.sh` if `ENABLE_DIND=true`
 - Start worker process
 
-### T015 [P] [US1] Create shared setup-credentials.sh script
+### T015 [DONE] [P] [US1] Create shared setup-credentials.sh script
 **File**: `packages/templates/src/cluster/shared/scripts/setup-credentials.sh`
 - Static file (no Handlebars)
 - Handle `${GITHUB_TOKEN:-$GH_TOKEN}` fallback
 - Handle `${ANTHROPIC_API_KEY:-$CLAUDE_API_KEY}` fallback
 - Configure `gh auth` and git credentials
 
-### T016 [P] [US2] Create setup-docker-dind.sh script
+### T016 [DONE] [P] [US2] Create setup-docker-dind.sh script
 **File**: `packages/templates/src/cluster/shared/scripts/setup-docker-dind.sh`
 - Static file (no Handlebars)
 - Start `dockerd` daemon
 - Wait for Docker socket availability
 - Only included for microservices variant
 
-### T017 [INFRA] Update templates package.json files field
+### T017 [DONE] [INFRA] Update templates package.json files field
 **File**: `packages/templates/package.json`
 - Add `src/cluster` to the `files` array so cluster templates ship with the package
 
@@ -137,7 +137,7 @@
 
 ## Phase 3: Template Selection & Rendering Engine
 
-### T018 [US1] [US2] Rewrite selectTemplates() for variant-based routing
+### T018 [DONE] [US1] [US2] Rewrite selectTemplates() for variant-based routing
 **File**: `packages/templates/src/renderer.ts`
 - Keep shared templates (config.yaml, generacy.env.template, gitignore, extensions.json) unchanged
 - Replace `isMultiRepo`-based devcontainer/compose selection with `context.cluster.variant` routing
@@ -147,7 +147,7 @@
 - Mark script files with `isStatic: true` to skip Handlebars rendering
 - Old `single-repo/` and `multi-repo/` paths are no longer selected (effectively deprecated)
 
-### T019 [US1] Update config.yaml template to include cluster section
+### T019 [DONE] [US1] Update config.yaml template to include cluster section
 **File**: `packages/templates/src/shared/config.yaml.hbs`
 - Add `cluster:` section with `variant: {{cluster.variant}}` after existing sections
 
@@ -155,16 +155,16 @@
 
 ## Phase 4: CLI Integration
 
-### T020 [US3] Add variant field to InitOptions type
+### T020 [DONE] [US3] Add variant field to InitOptions type
 **File**: `packages/generacy/src/cli/commands/init/types.ts`
 - Add `variant: 'standard' | 'microservices'` to `InitOptions` interface
 
-### T021 [US3] Add --variant CLI flag to init command
+### T021 [DONE] [US3] Add --variant CLI flag to init command
 **File**: `packages/generacy/src/cli/commands/init/index.ts`
 - Add `.addOption(new Option('--variant <variant>', 'Cluster variant').choices(['standard', 'microservices']))` to command definition
 - No default value on the Option (resolution in resolver.ts)
 
-### T022 [US1] [US3] [US4] Update option resolver with variant resolution
+### T022 [DONE] [US1] [US3] [US4] Update option resolver with variant resolution
 **File**: `packages/generacy/src/cli/commands/init/resolver.ts`
 - In `extractFlags()`: extract `variant` from CLI flags
 - In `loadExistingDefaults()`: read `config.cluster?.variant` from existing config
@@ -173,7 +173,7 @@
 - With `--yes` and existing config: preserve config value (prevents silent downgrade)
 - Add `variant: merged.variant ?? 'standard'` to final resolved options
 
-### T023 [US1] [US4] Add variant selection prompt
+### T023 [DONE] [US1] [US4] Add variant selection prompt
 **File**: `packages/generacy/src/cli/commands/init/prompts.ts`
 - Add variant to `ExistingDefaults` interface: `variant?: 'standard' | 'microservices'`
 - Insert variant selection prompt before project name prompt using `p.select()`
@@ -182,21 +182,21 @@
 - Skip prompt if variant already resolved from flags
 - Update `loadExistingConfigDefaults()` to read `config.cluster?.variant`
 
-### T024 [US1] [US2] Pass variant through to context builders in init action
+### T024 [DONE] [US1] [US2] Pass variant through to context builders in init action
 **File**: `packages/generacy/src/cli/commands/init/index.ts`
 - Pass `variant: initOptions.variant` to `buildSingleRepoContext()` and `buildMultiRepoContext()`
 - Ensure `context.cluster.variant` is populated for template selection
 
-### T025 [US1] Add chmod for shell scripts in writer
+### T025 [DONE] [US1] Add chmod for shell scripts in writer
 **File**: `packages/generacy/src/cli/commands/init/writer.ts`
 - Import `chmodSync` from `node:fs`
 - After `writeFileSync()`, check if `relativePath.endsWith('.sh')` and apply `chmodSync(fullPath, 0o755)`
 
-### T026 [US1] Update summary output with variant and .env.template next step
+### T026 [DONE] [US1] Update summary output with variant and .env.template next step
 **File**: `packages/generacy/src/cli/commands/init/summary.ts`
 - Update `printNextSteps()` to include step for copying `.devcontainer/.env.template` to `.devcontainer/.env`
 
-### T027 [US4] Add migration detection for old-format devcontainer.json
+### T027 [DONE] [US4] Add migration detection for old-format devcontainer.json
 **File**: `packages/generacy/src/cli/commands/init/index.ts`
 - Between conflict check and resolution steps, detect if existing `devcontainer.json` has `image` key but no `dockerComposeFile`
 - Log `p.log.warn()` recommending overwrite to adopt new cluster format
@@ -206,19 +206,19 @@
 
 ## Phase 5: Validator Updates
 
-### T028 [P] [INFRA] Relax devcontainer.json validator for docker-compose templates
+### T028 [DONE] [P] [INFRA] Relax devcontainer.json validator for docker-compose templates
 **File**: `packages/templates/src/validators.ts`
 - Update `validateRenderedDevContainer()` to not require Generacy Dev Container Feature when `dockerComposeFile` is present
 - Keep feature check for legacy non-compose devcontainer.json (if features section exists and no dockerComposeFile)
 
-### T029 [P] [INFRA] Add .env.template validator
+### T029 [DONE] [P] [INFRA] Add .env.template validator
 **File**: `packages/templates/src/validators.ts`
 - Add `validateRenderedEnvTemplate(content)` function
 - Check content is not empty
 - Check for required variables: `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`
 - Wire into `validateAllRenderedFiles()`: dispatch when path ends with `.env.template` and is under `.devcontainer`
 
-### T030 [P] [INFRA] Verify static shell scripts don't trigger undefined variable check
+### T030 [DONE] [P] [INFRA] Verify static shell scripts don't trigger undefined variable check
 **File**: `packages/templates/src/validators.ts`
 - Confirm `findUndefinedVariables()` regex targets `{{ }}` Handlebars syntax, not `${ }` bash syntax
 - If shell scripts are ever run through `validateAllRenderedFiles()`, add `.sh` exclusion as safety
@@ -228,7 +228,7 @@
 
 ## Phase 6: Testing
 
-### T031 [P] [INFRA] Add unit tests for variant context building
+### T031 [DONE] [P] [INFRA] Add unit tests for variant context building
 **File**: `packages/templates/tests/unit/builders.test.ts` (extend existing)
 - Test `buildSingleRepoContext()` with `variant: 'standard'` produces `context.cluster.variant === 'standard'`
 - Test `buildSingleRepoContext()` with `variant: 'microservices'` produces correct variant
@@ -236,7 +236,7 @@
 - Test default variant is `'standard'` when not specified
 - Test `withVariant()` modifier overrides existing variant
 
-### T032 [P] [INFRA] Add unit tests for variant-based template selection
+### T032 [DONE] [P] [INFRA] Add unit tests for variant-based template selection
 **File**: `packages/templates/tests/unit/renderer.test.ts` (extend existing)
 - Test `selectTemplates()` with standard variant returns correct template paths (`cluster/standard/*`)
 - Test `selectTemplates()` with microservices variant includes DinD script
