@@ -27,6 +27,7 @@ interface WorkspaceConfig {
 const DEFAULT_REPOS = [
   'tetrad-development',
   'contracts',
+  'cluster-templates',
   'latency',
   'agency',
   'generacy',
