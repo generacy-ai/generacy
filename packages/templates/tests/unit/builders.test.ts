@@ -13,6 +13,7 @@ import {
   withBaseImage,
   withBaseBranch,
   withOrchestrator,
+  withVariant,
   quickSingleRepo,
   quickMultiRepo,
 } from '../../src/builders.js';
@@ -1208,6 +1209,219 @@ describe('Edge Cases and Integration', () => {
       const timestamp = context.metadata.timestamp;
       expect(timestamp >= beforeBuild).toBe(true);
       expect(timestamp <= afterBuild).toBe(true);
+    });
+  });
+});
+
+describe('Variant Context Building', () => {
+  describe('buildSingleRepoContext with variant', () => {
+    it('should default variant to standard when not specified', () => {
+      const context = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+      });
+
+      expect(context.cluster).toBeDefined();
+      expect(context.cluster.variant).toBe('standard');
+    });
+
+    it('should set variant to standard when explicitly provided', () => {
+      const context = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+        variant: 'standard',
+      });
+
+      expect(context.cluster.variant).toBe('standard');
+    });
+
+    it('should set variant to microservices when provided', () => {
+      const context = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+        variant: 'microservices',
+      });
+
+      expect(context.cluster.variant).toBe('microservices');
+    });
+
+    it('should preserve all other fields when variant is set', () => {
+      const context = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+        variant: 'microservices',
+      });
+
+      expect(context.project.id).toBe('proj_123');
+      expect(context.repos.primary).toBe('acme/repo');
+      expect(context.repos.isMultiRepo).toBe(false);
+      expect(context.defaults.baseBranch).toBe('main');
+      expect(context.orchestrator.workerCount).toBe(0);
+    });
+  });
+
+  describe('buildMultiRepoContext with variant', () => {
+    it('should default variant to standard when not specified', () => {
+      const context = buildMultiRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/orch',
+        devRepos: ['acme/api'],
+      });
+
+      expect(context.cluster).toBeDefined();
+      expect(context.cluster.variant).toBe('standard');
+    });
+
+    it('should set variant to standard when explicitly provided', () => {
+      const context = buildMultiRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/orch',
+        devRepos: ['acme/api'],
+        variant: 'standard',
+      });
+
+      expect(context.cluster.variant).toBe('standard');
+    });
+
+    it('should set variant to microservices when provided', () => {
+      const context = buildMultiRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/orch',
+        devRepos: ['acme/api'],
+        variant: 'microservices',
+      });
+
+      expect(context.cluster.variant).toBe('microservices');
+    });
+
+    it('should preserve all other fields when variant is set', () => {
+      const context = buildMultiRepoContext({
+        projectId: 'proj_multi',
+        projectName: 'Multi Project',
+        primaryRepo: 'acme/orch',
+        devRepos: ['acme/api', 'acme/frontend'],
+        workerCount: 4,
+        variant: 'microservices',
+      });
+
+      expect(context.project.id).toBe('proj_multi');
+      expect(context.repos.primary).toBe('acme/orch');
+      expect(context.repos.dev).toEqual(['acme/api', 'acme/frontend']);
+      expect(context.repos.isMultiRepo).toBe(true);
+      expect(context.orchestrator.workerCount).toBe(4);
+    });
+  });
+
+  describe('withVariant modifier', () => {
+    it('should override variant to microservices', () => {
+      const base = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+      });
+
+      const modified = withVariant(base, 'microservices');
+
+      expect(modified.cluster.variant).toBe('microservices');
+    });
+
+    it('should override variant to standard', () => {
+      const base = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+        variant: 'microservices',
+      });
+
+      const modified = withVariant(base, 'standard');
+
+      expect(modified.cluster.variant).toBe('standard');
+    });
+
+    it('should preserve all other context properties', () => {
+      const base = buildMultiRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/orch',
+        devRepos: ['acme/api'],
+      });
+
+      const modified = withVariant(base, 'microservices');
+
+      expect(modified.project).toEqual(base.project);
+      expect(modified.repos).toEqual(base.repos);
+      expect(modified.defaults).toEqual(base.defaults);
+      expect(modified.orchestrator).toEqual(base.orchestrator);
+      expect(modified.devcontainer).toEqual(base.devcontainer);
+      expect(modified.metadata).toEqual(base.metadata);
+    });
+
+    it('should not mutate original context', () => {
+      const base = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+        variant: 'standard',
+      });
+
+      withVariant(base, 'microservices');
+
+      expect(base.cluster.variant).toBe('standard');
+    });
+
+    it('should work in a chain with other modifiers', () => {
+      const base = buildSingleRepoContext({
+        projectId: 'proj_123',
+        projectName: 'Test',
+        primaryRepo: 'acme/repo',
+      });
+
+      const modified = withVariant(
+        withGeneratedBy(
+          withBaseImage(base, 'custom-image'),
+          'generacy-cloud'
+        ),
+        'microservices'
+      );
+
+      expect(modified.cluster.variant).toBe('microservices');
+      expect(modified.devcontainer.baseImage).toBe('custom-image');
+      expect(modified.metadata.generatedBy).toBe('generacy-cloud');
+    });
+  });
+
+  describe('quickSingleRepo with variant', () => {
+    it('should default variant to standard when not provided', () => {
+      const context = quickSingleRepo('proj_123', 'Test', 'acme/repo');
+
+      expect(context.cluster.variant).toBe('standard');
+    });
+
+    it('should accept variant parameter', () => {
+      const context = quickSingleRepo('proj_123', 'Test', 'acme/repo', 'microservices');
+
+      expect(context.cluster.variant).toBe('microservices');
+    });
+  });
+
+  describe('quickMultiRepo with variant', () => {
+    it('should default variant to standard when not provided', () => {
+      const context = quickMultiRepo('proj_123', 'Test', 'acme/orch', ['acme/api']);
+
+      expect(context.cluster.variant).toBe('standard');
+    });
+
+    it('should accept variant parameter', () => {
+      const context = quickMultiRepo('proj_123', 'Test', 'acme/orch', ['acme/api'], 'microservices');
+
+      expect(context.cluster.variant).toBe('microservices');
     });
   });
 });

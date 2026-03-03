@@ -175,6 +175,29 @@ export const MetadataContextSchema = z.object({
 export type MetadataContext = z.infer<typeof MetadataContextSchema>;
 
 // ============================================================================
+// Cluster Context
+// ============================================================================
+
+/**
+ * Cluster variant determines the Docker topology
+ * - standard: Docker-outside-of-Docker (DooD) — for apps that don't run containers
+ * - microservices: Docker-in-Docker (DinD) — each worker can run isolated container stacks
+ */
+export const ClusterVariantSchema = z.enum(['standard', 'microservices']);
+
+export type ClusterVariant = z.infer<typeof ClusterVariantSchema>;
+
+/**
+ * Cluster configuration for development environment
+ */
+export const ClusterContextSchema = z.object({
+  /** Cluster variant: "standard" (DooD) or "microservices" (DinD) */
+  variant: ClusterVariantSchema.default('standard'),
+});
+
+export type ClusterContext = z.infer<typeof ClusterContextSchema>;
+
+// ============================================================================
 // Complete Template Context
 // ============================================================================
 
@@ -200,6 +223,9 @@ export const TemplateContextSchema = z.object({
 
   /** Template generation metadata */
   metadata: MetadataContextSchema,
+
+  /** Cluster configuration */
+  cluster: ClusterContextSchema,
 });
 
 export type TemplateContext = z.infer<typeof TemplateContextSchema>;
@@ -219,6 +245,7 @@ export const SingleRepoInputSchema = z.object({
   releaseStream: z.enum(['stable', 'preview']).optional(),
   baseBranch: z.string().optional(),
   agent: z.string().optional(),
+  variant: ClusterVariantSchema.optional(),
 });
 
 export type SingleRepoInput = z.infer<typeof SingleRepoInputSchema>;
@@ -238,6 +265,7 @@ export const MultiRepoInputSchema = z.object({
   agent: z.string().optional(),
   workerCount: z.number().int().min(1).max(20).optional(),
   pollIntervalMs: z.number().int().min(5000).optional(),
+  variant: ClusterVariantSchema.optional(),
 });
 
 export type MultiRepoInput = z.infer<typeof MultiRepoInputSchema>;

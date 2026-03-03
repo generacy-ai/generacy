@@ -62,6 +62,7 @@
     "src/shared",
     "src/single-repo",
     "src/multi-repo",
+    "src/cluster",
     "!src/**/*.test.ts",
     "!src/**/__tests__",
     "README.md",

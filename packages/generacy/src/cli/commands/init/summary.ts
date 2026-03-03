@@ -6,11 +6,18 @@
  * followed by actionable next steps for the developer.
  */
 import * as p from '@clack/prompts';
+import type { ClusterVariant } from '@generacy-ai/templates';
 import type { FileResult } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Action label mapping
 // ---------------------------------------------------------------------------
+
+/** Human-readable labels for cluster variants. */
+const VARIANT_LABELS: Record<ClusterVariant, string> = {
+  standard: 'Standard (DooD)',
+  microservices: 'Microservices (DinD)',
+};
 
 /** Display labels for each file action (normal and dry-run variants). */
 const ACTION_LABELS: Record<FileResult['action'], { normal: string; dryRun: string }> = {
@@ -44,22 +51,25 @@ function formatSize(bytes: number): string {
  *
  * @param results - Array of file results from `writeFiles()`.
  * @param dryRun  - Whether this was a dry-run (preview) invocation.
+ * @param variant - The selected cluster variant.
  */
-export function printSummary(results: FileResult[], dryRun: boolean): void {
+export function printSummary(results: FileResult[], dryRun: boolean, variant: ClusterVariant): void {
   if (results.length === 0) {
     p.log.warn('No files were generated.');
     return;
   }
 
+  p.log.info(`Cluster variant: ${VARIANT_LABELS[variant]}`);
+
   // Find the longest action label for alignment
-  const variant = dryRun ? 'dryRun' : 'normal';
+  const actionVariant = dryRun ? 'dryRun' : 'normal';
   const maxLabelLen = Math.max(
-    ...results.map((r) => ACTION_LABELS[r.action][variant].length),
+    ...results.map((r) => ACTION_LABELS[r.action][actionVariant].length),
   );
 
   // Print each file result
   for (const result of results) {
-    const label = ACTION_LABELS[result.action][variant].padEnd(maxLabelLen);
+    const label = ACTION_LABELS[result.action][actionVariant].padEnd(maxLabelLen);
     const size = formatSize(result.size);
     p.log.step(`${label}  ${result.path}${size}`);
   }
@@ -94,9 +104,10 @@ export function printNextSteps(): void {
   p.note(
     [
       '1. Review the generated files',
-      '2. Copy .generacy/generacy.env.template to .generacy/generacy.env and fill in credentials',
-      '3. Run `generacy doctor` to verify system requirements',
-      '4. Commit the generated files to your repository',
+      '2. Copy .devcontainer/.env.template to .devcontainer/.env and fill in credentials',
+      '3. Copy .generacy/generacy.env.template to .generacy/generacy.env and fill in credentials',
+      '4. Run `generacy doctor` to verify system requirements',
+      '5. Commit the generated files to your repository',
     ].join('\n'),
     'Next steps',
   );

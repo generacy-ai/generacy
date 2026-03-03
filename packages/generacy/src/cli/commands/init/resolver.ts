@@ -54,6 +54,9 @@ function loadExistingDefaults(gitRoot: string): Partial<InitOptions> {
     if (config.repos.clone && config.repos.clone.length > 0) {
       defaults.cloneRepos = config.repos.clone.map(configRepoToShorthand);
     }
+    if (config.cluster?.variant) {
+      defaults.variant = config.cluster.variant;
+    }
 
     logger.debug({ defaults }, 'Loaded existing config defaults for re-init');
     return defaults;
@@ -77,6 +80,9 @@ function extractFlags(flags: Record<string, unknown>): Partial<InitOptions> {
   if (typeof flags.baseBranch === 'string') partial.baseBranch = flags.baseBranch;
   if (typeof flags.releaseStream === 'string') {
     partial.releaseStream = flags.releaseStream as 'stable' | 'preview';
+  }
+  if (typeof flags.variant === 'string') {
+    partial.variant = flags.variant as 'standard' | 'microservices';
   }
 
   // Variadic flags come as string arrays from Commander
@@ -296,6 +302,7 @@ export async function resolveOptions(
     agent: merged.agent ?? 'claude-code',
     baseBranch: merged.baseBranch ?? 'main',
     releaseStream: merged.releaseStream ?? 'stable',
+    variant: merged.variant ?? 'standard',
     force: merged.force ?? false,
     dryRun: merged.dryRun ?? false,
     skipGithubCheck: merged.skipGithubCheck ?? false,

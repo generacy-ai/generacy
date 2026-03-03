@@ -64,3 +64,15 @@ orchestrator:
   # Number of parallel worker containers to spawn
   workerCount: {{orchestrator.workerCount}}
 {{/if}}
+{{#if cluster}}
+
+# ============================================================================
+# Cluster Configuration
+# ============================================================================
+
+cluster:
+  # Cluster variant determines the Docker topology for the dev container
+  # - standard: Docker-outside-of-Docker (DooD) — for apps that don't run containers
+  # - microservices: Docker-in-Docker (DinD) — each worker can run isolated container stacks
+  variant: "{{cluster.variant}}"
+{{/if}}

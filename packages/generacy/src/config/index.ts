@@ -15,6 +15,8 @@ export {
   type DefaultsConfig,
   OrchestratorSettingsSchema,
   type OrchestratorSettings,
+  ClusterConfigSchema,
+  type ClusterConfig,
   GeneracyConfigSchema,
   type GeneracyConfig,
   validateConfig,

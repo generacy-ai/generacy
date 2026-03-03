@@ -5,7 +5,7 @@
  * Also provides a helper to collect existing files that need smart-merge
  * support (e.g. `.vscode/extensions.json`) before template rendering.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { getLogger } from '../../utils/logger.js';
 import type { FileAction, FileResult } from './types.js';
@@ -69,6 +69,12 @@ export async function writeFiles(
 
     // Write file
     writeFileSync(fullPath, content, 'utf-8');
+
+    // Make shell scripts executable
+    if (relativePath.endsWith('.sh')) {
+      chmodSync(fullPath, 0o755);
+    }
+
     logger.debug({ path: relativePath, size, action: resultAction }, 'Wrote file');
 
     results.push({ path: relativePath, action: resultAction, size });

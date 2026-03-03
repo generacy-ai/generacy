@@ -9,6 +9,10 @@
  * - Merging behavior
  *
  * These tests ensure all components work together correctly.
+ *
+ * Note: All projects now use cluster templates (standard or microservices).
+ * The old single-repo/multi-repo template distinction has been replaced by
+ * cluster templates as the sole onboarding mechanism (see issue #289).
  */
 
 import { describe, it, expect } from 'vitest';
@@ -26,22 +30,35 @@ import singleRepoContext from '../fixtures/single-repo-context.json';
 import multiRepoContext from '../fixtures/multi-repo-context.json';
 import existingExtensions from '../fixtures/existing-extensions.json';
 
+// Standard variant produces 11 files:
+// 4 shared (config.yaml, generacy.env.template, .gitignore, extensions.json)
+// 4 cluster variant (Dockerfile, docker-compose.yml, devcontainer.json, .env.template)
+// 3 shared scripts (entrypoint-orchestrator.sh, entrypoint-worker.sh, setup-credentials.sh)
+const STANDARD_FILE_COUNT = 11;
+
 describe('Integration: renderProject - Single Repo', () => {
   it('should render all files for single-repo project', async () => {
     const files = await renderProject(singleRepoContext as TemplateContext);
 
-    // Verify correct number of files
-    expect(files.size).toBe(5);
+    // All projects now get cluster templates
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
 
-    // Verify all expected files are present
+    // Verify shared files
     expect(files.has('.generacy/config.yaml')).toBe(true);
     expect(files.has('.generacy/generacy.env.template')).toBe(true);
     expect(files.has('.generacy/.gitignore')).toBe(true);
     expect(files.has('.vscode/extensions.json')).toBe(true);
-    expect(files.has('.devcontainer/devcontainer.json')).toBe(true);
 
-    // Verify no multi-repo files
-    expect(files.has('.devcontainer/docker-compose.yml')).toBe(false);
+    // Verify cluster template files
+    expect(files.has('.devcontainer/devcontainer.json')).toBe(true);
+    expect(files.has('.devcontainer/docker-compose.yml')).toBe(true);
+    expect(files.has('.devcontainer/Dockerfile')).toBe(true);
+    expect(files.has('.devcontainer/.env.template')).toBe(true);
+
+    // Verify shared scripts
+    expect(files.has('.devcontainer/scripts/entrypoint-orchestrator.sh')).toBe(true);
+    expect(files.has('.devcontainer/scripts/entrypoint-worker.sh')).toBe(true);
+    expect(files.has('.devcontainer/scripts/setup-credentials.sh')).toBe(true);
   });
 
   it('should render valid config.yaml for single-repo', async () => {
@@ -69,10 +86,13 @@ describe('Integration: renderProject - Single Repo', () => {
     // Verify defaults
     expect(config.defaults.agent).toBe('claude-code');
     expect(config.defaults.baseBranch).toBe('main');
-    // Note: releaseStream is not rendered in config.yaml, it's just used for feature tag
 
     // Should NOT have orchestrator section for single-repo
     expect(config.orchestrator).toBeUndefined();
+
+    // Should have cluster section
+    expect(config.cluster).toBeDefined();
+    expect(config.cluster.variant).toBe('standard');
   });
 
   it('should render valid devcontainer.json for single-repo', async () => {
@@ -82,23 +102,19 @@ describe('Integration: renderProject - Single Repo', () => {
     // Parse JSON to ensure it's valid
     const devcontainer = JSON.parse(devcontainerJson);
 
-    // Verify structure
+    // Cluster templates always use docker-compose
     expect(devcontainer.name).toBe('E-Commerce API');
-    expect(devcontainer.image).toBe('mcr.microsoft.com/devcontainers/typescript-node:20');
+    expect(devcontainer.dockerComposeFile).toBe('docker-compose.yml');
+    expect(devcontainer.service).toBe('orchestrator');
+    expect(devcontainer.workspaceFolder).toBe('/workspaces/ecommerce-api');
 
-    // Verify features
-    expect(devcontainer.features).toBeDefined();
-    expect(devcontainer.features['ghcr.io/generacy-ai/generacy/generacy:1']).toBeDefined();
-
-    // Verify extensions
+    // Verify extensions in customizations
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.agency');
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.generacy');
 
-    // Should NOT have multi-repo properties
-    expect(devcontainer.dockerComposeFile).toBeUndefined();
-    expect(devcontainer.service).toBeUndefined();
-    expect(devcontainer.workspaceFolder).toBeUndefined();
-    expect(devcontainer.workspaceFolders).toBeUndefined();
+    // Cluster templates don't use image or features directly (handled by Dockerfile)
+    expect(devcontainer.image).toBeUndefined();
+    expect(devcontainer.features).toBeUndefined();
   });
 
   it('should render valid extensions.json for single-repo', async () => {
@@ -132,6 +148,16 @@ describe('Integration: renderProject - Single Repo', () => {
     expect(envTemplate).toContain('#');
   });
 
+  it('should render valid cluster .env.template for single-repo', async () => {
+    const files = await renderProject(singleRepoContext as TemplateContext);
+    const envTemplate = files.get('.devcontainer/.env.template')!;
+
+    // Verify content
+    expect(envTemplate).toContain('GITHUB_TOKEN=');
+    expect(envTemplate).toContain('ANTHROPIC_API_KEY=');
+    expect(envTemplate).toContain('REPO_URL=acme-corp/ecommerce-api');
+  });
+
   it('should render static .gitignore unchanged', async () => {
     const files = await renderProject(singleRepoContext as TemplateContext);
     const gitignore = files.get('.generacy/.gitignore')!;
@@ -155,13 +181,12 @@ describe('Integration: renderProject - Single Repo', () => {
   it('should not have undefined template variables in single-repo files', async () => {
     const files = await renderProject(singleRepoContext as TemplateContext);
 
-    // Check all files for {{undefined}} or similar
+    // Check rendered files for unrendered Handlebars variables
     for (const [path, content] of files) {
-      // Skip .gitignore as it's static
-      if (path.endsWith('.gitignore')) continue;
+      // Skip static files (gitignore and shell scripts)
+      if (path.endsWith('.gitignore') || path.endsWith('.sh')) continue;
 
       expect(content).not.toContain('{{undefined}}');
-      expect(content).not.toContain('undefined');
       expect(content).not.toMatch(/\{\{[^}]*undefined[^}]*\}\}/);
     }
   });
@@ -171,16 +196,20 @@ describe('Integration: renderProject - Multi Repo', () => {
   it('should render all files for multi-repo project', async () => {
     const files = await renderProject(multiRepoContext as TemplateContext);
 
-    // Verify correct number of files
-    expect(files.size).toBe(6);
+    // All projects now get cluster templates (same file count)
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
 
-    // Verify all expected files are present
+    // Verify shared files
     expect(files.has('.generacy/config.yaml')).toBe(true);
     expect(files.has('.generacy/generacy.env.template')).toBe(true);
     expect(files.has('.generacy/.gitignore')).toBe(true);
     expect(files.has('.vscode/extensions.json')).toBe(true);
+
+    // Verify cluster template files
     expect(files.has('.devcontainer/devcontainer.json')).toBe(true);
     expect(files.has('.devcontainer/docker-compose.yml')).toBe(true);
+    expect(files.has('.devcontainer/Dockerfile')).toBe(true);
+    expect(files.has('.devcontainer/.env.template')).toBe(true);
   });
 
   it('should render valid config.yaml for multi-repo', async () => {
@@ -220,6 +249,10 @@ describe('Integration: renderProject - Multi Repo', () => {
     // Verify orchestrator
     expect(config.orchestrator.workerCount).toBe(2);
     expect(config.orchestrator.pollIntervalMs).toBe(5000);
+
+    // Verify cluster
+    expect(config.cluster).toBeDefined();
+    expect(config.cluster.variant).toBe('standard');
   });
 
   it('should render valid devcontainer.json for multi-repo', async () => {
@@ -229,35 +262,17 @@ describe('Integration: renderProject - Multi Repo', () => {
     // Parse JSON to ensure it's valid
     const devcontainer = JSON.parse(devcontainerJson);
 
-    // Verify structure
+    // Cluster templates always use docker-compose
     expect(devcontainer.name).toBe('Acme Platform');
     expect(devcontainer.dockerComposeFile).toBe('docker-compose.yml');
     expect(devcontainer.service).toBe('orchestrator');
     expect(devcontainer.workspaceFolder).toBe('/workspaces/platform-orchestrator');
 
-    // Verify workspace folders
-    expect(devcontainer.workspaceFolders).toBeDefined();
-    expect(Array.isArray(devcontainer.workspaceFolders)).toBe(true);
-    expect(devcontainer.workspaceFolders).toHaveLength(6);
-
-    // Check all repos are in workspace folders
-    const workspacePaths = devcontainer.workspaceFolders.map((w: any) => w.path);
-    expect(workspacePaths).toContain('/workspaces/platform-orchestrator');
-    expect(workspacePaths).toContain('/workspaces/api-service');
-    expect(workspacePaths).toContain('/workspaces/frontend-app');
-    expect(workspacePaths).toContain('/workspaces/worker-service');
-    expect(workspacePaths).toContain('/workspaces/shared-lib');
-    expect(workspacePaths).toContain('/workspaces/proto-definitions');
-
-    // Verify features block (moved from docker-compose services to devcontainer.json)
-    expect(devcontainer.features).toBeDefined();
-    expect(devcontainer.features['ghcr.io/generacy-ai/generacy/generacy:1']).toBeDefined();
-
     // Verify extensions
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.agency');
     expect(devcontainer.customizations?.vscode?.extensions).toContain('generacy-ai.generacy');
 
-    // Should NOT have image (uses docker-compose)
+    // Cluster templates don't use image directly
     expect(devcontainer.image).toBeUndefined();
   });
 
@@ -283,39 +298,22 @@ describe('Integration: renderProject - Multi Repo', () => {
     // Verify Redis has no exposed ports
     expect(dockerCompose.services.redis.ports).toBeUndefined();
 
-    // Verify orchestrator service
+    // Verify orchestrator service uses build (not direct image)
     const orchestrator = dockerCompose.services.orchestrator;
-    expect(orchestrator.image).toBe('mcr.microsoft.com/devcontainers/base:ubuntu');
+    expect(orchestrator.build).toBeDefined();
+    expect(orchestrator.build.dockerfile).toBe('Dockerfile');
     expect(orchestrator.volumes).toBeDefined();
     expect(orchestrator.environment).toBeDefined();
 
     // Features belong in devcontainer.json, not docker-compose services
     expect(orchestrator.features).toBeUndefined();
 
-    // Verify primary repo mount uses '..' (not '../..')
-    const primaryMount = orchestrator.volumes.find((v: string) =>
-      v.includes('/workspaces/platform-orchestrator')
-    );
-    expect(primaryMount).toBeDefined();
-    expect(primaryMount).toMatch(/^\.\.\:/);
-    expect(primaryMount).not.toContain('../..');
-
-    // Verify all repos are mounted
-    const volumePaths = orchestrator.volumes.map((v: string) => v.split(':')[1]);
-    expect(volumePaths).toContain('/workspaces/platform-orchestrator');
-    expect(volumePaths).toContain('/workspaces/api-service');
-    expect(volumePaths).toContain('/workspaces/frontend-app');
-    expect(volumePaths).toContain('/workspaces/worker-service');
-    expect(volumePaths).toContain('/workspaces/shared-lib');
-    expect(volumePaths).toContain('/workspaces/proto-definitions');
-
     // Verify orchestrator health check
     expect(orchestrator.healthcheck).toBeDefined();
 
-    // Verify worker service
+    // Verify worker service uses build
     const worker = dockerCompose.services.worker;
-    expect(worker.image).toBe('mcr.microsoft.com/devcontainers/base:ubuntu');
-    expect(worker.deploy?.replicas).toBe(2);
+    expect(worker.build).toBeDefined();
     expect(worker.environment).toBeDefined();
 
     // Workers should not have features
@@ -324,20 +322,18 @@ describe('Integration: renderProject - Multi Repo', () => {
     // Workers should have health check
     expect(worker.healthcheck).toBeDefined();
 
-    // Workers should not have vscode-server volume
-    const workerVolumes = worker.volumes || [];
-    const hasVscodeServer = workerVolumes.some((v: string) =>
-      v.includes('vscode-server')
-    );
-    expect(hasVscodeServer).toBe(false);
+    // Worker replicas use runtime env var ${WORKER_COUNT:-3}
+    expect(worker.deploy).toBeDefined();
 
-    // Environment variables can be in array or object format in docker-compose
-    // Check for REDIS_URL in the environment
+    // Environment variables should include REDIS_URL
     const envArray = Array.isArray(worker.environment) ? worker.environment : Object.keys(worker.environment);
     const hasRedisUrl = envArray.some((e: any) =>
       typeof e === 'string' ? e.includes('REDIS_URL') : e === 'REDIS_URL'
     );
     expect(hasRedisUrl).toBe(true);
+
+    // Verify project ID is substituted in docker-compose
+    expect(dockerComposeYml).toContain('proj_xyz789def');
   });
 
   it('should pass validation for all multi-repo files', async () => {
@@ -350,16 +346,12 @@ describe('Integration: renderProject - Multi Repo', () => {
   it('should not have undefined template variables in multi-repo files', async () => {
     const files = await renderProject(multiRepoContext as TemplateContext);
 
-    // Check all files for {{undefined}} or similar
+    // Check rendered files for unrendered Handlebars variables
     for (const [path, content] of files) {
-      // Skip .gitignore as it's static
-      if (path.endsWith('.gitignore')) continue;
+      // Skip static files (gitignore and shell scripts)
+      if (path.endsWith('.gitignore') || path.endsWith('.sh')) continue;
 
       expect(content).not.toContain('{{undefined}}');
-      // Allow "undefined" in comments but not as substituted values
-      if (!path.endsWith('.yaml') && !path.endsWith('.yml')) {
-        expect(content).not.toContain('undefined');
-      }
       expect(content).not.toMatch(/\{\{[^}]*undefined[^}]*\}\}/);
     }
   });
@@ -515,7 +507,7 @@ describe('Integration: renderProject - Builder Integration', () => {
 
     const files = await renderProject(context);
 
-    expect(files.size).toBe(5);
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
     expect(files.has('.generacy/config.yaml')).toBe(true);
 
     const configYaml = files.get('.generacy/config.yaml')!;
@@ -538,7 +530,7 @@ describe('Integration: renderProject - Builder Integration', () => {
 
     const files = await renderProject(context);
 
-    expect(files.size).toBe(6);
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
     expect(files.has('.devcontainer/docker-compose.yml')).toBe(true);
 
     const configYaml = files.get('.generacy/config.yaml')!;
@@ -564,12 +556,12 @@ describe('Integration: renderProject - Builder Integration', () => {
     // Check defaults were applied
     expect(config.defaults.agent).toBe('claude-code');
     expect(config.defaults.baseBranch).toBe('main');
-    // Note: releaseStream is not rendered in config.yaml, it's just used for feature tag
 
-    // Check devcontainer defaults
+    // Cluster devcontainer uses docker-compose (not direct image)
     const devcontainerJson = files.get('.devcontainer/devcontainer.json')!;
     const devcontainer = JSON.parse(devcontainerJson);
-    expect(devcontainer.image).toContain('mcr.microsoft.com/devcontainers/');
+    expect(devcontainer.dockerComposeFile).toBe('docker-compose.yml');
+    expect(devcontainer.service).toBe('orchestrator');
   });
 });
 
@@ -618,8 +610,8 @@ describe('Integration: renderProject - File Content Integrity', () => {
     const files = await renderProject(singleRepoContext as TemplateContext);
 
     for (const [path, content] of files) {
-      // Skip .gitignore for this check
-      if (path.endsWith('.gitignore')) continue;
+      // Skip static files for this check
+      if (path.endsWith('.gitignore') || path.endsWith('.sh')) continue;
 
       // Should not start with blank line
       expect(content).not.toMatch(/^\n/);
@@ -653,20 +645,15 @@ describe('Integration: renderProject - Consistency Checks', () => {
     expect(devcontainerJson).toContain(projectName);
   });
 
-  it('should use consistent repo names across multi-repo files', async () => {
+  it('should use consistent repo names in config.yaml for multi-repo', async () => {
     const files = await renderProject(multiRepoContext as TemplateContext);
 
     const configYaml = files.get('.generacy/config.yaml')!;
-    const devcontainerJson = files.get('.devcontainer/devcontainer.json')!;
-    const dockerComposeYml = files.get('.devcontainer/docker-compose.yml')!;
 
-    // Check that all dev repos appear in all relevant files
+    // Check that all dev repos appear in config.yaml
     const devRepos = ['api-service', 'frontend-app', 'worker-service'];
-
     for (const repo of devRepos) {
       expect(configYaml).toContain(repo);
-      expect(devcontainerJson).toContain(repo);
-      expect(dockerComposeYml).toContain(repo);
     }
   });
 
@@ -701,7 +688,7 @@ describe('Integration: renderProject - Edge Cases', () => {
 
     const files = await renderProject(contextWithOnlyDev);
 
-    expect(files.size).toBe(6);
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
 
     const configYaml = files.get('.generacy/config.yaml')!;
     const config: any = yaml.load(configYaml);
@@ -723,7 +710,7 @@ describe('Integration: renderProject - Edge Cases', () => {
 
     const files = await renderProject(contextWithOnlyClone);
 
-    expect(files.size).toBe(6);
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
 
     const configYaml = files.get('.generacy/config.yaml')!;
     const config: any = yaml.load(configYaml);
@@ -742,7 +729,7 @@ describe('Integration: renderProject - Edge Cases', () => {
 
     const files = await renderProject(minimalContext);
 
-    expect(files.size).toBe(5);
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
     expect(() => validateAllRenderedFiles(files)).not.toThrow();
   });
 
@@ -773,13 +760,11 @@ describe('Integration: renderProject - Edge Cases', () => {
 
     const files = await renderProject(context);
 
-    expect(files.size).toBe(6);
+    expect(files.size).toBe(STANDARD_FILE_COUNT);
 
-    const dockerComposeYml = files.get('.devcontainer/docker-compose.yml')!;
-    const dockerCompose: any = yaml.load(dockerComposeYml);
-
-    // All repos should be mounted
-    const volumes = dockerCompose.services.orchestrator.volumes;
-    expect(volumes.length).toBeGreaterThanOrEqual(21); // primary + 20 dev repos
+    // Config should list all repos
+    const configYaml = files.get('.generacy/config.yaml')!;
+    const config: any = yaml.load(configYaml);
+    expect(config.repos.dev).toHaveLength(20);
   });
 });

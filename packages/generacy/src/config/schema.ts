@@ -123,6 +123,21 @@ export const OrchestratorSettingsSchema = z.object({
 export type OrchestratorSettings = z.infer<typeof OrchestratorSettingsSchema>;
 
 /**
+ * Cluster configuration schema
+ * Defines the development cluster topology
+ */
+export const ClusterConfigSchema = z.object({
+  /**
+   * Cluster variant determines the Docker topology
+   * - standard: Docker-outside-of-Docker (DooD) — for apps that don't run containers
+   * - microservices: Docker-in-Docker (DinD) — each worker can run isolated container stacks
+   */
+  variant: z.enum(['standard', 'microservices']).default('standard'),
+});
+
+export type ClusterConfig = z.infer<typeof ClusterConfigSchema>;
+
+/**
  * Complete Generacy configuration schema
  * Root configuration object for .generacy/config.yaml
  */
@@ -153,6 +168,12 @@ export const GeneracyConfigSchema = z.object({
    * Orchestrator settings (optional)
    */
   orchestrator: OrchestratorSettingsSchema.optional(),
+
+  /**
+   * Cluster configuration (optional)
+   * Defines the development cluster Docker topology
+   */
+  cluster: ClusterConfigSchema.optional(),
 });
 
 export type GeneracyConfig = z.infer<typeof GeneracyConfigSchema>;

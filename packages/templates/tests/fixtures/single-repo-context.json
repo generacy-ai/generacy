@@ -28,5 +28,8 @@
     "timestamp": "2026-02-24T15:30:00.000Z",
     "generatedBy": "generacy-cli",
     "version": "1.0.0"
+  },
+  "cluster": {
+    "variant": "standard"
   }
 }

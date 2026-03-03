@@ -269,6 +269,17 @@ export { validateRenderedDockerCompose } from './validators.js';
 export { validateRenderedExtensionsJson } from './validators.js';
 
 /**
+ * Validate rendered .env.template content
+ *
+ * Checks that the environment template is non-empty and contains
+ * required variable placeholders for cluster operation.
+ *
+ * @param content - Rendered .env.template content
+ * @throws Error if content is empty or missing required variables
+ */
+export { validateRenderedEnvTemplate } from './validators.js';
+
+/**
  * Validate all rendered files from renderProject output
  *
  * Applies appropriate validation to each file based on its type.
@@ -448,6 +459,23 @@ export { withBaseBranch } from './builders.js';
 export { withOrchestrator } from './builders.js';
 
 /**
+ * Override the cluster variant
+ *
+ * Useful for switching between standard (DooD) and microservices (DinD) after context is built.
+ *
+ * @param context - Existing template context
+ * @param variant - Cluster variant ('standard' or 'microservices')
+ * @returns New context with updated cluster variant
+ *
+ * @example
+ * ```typescript
+ * const context = buildSingleRepoContext(options);
+ * const dindContext = withVariant(context, 'microservices');
+ * ```
+ */
+export { withVariant } from './builders.js';
+
+/**
  * Build context for a minimal single-repo project
  *
  * Uses all defaults with minimal required fields.
@@ -582,6 +610,16 @@ export type { TemplateInfo } from './schema.js';
 export type { ProjectType } from './schema.js';
 
 /**
+ * Cluster variant type: 'standard' (DooD) or 'microservices' (DinD)
+ */
+export type { ClusterVariant } from './schema.js';
+
+/**
+ * Cluster configuration context
+ */
+export type { ClusterContext } from './schema.js';
+
+/**
  * Generacy's required VS Code extensions
  *
  * @constant
@@ -612,4 +650,6 @@ export {
   MultiRepoInputSchema,
   ExtensionsJsonSchema,
   TemplateMetadataSchema,
+  ClusterVariantSchema,
+  ClusterContextSchema,
 } from './schema.js';

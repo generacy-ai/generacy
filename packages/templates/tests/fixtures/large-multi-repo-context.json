@@ -46,5 +46,8 @@
     "timestamp": "2026-02-24T20:15:45.678Z",
     "generatedBy": "generacy-cloud",
     "version": "1.0.0"
+  },
+  "cluster": {
+    "variant": "standard"
   }
 }

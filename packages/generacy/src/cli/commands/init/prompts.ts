@@ -99,6 +99,7 @@ interface ExistingDefaults {
   cloneRepos?: string[];
   agent?: string;
   baseBranch?: string;
+  variant?: 'standard' | 'microservices';
 }
 
 /**
@@ -123,6 +124,9 @@ function loadExistingConfigDefaults(gitRoot: string): ExistingDefaults {
     }
     if (config.repos.clone && config.repos.clone.length > 0) {
       defaults.cloneRepos = config.repos.clone.map(configRepoToShorthand);
+    }
+    if (config.cluster?.variant) {
+      defaults.variant = config.cluster.variant;
     }
 
     logger.debug({ defaults }, 'Loaded existing config defaults for re-init');
@@ -161,6 +165,31 @@ export async function runInteractivePrompts(
 
   // ── Intro ──────────────────────────────────────────────────────────────
   p.intro('generacy init');
+
+  // ── Cluster variant ─────────────────────────────────────────────────────
+  if (defaults.variant !== undefined) {
+    result.variant = defaults.variant;
+  } else {
+    const defaultVariant = existing.variant ?? 'standard';
+    const variant = await p.select({
+      message: 'Cluster variant',
+      options: [
+        {
+          value: 'standard',
+          label: 'Standard (DooD)',
+          hint: 'Docker-outside-of-Docker — for apps that don\'t run containers',
+        },
+        {
+          value: 'microservices',
+          label: 'Microservices (DinD)',
+          hint: 'Docker-in-Docker — each worker runs isolated container stacks',
+        },
+      ],
+      initialValue: defaultVariant,
+    });
+    exitIfCancelled(variant);
+    result.variant = variant as 'standard' | 'microservices';
+  }
 
   // ── Project name ───────────────────────────────────────────────────────
   if (defaults.projectName !== undefined) {

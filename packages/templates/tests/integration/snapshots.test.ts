@@ -9,6 +9,9 @@
  * 1. Review the diff carefully
  * 2. Run `pnpm test -- -u` to update snapshots
  * 3. Commit the updated snapshots with your changes
+ *
+ * Note: All projects now use cluster templates (standard or microservices).
+ * Both single-repo and multi-repo produce the same set of cluster files.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -58,6 +61,30 @@ describe('Snapshot: Single-Repo Templates', () => {
 
     expect(gitignore).toBeDefined();
     expect(gitignore).toMatchSnapshot();
+  });
+
+  it('should match snapshot for docker-compose.yml (single-repo)', async () => {
+    const files = await renderProject(singleRepoContext as TemplateContext);
+    const dockerComposeYml = files.get('.devcontainer/docker-compose.yml')!;
+
+    expect(dockerComposeYml).toBeDefined();
+    expect(dockerComposeYml).toMatchSnapshot();
+  });
+
+  it('should match snapshot for Dockerfile (single-repo)', async () => {
+    const files = await renderProject(singleRepoContext as TemplateContext);
+    const dockerfile = files.get('.devcontainer/Dockerfile')!;
+
+    expect(dockerfile).toBeDefined();
+    expect(dockerfile).toMatchSnapshot();
+  });
+
+  it('should match snapshot for cluster .env.template (single-repo)', async () => {
+    const files = await renderProject(singleRepoContext as TemplateContext);
+    const envTemplate = files.get('.devcontainer/.env.template')!;
+
+    expect(envTemplate).toBeDefined();
+    expect(envTemplate).toMatchSnapshot();
   });
 });
 
@@ -150,28 +177,24 @@ describe('Snapshot: Edge Cases', () => {
     expect(configYaml).toMatchSnapshot();
   });
 
-  it('should match snapshot for docker-compose.yml with multiple repos', async () => {
+  it('should match snapshot for docker-compose.yml cluster services', async () => {
     const files = await renderProject(multiRepoContext as TemplateContext);
     const dockerComposeYml = files.get('.devcontainer/docker-compose.yml')!;
 
-    // Verify all repos are referenced
-    expect(dockerComposeYml).toContain('platform-orchestrator');
-    expect(dockerComposeYml).toContain('api-service');
-    expect(dockerComposeYml).toContain('frontend-app');
-    expect(dockerComposeYml).toContain('worker-service');
-    expect(dockerComposeYml).toContain('shared-lib');
-    expect(dockerComposeYml).toContain('proto-definitions');
+    // Verify cluster services are present
+    expect(dockerComposeYml).toContain('redis:');
+    expect(dockerComposeYml).toContain('orchestrator:');
+    expect(dockerComposeYml).toContain('worker:');
     expect(dockerComposeYml).toMatchSnapshot();
   });
 
-  it('should match snapshot for multi-repo devcontainer.json with workspace folders', async () => {
+  it('should match snapshot for devcontainer.json with docker-compose', async () => {
     const files = await renderProject(multiRepoContext as TemplateContext);
     const devcontainerJson = files.get('.devcontainer/devcontainer.json')!;
 
-    // Verify workspace folders are defined
-    expect(devcontainerJson).toContain('workspaceFolders');
-    expect(devcontainerJson).toContain('/workspaces/platform-orchestrator');
-    expect(devcontainerJson).toContain('/workspaces/api-service');
+    // Verify docker-compose integration
+    expect(devcontainerJson).toContain('docker-compose.yml');
+    expect(devcontainerJson).toContain('orchestrator');
     expect(devcontainerJson).toMatchSnapshot();
   });
 });
@@ -215,40 +238,31 @@ describe('Snapshot: Special Values', () => {
     expect(envTemplate).toMatchSnapshot();
   });
 
-  it('should correctly render base images in devcontainer templates', async () => {
+  it('should correctly render cluster devcontainer templates', async () => {
     const singleFiles = await renderProject(singleRepoContext as TemplateContext);
     const multiFiles = await renderProject(multiRepoContext as TemplateContext);
 
     const singleDevcontainer = singleFiles.get('.devcontainer/devcontainer.json')!;
     const multiDevcontainer = multiFiles.get('.devcontainer/devcontainer.json')!;
 
-    // Single-repo uses image directly
-    expect(singleDevcontainer).toContain('mcr.microsoft.com/devcontainers/typescript-node:20');
-
-    // Multi-repo uses docker-compose (no image field in devcontainer.json)
-    expect(multiDevcontainer).not.toContain('"image"');
+    // Both use docker-compose (cluster templates)
+    expect(singleDevcontainer).toContain('docker-compose.yml');
     expect(multiDevcontainer).toContain('docker-compose.yml');
+
+    // Both use orchestrator service
+    expect(singleDevcontainer).toContain('orchestrator');
+    expect(multiDevcontainer).toContain('orchestrator');
 
     expect(singleDevcontainer).toMatchSnapshot();
     expect(multiDevcontainer).toMatchSnapshot();
   });
 
-  it('should correctly render Generacy feature references', async () => {
-    const files = await renderProject(singleRepoContext as TemplateContext);
-    const devcontainerJson = files.get('.devcontainer/devcontainer.json')!;
-
-    // Verify feature reference is correct
-    expect(devcontainerJson).toContain('ghcr.io/generacy-ai/generacy/generacy:1');
-
-    expect(devcontainerJson).toMatchSnapshot();
-  });
-
-  it('should correctly render worker count in docker-compose.yml', async () => {
+  it('should correctly render cluster docker-compose with runtime env vars', async () => {
     const files = await renderProject(multiRepoContext as TemplateContext);
     const dockerComposeYml = files.get('.devcontainer/docker-compose.yml')!;
 
-    // Verify worker replicas match context
-    expect(dockerComposeYml).toContain('replicas: 2');
+    // Worker replicas use runtime env var (not baked-in value)
+    expect(dockerComposeYml).toContain('WORKER_COUNT');
 
     expect(dockerComposeYml).toMatchSnapshot();
   });

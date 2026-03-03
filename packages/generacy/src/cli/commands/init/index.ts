@@ -50,6 +50,10 @@ export function initCommand(): Command {
         .choices(['stable', 'preview'])
         .default('stable'),
     )
+    .addOption(
+      new Option('--variant <variant>', 'Cluster variant (standard = DooD, microservices = DinD)')
+        .choices(['standard', 'microservices']),
+    )
     .option('--force', 'Overwrite existing files without prompting')
     .option('--dry-run', 'Preview files without writing')
     .option('--skip-github-check', 'Skip GitHub access validation')
@@ -112,6 +116,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
         agent: initOptions.agent,
         baseBranch: initOptions.baseBranch,
         releaseStream: initOptions.releaseStream,
+        variant: initOptions.variant,
       });
     } else {
       context = buildSingleRepoContext({
@@ -121,6 +126,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
         agent: initOptions.agent,
         baseBranch: initOptions.baseBranch,
         releaseStream: initOptions.releaseStream,
+        variant: initOptions.variant,
       });
     }
 
@@ -155,6 +161,23 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
     logger.debug({ conflictCount: conflicts.size }, 'File conflicts detected');
   }
 
+  // ── 7b. Migration detection for old-format devcontainer.json ──────────
+  const devcontainerPath = '.devcontainer/devcontainer.json';
+  const existingDevcontainer = conflicts.get(devcontainerPath);
+  if (existingDevcontainer) {
+    try {
+      const parsed = JSON.parse(existingDevcontainer);
+      if (parsed.image && !parsed.dockerComposeFile) {
+        p.log.warn(
+          'Existing devcontainer.json uses the old image-based format.\n' +
+            '  Cluster templates use docker-compose. We recommend overwriting to adopt the new format.',
+        );
+      }
+    } catch {
+      // Invalid JSON — skip migration detection silently
+    }
+  }
+
   // ── 8. Resolve conflicts (prompt or force) ─────────────────────────────
   const actions = await resolveConflicts(renderedFiles, conflicts, initOptions);
 
@@ -173,7 +196,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
   }
 
   // ── 11. Print summary and next steps ───────────────────────────────────
-  printSummary(results, initOptions.dryRun);
+  printSummary(results, initOptions.dryRun, initOptions.variant);
   if (!initOptions.dryRun) {
     printNextSteps();
   }
