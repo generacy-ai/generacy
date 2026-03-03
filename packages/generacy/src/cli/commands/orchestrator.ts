@@ -198,7 +198,7 @@ async function setupLabelMonitor(
   logger: ReturnType<typeof getLogger>,
 ) {
   // Dynamic import to avoid loading orchestrator deps when label monitor is disabled
-  const { LabelMonitorService, SmeeWebhookReceiver, PhaseTrackerService, WebhookSetupService, resolveClusterIdentity } = await import('@generacy-ai/orchestrator');
+  const { LabelMonitorService, LabelSyncService, SmeeWebhookReceiver, PhaseTrackerService, WebhookSetupService, resolveClusterIdentity } = await import('@generacy-ai/orchestrator');
   const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
   const { Redis: IORedis } = await import('ioredis');
 
@@ -279,6 +279,24 @@ async function setupLabelMonitor(
       }
     },
   };
+
+  // Sync workflow labels to all monitored repositories
+  const labelSyncService = new LabelSyncService(monitorLogger, createGitHubClient);
+  try {
+    const syncResult = await labelSyncService.syncAll(repositories);
+    logger.info(
+      { successful: syncResult.successfulRepos, failed: syncResult.failedRepos, total: syncResult.totalRepos },
+      'Label sync complete',
+    );
+    if (syncResult.failedRepos > 0) {
+      logger.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
+    }
+  } catch (error) {
+    logger.warn(
+      { error: String(error) },
+      'Label sync failed (continuing with startup)',
+    );
+  }
 
   const phaseTracker = new PhaseTrackerService(monitorLogger, phaseTrackerRedis);
   const bridge = new LabelMonitorBridge(server, createGitHubClient, loggerAdapter);
