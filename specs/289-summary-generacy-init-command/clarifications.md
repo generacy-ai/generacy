@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -11,7 +11,7 @@
 - A) Full replacement: All projects get cluster templates (standard or microservices). Remove single-repo/multi-repo templates entirely.
 - B) Additive: Cluster templates are a new option alongside the existing single-repo/multi-repo templates. Users choose between "simple" (current) and "cluster" (new), then pick a cluster variant if applicable.
 - C) Conditional: Multi-repo projects always get cluster templates; single-repo projects keep the lightweight devcontainer unless the user explicitly opts into a cluster variant.
-**Answer**:
+**Answer**: **A (Full replacement)** — All projects get cluster templates (standard or microservices). The existing single-repo/multi-repo templates and the Dev Container Feature onboarding path are being deprecated. Cluster templates become the sole onboarding mechanism. The standard cluster variant serves as the lightweight option (no DinD, just orchestrator + workers + Redis). No need for a "none" or "simple" variant.
 
 ---
 
@@ -23,7 +23,7 @@
 - B) Official conventions: Use `GITHUB_TOKEN` and `ANTHROPIC_API_KEY` (matches GitHub Actions and Anthropic SDK defaults)
 - C) Support both with fallbacks: Scripts check for both names (e.g., `${ANTHROPIC_API_KEY:-$CLAUDE_API_KEY}`) and document the preferred name
 - D) Defer: Ship with cluster-templates naming for now, standardize in a follow-up issue
-**Answer**:
+**Answer**: **C (Support both with fallbacks), standardizing on official names** — Use `GITHUB_TOKEN` and `ANTHROPIC_API_KEY` as the documented/preferred names (matching GitHub Actions, `gh` CLI, and Anthropic SDK defaults), but support fallbacks: `${GITHUB_TOKEN:-$GH_TOKEN}` and `${ANTHROPIC_API_KEY:-$CLAUDE_API_KEY}`. The generacy init `github.ts` already looks for `GITHUB_TOKEN` first. The `.env.template` should list the official names as primary with comments noting the aliases. This avoids breaking anyone already using the cluster-templates names while aligning with ecosystem conventions going forward.
 
 ---
 
@@ -34,7 +34,7 @@
 - A) Set permissions in writer: Extend `writer.ts` to call `fs.chmodSync(path, 0o755)` for `.sh` files after writing
 - B) Dockerfile handles it: Add `RUN chmod +x /scripts/*.sh` in the generated Dockerfile (cluster-templates may already do this)
 - C) Git handles it: Mark scripts as executable via `git update-index --chmod=+x` after generation, relying on git to preserve permissions
-**Answer**:
+**Answer**: **A (Set permissions in writer)** — Add `fs.chmodSync(path, 0o755)` for `.sh` files in `writer.ts`. The cluster-templates Dockerfiles already use `COPY --chmod=755` so permissions are handled at build time too, but setting them correctly on disk ensures scripts work regardless of consumption context (local execution, non-Docker setups, git operations). One-line change with no downside.
 
 ---
 
@@ -44,7 +44,7 @@
 **Options**:
 - A) Integrated: Add variant to the existing `resolveOptions()` flow in `resolver.ts`, treating it like any other option (projectName, agent, etc.)
 - B) Separate step: Add a dedicated step 3 ("Resolve cluster variant") after option resolution but before GitHub validation, keeping variant logic isolated
-**Answer**:
+**Answer**: **A (Integrated into resolveOptions)** — The variant follows the exact same priority chain as every other option: flag -> config -> prompt -> default. The existing `resolver.ts` already handles projectName, agent, baseBranch, releaseStream with this pattern. Adding variant is consistent and keeps resolution logic centralized.
 
 ---
 
@@ -55,7 +55,7 @@
 - A) Config wins: Previously selected variant from config takes priority over the --yes default (consistent with how other options like projectName preserve existing values)
 - B) Flag default wins: --yes always uses "standard" unless `--variant` is explicitly provided (simpler, more predictable)
 - C) Explicit only: --yes uses the config value if present, otherwise "standard"; --variant flag always overrides both
-**Answer**:
+**Answer**: **C (Explicit only)** — Config value takes priority if present, otherwise defaults to "standard"; `--variant` flag always overrides both. This is consistent with how `resolveOptions()` already handles other options — existing config values from `.generacy/config.yaml` are loaded as defaults via `loadExistingDefaults()`, and CLI flags always win. A user who previously chose "microservices" shouldn't have `--yes` silently downgrade them.
 
 ---
 
@@ -66,7 +66,7 @@
 - A) Fixed: Hardcode `typescript-node:22-bookworm` in the cluster Dockerfile templates (simpler, tested combination)
 - B) Configurable: Make it a Handlebars variable `{{devcontainer.baseImage}}` with the cluster default, allowing override via context builders
 - C) Per-variant defaults: Each variant defines its own default base image, but it's still overridable
-**Answer**:
+**Answer**: **A (Fixed)** — Hardcode `typescript-node:22-bookworm` in cluster templates. The cluster Dockerfiles install specific tooling (gh CLI, Docker CE, Claude Code) tested against this base image. Making it configurable invites untested combinations for minimal benefit. Users who need a different base image can edit the generated Dockerfile post-init.
 
 ---
 
@@ -77,7 +77,7 @@
 - A) Overwrite only: Conflict resolution handles `devcontainer.json` normally (overwrite/skip/diff). Users manually clean up any orphaned files.
 - B) Detect and warn: If old-format devcontainer.json is detected (e.g., has `image` key instead of `dockerComposeFile`), warn the user that the format is changing and recommend a full overwrite.
 - C) Full replacement prompt: When migrating from old to new format, prompt the user to replace the entire `.devcontainer/` directory rather than per-file conflict resolution.
-**Answer**:
+**Answer**: **B (Detect and warn)** — If the existing `devcontainer.json` has an `image` key (old format) and the user is generating cluster templates (which use `dockerComposeFile`), warn that the format is changing and recommend full overwrite. This respects user agency while clearly communicating the incompatibility. Users may have customizations in their `.devcontainer/` directory they want to preserve.
 
 ---
 
@@ -88,7 +88,7 @@
 - A) Static: Copy shell scripts verbatim from cluster-templates. Runtime env vars handle all configuration. Simplest approach.
 - B) Handlebars: Convert all scripts to `.hbs` templates, allowing build-time substitution of paths, versions, and defaults alongside runtime env vars.
 - C) Hybrid: Most scripts are static, but specific ones (e.g., `setup-credentials.sh`) use Handlebars for values known at init time (like repo URL defaults).
-**Answer**:
+**Answer**: **A (Static)** — Copy shell scripts verbatim. The cluster-templates scripts already use runtime environment variables (`$REPO_URL`, `$WORKER_COUNT`, etc.) for all configuration. Treating shell scripts as Handlebars templates risks breaking bash syntax (e.g., `${VAR:-default}` conflicts with Handlebars `{{` delimiters) and adds complexity for zero gain.
 
 ---
 
@@ -99,7 +99,7 @@
 - A) Dockerfile only: Remove the Feature reference from cluster devcontainer.json; the Dockerfile handles CLI installation (avoids duplication, more control over version)
 - B) Feature only: Keep the Feature in devcontainer.json; remove the npm install from the Dockerfile (consistent with current approach, Feature handles updates)
 - C) Both with deduplication: Include the Feature but make the Dockerfile check if it's already installed before running npm install
-**Answer**:
+**Answer**: **A (Dockerfile only)** — Cluster template `devcontainer.json` files should NOT include the Generacy Dev Container Feature. The Dockerfile already installs the Generacy CLI, Agency MCP server, and Claude Code. The Feature onboarding path is being deprecated in favor of cluster templates as the sole onboarding mechanism (see Q1).
 
 ---
 
@@ -110,7 +110,7 @@
 - A) Extend renderProject: Add variant to TemplateContext; `renderProject` selects and renders the appropriate cluster templates alongside shared templates (single entry point, consistent API)
 - B) Separate renderCluster: `renderCluster(variant, context)` returns only cluster-specific files; the init command merges results from both `renderProject` (shared files) and `renderCluster` (cluster files)
 - C) Replace renderProject: Create a new unified `renderInit(context)` that handles everything (shared + cluster), deprecating the current `renderProject`
-**Answer**:
+**Answer**: **A (Extend renderProject)** — Add a `variant` field to `TemplateContext` and extend `selectTemplates(context)` to include cluster template sets when a variant is specified. This follows the same pattern as the current single-repo/multi-repo selection. The existing single-repo/multi-repo template paths should be marked for removal as cluster templates become the only path (per Q1). One entry point, consistent API, no duplicate rendering logic.
 
 ---
 
@@ -121,7 +121,7 @@
 - A) Syntax check: Validate Dockerfile has required directives (FROM, valid stage names) and shell scripts have proper shebang lines
 - B) Undefined variable check only: Reuse `findUndefinedVariables()` to catch unrendered `{{placeholders}}` in all generated files (lightweight, catches template errors)
 - C) No additional validation: Trust that the bundled templates are correct; only validate YAML/JSON files as currently done
-**Answer**:
+**Answer**: **B (Undefined variable check only)** — Reuse `findUndefinedVariables()` to scan all generated files for unrendered `{{placeholders}}`. This catches the highest-impact class of errors (template rendering failures) with minimal implementation cost. Full Dockerfile syntax validation is complex and low-value since the templates themselves are tested in the cluster-templates repo. JSON/YAML validators already cover config and devcontainer files.
 
 ---
 
@@ -132,5 +132,4 @@
 - A) Runtime env vars: docker-compose.yml uses `${WORKER_COUNT:-3}` and `${ORCHESTRATOR_PORT:-3100}` syntax, so users change values in .env without re-running init
 - B) Baked in: Handlebars substitution writes the actual values into docker-compose.yml at generation time (matches spec's variable substitution table)
 - C) Hybrid: Worker count uses runtime env var (frequently changed), port is baked in (rarely changed)
-**Answer**:
-
+**Answer**: **A (Runtime env vars)** — Use `${WORKER_COUNT:-3}` and `${ORCHESTRATOR_PORT:-3100}` in docker-compose.yml. This is already the pattern used in the cluster-templates repo. Users change values in `.env` without re-running init. The spec noting these as "out of scope" for init-time options aligns perfectly — they're runtime configuration, not generation-time decisions.
