@@ -137,6 +137,8 @@ export {
 
 export { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 
+export { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
+
 export { WorkerDispatcher } from './services/worker-dispatcher.js';
 
 export {

@@ -264,8 +264,11 @@ describe('SmeeWebhookReceiver', () => {
         { attempt: 8, delay: 300000 }, // Capped
       ];
 
+      // Process first fetch rejection to trigger the first warn + sleep
+      await vi.advanceTimersByTimeAsync(0);
+
       for (const { attempt, delay } of expectedDelays) {
-        await vi.runOnlyPendingTimersAsync();
+        // At this point, the warn for this attempt has already been logged
         expect(mockLogger.warn).toHaveBeenLastCalledWith(
           expect.objectContaining({
             reconnectMs: delay,
@@ -274,6 +277,8 @@ describe('SmeeWebhookReceiver', () => {
           'Smee connection lost, reconnecting...'
         );
 
+        // Advance past the sleep timer to trigger next iteration
+        // (sleep duration matches the logged reconnectMs)
         if (attempt < expectedDelays.length - 1) {
           await vi.advanceTimersByTimeAsync(delay);
         }

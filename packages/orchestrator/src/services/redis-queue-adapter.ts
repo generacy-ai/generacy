@@ -134,6 +134,7 @@ export class RedisQueueAdapter implements QueueManager {
         command: serialized.command,
         priority: serialized.priority,
         enqueuedAt: serialized.enqueuedAt,
+        metadata: serialized.metadata,
       };
     } catch (error) {
       this.logger.warn(
@@ -250,6 +251,7 @@ export class RedisQueueAdapter implements QueueManager {
             command: serialized.command,
             priority: serialized.priority,
             enqueuedAt: serialized.enqueuedAt,
+            metadata: serialized.metadata,
           },
           score,
         });

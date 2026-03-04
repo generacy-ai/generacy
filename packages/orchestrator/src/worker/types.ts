@@ -202,6 +202,8 @@ export interface WorkerContext {
   checkoutPath: string;
   /** Issue URL for prompts */
   issueUrl: string;
+  /** Issue description (from metadata or GitHub fetch) */
+  description: string;
   /** PR URL — set after draft PR is created, updated by PrManager */
   prUrl?: string;
 }

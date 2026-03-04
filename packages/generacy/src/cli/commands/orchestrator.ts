@@ -1,13 +1,18 @@
 /**
  * Orchestrator command implementation.
- * Starts the orchestrator HTTP server for worker coordination.
- * Optionally enables label monitoring to watch GitHub repos for process:* labels.
+ * Starts the Fastify-based orchestrator server from @generacy-ai/orchestrator.
+ * All service lifecycle (label monitoring, Smee webhooks, worker dispatch, etc.)
+ * is managed internally by the Fastify server.
  */
+import crypto from 'node:crypto';
 import { Command } from 'commander';
-import { getLogger } from '../utils/logger.js';
-import { createOrchestratorServer } from '../../orchestrator/index.js';
-import { createJobQueue } from '../../orchestrator/redis-job-queue.js';
-import { LabelMonitorBridge } from '../../orchestrator/label-monitor-bridge.js';
+import {
+  createServer,
+  startServer,
+  loadConfig,
+  InMemoryApiKeyStore,
+  type OrchestratorConfig,
+} from '@generacy-ai/orchestrator';
 
 /**
  * Create the orchestrator command
@@ -25,387 +30,126 @@ export function orchestratorCommand(): Command {
     .option('--label-monitor', 'Enable GitHub label monitoring (or set LABEL_MONITOR_ENABLED=true)')
     .option('--poll-interval <ms>', 'Label monitor poll interval in milliseconds (or set POLL_INTERVAL_MS)')
     .option('--monitored-repos <repos>', 'Comma-separated owner/repo list (or set MONITORED_REPOS)')
+    .option('--shutdown-timeout <ms>', 'Graceful shutdown timeout in milliseconds', '30000')
+    .option('--log-level <level>', 'Log level (trace, debug, info, warn, error)', 'info')
+    .option('--log-pretty', 'Pretty print logs')
     .action(async (options) => {
-      const logger = getLogger();
-
       const port = parseInt(options['port'], 10);
       const host = options['host'] as string;
       const workerTimeout = parseInt(options['workerTimeout'], 10);
-      const authToken = options['authToken'] as string | undefined;
-      const redisUrl = (options['redisUrl'] as string | undefined) ?? process.env['REDIS_URL'];
+      const authToken = (options['authToken'] as string | undefined) ?? process.env['ORCHESTRATOR_TOKEN'];
+      const shutdownTimeout = parseInt(options['shutdownTimeout'], 10);
+      const logLevel = options['logLevel'] as string;
+      const logPretty = options['logPretty'] === true;
 
       // Validate port
       if (isNaN(port) || port < 1 || port > 65535) {
-        logger.error('Invalid port number. Must be between 1 and 65535.');
+        console.error('Invalid port number. Must be between 1 and 65535.');
         process.exit(1);
       }
 
       // Validate timeout
       if (isNaN(workerTimeout) || workerTimeout < 1000) {
-        logger.error('Invalid worker timeout. Must be at least 1000ms.');
+        console.error('Invalid worker timeout. Must be at least 1000ms.');
         process.exit(1);
       }
 
-      const loggerAdapter = {
-        info: (message: string, data?: Record<string, unknown>) => logger.info(data ?? {}, message),
-        warn: (message: string, data?: Record<string, unknown>) => logger.warn(data ?? {}, message),
-        error: (message: string, data?: Record<string, unknown>) => logger.error(data ?? {}, message),
-      };
+      // Validate log level
+      const validLogLevels = ['trace', 'debug', 'info', 'warn', 'error'];
+      if (!validLogLevels.includes(logLevel)) {
+        console.error(`Invalid log level: ${logLevel}. Must be one of: ${validLogLevels.join(', ')}`);
+        process.exit(1);
+      }
 
-      logger.info({
-        port,
-        host,
-        workerTimeout,
-        authEnabled: !!(authToken || process.env['ORCHESTRATOR_TOKEN']),
-        redisUrl: redisUrl ? redisUrl.replace(/\/\/.*@/, '//***@') : undefined,
-      }, 'Starting orchestrator server');
+      // Ensure JWT secret is available (generate random for local dev if not configured)
+      if (!process.env['ORCHESTRATOR_JWT_SECRET']) {
+        process.env['ORCHESTRATOR_JWT_SECRET'] = crypto.randomBytes(32).toString('hex');
+      }
 
-      // Create job queue (Redis if URL provided, in-memory fallback)
-      const jobQueue = await createJobQueue(redisUrl, loggerAdapter);
+      // Load base config from YAML files and environment variables
+      let config: OrchestratorConfig;
+      try {
+        config = loadConfig();
+      } catch (error) {
+        console.error(
+          'Failed to load configuration:',
+          error instanceof Error ? error.message : String(error),
+        );
+        process.exit(1);
+      }
 
-      // Create server with pino logger adapter
-      const server = createOrchestratorServer({
-        port,
-        host,
-        workerTimeout,
-        authToken,
-        jobQueue,
-        logger: loggerAdapter,
-      });
+      // Override with CLI flags (highest priority)
+      config.server.port = port;
+      config.server.host = host;
+      config.logging.level = logLevel as OrchestratorConfig['logging']['level'];
+      config.logging.pretty = logPretty;
+      config.dispatch.heartbeatTtlMs = workerTimeout;
+      config.dispatch.shutdownTimeoutMs = shutdownTimeout;
 
-      // Label monitor setup
+      // Redis URL from CLI flag (env var already handled by loadConfig)
+      if (options['redisUrl']) {
+        config.redis.url = options['redisUrl'] as string;
+      }
+
+      // Poll interval from CLI flag
+      if (options['pollInterval']) {
+        config.monitor.pollIntervalMs = parseInt(options['pollInterval'] as string, 10);
+      }
+
+      // Parse repositories from CLI flag (overrides env-loaded repos)
+      if (options['monitoredRepos']) {
+        config.repositories = (options['monitoredRepos'] as string)
+          .split(',')
+          .map(r => r.trim())
+          .filter(Boolean)
+          .map(r => {
+            const [owner, repo] = r.split('/');
+            return owner && repo ? { owner, repo } : null;
+          })
+          .filter((r): r is { owner: string; repo: string } => r !== null);
+      }
+
+      // Validate label monitor requirements
       const labelMonitorEnabled =
         options['labelMonitor'] === true ||
         process.env['LABEL_MONITOR_ENABLED'] === 'true';
 
-      let labelMonitorSetup: Awaited<ReturnType<typeof setupLabelMonitor>> | null = null;
-
-      if (labelMonitorEnabled) {
-        labelMonitorSetup = await setupLabelMonitor(options, redisUrl, server, loggerAdapter, logger);
+      if (labelMonitorEnabled && config.repositories.length === 0) {
+        console.error(
+          'Label monitor enabled but no valid repositories configured. ' +
+          'Set MONITORED_REPOS env var or use --monitored-repos flag.',
+        );
+        process.exit(1);
       }
 
-      // Graceful shutdown handler
-      let isShuttingDown = false;
-      const shutdown = async (signal: string) => {
-        if (isShuttingDown) {
-          return;
-        }
-        isShuttingDown = true;
+      // Setup auth with CLI token
+      let apiKeyStore: InMemoryApiKeyStore | undefined;
+      if (authToken) {
+        config.auth.enabled = true;
+        apiKeyStore = new InMemoryApiKeyStore();
+        apiKeyStore.addKey(authToken, {
+          name: 'cli-token',
+          scopes: ['admin'],
+          createdAt: new Date().toISOString(),
+        });
+      }
 
-        logger.info({ signal }, 'Received shutdown signal, stopping orchestrator...');
-
-        try {
-          // Stop label monitor and smee receiver before closing the server
-          if (labelMonitorSetup) {
-            labelMonitorSetup.monitor.stopPolling();
-            if (labelMonitorSetup.smeeReceiver) {
-              labelMonitorSetup.smeeReceiver.stop();
-            }
-            logger.info('Label monitor stopped');
-          }
-
-          // Give a brief grace period for in-flight requests
-          await new Promise(resolve => setTimeout(resolve, 1000));
-
-          await server.close();
-          logger.info('Orchestrator shutdown complete');
-          process.exit(0);
-        } catch (error) {
-          logger.error({ error: String(error) }, 'Error during shutdown');
-          process.exit(1);
-        }
-      };
-
-      // Handle signals
-      process.on('SIGTERM', () => shutdown('SIGTERM'));
-      process.on('SIGINT', () => shutdown('SIGINT'));
-
-      // Handle uncaught errors
-      process.on('uncaughtException', (error) => {
-        logger.error({ error: error.message, stack: error.stack }, 'Uncaught exception');
-        shutdown('uncaughtException');
-      });
-
-      process.on('unhandledRejection', (reason) => {
-        logger.error({ reason: String(reason) }, 'Unhandled rejection');
-        shutdown('unhandledRejection');
-      });
-
-      // Start the server
+      // Create and start the Fastify server
       try {
-        await server.listen();
-        logger.info({
-          port: server.getPort(),
-          host,
-          labelMonitor: labelMonitorEnabled,
-          endpoints: [
-            'GET  /api/health',
-            'POST /api/workers/register',
-            'DELETE /api/workers/:workerId',
-            'POST /api/workers/:workerId/heartbeat',
-            'GET  /api/jobs/poll',
-            'GET  /api/jobs/:jobId',
-            'PUT  /api/jobs/:jobId/status',
-            'POST /api/jobs/:jobId/result',
-            'POST /api/jobs/:jobId/cancel',
-          ],
-        }, 'Orchestrator server ready and listening');
-
-        // Start label monitoring after server is ready
-        if (labelMonitorSetup) {
-          // Start smee receiver for real-time webhook events (if configured)
-          if (labelMonitorSetup.smeeReceiver) {
-            labelMonitorSetup.smeeReceiver.start().catch((error: unknown) => {
-              logger.error({ error: String(error) }, 'Smee webhook receiver failed');
-            });
-            logger.info('Smee webhook receiver started');
-          }
-
-          // Start polling as primary (no smee) or fallback (with smee)
-          labelMonitorSetup.monitor.startPolling().catch((error: unknown) => {
-            logger.error({ error: String(error) }, 'Label monitor polling failed');
-          });
-          logger.info(
-            { mode: labelMonitorSetup.smeeReceiver ? 'smee+polling-fallback' : 'polling-only' },
-            'Label monitor started',
-          );
-        }
+        const server = await createServer({ config, apiKeyStore });
+        const address = await startServer(server);
+        server.log.info(
+          { address, labelMonitor: config.repositories.length > 0 },
+          'Orchestrator server ready',
+        );
       } catch (error) {
-        logger.error({ error: String(error) }, 'Failed to start orchestrator server');
+        console.error(
+          'Failed to start orchestrator server:',
+          error instanceof Error ? error.message : String(error),
+        );
         process.exit(1);
       }
     });
 
   return command;
-}
-
-/**
- * Default poll interval when smee.io webhooks are active.
- * Polling serves as a fallback only, so it can be very infrequent.
- */
-const SMEE_FALLBACK_POLL_INTERVAL_MS = 300_000; // 5 minutes
-
-/**
- * Setup label monitoring when enabled.
- * Dynamically imports orchestrator services to avoid loading them when disabled.
- * Returns both the monitor service and an optional smee receiver.
- */
-async function setupLabelMonitor(
-  options: Record<string, unknown>,
-  redisUrl: string | undefined,
-  server: ReturnType<typeof createOrchestratorServer>,
-  loggerAdapter: { info: (msg: string, data?: Record<string, unknown>) => void; warn: (msg: string, data?: Record<string, unknown>) => void; error: (msg: string, data?: Record<string, unknown>) => void },
-  logger: ReturnType<typeof getLogger>,
-) {
-  // Dynamic import to avoid loading orchestrator deps when label monitor is disabled
-  const { LabelMonitorService, LabelSyncService, SmeeWebhookReceiver, PhaseTrackerService, WebhookSetupService, resolveClusterIdentity } = await import('@generacy-ai/orchestrator');
-  const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
-  const { Redis: IORedis } = await import('ioredis');
-
-  // Parse repositories — CLI flag > env var > config file
-  const reposStr =
-    (options['monitoredRepos'] as string | undefined) ??
-    process.env['MONITORED_REPOS'] ?? '';
-
-  const envRepositories = reposStr
-    .split(',')
-    .map(r => r.trim())
-    .filter(Boolean)
-    .map(r => {
-      const [owner, repo] = r.split('/');
-      if (!owner || !repo) {
-        logger.warn({ repo: r }, 'Invalid repository format, expected owner/repo');
-        return null;
-      }
-      return { owner, repo };
-    })
-    .filter((r): r is { owner: string; repo: string } => r !== null);
-
-  let repositories = envRepositories;
-  let repoSource = 'MONITORED_REPOS env var';
-
-  // Fallback to config file if no repos from CLI/env
-  if (repositories.length === 0) {
-    const { findWorkspaceConfigPath, tryLoadWorkspaceConfig, getMonitoredRepos } = await import('@generacy-ai/config');
-    const configPath = findWorkspaceConfigPath(process.cwd());
-    if (configPath) {
-      const config = tryLoadWorkspaceConfig(configPath);
-      if (config) {
-        repositories = getMonitoredRepos(config);
-        repoSource = 'config file';
-        logger.info(`Resolved ${repositories.length} monitored repos from ${configPath}`);
-      }
-    }
-  } else {
-    // Env var is set — check for drift against config file
-    const { findWorkspaceConfigPath, tryLoadWorkspaceConfig, getMonitoredRepos, detectRepoDrift } = await import('@generacy-ai/config');
-    const configPath = findWorkspaceConfigPath(process.cwd());
-    if (configPath) {
-      const config = tryLoadWorkspaceConfig(configPath);
-      if (config) {
-        const configRepos = getMonitoredRepos(config);
-        const drift = detectRepoDrift(configRepos, repositories);
-        if (drift) {
-          logger.warn({
-            inConfigOnly: drift.inConfigOnly,
-            inEnvOnly: drift.inEnvOnly,
-          }, 'Monitored repos drift detected between config file and env var');
-        }
-      }
-    }
-  }
-
-  if (repositories.length === 0) {
-    logger.error('Label monitor enabled but no valid repositories configured. Set MONITORED_REPOS or add repos to .generacy/config.yaml.');
-    process.exit(1);
-  }
-
-  logger.info({ count: repositories.length, source: repoSource }, `Monitoring ${repositories.length} repos from ${repoSource}`);
-
-  // Check for smee.io channel URL
-  const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'];
-  const useSmee = !!smeeChannelUrl;
-
-  // When smee is active, polling is just a fallback — use a much longer interval
-  const configuredPollMs = parseInt(
-    (options['pollInterval'] as string | undefined) ??
-    process.env['POLL_INTERVAL_MS'] ?? '30000',
-    10,
-  );
-  const pollIntervalMs = useSmee ? SMEE_FALLBACK_POLL_INTERVAL_MS : configuredPollMs;
-
-  // Create Redis connection for phase tracker (reuse URL from job queue)
-  let phaseTrackerRedis: InstanceType<typeof IORedis> | null = null;
-  if (redisUrl) {
-    try {
-      phaseTrackerRedis = new IORedis(redisUrl);
-      await phaseTrackerRedis.ping();
-      logger.info('Phase tracker Redis connected');
-    } catch (error) {
-      logger.warn(
-        { error: String(error) },
-        'Failed to connect Redis for phase tracker, dedup will be disabled',
-      );
-      phaseTrackerRedis = null;
-    }
-  }
-
-  // Pino-compatible logger adapter for LabelMonitorService
-  // The service calls logger.info(obj, msg) or logger.info(msg)
-  const monitorLogger = {
-    info: (msgOrObj: string | Record<string, unknown>, msg?: string) => {
-      if (typeof msgOrObj === 'string') {
-        logger.info(msgOrObj);
-      } else {
-        logger.info(msgOrObj, msg ?? '');
-      }
-    },
-    warn: (msgOrObj: string | Record<string, unknown>, msg?: string) => {
-      if (typeof msgOrObj === 'string') {
-        logger.warn(msgOrObj);
-      } else {
-        logger.warn(msgOrObj, msg ?? '');
-      }
-    },
-    error: (msgOrObj: string | Record<string, unknown>, msg?: string) => {
-      if (typeof msgOrObj === 'string') {
-        logger.error(msgOrObj);
-      } else {
-        logger.error(msgOrObj, msg ?? '');
-      }
-    },
-  };
-
-  // Sync workflow labels to all monitored repositories
-  const labelSyncService = new LabelSyncService(monitorLogger, createGitHubClient);
-  try {
-    const syncResult = await labelSyncService.syncAll(repositories);
-    logger.info(
-      { successful: syncResult.successfulRepos, failed: syncResult.failedRepos, total: syncResult.totalRepos },
-      'Label sync complete',
-    );
-    if (syncResult.failedRepos > 0) {
-      logger.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
-    }
-  } catch (error) {
-    logger.warn(
-      { error: String(error) },
-      'Label sync failed (continuing with startup)',
-    );
-  }
-
-  const phaseTracker = new PhaseTrackerService(monitorLogger, phaseTrackerRedis);
-  const bridge = new LabelMonitorBridge(server, createGitHubClient, loggerAdapter);
-
-  // Resolve cluster identity for assignee-based issue filtering
-  const clusterGithubUsername = await resolveClusterIdentity(
-    process.env['CLUSTER_GITHUB_USERNAME'],
-    monitorLogger,
-  );
-
-  const monitor = new LabelMonitorService(
-    monitorLogger,
-    createGitHubClient,
-    phaseTracker,
-    bridge,
-    { pollIntervalMs, maxConcurrentPolls: 5, adaptivePolling: !useSmee },
-    repositories,
-    clusterGithubUsername,
-  );
-
-  // Create smee receiver if channel URL is configured
-  let smeeReceiver: InstanceType<typeof SmeeWebhookReceiver> | null = null;
-  if (useSmee) {
-    const watchedRepos = new Set(repositories.map(r => `${r.owner}/${r.repo}`));
-    smeeReceiver = new SmeeWebhookReceiver(monitorLogger, monitor, {
-      channelUrl: smeeChannelUrl,
-      watchedRepos,
-    });
-    logger.info(
-      { channelUrl: smeeChannelUrl, pollFallbackMs: pollIntervalMs },
-      'Smee.io webhook receiver configured (polling reduced to fallback)',
-    );
-
-    // Auto-configure GitHub webhooks for all monitored repositories
-    logger.info('Configuring GitHub webhooks...');
-
-    try {
-      const webhookService = new WebhookSetupService(monitorLogger);
-      const summary = await webhookService.ensureWebhooks(smeeChannelUrl, repositories);
-
-      logger.info(
-        {
-          total: summary.total,
-          created: summary.created,
-          skipped: summary.skipped,
-          reactivated: summary.reactivated,
-          failed: summary.failed,
-        },
-        'Webhook auto-configuration complete',
-      );
-
-      // Warn if any webhooks failed to set up
-      if (summary.failed > 0) {
-        const failedRepos = summary.results
-          .filter((r) => r.action === 'failed')
-          .map((r) => `${r.owner}/${r.repo}`);
-        logger.warn(
-          { failedRepos },
-          'Some webhooks failed to configure - these repos will use polling fallback',
-        );
-      }
-    } catch (error) {
-      logger.warn(
-        { error: String(error) },
-        'Webhook auto-configuration failed (falling back to polling)',
-      );
-    }
-  }
-
-  logger.info(
-    { repositories: repositories.length, pollIntervalMs, smee: useSmee },
-    'Label monitor configured',
-  );
-
-  return { monitor, smeeReceiver };
 }

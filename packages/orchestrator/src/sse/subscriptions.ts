@@ -213,10 +213,20 @@ export class SSESubscriptionManager {
   private bufferEvent<T>(event: SSEEvent<T>, channel: SSEChannel): void {
     const now = Date.now();
 
+    // Use the event ID's embedded timestamp for ordering consistency with getMissedEvents,
+    // falling back to current time if the event ID doesn't contain a parseable timestamp.
+    let eventTimestamp = now;
+    if (event.id) {
+      const parsed = parseInt(event.id.split('_')[0] ?? '', 10);
+      if (!isNaN(parsed)) {
+        eventTimestamp = parsed;
+      }
+    }
+
     // Add to buffer
     this.eventBuffer.push({
       event: event as SSEEvent<unknown>,
-      timestamp: now,
+      timestamp: eventTimestamp,
       channel,
     });
 
