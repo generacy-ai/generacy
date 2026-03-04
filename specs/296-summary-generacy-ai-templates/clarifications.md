@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -12,7 +12,7 @@
 - B) GitHub tarball/zipball download via `fetch()`**: Single HTTP request to download the entire repo (or a subtree). Requires extracting the archive, but avoids recursive API calls. Needs a tar/zip extraction dependency or Node.js built-in `zlib`.
 - C) `git clone --depth 1 --sparse`**: Uses git CLI (already available since `generacy init` requires a git repo). No GitHub API auth needed for public repos. Requires `git` to be on PATH.
 - D) Octokit (add as dependency)**: Mirrors the `generacy-cloud` reference implementation most closely. Adds `octokit` as a dependency to the CLI package.
-**Answer**:
+**Answer**: **B) GitHub tarball via `fetch()`**. The `cluster-templates` repo has ~8-12 files per variant spread across directories. Option A (Contents API) would require multiple recursive API calls (5+ requests minimum). Tarball gets everything in a single HTTP request. Node's built-in `zlib` + `tar` extraction can handle `.tar.gz` with no new dependencies. The CLI already uses bare `fetch()` in `github.ts`, so this stays consistent.
 
 ---
 
@@ -24,7 +24,7 @@
 - B) Simple placeholder substitution: Files use a simple `{{variable}}` or `${variable}` syntax that can be replaced with a basic string-replace (no logic, no helpers). The CLI builds a flat key-value map and does find-and-replace.
 - C) Still Handlebars-based: `cluster-templates` uses the same `.hbs` format, and the CLI must retain Handlebars as a dependency for rendering. This contradicts the goal of removing Handlebars.
 - D) Mixed: Some files are static (scripts), some need substitution (config.yaml, devcontainer.json). The CLI needs a lightweight substitution engine for the dynamic files.
-**Answer**:
+**Answer**: **A) Fully static files**. Confirmed by inspecting the actual files in `cluster-templates`. The Dockerfile, docker-compose.yml, devcontainer.json, and .env.template contain zero template variables — they're all plain, ready-to-use files. The `.env.template` uses a "copy and fill in" pattern with empty values for the user. **Important caveat:** `cluster-templates` only contains the `.devcontainer/` files. The CLI must still generate `.generacy/config.yaml`, `.generacy/generacy.env.template`, `.generacy/.gitignore`, and `.vscode/extensions.json` separately (these currently come from the `shared/` templates and would need to be re-implemented inline in the CLI without Handlebars).
 
 ---
 
@@ -36,7 +36,7 @@
 - B) Bundle a snapshot as fallback: Ship a pinned copy of the templates inside the CLI package. Use it when the network fetch fails. Adds a build step to sync the snapshot but preserves offline capability.
 - C) Cache-first with TTL: After the first successful fetch, cache templates locally (e.g., `~/.generacy/template-cache/`). Subsequent runs use the cache if it's fresh (e.g., <24h) or if the network is unavailable. Requires cache invalidation logic.
 - D) Cache with explicit refresh: Cache fetched templates indefinitely. Add a `--refresh-templates` flag (or `generacy update-templates` command) to force re-download. Simplest caching model.
-**Answer**:
+**Answer**: **D) Cache with explicit refresh**. Templates are static and change infrequently, so caching indefinitely with explicit refresh is the simplest model. Cache fetched templates locally (e.g., `~/.generacy/template-cache/{ref}/`). On subsequent runs, use cache if present. Add `--refresh-templates` flag to force re-download. First run requires network.
 
 ---
 
@@ -47,7 +47,7 @@
 - A) Public repo, no auth required: Fetch without authentication. Accept the 60 req/hr rate limit for unauthenticated requests (sufficient for CLI usage).
 - B) Public repo, use auth opportunistically: Fetch without auth by default, but if a GitHub token is already available (from the earlier discovery step), include it for higher rate limits (5000 req/hr).
 - C) Private repo, auth required: The fetcher must use a GitHub token. Reuse the token discovered in step 3 of the init flow. Fail with a clear error if no token is available.
-**Answer**:
+**Answer**: **B) Public repo, use auth opportunistically**. Confirmed the repo is public (`private: false`). With the tarball approach (Q1), it's a single request, so the 60 req/hr unauthenticated rate limit is a non-issue. But since the token is already discovered in step 3 of the init flow, include it if available for higher rate limits.
 
 ---
 
@@ -59,7 +59,7 @@
 - B) Pin to a tag matching CLI version: The CLI fetches `cluster-templates@v{cli-version}`. Requires the `cluster-templates` repo to publish matching tags. Ensures reproducibility.
 - C) Pin to a hardcoded tag/commit in CLI source: Each CLI release hardcodes the `cluster-templates` ref it's compatible with. Updated as part of the CLI release process. Most reproducible.
 - D) Configurable with a sensible default: Default to `main` but allow override via `--template-ref <ref>` flag or `GENERACY_TEMPLATE_REF` env var. Flexible for development and debugging.
-**Answer**:
+**Answer**: **D) Configurable with sensible default**. Default to `develop` (the repo's actual default branch, not `main`) with override via `--template-ref <ref>` flag or `GENERACY_TEMPLATE_REF` env var. This matches the worker's configurable `ref` parameter pattern and allows testing against specific commits/tags without rigid release coupling.
 
 ---
 
@@ -70,7 +70,7 @@
 - A) Inline in `init/index.ts` or `init/writer.ts`: Move the merge logic (parse existing JSON, deduplicate recommendations, merge) directly into the init command's file-writing step. Keep `GENERACY_EXTENSIONS` as a constant in the init module.
 - B) Fetch extensions list from `cluster-templates`: The fetched `extensions.json` from `cluster-templates` provides the Generacy extensions list. The CLI only needs to merge it with any existing file. No hardcoded extension list in the CLI.
 - C) Skip merge, always overwrite: Simplify by always writing the fetched `extensions.json`. Users who want custom extensions can re-add them after init. Reduces complexity but loses the current "non-destructive" behavior.
-**Answer**:
+**Answer**: **A) Inline in init command**. Move the merge logic inline into the init command's writer step. Keep `GENERACY_EXTENSIONS` as a constant in the init module. The extensions list is a CLI concern (not a cluster/devcontainer concern), so it shouldn't live in `cluster-templates`. The `.vscode/extensions.json` is currently a shared template (not variant-specific), confirming it belongs in the CLI.
 
 ---
 
@@ -81,7 +81,7 @@
 - A) No context needed: `cluster-templates` files are fetched as-is with no variable substitution. The context-building step (step 4) is removed entirely. The CLI only needs the variant to know which directory to fetch.
 - B) Simplified context: The CLI builds a flat key-value map (e.g., `{projectName: "...", primaryRepo: "...", ...}`) for simple string substitution. No nested structure, no Zod validation.
 - C) Same context, different renderer: The `TemplateContext` structure stays the same (or moves into the CLI), but instead of Handlebars it's used with a lighter rendering approach.
-**Answer**:
+**Answer**: **A) No context needed (with caveat)**. Since cluster-templates files are fully static (Q2 = A), no `TemplateContext` is needed for rendering devcontainer files. The variant determines which directory to fetch. **Caveat:** `.generacy/config.yaml` and related files still need to be generated from `InitOptions` directly (e.g., using `yaml` serialization of a plain object). The complex nested `TemplateContext` with Zod validation can be removed.
 
 ---
 
@@ -93,7 +93,7 @@
 - B) Superset: `cluster-templates` may include additional files not in the current package. The CLI should fetch and write all files from the repo, updating the file list dynamically.
 - C) Different paths: The files are equivalent but may use different directory structures or naming. A path mapping layer is needed in the CLI.
 - D) Unknown — needs investigation: Someone needs to inspect the `cluster-templates` repo to confirm file parity before implementation begins.
-**Answer**:
+**Answer**: **Not an exact match — different file sets**. `cluster-templates` contains only the `.devcontainer/` files + `.gitattributes` per variant. It does **not** contain: `.generacy/config.yaml`, `.generacy/generacy.env.template`, `.generacy/.gitignore`, `.vscode/extensions.json`. It **does** add `.gitattributes` (new, not in current templates). The writer and conflict modules need updating to handle two sources: fetched files (from `cluster-templates`) + CLI-generated files (config, env template, gitignore, extensions).
 
 ---
 
@@ -104,7 +104,7 @@
 - A) No retry, fail fast: If the fetch fails, print a descriptive error and exit. Users can re-run `generacy init` manually. Keeps the implementation simple.
 - B) Retry with backoff for transient errors: Retry 429 and 5xx errors up to 3 times with exponential backoff. Show a spinner with "Retrying..." message. Fail immediately on 4xx errors (except 429).
 - C) Retry with user prompt: On transient failure, ask the user "Template fetch failed. Retry? [Y/n]" before retrying. Gives the user control.
-**Answer**:
+**Answer**: **A) No retry, fail fast**. With the tarball approach and caching (Q1 + Q3), the fetch is a single request that succeeds or fails. Interactive CLI users can just re-run the command. Print a clear error message, suggest checking connectivity, and mention `--refresh-templates` if using cached templates.
 
 ---
 
@@ -114,4 +114,4 @@
 **Options**:
 - A) Add explicit variant to each test: Pass `'standard'` (or the relevant variant) to every `printSummary()` call in the test file. Most explicit and test-correct.
 - B) Make variant optional with default: Change `printSummary()` signature to default `variant` to `'standard'` if not provided. Fixes tests and makes the API more forgiving.
-**Answer**:
+**Answer**: **A) Add explicit variant to each test**. Pass `'standard'` to every `printSummary()` call in the test file. Making the parameter optional (B) reduces type safety for a cosmetic benefit. Tests should be explicit about what variant they're testing.
