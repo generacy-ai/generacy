@@ -16,8 +16,6 @@ permissions:
 jobs:
   publish-npm:
     runs-on: ubuntu-latest
-    outputs:
-      has_changesets: ${{ steps.changesets.outputs.has_changesets }}
     steps:
       - uses: actions/checkout@v4
 
@@ -38,22 +36,32 @@ jobs:
       - name: Build (packages)
         run: pnpm -r run --if-present build
 
-      - name: Check for changesets
-        id: changesets
+      - name: Ensure changesets for preview
         run: |
           CHANGESET_FILES=$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)
           if [ -n "$CHANGESET_FILES" ]; then
-            echo "has_changesets=true" >> $GITHUB_OUTPUT
+            echo "Changeset files found, proceeding with preview publish"
           else
-            echo "has_changesets=false" >> $GITHUB_OUTPUT
+            echo "No changeset files found, generating synthetic changeset"
+            node -e "
+              const fs = require('fs'), path = require('path');
+              const config = JSON.parse(fs.readFileSync('.changeset/config.json', 'utf8'));
+              const ignore = new Set(config.ignore || []);
+              const pkgs = fs.readdirSync('packages')
+                .map(d => path.join('packages', d, 'package.json'))
+                .filter(p => fs.existsSync(p))
+                .map(p => JSON.parse(fs.readFileSync(p, 'utf8')))
+                .filter(p => !p.private && p.name && !ignore.has(p.name));
+              const lines = ['---', ...pkgs.map(p => '\"' + p.name + '\": patch'), '---', '', 'Preview publish (synthetic)', ''];
+              fs.writeFileSync('.changeset/preview-publish.md', lines.join('\n'));
+              console.log('Created synthetic changeset for ' + pkgs.length + ' packages');
+            "
           fi
 
       - name: Version (snapshot)
-        if: steps.changesets.outputs.has_changesets == 'true'
         run: pnpm changeset version --snapshot preview
 
       - name: Publish preview
-        if: steps.changesets.outputs.has_changesets == 'true'
         run: pnpm -r --filter '!generacy-extension' publish --tag preview --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
