@@ -253,29 +253,51 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       integrationRegistry,
     });
 
-    // Register webhook routes (if monitor service is available)
-    if (labelMonitorService) {
-      const watchedRepos = new Set(
-        config.repositories.map(r => `${r.owner}/${r.repo}`)
-      );
-      await setupWebhookRoutes(server, {
-        monitorService: labelMonitorService,
-        webhookSecret: config.monitor.webhookSecret,
-        watchedRepos,
-        clusterGithubUsername,
-      });
-    }
+    // Register webhook routes inside an encapsulated plugin so the custom
+    // application/json content-type parser (needed for raw-body signature
+    // verification) is scoped to webhook routes only and registered exactly once.
+    const hasWebhookRoutes = labelMonitorService || prFeedbackMonitorService;
+    if (hasWebhookRoutes) {
+      await server.register(async (webhookScope) => {
+        // Replace the default JSON parser with one that preserves the raw body
+        // for HMAC-SHA256 signature verification.
+        webhookScope.removeContentTypeParser('application/json');
+        webhookScope.addContentTypeParser(
+          'application/json',
+          { parseAs: 'string' },
+          (_req, body, done) => {
+            try {
+              const json = JSON.parse(body as string);
+              done(null, { parsed: json, raw: body });
+            } catch (err) {
+              done(err as Error, undefined);
+            }
+          },
+        );
 
-    // Register PR webhook routes (if PR feedback monitor service is available)
-    if (prFeedbackMonitorService) {
-      const watchedRepos = new Set(
-        config.repositories.map(r => `${r.owner}/${r.repo}`)
-      );
-      await setupPrWebhookRoutes(server, {
-        monitorService: prFeedbackMonitorService,
-        webhookSecret: config.prMonitor.webhookSecret,
-        watchedRepos,
-        clusterGithubUsername,
+        if (labelMonitorService) {
+          const watchedRepos = new Set(
+            config.repositories.map(r => `${r.owner}/${r.repo}`)
+          );
+          await setupWebhookRoutes(webhookScope, {
+            monitorService: labelMonitorService,
+            webhookSecret: config.monitor.webhookSecret,
+            watchedRepos,
+            clusterGithubUsername,
+          });
+        }
+
+        if (prFeedbackMonitorService) {
+          const watchedRepos = new Set(
+            config.repositories.map(r => `${r.owner}/${r.repo}`)
+          );
+          await setupPrWebhookRoutes(webhookScope, {
+            monitorService: prFeedbackMonitorService,
+            webhookSecret: config.prMonitor.webhookSecret,
+            watchedRepos,
+            clusterGithubUsername,
+          });
+        }
       });
     }
 
