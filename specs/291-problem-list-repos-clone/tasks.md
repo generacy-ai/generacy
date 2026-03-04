@@ -12,7 +12,7 @@
 
 ## Phase 1: Create `@generacy-ai/config` shared package
 
-### T001 Scaffold `packages/config` package structure
+### T001 [DONE] Scaffold `packages/config` package structure
 **Files**:
 - `packages/config/package.json`
 - `packages/config/tsconfig.json`
@@ -22,14 +22,14 @@
 - Create `src/index.ts` as barrel export (initially empty, populated in subsequent tasks)
 - Register in pnpm workspace (already covered by `packages/*` glob in `pnpm-workspace.yaml`)
 
-### T002 [P] Define workspace Zod schemas
+### T002 [DONE] [P] Define workspace Zod schemas
 **File**: `packages/config/src/workspace-schema.ts`
 - Define `WorkspaceRepoSchema`: `z.object({ name: z.string().min(1), monitor: z.boolean().default(true) })`
 - Define `WorkspaceConfigSchema`: `z.object({ org: z.string().min(1), branch: z.string().min(1).default('develop'), repos: z.array(WorkspaceRepoSchema).min(1) })`
 - Export types: `WorkspaceRepo`, `WorkspaceConfig`
 - Export schemas for reuse in `GeneracyConfigSchema` (Phase 2)
 
-### T003 [P] Implement repo helper functions
+### T003 [DONE] [P] Implement repo helper functions
 **File**: `packages/config/src/repos.ts`
 - `getWorkspaceRepos(config: WorkspaceConfig)` → returns `{ owner: string, repo: string }[]` using `config.org` as owner
 - `getMonitoredRepos(config: WorkspaceConfig)` → filters `config.repos` for `monitor: true`, returns `{ owner: string, repo: string }[]`
@@ -37,7 +37,7 @@
 - `getRepoWorkdir(repoName: string, basePath: string = '/workspaces')` → returns `${basePath}/${repoName}`
 - All functions are pure (no I/O), taking `WorkspaceConfig` as input
 
-### T004 [P] Implement multi-format repo input parser
+### T004 [DONE] [P] Implement multi-format repo input parser
 **File**: `packages/config/src/parse-repo-input.ts`
 - `parseRepoInput(input: string, defaultOrg?: string)` → returns `{ owner: string, repo: string }`
 - Support formats: bare name (`generacy`), `owner/repo` (`generacy-ai/generacy`), `github.com/owner/repo`, SSH URL, HTTPS URL
@@ -45,14 +45,14 @@
 - Strip `.git` suffix if present
 - `parseRepoList(csv: string, defaultOrg?: string)` → splits on comma, trims, filters empty, calls `parseRepoInput` on each
 
-### T005 [P] Implement drift detection utility
+### T005 [DONE] [P] Implement drift detection utility
 **File**: `packages/config/src/drift.ts`
 - `detectRepoDrift(configRepos: { owner: string, repo: string }[], envRepos: { owner: string, repo: string }[])` → returns `{ inConfigOnly: string[], inEnvOnly: string[] } | null`
 - Set comparison using `owner/repo` as key
 - Returns `null` if sets are identical
 - Intended for logging warnings, not blocking
 
-### T006 [P] Implement `tryLoadWorkspaceConfig()`
+### T006 [DONE] [P] Implement `tryLoadWorkspaceConfig()`
 **File**: `packages/config/src/loader.ts`
 - `tryLoadWorkspaceConfig(configPath: string)` → returns `WorkspaceConfig | null`
 - Check `existsSync(configPath)`, return `null` if missing
@@ -61,7 +61,7 @@
 - Validate with `WorkspaceConfigSchema.parse()` (throws on invalid)
 - `findWorkspaceConfigPath(startDir: string, configDirName = '.generacy', configFileName = 'config.yaml')` → walks up directories looking for `{dir}/{configDirName}/{configFileName}`, stops at `.git` root, returns path or `null`
 
-### T007 Update `packages/config/src/index.ts` barrel exports
+### T007 [DONE] Update `packages/config/src/index.ts` barrel exports
 **File**: `packages/config/src/index.ts`
 - Re-export all public types and functions from `workspace-schema.ts`, `repos.ts`, `parse-repo-input.ts`, `drift.ts`, `loader.ts`
 - This is the public API surface of the package
@@ -70,21 +70,21 @@
 
 ## Phase 2: Unit tests for `@generacy-ai/config`
 
-### T008 [P] Write workspace schema tests
+### T008 [DONE] [P] Write workspace schema tests
 **File**: `packages/config/src/__tests__/workspace-schema.test.ts`
 - Valid config with all fields
 - Default values: `monitor` defaults to `true`, `branch` defaults to `'develop'`
 - Reject empty `org`, empty `repos` array, empty repo `name`
 - Type inference checks
 
-### T009 [P] Write repo helper tests
+### T009 [DONE] [P] Write repo helper tests
 **File**: `packages/config/src/__tests__/repos.test.ts`
 - `getWorkspaceRepos` returns correct `{ owner, repo }[]` with org prefix
 - `getMonitoredRepos` filters correctly (mix of `monitor: true` and `false`)
 - `getRepoNames` returns bare names
 - `getRepoWorkdir` returns correct path with default and custom `basePath`
 
-### T010 [P] Write parse-repo-input tests
+### T010 [DONE] [P] Write parse-repo-input tests
 **File**: `packages/config/src/__tests__/parse-repo-input.test.ts`
 - Bare name with `defaultOrg` → `{ owner, repo }`
 - Bare name without `defaultOrg` → throws
@@ -95,7 +95,7 @@
 - `parseRepoList` with comma-separated input, whitespace, empty entries
 - Invalid inputs (empty string, just `/`)
 
-### T011 [P] Write drift detection tests
+### T011 [DONE] [P] Write drift detection tests
 **File**: `packages/config/src/__tests__/drift.test.ts`
 - Identical sets → returns `null`
 - Extra repo in config → `inConfigOnly` populated
@@ -103,7 +103,7 @@
 - Both differ → both arrays populated
 - Empty inputs
 
-### T012 [P] Write loader tests
+### T012 [DONE] [P] Write loader tests
 **File**: `packages/config/src/__tests__/loader.test.ts`
 - `tryLoadWorkspaceConfig` with valid YAML file → returns `WorkspaceConfig`
 - Missing file → returns `null`
@@ -116,18 +116,18 @@
 
 ## Phase 3: Integrate workspace schema into generacy config
 
-### T013 Add `@generacy-ai/config` dependency to generacy package
+### T013 [DONE] Add `@generacy-ai/config` dependency to generacy package
 **File**: `packages/generacy/package.json`
 - Add `"@generacy-ai/config": "workspace:*"` to `dependencies` (line 41 area)
 - Run `pnpm install` to link the workspace package
 
-### T014 Add `workspace` field to `GeneracyConfigSchema`
+### T014 [DONE] Add `workspace` field to `GeneracyConfigSchema`
 **File**: `packages/generacy/src/config/schema.ts`
 - Import `WorkspaceConfigSchema` from `@generacy-ai/config`
 - Add `workspace: WorkspaceConfigSchema.optional()` to `GeneracyConfigSchema` (after `cluster` field, ~line 176)
 - This is optional so existing configs without `workspace` remain valid
 
-### T015 Add workspace schema tests to generacy config tests
+### T015 [DONE] Add workspace schema tests to generacy config tests
 **File**: `packages/generacy/src/config/__tests__/schema.test.ts`
 - Add test: config with valid `workspace` section passes validation
 - Add test: config without `workspace` section still passes (optional field)
@@ -137,7 +137,7 @@
 
 ## Phase 4: Update `generacy setup workspace`
 
-### T016 Replace `DEFAULT_REPOS` with config-based resolution
+### T016 [DONE] Replace `DEFAULT_REPOS` with config-based resolution
 **File**: `packages/generacy/src/cli/commands/setup/workspace.ts`
 - Import `tryLoadWorkspaceConfig`, `getRepoNames`, `getWorkspaceRepos`, `findWorkspaceConfigPath` from `@generacy-ai/config`
 - Remove `DEFAULT_REPOS` constant (lines 27-36)
@@ -150,7 +150,7 @@
   - If config not found and no overrides, return only `['tetrad-development']` (bootstrap phase)
 - Log the repo source: `"CLI flag"`, `"REPOS env var"`, `"config file"`, or `"bootstrap (config not found)"`
 
-### T017 Implement two-phase clone logic
+### T017 [DONE] Implement two-phase clone logic
 **File**: `packages/generacy/src/cli/commands/setup/workspace.ts`
 - Update the `action` handler (lines 245-302):
   - After initial clone loop, if repos were bootstrapped (only tetrad-development):
@@ -160,7 +160,7 @@
   - Preserve existing tetrad-development-first ordering logic (lines 267-273)
   - Log: `"Phase 2: Found config, cloning {N} additional repos"`
 
-### T018 [P] Use `parseRepoInput` for CLI `--repos` flag
+### T018 [DONE] [P] Use `parseRepoInput` for CLI `--repos` flag
 **File**: `packages/generacy/src/cli/commands/setup/workspace.ts`
 - Import `parseRepoList` from `@generacy-ai/config`
 - When parsing `cliRepos` or `envRepos`, use `parseRepoList()` to support multi-format input (bare names, `owner/repo`, URLs)
@@ -170,7 +170,7 @@
 
 ## Phase 5: Update orchestrator startup (`orchestrator.ts`)
 
-### T019 Add config file fallback for monitored repos in `setupLabelMonitor()`
+### T019 [DONE] Add config file fallback for monitored repos in `setupLabelMonitor()`
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - Import `tryLoadWorkspaceConfig`, `getMonitoredRepos`, `findWorkspaceConfigPath`, `detectRepoDrift` from `@generacy-ai/config`
 - Update repository resolution block (lines 206-227):
@@ -185,11 +185,11 @@
 
 ## Phase 6: Update orchestrator config loader (`loader.ts`)
 
-### T020 Add `@generacy-ai/config` dependency to orchestrator package
+### T020 [DONE] Add `@generacy-ai/config` dependency to orchestrator package
 **File**: `packages/orchestrator/package.json`
 - Add `"@generacy-ai/config": "workspace:*"` to `dependencies`
 
-### T021 Add config file fallback for repositories in `loadFromEnv()`
+### T021 [DONE] Add config file fallback for repositories in `loadFromEnv()`
 **File**: `packages/orchestrator/src/config/loader.ts`
 - Import `tryLoadWorkspaceConfig`, `getMonitoredRepos`, `findWorkspaceConfigPath` from `@generacy-ai/config`
 - Update repository config block (lines 107-115):
@@ -203,7 +203,7 @@
 
 ## Phase 7: Update job handler (`job-handler.ts`)
 
-### T022 Replace inline `MONITORED_REPOS` parsing with config-based lookup
+### T022 [DONE] Replace inline `MONITORED_REPOS` parsing with config-based lookup
 **File**: `packages/generacy/src/orchestrator/job-handler.ts`
 - Import `tryLoadWorkspaceConfig`, `getRepoWorkdir`, `findWorkspaceConfigPath`, `getRepoNames` from `@generacy-ai/config`
 - Update `resolveJobWorkdir()` (lines 572-598):
@@ -218,7 +218,7 @@
 
 ## Phase 8: Integration tests
 
-### T023 [P] Write integration test for workspace command override priority
+### T023 [DONE] [P] Write integration test for workspace command override priority
 **File**: `packages/generacy/src/cli/commands/setup/__tests__/workspace.test.ts`
 - Test: CLI `--repos` flag overrides everything
 - Test: `REPOS` env var overrides config file
@@ -227,14 +227,14 @@
 - Test: Two-phase clone triggers when config found after bootstrap
 - Use temp directories with mock `.generacy/config.yaml` files
 
-### T024 [P] Write integration test for orchestrator monitored repos resolution
+### T024 [DONE] [P] Write integration test for orchestrator monitored repos resolution
 **File**: `packages/generacy/src/cli/commands/__tests__/orchestrator-repos.test.ts`
 - Test: `MONITORED_REPOS` env var takes priority over config
 - Test: Config file used as fallback when env var is empty
 - Test: Drift detection logs warning when env and config differ
 - Test: Error when no repos resolved from any source
 
-### T025 [P] Write integration test for orchestrator loader config fallback
+### T025 [DONE] [P] Write integration test for orchestrator loader config fallback
 **File**: `packages/orchestrator/src/config/__tests__/loader-workspace.test.ts`
 - Test: `MONITORED_REPOS` env var still works as before
 - Test: Config file fallback populates `config.repositories`
@@ -244,11 +244,11 @@
 
 ## Phase 9: Build validation and cleanup
 
-### T026 Run `pnpm install` and verify workspace linking
+### T026 [DONE] Run `pnpm install` and verify workspace linking
 - Run `pnpm install` to link the new `@generacy-ai/config` workspace package
 - Verify all three packages resolve the dependency correctly
 
-### T027 Run `pnpm build` across all packages
+### T027 [DONE] Run `pnpm build` across all packages
 - Run `pnpm -r build` to verify TypeScript compilation succeeds
 - Fix any type errors from new imports or schema changes
 
@@ -257,7 +257,7 @@
 - Verify no regressions in existing tests
 - Verify all new tests pass
 
-### T029 Update `agent.env.template` documentation (companion repo)
+### T029 [DONE] Update `agent.env.template` documentation (companion repo)
 **File**: `tetrad-development/.devcontainer/agent.env.template` *(companion repo — may be out of scope)*
 - Add comment: `# MONITORED_REPOS overrides .generacy/config.yaml — leave empty to use config file`
 - Document that the config file is the source of truth

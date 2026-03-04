@@ -6,6 +6,12 @@ import { existsSync, readdirSync } from 'node:fs';
 import { resolve, isAbsolute } from 'node:path';
 import { execSync } from 'node:child_process';
 import {
+  findWorkspaceConfigPath,
+  tryLoadWorkspaceConfig,
+  getWorkspaceRepos,
+  getRepoWorkdir,
+} from '@generacy-ai/config';
+import {
   loadWorkflowFromString,
   loadWorkflowWithExtends,
   prepareWorkflow,
@@ -566,8 +572,8 @@ export class JobHandler {
 
   /**
    * Resolve the working directory for a job.
-   * Uses MONITORED_REPOS env var to map owner/repo to local workspace paths.
-   * Falls back to job.workdir, then this.workdir.
+   * Checks MONITORED_REPOS env var first, then falls back to workspace config.
+   * Final fallback is job.workdir, then this.workdir.
    */
   private resolveJobWorkdir(job: Job): string {
     if (job.workdir) return job.workdir;
@@ -576,18 +582,40 @@ export class JobHandler {
     const repo = job.inputs?.repo as string | undefined;
     if (owner && repo) {
       const fullName = `${owner}/${repo}`;
-      const monitoredRepos = process.env['MONITORED_REPOS'] ?? '';
-      const repos = monitoredRepos.split(',').map(r => r.trim()).filter(Boolean);
 
-      for (const entry of repos) {
+      // 1. Try MONITORED_REPOS env var (backward compatibility)
+      const monitoredRepos = process.env['MONITORED_REPOS'] ?? '';
+      const envRepos = monitoredRepos.split(',').map(r => r.trim()).filter(Boolean);
+
+      for (const entry of envRepos) {
         if (entry === fullName) {
-          // Derive workspace path from the repo name portion
           const repoName = entry.split('/')[1];
           if (repoName) {
-            const repoWorkdir = `/workspaces/${repoName}`;
+            const repoWorkdir = getRepoWorkdir(repoName);
             if (existsSync(repoWorkdir)) {
               this.logger.info(`Using repo workdir: ${repoWorkdir} (from MONITORED_REPOS)`);
               return repoWorkdir;
+            }
+          }
+        }
+      }
+
+      // 2. Fallback to workspace config file
+      if (envRepos.length === 0) {
+        const configPath = findWorkspaceConfigPath(this.workdir);
+        if (configPath) {
+          const config = tryLoadWorkspaceConfig(configPath);
+          if (config) {
+            const configRepos = getWorkspaceRepos(config);
+            const match = configRepos.find(
+              (r) => `${r.owner}/${r.repo}` === fullName,
+            );
+            if (match) {
+              const repoWorkdir = getRepoWorkdir(match.repo);
+              if (existsSync(repoWorkdir)) {
+                this.logger.info(`Using repo workdir: ${repoWorkdir} (from config file)`);
+                return repoWorkdir;
+              }
             }
           }
         }

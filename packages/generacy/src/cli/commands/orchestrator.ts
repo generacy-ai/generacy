@@ -202,12 +202,12 @@ async function setupLabelMonitor(
   const { createGitHubClient } = await import('@generacy-ai/workflow-engine');
   const { Redis: IORedis } = await import('ioredis');
 
-  // Parse repositories
+  // Parse repositories — CLI flag > env var > config file
   const reposStr =
     (options['monitoredRepos'] as string | undefined) ??
     process.env['MONITORED_REPOS'] ?? '';
 
-  const repositories = reposStr
+  const envRepositories = reposStr
     .split(',')
     .map(r => r.trim())
     .filter(Boolean)
@@ -221,10 +221,46 @@ async function setupLabelMonitor(
     })
     .filter((r): r is { owner: string; repo: string } => r !== null);
 
+  let repositories = envRepositories;
+  let repoSource = 'MONITORED_REPOS env var';
+
+  // Fallback to config file if no repos from CLI/env
   if (repositories.length === 0) {
-    logger.error('Label monitor enabled but no valid repositories configured. Set MONITORED_REPOS.');
+    const { findWorkspaceConfigPath, tryLoadWorkspaceConfig, getMonitoredRepos } = await import('@generacy-ai/config');
+    const configPath = findWorkspaceConfigPath(process.cwd());
+    if (configPath) {
+      const config = tryLoadWorkspaceConfig(configPath);
+      if (config) {
+        repositories = getMonitoredRepos(config);
+        repoSource = 'config file';
+        logger.info(`Resolved ${repositories.length} monitored repos from ${configPath}`);
+      }
+    }
+  } else {
+    // Env var is set — check for drift against config file
+    const { findWorkspaceConfigPath, tryLoadWorkspaceConfig, getMonitoredRepos, detectRepoDrift } = await import('@generacy-ai/config');
+    const configPath = findWorkspaceConfigPath(process.cwd());
+    if (configPath) {
+      const config = tryLoadWorkspaceConfig(configPath);
+      if (config) {
+        const configRepos = getMonitoredRepos(config);
+        const drift = detectRepoDrift(configRepos, repositories);
+        if (drift) {
+          logger.warn({
+            inConfigOnly: drift.inConfigOnly,
+            inEnvOnly: drift.inEnvOnly,
+          }, 'Monitored repos drift detected between config file and env var');
+        }
+      }
+    }
+  }
+
+  if (repositories.length === 0) {
+    logger.error('Label monitor enabled but no valid repositories configured. Set MONITORED_REPOS or add repos to .generacy/config.yaml.');
     process.exit(1);
   }
+
+  logger.info({ count: repositories.length, source: repoSource }, `Monitoring ${repositories.length} repos from ${repoSource}`);
 
   // Check for smee.io channel URL
   const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'];

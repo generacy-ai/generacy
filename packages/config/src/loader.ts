@@ -1,0 +1,55 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join, parse as parsePath } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { WorkspaceConfigSchema, type WorkspaceConfig } from './workspace-schema.js';
+
+/**
+ * Attempt to load and validate workspace config from a YAML file.
+ * Returns `null` if the file does not exist or has no `workspace` key.
+ * Throws if the file exists but contains invalid config.
+ */
+export function tryLoadWorkspaceConfig(configPath: string): WorkspaceConfig | null {
+  if (!existsSync(configPath)) {
+    return null;
+  }
+
+  const raw = readFileSync(configPath, 'utf-8');
+  const parsed: unknown = parseYaml(raw);
+
+  if (parsed == null || typeof parsed !== 'object') {
+    return null;
+  }
+
+  const doc = parsed as Record<string, unknown>;
+  if (!('workspace' in doc) || doc['workspace'] == null) {
+    return null;
+  }
+
+  return WorkspaceConfigSchema.parse(doc['workspace']);
+}
+
+/**
+ * Walk up from `startDir` looking for `{configDirName}/{configFileName}`.
+ * Stops at the filesystem root. Returns the full path if found, `null` otherwise.
+ */
+export function findWorkspaceConfigPath(
+  startDir: string,
+  configDirName = '.generacy',
+  configFileName = 'config.yaml',
+): string | null {
+  let dir = startDir;
+
+  for (;;) {
+    const candidate = join(dir, configDirName, configFileName);
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+
+    const parent = dirname(dir);
+    if (parent === dir) {
+      // Reached filesystem root
+      return null;
+    }
+    dir = parent;
+  }
+}
