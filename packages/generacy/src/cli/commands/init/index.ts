@@ -5,27 +5,24 @@
  *   1. Detect git root
  *   2. Resolve options (flags + prompts + auto-detection)
  *   3. GitHub validation (advisory)
- *   4. Build template context
+ *   4. Fetch cluster templates from GitHub
  *   5. Collect existing files for merge support
- *   6. Render templates
- *   7. Check & resolve file conflicts
- *   8. Write files (or dry-run preview)
- *   9. Post-generation config validation
- *  10. Print summary & next steps
+ *   6. Generate CLI-owned files (config, env, gitignore, extensions)
+ *   7. Merge template + CLI files
+ *   8. Check & resolve file conflicts
+ *   9. Write files (or dry-run preview)
+ *  10. Post-generation config validation
+ *  11. Print summary & next steps
  */
 import { Command, Option } from 'commander';
 import * as p from '@clack/prompts';
-import {
-  buildSingleRepoContext,
-  buildMultiRepoContext,
-  renderProject,
-  withGeneratedBy,
-} from '@generacy-ai/templates';
 import { loadConfig } from '../../../config/index.js';
 import { getLogger } from '../../utils/logger.js';
 import { detectGitRoot } from './repo-utils.js';
 import { resolveOptions, ResolverError } from './resolver.js';
 import { runGitHubValidation } from './github.js';
+import { fetchClusterTemplates } from './template-fetcher.js';
+import { generateCliFiles, generateExtensionsJson } from './file-generators.js';
 import { checkConflicts, resolveConflicts } from './conflicts.js';
 import { writeFiles, collectExistingFiles } from './writer.js';
 import { printSummary, printNextSteps } from './summary.js';
@@ -54,6 +51,8 @@ export function initCommand(): Command {
       new Option('--variant <variant>', 'Cluster variant (standard = DooD, microservices = DinD)')
         .choices(['standard', 'microservices']),
     )
+    .option('--template-ref <ref>', 'Git ref for cluster-templates repo (branch, tag, or commit)')
+    .option('--refresh-templates', 'Bypass template cache and re-download')
     .option('--force', 'Overwrite existing files without prompting')
     .option('--dry-run', 'Preview files without writing')
     .option('--skip-github-check', 'Skip GitHub access validation')
@@ -95,73 +94,53 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
   // ── 3. GitHub validation (unless skipped) ──────────────────────────────
   await runGitHubValidation(initOptions);
 
-  // ── 4. Build template context ──────────────────────────────────────────
-  const projectId = initOptions.projectId;
-  const isMultiRepo = initOptions.devRepos.length > 0;
-
+  // ── 4. Fetch cluster templates from GitHub ──────────────────────────────
   // TODO: [FR-017] When API integration is available, fetch project details
   //       from the Generacy API if --project-id was provided.
   // TODO: [FR-018] When API integration is available, optionally create a
   //       new project via the Generacy API and use the server-issued ID.
 
-  let context;
+  let clusterFiles: Map<string, string>;
   try {
-    if (isMultiRepo) {
-      context = buildMultiRepoContext({
-        projectId,
-        projectName: initOptions.projectName,
-        primaryRepo: initOptions.primaryRepo,
-        devRepos: initOptions.devRepos,
-        cloneRepos: initOptions.cloneRepos,
-        agent: initOptions.agent,
-        baseBranch: initOptions.baseBranch,
-        releaseStream: initOptions.releaseStream,
-        variant: initOptions.variant,
-      });
-    } else {
-      context = buildSingleRepoContext({
-        projectId,
-        projectName: initOptions.projectName,
-        primaryRepo: initOptions.primaryRepo,
-        agent: initOptions.agent,
-        baseBranch: initOptions.baseBranch,
-        releaseStream: initOptions.releaseStream,
-        variant: initOptions.variant,
-      });
-    }
-
-    // Mark as CLI-generated
-    context = withGeneratedBy(context, 'generacy-cli');
+    clusterFiles = await fetchClusterTemplates({
+      variant: initOptions.variant,
+      ref: initOptions.templateRef,
+      refreshCache: initOptions.refreshTemplates,
+    });
   } catch (error) {
     p.log.error(
-      `Failed to build template context: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to fetch cluster templates: ${error instanceof Error ? error.message : String(error)}`,
     );
     process.exit(1);
   }
+
+  logger.debug({ fileCount: clusterFiles.size }, 'Fetched cluster template files');
 
   // ── 5. Collect existing files for merge support ────────────────────────
   const existingFiles = collectExistingFiles(gitRoot);
 
-  // ── 6. Render templates ────────────────────────────────────────────────
-  let renderedFiles;
-  try {
-    renderedFiles = await renderProject(context, existingFiles);
-  } catch (error) {
-    p.log.error(
-      `Failed to render templates: ${error instanceof Error ? error.message : String(error)}`,
-    );
-    process.exit(1);
+  // ── 6. Generate CLI-owned files ────────────────────────────────────────
+  const cliFiles = generateCliFiles(initOptions);
+
+  // Merge extensions.json with existing content if present
+  const extensionsPath = '.vscode/extensions.json';
+  const existingExtensions = existingFiles.get(extensionsPath);
+  if (existingExtensions) {
+    cliFiles.set(extensionsPath, generateExtensionsJson(existingExtensions));
   }
 
-  logger.debug({ fileCount: renderedFiles.size }, 'Rendered template files');
+  // ── 7. Merge template + CLI files ──────────────────────────────────────
+  const renderedFiles = new Map([...clusterFiles, ...cliFiles]);
 
-  // ── 7. Check conflicts ─────────────────────────────────────────────────
+  logger.debug({ fileCount: renderedFiles.size }, 'Total files to write');
+
+  // ── 8. Check conflicts ─────────────────────────────────────────────────
   const conflicts = checkConflicts(renderedFiles, gitRoot);
   if (conflicts.size > 0) {
     logger.debug({ conflictCount: conflicts.size }, 'File conflicts detected');
   }
 
-  // ── 7b. Migration detection for old-format devcontainer.json ──────────
+  // ── 8b. Migration detection for old-format devcontainer.json ──────────
   const devcontainerPath = '.devcontainer/devcontainer.json';
   const existingDevcontainer = conflicts.get(devcontainerPath);
   if (existingDevcontainer) {
@@ -178,13 +157,13 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
     }
   }
 
-  // ── 8. Resolve conflicts (prompt or force) ─────────────────────────────
+  // ── 9. Resolve conflicts (prompt or force) ─────────────────────────────
   const actions = await resolveConflicts(renderedFiles, conflicts, initOptions);
 
-  // ── 9. Write files (or dry-run preview) ────────────────────────────────
+  // ── 10. Write files (or dry-run preview) ───────────────────────────────
   const results = await writeFiles(renderedFiles, actions, gitRoot, initOptions.dryRun);
 
-  // ── 10. Post-generation validation (skip if dry-run) ───────────────────
+  // ── 11. Post-generation validation (skip if dry-run) ──────────────────
   if (!initOptions.dryRun) {
     try {
       loadConfig({ startDir: gitRoot });
@@ -195,7 +174,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
     }
   }
 
-  // ── 11. Print summary and next steps ───────────────────────────────────
+  // ── 12. Print summary and next steps ──────────────────────────────────
   printSummary(results, initOptions.dryRun, initOptions.variant);
   if (!initOptions.dryRun) {
     printNextSteps();

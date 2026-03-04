@@ -40,7 +40,6 @@
   "dependencies": {
     "@clack/prompts": "^0.9",
     "@generacy-ai/orchestrator": "workspace:*",
-    "@generacy-ai/templates": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
     "commander": "^12.0.0",
     "diff": "^7",

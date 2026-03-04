@@ -12,7 +12,7 @@
 
 ## Phase 1: Migrate `ClusterVariant` Type & Add Template Fetcher
 
-### T001 [US1] Move `ClusterVariant` type to CLI package
+### T001 [DONE] [US1] Move `ClusterVariant` type to CLI package
 **File**: `packages/generacy/src/cli/commands/init/types.ts`
 - Add `export type ClusterVariant = 'standard' | 'microservices';` directly in `types.ts`
 - Remove `import type { ClusterVariant } from '@generacy-ai/templates';` (line 1)
@@ -20,12 +20,12 @@
   - `templateRef: string` — Git ref for cluster-templates repo (default `'develop'`)
   - `refreshTemplates: boolean` — Bypass template cache
 
-### T002 [P] [US1] Update `ClusterVariant` import in `summary.ts`
+### T002 [DONE] [P] [US1] Update `ClusterVariant` import in `summary.ts`
 **File**: `packages/generacy/src/cli/commands/init/summary.ts`
 - Change `import type { ClusterVariant } from '@generacy-ai/templates';` (line 9) to `import type { ClusterVariant } from './types.js';`
 - No other changes needed — `VARIANT_LABELS` and `printSummary` signature stay the same
 
-### T003 [US1] Create tar extraction utility
+### T003 [DONE] [US1] Create tar extraction utility
 **File**: `packages/generacy/src/cli/commands/init/tar-utils.ts` (new)
 - Implement `extractTarGz(buffer: Buffer, filter: (path: string) => boolean): Promise<Map<string, string>>`
 - Use `node:zlib.createGunzip()` + streaming tar parsing
@@ -35,7 +35,7 @@
 - Decode file content as UTF-8 strings
 - Apply filter function to select only matching paths
 
-### T004 [P] [US1] Create template fetcher module
+### T004 [DONE] [P] [US1] Create template fetcher module
 **File**: `packages/generacy/src/cli/commands/init/template-fetcher.ts` (new)
 - Implement `fetchClusterTemplates(options: FetchOptions): Promise<Map<string, string>>`
 - `FetchOptions`: `{ variant: ClusterVariant, ref?: string, token?: string | null, refreshCache?: boolean }`
@@ -58,7 +58,7 @@
   - Network error: "Failed to fetch cluster templates — check your network connection"
   - Fail fast, no retry
 
-### T005 [P] [US1] Add CLI flags for template fetching
+### T005 [DONE] [P] [US1] Add CLI flags for template fetching
 **File**: `packages/generacy/src/cli/commands/init/index.ts`
 - Add `--template-ref <ref>` option (default: `process.env.GENERACY_TEMPLATE_REF || 'develop'`)
 - Add `--refresh-templates` boolean flag (default: false)
@@ -68,7 +68,7 @@
 
 ## Phase 2: Inline CLI File Generation
 
-### T006 [US1] Create CLI file generator module
+### T006 [DONE] [US1] Create CLI file generator module
 **File**: `packages/generacy/src/cli/commands/init/file-generators.ts` (new)
 - Implement `generateCliFiles(options: InitOptions): Map<string, string>`
 - Returns a `Map<targetPath, content>` for all CLI-owned files
@@ -109,7 +109,7 @@
 
 ## Phase 3: Rewire Init Flow & Remove Templates Dependency
 
-### T007 [US1] Update resolver to thread new flags
+### T007 [DONE] [US1] Update resolver to thread new flags
 **File**: `packages/generacy/src/cli/commands/init/resolver.ts`
 - Add `templateRef` and `refreshTemplates` to the `extractFlags()` function
 - Read `GENERACY_TEMPLATE_REF` env var as fallback for `--template-ref` in `resolveOptions()`
@@ -117,7 +117,7 @@
   - `templateRef: merged.templateRef ?? process.env.GENERACY_TEMPLATE_REF ?? 'develop'`
   - `refreshTemplates: merged.refreshTemplates ?? false`
 
-### T008 [US1] Rewrite init orchestration in `index.ts`
+### T008 [DONE] [US1] Rewrite init orchestration in `index.ts`
 **File**: `packages/generacy/src/cli/commands/init/index.ts`
 - Remove imports from `@generacy-ai/templates` (line 18-23):
   - Remove `buildSingleRepoContext`, `buildMultiRepoContext`, `renderProject`, `withGeneratedBy`
@@ -155,7 +155,7 @@
 - Remove the `context` variable and all `buildContext`/`withGeneratedBy` usage
 - Keep migration detection for old devcontainer.json (step 7b, lines 165-179) as-is
 
-### T009 [P] [US1] Update conflict detection for new files
+### T009 [DONE] [P] [US1] Update conflict detection for new files
 **File**: `packages/generacy/src/cli/commands/init/conflicts.ts`
 - No structural changes needed — `checkConflicts()` already works on `Map<path, content>` generically
 - Verify `.gitattributes` (potentially coming from cluster-templates) is handled correctly
@@ -165,27 +165,27 @@
 
 ## Phase 4: Remove Templates Package & Clean Up Dependencies
 
-### T010 [US1] Delete `packages/templates/` directory
+### T010 [DONE] [US1] Delete `packages/templates/` directory
 **Files**: `packages/templates/` (entire directory)
 - Delete the entire `packages/templates/` directory
 - This includes: `src/`, `tests/`, `package.json`, `tsconfig.json`, and all template files
 - `pnpm-workspace.yaml` uses `packages/*` glob — no change needed
 
-### T011 [US1] Remove `@generacy-ai/templates` dependency from CLI package
+### T011 [DONE] [US1] Remove `@generacy-ai/templates` dependency from CLI package
 **File**: `packages/generacy/package.json`
 - Remove `"@generacy-ai/templates": "workspace:*"` from `dependencies`
 - Add `tar-stream` dependency if using that package (or no new dep if using inline parser)
 - Verify `yaml` package is listed as a direct dependency (it is: `"yaml": "^2.4.0"`)
 - Verify `handlebars` is NOT a direct dependency of this package (it isn't — only in templates)
 
-### T012 [P] [US1] Clean up tsconfig references
+### T012 [DONE] [P] [US1] Clean up tsconfig references
 **Files**:
 - `packages/generacy/tsconfig.json`
 - `tsconfig.json` (root)
 - Check for and remove any `references` or `paths` entries pointing to `packages/templates`
 - Check for `compilerOptions.paths` mapping `@generacy-ai/templates` → local path
 
-### T013 [US1] Regenerate lockfile
+### T013 [DONE] [US1] Regenerate lockfile
 - Run `pnpm install` to regenerate `pnpm-lock.yaml` without templates package dependencies
 - Verify no broken peer dependencies or missing modules
 
@@ -193,13 +193,13 @@
 
 ## Phase 5: Testing
 
-### T014 [US1] Fix pre-existing `summary.test.ts` bug
+### T014 [DONE] [US1] Fix pre-existing `summary.test.ts` bug
 **File**: `packages/generacy/src/cli/commands/init/__tests__/summary.test.ts`
 - `printSummary()` signature is `(results, dryRun, variant)` but tests omit the `variant` argument
 - Add `'standard'` as the third argument to all `printSummary()` calls (~11 call sites)
 - Update the `ClusterVariant` import to use local `'./types.js'` path
 
-### T015 [P] [US1] Write tar extraction tests
+### T015 [DONE] [P] [US1] Write tar extraction tests
 **File**: `packages/generacy/src/cli/commands/init/__tests__/tar-utils.test.ts` (new)
 - Create sample `.tar.gz` buffers programmatically using `node:zlib` + manual tar construction (or `tar-stream` pack)
 - Test cases:
@@ -211,7 +211,7 @@
   - Handle non-UTF-8 or binary file entries (should skip or handle)
   - Path mapping: strip top-level archive prefix correctly
 
-### T016 [P] [US1] Write template fetcher tests
+### T016 [DONE] [P] [US1] Write template fetcher tests
 **File**: `packages/generacy/src/cli/commands/init/__tests__/template-fetcher.test.ts` (new)
 - Mock `global.fetch` to return controlled responses
 - Test cases:
@@ -225,7 +225,7 @@
   - Auth header omitted when `token` is null/undefined
   - Path mapping: `{hash}/standard/Dockerfile` → `.devcontainer/Dockerfile`
 
-### T017 [P] [US1] Write file generator tests
+### T017 [DONE] [P] [US1] Write file generator tests
 **File**: `packages/generacy/src/cli/commands/init/__tests__/file-generators.test.ts` (new)
 - Test `generateCliFiles()`:
   - Single-repo config.yaml: no orchestrator section, correct project/repos/defaults/cluster
@@ -242,7 +242,7 @@
   - Existing content already has Generacy extensions → no duplicates (Set dedup)
   - Invalid existing JSON → fallback to new file or error
 
-### T018 [US1] Update existing init tests for removed templates dependency
+### T018 [DONE] [US1] Update existing init tests for removed templates dependency
 **Files**:
 - `packages/generacy/src/cli/commands/init/__tests__/resolver.test.ts`
 - `packages/generacy/src/cli/commands/init/__tests__/conflicts.test.ts`
@@ -262,7 +262,7 @@
 - Verify all tests pass (including new tests from Phase 5)
 - Fix any failures
 
-### T020 [US1] Run build
+### T020 [DONE] [US1] Run build
 - Run `pnpm build` at workspace root
 - Verify clean TypeScript compilation with no errors
 - Check for unused import warnings
@@ -275,7 +275,7 @@
 - Test `--template-ref` flag with a specific commit/tag
 - Test `--refresh-templates` bypasses cache
 
-### T022 [US1] Final cleanup and lockfile
+### T022 [DONE] [US1] Final cleanup and lockfile
 - Run `pnpm install` to ensure clean lockfile
 - Verify `packages/templates` is completely removed from `pnpm-lock.yaml`
 - Run `git status` to review all changes

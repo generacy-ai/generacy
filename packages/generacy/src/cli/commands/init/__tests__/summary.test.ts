@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { FileResult } from '../types.js';
+import type { ClusterVariant, FileResult } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Mock @clack/prompts
@@ -55,13 +55,13 @@ describe('printSummary', () => {
 
   describe('empty results', () => {
     it('warns when no files were generated', () => {
-      printSummary([], false);
+      printSummary([], false, 'standard');
 
       expect(mockLogWarn).toHaveBeenCalledWith('No files were generated.');
     });
 
     it('does not print file lines or totals for empty results', () => {
-      printSummary([], false);
+      printSummary([], false, 'standard');
 
       expect(mockLogStep).not.toHaveBeenCalled();
       expect(mockLogSuccess).not.toHaveBeenCalled();
@@ -79,7 +79,7 @@ describe('printSummary', () => {
         makeResult({ path: '.generacy/config.yaml', action: 'created', size: 100 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogStep).toHaveBeenCalledTimes(1);
       expect(mockLogStep).toHaveBeenCalledWith(expect.stringContaining('Created'));
@@ -94,7 +94,7 @@ describe('printSummary', () => {
         makeResult({ path: 'd.txt', action: 'skipped', size: 0 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       const calls = mockLogStep.mock.calls.map((c: unknown[]) => c[0] as string);
       expect(calls[0]).toContain('Created');
@@ -108,7 +108,7 @@ describe('printSummary', () => {
         makeResult({ path: 'a.txt', action: 'created', size: 10 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogSuccess).toHaveBeenCalledTimes(1);
       expect(mockLogSuccess).toHaveBeenCalledWith('Done: 1 created');
@@ -123,7 +123,7 @@ describe('printSummary', () => {
         makeResult({ path: 'e.txt', action: 'skipped', size: 0 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogSuccess).toHaveBeenCalledWith(
         'Done: 2 created, 1 overwritten, 1 merged, 1 skipped',
@@ -136,7 +136,7 @@ describe('printSummary', () => {
         makeResult({ path: 'b.txt', action: 'skipped', size: 0 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogSuccess).toHaveBeenCalledWith('Done: 1 created, 1 skipped');
     });
@@ -155,7 +155,7 @@ describe('printSummary', () => {
         makeResult({ path: 'd.txt', action: 'skipped', size: 0 }),
       ];
 
-      printSummary(results, true);
+      printSummary(results, true, 'standard');
 
       const calls = mockLogStep.mock.calls.map((c: unknown[]) => c[0] as string);
       expect(calls[0]).toContain('Would create');
@@ -169,9 +169,10 @@ describe('printSummary', () => {
         makeResult({ path: 'a.txt', action: 'created', size: 10 }),
       ];
 
-      printSummary(results, true);
+      printSummary(results, true, 'standard');
 
-      expect(mockLogInfo).toHaveBeenCalledTimes(1);
+      expect(mockLogInfo).toHaveBeenCalledTimes(2);
+      expect(mockLogInfo).toHaveBeenCalledWith('Cluster variant: Standard (DooD)');
       expect(mockLogInfo).toHaveBeenCalledWith(
         'Dry run: 1 created (no files were written)',
       );
@@ -182,7 +183,7 @@ describe('printSummary', () => {
         makeResult({ path: 'a.txt', action: 'created', size: 10 }),
       ];
 
-      printSummary(results, true);
+      printSummary(results, true, 'standard');
 
       expect(mockLogSuccess).not.toHaveBeenCalled();
     });
@@ -194,7 +195,7 @@ describe('printSummary', () => {
         makeResult({ path: 'c.txt', action: 'skipped', size: 0 }),
       ];
 
-      printSummary(results, true);
+      printSummary(results, true, 'standard');
 
       expect(mockLogInfo).toHaveBeenCalledWith(
         'Dry run: 1 created, 1 merged, 1 skipped (no files were written)',
@@ -212,7 +213,7 @@ describe('printSummary', () => {
         makeResult({ path: 'small.txt', action: 'created', size: 500 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogStep).toHaveBeenCalledWith(expect.stringContaining('(500 bytes)'));
     });
@@ -222,7 +223,7 @@ describe('printSummary', () => {
         makeResult({ path: 'exact.txt', action: 'created', size: 1024 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogStep).toHaveBeenCalledWith(expect.stringContaining('(1.0 KB)'));
     });
@@ -232,7 +233,7 @@ describe('printSummary', () => {
         makeResult({ path: 'large.txt', action: 'created', size: 1536 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       expect(mockLogStep).toHaveBeenCalledWith(expect.stringContaining('(1.5 KB)'));
     });
@@ -242,7 +243,7 @@ describe('printSummary', () => {
         makeResult({ path: 'skipped.txt', action: 'skipped', size: 0 }),
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       const call = mockLogStep.mock.calls[0]![0] as string;
       expect(call).not.toContain('bytes');
@@ -261,7 +262,7 @@ describe('printSummary', () => {
         makeResult({ path: 'b.txt', action: 'overwritten', size: 20 }), // "Overwritten" (11)
       ];
 
-      printSummary(results, false);
+      printSummary(results, false, 'standard');
 
       const calls = mockLogStep.mock.calls.map((c: unknown[]) => c[0] as string);
       // "Created" should be padded to 11 chars ("Overwritten" length)
@@ -275,7 +276,7 @@ describe('printSummary', () => {
         makeResult({ path: 'b.txt', action: 'overwritten', size: 20 }), // "Would overwrite" (15)
       ];
 
-      printSummary(results, true);
+      printSummary(results, true, 'standard');
 
       const calls = mockLogStep.mock.calls.map((c: unknown[]) => c[0] as string);
       // "Would merge" (11) padded to 15 ("Would overwrite" length)
@@ -294,15 +295,16 @@ describe('printNextSteps', () => {
     vi.clearAllMocks();
   });
 
-  it('prints all four guidance steps', () => {
+  it('prints all five guidance steps', () => {
     printNextSteps();
 
     expect(mockNote).toHaveBeenCalledTimes(1);
     const body = mockNote.mock.calls[0]![0] as string;
     expect(body).toContain('1. Review the generated files');
-    expect(body).toContain('2. Copy .generacy/generacy.env.template to .generacy/generacy.env and fill in credentials');
-    expect(body).toContain('3. Run `generacy doctor` to verify system requirements');
-    expect(body).toContain('4. Commit the generated files to your repository');
+    expect(body).toContain('2. Copy .devcontainer/.env.template to .devcontainer/.env and fill in credentials');
+    expect(body).toContain('3. Copy .generacy/generacy.env.template to .generacy/generacy.env and fill in credentials');
+    expect(body).toContain('4. Run `generacy doctor` to verify system requirements');
+    expect(body).toContain('5. Commit the generated files to your repository');
   });
 
   it('uses "Next steps" as the note title', () => {
@@ -316,6 +318,6 @@ describe('printNextSteps', () => {
 
     const body = mockNote.mock.calls[0]![0] as string;
     const lines = body.split('\n');
-    expect(lines).toHaveLength(4);
+    expect(lines).toHaveLength(5);
   });
 });

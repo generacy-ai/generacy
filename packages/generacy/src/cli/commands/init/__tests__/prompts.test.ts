@@ -61,6 +61,7 @@ const GIT_ROOT = '/home/user/my-project';
 /** Build a set of defaults where every field is provided (nothing to prompt). */
 function allDefaults(): Partial<InitOptions> {
   return {
+    variant: 'standard',
     projectName: 'My Project',
     primaryRepo: 'acme/app',
     devRepos: ['acme/lib'],
@@ -97,7 +98,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')            // primary repo
         .mockResolvedValueOnce('')                     // dev repos (empty)
         .mockResolvedValueOnce('main');                // base branch
-      mockSelect.mockResolvedValueOnce('claude-code'); // agent
+      mockSelect
+        .mockResolvedValueOnce('standard')             // variant
+        .mockResolvedValueOnce('claude-code');          // agent
 
       // Act
       const result = await runInteractivePrompts({}, GIT_ROOT);
@@ -105,7 +108,8 @@ describe('runInteractivePrompts', () => {
       // Assert
       expect(mockIntro).toHaveBeenCalledWith('generacy init');
       expect(mockText).toHaveBeenCalledTimes(4); // name, primary, dev repos, base branch
-      expect(mockSelect).toHaveBeenCalledTimes(1); // agent
+      expect(mockSelect).toHaveBeenCalledTimes(2); // variant + agent
+      expect(result.variant).toBe('standard');
       expect(result.projectName).toBe('Test Project');
       expect(result.primaryRepo).toBe('acme/app');
       expect(result.devRepos).toEqual([]);
@@ -121,7 +125,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/lib')            // dev repos
         .mockResolvedValueOnce('acme/docs')           // clone repos
         .mockResolvedValueOnce('develop');             // base branch
-      mockSelect.mockResolvedValueOnce('cursor-agent');
+      mockSelect
+        .mockResolvedValueOnce('standard')             // variant
+        .mockResolvedValueOnce('cursor-agent');         // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -138,7 +144,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('https://github.com/acme/app.git')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')             // variant
+        .mockResolvedValueOnce('claude-code');          // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -152,7 +160,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('https://github.com/acme/lib.git, git@github.com:acme/utils.git')
         .mockResolvedValueOnce('')                    // clone repos
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')             // variant
+        .mockResolvedValueOnce('claude-code');          // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -184,7 +194,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')   // primary repo
         .mockResolvedValueOnce('')            // dev repos
         .mockResolvedValueOnce('main');       // base branch
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')    // variant
+        .mockResolvedValueOnce('claude-code'); // agent
 
       const result = await runInteractivePrompts({ projectName: 'Given Name' }, GIT_ROOT);
 
@@ -198,7 +210,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('Project')    // project name
         .mockResolvedValueOnce('')            // dev repos
         .mockResolvedValueOnce('main');       // base branch
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')    // variant
+        .mockResolvedValueOnce('claude-code'); // agent
 
       const result = await runInteractivePrompts({ primaryRepo: 'acme/app' }, GIT_ROOT);
 
@@ -213,7 +227,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')   // primary repo
         .mockResolvedValueOnce('')            // clone repos (prompted because devRepos present)
         .mockResolvedValueOnce('main');       // base branch
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')    // variant
+        .mockResolvedValueOnce('claude-code'); // agent
 
       const result = await runInteractivePrompts({ devRepos: ['acme/lib'] }, GIT_ROOT);
 
@@ -229,7 +245,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')   // primary repo
         .mockResolvedValueOnce('acme/lib')   // dev repos — triggers multi-repo flow
         .mockResolvedValueOnce('main');       // base branch
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')    // variant
+        .mockResolvedValueOnce('claude-code'); // agent
 
       const result = await runInteractivePrompts({ cloneRepos: ['acme/docs'] }, GIT_ROOT);
 
@@ -242,12 +260,13 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      // No select call expected
+      mockSelect.mockResolvedValueOnce('standard'); // variant still prompted
 
       const result = await runInteractivePrompts({ agent: 'cursor-agent' }, GIT_ROOT);
 
       expect(result.agent).toBe('cursor-agent');
-      expect(mockSelect).not.toHaveBeenCalled();
+      // Only variant select — agent select skipped
+      expect(mockSelect).toHaveBeenCalledTimes(1);
     });
 
     it('skips base branch prompt when baseBranch default is set', async () => {
@@ -255,7 +274,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('Project')
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('');           // dev repos
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')    // variant
+        .mockResolvedValueOnce('claude-code'); // agent
 
       const result = await runInteractivePrompts({ baseBranch: 'develop' }, GIT_ROOT);
 
@@ -270,7 +291,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')            // dev repos (empty)
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')    // variant
+        .mockResolvedValueOnce('claude-code'); // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -285,12 +308,12 @@ describe('runInteractivePrompts', () => {
   // -------------------------------------------------------------------------
 
   describe('cancel handling', () => {
-    it('exits with code 130 when project name is cancelled', async () => {
+    it('exits with code 130 when variant select is cancelled', async () => {
       const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
         throw new Error('process.exit');
       });
       mockIsCancel.mockReturnValue(true);
-      mockText.mockResolvedValueOnce(Symbol('cancel') as unknown as string);
+      mockSelect.mockResolvedValueOnce(Symbol('cancel') as unknown as string);
 
       await expect(runInteractivePrompts({}, GIT_ROOT)).rejects.toThrow('process.exit');
 
@@ -299,15 +322,15 @@ describe('runInteractivePrompts', () => {
       mockExit.mockRestore();
     });
 
-    it('exits with code 130 when primary repo is cancelled', async () => {
+    it('exits with code 130 when project name is cancelled', async () => {
       const mockExit = vi.spyOn(process, 'exit').mockImplementation(() => {
         throw new Error('process.exit');
       });
-      mockText.mockResolvedValueOnce('Project');       // project name OK
+      mockSelect.mockResolvedValueOnce('standard');     // variant OK
+      mockText.mockResolvedValueOnce(Symbol('cancel') as unknown as string); // project name cancelled
       mockIsCancel
-        .mockReturnValueOnce(false)                     // project name not cancelled
-        .mockReturnValueOnce(true);                     // primary repo cancelled
-      mockText.mockResolvedValueOnce(Symbol('cancel') as unknown as string);
+        .mockReturnValueOnce(false)                     // variant not cancelled
+        .mockReturnValueOnce(true);                     // project name cancelled
 
       await expect(runInteractivePrompts({}, GIT_ROOT)).rejects.toThrow('process.exit');
 
@@ -324,11 +347,14 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('');                     // dev repos
       mockIsCancel
+        .mockReturnValueOnce(false)                     // variant
         .mockReturnValueOnce(false)                     // project name
         .mockReturnValueOnce(false)                     // primary repo
         .mockReturnValueOnce(false)                     // dev repos
         .mockReturnValueOnce(true);                     // agent cancelled
-      mockSelect.mockResolvedValueOnce(Symbol('cancel') as unknown as string);
+      mockSelect
+        .mockResolvedValueOnce('standard')               // variant OK
+        .mockResolvedValueOnce(Symbol('cancel') as unknown as string); // agent cancelled
 
       await expect(runInteractivePrompts({}, GIT_ROOT)).rejects.toThrow('process.exit');
 
@@ -361,7 +387,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/lib')                  // dev repos (normalized from config)
         .mockResolvedValueOnce('acme/docs')                 // clone repos (normalized from config)
         .mockResolvedValueOnce('develop');                   // base branch (from config)
-      mockSelect.mockResolvedValueOnce('cursor-agent');      // agent (from config)
+      mockSelect
+        .mockResolvedValueOnce('standard')                   // variant
+        .mockResolvedValueOnce('cursor-agent');              // agent (from config)
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -383,7 +411,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')      // variant
+        .mockResolvedValueOnce('claude-code');   // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -411,7 +441,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/lib-a, acme/lib-b') // normalized from config format
         .mockResolvedValueOnce('')                         // clone repos
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')                 // variant
+        .mockResolvedValueOnce('claude-code');              // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -432,7 +464,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')             // dev repos (no config default)
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')      // variant
+        .mockResolvedValueOnce('claude-code');   // agent
 
       const result = await runInteractivePrompts({}, GIT_ROOT);
 
@@ -452,7 +486,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
@@ -471,7 +507,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
@@ -489,7 +527,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
@@ -510,7 +550,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
@@ -522,17 +564,39 @@ describe('runInteractivePrompts', () => {
       expect(baseBranchCall.validate!('main')).toBeUndefined();
     });
 
+    it('provides correct variant select options', async () => {
+      mockText
+        .mockResolvedValueOnce('Project')
+        .mockResolvedValueOnce('acme/app')
+        .mockResolvedValueOnce('')
+        .mockResolvedValueOnce('main');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
+
+      await runInteractivePrompts({}, GIT_ROOT);
+
+      const variantSelectCall = mockSelect.mock.calls[0]![0] as {
+        options: Array<{ value: string; label: string }>;
+      };
+      expect(variantSelectCall.options).toHaveLength(2);
+      expect(variantSelectCall.options[0]!.value).toBe('standard');
+      expect(variantSelectCall.options[1]!.value).toBe('microservices');
+    });
+
     it('provides correct agent select options', async () => {
       mockText
         .mockResolvedValueOnce('Project')
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
-      const agentSelectCall = mockSelect.mock.calls[0]![0] as {
+      const agentSelectCall = mockSelect.mock.calls[1]![0] as {
         options: Array<{ value: string; label: string }>;
       };
       expect(agentSelectCall.options).toHaveLength(2);
@@ -552,7 +616,9 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
@@ -567,12 +633,30 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
       const baseBranchCall = mockText.mock.calls[3]![0] as { initialValue?: string };
       expect(baseBranchCall.initialValue).toBe('main');
+    });
+
+    it('uses "standard" as default variant', async () => {
+      mockText
+        .mockResolvedValueOnce('Project')
+        .mockResolvedValueOnce('acme/app')
+        .mockResolvedValueOnce('')
+        .mockResolvedValueOnce('main');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
+
+      await runInteractivePrompts({}, GIT_ROOT);
+
+      const variantCall = mockSelect.mock.calls[0]![0] as { initialValue?: string };
+      expect(variantCall.initialValue).toBe('standard');
     });
 
     it('uses "claude-code" as default agent', async () => {
@@ -581,11 +665,13 @@ describe('runInteractivePrompts', () => {
         .mockResolvedValueOnce('acme/app')
         .mockResolvedValueOnce('')
         .mockResolvedValueOnce('main');
-      mockSelect.mockResolvedValueOnce('claude-code');
+      mockSelect
+        .mockResolvedValueOnce('standard')
+        .mockResolvedValueOnce('claude-code');
 
       await runInteractivePrompts({}, GIT_ROOT);
 
-      const agentCall = mockSelect.mock.calls[0]![0] as { initialValue?: string };
+      const agentCall = mockSelect.mock.calls[1]![0] as { initialValue?: string };
       expect(agentCall.initialValue).toBe('claude-code');
     });
   });

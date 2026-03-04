@@ -5,7 +5,7 @@
  *   - Detects which rendered files already exist on disk
  *   - Displays unified diffs between existing and generated content
  *   - Prompts the user per-file (overwrite / skip / show diff) unless `--force`
- *   - Auto-merges `.vscode/extensions.json` via the templates `renderProject` merge
+ *   - Auto-merges `.vscode/extensions.json` (merge logic handled upstream in the init flow)
  */
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
@@ -20,7 +20,7 @@ import type { FileAction, InitOptions } from './types.js';
 /**
  * Check which rendered files already exist on disk.
  *
- * @param files - Map of relative path → generated content (from `renderProject`).
+ * @param files - Map of relative path → generated content (cluster templates + CLI files).
  * @param gitRoot - Absolute path to the git repository root.
  * @returns Map of conflicting relative paths → existing file content.
  */
@@ -90,8 +90,8 @@ const MERGE_FILES = new Set(['.vscode/extensions.json']);
  *
  * - Non-conflicting files → `'overwrite'` (create new).
  * - `--force` flag → all conflicts → `'overwrite'`.
- * - Files in `MERGE_FILES` → `'merge'` (smart merge handled by `renderProject`'s
- *   `existingFiles` parameter upstream).
+ * - Files in `MERGE_FILES` → `'merge'` (smart merge handled upstream by
+ *   `generateExtensionsJson` in the init flow).
  * - Otherwise → interactive per-file prompt: Overwrite / Skip / Show diff.
  *
  * @param files - Map of relative path → generated content.
