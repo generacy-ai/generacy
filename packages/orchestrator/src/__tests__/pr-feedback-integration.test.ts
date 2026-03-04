@@ -1634,7 +1634,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   let processFactory: any;
   let mockProcess: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     logger = createMockLogger();
     queueAdapter = new MockQueueAdapter();
@@ -1717,7 +1717,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
 
     // Mock process for Claude CLI
-    const { default: EventEmitter } = await import('node:events');
+    const { EventEmitter } = await import('node:events');
     mockProcess = {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),

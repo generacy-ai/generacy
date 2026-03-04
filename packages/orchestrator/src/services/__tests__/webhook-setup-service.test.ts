@@ -67,7 +67,7 @@ describe('WebhookSetupService', () => {
       // Assert
       expect(executeCommandMock).toHaveBeenCalledWith('gh', [
         'api',
-        'GET /repos/testorg/testrepo/hooks',
+        '/repos/testorg/testrepo/hooks',
       ]);
       expect(result.total).toBe(1);
       expect(result.skipped).toBe(1); // Webhook already exists and is active
@@ -1052,7 +1052,7 @@ describe('WebhookSetupService', () => {
       // Assert - verify the exact PATCH command structure
       expect(executeCommandMock).toHaveBeenCalledWith('gh', [
         'api',
-        'PATCH',
+        '-X', 'PATCH',
         '/repos/testorg/testrepo/hooks/456',
         '-F',
         'active=true',

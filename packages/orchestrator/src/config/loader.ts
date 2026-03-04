@@ -345,7 +345,7 @@ export function createTestConfig(
       host: '127.0.0.1',
     },
     redis: {
-      url: 'redis://localhost:6379',
+      url: 'redis://127.0.0.1:1', // Unreachable port — triggers fast failure and in-memory fallback
     },
     auth: {
       enabled: false,

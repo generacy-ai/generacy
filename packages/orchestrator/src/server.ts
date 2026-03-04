@@ -146,7 +146,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize Redis client (shared across services)
   let redisClient: IORedis | null = null;
   try {
-    redisClient = new IORedis(config.redis.url);
+    redisClient = new IORedis(config.redis.url, {
+      maxRetriesPerRequest: 1,
+      connectTimeout: 5000,
+      retryStrategy: () => null, // Don't retry — fall back to in-memory
+    });
     // Test connection
     await redisClient.ping();
     server.log.info('Redis connected');
