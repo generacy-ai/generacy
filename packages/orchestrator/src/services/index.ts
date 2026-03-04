@@ -39,6 +39,8 @@ export {
 
 export { RedisQueueAdapter } from './redis-queue-adapter.js';
 
+export { InMemoryQueueAdapter } from './in-memory-queue-adapter.js';
+
 export { WorkerDispatcher } from './worker-dispatcher.js';
 
 export {

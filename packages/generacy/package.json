@@ -39,12 +39,12 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@clack/prompts": "^0.9",
+    "@generacy-ai/config": "workspace:*",
     "@generacy-ai/orchestrator": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
     "commander": "^12.0.0",
     "diff": "^7",
     "dotenv": "^16.4.0",
-    "ioredis": "^5.4.1",
     "pino": "^9.0.0",
     "pino-pretty": "^11.0.0",
     "yaml": "^2.4.0",

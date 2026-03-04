@@ -122,7 +122,7 @@ function generateGitignore(): string {
  * @returns Formatted JSON string with merged recommendations.
  */
 export function generateExtensionsJson(existingContent?: string): string {
-  let recommendations = new Set<string>(GENERACY_EXTENSIONS);
+  const recommendations = new Set<string>(GENERACY_EXTENSIONS);
 
   if (existingContent) {
     try {

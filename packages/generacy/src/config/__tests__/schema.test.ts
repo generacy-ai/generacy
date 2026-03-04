@@ -578,6 +578,187 @@ describe('GeneracyConfigSchema', () => {
     expect(result.repos.clone).toHaveLength(2);
     expect(result.orchestrator?.workerCount).toEqual(5);
   });
+
+  it('should validate config with a valid workspace section', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+        branch: 'develop',
+        repos: [
+          { name: 'tetrad-development', monitor: true },
+          { name: 'generacy', monitor: true },
+        ],
+      },
+    };
+    const result = GeneracyConfigSchema.parse(config);
+    expect(result.workspace).toBeDefined();
+    expect(result.workspace?.org).toEqual('generacy-ai');
+    expect(result.workspace?.branch).toEqual('develop');
+    expect(result.workspace?.repos).toHaveLength(2);
+    expect(result.workspace?.repos[0].name).toEqual('tetrad-development');
+    expect(result.workspace?.repos[0].monitor).toEqual(true);
+  });
+
+  it('should validate config without workspace section (optional)', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+    };
+    const result = GeneracyConfigSchema.parse(config);
+    expect(result.workspace).toBeUndefined();
+  });
+
+  it('should default workspace branch to "develop" when omitted', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+        repos: [{ name: 'generacy' }],
+      },
+    };
+    const result = GeneracyConfigSchema.parse(config);
+    expect(result.workspace?.branch).toEqual('develop');
+  });
+
+  it('should default workspace repo monitor to true when omitted', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+        repos: [{ name: 'generacy' }],
+      },
+    };
+    const result = GeneracyConfigSchema.parse(config);
+    expect(result.workspace?.repos[0].monitor).toEqual(true);
+  });
+
+  it('should accept workspace repo with monitor set to false', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+        repos: [
+          { name: 'generacy', monitor: true },
+          { name: 'docs-only', monitor: false },
+        ],
+      },
+    };
+    const result = GeneracyConfigSchema.parse(config);
+    expect(result.workspace?.repos[1].monitor).toEqual(false);
+  });
+
+  it('should reject workspace with empty org', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: '',
+        repos: [{ name: 'generacy' }],
+      },
+    };
+    expect(() => GeneracyConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject workspace with empty repos array', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+        repos: [],
+      },
+    };
+    expect(() => GeneracyConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject workspace repo with empty name', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+        repos: [{ name: '' }],
+      },
+    };
+    expect(() => GeneracyConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject workspace missing repos field', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        org: 'generacy-ai',
+      },
+    };
+    expect(() => GeneracyConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject workspace missing org field', () => {
+    const config = {
+      project: {
+        id: 'proj_test123',
+        name: 'My Project',
+      },
+      repos: {
+        primary: 'github.com/acme/main-api',
+      },
+      workspace: {
+        repos: [{ name: 'generacy' }],
+      },
+    };
+    expect(() => GeneracyConfigSchema.parse(config)).toThrow();
+  });
 });
 
 describe('validateConfig', () => {

@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
+import { tryLoadWorkspaceConfig, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -104,7 +105,7 @@ function loadFromEnv(): Record<string, unknown> {
       process.env[`${ENV_PREFIX}LOG_PRETTY`] === 'true';
   }
 
-  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES)
+  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES, then config file)
   const reposStr = process.env['MONITORED_REPOS'] ?? process.env[`${ENV_PREFIX}REPOSITORIES`];
   if (reposStr) {
     const repos = reposStr.split(',').map(r => {
@@ -112,6 +113,15 @@ function loadFromEnv(): Record<string, unknown> {
       return { owner, repo };
     }).filter(r => r.owner && r.repo);
     config.repositories = repos;
+  } else {
+    // Fallback to .generacy/config.yaml workspace config
+    const configPath = findWorkspaceConfigPath(process.cwd());
+    if (configPath) {
+      const workspaceConfig = tryLoadWorkspaceConfig(configPath);
+      if (workspaceConfig) {
+        config.repositories = getMonitoredRepos(workspaceConfig);
+      }
+    }
   }
 
   // Monitor config (POLL_INTERVAL_MS takes precedence, falls back to ORCHESTRATOR_POLL_INTERVAL_MS)
@@ -180,6 +190,24 @@ function loadFromEnv(): Record<string, unknown> {
       process.env['PR_MONITOR_MAX_CONCURRENT_POLLS']!,
       10
     );
+  }
+
+  // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)
+  const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
+  if (smeeChannelUrl) {
+    if (!config.smee) {
+      config.smee = {};
+    }
+    (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
+  }
+
+  // Webhook setup config
+  if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
+    const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];
+    if (!config.webhookSetup) {
+      config.webhookSetup = {};
+    }
+    (config.webhookSetup as Record<string, unknown>).enabled = value === 'true';
   }
 
   return config;
@@ -327,7 +355,7 @@ export function createTestConfig(
       host: '127.0.0.1',
     },
     redis: {
-      url: 'redis://localhost:6379',
+      url: 'redis://127.0.0.1:1', // Unreachable port — triggers fast failure and in-memory fallback
     },
     auth: {
       enabled: false,

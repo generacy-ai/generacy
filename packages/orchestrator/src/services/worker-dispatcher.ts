@@ -20,22 +20,27 @@ interface Logger {
  * Worker dispatcher that polls the queue, enforces concurrency limits,
  * manages heartbeats, reaps stale workers, and handles graceful shutdown.
  *
+ * Supports both Redis-based and in-memory heartbeat tracking.
+ * When Redis is null, heartbeats are tracked via an in-memory Map with timestamps.
+ *
  * Follows the same AbortController pattern as LabelMonitorService.
  */
 export class WorkerDispatcher {
   private readonly queue: QueueManager;
-  private readonly redis: Redis;
+  private readonly redis: Redis | null;
   private readonly logger: Logger;
   private readonly config: DispatchConfig;
   private readonly handler: WorkerHandler;
   private readonly activeWorkers = new Map<string, WorkerInfo>();
   private readonly labelCleanup?: LabelCleanupFn;
+  /** In-memory heartbeat timestamps (used when Redis is null) */
+  private readonly heartbeatTimestamps = new Map<string, number>();
   private abortController: AbortController | null = null;
   private running = false;
 
   constructor(
     queue: QueueManager,
-    redis: Redis,
+    redis: Redis | null,
     logger: Logger,
     config: DispatchConfig,
     handler: WorkerHandler,
@@ -176,18 +181,7 @@ export class WorkerDispatcher {
     );
 
     // Start heartbeat refresh at half the TTL
-    const heartbeatKey = `orchestrator:worker:${workerId}:heartbeat`;
-    const ttlSeconds = Math.ceil(this.config.heartbeatTtlMs / 1000);
-    const heartbeatInterval = setInterval(async () => {
-      try {
-        await this.redis.set(heartbeatKey, '1', 'EX', ttlSeconds);
-      } catch (error) {
-        this.logger.warn(
-          { err: error, workerId },
-          'Failed to refresh heartbeat',
-        );
-      }
-    }, this.config.heartbeatTtlMs / 2);
+    const heartbeatInterval = this.startHeartbeat(workerId);
 
     // Create the worker promise
     const promise = this.runWorker(workerId, item, heartbeatInterval);
@@ -226,7 +220,70 @@ export class WorkerDispatcher {
       );
     } finally {
       clearInterval(heartbeatInterval);
+      this.clearHeartbeat(workerId);
       this.activeWorkers.delete(workerId);
+    }
+  }
+
+  /**
+   * Start a heartbeat for a worker. Returns the interval handle.
+   * Uses Redis SET with TTL when Redis is available, or in-memory timestamps otherwise.
+   */
+  private startHeartbeat(workerId: string): NodeJS.Timeout {
+    if (this.redis) {
+      const heartbeatKey = `orchestrator:worker:${workerId}:heartbeat`;
+      const ttlSeconds = Math.ceil(this.config.heartbeatTtlMs / 1000);
+      // Set initial heartbeat
+      this.redis.set(heartbeatKey, '1', 'EX', ttlSeconds).catch((error) => {
+        this.logger.warn({ err: error, workerId }, 'Failed to set initial heartbeat');
+      });
+      return setInterval(async () => {
+        try {
+          await this.redis!.set(heartbeatKey, '1', 'EX', ttlSeconds);
+        } catch (error) {
+          this.logger.warn({ err: error, workerId }, 'Failed to refresh heartbeat');
+        }
+      }, this.config.heartbeatTtlMs / 2);
+    }
+
+    // In-memory heartbeat: store current timestamp
+    this.heartbeatTimestamps.set(workerId, Date.now());
+    return setInterval(() => {
+      this.heartbeatTimestamps.set(workerId, Date.now());
+    }, this.config.heartbeatTtlMs / 2);
+  }
+
+  /**
+   * Check if a worker's heartbeat is still alive.
+   * Uses Redis EXISTS when Redis is available, or checks in-memory timestamps otherwise.
+   */
+  private async isHeartbeatAlive(workerId: string): Promise<boolean> {
+    if (this.redis) {
+      const heartbeatKey = `orchestrator:worker:${workerId}:heartbeat`;
+      const exists = await this.redis.exists(heartbeatKey);
+      return exists === 1;
+    }
+
+    // In-memory: check if timestamp is within TTL
+    const lastHeartbeat = this.heartbeatTimestamps.get(workerId);
+    if (lastHeartbeat === undefined) {
+      return false;
+    }
+    return (Date.now() - lastHeartbeat) < this.config.heartbeatTtlMs;
+  }
+
+  /**
+   * Clear a worker's heartbeat.
+   * Deletes the Redis key or removes the in-memory timestamp.
+   */
+  private clearHeartbeat(workerId: string): void {
+    if (this.redis) {
+      const heartbeatKey = `orchestrator:worker:${workerId}:heartbeat`;
+      this.redis.del(heartbeatKey).catch((error) => {
+        this.logger.warn({ err: error, workerId }, 'Failed to clear heartbeat');
+      });
+    } else {
+      this.heartbeatTimestamps.delete(workerId);
     }
   }
 
@@ -246,9 +303,8 @@ export class WorkerDispatcher {
 
   private async reapStaleWorkers(): Promise<void> {
     for (const [workerId, worker] of this.activeWorkers) {
-      const heartbeatKey = `orchestrator:worker:${workerId}:heartbeat`;
       try {
-        const alive = await this.redis.exists(heartbeatKey);
+        const alive = await this.isHeartbeatAlive(workerId);
         if (!alive) {
           this.logger.warn(
             { workerId, item: `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}` },
@@ -270,6 +326,7 @@ export class WorkerDispatcher {
           }
 
           clearInterval(worker.heartbeatInterval);
+          this.clearHeartbeat(workerId);
           await this.queue.release(workerId, worker.item);
           this.activeWorkers.delete(workerId);
         }

@@ -278,6 +278,20 @@ export class LabelMonitorService {
       );
     }
 
+    // Fetch issue description for queue metadata
+    let description = `Issue #${issueNumber}`;
+    let fetchedIssue: Awaited<ReturnType<ReturnType<GitHubClientFactory>['getIssue']>> | null = null;
+    try {
+      const client = this.createClient();
+      fetchedIssue = await client.getIssue(owner, repo, issueNumber);
+      description = fetchedIssue.body || fetchedIssue.title;
+    } catch (error) {
+      this.logger.warn(
+        { err: String(error), owner, repo, issueNumber },
+        'Failed to fetch issue details, using fallback description',
+      );
+    }
+
     // Build queue item
     const queueItem: QueueItem = {
       owner,
@@ -287,6 +301,7 @@ export class LabelMonitorService {
       command: type === 'process' ? 'process' : 'continue',
       priority: Date.now(),
       enqueuedAt: new Date().toISOString(),
+      metadata: { description },
     };
 
     // Enqueue
@@ -300,19 +315,19 @@ export class LabelMonitorService {
     await this.phaseTracker.markProcessed(owner, repo, issueNumber, dedupPhase);
 
     // Manage labels via GitHubClient
-    const client = this.createClient();
-
     if (type === 'process') {
       // Remove trigger label, agent:error, and all completed:* labels from previous runs.
       // Without clearing completed:* labels, requeued issues skip already-labeled phases
       // even if the prior run failed mid-implementation.
       try {
-        const issue = await client.getIssue(owner, repo, issueNumber);
+        // Reuse issue data from description fetch if available, otherwise re-fetch
+        const issue = fetchedIssue ?? await this.createClient().getIssue(owner, repo, issueNumber);
         const completedLabels = issue.labels
           .map(l => typeof l === 'string' ? l : l.name)
           .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX));
 
         const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
+        const client = this.createClient();
         await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
         await client.addLabels(owner, repo, issueNumber, [
           AGENT_IN_PROGRESS_LABEL,

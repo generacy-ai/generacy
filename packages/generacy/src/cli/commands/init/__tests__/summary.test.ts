@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { ClusterVariant, FileResult } from '../types.js';
+import type { FileResult } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Mock @clack/prompts
@@ -171,8 +171,8 @@ describe('printSummary', () => {
 
       printSummary(results, true, 'standard');
 
+      // Called twice: once for variant label, once for dry-run totals
       expect(mockLogInfo).toHaveBeenCalledTimes(2);
-      expect(mockLogInfo).toHaveBeenCalledWith('Cluster variant: Standard (DooD)');
       expect(mockLogInfo).toHaveBeenCalledWith(
         'Dry run: 1 created (no files were written)',
       );

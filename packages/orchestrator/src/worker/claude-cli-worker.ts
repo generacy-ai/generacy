@@ -182,10 +182,21 @@ export class ClaudeCliWorker {
         return;
       }
 
-      // 3. Get issue labels to resolve starting phase
+      // 3. Get issue details and resolve description
       const issue = await github.getIssue(item.owner, item.repo, item.issueNumber);
       const labels = issue.labels.map((l) =>
         typeof l === 'string' ? l : l.name,
+      );
+
+      // Prefer description from queue metadata (pre-fetched by LabelMonitorService),
+      // fall back to the issue body/title from the GitHub fetch above.
+      const description = (item.metadata?.description as string)
+        || issue.body
+        || issue.title
+        || `Issue #${item.issueNumber}`;
+      workerLogger.info(
+        { source: item.metadata?.description ? 'metadata' : 'github' },
+        'Resolved issue description',
       );
 
       // 4. Resolve starting phase (for process/continue commands)
@@ -213,6 +224,7 @@ export class ClaudeCliWorker {
         signal: abortController.signal,
         checkoutPath,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
+        description,
       };
 
       // 7. Create sub-components
