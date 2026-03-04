@@ -80,20 +80,27 @@ export function createAuthMiddleware(options: AuthMiddlewareOptions) {
       );
     }
 
-    // Try JWT authentication
+    // Try Bearer token as API key (allows same key to work via Authorization header)
     const authHeader = request.headers.authorization;
-    const token = extractBearerToken(authHeader as string | undefined);
-    if (token) {
+    const bearerToken = extractBearerToken(authHeader as string | undefined);
+    if (bearerToken) {
+      const apiKeyResult = await validateApiKey(bearerToken, apiKeyStore);
+      if (apiKeyResult.valid && apiKeyResult.credential) {
+        request.auth = createAuthContextFromApiKey(apiKeyResult.credential);
+        return;
+      }
+
+      // Bearer token not in API key store — fall through to JWT verification
       const payload = await verifyToken(request);
       if (payload) {
         request.auth = createAuthContextFromJWT(payload);
         return;
       }
 
-      // Invalid JWT
+      // Neither API key nor valid JWT
       return reply.status(401).send(
         createProblemDetails(ErrorTypes.UNAUTHORIZED, 'Invalid Token', 401, {
-          detail: 'The provided JWT token is invalid or expired',
+          detail: 'The provided token is not a valid API key or JWT',
           traceId: request.correlationId,
         })
       );

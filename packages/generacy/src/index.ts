@@ -2,32 +2,8 @@
  * @generacy-ai/generacy
  *
  * Headless CLI and library for running Generacy workflows.
- * Provides orchestrator integration, agency support, and workflow execution.
+ * Provides agency support and workflow execution.
  */
-
-// Orchestrator client
-export {
-  OrchestratorClient,
-  OrchestratorClientError,
-  HeartbeatManager,
-  JobHandler,
-} from './orchestrator/index.js';
-
-export type {
-  OrchestratorClientOptions,
-  HeartbeatManagerOptions,
-  WorkerStatus,
-  JobHandlerOptions,
-  Job,
-  JobStatus,
-  JobPriority,
-  JobResult,
-  WorkerRegistration,
-  Heartbeat,
-  HeartbeatResponse,
-  PollResponse,
-  OrchestratorError,
-} from './orchestrator/index.js';
 
 // Agency integration
 export {

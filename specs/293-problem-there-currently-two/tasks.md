@@ -12,7 +12,7 @@
 
 ## Phase 1: InMemoryQueueAdapter
 
-### T001 [P] Create InMemoryQueueAdapter implementing QueueManager interface
+### T001 [DONE] [P] Create InMemoryQueueAdapter implementing QueueManager interface
 **File**: `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
 - Implement `QueueManager` interface (`enqueue`, `claim`, `release`, `complete`, `getQueueDepth`, `getQueueItems`, `getActiveWorkerCount`)
 - Use sorted array for pending queue (sorted by priority descending, then FIFO via `enqueuedAt`)
@@ -22,7 +22,7 @@
 - Implement dead-letter tracking (items exceeding max retries stored separately)
 - Ensure dedup: reject enqueue if item key already exists in pending or claimed
 
-### T002 [P] Write unit tests for InMemoryQueueAdapter
+### T002 [DONE] [P] Write unit tests for InMemoryQueueAdapter
 **File**: `packages/orchestrator/src/services/__tests__/in-memory-queue-adapter.test.ts`
 - Test enqueue adds items to pending queue
 - Test priority ordering (higher priority claimed first)
@@ -37,7 +37,7 @@
 - Test getActiveWorkerCount returns count of workers with claimed items
 - Test dedup: enqueue rejects duplicate item keys
 
-### T003 [P] Export InMemoryQueueAdapter from package
+### T003 [DONE] [P] Export InMemoryQueueAdapter from package
 **Files**:
 - `packages/orchestrator/src/services/index.ts`
 - `packages/orchestrator/src/index.ts`
@@ -48,7 +48,7 @@
 
 ## Phase 2: Bearer Token Auth Compatibility
 
-### T004 [P] Add Bearer token fallback to auth middleware
+### T004 [DONE] [P] Add Bearer token fallback to auth middleware
 **File**: `packages/orchestrator/src/auth/middleware.ts`
 - After the existing API key check (`x-api-key` header) and before the JWT check:
   1. Extract Bearer token from `Authorization` header using existing `extractBearerToken()`
@@ -58,7 +58,7 @@
   5. If not found: fall through to existing JWT verification path
 - This allows the same token registered via `InMemoryApiKeyStore.addKey()` to work with both `X-API-Key` and `Authorization: Bearer` headers
 
-### T005 [P] Write tests for Bearer token auth fallback
+### T005 [DONE] [P] Write tests for Bearer token auth fallback
 **File**: `packages/orchestrator/src/auth/__tests__/middleware.test.ts`
 - Test Bearer token is hashed and validated against API key store
 - Test valid Bearer token sets correct auth context with scopes
@@ -71,7 +71,7 @@
 
 ## Phase 3: Smee/Webhook Lifecycle in Server
 
-### T006 [P] Add smee config section to OrchestratorConfig schema
+### T006 [DONE] [P] Add smee config section to OrchestratorConfig schema
 **File**: `packages/orchestrator/src/config/schema.ts`
 - Add `smee` object to `OrchestratorConfigSchema`:
   ```
@@ -82,12 +82,12 @@
   webhookSetup: { enabled: boolean (default false) }
   ```
 
-### T007 [P] Map SMEE_CHANNEL_URL env var in config loader
+### T007 [DONE] [P] Map SMEE_CHANNEL_URL env var in config loader
 **File**: `packages/orchestrator/src/config/loader.ts`
 - Map `SMEE_CHANNEL_URL` env var to `smee.channelUrl`
 - Map `WEBHOOK_SETUP_ENABLED` env var to `webhookSetup.enabled`
 
-### T008 Integrate SmeeWebhookReceiver and WebhookSetupService lifecycle into Fastify server
+### T008 [DONE] Integrate SmeeWebhookReceiver and WebhookSetupService lifecycle into Fastify server
 **File**: `packages/orchestrator/src/server.ts`
 - **Depends on**: T006, T007
 - After `LabelMonitorService` creation, if `config.smee.channelUrl` is set:
@@ -104,7 +104,7 @@
 
 ## Phase 4: Move Issue Enrichment into LabelMonitorService
 
-### T009 [P] Add issue description fetching to LabelMonitorService.processLabelEvent()
+### T009 [DONE] [P] Add issue description fetching to LabelMonitorService.processLabelEvent()
 **File**: `packages/orchestrator/src/services/label-monitor-service.ts`
 - In `processLabelEvent()`, after dedup check and before `queueAdapter.enqueue()`:
   1. Call `this.createGitHubClient(owner).rest.issues.get({ owner, repo, issue_number })` to fetch issue details
@@ -113,13 +113,13 @@
 - Wrap in try/catch: log warning on failure, use fallback description string like `"Issue #{issueNumber}"`
 - This eliminates the need for `LabelMonitorBridge` which currently does this enrichment
 
-### T010 [P] Update ClaudeCliWorker to read description from QueueItem metadata
+### T010 [DONE] [P] Update ClaudeCliWorker to read description from QueueItem metadata
 **File**: `packages/orchestrator/src/worker/claude-cli-worker.ts`
 - In `handle()` method, read `item.metadata?.description` if available
 - Use it as the issue description instead of fetching separately
 - Keep existing fetch-from-GitHub as fallback if metadata.description is missing (backwards compat)
 
-### T011 [P] Extend QueueItem type to support metadata
+### T011 [DONE] [P] Extend QueueItem type to support metadata
 **File**: `packages/orchestrator/src/types/monitor.ts`
 - Add optional `metadata?: Record<string, unknown>` field to `QueueItem` interface
 - Ensure `RedisQueueAdapter` serializes/deserializes metadata (check JSON.stringify/parse handling)
@@ -128,14 +128,14 @@
 
 ## Phase 5: Rewrite CLI Command
 
-### T012 Accept optional apiKeyStore in CreateServerOptions
+### T012 [DONE] Accept optional apiKeyStore in CreateServerOptions
 **File**: `packages/orchestrator/src/server.ts`
 - **Depends on**: T001, T004, T008, T009
 - Add `apiKeyStore?: InMemoryApiKeyStore` to `CreateServerOptions` interface
 - In `createServer()`, if `options.apiKeyStore` is provided, use it instead of creating a new `InMemoryApiKeyStore`
 - Export updated `CreateServerOptions` type from `packages/orchestrator/src/index.ts`
 
-### T013 Rewrite CLI orchestrator command to use Fastify server
+### T013 [DONE] Rewrite CLI orchestrator command to use Fastify server
 **File**: `packages/generacy/src/cli/commands/orchestrator.ts`
 - **Depends on**: T012
 - Complete rewrite of the command action:
@@ -168,7 +168,7 @@
 
 ## Phase 6: In-Memory Queue Fallback in Server
 
-### T014 Support Redis-free operation in Fastify server using InMemoryQueueAdapter
+### T014 [DONE] Support Redis-free operation in Fastify server using InMemoryQueueAdapter
 **File**: `packages/orchestrator/src/server.ts`
 - **Depends on**: T001, T012
 - When Redis connection fails (existing try/catch block):
@@ -177,7 +177,7 @@
   3. Use it as `QueueManager` for dispatch routes
 - This replaces the current behavior where no-Redis mode creates a dummy adapter that only logs
 
-### T015 Support WorkerDispatcher without Redis for heartbeat tracking
+### T015 [DONE] Support WorkerDispatcher without Redis for heartbeat tracking
 **File**: `packages/orchestrator/src/services/worker-dispatcher.ts`
 - **Depends on**: T014
 - Modify `WorkerDispatcher` constructor to accept `Redis | null`
@@ -193,7 +193,7 @@
 
 ## Phase 7: Delete Old Orchestrator Code
 
-### T016 Delete old orchestrator directory
+### T016 [DONE] Delete old orchestrator directory
 **File**: `packages/generacy/src/orchestrator/`
 - **Depends on**: T013
 - Delete entire directory and all files:
@@ -203,7 +203,7 @@
   - `async-event-queue.ts`, `types.ts`, `index.ts`
   - `__tests__/` directory and all test files
 
-### T017 Update worker.ts CLI command to not import from old orchestrator
+### T017 [DONE] Update worker.ts CLI command to not import from old orchestrator
 **File**: `packages/generacy/src/cli/commands/worker.ts`
 - **Depends on**: T016
 - Check all imports from `../../orchestrator/index.js`
@@ -213,7 +213,7 @@
   - If the worker command is deprecated (Fastify server uses internal `WorkerDispatcher`): deprecate/remove the worker command
 - **Action**: Evaluate whether `worker.ts` is still needed given the new `WorkerDispatcher` model. If not, mark as deprecated. If yes, move client types to orchestrator package.
 
-### T018 Clean up package.json dependencies
+### T018 [DONE] Clean up package.json dependencies
 **File**: `packages/generacy/package.json`
 - **Depends on**: T016
 - Check if `ioredis` is only used by old orchestrator code
@@ -221,7 +221,7 @@
 - Check for any other dependencies only used by deleted code
 - Run `pnpm install` to update lockfile
 
-### T019 Remove or update any remaining imports of old orchestrator
+### T019 [DONE] Remove or update any remaining imports of old orchestrator
 **Files**: Various files in `packages/generacy/src/`
 - **Depends on**: T016
 - Search for any remaining imports of `../orchestrator/`, `../../orchestrator/`, or `./orchestrator/`
@@ -232,7 +232,7 @@
 
 ## Phase 8: Testing & Validation
 
-### T020 Write integration test: Fastify server starts via CLI config (no Redis)
+### T020 [DONE] Write integration test: Fastify server starts via CLI config (no Redis)
 **File**: `packages/orchestrator/src/__tests__/server-cli-integration.test.ts`
 - **Depends on**: T013, T014
 - Build an `OrchestratorConfig` mimicking CLI flag mapping
@@ -241,7 +241,7 @@
 - Verify `InMemoryQueueAdapter` is used as queue backend
 - Verify graceful shutdown works
 
-### T021 Write integration test: auth-token flag registers API key
+### T021 [DONE] Write integration test: auth-token flag registers API key
 **File**: `packages/orchestrator/src/__tests__/server-auth-integration.test.ts`
 - **Depends on**: T013, T004
 - Create `InMemoryApiKeyStore`, add a token
@@ -250,7 +250,7 @@
 - Verify `X-API-Key: <token>` authenticates successfully
 - Verify invalid tokens are rejected
 
-### T022 Write integration test: label monitoring with Fastify server
+### T022 [DONE] Write integration test: label monitoring with Fastify server
 **File**: `packages/orchestrator/src/__tests__/server-monitoring-integration.test.ts`
 - **Depends on**: T013, T009
 - Configure server with `repositories: [{ owner: 'test', repo: 'repo' }]`
@@ -258,7 +258,7 @@
 - Verify monitoring starts on server ready
 - Verify monitoring stops on server close
 
-### T023 Verify TypeScript compilation and lint
+### T023 [DONE] Verify TypeScript compilation and lint
 **Files**: All modified/new files
 - **Depends on**: All previous tasks
 - Run `pnpm -r build` to verify TypeScript compilation across all packages

@@ -69,6 +69,7 @@ function createWorkerContext(overrides: Partial<WorkerContext> = {}): WorkerCont
     signal: new AbortController().signal,
     checkoutPath: '/tmp/test-checkout',
     issueUrl: 'https://github.com/test-owner/test-repo/issues/42',
+    description: 'Test issue description',
     ...overrides,
   };
 }

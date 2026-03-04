@@ -4,6 +4,7 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 
 import { type OrchestratorConfig, loadConfig, createTestConfig } from './config/index.js';
+import type { QueueManager } from './types/index.js';
 import { correlationIdHook, correlationIdResponseHook, setupGracefulShutdown } from './utils/index.js';
 import { setupErrorHandler } from './middleware/error-handler.js';
 import { setupRateLimit } from './middleware/rate-limit.js';
@@ -18,7 +19,10 @@ import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
+import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
+import { SmeeWebhookReceiver } from './services/smee-receiver.js';
+import { WebhookSetupService } from './services/webhook-setup-service.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
@@ -37,6 +41,8 @@ export interface CreateServerOptions {
   fastifyOptions?: FastifyServerOptions;
   /** Skip route registration (for testing individual routes) */
   skipRoutes?: boolean;
+  /** Pre-configured API key store (creates a new one if not provided) */
+  apiKeyStore?: InMemoryApiKeyStore;
 }
 
 /**
@@ -105,7 +111,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   setupErrorHandler(server);
 
   // Setup authentication middleware
-  const apiKeyStore = new InMemoryApiKeyStore();
+  const apiKeyStore = options.apiKeyStore ?? new InMemoryApiKeyStore();
   const authMiddleware = createAuthMiddleware({
     apiKeyStore,
     enabled: config.auth.enabled,
@@ -151,51 +157,64 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     redisClient = null;
   }
 
-  // Initialize Redis queue adapter (replaces in-memory placeholder)
-  let redisQueueAdapter: RedisQueueAdapter | null = null;
-  let workerDispatcher: WorkerDispatcher | null = null;
+  // Initialize queue adapter: prefer Redis, fall back to in-memory
+  let queueAdapter: QueueManager;
   if (redisClient) {
-    redisQueueAdapter = new RedisQueueAdapter(redisClient, server.log, {
+    queueAdapter = new RedisQueueAdapter(redisClient, server.log, {
       maxRetries: config.dispatch.maxRetries,
     });
-
-    // Create CLI worker to handle queue items
-    const cliWorker = new ClaudeCliWorker(config.worker, server.log);
-
-    workerDispatcher = new WorkerDispatcher(
-      redisQueueAdapter,
-      redisClient,
-      server.log,
-      config.dispatch,
-      cliWorker.handle.bind(cliWorker),
-    );
+  } else {
+    queueAdapter = new InMemoryQueueAdapter(server.log, {
+      maxRetries: config.dispatch.maxRetries,
+    });
+    server.log.info('Using in-memory queue adapter (Redis unavailable)');
   }
+
+  // Create CLI worker and dispatcher (works with or without Redis)
+  const cliWorker = new ClaudeCliWorker(config.worker, server.log);
+  const workerDispatcher = new WorkerDispatcher(
+    queueAdapter,
+    redisClient,
+    server.log,
+    config.dispatch,
+    cliWorker.handle.bind(cliWorker),
+  );
 
   // Initialize label monitor service
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
+  let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (config.repositories.length > 0) {
     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
 
-    // Use Redis queue adapter if available, otherwise fall back to a logging-only adapter
-    const queueAdapter = redisQueueAdapter ?? {
-      async enqueue(item: import('./types/index.js').QueueItem): Promise<void> {
-        server.log.warn(
-          { owner: item.owner, repo: item.repo, issue: item.issueNumber },
-          'Item enqueued (fallback adapter — Redis unavailable)',
-        );
-      },
-    };
+    // When Smee is configured, use its fallback poll interval and disable adaptive polling
+    // (Smee provides real-time events, polling is only a safety net)
+    const monitorConfig = config.smee.channelUrl
+      ? { ...config.monitor, pollIntervalMs: config.smee.fallbackPollIntervalMs, adaptivePolling: false }
+      : config.monitor;
 
     labelMonitorService = new LabelMonitorService(
       server.log,
       createGitHubClient,
       phaseTracker,
       queueAdapter,
-      config.monitor,
+      monitorConfig,
       config.repositories,
       clusterGithubUsername,
     );
+
+    // Create SmeeWebhookReceiver if Smee channel URL is configured
+    if (config.smee.channelUrl) {
+      const watchedRepos = new Set(
+        config.repositories.map(r => `${r.owner}/${r.repo}`)
+      );
+      smeeReceiver = new SmeeWebhookReceiver(
+        server.log,
+        labelMonitorService,
+        { channelUrl: config.smee.channelUrl, watchedRepos },
+      );
+      server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
+    }
 
     // Initialize PR feedback monitor service (if enabled)
     if (config.prMonitor.enabled) {
@@ -256,10 +275,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       });
     }
 
-    // Register dispatch queue routes (if queue adapter is available)
-    if (redisQueueAdapter) {
-      await setupDispatchRoutes(server, redisQueueAdapter);
-    }
+    // Register dispatch queue routes
+    await setupDispatchRoutes(server, queueAdapter);
 
     // Note: SSE routes are registered via registerRoutes() -> setupEventsRoutes()
   }
@@ -280,10 +297,23 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       });
     }
 
-    if (workerDispatcher) {
-      // Start worker dispatcher in the background (non-blocking)
-      workerDispatcher.start().catch((error) => {
-        server.log.error({ err: error }, 'Worker dispatcher failed');
+    // Start worker dispatcher in the background (non-blocking)
+    workerDispatcher.start().catch((error) => {
+      server.log.error({ err: error }, 'Worker dispatcher failed');
+    });
+
+    // Start SmeeWebhookReceiver in the background (non-blocking)
+    if (smeeReceiver) {
+      smeeReceiver.start().catch((error) => {
+        server.log.error({ err: error }, 'Smee webhook receiver failed');
+      });
+    }
+
+    // Run webhook setup if enabled (ensures GitHub webhooks point to the Smee channel)
+    if (config.webhookSetup.enabled && config.smee.channelUrl) {
+      const webhookSetupService = new WebhookSetupService(server.log);
+      webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
+        server.log.error({ err: error }, 'Webhook setup failed');
       });
     }
   });
@@ -297,10 +327,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     },
     cleanup: [
       async () => {
-        // Stop worker dispatcher (waits for in-flight workers)
-        if (workerDispatcher) {
-          await workerDispatcher.stop();
+        // Stop Smee webhook receiver
+        if (smeeReceiver) {
+          smeeReceiver.stop();
         }
+        // Stop worker dispatcher (waits for in-flight workers)
+        await workerDispatcher.stop();
         // Stop label monitor polling
         if (labelMonitorService) {
           labelMonitorService.stopPolling();
