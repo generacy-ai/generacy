@@ -93,11 +93,15 @@ function extractFlags(flags: Record<string, unknown>): Partial<InitOptions> {
     partial.cloneRepos = flags.cloneRepo.filter((v): v is string => typeof v === 'string');
   }
 
+  // Template flags
+  if (typeof flags.templateRef === 'string') partial.templateRef = flags.templateRef;
+
   // Boolean flags
   if (typeof flags.force === 'boolean') partial.force = flags.force;
   if (typeof flags.dryRun === 'boolean') partial.dryRun = flags.dryRun;
   if (typeof flags.skipGithubCheck === 'boolean') partial.skipGithubCheck = flags.skipGithubCheck;
   if (typeof flags.yes === 'boolean') partial.yes = flags.yes;
+  if (typeof flags.refreshTemplates === 'boolean') partial.refreshTemplates = flags.refreshTemplates;
 
   return partial;
 }
@@ -307,6 +311,8 @@ export async function resolveOptions(
     dryRun: merged.dryRun ?? false,
     skipGithubCheck: merged.skipGithubCheck ?? false,
     yes: merged.yes ?? false,
+    templateRef: merged.templateRef ?? process.env.GENERACY_TEMPLATE_REF ?? 'develop',
+    refreshTemplates: merged.refreshTemplates ?? false,
   };
 
   logger.debug({ resolved }, 'Resolved init options');

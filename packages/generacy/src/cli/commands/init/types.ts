@@ -1,4 +1,13 @@
-import type { ClusterVariant } from '@generacy-ai/templates';
+// ---------------------------------------------------------------------------
+// Cluster variant
+// ---------------------------------------------------------------------------
+
+/**
+ * Cluster variant determines the Docker topology:
+ * - `standard`: Docker-outside-of-Docker (DooD) — for apps that don't run containers
+ * - `microservices`: Docker-in-Docker (DinD) — each worker can run isolated container stacks
+ */
+export type ClusterVariant = 'standard' | 'microservices';
 
 // ---------------------------------------------------------------------------
 // Resolved init options — all values are concrete (no undefined)
@@ -44,6 +53,12 @@ export interface InitOptions {
 
   /** Accept all defaults without interactive prompts. */
   yes: boolean;
+
+  /** Git ref (branch, tag, or commit) for the cluster-templates repository. */
+  templateRef: string;
+
+  /** Bypass the local template cache and re-download from GitHub. */
+  refreshTemplates: boolean;
 }
 
 // ---------------------------------------------------------------------------

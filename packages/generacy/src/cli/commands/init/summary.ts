@@ -6,8 +6,7 @@
  * followed by actionable next steps for the developer.
  */
 import * as p from '@clack/prompts';
-import type { ClusterVariant } from '@generacy-ai/templates';
-import type { FileResult } from './types.js';
+import type { ClusterVariant, FileResult } from './types.js';
 
 // ---------------------------------------------------------------------------
 // Action label mapping

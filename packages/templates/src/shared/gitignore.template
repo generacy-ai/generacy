@@ -1,8 +1,0 @@
-# Generacy Configuration Files
-# This file is added to your .gitignore by Generacy's onboarding PR
-
-# Environment file containing secrets (API keys, tokens)
-generacy.env
-
-# Agent state directory (runtime data, conversation history)
-.agent-state/
