@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { WorkspaceConfigSchema } from '@generacy-ai/config';
 
 /**
  * Project configuration schema
@@ -174,6 +175,12 @@ export const GeneracyConfigSchema = z.object({
    * Defines the development cluster Docker topology
    */
   cluster: ClusterConfigSchema.optional(),
+
+  /**
+   * Workspace configuration (optional)
+   * Defines the org, default branch, and repos to clone/monitor
+   */
+  workspace: WorkspaceConfigSchema.optional(),
 });
 
 export type GeneracyConfig = z.infer<typeof GeneracyConfigSchema>;

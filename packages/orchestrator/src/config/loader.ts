@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
+import { tryLoadWorkspaceConfig, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -104,7 +105,7 @@ function loadFromEnv(): Record<string, unknown> {
       process.env[`${ENV_PREFIX}LOG_PRETTY`] === 'true';
   }
 
-  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES)
+  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES, then config file)
   const reposStr = process.env['MONITORED_REPOS'] ?? process.env[`${ENV_PREFIX}REPOSITORIES`];
   if (reposStr) {
     const repos = reposStr.split(',').map(r => {
@@ -112,6 +113,15 @@ function loadFromEnv(): Record<string, unknown> {
       return { owner, repo };
     }).filter(r => r.owner && r.repo);
     config.repositories = repos;
+  } else {
+    // Fallback to .generacy/config.yaml workspace config
+    const configPath = findWorkspaceConfigPath(process.cwd());
+    if (configPath) {
+      const workspaceConfig = tryLoadWorkspaceConfig(configPath);
+      if (workspaceConfig) {
+        config.repositories = getMonitoredRepos(workspaceConfig);
+      }
+    }
   }
 
   // Monitor config (POLL_INTERVAL_MS takes precedence, falls back to ORCHESTRATOR_POLL_INTERVAL_MS)

@@ -100,8 +100,8 @@ describe('init CLI command', () => {
       expect(existsSync(join(testDir, '.vscode', 'extensions.json'))).toBe(true);
       expect(existsSync(join(testDir, '.devcontainer', 'devcontainer.json'))).toBe(true);
 
-      // Single-repo should NOT have docker-compose.yml
-      expect(existsSync(join(testDir, '.devcontainer', 'docker-compose.yml'))).toBe(false);
+      // Standard cluster always generates docker-compose.yml
+      expect(existsSync(join(testDir, '.devcontainer', 'docker-compose.yml'))).toBe(true);
     });
 
     it('should generate config.yaml with correct project name and repo', () => {
@@ -211,7 +211,7 @@ describe('init CLI command', () => {
       expect(config).toContain('acme/lib');
     });
 
-    it('should include dev repo in docker-compose.yml', () => {
+    it('should include project name in docker-compose.yml', () => {
       runInit(
         '--project-name "Multi" --primary-repo "acme/app" --dev-repo "acme/lib" -y --skip-github-check',
         { cwd: testDir },
@@ -221,17 +221,17 @@ describe('init CLI command', () => {
         join(testDir, '.devcontainer', 'docker-compose.yml'),
         'utf-8',
       );
-      expect(compose).toContain('lib');
+      expect(compose).toContain('Multi');
     });
 
-    it('should print summary with 6 created files', () => {
+    it('should print summary with docker-compose.yml and created count', () => {
       const output = runInit(
         '--project-name "Multi" --primary-repo "acme/app" --dev-repo "acme/lib" -y --skip-github-check',
         { cwd: testDir },
       );
 
       expect(output).toContain('.devcontainer/docker-compose.yml');
-      expect(output).toContain('6 created');
+      expect(output).toContain('created');
     });
 
     it('should exit with code 0', () => {

@@ -39,6 +39,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@clack/prompts": "^0.9",
+    "@generacy-ai/config": "workspace:*",
     "@generacy-ai/orchestrator": "workspace:*",
     "@generacy-ai/templates": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
