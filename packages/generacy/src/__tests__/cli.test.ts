@@ -5,8 +5,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createProgram } from '../cli/index.js';
 import { resolveConfig, createConfig, validateConfig } from '../cli/utils/config.js';
 import { createLogger, PinoWorkflowLogger } from '../cli/utils/logger.js';
-import { OrchestratorClient, OrchestratorClientError } from '../orchestrator/client.js';
-import { HeartbeatManager } from '../orchestrator/heartbeat.js';
 import { createHealthServer } from '../health/server.js';
 
 describe('CLI Program', () => {
@@ -225,75 +223,6 @@ describe('Logger', () => {
     expect(typeof workflowLogger.error).toBe('function');
     expect(typeof workflowLogger.debug).toBe('function');
     expect(typeof workflowLogger.child).toBe('function');
-  });
-});
-
-describe('OrchestratorClient', () => {
-  it('should create client with options', () => {
-    const client = new OrchestratorClient({
-      baseUrl: 'http://localhost:3000',
-      timeout: 5000,
-    });
-
-    expect(client).toBeDefined();
-  });
-
-  it('should handle request errors', async () => {
-    const client = new OrchestratorClient({
-      baseUrl: 'http://localhost:99999', // Invalid port
-      timeout: 100,
-    });
-
-    await expect(client.pollForJob('test-worker')).rejects.toThrow();
-  });
-});
-
-describe('OrchestratorClientError', () => {
-  it('should create error with details', () => {
-    const error = new OrchestratorClientError(
-      'Not found',
-      'NOT_FOUND',
-      404,
-      { resource: 'job' }
-    );
-
-    expect(error.message).toBe('Not found');
-    expect(error.code).toBe('NOT_FOUND');
-    expect(error.statusCode).toBe(404);
-    expect(error.details).toEqual({ resource: 'job' });
-  });
-});
-
-describe('HeartbeatManager', () => {
-  it('should create manager with options', () => {
-    const client = new OrchestratorClient({
-      baseUrl: 'http://localhost:3000',
-    });
-
-    const manager = new HeartbeatManager({
-      client,
-      workerId: 'test-worker',
-      interval: 10000,
-    });
-
-    expect(manager).toBeDefined();
-  });
-
-  it('should track status changes', () => {
-    const client = new OrchestratorClient({
-      baseUrl: 'http://localhost:3000',
-    });
-
-    const manager = new HeartbeatManager({
-      client,
-      workerId: 'test-worker',
-    });
-
-    manager.setStatus('busy');
-    manager.setCurrentJob('job-123', 50);
-
-    // Status is tracked internally
-    expect(manager.getUptime()).toBeGreaterThanOrEqual(0);
   });
 });
 

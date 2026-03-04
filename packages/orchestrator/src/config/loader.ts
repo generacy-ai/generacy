@@ -182,6 +182,24 @@ function loadFromEnv(): Record<string, unknown> {
     );
   }
 
+  // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)
+  const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
+  if (smeeChannelUrl) {
+    if (!config.smee) {
+      config.smee = {};
+    }
+    (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
+  }
+
+  // Webhook setup config
+  if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
+    const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];
+    if (!config.webhookSetup) {
+      config.webhookSetup = {};
+    }
+    (config.webhookSetup as Record<string, unknown>).enabled = value === 'true';
+  }
+
   return config;
 }
 
@@ -327,7 +345,7 @@ export function createTestConfig(
       host: '127.0.0.1',
     },
     redis: {
-      url: 'redis://localhost:6379',
+      url: 'redis://127.0.0.1:1', // Unreachable port — triggers fast failure and in-memory fallback
     },
     auth: {
       enabled: false,

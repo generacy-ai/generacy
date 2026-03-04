@@ -34,7 +34,7 @@ function createMockGitHubClient(overrides: Record<string, unknown> = {}) {
     removeLabels: vi.fn().mockResolvedValue(undefined),
     listLabels: vi.fn().mockResolvedValue([]),
     listIssuesWithLabel: vi.fn().mockResolvedValue([]),
-    getIssue: vi.fn().mockResolvedValue({ labels: [] }),
+    getIssue: vi.fn().mockResolvedValue({ labels: [], body: 'Test issue body', title: 'Test issue title' }),
     ...overrides,
   } as unknown as ReturnType<import('@generacy-ai/workflow-engine').GitHubClientFactory>;
 }
@@ -142,7 +142,7 @@ describe('LabelMonitorService', () => {
   // ==========================================================================
 
   describe('processLabelEvent', () => {
-    it('should enqueue a process event and update labels', async () => {
+    it('should enqueue a process event with description and update labels', async () => {
       const event = {
         type: 'process' as const,
         owner: 'owner',
@@ -164,6 +164,7 @@ describe('LabelMonitorService', () => {
           issueNumber: 42,
           workflowName: 'speckit-feature',
           command: 'process',
+          metadata: { description: 'Test issue body' },
         }),
       );
       expect(mockClient.removeLabels).toHaveBeenCalledWith(
@@ -213,7 +214,7 @@ describe('LabelMonitorService', () => {
       );
     });
 
-    it('should still enqueue even if label update fails', async () => {
+    it('should use fallback description when getIssue fails', async () => {
       (mockClient.getIssue as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('API error'),
       );
@@ -232,8 +233,42 @@ describe('LabelMonitorService', () => {
       const result = await service.processLabelEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalled();
-      expect(logger.warn).toHaveBeenCalled();
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { description: 'Issue #42' },
+        }),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 42 }),
+        'Failed to fetch issue details, using fallback description',
+      );
+    });
+
+    it('should fall back to title when issue body is empty', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [],
+        body: '',
+        title: 'My issue title',
+      });
+
+      const event = {
+        type: 'process' as const,
+        owner: 'owner',
+        repo: 'repo',
+        issueNumber: 42,
+        labelName: 'process:speckit-feature',
+        parsedName: 'speckit-feature',
+        source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
+      };
+
+      await service.processLabelEvent(event);
+
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { description: 'My issue title' },
+        }),
+      );
     });
   });
 

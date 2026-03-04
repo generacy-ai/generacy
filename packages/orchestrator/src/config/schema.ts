@@ -179,6 +179,26 @@ export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 export { WorkerConfigSchema, type WorkerConfig };
 
 /**
+ * Smee.io webhook proxy configuration
+ */
+export const SmeeConfigSchema = z.object({
+  /** Smee.io channel URL for receiving webhook events */
+  channelUrl: z.string().url().optional(),
+  /** Fallback poll interval when Smee is active (milliseconds) */
+  fallbackPollIntervalMs: z.number().int().min(30000).default(300000),
+});
+export type SmeeConfig = z.infer<typeof SmeeConfigSchema>;
+
+/**
+ * Webhook setup configuration
+ */
+export const WebhookSetupConfigSchema = z.object({
+  /** Whether automatic webhook setup is enabled */
+  enabled: z.boolean().default(false),
+});
+export type WebhookSetupConfig = z.infer<typeof WebhookSetupConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
@@ -194,6 +214,8 @@ export const OrchestratorConfigSchema = z.object({
   epicMonitor: EpicMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
+  smee: SmeeConfigSchema.default({}),
+  webhookSetup: WebhookSetupConfigSchema.default({}),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 
