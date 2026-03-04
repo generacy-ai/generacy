@@ -115,25 +115,18 @@ function mockFileSystem(
 
 describe('setup workspace command', () => {
   describe('config resolution', () => {
-    it('uses default 8 repos when no CLI args or env vars', async () => {
+    it('bootstraps with tetrad-development when no CLI args, env vars, or config file', async () => {
       mockExecBehavior();
       mockFileSystem();
 
       await runWorkspaceCommand([]);
 
-      // Should clone all 8 default repos
+      // Should bootstrap by cloning only tetrad-development (config file not found)
       const cloneCalls = mockExecSync.mock.calls
         .map((c) => c[0] as string)
         .filter((cmd) => cmd.includes('git clone'));
-      expect(cloneCalls).toHaveLength(8);
+      expect(cloneCalls).toHaveLength(1);
       expect(cloneCalls.some((c) => c.includes('tetrad-development'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('contracts'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('latency'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('agency'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('generacy'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('humancy'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('generacy-cloud'))).toBe(true);
-      expect(cloneCalls.some((c) => c.includes('humancy-cloud'))).toBe(true);
     });
 
     it('uses REPOS env var override (comma-separated → array)', async () => {
@@ -799,7 +792,7 @@ describe('setup workspace command', () => {
       await runWorkspaceCommand(['--repos', 'repo-a,repo-b', '--branch', 'main']);
 
       expect(mockLogger.info).toHaveBeenCalledWith(
-        { org: 'generacy-ai', branch: 'main', repos: 2 },
+        { org: 'generacy-ai', branch: 'main', repos: 2, source: 'CLI flag' },
         'Configuration',
       );
     });

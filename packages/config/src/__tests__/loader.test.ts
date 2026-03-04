@@ -161,14 +161,11 @@ describe('findWorkspaceConfigPath', () => {
   });
 
   it('returns null when config is not found', () => {
-    // Start in a temp dir with no .generacy anywhere up to root
+    // Use a custom config dir name that will never exist in any parent directory
     const nested = join(tempDir, 'empty', 'tree');
     mkdirSync(nested, { recursive: true });
 
-    const result = findWorkspaceConfigPath(nested);
-    // We can't guarantee null since there might be a .generacy somewhere
-    // above tempDir, but in practice /tmp won't have one.
-    // The function walks all the way to filesystem root.
+    const result = findWorkspaceConfigPath(nested, '.generacy-test-nonexistent');
     expect(result).toBeNull();
   });
 
