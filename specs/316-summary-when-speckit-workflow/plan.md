@@ -126,5 +126,6 @@ packages/orchestrator/src/worker/
 ## Dependencies
 
 - No new npm packages required
-- Uses existing `GitHubClient.addIssueComment()` and `fs`/`glob` from Node.js
-- Uses existing `executeCommand` for `gh` CLI calls
+- Uses existing `GitHubClient.addIssueComment(owner, repo, number, body)` from `workflow-engine/src/actions/github/client/interface.ts`
+- Uses Node.js `fs` and `glob` for file discovery
+- Reference: existing question formatting pattern in `workflow-engine/src/actions/builtin/speckit/operations/clarify.ts` (lines 276-289)
