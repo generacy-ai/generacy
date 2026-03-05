@@ -130,11 +130,21 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
           gateLabel: 'waiting-for:clarification',
           condition: 'always',
         },
+        {
+          phase: 'implement',
+          gateLabel: 'waiting-for:implementation-review',
+          condition: 'always',
+        },
       ],
       'speckit-bugfix': [
         {
           phase: 'clarify',
           gateLabel: 'waiting-for:clarification',
+          condition: 'always',
+        },
+        {
+          phase: 'implement',
+          gateLabel: 'waiting-for:implementation-review',
           condition: 'always',
         },
       ],
@@ -174,8 +184,10 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.getIssueComments.mockResolvedValue([]);
     mockGithub.addIssueComment.mockResolvedValue({ id: 1, body: '' });
     mockGithub.updateComment.mockResolvedValue(undefined);
-    // PrManager git mocks
-    mockGithub.getStatus.mockResolvedValue({ branch: 'feature/42', has_changes: false, staged: [], unstaged: [], untracked: [] });
+    // PrManager git mocks — default to has_changes: true so implement phase
+    // passes the "must produce changes" check. Tests that need has_changes: false
+    // should override this mock.
+    mockGithub.getStatus.mockResolvedValue({ branch: 'feature/42', has_changes: true, staged: [], unstaged: [], untracked: [] });
     mockGithub.stageAll.mockResolvedValue(undefined);
     mockGithub.commit.mockResolvedValue({ sha: 'abc123', files_committed: [] });
     mockGithub.push.mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' });
