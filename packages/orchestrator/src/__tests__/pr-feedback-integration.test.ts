@@ -186,8 +186,22 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       [{ owner: 'test-org', repo: 'test-repo' }],
     );
 
-    // Setup Fastify server with webhook routes
+    // Setup Fastify server with custom content type parser (preserves raw body
+    // for HMAC signature verification, matching production server.ts setup)
     server = Fastify({ logger: false });
+    server.removeContentTypeParser('application/json');
+    server.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string' },
+      (_req, body, done) => {
+        try {
+          const json = JSON.parse(body as string);
+          done(null, { parsed: json, raw: body });
+        } catch (err) {
+          done(err as Error, undefined);
+        }
+      },
+    );
     await setupPrWebhookRoutes(server, {
       monitorService,
       webhookSecret: WEBHOOK_SECRET,
@@ -1172,8 +1186,22 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       [{ owner: 'test-org', repo: 'test-repo' }],
     );
 
-    // Setup Fastify server with webhook routes
+    // Setup Fastify server with custom content type parser (preserves raw body
+    // for HMAC signature verification, matching production server.ts setup)
     server = Fastify({ logger: false });
+    server.removeContentTypeParser('application/json');
+    server.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string' },
+      (_req, body, done) => {
+        try {
+          const json = JSON.parse(body as string);
+          done(null, { parsed: json, raw: body });
+        } catch (err) {
+          done(err as Error, undefined);
+        }
+      },
+    );
     await setupPrWebhookRoutes(server, {
       monitorService,
       webhookSecret: WEBHOOK_SECRET,
