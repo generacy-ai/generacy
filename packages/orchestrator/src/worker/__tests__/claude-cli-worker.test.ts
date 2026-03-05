@@ -39,6 +39,14 @@ const mockGithub = {
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
   createGitHubClient: vi.fn(() => mockGithub),
+  createFeature: vi.fn().mockResolvedValue({
+    success: true,
+    branch_name: '042-test-feature',
+    feature_num: '042',
+    spec_file: '/tmp/test-checkout/specs/042-test-feature/spec.md',
+    feature_dir: '/tmp/test-checkout/specs/042-test-feature',
+    git_branch_created: true,
+  }),
 }));
 
 vi.mock('../repo-checkout.js', () => ({

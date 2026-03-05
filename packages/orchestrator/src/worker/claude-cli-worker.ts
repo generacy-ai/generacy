@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createGitHubClient } from '@generacy-ai/workflow-engine';
-import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import { createGitHubClient, createFeature } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger } from './types.js';
 import { getPhaseSequence } from './types.js';
@@ -203,15 +202,35 @@ export class ClaudeCliWorker {
       const startPhase = this.phaseResolver.resolveStartPhase(labels, item.command as 'process' | 'continue', item.workflowName);
       workerLogger.info({ startPhase, labels }, 'Resolved starting phase');
 
-      // 5. If resuming (has completed phases), find and checkout the feature branch
-      if (startPhase !== 'specify') {
-        const featureBranch = await this.resolveFeatureBranch(
-          github, item.owner, item.repo, item.issueNumber, workerLogger,
+      // 5. Setup: ensure the feature branch exists and is checked out.
+      //
+      // The old workflow executor had an explicit setup phase that called
+      // speckit.create_feature with the issue number. The new orchestrator
+      // delegates phases to Claude CLI slash commands, but branch creation
+      // must happen deterministically (with the correct issue number) before
+      // any phase runs — otherwise the CLI operates on the default branch.
+      //
+      // createFeature is idempotent: if the branch/dir already exists it
+      // checks out the existing branch and pulls latest from remote.
+      const featureResult = await createFeature({
+        description,
+        number: item.issueNumber,
+        cwd: checkoutPath,
+      });
+
+      if (featureResult.success) {
+        workerLogger.info(
+          {
+            branch: featureResult.branch_name,
+            created: featureResult.git_branch_created,
+            featureDir: featureResult.feature_dir,
+          },
+          'Feature branch setup complete',
         );
-        if (featureBranch) {
-          workerLogger.info({ featureBranch }, 'Switching to existing feature branch for resume');
-          await this.repoCheckout.switchBranch(checkoutPath, featureBranch);
-        }
+      } else {
+        throw new Error(
+          `Failed to setup feature branch for issue #${item.issueNumber}: ${featureResult.error ?? 'unknown error'}`,
+        );
       }
 
       // 6. Build WorkerContext
@@ -424,40 +443,4 @@ export class ClaudeCliWorker {
     }
   }
 
-  /**
-   * Find the feature branch for an issue by checking for an existing PR.
-   *
-   * When resuming a workflow, the feature branch was created during the first
-   * run's setup phase. We find it by searching for an open draft PR that
-   * references the issue number.
-   *
-   * @returns The branch name, or undefined if no feature branch was found.
-   */
-  private async resolveFeatureBranch(
-    github: GitHubClient,
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    logger: Logger,
-  ): Promise<string | undefined> {
-    try {
-      // Search remote branches for one starting with the issue number
-      const branches = await github.listBranches(owner, repo);
-      const featureBranch = branches.find((b) => b.startsWith(`${issueNumber}-`));
-
-      if (featureBranch) {
-        logger.info({ featureBranch, issueNumber }, 'Found feature branch by issue number prefix');
-        return featureBranch;
-      }
-
-      logger.info({ issueNumber }, 'No feature branch found for issue');
-      return undefined;
-    } catch (error) {
-      logger.warn(
-        { error: String(error), issueNumber },
-        'Failed to resolve feature branch (non-fatal)',
-      );
-      return undefined;
-    }
-  }
 }
