@@ -88,7 +88,6 @@ function createMockProcess(exitCode = 0, exitDelay = 10) {
 // ---------------------------------------------------------------------------
 const defaultConfig: WorkerConfig = {
   workspaceDir: '/tmp/workspace',
-  maxTurns: 10,
   phaseTimeoutMs: 60_000,
   shutdownGracePeriodMs: 5_000,
   validateCommand: 'pnpm test && pnpm build',
@@ -246,11 +245,11 @@ describe('PrFeedbackHandler', () => {
       expect(spawnFn).toHaveBeenCalledWith(
         'claude',
         expect.arrayContaining([
-          '--headless',
-          '--output', 'json',
-          '--print', 'all',
-          '--max-turns', '10',
-          '--prompt', expect.stringContaining('PR #100'),
+          '-p',
+          '--output-format', 'stream-json',
+          '--dangerously-skip-permissions',
+          '--verbose',
+          expect.stringContaining('PR #100'),
         ]),
         expect.objectContaining({
           cwd: checkoutPath,
@@ -587,7 +586,6 @@ describe('PrFeedbackHandler', () => {
       expect(spawnFn).toHaveBeenCalledWith(
         'claude',
         expect.arrayContaining([
-          '--prompt',
           expect.stringContaining('src/index.ts:15'),
         ]),
         expect.any(Object),
@@ -596,7 +594,6 @@ describe('PrFeedbackHandler', () => {
       expect(spawnFn).toHaveBeenCalledWith(
         'claude',
         expect.arrayContaining([
-          '--prompt',
           expect.stringContaining('src/util.ts:20'),
         ]),
         expect.any(Object),
@@ -619,7 +616,6 @@ describe('PrFeedbackHandler', () => {
       expect(spawnFn).toHaveBeenCalledWith(
         'claude',
         expect.arrayContaining([
-          '--prompt',
           expect.stringContaining('**alice**'),
         ]),
         expect.any(Object),
@@ -643,7 +639,6 @@ describe('PrFeedbackHandler', () => {
       expect(spawnFn).toHaveBeenCalledWith(
         'claude',
         expect.arrayContaining([
-          '--prompt',
           expect.stringContaining('Do NOT resolve any review threads'),
         ]),
         expect.any(Object),

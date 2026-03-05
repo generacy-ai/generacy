@@ -44,10 +44,10 @@ export class CliSpawner {
     const prompt = `${command} ${options.prompt}`;
 
     const args = [
-      '--headless',
-      '--output', 'json',
-      '--print', 'all',
-      '--max-turns', String(options.maxTurns),
+      '-p',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
     ];
 
     // Resume a previous session to keep MCP servers warm and carry context
@@ -55,13 +55,12 @@ export class CliSpawner {
       args.push('--resume', options.resumeSessionId);
     }
 
-    args.push('--prompt', prompt);
+    args.push(prompt);
 
     this.logger.info(
       {
         phase,
         cwd: options.cwd,
-        maxTurns: options.maxTurns,
         timeoutMs: options.timeoutMs,
         resumeSessionId: options.resumeSessionId ?? null,
       },

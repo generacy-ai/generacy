@@ -288,15 +288,15 @@ Please proceed with addressing the feedback.`;
     workflowId: string,
   ): Promise<boolean> {
     const args = [
-      '--headless',
-      '--output', 'json',
-      '--print', 'all',
-      '--max-turns', String(this.config.maxTurns),
-      '--prompt', prompt,
+      '-p',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
+      prompt,
     ];
 
     this.logger.info(
-      { cwd: checkoutPath, maxTurns: this.config.maxTurns, timeoutMs: this.config.phaseTimeoutMs },
+      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs },
       'Spawning Claude CLI for PR feedback',
     );
 

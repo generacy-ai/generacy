@@ -115,7 +115,6 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     workspaceDir: '/tmp/test-workspaces',
     shutdownGracePeriodMs: 5000,
     validateCommand: 'pnpm test && pnpm build',
-    maxTurns: 100,
     gates: {
       'speckit-feature': [
         {
@@ -300,7 +299,7 @@ describe('ClaudeCliWorker (integration)', () => {
 
       // First CLI spawn should be for 'plan' (GATE_MAPPING: clarification → resumeFrom: plan)
       const firstSpawnArgs = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
-      const promptArg = firstSpawnArgs[firstSpawnArgs.indexOf('--prompt') + 1]!;
+      const promptArg = firstSpawnArgs[firstSpawnArgs.length - 1]!;
       expect(promptArg).toContain('/speckit:plan');
     });
   });
@@ -973,8 +972,7 @@ describe('ClaudeCliWorker (integration)', () => {
       const spawnCalls = spawnFn.mock.calls as [string, string[], unknown][];
       const prompts = spawnCalls.map((call) => {
         const args = call[1] as string[];
-        const promptIdx = args.indexOf('--prompt');
-        return promptIdx >= 0 ? args[promptIdx + 1] : null;
+        return args[args.length - 1] ?? null;
       });
       expect(prompts[0]).toContain('/speckit:specify');
       expect(prompts[1]).toContain('/speckit:clarify');
@@ -1068,8 +1066,7 @@ describe('ClaudeCliWorker (integration)', () => {
       expect(spawnFn).toHaveBeenCalledTimes(2);
 
       const firstPrompt = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
-      const promptIdx = firstPrompt.indexOf('--prompt');
-      expect(firstPrompt[promptIdx + 1]).toContain('/speckit:plan');
+      expect(firstPrompt[firstPrompt.length - 1]).toContain('/speckit:plan');
     });
   });
 
