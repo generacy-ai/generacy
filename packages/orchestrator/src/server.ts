@@ -71,6 +71,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       level: config.logging.level,
       ...(typeof loggerConfig === 'object' ? loggerConfig : {}),
     },
+    disableRequestLogging: true, // Custom request-logger hooks handle this
     ...options.fastifyOptions,
   });
 
