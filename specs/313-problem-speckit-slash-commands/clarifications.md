@@ -9,7 +9,7 @@
 - B: Accept namespaced names (e.g., `/agency-spec-kit:specify`) and update all references across the codebase
 - C: Register both namespaced and bare names so existing references continue to work
 
-**Answer**: *Pending*
+**Answer**: C — Register both namespaced and bare names so existing references (orchestrator `PHASE_TO_COMMAND`, CLAUDE.md, automation scripts) continue to work without changes.
 
 ---
 
@@ -20,7 +20,7 @@
 - B: Keep separate — MCP config stays in `generacy setup build` since it depends on local agency repo paths
 - C: Include in plugin manifest for marketplace installs, keep separate for fallback file-copy installs
 
-**Answer**: *Pending*
+**Answer**: C — Include MCP config in plugin manifest for marketplace installs, keep separate for fallback file-copy installs.
 
 ---
 
@@ -31,7 +31,7 @@
 - B: The repo already exists (provide URL)
 - C: Someone else will create the repo; this issue just publishes to it
 
-**Answer**: *Pending*
+**Answer**: N/A — No new repo needed. The marketplace should live in the agency repo alongside the plugin source (`agency/packages/claude-plugin-agency-spec-kit/`). This avoids the overhead of a separate repo entirely.
 
 ---
 
@@ -43,7 +43,7 @@
 - C: Git submodule — marketplace repo references agency repo as a submodule
 - D: Move command source of truth to the marketplace repo (agency repo references them instead)
 
-**Answer**: *Pending*
+**Answer**: N/A — Since the marketplace and plugin source are in the same repo, there is no sync problem. Commands are always in sync by definition.
 
 ---
 
@@ -55,4 +55,4 @@
 - C: In the cluster-templates repo's entrypoint config
 - D: In `~/.claude/settings.json` after first install (let Claude Code manage it)
 
-**Answer**: *Pending*
+**Answer**: A — Pin version in this repo (e.g., `package.json` or `autodev.json`), since `generacy setup build` is the consumer.

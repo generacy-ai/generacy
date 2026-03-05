@@ -42,6 +42,14 @@ This requires:
 - **Q4 (Version Pinning)**: C — Pin version by default, with a `--latest` flag to override.
 - **Q5 (Offline Fallback)**: A — Fall back to file-copy from agency repo if available, error otherwise.
 
+## Clarification Answers (from #313)
+
+- **Q1 (Namespacing)**: C — Register both namespaced and bare names so existing references continue to work.
+- **Q2 (MCP Server)**: C — Include MCP config in plugin manifest for marketplace installs, keep separate for fallback file-copy.
+- **Q3 (Marketplace Repo)**: N/A — No separate repo; marketplace lives in agency repo alongside plugin source.
+- **Q4 (Command Sync)**: N/A — Same repo, no sync problem.
+- **Q5 (Version Pinning Location)**: A — Pin version in this repo (e.g., `package.json` or `autodev.json`).
+
 ## Related
 
 - #310 — Previous attempt (closing due to stale orchestrator state)
@@ -86,7 +94,7 @@ This requires:
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Set up Claude Code marketplace (GitHub repo or URL) | P1 | Private, team-members only |
+| FR-001 | Set up Claude Code marketplace in agency repo | P1 | No separate repo; lives alongside plugin source |
 | FR-002 | Create plugin manifest for `agency-spec-kit` | P1 | Lists all speckit commands |
 | FR-003 | Publish plugin commands to marketplace | P1 | |
 | FR-004 | Update `generacy setup build` to install via marketplace | P1 | Replace file-copy logic |
