@@ -88,6 +88,8 @@ export { WORKFLOW_LABELS, type LabelDefinition } from './actions/github/label-de
 
 // Speckit operations (for direct invocation from orchestrator)
 export { executeTasksToIssues } from './actions/builtin/speckit/operations/tasks-to-issues.js';
+export { createFeature } from './actions/builtin/speckit/lib/feature.js';
+export type { CreateFeatureInput, CreateFeatureOutput } from './actions/builtin/speckit/types.js';
 
 // Epic utilities (for direct invocation from orchestrator)
 export { findChildIssues, type EpicChildWithPr, type FindChildIssuesOptions } from './actions/epic/find-children.js';
