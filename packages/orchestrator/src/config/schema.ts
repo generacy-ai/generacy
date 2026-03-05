@@ -164,7 +164,7 @@ export const DispatchConfigSchema = z.object({
   /** Interval between queue polls in milliseconds */
   pollIntervalMs: z.number().int().min(1000).default(5000),
   /** Maximum number of concurrent workers */
-  maxConcurrentWorkers: z.number().int().min(1).max(20).default(3),
+  maxConcurrentWorkers: z.number().int().min(0).max(20).default(3),
   /** Worker heartbeat TTL in milliseconds */
   heartbeatTtlMs: z.number().int().min(5000).default(30000),
   /** Interval between heartbeat/reaper checks in milliseconds */
@@ -202,6 +202,8 @@ export type WebhookSetupConfig = z.infer<typeof WebhookSetupConfigSchema>;
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
+  /** Operating mode: 'full' runs everything, 'worker' runs only dispatch */
+  mode: z.enum(['full', 'worker']).default('full'),
   server: ServerConfigSchema.default({}),
   redis: RedisConfigSchema.default({}),
   auth: AuthConfigSchema,

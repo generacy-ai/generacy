@@ -33,6 +33,7 @@ export function orchestratorCommand(): Command {
     .option('--shutdown-timeout <ms>', 'Graceful shutdown timeout in milliseconds', '30000')
     .option('--log-level <level>', 'Log level (trace, debug, info, warn, error)', 'info')
     .option('--log-pretty', 'Pretty print logs')
+    .option('--worker-only', 'Run in worker-only mode (dispatch jobs only, no monitoring)')
     .action(async (options) => {
       const port = parseInt(options['port'], 10);
       const host = options['host'] as string;
@@ -76,6 +77,11 @@ export function orchestratorCommand(): Command {
           error instanceof Error ? error.message : String(error),
         );
         process.exit(1);
+      }
+
+      // Set operating mode
+      if (options['workerOnly']) {
+        config.mode = 'worker';
       }
 
       // Override with CLI flags (highest priority)
@@ -139,7 +145,7 @@ export function orchestratorCommand(): Command {
         const server = await createServer({ config, apiKeyStore });
         const address = await startServer(server);
         server.log.info(
-          { address, labelMonitor: config.repositories.length > 0 },
+          { address, mode: config.mode, labelMonitor: config.mode !== 'worker' && config.repositories.length > 0 },
           'Orchestrator server ready',
         );
       } catch (error) {
