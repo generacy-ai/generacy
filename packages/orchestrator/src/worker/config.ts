@@ -29,9 +29,11 @@ export const WorkerConfigSchema = z.object({
   gates: z.record(z.string(), z.array(GateDefinitionSchema)).default({
     'speckit-feature': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+      { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
     ],
     'speckit-bugfix': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+      { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
     ],
     'speckit-epic': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },

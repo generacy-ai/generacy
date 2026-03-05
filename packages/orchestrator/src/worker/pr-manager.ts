@@ -36,25 +36,28 @@ export class PrManager {
    * Safe to call after every phase — handles "nothing to commit" and
    * "PR already exists" gracefully.
    *
-   * @returns The PR URL if one exists/was created, undefined otherwise.
+   * @returns An object with the PR URL (if available) and whether changes were committed.
    */
-  async commitPushAndEnsurePr(phase: WorkflowPhase): Promise<string | undefined> {
-    await this.commitAndPush(phase);
-    return this.ensureDraftPr();
+  async commitPushAndEnsurePr(phase: WorkflowPhase): Promise<{ prUrl?: string; hasChanges: boolean }> {
+    const hasChanges = await this.commitAndPush(phase);
+    const prUrl = await this.ensureDraftPr();
+    return { prUrl, hasChanges };
   }
 
   /**
    * Commit all changed files and push to the remote.
    *
    * Handles "nothing to commit" gracefully by checking git status first.
+   *
+   * @returns true if changes were committed and pushed, false otherwise.
    */
-  private async commitAndPush(phase: WorkflowPhase): Promise<void> {
+  private async commitAndPush(phase: WorkflowPhase): Promise<boolean> {
     try {
       // Check if there are any changes to commit
       const status = await this.github.getStatus();
       if (!status.has_changes) {
         this.logger.debug({ phase }, 'No changes to commit after phase');
-        return;
+        return false;
       }
 
       // Stage all changes
@@ -75,12 +78,15 @@ export class PrManager {
         { phase, ref: pushResult.ref, remote: pushResult.remote },
         'Pushed phase changes to remote',
       );
+
+      return true;
     } catch (error) {
       // Log but don't fail the workflow — commit/push is best-effort between phases
       this.logger.warn(
         { phase, error: String(error) },
         'Failed to commit/push after phase (non-fatal)',
       );
+      return false;
     }
   }
 
