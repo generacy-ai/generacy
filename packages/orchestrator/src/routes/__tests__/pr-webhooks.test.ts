@@ -99,6 +99,23 @@ interface ServerOptions {
 async function buildServer(options: ServerOptions = {}): Promise<FastifyInstance> {
   const server = Fastify({ logger: false });
 
+  // Register the custom content type parser that preserves raw body for
+  // signature verification (in production this is done in server.ts via
+  // an encapsulated plugin wrapping the webhook routes).
+  server.removeContentTypeParser('application/json');
+  server.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      try {
+        const json = JSON.parse(body as string);
+        done(null, { parsed: json, raw: body });
+      } catch (err) {
+        done(err as Error, undefined);
+      }
+    },
+  );
+
   const monitorService = options.monitorService ?? createMockMonitorService();
   const webhookSecret = options.webhookSecret;
   const watchedRepos = options.watchedRepos ?? new Set(['test-org/test-repo']);
