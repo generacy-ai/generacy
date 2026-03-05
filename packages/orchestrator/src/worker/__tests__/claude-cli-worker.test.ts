@@ -131,7 +131,13 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
           condition: 'always',
         },
       ],
-      'speckit-bugfix': [],
+      'speckit-bugfix': [
+        {
+          phase: 'clarify',
+          gateLabel: 'waiting-for:clarification',
+          condition: 'always',
+        },
+      ],
     },
     ...overrides,
   };
@@ -246,8 +252,8 @@ describe('ClaudeCliWorker (integration)', () => {
     });
   });
 
-  describe('speckit-bugfix workflow: no gates', () => {
-    it('runs all phases to completion including validate', async () => {
+  describe('speckit-bugfix workflow: gates at clarify', () => {
+    it('runs specify and clarify then hits clarification gate', async () => {
       mockGithub.getIssue.mockResolvedValue({ labels: [] });
       spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
 
@@ -259,25 +265,14 @@ describe('ClaudeCliWorker (integration)', () => {
 
       await worker.handle(createQueueItem({ workflowName: 'speckit-bugfix' }));
 
-      // Should have spawned CLI for specify, clarify, plan, tasks, implement
-      // and sh for validate = 6 total spawns
-      expect(spawnFn).toHaveBeenCalledTimes(6);
+      // Should have spawned CLI for specify and clarify only (gate hit after clarify)
+      expect(spawnFn).toHaveBeenCalledTimes(2);
 
-      // Validate phase spawns 'sh -c' instead of 'claude'
-      const lastSpawnCall = spawnFn.mock.calls[5] as [string, string[], unknown];
-      expect(lastSpawnCall[0]).toBe('sh');
-      expect(lastSpawnCall[1]).toEqual(['-c', 'pnpm test && pnpm build']);
-
-      // Workflow should be complete — agent:in-progress removed
-      expect(mockGithub.removeLabels).toHaveBeenCalledWith(
-        'test-owner', 'test-repo', 42, ['agent:in-progress'],
+      // waiting-for:clarification label should be added
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42,
+        expect.arrayContaining(['waiting-for:clarification']),
       );
-
-      // SSE events should include workflow:completed
-      const completedEvent = sseEvents.find(
-        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
-      );
-      expect(completedEvent).toBeDefined();
     });
   });
 
