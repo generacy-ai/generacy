@@ -17,8 +17,12 @@ interface Logger {
 }
 
 /**
- * Worker dispatcher that polls the queue, enforces concurrency limits,
+ * Worker dispatcher that polls the queue, processes one job at a time,
  * manages heartbeats, reaps stale workers, and handles graceful shutdown.
+ *
+ * Each worker container replica runs exactly one job at a time to ensure
+ * full isolation. Scaling is achieved by adding container replicas, not
+ * by increasing concurrency within a single container.
  *
  * Supports both Redis-based and in-memory heartbeat tracking.
  * When Redis is null, heartbeats are tracked via an in-memory Map with timestamps.
@@ -70,7 +74,6 @@ export class WorkerDispatcher {
     this.logger.info(
       {
         pollIntervalMs: this.config.pollIntervalMs,
-        maxConcurrentWorkers: this.config.maxConcurrentWorkers,
         heartbeatTtlMs: this.config.heartbeatTtlMs,
       },
       'Starting worker dispatcher',
@@ -159,11 +162,12 @@ export class WorkerDispatcher {
   }
 
   private async pollOnce(): Promise<void> {
-    // Don't claim if at concurrency limit
-    if (this.activeWorkers.size >= this.config.maxConcurrentWorkers) {
+    // Each container processes exactly one job at a time for full isolation.
+    // Scale by adding container replicas, not concurrent workers.
+    if (this.activeWorkers.size >= 1) {
       this.logger.debug(
-        { active: this.activeWorkers.size, max: this.config.maxConcurrentWorkers },
-        'At concurrency limit, skipping claim',
+        { active: this.activeWorkers.size },
+        'Already processing a job, skipping claim',
       );
       return;
     }

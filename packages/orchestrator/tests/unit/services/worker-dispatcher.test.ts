@@ -55,7 +55,6 @@ const sampleItem: QueueItem = {
 // Use very short intervals so tests run fast with real timers
 const testConfig: DispatchConfig = {
   pollIntervalMs: 10,
-  maxConcurrentWorkers: 3,
   heartbeatTtlMs: 200,
   heartbeatCheckIntervalMs: 20,
   shutdownTimeoutMs: 100,
@@ -154,7 +153,7 @@ describe('WorkerDispatcher', () => {
   });
 
   describe('concurrency limit', () => {
-    it('should not claim when at maxConcurrentWorkers', async () => {
+    it('should not claim when already processing a job', async () => {
       const blockers: Array<{ resolve: () => void }> = [];
 
       handler.mockImplementation(
@@ -176,17 +175,14 @@ describe('WorkerDispatcher', () => {
       // Wait long enough for several poll cycles
       await tick(100);
 
-      // Active workers should be capped at max
-      expect(dispatcher.getActiveWorkerCount()).toBe(
-        testConfig.maxConcurrentWorkers,
-      );
+      // Only one job should be active at a time (1 per container)
+      expect(dispatcher.getActiveWorkerCount()).toBe(1);
 
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({
-          active: testConfig.maxConcurrentWorkers,
-          max: testConfig.maxConcurrentWorkers,
+          active: 1,
         }),
-        'At concurrency limit, skipping claim',
+        'Already processing a job, skipping claim',
       );
 
       // Resolve all blockers to allow cleanup

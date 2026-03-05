@@ -286,11 +286,12 @@ Level 4 scales horizontally with multiple orchestrator instances behind a load b
 
 ### Worker Pool Configuration
 
-The worker dispatcher controls concurrency and resilience through these settings:
+Each worker container processes exactly one job at a time to ensure full isolation. Scale by adding container replicas, not by increasing concurrency within a single container.
+
+The worker dispatcher controls polling and resilience through these settings:
 
 | Setting | Default | Range | Description |
 |---------|---------|-------|-------------|
-| `maxConcurrentWorkers` | 3 | 1–20 | Maximum workers processing jobs in parallel |
 | `pollIntervalMs` | 5000 | ≥ 1000 | Interval between queue polls (ms) |
 | `heartbeatTtlMs` | 30000 | ≥ 5000 | Worker heartbeat TTL — stale workers are reaped after expiry |
 | `heartbeatCheckIntervalMs` | 15000 | ≥ 5000 | Interval between heartbeat/reaper checks (ms) |
