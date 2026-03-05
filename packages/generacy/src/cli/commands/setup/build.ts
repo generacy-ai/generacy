@@ -5,9 +5,11 @@
  */
 import { Command } from 'commander';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -237,6 +239,72 @@ function buildGeneracy(config: BuildConfig): void {
 }
 
 /**
+ * Phase 4: Install speckit commands and configure Agency MCP for Claude Code.
+ * Copies speckit slash command definitions to ~/.claude/commands/ and adds the
+ * Agency MCP server to the user-level Claude config so that spec_kit tools and
+ * /specify, /clarify, /plan, /tasks, /implement commands are available in all
+ * Claude Code sessions (including worker containers).
+ */
+function installClaudeCodeIntegration(config: BuildConfig): void {
+  const logger = getLogger();
+  const home = homedir();
+
+  logger.info('Phase 4: Installing Claude Code integration (speckit commands + Agency MCP)');
+
+  // Copy speckit command definitions to ~/.claude/commands/
+  const pluginCommandsDir = join(
+    config.agencyDir,
+    'packages',
+    'claude-plugin-agency-spec-kit',
+    'commands',
+  );
+  const userCommandsDir = join(home, '.claude', 'commands');
+
+  if (existsSync(pluginCommandsDir)) {
+    mkdirSync(userCommandsDir, { recursive: true });
+    const files = readdirSync(pluginCommandsDir).filter((f) => f.endsWith('.md'));
+    for (const file of files) {
+      copyFileSync(join(pluginCommandsDir, file), join(userCommandsDir, file));
+    }
+    logger.info({ count: files.length, dest: userCommandsDir }, 'Copied speckit command definitions');
+  } else {
+    logger.warn({ dir: pluginCommandsDir }, 'Speckit commands directory not found, skipping');
+  }
+
+  // Add Agency MCP server to user-level Claude config (~/.claude.json)
+  const claudeJsonPath = join(home, '.claude.json');
+  const agencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
+
+  if (!existsSync(agencyCli)) {
+    logger.warn('Agency CLI not found, skipping MCP configuration');
+    return;
+  }
+
+  try {
+    let claudeJson: Record<string, unknown> = {};
+    if (existsSync(claudeJsonPath)) {
+      claudeJson = JSON.parse(readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>;
+    }
+
+    const mcpServers = (claudeJson['mcpServers'] ?? {}) as Record<string, unknown>;
+    mcpServers['agency'] = {
+      type: 'stdio',
+      command: 'node',
+      args: [agencyCli],
+      cwd: config.agencyDir,
+    };
+    claudeJson['mcpServers'] = mcpServers;
+
+    writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2));
+    logger.info('Configured Agency MCP server in user-level Claude config');
+  } catch (error) {
+    logger.warn({ error: String(error) }, 'Failed to configure Agency MCP server');
+  }
+
+  logger.info('Phase 4 complete: Claude Code integration installed');
+}
+
+/**
  * Create the `setup build` subcommand.
  */
 export function setupBuildCommand(): Command {
@@ -272,6 +340,13 @@ export function setupBuildCommand(): Command {
         buildGeneracy(config);
       } else {
         logger.info('Skipping Phase 3: Generacy build (--skip-generacy)');
+      }
+
+      // Phase 4: Install Claude Code integration (speckit commands + Agency MCP)
+      if (!config.skipAgency) {
+        installClaudeCodeIntegration(config);
+      } else {
+        logger.info('Skipping Phase 4: Claude Code integration (--skip-agency)');
       }
 
       logger.info('Build process complete');
