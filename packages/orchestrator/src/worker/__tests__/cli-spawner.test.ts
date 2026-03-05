@@ -72,7 +72,6 @@ function defaultOptions(overrides: Partial<CliSpawnOptions> = {}): CliSpawnOptio
     prompt: 'do something',
     cwd: '/tmp/repo',
     env: { PATH: '/usr/bin' },
-    maxTurns: 5,
     timeoutMs: 60_000,
     signal: new AbortController().signal,
     ...overrides,
@@ -138,7 +137,7 @@ describe('CliSpawner', () => {
       expect(spawnArgs[resumeIndex + 1]).toBe('ses-abc-123');
     });
 
-    it('places --resume before --prompt in args', async () => {
+    it('places --resume before the prompt positional arg', async () => {
       const { handle } = createMockProcess(0, 10);
       spawnFn.mockReturnValue(handle);
       const capture = createMockCapture();
@@ -151,8 +150,8 @@ describe('CliSpawner', () => {
 
       const spawnArgs = spawnFn.mock.calls[0]![1] as string[];
       const resumeIndex = spawnArgs.indexOf('--resume');
-      const promptIndex = spawnArgs.indexOf('--prompt');
-      expect(resumeIndex).toBeLessThan(promptIndex);
+      // Prompt is always the last positional argument
+      expect(resumeIndex).toBeLessThan(spawnArgs.length - 1);
     });
 
     it('includes sessionId from capture in PhaseResult', async () => {

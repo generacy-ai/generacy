@@ -127,7 +127,6 @@ export class PhaseLoop {
               prompt: context.issueUrl,
               cwd: context.checkoutPath,
               env: {},
-              maxTurns: config.maxTurns,
               timeoutMs: config.phaseTimeoutMs,
               signal: context.signal,
               resumeSessionId: currentSessionId,

@@ -25,8 +25,6 @@ export const WorkerConfigSchema = z.object({
   shutdownGracePeriodMs: z.number().int().min(1000).default(5000),
   /** Command to run during the validate phase */
   validateCommand: z.string().default('pnpm test && pnpm build'),
-  /** Maximum Claude CLI turns per phase */
-  maxTurns: z.number().int().min(10).default(100),
   /** Gate definitions keyed by issue label */
   gates: z.record(z.string(), z.array(GateDefinitionSchema)).default({
     'speckit-feature': [

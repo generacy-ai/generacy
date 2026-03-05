@@ -134,8 +134,6 @@ export interface CliSpawnOptions {
   cwd: string;
   /** Environment variables to pass */
   env: Record<string, string>;
-  /** Maximum turns */
-  maxTurns: number;
   /** Timeout in milliseconds */
   timeoutMs: number;
   /** Abort signal for graceful shutdown */

@@ -17,7 +17,6 @@ function makeConfig(gates: WorkerConfig['gates']): WorkerConfig {
     workspaceDir: '/tmp/orchestrator-workspaces',
     shutdownGracePeriodMs: 5000,
     validateCommand: 'pnpm test && pnpm build',
-    maxTurns: 100,
     gates,
   };
 }
