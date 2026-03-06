@@ -36,7 +36,8 @@ export class PrManager {
    * Safe to call after every phase — handles "nothing to commit" and
    * "PR already exists" gracefully.
    *
-   * @returns An object with the PR URL (if available) and whether changes were committed.
+   * @returns An object with the PR URL (if available) and whether changes were produced
+   * (either uncommitted changes we commit, or commits the phase made directly).
    */
   async commitPushAndEnsurePr(phase: WorkflowPhase): Promise<{ prUrl?: string; hasChanges: boolean }> {
     const hasChanges = await this.commitAndPush(phase);
@@ -45,39 +46,57 @@ export class PrManager {
   }
 
   /**
-   * Commit all changed files and push to the remote.
+   * Commit any uncommitted changes and push to the remote.
    *
-   * Handles "nothing to commit" gracefully by checking git status first.
+   * Handles both cases: uncommitted changes (we commit them) and changes the
+   * phase already committed directly (detected via unpushed commits).
    *
-   * @returns true if changes were committed and pushed, false otherwise.
+   * @returns true if changes were produced (committed or already committed), false otherwise.
    */
   private async commitAndPush(phase: WorkflowPhase): Promise<boolean> {
     try {
-      // Check if there are any changes to commit
+      let committed = false;
+
+      // Check if there are any uncommitted changes to commit
       const status = await this.github.getStatus();
-      if (!status.has_changes) {
-        this.logger.debug({ phase }, 'No changes to commit after phase');
+      if (status.has_changes) {
+        // Stage all changes
+        await this.github.stageAll();
+
+        // Commit with a phase-specific message
+        const message = `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
+        const commitResult = await this.github.commit(message);
+        this.logger.info(
+          { phase, sha: commitResult.sha, files: commitResult.files_committed.length },
+          'Committed phase changes',
+        );
+        committed = true;
+      }
+
+      // Check for unpushed commits (the phase may have committed directly)
+      const branch = await this.github.getCurrentBranch();
+      const unpushed = await this.github.getCommitsBetween(`origin/${branch}`, branch).catch(() => []);
+      const hasUnpushed = unpushed.length > 0;
+
+      if (!committed && !hasUnpushed) {
+        this.logger.debug({ phase }, 'No changes to commit or push after phase');
         return false;
       }
 
-      // Stage all changes
-      await this.github.stageAll();
-
-      // Commit with a phase-specific message
-      const message = `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
-      const commitResult = await this.github.commit(message);
-      this.logger.info(
-        { phase, sha: commitResult.sha, files: commitResult.files_committed.length },
-        'Committed phase changes',
-      );
-
-      // Push to remote (set upstream on first push)
-      const branch = await this.github.getCurrentBranch();
-      const pushResult = await this.github.push('origin', branch, true);
-      this.logger.info(
-        { phase, ref: pushResult.ref, remote: pushResult.remote },
-        'Pushed phase changes to remote',
-      );
+      if (hasUnpushed) {
+        if (!committed) {
+          this.logger.info(
+            { phase, unpushedCount: unpushed.length },
+            'Phase committed its own changes — pushing to remote',
+          );
+        }
+        // Push to remote (set upstream on first push)
+        const pushResult = await this.github.push('origin', branch, true);
+        this.logger.info(
+          { phase, ref: pushResult.ref, remote: pushResult.remote },
+          'Pushed phase changes to remote',
+        );
+      }
 
       return true;
     } catch (error) {
