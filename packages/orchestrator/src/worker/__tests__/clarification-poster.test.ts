@@ -233,6 +233,20 @@ describe('postClarifications', () => {
     expect(context.github.addIssueComment).not.toHaveBeenCalled();
   });
 
+  it('skips when Claude CLI clarify phase already posted (cross-marker dedup)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 2, body: '<!-- generacy-clarification:batch-1 -->\n## Clarification Questions' },
+    ]);
+
+    const result = await postClarifications(context, logger);
+
+    expect(result.posted).toBe(false);
+    expect(result.reason).toBe('already-posted');
+    expect(context.github.addIssueComment).not.toHaveBeenCalled();
+  });
+
   it('returns no-op when no pending questions', async () => {
     const allAnswered = `### Q1: Done
 **Context**: Answered.
