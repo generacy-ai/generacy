@@ -114,11 +114,12 @@ function mapArchivePath(
   const rest = archivePath.slice(firstSlash + 1);
   if (!rest) return null;
 
-  // Files under the variant directory → .devcontainer/
+  // Files under the variant directory are returned as-is (they already
+  // include their target directory, e.g. `.devcontainer/Dockerfile`).
   const variantPrefix = `${variant}/`;
   if (rest.startsWith(variantPrefix)) {
     const innerPath = rest.slice(variantPrefix.length);
-    return innerPath ? `.devcontainer/${innerPath}` : null;
+    return innerPath || null;
   }
 
   return null;

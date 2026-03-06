@@ -72,20 +72,21 @@ function buildStandardTarball(): Buffer {
   return buildTarGz(
     makeDirEntry(`${HASH_PREFIX}/`),
     makeDirEntry('standard/', HASH_PREFIX),
+    makeDirEntry('.devcontainer/', `${HASH_PREFIX}/standard`),
     makeTarEntry({
       name: 'Dockerfile',
       content: 'FROM node:20',
-      prefix: `${HASH_PREFIX}/standard`,
+      prefix: `${HASH_PREFIX}/standard/.devcontainer`,
     }),
     makeTarEntry({
       name: 'docker-compose.yml',
       content: 'version: "3.8"',
-      prefix: `${HASH_PREFIX}/standard`,
+      prefix: `${HASH_PREFIX}/standard/.devcontainer`,
     }),
     makeTarEntry({
       name: 'devcontainer.json',
       content: '{ "name": "dev" }',
-      prefix: `${HASH_PREFIX}/standard`,
+      prefix: `${HASH_PREFIX}/standard/.devcontainer`,
     }),
   );
 }
@@ -192,12 +193,12 @@ describe('fetchClusterTemplates', () => {
   // -------------------------------------------------------------------------
 
   describe('path mapping', () => {
-    it('maps {hash}/standard/Dockerfile to .devcontainer/Dockerfile', async () => {
+    it('maps {hash}/standard/.devcontainer/Dockerfile to .devcontainer/Dockerfile', async () => {
       const tarball = buildTarGz(
         makeTarEntry({
           name: 'Dockerfile',
           content: 'FROM ubuntu',
-          prefix: `${HASH_PREFIX}/standard`,
+          prefix: `${HASH_PREFIX}/standard/.devcontainer`,
         }),
       );
 
@@ -220,7 +221,7 @@ describe('fetchClusterTemplates', () => {
         makeTarEntry({
           name: 'entrypoint.sh',
           content: '#!/bin/bash',
-          prefix: `${HASH_PREFIX}/standard/scripts`,
+          prefix: `${HASH_PREFIX}/standard/.devcontainer/scripts`,
         }),
       );
 
@@ -243,12 +244,12 @@ describe('fetchClusterTemplates', () => {
         makeTarEntry({
           name: 'Dockerfile',
           content: 'FROM node:20',
-          prefix: `${HASH_PREFIX}/standard`,
+          prefix: `${HASH_PREFIX}/standard/.devcontainer`,
         }),
         makeTarEntry({
           name: 'Dockerfile',
           content: 'FROM node:20-slim',
-          prefix: `${HASH_PREFIX}/microservices`,
+          prefix: `${HASH_PREFIX}/microservices/.devcontainer`,
         }),
       );
 
