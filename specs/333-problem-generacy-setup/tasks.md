@@ -26,20 +26,20 @@
 
 ## Phase 3: Tests — Update and Add
 
-- [ ] T011 Remove obsolete tests: bootstrap mode, two-phase clone, bootstrap warning (workspace.test.ts ~lines 196, 209, 235, 314)
-- [ ] T012 [P] Add test: `--config` flag loads config from specified path
-- [ ] T013 [P] Add test: `CONFIG_PATH` env var loads config from specified path
-- [ ] T014 [P] Add test: `--config` overrides `CONFIG_PATH` env var
-- [ ] T015 [P] Add test: discovers config from workdir subdirectory when no explicit config
-- [ ] T016 [P] Add test: fails with error when no config found anywhere
-- [ ] T017 [P] Add test: fails with error when multiple configs found in workdir subdirectories
-- [ ] T018 [P] Add test: `--config` resolves ambiguity when multiple configs exist
-- [ ] T019 Update existing test `config file is used when no CLI flag and no REPOS env var` to mock `scanForWorkspaceConfig`
+- [X] T011 Remove obsolete tests: bootstrap mode, two-phase clone, bootstrap warning (workspace.test.ts ~lines 196, 209, 235, 314)
+- [X] T012 [P] Add test: `--config` flag loads config from specified path
+- [X] T013 [P] Add test: `CONFIG_PATH` env var loads config from specified path
+- [X] T014 [P] Add test: `--config` overrides `CONFIG_PATH` env var
+- [X] T015 [P] Add test: discovers config from workdir subdirectory when no explicit config
+- [X] T016 [P] Add test: fails with error when no config found anywhere
+- [X] T017 [P] Add test: fails with error when multiple configs found in workdir subdirectories
+- [X] T018 [P] Add test: `--config` resolves ambiguity when multiple configs exist
+- [X] T019 Update existing test `config file is used when no CLI flag and no REPOS env var` to mock `scanForWorkspaceConfig`
 
 ## Phase 4: Verification
 
-- [ ] T020 Run `pnpm build` for both `@generacy-ai/config` and `@generacy-ai/generacy` packages — verify no type errors
-- [ ] T021 Run full test suite with `pnpm test` — verify all tests pass
+- [X] T020 Run `pnpm build` for both `@generacy-ai/config` and `@generacy-ai/generacy` packages — verify no type errors
+- [X] T021 Run full test suite with `pnpm test` — verify all tests pass
 
 ## Dependencies & Execution Order
 

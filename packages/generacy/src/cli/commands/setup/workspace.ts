@@ -68,7 +68,7 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
         { path: explicitConfigPath },
         'Config file not found or invalid at specified path',
       );
-      process.exit(1);
+      return process.exit(1) as never;
     }
 
     // Fallback: scan workdir subdirectories for config
@@ -80,7 +80,7 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
           { configs: foundPaths },
           'Multiple .generacy/config.yaml files found. Use --config or CONFIG_PATH to specify which one.',
         );
-        process.exit(1);
+        return process.exit(1) as never;
       }
 
       if (foundPaths.length === 1) {
@@ -98,7 +98,7 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
         'No .generacy/config.yaml found. Provide one via --config, CONFIG_PATH env, ' +
         'or ensure a project with .generacy/config.yaml is mounted under ' + workdir,
       );
-      process.exit(1);
+      return process.exit(1) as never;
     }
   }
 

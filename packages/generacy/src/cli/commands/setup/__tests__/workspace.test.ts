@@ -41,12 +41,13 @@ vi.mock('@generacy-ai/config', async () => {
   return {
     ...actual,
     tryLoadWorkspaceConfig: vi.fn(() => null),
+    scanForWorkspaceConfig: vi.fn(() => []),
   };
 });
 
 import { existsSync } from 'node:fs';
 import { execSafe } from '../../../utils/exec.js';
-import { tryLoadWorkspaceConfig } from '@generacy-ai/config';
+import { tryLoadWorkspaceConfig, scanForWorkspaceConfig } from '@generacy-ai/config';
 import { setupWorkspaceCommand } from '../workspace.js';
 
 /**
@@ -93,7 +94,7 @@ function getCloneBranch(): string | undefined {
 
 const ENV_KEYS = [
   'REPOS', 'REPO_BRANCH', 'DEFAULT_BRANCH', 'GITHUB_ORG',
-  'CLEAN_REPOS', 'GH_TOKEN', 'GH_USERNAME',
+  'CLEAN_REPOS', 'GH_TOKEN', 'GH_USERNAME', 'CONFIG_PATH',
 ] as const;
 
 describe('workspace command override priority', () => {
@@ -110,6 +111,7 @@ describe('workspace command override priority', () => {
     (existsSync as Mock).mockReturnValue(false);
     (execSafe as Mock).mockReturnValue({ ok: true, stdout: '', stderr: '' });
     (tryLoadWorkspaceConfig as Mock).mockReturnValue(null);
+    (scanForWorkspaceConfig as Mock).mockReturnValue([]);
 
     mockExit = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
   });
@@ -177,6 +179,8 @@ describe('workspace command override priority', () => {
   });
 
   it('config file is used when no CLI flag and no REPOS env var', async () => {
+    // scanForWorkspaceConfig discovers a config in a workdir subdirectory
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/my-project/.generacy/config.yaml']);
     (tryLoadWorkspaceConfig as Mock).mockReturnValue({
       org: 'generacy-ai',
       branch: 'develop',
@@ -193,70 +197,109 @@ describe('workspace command override priority', () => {
     expect(cloned).toContain('config-repo-y');
   });
 
-  it('bootstrap mode clones only tetrad-development when no config found and no overrides', async () => {
-    // tryLoadWorkspaceConfig returns null (no config file)
-    // No CLI flag, no env var
+  // ── --config flag and CONFIG_PATH env ────────────────────────────
+
+  it('--config flag loads config from specified path', async () => {
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'develop',
+      repos: [{ name: 'explicit-repo', monitor: true }],
+    });
+
+    await runCommand(['--config', '/custom/path/config.yaml', '--workdir', '/tmp/ws']);
+
+    expect(tryLoadWorkspaceConfig).toHaveBeenCalledWith('/custom/path/config.yaml');
+    const cloned = getClonedRepos();
+    expect(cloned).toContain('explicit-repo');
+  });
+
+  it('CONFIG_PATH env var loads config from specified path', async () => {
+    process.env['CONFIG_PATH'] = '/env/path/config.yaml';
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'develop',
+      repos: [{ name: 'env-config-repo', monitor: true }],
+    });
+
+    await runCommand(['--workdir', '/tmp/ws']);
+
+    expect(tryLoadWorkspaceConfig).toHaveBeenCalledWith('/env/path/config.yaml');
+    const cloned = getClonedRepos();
+    expect(cloned).toContain('env-config-repo');
+  });
+
+  it('--config overrides CONFIG_PATH env var', async () => {
+    process.env['CONFIG_PATH'] = '/env/path/config.yaml';
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'develop',
+      repos: [{ name: 'cli-config-repo', monitor: true }],
+    });
+
+    await runCommand(['--config', '/cli/path/config.yaml', '--workdir', '/tmp/ws']);
+
+    expect(tryLoadWorkspaceConfig).toHaveBeenCalledWith('/cli/path/config.yaml');
+    const cloned = getClonedRepos();
+    expect(cloned).toContain('cli-config-repo');
+  });
+
+  it('discovers config from workdir subdirectory when no explicit config', async () => {
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project-a/.generacy/config.yaml']);
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'develop',
+      repos: [{ name: 'discovered-repo', monitor: true }],
+    });
+
+    await runCommand(['--workdir', '/tmp/ws']);
+
+    expect(scanForWorkspaceConfig).toHaveBeenCalledWith('/tmp/ws');
+    const cloned = getClonedRepos();
+    expect(cloned).toContain('discovered-repo');
+  });
+
+  it('fails with error when no config found anywhere', async () => {
+    (scanForWorkspaceConfig as Mock).mockReturnValue([]);
     (tryLoadWorkspaceConfig as Mock).mockReturnValue(null);
 
-    await runCommand(['--workdir', '/tmp/ws']);
+    // process.exit is mocked, so the action handler will throw when accessing
+    // undefined config properties — we just verify exit was called
+    try { await runCommand(['--workdir', '/tmp/ws']); } catch { /* expected */ }
 
-    const cloned = getClonedRepos();
-    expect(cloned).toEqual(['tetrad-development']);
+    expect(mockExit).toHaveBeenCalledWith(1);
   });
 
-  // ── Two-phase clone ───────────────────────────────────────────────
+  it('fails with error when multiple configs found in workdir subdirectories', async () => {
+    (scanForWorkspaceConfig as Mock).mockReturnValue([
+      '/tmp/ws/project-a/.generacy/config.yaml',
+      '/tmp/ws/project-b/.generacy/config.yaml',
+    ]);
 
-  it('two-phase clone: bootstraps tetrad-development, then clones additional repos from config', async () => {
-    // First call (resolveWorkspaceConfig): no config → bootstrap
-    // Second call (phase 2 in action handler): config found
-    (tryLoadWorkspaceConfig as Mock)
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce({
-        org: 'generacy-ai',
-        branch: 'develop',
-        repos: [
-          { name: 'tetrad-development', monitor: true },
-          { name: 'generacy', monitor: true },
-          { name: 'contracts', monitor: false },
-        ],
-      });
+    try { await runCommand(['--workdir', '/tmp/ws']); } catch { /* expected */ }
 
-    await runCommand(['--workdir', '/tmp/ws']);
-
-    const cloned = getClonedRepos();
-    // tetrad-development is cloned in phase 1 (bootstrap)
-    expect(cloned).toContain('tetrad-development');
-    // additional repos from config are cloned in phase 2
-    expect(cloned).toContain('generacy');
-    expect(cloned).toContain('contracts');
-    expect(cloned).toHaveLength(3);
+    expect(mockExit).toHaveBeenCalledWith(1);
   });
 
-  it('two-phase clone does not re-clone tetrad-development in phase 2', async () => {
-    (tryLoadWorkspaceConfig as Mock)
-      .mockReturnValueOnce(null)
-      .mockReturnValueOnce({
-        org: 'generacy-ai',
-        branch: 'develop',
-        repos: [
-          { name: 'tetrad-development', monitor: true },
-          { name: 'generacy', monitor: true },
-        ],
-      });
+  it('--config resolves ambiguity when multiple configs exist', async () => {
+    // Even though scan would find multiple, --config bypasses the scan
+    (tryLoadWorkspaceConfig as Mock).mockReturnValue({
+      org: 'generacy-ai',
+      branch: 'develop',
+      repos: [{ name: 'chosen-repo', monitor: true }],
+    });
 
-    await runCommand(['--workdir', '/tmp/ws']);
+    await runCommand(['--config', '/tmp/ws/project-a/.generacy/config.yaml', '--workdir', '/tmp/ws']);
 
-    // Count clone attempts for tetrad-development
-    const tetradCloneCalls = (execSafe as Mock).mock.calls.filter(
-      (call: string[]) => call[0].startsWith('git clone') && call[0].includes('tetrad-development'),
-    );
-    // Should be cloned exactly once (phase 1 only, filtered out in phase 2)
-    expect(tetradCloneCalls.length).toBe(1);
+    // scanForWorkspaceConfig should NOT be called when --config is provided
+    expect(scanForWorkspaceConfig).not.toHaveBeenCalled();
+    const cloned = getClonedRepos();
+    expect(cloned).toContain('chosen-repo');
   });
 
   // ── Config-derived defaults ───────────────────────────────────────
 
   it('config file provides org and branch as defaults', async () => {
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
     (tryLoadWorkspaceConfig as Mock).mockReturnValue({
       org: 'custom-org',
       branch: 'main',
@@ -270,6 +313,7 @@ describe('workspace command override priority', () => {
   });
 
   it('CLI --branch overrides config branch', async () => {
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
     (tryLoadWorkspaceConfig as Mock).mockReturnValue({
       org: 'generacy-ai',
       branch: 'main',
@@ -284,6 +328,7 @@ describe('workspace command override priority', () => {
   it('GITHUB_ORG env var overrides config org', async () => {
     process.env['GITHUB_ORG'] = 'env-org';
 
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
     (tryLoadWorkspaceConfig as Mock).mockReturnValue({
       org: 'config-org',
       branch: 'develop',
@@ -298,6 +343,7 @@ describe('workspace command override priority', () => {
   it('REPO_BRANCH env var overrides config branch', async () => {
     process.env['REPO_BRANCH'] = 'env-branch';
 
+    (scanForWorkspaceConfig as Mock).mockReturnValue(['/tmp/ws/project/.generacy/config.yaml']);
     (tryLoadWorkspaceConfig as Mock).mockReturnValue({
       org: 'generacy-ai',
       branch: 'config-branch',
@@ -309,17 +355,4 @@ describe('workspace command override priority', () => {
     expect(getCloneBranch()).toBe('env-branch');
   });
 
-  // ── Bootstrap warning ─────────────────────────────────────────────
-
-  it('bootstrap warns when no config found after cloning tetrad-development', async () => {
-    // Both calls return null (no config exists even after clone)
-    (tryLoadWorkspaceConfig as Mock).mockReturnValue(null);
-
-    await runCommand(['--workdir', '/tmp/ws']);
-
-    const cloned = getClonedRepos();
-    expect(cloned).toEqual(['tetrad-development']);
-    // Should not have cloned any additional repos
-    expect(cloned).toHaveLength(1);
-  });
 });
