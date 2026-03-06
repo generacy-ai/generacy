@@ -3,6 +3,7 @@ import {
   parseClarifications,
   formatComment,
   postClarifications,
+  hasPendingClarifications,
   clarificationMarker,
 } from '../clarification-poster.js';
 import type { WorkerContext, Logger } from '../types.js';
@@ -283,6 +284,65 @@ describe('postClarifications', () => {
     expect(result.posted).toBe(false);
     expect(result.reason).toBe('post-failed');
     expect(result.pendingCount).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T004: hasPendingClarifications tests
+// ---------------------------------------------------------------------------
+describe('hasPendingClarifications', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns true when pending questions exist', () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
+  });
+
+  it('returns false when all questions are answered', () => {
+    const allAnswered = `### Q1: Done
+**Context**: Answered.
+**Question**: Already answered?
+
+**Answer**: Yes, done.
+`;
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(allAnswered);
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+  });
+
+  it('returns false when specs dir does not exist', () => {
+    mockReaddirSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+  });
+
+  it('returns false when no matching spec directory found', () => {
+    mockReaddirSync.mockReturnValue(['99-other-issue']);
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+  });
+
+  it('returns false when clarifications.md does not exist', () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+  });
+
+  it('returns false for empty clarifications file', () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue('');
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
   });
 });
 

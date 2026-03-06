@@ -183,6 +183,47 @@ export function formatComment(questions: ClarificationQuestion[], issueNumber: n
 }
 
 // ---------------------------------------------------------------------------
+// hasPendingClarifications
+// ---------------------------------------------------------------------------
+
+/**
+ * Check whether the clarify phase produced pending questions.
+ *
+ * Returns `true` if `clarifications.md` exists in the spec directory and
+ * contains at least one unanswered question. Used by the phase loop to
+ * evaluate the `on-questions` gate condition.
+ */
+export function hasPendingClarifications(
+  checkoutPath: string,
+  issueNumber: number,
+): boolean {
+  const specsDir = join(checkoutPath, 'specs');
+
+  let clarificationsPath: string | undefined;
+  try {
+    const dirs = readdirSync(specsDir);
+    const match = dirs.find((d) => d.startsWith(`${issueNumber}-`));
+    if (match) {
+      clarificationsPath = join(specsDir, match, 'clarifications.md');
+    }
+  } catch {
+    return false;
+  }
+
+  if (!clarificationsPath) return false;
+
+  let content: string;
+  try {
+    content = readFileSync(clarificationsPath, 'utf-8');
+  } catch {
+    return false;
+  }
+
+  const questions = parseClarifications(content);
+  return questions.some((q) => !q.answered);
+}
+
+// ---------------------------------------------------------------------------
 // postClarifications
 // ---------------------------------------------------------------------------
 

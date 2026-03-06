@@ -7,7 +7,7 @@ import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
-import { postClarifications } from './clarification-poster.js';
+import { postClarifications, hasPendingClarifications } from './clarification-poster.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -220,7 +220,24 @@ export class PhaseLoop {
 
       // 6. Check for review gates
       const gate = gateChecker.checkGate(phase, context.item.workflowName, config);
-      if (gate && gate.condition === 'always') {
+
+      // Evaluate whether the gate should activate based on its condition
+      let gateActive = false;
+      if (gate) {
+        if (gate.condition === 'always') {
+          gateActive = true;
+        } else if (gate.condition === 'on-questions') {
+          gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber);
+          if (!gateActive) {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel },
+              'Gate condition "on-questions" not met (no pending clarifications) — skipping',
+            );
+          }
+        }
+      }
+
+      if (gateActive && gate) {
         // Check if this gate is already satisfied (e.g., completed:clarification
         // was added before the workflow reached this point). The completed label
         // corresponds to the gate label suffix: waiting-for:X → completed:X.
