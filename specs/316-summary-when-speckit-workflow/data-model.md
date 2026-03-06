@@ -45,13 +45,15 @@ interface PostClarificationOptions {
 ## Relationships
 
 ```
-phase-loop.ts
+phase-loop.ts (gate-hit block, before onGateHit)
   └── calls postClarificationQuestions(opts)
         ├── globs for specs/{issueNumber}-*/clarifications.md
         ├── reads file content
         ├── calls parsePendingQuestions(content) → PendingQuestion[]
-        ├── calls formatQuestionsComment(questions) → string
-        └── calls github.addIssueComment(owner, repo, issueNumber, comment)
+        ├── if questions.length > 0:
+        │     ├── calls formatQuestionsComment(questions) → string
+        │     └── calls github.addIssueComment(owner, repo, issueNumber, comment)
+        └── catches errors → logger.warn (non-blocking)
 ```
 
 ## Validation Rules
@@ -80,7 +82,7 @@ phase-loop.ts
 ## Output Format (GitHub comment)
 
 ```markdown
-## 🔍 Clarification Questions
+## Clarification Questions
 
 The following questions need your input before we can proceed:
 

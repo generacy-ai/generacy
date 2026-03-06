@@ -2,63 +2,71 @@
 
 ## Technology Decisions
 
-### 1. Standalone comment vs. stage comment update
+### 1. Orchestrator-level posting replaces clarify-phase posting
 
-**Decision**: Standalone comment (new issue comment)
+**Decision**: Remove clarify-phase `gh issue comment` posting (clarify.ts lines 268-305), replace with orchestrator-level posting
 
 **Rationale**:
-- Stage comments are updated in-place via `StageCommentManager` — watchers don't get notifications for edits
+- The clarify operation posts via `gh issue comment` inside the Claude Code session — agent-driven and unreliable
+- The orchestrator has deterministic control over the flow and can guarantee ordering relative to labels
+- Single source of truth: orchestrator owns the posting responsibility
+- Clarify operation still generates `clarifications.md` and returns structured output
+
+### 2. Standalone comment (not stage comment)
+
+**Decision**: Post as a new standalone issue comment
+
+**Rationale**:
+- Stage comments are updated in-place via `StageCommentManager` — no notification on edit
 - A new comment triggers email/notification for issue subscribers
-- Questions deserve their own notification to attract attention
-- Stage comment remains focused on progress tracking
+- Questions are actionable and deserve their own notification
+- Clean separation: stage comment tracks progress, question comment solicits input
 
-### 2. Orchestrator-level posting vs. fixing clarify-phase posting
-
-**Decision**: Add orchestrator-level posting as a deterministic backup
-
-**Rationale**:
-- The clarify operation (`clarify.ts` lines 268-305) already posts questions via `gh issue comment` inside the Claude Code session
-- However, this is agent-driven — the agent may skip or fail the step
-- Orchestrator-level posting is deterministic: it runs after the phase completes, outside the agent session
-- Keeping both provides defense-in-depth; the duplicate is acceptable
-
-### 3. File location strategy
+### 3. File location via glob
 
 **Decision**: Glob for `specs/{issueNumber}-*/clarifications.md`
 
 **Rationale**:
-- Spec directories follow the pattern `specs/{issueNumber}-{slug}/`
-- The slug portion varies and is not predictable from the orchestrator context
+- Clarification answer preferred using `clarifications_file` from `ClarifyOutput`, but `PhaseResult` doesn't carry structured action output — only raw `OutputChunk[]`
+- Adding structured output to `PhaseResult` is out of scope for this bug fix
 - Globbing by issue number is reliable and avoids coupling to naming conventions
-- Node.js `glob` or `fs.readdirSync` + filter is straightforward
+- Spec directories follow the predictable pattern `specs/{issueNumber}-{slug}/`
 
-### 4. Error handling strategy
+### 4. Comment posted before gate labels (hard requirement)
 
-**Decision**: Non-blocking — errors are logged but don't prevent gate-hit flow
+**Decision**: Post comment before calling `labelManager.onGateHit()`
 
 **Rationale**:
-- FR-005 explicitly requires this: "Should not block the gate-hit flow"
-- The clarification posting is a convenience feature, not critical path
+- `onGateHit()` adds both `waiting-for:clarification` and `agent:paused` labels
+- The `agent:paused` label triggers a GitHub notification
+- Posting the comment first ensures it appears in the notification email
+- Simple reordering — no need to split `onGateHit()`
+
+### 5. Error handling: non-blocking
+
+**Decision**: Errors logged but don't prevent gate-hit flow
+
+**Rationale**:
+- Clarification posting is a convenience feature, not critical path
 - Gate labels, stage comments, and PR management must proceed regardless
+- `try/catch` with warning log is sufficient
 
 ## Implementation Patterns
 
 ### Markdown parsing
 
-The clarify operation in `workflow-engine` already has a `parseQuestions()` function (lines 107-147). However:
-- It's in `workflow-engine`, not `orchestrator`
-- It parses a slightly different format (initial generation vs. committed file)
-- Duplicating a small regex parser is simpler than adding a cross-package dependency
+The `parseQuestions()` function in `workflow-engine/src/actions/builtin/speckit/operations/clarify.ts` (lines 107-147) provides a reference implementation. The orchestrator parser will be a simplified duplicate that:
 
-The orchestrator parser needs to:
-1. Split on `### Q\d+:` headers
-2. Extract `**Context**:`, `**Question**:`, `**Options**:` fields
-3. Filter to only questions with `**Answer**: *Pending*`
+1. Splits on `### Q\d+:` headers
+2. Extracts `**Context**:`, `**Question**:`, `**Options**:` fields
+3. Filters to only questions with `**Answer**: *Pending*`
+
+Cross-package dependency is overkill for ~50 lines of parsing logic.
 
 ### GitHub comment format
 
 ```markdown
-## 🔍 Clarification Questions
+## Clarification Questions
 
 The following questions need your input before we can proceed:
 
@@ -73,7 +81,7 @@ The following questions need your input before we can proceed:
 
 ---
 
-*Please answer by replying to this issue. The workflow will resume automatically when answers are detected.*
+*Reply to this issue with your answers. The workflow will resume when answers are detected.*
 ```
 
 ## Alternatives Considered
@@ -82,5 +90,6 @@ The following questions need your input before we can proceed:
 |------------|---------|
 | Fix clarify-phase posting only | Not deterministic — still agent-driven |
 | Include in stage comment | No notification on edit; less visible |
+| Use `ClarifyOutput.clarifications_file` | `PhaseResult` lacks structured action output |
+| Extract parser to shared package | Cross-package dependency for ~50 lines of parsing |
 | Post via webhook/bot | Over-engineered for this use case |
-| Extract to shared package | Cross-package dependency for ~50 lines of parsing |
