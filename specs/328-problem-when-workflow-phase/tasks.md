@@ -10,17 +10,17 @@
 
 ## Phase 1: Label Definitions
 
-- [ ] T001 [P] Add `failed:*` label definitions to `WORKFLOW_LABELS` in `packages/workflow-engine/src/actions/github/label-definitions.ts` — add 6 labels (`failed:specify`, `failed:clarify`, `failed:plan`, `failed:tasks`, `failed:implement`, `failed:validate`) with color `D73A4A` and description `"Phase {phase} failed"`, placed after existing `completed:*` block
+- [X] T001 [P] Add `failed:*` label definitions to `WORKFLOW_LABELS` in `packages/workflow-engine/src/actions/github/label-definitions.ts` — add 6 labels (`failed:specify`, `failed:clarify`, `failed:plan`, `failed:tasks`, `failed:implement`, `failed:validate`) with color `D73A4A` and description `"Phase {phase} failed"`, placed after existing `completed:*` block
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [P] Update `LabelManager.onError()` in `packages/orchestrator/src/worker/label-manager.ts` to add `failed:${phase}` alongside `agent:error` in the `addLabels` call
-- [ ] T003 [P] Add `failed:*` label cleanup in `packages/orchestrator/src/services/label-monitor-service.ts` — add `FAILED_LABEL_PREFIX = 'failed:'` constant and update `processLabelEvent()` to filter and remove `failed:*` labels alongside existing `completed:*` cleanup
+- [X] T002 [P] Update `LabelManager.onError()` in `packages/orchestrator/src/worker/label-manager.ts` to add `failed:${phase}` alongside `agent:error` in the `addLabels` call
+- [X] T003 [P] Add `failed:*` label cleanup in `packages/orchestrator/src/services/label-monitor-service.ts` — add `FAILED_LABEL_PREFIX = 'failed:'` constant and update `processLabelEvent()` to filter and remove `failed:*` labels alongside existing `completed:*` cleanup
 
 ## Phase 3: Tests
 
-- [ ] T004 [P] Update `onError` test in `packages/orchestrator/src/worker/__tests__/label-manager.test.ts` to expect `failed:<phase>` in the `addLabels` call
-- [ ] T005 [P] Add test in `packages/orchestrator/tests/unit/services/label-monitor-service.test.ts` verifying `failed:*` labels are removed on `process` events
+- [X] T004 [P] Update `onError` test in `packages/orchestrator/src/worker/__tests__/label-manager.test.ts` to expect `failed:<phase>` in the `addLabels` call
+- [X] T005 [P] Add test in `packages/orchestrator/tests/unit/services/label-monitor-service.test.ts` verifying `failed:*` labels are removed on `process` events
 
 ## Dependencies & Execution Order
 

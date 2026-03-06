@@ -105,16 +105,18 @@ export class LabelManager {
     await this.retryWithBackoff(async () => {
       const phaseLabel = `phase:${phase}`;
 
+      const failedLabel = `failed:${phase}`;
+
       this.logger.info(
         { phase, issue: this.issueNumber },
-        `Error in phase: removing ${phaseLabel} and agent:in-progress, adding agent:error`,
+        `Error in phase: removing ${phaseLabel} and agent:in-progress, adding ${failedLabel} and agent:error`,
       );
 
       await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [
         phaseLabel,
         'agent:in-progress',
       ]);
-      await this.github.addLabels(this.owner, this.repo, this.issueNumber, ['agent:error']);
+      await this.github.addLabels(this.owner, this.repo, this.issueNumber, [failedLabel, 'agent:error']);
     });
   }
 

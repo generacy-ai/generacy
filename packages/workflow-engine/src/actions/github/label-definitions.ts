@@ -58,6 +58,14 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:children-complete', color: '0E8A16', description: 'All epic children completed' },
   { name: 'completed:epic-approval', color: '0E8A16', description: 'Epic rollup PR approved and merged' },
 
+  // Failed phase labels
+  { name: 'failed:specify', color: 'D73A4A', description: 'Phase specify failed' },
+  { name: 'failed:clarify', color: 'D73A4A', description: 'Phase clarify failed' },
+  { name: 'failed:plan', color: 'D73A4A', description: 'Phase plan failed' },
+  { name: 'failed:tasks', color: 'D73A4A', description: 'Phase tasks failed' },
+  { name: 'failed:implement', color: 'D73A4A', description: 'Phase implement failed' },
+  { name: 'failed:validate', color: 'D73A4A', description: 'Phase validate failed' },
+
   // Issue type labels
   { name: 'type:feature', color: '1D76DB', description: 'Feature request' },
   { name: 'type:bug', color: 'D73A4A', description: 'Bug report' },

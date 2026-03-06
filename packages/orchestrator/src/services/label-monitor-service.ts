@@ -39,6 +39,7 @@ export interface LabelMonitorOptions {
 
 const PROCESS_LABEL_PREFIX = 'process:';
 const COMPLETED_LABEL_PREFIX = 'completed:';
+const FAILED_LABEL_PREFIX = 'failed:';
 const WAITING_FOR_LABEL_PREFIX = 'waiting-for:';
 const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
 const MIN_POLL_INTERVAL_MS = 10000;
@@ -324,7 +325,7 @@ export class LabelMonitorService {
         const issue = fetchedIssue ?? await this.createClient().getIssue(owner, repo, issueNumber);
         const completedLabels = issue.labels
           .map(l => typeof l === 'string' ? l : l.name)
-          .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX));
+          .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX) || name.startsWith(FAILED_LABEL_PREFIX));
 
         const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
         const client = this.createClient();
