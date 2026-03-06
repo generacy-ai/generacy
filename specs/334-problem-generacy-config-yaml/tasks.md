@@ -10,19 +10,19 @@
 
 ## Phase 1: Schema & Conversion Logic
 
-- [ ] T001 [P] Create template config Zod schema (`packages/config/src/template-schema.ts`)
-- [ ] T002 [P] Create template-to-workspace converter (`packages/config/src/convert-template.ts`)
+- [X] T001 [P] Create template config Zod schema (`packages/config/src/template-schema.ts`)
+- [X] T002 [P] Create template-to-workspace converter (`packages/config/src/convert-template.ts`)
 
 ## Phase 2: Loader Integration
 
-- [ ] T003 Add template format fallback to `tryLoadWorkspaceConfig()` in `packages/config/src/loader.ts`
-- [ ] T004 Export new modules from `packages/config/src/index.ts`
+- [X] T003 Add template format fallback to `tryLoadWorkspaceConfig()` in `packages/config/src/loader.ts`
+- [X] T004 Export new modules from `packages/config/src/index.ts`
 
 ## Phase 3: Tests
 
-- [ ] T005 [P] Write template schema validation tests (`packages/config/src/__tests__/template-schema.test.ts`)
-- [ ] T006 [P] Write conversion logic tests (`packages/config/src/__tests__/convert-template.test.ts`)
-- [ ] T007 [P] Add template fallback integration tests to `packages/config/src/__tests__/loader.test.ts`
+- [X] T005 [P] Write template schema validation tests (`packages/config/src/__tests__/template-schema.test.ts`)
+- [X] T006 [P] Write conversion logic tests (`packages/config/src/__tests__/convert-template.test.ts`)
+- [X] T007 [P] Add template fallback integration tests to `packages/config/src/__tests__/loader.test.ts`
 
 ## Dependencies & Execution Order
 

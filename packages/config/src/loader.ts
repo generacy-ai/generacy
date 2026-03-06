@@ -2,6 +2,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, parse as parsePath } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { WorkspaceConfigSchema, type WorkspaceConfig } from './workspace-schema.js';
+import { TemplateConfigSchema } from './template-schema.js';
+import { convertTemplateConfig } from './convert-template.js';
 
 /**
  * Attempt to load and validate workspace config from a YAML file.
@@ -21,11 +23,20 @@ export function tryLoadWorkspaceConfig(configPath: string): WorkspaceConfig | nu
   }
 
   const doc = parsed as Record<string, unknown>;
-  if (!('workspace' in doc) || doc['workspace'] == null) {
-    return null;
+
+  // Existing: try workspace key
+  if ('workspace' in doc && doc['workspace'] != null) {
+    return WorkspaceConfigSchema.parse(doc['workspace']);
   }
 
-  return WorkspaceConfigSchema.parse(doc['workspace']);
+  // Fallback: try template format (repos.primary detection)
+  if ('repos' in doc && doc['repos'] != null &&
+      typeof doc['repos'] === 'object' && 'primary' in (doc['repos'] as object)) {
+    const template = TemplateConfigSchema.parse(doc);
+    return convertTemplateConfig(template);
+  }
+
+  return null;
 }
 
 /**
