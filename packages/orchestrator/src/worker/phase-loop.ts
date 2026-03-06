@@ -7,6 +7,7 @@ import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import { postClarifications } from './clarification-poster.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -239,6 +240,18 @@ export class PhaseLoop {
             'Gate hit, pausing workflow',
           );
           await labelManager.onGateHit(phase, gate.gateLabel);
+
+          // Post clarification questions to the issue when clarify gate is hit
+          if (gate.gateLabel === 'waiting-for:clarification') {
+            try {
+              await postClarifications(context, this.logger);
+            } catch (error) {
+              this.logger.warn(
+                { error: error instanceof Error ? error.message : String(error) },
+                'Failed to post clarification questions — continuing gate flow',
+              );
+            }
+          }
 
           // Update the result with gate info
           result.gateHit = {
