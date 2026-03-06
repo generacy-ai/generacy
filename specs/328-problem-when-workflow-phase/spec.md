@@ -1,10 +1,10 @@
-# Feature Specification: Add phase-specific failure labels
+# Feature Specification: ## Problem
+
+When a workflow phase fails (e
 
 **Branch**: `328-problem-when-workflow-phase` | **Date**: 2026-03-06 | **Status**: Draft
 
 ## Summary
-
-When a workflow phase fails, the label manager only sets `agent:error` with no indication of which phase failed. This fix adds `failed:<phase>` labels so users can see at a glance which phase encountered an error.
 
 ## Problem
 
@@ -32,56 +32,42 @@ async onError(phase: WorkflowPhase): Promise<void> {
 2. Update `LabelManager.onError()` to add `failed:<phase>` alongside `agent:error`
 3. Clear `failed:*` labels on `process` events (same as `completed:*` labels are cleared in `LabelMonitorService.processLabelEvent`)
 
+## Additional Context
+
+- Worker logs from issue #313 show: `"Error in phase: removing phase:validate and agent:in-progress, adding agent:error"`
+- The validate phase failed with exit code 1 after only 473ms (separate issue: missing `pnpm install`)
+
 ## User Stories
 
-### US1: DevOps engineer identifies failed phase from GitHub labels
+### US1: [Primary User Story]
 
-**As a** DevOps engineer monitoring workflow progress,
-**I want** to see which specific phase failed directly from the issue labels,
-**So that** I can quickly diagnose and triage failures without checking worker logs.
-
-**Acceptance Criteria**:
-- [ ] When a phase fails, the issue receives a `failed:<phase>` label (e.g., `failed:validate`)
-- [ ] The `agent:error` label is still applied alongside the failure label
-- [ ] The `failed:<phase>` label is cleared when the issue is reprocessed
-
-### US2: Workflow recovers cleanly after a failed phase
-
-**As a** workflow system,
-**I want** `failed:*` labels to be cleared when an issue re-enters processing,
-**So that** stale failure labels don't persist after a retry succeeds.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `failed:*` labels are removed on `process` events, similar to `completed:*` label clearing
-- [ ] Re-processing an issue that previously failed results in a clean label state
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `failed:<phase>` label definitions for all workflow phases | P1 | In `label-definitions.ts` |
-| FR-002 | `LabelManager.onError()` adds `failed:<phase>` label when a phase fails | P1 | Alongside existing `agent:error` |
-| FR-003 | Clear `failed:*` labels on `process` events | P1 | Mirror `completed:*` clearing logic in `LabelMonitorService` |
-| FR-004 | `failed:<phase>` labels use a distinct color for visual differentiation | P2 | Red or similar warning color |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Phase failure is identifiable from labels alone | 100% of failures | Check that every `agent:error` event also has a `failed:<phase>` label |
-| SC-002 | No stale `failed:*` labels after successful reprocessing | 0 stale labels | Verify labels are cleared on `process` event |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- All workflow phases that can fail are represented in the `WorkflowPhase` type
-- The existing label infrastructure supports dynamic label creation/application
-- `completed:*` label clearing logic in `LabelMonitorService.processLabelEvent` can serve as a pattern for `failed:*` clearing
+- [Assumption 1]
 
 ## Out of Scope
 
-- Alerting/notification on phase failures (separate concern)
-- Root cause diagnosis of why `validate` failed on #313 (missing `pnpm install` — tracked separately)
-- Retry logic for failed phases
+- [Exclusion 1]
 
 ---
 
