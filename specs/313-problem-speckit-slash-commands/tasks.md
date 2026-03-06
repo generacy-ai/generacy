@@ -23,16 +23,16 @@ Set up the marketplace and plugin structure in the agency repo (`agency/packages
 
 Modify `installClaudeCodeIntegration()` in `packages/generacy/src/cli/commands/setup/build.ts` to install via marketplace with fallback.
 
-- [ ] T007 Add marketplace registration — write `generacy-marketplace` entry to `~/.claude/settings.json` → `extraKnownMarketplaces` with `source: { source: "github", repo: "generacy-ai/agency" }` (agency repo is the marketplace)
-- [ ] T008 Add marketplace plugin install — run `claude plugin install agency-spec-kit@generacy-marketplace --scope user` via `execSync`, wrapped in try/catch
-- [ ] T009 Add fallback logic — if marketplace install fails and agency repo exists locally, fall back to current file-copy behavior; if neither works, log warning and continue
-- [ ] T010 Add cleanup logic — remove old file-copy commands from `~/.claude/commands/` (9 `.md` files) when plugin installs successfully to avoid duplicates (per clarification from #310 Q3)
-- [ ] T011 Add version pinning support — read pinned version from `package.json` or config, pass to install command; support `--latest` flag to override (per spec Q4: C, clarification Q5: A)
-- [ ] T012 [P] Write tests in `packages/generacy/src/__tests__/setup/build.test.ts` — test marketplace registration, plugin install success, fallback to file copy, cleanup of old commands, version pinning, and error handling
+- [X] T007 Add marketplace registration — write `generacy-marketplace` entry to `~/.claude/settings.json` → `extraKnownMarketplaces` with `source: { source: "github", repo: "generacy-ai/agency" }` (agency repo is the marketplace)
+- [X] T008 Add marketplace plugin install — run `claude plugin install agency-spec-kit@generacy-marketplace --scope user` via `execSync`, wrapped in try/catch
+- [X] T009 Add fallback logic — if marketplace install fails and agency repo exists locally, fall back to current file-copy behavior; if neither works, log warning and continue
+- [X] T010 Add cleanup logic — remove old file-copy commands from `~/.claude/commands/` (9 `.md` files) when plugin installs successfully to avoid duplicates (per clarification from #310 Q3)
+- [X] T011 Add version pinning support — read pinned version from `package.json` or config, pass to install command; support `--latest` flag to override (per spec Q4: C, clarification Q5: A)
+- [X] T012 [P] Write tests in `packages/generacy/src/__tests__/setup/build.test.ts` — test marketplace registration, plugin install success, fallback to file copy, cleanup of old commands, version pinning, and error handling
 
 ## Phase 3: Project-Level Config
 
-- [ ] T013 [P] Add `extraKnownMarketplaces` entry to `.claude/settings.json` in generacy repo — `generacy-marketplace` pointing to `generacy-ai/agency` GitHub source, so team members auto-discover the marketplace
+- [X] T013 [P] Add `extraKnownMarketplaces` entry to `.claude/settings.json` in generacy repo — `generacy-marketplace` pointing to `generacy-ai/agency` GitHub source, so team members auto-discover the marketplace
 
 ## Phase 4: Worker Container Entrypoints
 

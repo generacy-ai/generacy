@@ -16,7 +16,7 @@ import {
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getLogger } from '../../utils/logger.js';
-import { exec } from '../../utils/exec.js';
+import { exec, execSafe } from '../../utils/exec.js';
 
 /**
  * Build configuration resolved from CLI args.
@@ -28,12 +28,13 @@ interface BuildConfig {
   agencyDir: string;
   generacyDir: string;
   latencyDir: string;
+  latestPlugin: boolean;
 }
 
 /**
  * Resolve build config with three-tier priority: defaults → env vars → CLI args.
  */
-function resolveBuildConfig(cliArgs: Partial<BuildConfig>): BuildConfig {
+function resolveBuildConfig(cliArgs: Partial<BuildConfig> & { latest?: boolean }): BuildConfig {
   return {
     skipCleanup: cliArgs.skipCleanup ?? false,
     skipAgency: cliArgs.skipAgency ?? false,
@@ -41,6 +42,7 @@ function resolveBuildConfig(cliArgs: Partial<BuildConfig>): BuildConfig {
     agencyDir: cliArgs.agencyDir ?? '/workspaces/agency',
     generacyDir: cliArgs.generacyDir ?? '/workspaces/generacy',
     latencyDir: cliArgs.latencyDir ?? '/workspaces/latency',
+    latestPlugin: cliArgs.latestPlugin ?? cliArgs.latest ?? false,
   };
 }
 
@@ -239,44 +241,125 @@ function buildGeneracy(config: BuildConfig): void {
 }
 
 /**
+ * Speckit command files that may exist as old file-copy artifacts in ~/.claude/commands/.
+ */
+const SPECKIT_COMMAND_FILES = [
+  'specify.md',
+  'clarify.md',
+  'plan.md',
+  'tasks.md',
+  'implement.md',
+  'checklist.md',
+  'analyze.md',
+  'constitution.md',
+  'taskstoissues.md',
+];
+
+/**
  * Phase 4: Install speckit commands and configure Agency MCP for Claude Code.
- * Copies speckit slash command definitions to ~/.claude/commands/ and adds the
- * Agency MCP server to the user-level Claude config so that spec_kit tools and
- * /specify, /clarify, /plan, /tasks, /implement commands are available in all
- * Claude Code sessions (including worker containers).
+ * Installs speckit slash commands via marketplace plugin with fallback to file copy.
+ * Adds the Agency MCP server to the user-level Claude config.
  */
 function installClaudeCodeIntegration(config: BuildConfig): void {
   const logger = getLogger();
   const home = homedir();
+  const claudeDir = join(home, '.claude');
 
   logger.info('Phase 4: Installing Claude Code integration (speckit commands + Agency MCP)');
 
-  // Copy speckit command definitions to ~/.claude/commands/
-  const pluginCommandsDir = join(
-    config.agencyDir,
-    'packages',
-    'claude-plugin-agency-spec-kit',
-    'commands',
-  );
-  const userCommandsDir = join(home, '.claude', 'commands');
-
-  if (existsSync(pluginCommandsDir)) {
-    mkdirSync(userCommandsDir, { recursive: true });
-    const files = readdirSync(pluginCommandsDir).filter((f) => f.endsWith('.md'));
-    for (const file of files) {
-      copyFileSync(join(pluginCommandsDir, file), join(userCommandsDir, file));
+  // Step 1: Register marketplace in ~/.claude/settings.json
+  const settingsPath = join(claudeDir, 'settings.json');
+  try {
+    let settings: Record<string, unknown> = {};
+    if (existsSync(settingsPath)) {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
     }
-    logger.info({ count: files.length, dest: userCommandsDir }, 'Copied speckit command definitions');
-  } else {
-    logger.warn({ dir: pluginCommandsDir }, 'Speckit commands directory not found, skipping');
+
+    const marketplaces = (settings['extraKnownMarketplaces'] ?? {}) as Record<string, unknown>;
+    const marketplaceSource: Record<string, unknown> = {
+      source: {
+        source: 'github',
+        repo: 'generacy-ai/agency',
+      },
+    };
+    // Version pinning: add ref to source unless --latest is specified
+    if (!config.latestPlugin) {
+      (marketplaceSource['source'] as Record<string, unknown>)['ref'] = 'v1.0.0';
+    }
+    marketplaces['generacy-marketplace'] = marketplaceSource;
+    settings['extraKnownMarketplaces'] = marketplaces;
+
+    mkdirSync(claudeDir, { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
+    logger.info('Registered generacy-marketplace in ~/.claude/settings.json');
+  } catch (error) {
+    logger.warn({ error: String(error) }, 'Failed to register marketplace');
   }
 
-  // Add Agency MCP server to user-level Claude config (~/.claude.json)
+  // Step 2: Try marketplace plugin install
+  let pluginInstalled = false;
+  const installCmd = 'claude plugin install agency-spec-kit@generacy-marketplace --scope user';
+  const result = execSafe(installCmd);
+  if (result.ok) {
+    pluginInstalled = true;
+    logger.info('Installed agency-spec-kit plugin via marketplace');
+  } else {
+    logger.warn({ stderr: result.stderr }, 'Marketplace plugin install failed, trying fallback');
+  }
+
+  // Step 3: Fallback to file copy from agency repo
+  if (!pluginInstalled) {
+    const pluginCommandsDir = join(
+      config.agencyDir,
+      'packages',
+      'claude-plugin-agency-spec-kit',
+      'commands',
+    );
+    const userCommandsDir = join(home, '.claude', 'commands');
+
+    if (existsSync(pluginCommandsDir)) {
+      mkdirSync(userCommandsDir, { recursive: true });
+      const files = readdirSync(pluginCommandsDir).filter((f) => f.endsWith('.md'));
+      for (const file of files) {
+        copyFileSync(join(pluginCommandsDir, file), join(userCommandsDir, file));
+      }
+      logger.info(
+        { count: files.length, dest: userCommandsDir },
+        'Fallback: copied speckit command definitions',
+      );
+    } else {
+      logger.warn(
+        { dir: pluginCommandsDir },
+        'Speckit commands directory not found and marketplace install failed',
+      );
+    }
+  } else {
+    // Step 4: Clean up old file-copy commands to avoid duplicates
+    const userCommandsDir = join(home, '.claude', 'commands');
+    let cleanedCount = 0;
+    for (const file of SPECKIT_COMMAND_FILES) {
+      const filePath = join(userCommandsDir, file);
+      if (existsSync(filePath)) {
+        try {
+          rmSync(filePath, { force: true });
+          cleanedCount++;
+        } catch {
+          // Ignore cleanup errors for individual files
+        }
+      }
+    }
+    if (cleanedCount > 0) {
+      logger.info({ count: cleanedCount }, 'Cleaned up old file-copy commands');
+    }
+  }
+
+  // Step 5: Add Agency MCP server to user-level Claude config (~/.claude.json)
   const claudeJsonPath = join(home, '.claude.json');
   const agencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
 
   if (!existsSync(agencyCli)) {
     logger.warn('Agency CLI not found, skipping MCP configuration');
+    logger.info('Phase 4 complete: Claude Code integration installed');
     return;
   }
 
@@ -315,6 +398,7 @@ export function setupBuildCommand(): Command {
     .option('--skip-cleanup', 'Skip Phase 1: Claude plugin state cleanup')
     .option('--skip-agency', 'Skip Phase 2: Agency package build')
     .option('--skip-generacy', 'Skip Phase 3: Generacy package build')
+    .option('--latest', 'Install latest plugin version instead of pinned version')
     .action(async (options) => {
       const logger = getLogger();
       const config = resolveBuildConfig(options);
