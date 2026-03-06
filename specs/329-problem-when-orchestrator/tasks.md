@@ -10,18 +10,18 @@
 
 ## Phase 1: Configuration
 
-- [ ] T001 [US1] Add `preValidateCommand` field to `WorkerConfigSchema` in `packages/orchestrator/src/worker/config.ts` — add `preValidateCommand: z.string().default('pnpm install')` after the `validateCommand` field
-- [ ] T002 [P] [US1] Add unit test for config schema default in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — verify `preValidateCommand` defaults to `'pnpm install'` and accepts empty string
+- [X] T001 [US1] Add `preValidateCommand` field to `WorkerConfigSchema` in `packages/orchestrator/src/worker/config.ts` — add `preValidateCommand: z.string().default('pnpm install')` after the `validateCommand` field
+- [X] T002 [P] [US1] Add unit test for config schema default in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — verify `preValidateCommand` defaults to `'pnpm install'` and accepts empty string
 
 ## Phase 2: Core Implementation
 
-- [ ] T003 [US1] Add `runPreValidateInstall` method to `CliSpawner` in `packages/orchestrator/src/worker/cli-spawner.ts` — new method with 5-minute timeout (300,000ms), uses `manageProcess`, returns `PhaseResult`
-- [ ] T004 [US1] Add unit tests for `runPreValidateInstall` in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — test success/failure cases, correct cwd, timeout behavior
+- [X] T003 [US1] Add `runPreValidateInstall` method to `CliSpawner` in `packages/orchestrator/src/worker/cli-spawner.ts` — new method with 5-minute timeout (300,000ms), uses `manageProcess`, returns `PhaseResult`
+- [X] T004 [US1] Add unit tests for `runPreValidateInstall` in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — test success/failure cases, correct cwd, timeout behavior
 
 ## Phase 3: Integration
 
-- [ ] T005 [US1] Integrate pre-validate install step in phase loop at `packages/orchestrator/src/worker/phase-loop.ts` — call `runPreValidateInstall` before `runValidatePhase` when `config.preValidateCommand` is non-empty, handle install failure by stopping phase loop
-- [ ] T006 [US1] Add integration tests for phase loop pre-validate behavior — verify install runs before validate, skipped when empty string, install failure prevents validate from running
+- [X] T005 [US1] Integrate pre-validate install step in phase loop at `packages/orchestrator/src/worker/phase-loop.ts` — call `runPreValidateInstall` before `runValidatePhase` when `config.preValidateCommand` is non-empty, handle install failure by stopping phase loop
+- [X] T006 [US1] Add integration tests for phase loop pre-validate behavior — verify install runs before validate, skipped when empty string, install failure prevents validate from running
 
 ## Dependencies & Execution Order
 

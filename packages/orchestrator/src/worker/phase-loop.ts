@@ -123,6 +123,30 @@ export class PhaseLoop {
       let result: PhaseResult;
       try {
         if (PHASE_TO_COMMAND[phase] === null) {
+          // Pre-validate: install dependencies if configured
+          if (config.preValidateCommand) {
+            const installResult = await cliSpawner.runPreValidateInstall(
+              context.checkoutPath,
+              config.preValidateCommand,
+              context.signal,
+            );
+            if (!installResult.success) {
+              this.logger.error(
+                { phase, error: installResult.error?.message },
+                'Pre-validate install failed',
+              );
+              results.push(installResult);
+              await labelManager.onError(phase);
+              await stageCommentManager.updateStageComment({
+                stage,
+                status: 'error',
+                phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+                startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+              });
+              return { results, completed: false, lastPhase: phase, gateHit: false };
+            }
+          }
+
           // Validate phase — run test command
           result = await cliSpawner.runValidatePhase(
             context.checkoutPath,
