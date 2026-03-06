@@ -47,6 +47,14 @@ function resolveBuildConfig(cliArgs: Partial<BuildConfig> & { latest?: boolean }
 }
 
 /**
+ * Check whether we're running in an external project (no source repos present).
+ * External projects use installed packages instead of building from source.
+ */
+function isExternalProject(config: BuildConfig): boolean {
+  return !existsSync(config.agencyDir) && !existsSync(config.latencyDir);
+}
+
+/**
  * Phase 1: Clean stale Claude plugin state.
  * Removes marketplace caches, resets installed plugins, and clears enabledPlugins from settings.
  * All operations are non-fatal — errors are logged as warnings.
@@ -128,7 +136,7 @@ function buildAgency(config: BuildConfig): void {
   logger.info('Phase 2: Building Agency packages');
 
   if (!existsSync(config.agencyDir)) {
-    logger.warn({ dir: config.agencyDir }, 'Agency directory not found, skipping');
+    logger.info('Skipping source build for agency/latency — using installed packages');
     return;
   }
 
@@ -203,7 +211,7 @@ function buildGeneracy(config: BuildConfig): void {
   logger.info('Phase 3: Building Generacy packages');
 
   if (!existsSync(config.generacyDir)) {
-    logger.warn({ dir: config.generacyDir }, 'Generacy directory not found, skipping');
+    logger.info('Skipping source build for generacy — using installed packages');
     return;
   }
 
@@ -307,8 +315,8 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     logger.warn({ stderr: result.stderr }, 'Marketplace plugin install failed, trying fallback');
   }
 
-  // Step 3: Fallback to file copy from agency repo
-  if (!pluginInstalled) {
+  // Step 3: Fallback to file copy from agency repo (only when agency dir exists)
+  if (!pluginInstalled && existsSync(config.agencyDir)) {
     const pluginCommandsDir = join(
       config.agencyDir,
       'packages',
@@ -333,6 +341,8 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
         'Speckit commands directory not found and marketplace install failed',
       );
     }
+  } else if (!pluginInstalled) {
+    logger.info('Skipping file-copy fallback — agency source not available');
   } else {
     // Step 4: Clean up old file-copy commands to avoid duplicates
     const userCommandsDir = join(home, '.claude', 'commands');
@@ -358,7 +368,7 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
   const agencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
 
   if (!existsSync(agencyCli)) {
-    logger.warn('Agency CLI not found, skipping MCP configuration');
+    logger.info('Skipping MCP configuration — agency not built from source');
     logger.info('Phase 4 complete: Claude Code integration installed');
     return;
   }
