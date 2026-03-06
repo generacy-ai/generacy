@@ -75,8 +75,18 @@ export class PrManager {
 
       // Check for unpushed commits (the phase may have committed directly)
       const branch = await this.github.getCurrentBranch();
-      const unpushed = await this.github.getCommitsBetween(`origin/${branch}`, branch).catch(() => []);
-      const hasUnpushed = unpushed.length > 0;
+      const remoteExists = await this.github.branchExists(branch, true).catch(() => false);
+      let unpushedCount: number;
+      if (remoteExists) {
+        const unpushed = await this.github.getCommitsBetween(`origin/${branch}`, branch).catch(() => []);
+        unpushedCount = unpushed.length;
+      } else {
+        // Remote branch doesn't exist yet — any local commits are unpushed
+        const defaultBranch = await this.github.getDefaultBranch();
+        const localCommits = await this.github.getCommitsBetween(`origin/${defaultBranch}`, branch).catch(() => []);
+        unpushedCount = localCommits.length;
+      }
+      const hasUnpushed = unpushedCount > 0;
 
       if (!committed && !hasUnpushed) {
         this.logger.debug({ phase }, 'No changes to commit or push after phase');
@@ -86,7 +96,7 @@ export class PrManager {
       if (hasUnpushed) {
         if (!committed) {
           this.logger.info(
-            { phase, unpushedCount: unpushed.length },
+            { phase, unpushedCount },
             'Phase committed its own changes — pushing to remote',
           );
         }

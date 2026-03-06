@@ -34,6 +34,7 @@ function createMockGitHubClient(
     createPullRequest: vi.fn().mockResolvedValue({ number: 42, url: 'https://github.com/test/repo/pull/42' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
     getCommitsBetween: vi.fn().mockResolvedValue([]),
+    branchExists: vi.fn().mockResolvedValue(true),
 
     // Other GitHubClient methods (not used by PrManager but required by interface)
     clone: vi.fn().mockResolvedValue(undefined),
@@ -454,6 +455,22 @@ describe('PrManager', () => {
 
       // getCommitsBetween failure caught, treated as no unpushed commits
       expect(result.hasChanges).toBe(false);
+    });
+
+    it('should detect changes when remote branch does not exist yet', async () => {
+      // Phase committed directly, but origin/branch doesn't exist (first push)
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.branchExists = vi.fn().mockResolvedValue(false);
+      github.getCommitsBetween = vi.fn().mockResolvedValue([
+        { sha: 'abc123', message: 'feat: implement feature' },
+      ]);
+
+      const result = await prManager.commitPushAndEnsurePr('implement');
+
+      expect(result.hasChanges).toBe(true);
+      expect(github.push).toHaveBeenCalled();
+      // Should compare against default branch, not origin/test-branch
+      expect(github.getCommitsBetween).toHaveBeenCalledWith('origin/main', 'test-branch');
     });
   });
 
