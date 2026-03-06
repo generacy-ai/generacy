@@ -23,6 +23,13 @@ When the clarify gate is hit, the orchestrator should:
 
 Gate-hit handling is in `packages/orchestrator/src/worker/phase-loop.ts` lines 189-212. The natural insertion point is after `labelManager.onGateHit()` and before the stage comment update.
 
+**Implementation approach** (per clarification):
+- Create a dedicated `ClarificationPoster` class to encapsulate file parsing and comment posting logic
+- Call it from `phase-loop.ts` after `labelManager.onGateHit()` — phase-loop stays clean of file I/O
+- Locate `clarifications.md` via glob: `specs/{issueNumber}-*/clarifications.md`
+- Remove existing posting code from `executeClarify()` in the clarify operation — orchestrator is solely responsible
+- Include answering instructions in the posted comment (e.g., "Reply with Q1: your answer")
+
 ## User Stories
 
 ### US1: Human reviewer sees clarification questions on the issue
@@ -52,8 +59,8 @@ Gate-hit handling is in `packages/orchestrator/src/worker/phase-loop.ts` lines 1
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Read and parse `clarifications.md` to extract pending questions | P1 | Questions have `**Answer**: *Pending*` |
-| FR-002 | Post extracted questions as a GitHub issue comment | P1 | Using `gh` CLI or GitHub API |
-| FR-003 | Format the comment with clear question numbering | P2 | Markdown formatting |
+| FR-002 | Post extracted questions as a GitHub issue comment | P1 | Via dedicated `ClarificationPoster` class |
+| FR-003 | Format the comment with clear question numbering and answering instructions | P2 | Include "Reply with Q1: answer" template |
 | FR-004 | Handle missing file or parse errors gracefully | P1 | Log warning, don't block |
 
 ## Success Criteria

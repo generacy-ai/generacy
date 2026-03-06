@@ -1,6 +1,6 @@
 # Clarification Questions
 
-## Status: Pending
+## Status: Resolved
 
 ## Questions
 
@@ -14,7 +14,7 @@
 - B: Add redundant posting at gate-hit time as a safety net (accept possible duplicates)
 - C: Move posting responsibility entirely to the gate-hit handler and remove it from the clarify operation
 
-**Answer**: *Pending*
+**Answer**: C — Move posting responsibility entirely to the gate-hit handler and remove it from the clarify operation. The orchestrator has deterministic control over the posting flow and can guarantee ordering relative to labels. Agent-level posting via `gh issue comment` inside the Claude Code session is fragile — it can be skipped, formatted differently, or fail partway through.
 
 ### Q2: Implementation location
 **Context**: The spec explicitly offers two alternatives: adding logic in `phase-loop.ts` after `labelManager.onGateHit()`, or making it a `StageCommentManager` responsibility. These have different architectural implications — phase-loop keeps it as a one-off side effect, while StageCommentManager makes it a reusable concern.
@@ -23,13 +23,13 @@
 - A: In `phase-loop.ts` directly after `labelManager.onGateHit()` — simplest, keeps it as a gate-specific side effect
 - B: In `StageCommentManager` as a new method — more structured, but extends the manager's responsibility beyond stage tracking
 
-**Answer**: *Pending*
+**Answer**: A — In `phase-loop.ts` directly after `labelManager.onGateHit()`. But use a new dedicated class (e.g., `ClarificationPoster`) to encapsulate the file parsing and comment posting logic — phase-loop should stay clean of file I/O and markdown parsing. The class is instantiated and called from phase-loop but owns its own logic.
 
 ### Q3: Clarifications.md file path resolution
 **Context**: The spec says to read `clarifications.md` "from the working directory," but actual clarification files live in `specs/{issue-number}-{slug}/clarifications.md` (e.g., `specs/316-summary-when-speckit-workflow/clarifications.md`). The gate-hit handler needs to know the correct spec directory path.
 **Question**: How should the gate-hit handler locate `clarifications.md`? Should it search the `specs/` directory for the matching issue number, or is the spec directory path already available in the phase-loop context?
 
-**Answer**: *Pending*
+**Answer**: Search `specs/` directory for a subdirectory starting with the issue number (e.g., `specs/316-*/clarifications.md`). This matches the existing `specs/{issueNumber}-{slug}/` convention and doesn't require passing data between phases.
 
 ### Q4: Comment format and answering UX
 **Context**: The spec says questions should be "clearly formatted" and "easy to answer" but doesn't specify the exact format. The orchestrator's resume flow expects answers in a specific format (e.g., `Q1: answer`). The comment format affects whether humans can answer inline or need to follow a template.
@@ -38,4 +38,4 @@
 - A: Include answering instructions with the expected format template
 - B: Just display questions — the existing workflow documentation covers the answer format
 
-**Answer**: *Pending*
+**Answer**: A — Include answering instructions with the expected format template so humans know exactly how to respond.
