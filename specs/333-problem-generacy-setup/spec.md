@@ -1,8 +1,10 @@
-# Feature Specification: Remove hardcoded tetrad-development bootstrap fallback
+# Feature Specification: ## Problem
 
-Remove the hardcoded `tetrad-development` bootstrap fallback from `generacy setup workspace` so external projects can use their own `.generacy/config.yaml`.
+`generacy setup workspace` has a hardcoded bootstrap fallback that assumes `tetrad-development` is always the config source
 
 **Branch**: `333-problem-generacy-setup` | **Date**: 2026-03-06 | **Status**: Draft
+
+## Summary
 
 ## Problem
 
@@ -50,57 +52,35 @@ The setup should discover the `.generacy/config.yaml` in the already-mounted pro
 
 ## User Stories
 
-### US1: External project workspace setup
+### US1: [Primary User Story]
 
-**As an** external project developer using the cluster-templates devcontainer,
-**I want** `generacy setup workspace` to discover and use my project's `.generacy/config.yaml`,
-**So that** I can set up my workspace without needing access to the `tetrad-development` repository.
-
-**Acceptance Criteria**:
-- [ ] Workspace setup finds `.generacy/config.yaml` in any mounted project directory under `/workspaces/`
-- [ ] No attempt is made to clone `tetrad-development` when a valid config exists on disk
-- [ ] Setup completes successfully using the discovered config
-
-### US2: Clear failure on missing config
-
-**As a** developer setting up a workspace without any config file,
-**I want** a clear error message explaining that no `.generacy/config.yaml` was found,
-**So that** I know exactly what to fix rather than seeing a cryptic clone failure.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] When no config is found anywhere, the command fails with an actionable error message
-- [ ] The error message indicates where config files are expected (e.g., `/workspaces/<project>/.generacy/config.yaml`)
-- [ ] No fallback cloning is attempted
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Remove the hardcoded `tetrad-development` bootstrap fallback from workspace setup | P1 | Lines ~62-72 in workspace.ts |
-| FR-002 | Call `findWorkspaceConfigPath()` from workspace setup to discover config from mounted project repos | P1 | Function already exists in `packages/config/src/loader.ts:35-55` |
-| FR-003 | Fail with a clear, actionable error message when no config is found | P1 | Per #291 Q6 design decision |
-| FR-004 | Remove or deprecate the `BOOTSTRAP_REPOS` constant if it exists | P2 | Per #291 design: no hardcoded repo list |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | External project setup succeeds | 100% of projects with valid `.generacy/config.yaml` set up without errors | Manual test with cluster-template project |
-| SC-002 | No hardcoded repo references | Zero references to `tetrad-development` in workspace setup logic | Code review / grep |
-| SC-003 | Clear error on missing config | Error message includes expected config path | Manual test without config |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The `findWorkspaceConfigPath()` function in `packages/config/src/loader.ts` correctly walks directories to find config files
-- External projects following the cluster-template pattern mount their repo at `/workspaces/<project-name>/`
-- The `.generacy/config.yaml` schema is consistent across internal and external projects
+- [Assumption 1]
 
 ## Out of Scope
 
-- Changes to the `.generacy/config.yaml` schema or format
-- Changes to how config is loaded after discovery (only the discovery/fallback mechanism changes)
-- Supporting config discovery outside of `/workspaces/` directories
-- Migration tooling for existing setups
+- [Exclusion 1]
 
 ---
 
