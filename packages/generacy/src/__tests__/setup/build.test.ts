@@ -404,15 +404,14 @@ describe('setup build command', () => {
       );
     });
 
-    it('skips Phase 2 entirely when agency directory does not exist', async () => {
+    it('skips Phase 2 with info log when agency directory does not exist', async () => {
       mockExecBehavior();
       mockFileSystem([]); // No agency dir
 
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { dir: '/workspaces/agency' },
-        'Agency directory not found, skipping',
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for agency/latency — using installed packages',
       );
       expect(mockExit).not.toHaveBeenCalled();
     });
@@ -552,15 +551,14 @@ describe('setup build command', () => {
       );
     });
 
-    it('skips Phase 3 when generacy directory does not exist', async () => {
+    it('skips Phase 3 with info log when generacy directory does not exist', async () => {
       mockExecBehavior();
       mockFileSystem([]); // No generacy dir
 
       await runBuildCommand(['--skip-cleanup', '--skip-agency']);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { dir: '/workspaces/generacy' },
-        'Generacy directory not found, skipping',
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for generacy — using installed packages',
       );
       expect(mockExit).not.toHaveBeenCalled();
     });
@@ -781,7 +779,7 @@ describe('setup build command', () => {
       });
     });
 
-    it('skips MCP configuration when Agency CLI not found', async () => {
+    it('skips MCP configuration with info log when Agency CLI not found', async () => {
       mockExecBehavior();
       mockFileSystem([
         '/workspaces/agency',
@@ -793,9 +791,86 @@ describe('setup build command', () => {
       // Note: buildAgency would normally exit(1) here, but we mock exit
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        'Agency CLI not found, skipping MCP configuration',
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping MCP configuration — agency not built from source',
       );
+    });
+  });
+
+  describe('external project scenario', () => {
+    it('completes successfully with no source repos present', async () => {
+      mockExecBehavior();
+      // No source repos exist — simulates external project environment
+      mockFileSystem([]);
+
+      await runBuildCommand([]);
+
+      // Phase 2 and 3 should skip with info-level messages
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for agency/latency — using installed packages',
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for generacy — using installed packages',
+      );
+      // Should not exit with error
+      expect(mockExit).not.toHaveBeenCalled();
+      // Build process should complete
+      expect(mockLogger.info).toHaveBeenCalledWith('Build process complete');
+    });
+
+    it('skips file-copy fallback when agency dir does not exist and marketplace fails', async () => {
+      mockExecBehavior({
+        'claude plugin install': { throw: true },
+      });
+      // No source repos — external project
+      mockFileSystem([]);
+
+      await runBuildCommand([]);
+
+      // Should log info about skipping fallback, not warn
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping file-copy fallback — agency source not available',
+      );
+      // Should NOT attempt file copy
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('regression: source dirs present', () => {
+    it('proceeds with full build when source directories exist', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/generacy',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/generacy/packages/generacy/dist/cli/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup']);
+
+      // Phase 2 should build agency (not skip)
+      expect(mockLogger.info).toHaveBeenCalledWith('Phase 2: Building Agency packages');
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'pnpm build',
+        expect.objectContaining({ cwd: '/workspaces/agency' }),
+      );
+      // Phase 3 should build generacy (not skip)
+      expect(mockLogger.info).toHaveBeenCalledWith('Phase 3: Building Generacy packages');
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'pnpm build',
+        expect.objectContaining({ cwd: '/workspaces/generacy' }),
+      );
+      // Should not log skip messages
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        'Skipping source build for agency/latency — using installed packages',
+      );
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        'Skipping source build for generacy — using installed packages',
+      );
+      expect(mockExit).not.toHaveBeenCalled();
     });
   });
 
