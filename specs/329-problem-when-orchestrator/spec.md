@@ -1,16 +1,16 @@
-# Bug Fix: Validate phase fails because pnpm install is not run after checkout
+# Feature Specification: ## Problem
 
-**Branch**: `329-problem-when-orchestrator` | **Date**: 2026-03-06 | **Status**: Draft | **Type**: Bug Fix
+When the orchestrator worker resumes a workflow into the validate phase, it clones the repository fresh but does not run `pnpm install` before executing the validate command (`pnpm test && pnpm build`)
+
+**Branch**: `329-problem-when-orchestrator` | **Date**: 2026-03-06 | **Status**: Draft
 
 ## Summary
-
-The orchestrator worker's validate phase fails immediately because dependencies are not installed after cloning the repository. When the worker resumes a workflow into the validate phase, it clones the repo fresh and runs the validate command (`pnpm test && pnpm build`) directly — but `node_modules` doesn't exist, so `vitest` and other devDependencies are missing.
 
 ## Problem
 
 When the orchestrator worker resumes a workflow into the validate phase, it clones the repository fresh but does not run `pnpm install` before executing the validate command (`pnpm test && pnpm build`). This causes immediate failure because `vitest` (and other devDependencies) are not installed.
 
-### Evidence
+## Evidence from Issue #313
 
 Worker logs show:
 ```
@@ -28,57 +28,53 @@ durationMs: 473   ← way too fast, vitest not found
 
 The worker's checkout flow (`claude-cli-worker.ts`) clones the repo and checks out the branch but does not install dependencies.
 
+## Proposed Solution
+
+Before running the validate command, the worker should ensure dependencies are installed. Options:
+
+1. **Add a pre-validate install step** in the phase loop or cli-spawner that runs `pnpm install` (or the appropriate package manager command) before the validate command
+2. **Prepend to the validate command** itself: `pnpm install && pnpm test && pnpm build`
+3. **Add a general post-checkout hook** in the worker that runs dependency installation after cloning/checking out
+
+Option 1 or 3 seems cleanest as it keeps the validate command focused on actual validation.
+
+## Additional Context
+
+- This only affects the validate phase because it's the only phase that runs a raw shell command rather than the Claude CLI
+- The Claude CLI phases work because Claude has access to the codebase and can install deps as needed
+- The validate phase was added to run automated checks (tests, build) after implementation
+
 ## User Stories
 
-### US1: Orchestrator validate phase succeeds after fresh checkout
+### US1: [Primary User Story]
 
-**As a** developer using the orchestrator workflow,
-**I want** the validate phase to automatically install dependencies before running tests/build,
-**So that** the validate phase works correctly on fresh clones without manual intervention.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Dependencies are installed before the validate command runs
-- [ ] The validate phase passes when tests and build would otherwise succeed
-- [ ] The dependency installation step uses the correct package manager for the project
-- [ ] Installation failures are properly reported (not silently swallowed)
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Run dependency installation before the validate command after a fresh checkout | P1 | Core fix |
-| FR-002 | Detect the appropriate package manager (pnpm/npm/yarn) from the project | P2 | Check for lockfiles: pnpm-lock.yaml, package-lock.json, yarn.lock |
-| FR-003 | Report installation failures clearly in worker logs | P1 | Distinct from validate command failures |
-| FR-004 | Installation should only run when node_modules is missing or stale | P3 | Optimization to avoid unnecessary installs on warm checkouts |
-
-## Proposed Solution
-
-**Recommended: Option 3 — Post-checkout dependency installation hook**
-
-Add a dependency installation step in the worker's checkout flow (`claude-cli-worker.ts`) that runs after cloning/checking out the branch. This ensures all subsequent phases (not just validate) have dependencies available.
-
-**Alternative: Option 1 — Pre-validate install step in cli-spawner**
-
-Add a `pnpm install` (or detected package manager) call in `CliSpawner.runValidatePhase()` before executing the validate command. Simpler but only fixes validate phase.
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Validate phase completes on fresh clone | 100% success rate (when tests/build pass) | Worker logs show real test execution time (not sub-second) |
-| SC-002 | Dependencies installed correctly | node_modules present before validate command | Check exit code of install step |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The orchestrator workspace always has a package manager (pnpm) available in PATH
-- Projects using the orchestrator have a lockfile checked into the repository
-- Fresh clones are the primary scenario (not incremental updates to existing checkouts)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Supporting non-Node.js projects (e.g., Python, Go)
-- Caching node_modules across worker runs
-- Parallelizing dependency installation with other operations
+- [Exclusion 1]
 
 ---
 
