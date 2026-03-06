@@ -10,19 +10,19 @@
 
 ## Phase 1: Config Package — Add scanForWorkspaceConfig
 
-- [ ] T001 [P] Add `scanForWorkspaceConfig()` function to `packages/config/src/loader.ts` — scans immediate subdirs of a parent directory for `.generacy/config.yaml`, returns array of found paths
-- [ ] T002 [P] Export `scanForWorkspaceConfig` from `packages/config/src/index.ts`
-- [ ] T003 [P] Add unit tests for `scanForWorkspaceConfig()` — test with 0, 1, and multiple configs found; test that non-directory entries are skipped
+- [X] T001 [P] Add `scanForWorkspaceConfig()` function to `packages/config/src/loader.ts` — scans immediate subdirs of a parent directory for `.generacy/config.yaml`, returns array of found paths
+- [X] T002 [P] Export `scanForWorkspaceConfig` from `packages/config/src/index.ts`
+- [X] T003 [P] Add unit tests for `scanForWorkspaceConfig()` — test with 0, 1, and multiple configs found; test that non-directory entries are skipped
 
 ## Phase 2: Workspace Command — Rewrite Config Resolution
 
-- [ ] T004 Remove hardcoded `tetrad-development` config path lookup (workspace.ts ~lines 62-74)
-- [ ] T005 Remove Phase 2 bootstrap logic — re-read config after cloning tetrad-development (workspace.ts ~lines 301-340)
-- [ ] T006 Remove `tetrad-development` repo ordering priority (workspace.ts ~lines 285-289)
-- [ ] T007 Remove `'bootstrap (config not found)'` from `repoSource` union type in WorkspaceConfig interface
-- [ ] T008 Add `--config <path>` CLI option to Commander command definition and `config` to WorkspaceCliOptions interface
-- [ ] T009 Implement new config resolution chain: `--repos` → `REPOS env` → `--config`/`CONFIG_PATH` → `scanForWorkspaceConfig(workdir)` → error with clear message
-- [ ] T010 Add error handling for multiple configs found — list paths, suggest `--config`
+- [X] T004 Remove hardcoded `tetrad-development` config path lookup (workspace.ts ~lines 62-74)
+- [X] T005 Remove Phase 2 bootstrap logic — re-read config after cloning tetrad-development (workspace.ts ~lines 301-340)
+- [X] T006 Remove `tetrad-development` repo ordering priority (workspace.ts ~lines 285-289)
+- [X] T007 Remove `'bootstrap (config not found)'` from `repoSource` union type in WorkspaceConfig interface
+- [X] T008 Add `--config <path>` CLI option to Commander command definition and `config` to WorkspaceCliOptions interface
+- [X] T009 Implement new config resolution chain: `--repos` → `REPOS env` → `--config`/`CONFIG_PATH` → `scanForWorkspaceConfig(workdir)` → error with clear message
+- [X] T010 Add error handling for multiple configs found — list paths, suggest `--config`
 
 ## Phase 3: Tests — Update and Add
 

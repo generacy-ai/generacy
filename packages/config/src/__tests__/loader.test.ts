@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findWorkspaceConfigPath, tryLoadWorkspaceConfig } from '../loader.js';
+import { findWorkspaceConfigPath, scanForWorkspaceConfig, tryLoadWorkspaceConfig } from '../loader.js';
 
 const VALID_YAML = `
 workspace:
@@ -215,5 +215,51 @@ describe('findWorkspaceConfigPath', () => {
 
     const result = findWorkspaceConfigPath(nested);
     expect(result).toBe(join(parentConfigDir, 'config.yaml'));
+  });
+});
+
+describe('scanForWorkspaceConfig', () => {
+  it('returns empty array when no subdirectories have config', () => {
+    mkdirSync(join(tempDir, 'project-a'));
+    mkdirSync(join(tempDir, 'project-b'));
+
+    const result = scanForWorkspaceConfig(tempDir);
+    expect(result).toEqual([]);
+  });
+
+  it('finds config in a single subdirectory', () => {
+    const configDir = join(tempDir, 'my-project', '.generacy');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), VALID_YAML);
+
+    const result = scanForWorkspaceConfig(tempDir);
+    expect(result).toEqual([join(configDir, 'config.yaml')]);
+  });
+
+  it('finds configs in multiple subdirectories', () => {
+    const configA = join(tempDir, 'project-a', '.generacy');
+    const configB = join(tempDir, 'project-b', '.generacy');
+    mkdirSync(configA, { recursive: true });
+    mkdirSync(configB, { recursive: true });
+    writeFileSync(join(configA, 'config.yaml'), VALID_YAML);
+    writeFileSync(join(configB, 'config.yaml'), VALID_YAML);
+
+    const result = scanForWorkspaceConfig(tempDir);
+    expect(result).toHaveLength(2);
+    expect(result).toContain(join(configA, 'config.yaml'));
+    expect(result).toContain(join(configB, 'config.yaml'));
+  });
+
+  it('skips non-directory entries', () => {
+    // Create a file (not a directory) at the top level
+    writeFileSync(join(tempDir, 'not-a-dir'), 'hello');
+
+    // Create an actual project with config
+    const configDir = join(tempDir, 'real-project', '.generacy');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), VALID_YAML);
+
+    const result = scanForWorkspaceConfig(tempDir);
+    expect(result).toEqual([join(configDir, 'config.yaml')]);
   });
 });

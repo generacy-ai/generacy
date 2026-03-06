@@ -18,4 +18,4 @@ export { parseRepoInput, parseRepoList } from './parse-repo-input.js';
 
 export { detectRepoDrift } from './drift.js';
 
-export { tryLoadWorkspaceConfig, findWorkspaceConfigPath } from './loader.js';
+export { tryLoadWorkspaceConfig, findWorkspaceConfigPath, scanForWorkspaceConfig } from './loader.js';

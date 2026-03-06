@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getLogger } from '../../utils/logger.js';
 import { exec, execSafe } from '../../utils/exec.js';
-import { tryLoadWorkspaceConfig, getRepoNames, parseRepoList } from '@generacy-ai/config';
+import { tryLoadWorkspaceConfig, getRepoNames, parseRepoList, scanForWorkspaceConfig } from '@generacy-ai/config';
 
 /**
  * Workspace configuration resolved from CLI args and environment variables.
@@ -20,7 +20,7 @@ interface WorkspaceConfig {
   workdir: string;
   clean: boolean;
   githubOrg: string;
-  repoSource: 'CLI flag' | 'REPOS env var' | 'config file' | 'bootstrap (config not found)';
+  repoSource: 'CLI flag' | 'REPOS env var' | 'config file';
 }
 
 /**
@@ -31,6 +31,7 @@ interface WorkspaceCliOptions {
   branch?: string;
   workdir?: string;
   clean?: boolean;
+  config?: string;
 }
 
 /**
@@ -58,9 +59,34 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
     if (!configOrg && parsed.length > 0) configOrg = parsed[0]!.owner;
     repoSource = 'REPOS env var';
   } else {
-    // Try loading from config file
-    const configPath = join(workdir, 'tetrad-development', '.generacy', 'config.yaml');
-    const wsConfig = tryLoadWorkspaceConfig(configPath);
+    // Try explicit config path: --config flag or CONFIG_PATH env var
+    const explicitConfigPath = cliArgs.config ?? process.env['CONFIG_PATH'];
+    let wsConfig = explicitConfigPath ? tryLoadWorkspaceConfig(explicitConfigPath) : null;
+
+    if (!wsConfig && explicitConfigPath) {
+      logger.error(
+        { path: explicitConfigPath },
+        'Config file not found or invalid at specified path',
+      );
+      process.exit(1);
+    }
+
+    // Fallback: scan workdir subdirectories for config
+    if (!wsConfig) {
+      const foundPaths = scanForWorkspaceConfig(workdir);
+
+      if (foundPaths.length > 1) {
+        logger.error(
+          { configs: foundPaths },
+          'Multiple .generacy/config.yaml files found. Use --config or CONFIG_PATH to specify which one.',
+        );
+        process.exit(1);
+      }
+
+      if (foundPaths.length === 1) {
+        wsConfig = tryLoadWorkspaceConfig(foundPaths[0]!);
+      }
+    }
 
     if (wsConfig) {
       repos = getRepoNames(wsConfig);
@@ -68,9 +94,11 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
       configBranch = wsConfig.branch;
       repoSource = 'config file';
     } else {
-      // Bootstrap phase: only clone tetrad-development so we can read its config later
-      repos = ['tetrad-development'];
-      repoSource = 'bootstrap (config not found)';
+      logger.error(
+        'No .generacy/config.yaml found. Provide one via --config, CONFIG_PATH env, ' +
+        'or ensure a project with .generacy/config.yaml is mounted under ' + workdir,
+      );
+      process.exit(1);
     }
   }
 
@@ -258,6 +286,7 @@ export function setupWorkspaceCommand(): Command {
       'Target branch (or REPO_BRANCH/DEFAULT_BRANCH env)',
     )
     .option('--workdir <dir>', 'Workspace root directory', '/workspaces')
+    .option('--config <path>', 'Path to .generacy/config.yaml (or CONFIG_PATH env)')
     .option('--clean', 'Hard reset repos before updating (or CLEAN_REPOS env)')
     .action(async (options) => {
       const logger = getLogger();
@@ -281,61 +310,12 @@ export function setupWorkspaceCommand(): Command {
       let failureCount = 0;
       const processedRepos: string[] = [];
 
-      // Process tetrad-development first if in the list
-      const orderedRepos = [...config.repos];
-      const tetradIndex = orderedRepos.indexOf('tetrad-development');
-      if (tetradIndex > 0) {
-        orderedRepos.splice(tetradIndex, 1);
-        orderedRepos.unshift('tetrad-development');
-      }
-
-      for (const repo of orderedRepos) {
+      for (const repo of config.repos) {
         if (cloneOrUpdateRepo(repo, config)) {
           successCount++;
           processedRepos.push(repo);
         } else {
           failureCount++;
-        }
-      }
-
-      // Phase 2: If we bootstrapped, re-read config from freshly cloned tetrad-development
-      if (config.repoSource === 'bootstrap (config not found)') {
-        const configPath = join(config.workdir, 'tetrad-development', '.generacy', 'config.yaml');
-        const wsConfig = tryLoadWorkspaceConfig(configPath);
-
-        if (wsConfig) {
-          const allRepos = getRepoNames(wsConfig);
-          const additionalRepos = allRepos.filter((r) => !processedRepos.includes(r));
-
-          if (additionalRepos.length > 0) {
-            logger.info(
-              { count: additionalRepos.length },
-              'Phase 2: Found config, cloning additional repos',
-            );
-
-            // Apply config-derived org and branch as defaults
-            const phase2Config: WorkspaceConfig = {
-              ...config,
-              githubOrg: process.env['GITHUB_ORG'] ?? wsConfig.org,
-              branch:
-                options.branch ??
-                process.env['REPO_BRANCH'] ??
-                process.env['DEFAULT_BRANCH'] ??
-                wsConfig.branch,
-              repoSource: 'config file',
-            };
-
-            for (const repo of additionalRepos) {
-              if (cloneOrUpdateRepo(repo, phase2Config)) {
-                successCount++;
-                processedRepos.push(repo);
-              } else {
-                failureCount++;
-              }
-            }
-          }
-        } else {
-          logger.warn('Bootstrap complete but no config found in tetrad-development — only tetrad-development was cloned');
         }
       }
 

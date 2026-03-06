@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, parse as parsePath } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { WorkspaceConfigSchema, type WorkspaceConfig } from './workspace-schema.js';
@@ -52,4 +52,25 @@ export function findWorkspaceConfigPath(
     }
     dir = parent;
   }
+}
+
+/**
+ * Scan immediate subdirectories of `parentDir` for a workspace config file.
+ * Returns all found config paths (caller decides how to handle multiples).
+ */
+export function scanForWorkspaceConfig(
+  parentDir: string,
+  configDirName = '.generacy',
+  configFileName = 'config.yaml',
+): string[] {
+  const entries = readdirSync(parentDir, { withFileTypes: true });
+  const found: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = join(parentDir, entry.name, configDirName, configFileName);
+    if (existsSync(candidate)) {
+      found.push(candidate);
+    }
+  }
+  return found;
 }
