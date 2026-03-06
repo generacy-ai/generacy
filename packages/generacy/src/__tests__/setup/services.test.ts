@@ -34,7 +34,7 @@ const mockSocketInstance = {
 };
 vi.mock('node:net', () => ({
   default: {
-    Socket: vi.fn(() => mockSocketInstance),
+    Socket: vi.fn(function () { return mockSocketInstance; }),
   },
 }));
 
@@ -66,6 +66,9 @@ let processListeners: Record<string, ((...args: unknown[]) => void)[]>;
 
 beforeEach(() => {
   vi.resetAllMocks();
+
+  // Re-establish MockSocket constructor after resetAllMocks clears it
+  MockSocket.mockImplementation(function () { return mockSocketInstance; });
 
   processListeners = { SIGTERM: [], SIGINT: [] };
 

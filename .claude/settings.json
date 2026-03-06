@@ -1,0 +1,10 @@
+{
+  "extraKnownMarketplaces": {
+    "generacy-marketplace": {
+      "source": {
+        "source": "github",
+        "repo": "generacy-ai/agency"
+      }
+    }
+  }
+}

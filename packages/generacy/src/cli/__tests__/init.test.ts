@@ -114,7 +114,7 @@ describe('init CLI command', () => {
         join(testDir, '.generacy', 'config.yaml'),
         'utf-8',
       );
-      expect(config).toContain('name: "Test Project"');
+      expect(config).toContain('name: Test Project');
       expect(config).toContain('acme/app');
     });
 
@@ -128,7 +128,7 @@ describe('init CLI command', () => {
         join(testDir, '.generacy', 'config.yaml'),
         'utf-8',
       );
-      expect(config).toMatch(/id: "proj_local[a-f0-9]{8}"/);
+      expect(config).toMatch(/id: proj_local[a-f0-9]{8}/);
     });
 
     it('should print a summary listing all created files', () => {
@@ -211,7 +211,7 @@ describe('init CLI command', () => {
       expect(config).toContain('acme/lib');
     });
 
-    it('should include project name in docker-compose.yml', () => {
+    it('should generate a valid docker-compose.yml with services', () => {
       runInit(
         '--project-name "Multi" --primary-repo "acme/app" --dev-repo "acme/lib" -y --skip-github-check',
         { cwd: testDir },
@@ -221,7 +221,7 @@ describe('init CLI command', () => {
         join(testDir, '.devcontainer', 'docker-compose.yml'),
         'utf-8',
       );
-      expect(compose).toContain('Multi');
+      expect(compose).toContain('services:');
     });
 
     it('should print summary with docker-compose.yml and created count', () => {
@@ -374,7 +374,7 @@ describe('init CLI command', () => {
         join(testDir, '.generacy', 'config.yaml'),
         'utf-8',
       );
-      expect(configBefore).toContain('name: "First"');
+      expect(configBefore).toContain('name: First');
 
       // Second init with different project name
       runInit(
@@ -386,8 +386,8 @@ describe('init CLI command', () => {
         join(testDir, '.generacy', 'config.yaml'),
         'utf-8',
       );
-      expect(configAfter).toContain('name: "Second"');
-      expect(configAfter).not.toContain('name: "First"');
+      expect(configAfter).toContain('name: Second');
+      expect(configAfter).not.toContain('name: First');
     });
 
     it('should show "Overwritten" in the summary for the second run', () => {

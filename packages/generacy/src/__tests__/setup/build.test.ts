@@ -15,9 +15,11 @@ vi.mock('node:child_process', () => ({
 
 // Mock fs
 vi.mock('node:fs', () => ({
+  copyFileSync: vi.fn(),
   existsSync: vi.fn(),
   mkdirSync: vi.fn(),
   readFileSync: vi.fn(),
+  readdirSync: vi.fn(),
   rmSync: vi.fn(),
   writeFileSync: vi.fn(),
 }));
@@ -34,13 +36,16 @@ vi.mock('../../cli/utils/logger.js', () => ({
 
 // Import after mocks are set up
 const { execSync } = await import('node:child_process');
-const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+const { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } =
+  await import('node:fs');
 const { setupBuildCommand } = await import('../../cli/commands/setup/build.js');
 
 const mockExecSync = execSync as Mock;
+const mockCopyFileSync = copyFileSync as Mock;
 const mockExistsSync = existsSync as Mock;
 const mockMkdirSync = mkdirSync as Mock;
 const mockReadFileSync = readFileSync as Mock;
+const mockReaddirSync = readdirSync as Mock;
 const mockRmSync = rmSync as Mock;
 const mockWriteFileSync = writeFileSync as Mock;
 
@@ -574,6 +579,223 @@ describe('setup build command', () => {
         'Generacy CLI artifact missing after build',
       );
       expect(mockExit).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe('Phase 4: marketplace plugin install', () => {
+    it('registers marketplace in ~/.claude/settings.json with version pinning', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // Should write settings.json with marketplace registration
+      const settingsCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude/settings.json',
+      );
+      expect(settingsCalls.length).toBeGreaterThan(0);
+      const written = JSON.parse(settingsCalls[0][1] as string);
+      expect(written.extraKnownMarketplaces['generacy-marketplace']).toEqual({
+        source: {
+          source: 'github',
+          repo: 'generacy-ai/agency',
+          ref: 'v1.0.0',
+        },
+      });
+    });
+
+    it('registers marketplace without ref when --latest is passed', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy', '--latest']);
+
+      const settingsCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude/settings.json',
+      );
+      expect(settingsCalls.length).toBeGreaterThan(0);
+      const written = JSON.parse(settingsCalls[0][1] as string);
+      expect(written.extraKnownMarketplaces['generacy-marketplace']).toEqual({
+        source: {
+          source: 'github',
+          repo: 'generacy-ai/agency',
+        },
+      });
+    });
+
+    it('preserves existing settings when registering marketplace', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/home/testuser/.claude/settings.json',
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+      mockReadFileSync.mockReturnValue(JSON.stringify({ theme: 'dark', fontSize: 14 }));
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      const settingsCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude/settings.json',
+      );
+      const written = JSON.parse(settingsCalls[0][1] as string);
+      expect(written.theme).toBe('dark');
+      expect(written.fontSize).toBe(14);
+      expect(written.extraKnownMarketplaces['generacy-marketplace']).toBeDefined();
+    });
+
+    it('runs claude plugin install command', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // execSync should have been called with the plugin install command
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'claude plugin install agency-spec-kit@generacy-marketplace --scope user',
+        expect.anything(),
+      );
+    });
+
+    it('falls back to file copy when marketplace install fails', async () => {
+      mockExecBehavior({
+        'claude plugin install': { throw: true },
+      });
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/agency/packages/claude-plugin-agency-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // Should warn about marketplace failure
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ stderr: expect.any(String) }),
+        'Marketplace plugin install failed, trying fallback',
+      );
+      // Should copy files as fallback
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ count: 3 }),
+        'Fallback: copied speckit command definitions',
+      );
+    });
+
+    it('warns when both marketplace and fallback fail', async () => {
+      mockExecBehavior({
+        'claude plugin install': { throw: true },
+      });
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        // No commands directory — fallback also fails
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dir: '/workspaces/agency/packages/claude-plugin-agency-spec-kit/commands',
+        }),
+        'Speckit commands directory not found and marketplace install failed',
+      );
+    });
+
+    it('cleans up old file-copy commands when plugin installs successfully', async () => {
+      mockExecBehavior();
+      // Make some old command files exist
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/home/testuser/.claude/commands/specify.md',
+        '/home/testuser/.claude/commands/clarify.md',
+        '/home/testuser/.claude/commands/plan.md',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // Should remove old command files
+      expect(mockRmSync).toHaveBeenCalledWith(
+        '/home/testuser/.claude/commands/specify.md',
+        { force: true },
+      );
+      expect(mockRmSync).toHaveBeenCalledWith(
+        '/home/testuser/.claude/commands/clarify.md',
+        { force: true },
+      );
+      expect(mockRmSync).toHaveBeenCalledWith(
+        '/home/testuser/.claude/commands/plan.md',
+        { force: true },
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { count: 3 },
+        'Cleaned up old file-copy commands',
+      );
+    });
+
+    it('configures Agency MCP server in ~/.claude.json', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      const claudeJsonCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude.json',
+      );
+      expect(claudeJsonCalls.length).toBeGreaterThan(0);
+      const written = JSON.parse(claudeJsonCalls[0][1] as string);
+      expect(written.mcpServers.agency).toEqual({
+        type: 'stdio',
+        command: 'node',
+        args: ['/workspaces/agency/packages/agency/dist/cli.js'],
+        cwd: '/workspaces/agency',
+      });
+    });
+
+    it('skips MCP configuration when Agency CLI not found', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        // Agency CLI missing
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      // Note: buildAgency would normally exit(1) here, but we mock exit
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        'Agency CLI not found, skipping MCP configuration',
+      );
     });
   });
 
