@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 export const TemplateReposSchema = z.object({
   primary: z.string().min(1),
-  dev: z.array(z.string().min(1)).optional().default([]),
-  clone: z.array(z.string().min(1)).optional().default([]),
+  dev: z.array(z.string().min(1)).nullable().transform((v) => v ?? []).optional().default([]),
+  clone: z.array(z.string().min(1)).nullable().transform((v) => v ?? []).optional().default([]),
 });
 
 export const TemplateConfigSchema = z.object({

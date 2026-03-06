@@ -70,6 +70,20 @@ describe('TemplateConfigSchema', () => {
     ).toThrow();
   });
 
+  it('coerces null dev to empty array', () => {
+    const result = TemplateConfigSchema.parse({
+      repos: { primary: 'generacy', dev: null },
+    });
+    expect(result.repos.dev).toEqual([]);
+  });
+
+  it('coerces null clone to empty array', () => {
+    const result = TemplateConfigSchema.parse({
+      repos: { primary: 'generacy', clone: null },
+    });
+    expect(result.repos.clone).toEqual([]);
+  });
+
   it('rejects repos.dev with empty string', () => {
     expect(() =>
       TemplateConfigSchema.parse({ repos: { primary: 'generacy', dev: [''] } }),
