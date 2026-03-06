@@ -136,6 +136,109 @@ workspace:
 
     expect(() => tryLoadWorkspaceConfig(configPath)).toThrow();
   });
+
+  // --- Template format fallback tests ---
+
+  it('returns WorkspaceConfig for template format config', () => {
+    const yaml = `
+project:
+  id: o8XtVeE5H9xoGbVUvwt
+  name: markdown-preview-tool
+  org_id: vnVZdzlNYc7IykLrPjW5
+  org_name: christrudelpw
+repos:
+  primary: christrudelpw/markdown-preview-tool
+`;
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, yaml);
+
+    const result = tryLoadWorkspaceConfig(configPath);
+    expect(result).toEqual({
+      org: 'christrudelpw',
+      branch: 'develop',
+      repos: [{ name: 'markdown-preview-tool', monitor: true }],
+    });
+  });
+
+  it('handles template format with dev and clone repos', () => {
+    const yaml = `
+project:
+  id: abc123
+  name: my-app
+  org_id: org456
+  org_name: myorg
+repos:
+  primary: myorg/my-app
+  dev:
+    - myorg/shared-lib
+    - myorg/utils
+  clone:
+    - myorg/docs
+`;
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, yaml);
+
+    const result = tryLoadWorkspaceConfig(configPath);
+    expect(result).toEqual({
+      org: 'myorg',
+      branch: 'develop',
+      repos: [
+        { name: 'my-app', monitor: true },
+        { name: 'shared-lib', monitor: true },
+        { name: 'utils', monitor: true },
+        { name: 'docs', monitor: false },
+      ],
+    });
+  });
+
+  it('workspace key takes precedence over template format', () => {
+    const yaml = `
+workspace:
+  org: generacy-ai
+  repos:
+    - name: generacy
+repos:
+  primary: otherorg/other-repo
+`;
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, yaml);
+
+    const result = tryLoadWorkspaceConfig(configPath);
+    expect(result).toEqual({
+      org: 'generacy-ai',
+      branch: 'develop',
+      repos: [{ name: 'generacy', monitor: true }],
+    });
+  });
+
+  it('returns null for repos without primary key', () => {
+    const yaml = `
+repos:
+  dev:
+    - myorg/some-lib
+  clone:
+    - myorg/docs
+`;
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, yaml);
+
+    expect(tryLoadWorkspaceConfig(configPath)).toBeNull();
+  });
+
+  it('throws on invalid template format (empty primary)', () => {
+    const yaml = `
+project:
+  id: abc123
+  name: my-app
+  org_name: myorg
+repos:
+  primary: ""
+`;
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, yaml);
+
+    expect(() => tryLoadWorkspaceConfig(configPath)).toThrow();
+  });
 });
 
 describe('findWorkspaceConfigPath', () => {
