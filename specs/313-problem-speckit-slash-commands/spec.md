@@ -22,10 +22,11 @@ claude plugin install agency-spec-kit@generacy-marketplace
 ```
 
 This requires:
-1. Setting up a Claude Code marketplace (can be a GitHub repo or URL)
-2. Publishing the plugin manifest and commands to the marketplace
-3. Updating `generacy setup build` to install via marketplace instead of file copy
-4. Updating cluster-templates entrypoints to install via marketplace
+1. Setting up the marketplace within the agency repo (`agency/packages/claude-plugin-agency-spec-kit/`) — no separate repo needed
+2. Creating a plugin manifest that registers both namespaced and bare command names
+3. Bundling Agency MCP server config in the plugin manifest for marketplace installs
+4. Updating `generacy setup build` to install via marketplace instead of file copy
+5. Updating cluster-templates entrypoints to install via marketplace
 
 ## Benefits
 
@@ -96,13 +97,13 @@ This requires:
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Set up a Claude Code marketplace (GitHub repo or URL) | P1 | Private, restricted to team members |
-| FR-002 | Create plugin manifest for `agency-spec-kit` | P1 | Includes all speckit commands |
-| FR-003 | Publish commands to the marketplace | P1 | |
+| FR-001 | Configure marketplace within agency repo (`packages/claude-plugin-agency-spec-kit/`) | P1 | No separate repo needed (per Q3 clarification) |
+| FR-002 | Create plugin manifest with both namespaced and bare command names | P1 | Register `specify` and `agency-spec-kit:specify` etc. (per Q1) |
+| FR-003 | Bundle Agency MCP server config in plugin manifest | P1 | For marketplace installs; separate for file-copy fallback (per Q2) |
 | FR-004 | Update `generacy setup build` to install via marketplace | P1 | Replace file-copy logic |
 | FR-005 | Update cluster-templates entrypoints for marketplace install | P1 | cluster-templates#3 |
 | FR-006 | Clean up old file-copy commands during install | P2 | Remove `~/.claude/commands/` speckit files |
-| FR-007 | Support version pinning with `--latest` override | P2 | Pin by default |
+| FR-007 | Support version pinning with `--latest` override | P2 | Pin version in this repo's `package.json` or `autodev.json` (per Q5) |
 | FR-008 | Implement offline fallback to local agency repo | P3 | Error if neither source available |
 
 ## Success Criteria
@@ -117,8 +118,9 @@ This requires:
 ## Assumptions
 
 - Claude Code has a working `claude plugin install` / `claude plugin marketplace` system
-- A GitHub repo can serve as a private marketplace
-- Team members have GitHub access to the marketplace repo
+- The agency repo can host the marketplace alongside the plugin source (no separate repo)
+- Team members have GitHub access to the agency repo
+- Commands stay in sync automatically since source and marketplace are co-located (per Q4)
 
 ## Out of Scope
 
