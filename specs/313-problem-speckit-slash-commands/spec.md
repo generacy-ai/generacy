@@ -1,10 +1,10 @@
-# Feature Specification: Publish Speckit Commands as Claude Code Marketplace Plugin
+# Feature Specification: ## Problem
+
+The speckit slash commands (`/specify`, `/clarify`, `/plan`, `/tasks`, `/implement`, etc
 
 **Branch**: `313-problem-speckit-slash-commands` | **Date**: 2026-03-06 | **Status**: Draft
 
 ## Summary
-
-Migrate speckit slash commands from file-copy installation to a Claude Code marketplace plugin, enabling developers to install commands without cloning the agency repo and providing standard plugin lifecycle management.
 
 ## Problem
 
@@ -22,11 +22,10 @@ claude plugin install agency-spec-kit@generacy-marketplace
 ```
 
 This requires:
-1. Setting up the marketplace within the agency repo (`agency/packages/claude-plugin-agency-spec-kit/`) — no separate repo needed
-2. Creating a plugin manifest that registers both namespaced and bare command names
-3. Bundling Agency MCP server config in the plugin manifest for marketplace installs
-4. Updating `generacy setup build` to install via marketplace instead of file copy
-5. Updating cluster-templates entrypoints to install via marketplace
+1. Setting up a Claude Code marketplace (can be a GitHub repo or URL)
+2. Publishing the plugin manifest and commands to the marketplace
+3. Updating `generacy setup build` to install via marketplace instead of file copy
+4. Updating cluster-templates entrypoints to install via marketplace
 
 ## Benefits
 
@@ -51,82 +50,35 @@ This requires:
 
 ## User Stories
 
-### US1: Developer Installs Speckit via Marketplace
+### US1: [Primary User Story]
 
-**As a** developer on the Generacy team,
-**I want** to install speckit commands via `claude plugin install`,
-**So that** I don't need the agency repo cloned locally to use speckit workflows.
-
-**Acceptance Criteria**:
-- [ ] Running `claude plugin install agency-spec-kit@generacy-marketplace` installs all speckit commands
-- [ ] Installed commands are available as slash commands in Claude Code
-- [ ] Installation works outside dev container environments
-
-### US2: Clean Migration from File-Copy
-
-**As a** developer with existing file-copy installed commands,
-**I want** the marketplace install to clean up old file-copy commands,
-**So that** I don't have duplicate or conflicting command definitions.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Old `~/.claude/commands/` speckit files are removed during marketplace install
-- [ ] No command conflicts after migration
-
-### US3: Version-Pinned Plugin Updates
-
-**As a** developer,
-**I want** plugin versions pinned by default with a `--latest` flag to override,
-**So that** I get predictable behavior with the option to update.
-
-**Acceptance Criteria**:
-- [ ] Default install pins to a specific version
-- [ ] `--latest` flag installs the most recent version
-- [ ] Version info is visible in plugin metadata
-
-### US4: Offline Fallback
-
-**As a** developer working without network access,
-**I want** the system to fall back to file-copy from the agency repo if available,
-**So that** I can still use speckit commands when offline.
-
-**Acceptance Criteria**:
-- [ ] If marketplace is unreachable and agency repo exists locally, commands are copied from it
-- [ ] If neither source is available, a clear error message is shown
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Configure marketplace within agency repo (`packages/claude-plugin-agency-spec-kit/`) | P1 | No separate repo needed (per Q3 clarification) |
-| FR-002 | Create plugin manifest with both namespaced and bare command names | P1 | Register `specify` and `agency-spec-kit:specify` etc. (per Q1) |
-| FR-003 | Bundle Agency MCP server config in plugin manifest | P1 | For marketplace installs; separate for file-copy fallback (per Q2) |
-| FR-004 | Update `generacy setup build` to install via marketplace | P1 | Replace file-copy logic |
-| FR-005 | Update cluster-templates entrypoints for marketplace install | P1 | cluster-templates#3 |
-| FR-006 | Clean up old file-copy commands during install | P2 | Remove `~/.claude/commands/` speckit files |
-| FR-007 | Support version pinning with `--latest` override | P2 | Pin version in this repo's `package.json` or `autodev.json` (per Q5) |
-| FR-008 | Implement offline fallback to local agency repo | P3 | Error if neither source available |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Plugin installable without agency repo | 100% | Test install on clean environment |
-| SC-002 | All speckit commands functional after marketplace install | 100% | Run each command end-to-end |
-| SC-003 | Migration from file-copy is seamless | No duplicates | Verify no conflicting command files |
-| SC-004 | Works for external contributors | Yes | Test from outside dev container |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Claude Code has a working `claude plugin install` / `claude plugin marketplace` system
-- The agency repo can host the marketplace alongside the plugin source (no separate repo)
-- Team members have GitHub access to the agency repo
-- Commands stay in sync automatically since source and marketplace are co-located (per Q4)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Public marketplace listing (starting private only)
-- Plugin auto-update mechanisms beyond `--latest`
-- Supporting non-Claude-Code plugin systems
+- [Exclusion 1]
 
 ---
 
