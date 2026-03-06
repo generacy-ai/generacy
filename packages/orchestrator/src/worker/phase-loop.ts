@@ -220,32 +220,47 @@ export class PhaseLoop {
       // 6. Check for review gates
       const gate = gateChecker.checkGate(phase, context.item.workflowName, config);
       if (gate && gate.condition === 'always') {
-        this.logger.info(
-          { phase, gateLabel: gate.gateLabel },
-          'Gate hit, pausing workflow',
-        );
-        await labelManager.onGateHit(phase, gate.gateLabel);
+        // Check if this gate is already satisfied (e.g., completed:clarification
+        // was added before the workflow reached this point). The completed label
+        // corresponds to the gate label suffix: waiting-for:X → completed:X.
+        const gateSuffix = gate.gateLabel.replace(/^waiting-for:/, '');
+        const completedLabel = `completed:${gateSuffix}`;
+        const currentIssue = await context.github.getIssue(context.item.owner, context.item.repo, context.item.issueNumber);
+        const currentLabels = currentIssue.labels.map((l) => typeof l === 'string' ? l : l.name);
 
-        // Update the result with gate info
-        result.gateHit = {
-          gateLabel: gate.gateLabel,
-          reason: `Review gate "${gate.gateLabel}" activated after phase "${phase}"`,
-        };
+        if (currentLabels.includes(completedLabel)) {
+          this.logger.info(
+            { phase, gateLabel: gate.gateLabel, completedLabel },
+            'Gate already satisfied — skipping pause',
+          );
+        } else {
+          this.logger.info(
+            { phase, gateLabel: gate.gateLabel },
+            'Gate hit, pausing workflow',
+          );
+          await labelManager.onGateHit(phase, gate.gateLabel);
 
-        // Record completion time before gate pause
-        const ts = phaseTimestamps.get(phase);
-        if (ts) ts.completedAt = new Date().toISOString();
+          // Update the result with gate info
+          result.gateHit = {
+            gateLabel: gate.gateLabel,
+            reason: `Review gate "${gate.gateLabel}" activated after phase "${phase}"`,
+          };
 
-        // Update stage comment showing gate hit
-        await stageCommentManager.updateStageComment({
-          stage,
-          status: 'in_progress',
-          phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
-          startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-          prUrl: context.prUrl,
-        });
+          // Record completion time before gate pause
+          const ts = phaseTimestamps.get(phase);
+          if (ts) ts.completedAt = new Date().toISOString();
 
-        return { results, completed: false, lastPhase: phase, gateHit: true };
+          // Update stage comment showing gate hit
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'in_progress',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+
+          return { results, completed: false, lastPhase: phase, gateHit: true };
+        }
       }
 
       // 7. Record phase completion time
