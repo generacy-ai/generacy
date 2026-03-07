@@ -286,6 +286,28 @@ describe('postClarifications', () => {
     expect(result.reason).toBe('file-not-found');
   });
 
+  it('posts clarification comment with zero-padded spec directory', async () => {
+    mockReaddirSync.mockReturnValue(['008-fix-something']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    const ctx = createWorkerContext({
+      item: {
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 8,
+        workflowName: 'speckit-bugfix',
+        command: 'process',
+        priority: Date.now(),
+        enqueuedAt: new Date().toISOString(),
+      },
+    });
+
+    const result = await postClarifications(ctx, logger);
+
+    expect(result.posted).toBe(true);
+    expect(result.pendingCount).toBe(2);
+  });
+
   it('returns post-failed when GitHub API errors', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
@@ -357,6 +379,20 @@ describe('hasPendingClarifications', () => {
     mockReadFileSync.mockReturnValue('');
 
     expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+  });
+
+  it('matches zero-padded spec directory names', () => {
+    mockReaddirSync.mockReturnValue(['042-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
+  });
+
+  it('matches triple-zero-padded spec directory for single-digit issue', () => {
+    mockReaddirSync.mockReturnValue(['008-fix-something']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    expect(hasPendingClarifications('/tmp/checkout', 8)).toBe(true);
   });
 });
 

@@ -11,6 +11,31 @@ import { join } from 'node:path';
 import type { WorkerContext, Logger } from './types.js';
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Find the spec directory for a given issue number.
+ *
+ * Spec directories are named `{number}-{slug}` where the number may be
+ * zero-padded (e.g., `008-fix-something`). This function parses the numeric
+ * prefix from each directory and compares as integers to handle both padded
+ * and unpadded naming conventions.
+ */
+function findSpecDir(specsDir: string, issueNumber: number): string | undefined {
+  let dirs: string[];
+  try {
+    dirs = readdirSync(specsDir);
+  } catch {
+    return undefined;
+  }
+  return dirs.find((d) => {
+    const match = d.match(/^(\d+)-/);
+    return match !== null && parseInt(match[1]!, 10) === issueNumber;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
@@ -198,19 +223,10 @@ export function hasPendingClarifications(
   issueNumber: number,
 ): boolean {
   const specsDir = join(checkoutPath, 'specs');
+  const specDir = findSpecDir(specsDir, issueNumber);
+  if (!specDir) return false;
 
-  let clarificationsPath: string | undefined;
-  try {
-    const dirs = readdirSync(specsDir);
-    const match = dirs.find((d) => d.startsWith(`${issueNumber}-`));
-    if (match) {
-      clarificationsPath = join(specsDir, match, 'clarifications.md');
-    }
-  } catch {
-    return false;
-  }
-
-  if (!clarificationsPath) return false;
+  const clarificationsPath = join(specsDir, specDir, 'clarifications.md');
 
   let content: string;
   try {
@@ -239,17 +255,11 @@ export async function postClarifications(
 
   // 1. Find clarifications.md in the specs directory
   const specsDir = join(checkoutPath, 'specs');
-  let clarificationsPath: string | undefined;
+  const specDir = findSpecDir(specsDir, issueNumber);
 
-  try {
-    const dirs = readdirSync(specsDir);
-    const match = dirs.find((d) => d.startsWith(`${issueNumber}-`));
-    if (match) {
-      clarificationsPath = join(specsDir, match, 'clarifications.md');
-    }
-  } catch {
-    // specs/ dir doesn't exist
-  }
+  const clarificationsPath = specDir
+    ? join(specsDir, specDir, 'clarifications.md')
+    : undefined;
 
   if (!clarificationsPath) {
     logger.warn({ issueNumber }, 'No spec directory found for issue — skipping clarification posting');
