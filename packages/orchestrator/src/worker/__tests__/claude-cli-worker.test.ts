@@ -289,7 +289,7 @@ describe('ClaudeCliWorker (integration)', () => {
   });
 
   describe('continue command: resume after gate', () => {
-    it('starts from plan when continue command with completed:clarification label', async () => {
+    it('starts from clarify when continue command with completed:clarification label (re-runs clarify for answer integration)', async () => {
       mockGithub.getIssue.mockResolvedValue({
         labels: [
           { name: 'completed:specify' },
@@ -312,10 +312,10 @@ describe('ClaudeCliWorker (integration)', () => {
         workflowName: 'speckit-bugfix',
       }));
 
-      // First CLI spawn should be for 'plan' (GATE_MAPPING: clarification → resumeFrom: plan)
+      // First CLI spawn should be for 'clarify' (GATE_MAPPING: clarification → resumeFrom: clarify)
       const firstSpawnArgs = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
       const promptArg = firstSpawnArgs[firstSpawnArgs.length - 1]!;
-      expect(promptArg).toContain('/agency-spec-kit:plan');
+      expect(promptArg).toContain('/agency-spec-kit:clarify');
     });
   });
 
