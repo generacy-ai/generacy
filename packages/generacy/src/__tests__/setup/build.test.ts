@@ -580,178 +580,117 @@ describe('setup build command', () => {
     });
   });
 
-  describe('Phase 4: marketplace plugin install', () => {
-    it('registers marketplace in ~/.claude/settings.json with version pinning', async () => {
+  describe('Phase 4: speckit command resolution and copy', () => {
+    it('resolves commands from local generacy workspace node_modules (Tier 1)', async () => {
       mockExecBehavior();
       mockFileSystem([
         '/workspaces/agency',
         '/workspaces/latency',
         '/workspaces/agency/packages/agency/dist/cli.js',
         '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-      ]);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      // Should write settings.json with marketplace registration
-      const settingsCalls = mockWriteFileSync.mock.calls.filter(
-        (c) => (c[0] as string) === '/home/testuser/.claude/settings.json',
-      );
-      expect(settingsCalls.length).toBeGreaterThan(0);
-      const written = JSON.parse(settingsCalls[0][1] as string);
-      expect(written.extraKnownMarketplaces['generacy-marketplace']).toEqual({
-        source: {
-          source: 'github',
-          repo: 'generacy-ai/agency',
-          ref: 'v1.0.0',
-        },
-      });
-    });
-
-    it('registers marketplace without ref when --latest is passed', async () => {
-      mockExecBehavior();
-      mockFileSystem([
-        '/workspaces/agency',
-        '/workspaces/latency',
-        '/workspaces/agency/packages/agency/dist/cli.js',
-        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-      ]);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy', '--latest']);
-
-      const settingsCalls = mockWriteFileSync.mock.calls.filter(
-        (c) => (c[0] as string) === '/home/testuser/.claude/settings.json',
-      );
-      expect(settingsCalls.length).toBeGreaterThan(0);
-      const written = JSON.parse(settingsCalls[0][1] as string);
-      expect(written.extraKnownMarketplaces['generacy-marketplace']).toEqual({
-        source: {
-          source: 'github',
-          repo: 'generacy-ai/agency',
-        },
-      });
-    });
-
-    it('preserves existing settings when registering marketplace', async () => {
-      mockExecBehavior();
-      mockFileSystem([
-        '/home/testuser/.claude/settings.json',
-        '/workspaces/agency',
-        '/workspaces/latency',
-        '/workspaces/agency/packages/agency/dist/cli.js',
-        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-      ]);
-      mockReadFileSync.mockReturnValue(JSON.stringify({ theme: 'dark', fontSize: 14 }));
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      const settingsCalls = mockWriteFileSync.mock.calls.filter(
-        (c) => (c[0] as string) === '/home/testuser/.claude/settings.json',
-      );
-      const written = JSON.parse(settingsCalls[0][1] as string);
-      expect(written.theme).toBe('dark');
-      expect(written.fontSize).toBe(14);
-      expect(written.extraKnownMarketplaces['generacy-marketplace']).toBeDefined();
-    });
-
-    it('runs claude plugin install command', async () => {
-      mockExecBehavior();
-      mockFileSystem([
-        '/workspaces/agency',
-        '/workspaces/latency',
-        '/workspaces/agency/packages/agency/dist/cli.js',
-        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-      ]);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      // execSync should have been called with the plugin install command
-      expect(mockExecSync).toHaveBeenCalledWith(
-        'claude plugin install agency-spec-kit@generacy-marketplace --scope user',
-        expect.anything(),
-      );
-    });
-
-    it('falls back to file copy when marketplace install fails', async () => {
-      mockExecBehavior({
-        'claude plugin install': { throw: true },
-      });
-      mockFileSystem([
-        '/workspaces/agency',
-        '/workspaces/latency',
-        '/workspaces/agency/packages/agency/dist/cli.js',
-        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-        '/workspaces/agency/packages/claude-plugin-agency-spec-kit/commands',
+        '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
       ]);
       mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
 
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
-      // Should warn about marketplace failure
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ stderr: expect.any(String) }),
-        'Marketplace plugin install failed, trying fallback',
-      );
-      // Should copy files as fallback
-      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
       expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.objectContaining({ count: 3 }),
-        'Fallback: copied speckit command definitions',
+        { path: '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from local workspace',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockCopyFileSync).toHaveBeenCalledWith(
+        '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands/specify.md',
+        '/home/testuser/.claude/commands/specify.md',
       );
     });
 
-    it('warns when both marketplace and fallback fail', async () => {
+    it('resolves commands from agency workspace node_modules (Tier 1 fallback)', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        // generacy node_modules does NOT have the package
+        '/workspaces/agency/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/workspaces/agency/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from local workspace',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves commands from npm global (Tier 2) when local not found', async () => {
       mockExecBehavior({
-        'claude plugin install': { throw: true },
+        'npm root -g': { stdout: '/usr/lib/node_modules' },
       });
       mockFileSystem([
         '/workspaces/agency',
         '/workspaces/latency',
         '/workspaces/agency/packages/agency/dist/cli.js',
         '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-        // No commands directory — fallback also fails
+        // No local node_modules paths
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
       ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'plan.md']);
 
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dir: '/workspaces/agency/packages/claude-plugin-agency-spec-kit/commands',
-        }),
-        'Speckit commands directory not found and marketplace install failed',
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from npm global',
       );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
     });
 
-    it('cleans up old file-copy commands when plugin installs successfully', async () => {
-      mockExecBehavior();
-      // Make some old command files exist
+    it('returns null when package not found in any tier', async () => {
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
       mockFileSystem([
         '/workspaces/agency',
         '/workspaces/latency',
         '/workspaces/agency/packages/agency/dist/cli.js',
         '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
-        '/home/testuser/.claude/commands/specify.md',
-        '/home/testuser/.claude/commands/clarify.md',
-        '/home/testuser/.claude/commands/plan.md',
       ]);
 
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
-      // Should remove old command files
-      expect(mockRmSync).toHaveBeenCalledWith(
-        '/home/testuser/.claude/commands/specify.md',
-        { force: true },
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
       );
-      expect(mockRmSync).toHaveBeenCalledWith(
-        '/home/testuser/.claude/commands/clarify.md',
-        { force: true },
-      );
-      expect(mockRmSync).toHaveBeenCalledWith(
-        '/home/testuser/.claude/commands/plan.md',
-        { force: true },
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+    });
+
+    it('copies .md files to ~/.claude/commands/ and logs count', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md', 'README.txt']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // Should only copy .md files (not README.txt)
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockMkdirSync).toHaveBeenCalledWith(
+        '/home/testuser/.claude/commands',
+        { recursive: true },
       );
       expect(mockLogger.info).toHaveBeenCalledWith(
-        { count: 3 },
-        'Cleaned up old file-copy commands',
+        expect.objectContaining({ count: 3 }),
+        'Copied speckit command files',
       );
     });
 
@@ -780,19 +719,20 @@ describe('setup build command', () => {
     });
 
     it('skips MCP configuration with info log when Agency CLI not found', async () => {
-      mockExecBehavior();
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
       mockFileSystem([
         '/workspaces/agency',
         '/workspaces/latency',
-        // Agency CLI missing
+        // Agency CLI missing — buildAgency would exit(1) but we mock exit
         '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
       ]);
 
-      // Note: buildAgency would normally exit(1) here, but we mock exit
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
       expect(mockLogger.info).toHaveBeenCalledWith(
-        'Skipping MCP configuration — agency not built from source',
+        'Skipping MCP configuration — agency CLI not found',
       );
     });
   });
@@ -818,15 +758,14 @@ describe('setup build command', () => {
       expect(mockLogger.info).toHaveBeenCalledWith('Build process complete');
     });
 
-    it('tries npm-global fallback when agency dir does not exist and marketplace fails', async () => {
+    it('resolves commands from npm global in external project', async () => {
       mockExecBehavior({
-        'claude plugin marketplace list': { throw: true },
-        'claude plugin marketplace add': { throw: true },
         'npm root -g': { stdout: '/usr/lib/node_modules' },
       });
-      // No source repos — external project, but npm global commands dir exists
+      // No source repos — external project, but npm global package exists
       mockFileSystem([
-        '/usr/lib/node_modules/@generacy-ai/agency/commands',
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+        '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js',
       ]);
       mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md']);
 
@@ -835,20 +774,18 @@ describe('setup build command', () => {
       // Should copy files from npm global
       expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
       expect(mockCopyFileSync).toHaveBeenCalledWith(
-        '/usr/lib/node_modules/@generacy-ai/agency/commands/specify.md',
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands/specify.md',
         '/home/testuser/.claude/commands/specify.md',
       );
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({ count: 2 }),
-        'Copied speckit command definitions from npm global',
+        'Copied speckit command files',
       );
       expect(mockExit).not.toHaveBeenCalled();
     });
 
-    it('warns when all fallbacks fail (marketplace, source, npm)', async () => {
+    it('logs error when package not found anywhere', async () => {
       mockExecBehavior({
-        'claude plugin marketplace list': { throw: true },
-        'claude plugin marketplace add': { throw: true },
         'npm root -g': { throw: true },
       });
       // No source repos, npm root fails
@@ -856,8 +793,9 @@ describe('setup build command', () => {
 
       await runBuildCommand([]);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        'No speckit commands available — marketplace, source, and npm fallbacks all failed',
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
       );
       expect(mockCopyFileSync).not.toHaveBeenCalled();
       expect(mockExit).not.toHaveBeenCalled();
@@ -901,98 +839,15 @@ describe('setup build command', () => {
     });
   });
 
-  describe('Phase 4: npm-global fallback', () => {
-    it('copies .md files from npm global when marketplace fails and agency source unavailable', async () => {
-      mockExecBehavior({
-        'claude plugin marketplace list': { throw: true },
-        'claude plugin marketplace add': { throw: true },
-        'npm root -g': { stdout: '/usr/lib/node_modules' },
-      });
-      mockFileSystem([
-        '/usr/lib/node_modules/@generacy-ai/agency/commands',
-        '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js',
-      ]);
-      mockReaddirSync.mockReturnValue(['specify.md', 'plan.md', 'tasks.md']);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      expect(mockMkdirSync).toHaveBeenCalledWith(
-        '/home/testuser/.claude/commands',
-        { recursive: true },
-      );
-      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
-      expect(mockCopyFileSync).toHaveBeenCalledWith(
-        '/usr/lib/node_modules/@generacy-ai/agency/commands/specify.md',
-        '/home/testuser/.claude/commands/specify.md',
-      );
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        expect.objectContaining({ count: 3 }),
-        'Copied speckit command definitions from npm global',
-      );
-    });
-
-    it('skips npm fallback when marketplace plugin installs successfully', async () => {
-      mockExecBehavior({
-        'npm root -g': { stdout: '/usr/lib/node_modules' },
-      });
-      mockFileSystem([
-        '/usr/lib/node_modules/@generacy-ai/agency/commands',
-        '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js',
-      ]);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      // Plugin installed successfully, so npm fallback should not be used for commands
-      expect(mockLogger.info).toHaveBeenCalledWith(
-        'Installed agency-spec-kit plugin via marketplace',
-      );
-      // copyFileSync should not be called for command files
-      expect(mockCopyFileSync).not.toHaveBeenCalled();
-    });
-
-    it('warns when npm root -g fails and commands dir does not exist', async () => {
-      mockExecBehavior({
-        'claude plugin marketplace list': { throw: true },
-        'claude plugin marketplace add': { throw: true },
-        'npm root -g': { throw: true },
-      });
-      mockFileSystem([]);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        'No speckit commands available — marketplace, source, and npm fallbacks all failed',
-      );
-      expect(mockCopyFileSync).not.toHaveBeenCalled();
-    });
-
-    it('warns when npm root succeeds but commands dir does not exist in package', async () => {
-      mockExecBehavior({
-        'claude plugin marketplace list': { throw: true },
-        'claude plugin marketplace add': { throw: true },
-        'npm root -g': { stdout: '/usr/lib/node_modules' },
-      });
-      // npm root returns valid path but no commands/ dir in the package
-      mockFileSystem([]);
-
-      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        'No speckit commands available — marketplace, source, and npm fallbacks all failed',
-      );
-      expect(mockCopyFileSync).not.toHaveBeenCalled();
-    });
-
-    it('resolveNpmGlobalRoot returns trimmed path on success and null on failure', async () => {
+  describe('Phase 4: npm-global resolution', () => {
+    it('resolveNpmGlobalRoot returns trimmed path on success', async () => {
       // Test via the MCP CLI resolution path — when agency source is not available,
       // the code uses resolveNpmGlobalRoot() to find the global CLI
       mockExecBehavior({
-        'claude plugin marketplace list': { throw: true },
-        'claude plugin marketplace add': { throw: true },
         'npm root -g': { stdout: '  /usr/lib/node_modules  \n' },
       });
       mockFileSystem([
-        '/usr/lib/node_modules/@generacy-ai/agency/commands',
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
         '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js',
       ]);
       mockReaddirSync.mockReturnValue(['specify.md']);
@@ -1001,7 +856,7 @@ describe('setup build command', () => {
 
       // Should have used the trimmed path (no leading/trailing whitespace)
       expect(mockCopyFileSync).toHaveBeenCalledWith(
-        '/usr/lib/node_modules/@generacy-ai/agency/commands/specify.md',
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands/specify.md',
         '/home/testuser/.claude/commands/specify.md',
       );
       // MCP CLI should also be found via the trimmed path
@@ -1009,6 +864,37 @@ describe('setup build command', () => {
         { path: '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js' },
         'Using globally installed agency CLI',
       );
+    });
+
+    it('logs error when npm root -g fails and no local paths exist', async () => {
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
+      mockFileSystem([]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+      );
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+    });
+
+    it('logs error when npm root succeeds but commands dir does not exist', async () => {
+      mockExecBehavior({
+        'npm root -g': { stdout: '/usr/lib/node_modules' },
+      });
+      // npm root returns valid path but no commands/ dir in the package
+      mockFileSystem([]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+      );
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
     });
   });
 
