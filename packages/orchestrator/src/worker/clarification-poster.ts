@@ -6,7 +6,7 @@
  * but can fail silently. This module reads `clarifications.md`, extracts
  * pending questions, and posts them as a comment with a dedup marker.
  */
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { WorkerContext, Logger } from './types.js';
 
@@ -237,6 +237,135 @@ export function hasPendingClarifications(
 
   const questions = parseClarifications(content);
   return questions.some((q) => !q.answered);
+}
+
+// ---------------------------------------------------------------------------
+// integrateClarificationAnswers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse answers from GitHub issue comments.
+ *
+ * Scans comment bodies for patterns like `Q1: answer text` and extracts
+ * answers keyed by question number. Later answers for the same question
+ * override earlier ones (last wins).
+ */
+function parseAnswersFromComments(
+  comments: Array<{ body: string }>,
+  questionNumbers: number[],
+): Map<number, string> {
+  const answers = new Map<number, string>();
+
+  for (const comment of comments) {
+    const regex =
+      /(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
+
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(comment.body)) !== null) {
+      const numStr = match[1];
+      const answerStr = match[2];
+      if (!numStr || answerStr === undefined) continue;
+      const questionNumber = parseInt(numStr, 10);
+      const answer = answerStr.trim();
+
+      if (answer && questionNumbers.includes(questionNumber)) {
+        answers.set(questionNumber, answer);
+      }
+    }
+  }
+
+  return answers;
+}
+
+export interface IntegrationResult {
+  /** Number of answers integrated into the file */
+  integrated: number;
+  /** Reason if nothing was integrated */
+  reason?: 'no-spec-dir' | 'no-file' | 'no-pending' | 'no-answers' | 'no-changes';
+}
+
+/**
+ * Integrate clarification answers from GitHub issue comments into the local
+ * clarifications.md file.
+ *
+ * This is a defensive measure: the Claude CLI clarify command is supposed to
+ * call `manage_clarifications update_answer` to persist answers, but if it
+ * fails to do so, this function ensures the answers are integrated before
+ * the gate checker evaluates `hasPendingClarifications`.
+ */
+export async function integrateClarificationAnswers(
+  context: WorkerContext,
+  logger: Logger,
+): Promise<IntegrationResult> {
+  const { github, item, checkoutPath } = context;
+  const { owner, repo, issueNumber } = item;
+
+  // 1. Find clarifications.md
+  const specsDir = join(checkoutPath, 'specs');
+  const specDir = findSpecDir(specsDir, issueNumber);
+  if (!specDir) {
+    return { integrated: 0, reason: 'no-spec-dir' };
+  }
+
+  const clarificationsPath = join(specsDir, specDir, 'clarifications.md');
+
+  let content: string;
+  try {
+    content = readFileSync(clarificationsPath, 'utf-8');
+  } catch {
+    return { integrated: 0, reason: 'no-file' };
+  }
+
+  // 2. Parse questions to find pending ones
+  const questions = parseClarifications(content);
+  const pendingQuestions = questions.filter((q) => !q.answered);
+  if (pendingQuestions.length === 0) {
+    return { integrated: 0, reason: 'no-pending' };
+  }
+
+  const pendingNumbers = pendingQuestions.map((q) => q.number);
+
+  // 3. Fetch GitHub issue comments and parse answers
+  let comments: Array<{ body: string }>;
+  try {
+    comments = await github.getIssueComments(owner, repo, issueNumber);
+  } catch (error) {
+    logger.warn(
+      { error: error instanceof Error ? error.message : String(error) },
+      'Failed to fetch issue comments for answer integration',
+    );
+    return { integrated: 0, reason: 'no-answers' };
+  }
+
+  const answers = parseAnswersFromComments(comments, pendingNumbers);
+  if (answers.size === 0) {
+    return { integrated: 0, reason: 'no-answers' };
+  }
+
+  // 4. Update the file content — replace *Pending* with actual answers
+  //    for each matched question
+  let updatedContent = content;
+  for (const [questionNum, answer] of answers) {
+    // Match the answer line within the correct question section.
+    // The pattern finds ### Q{N}: ... **Answer**: *Pending* and replaces
+    // the *Pending* part with the actual answer text.
+    const pattern = new RegExp(
+      `(### Q${questionNum}:[\\s\\S]*?\\*\\*Answer\\*\\*:\\s*)\\*Pending\\*`,
+    );
+    updatedContent = updatedContent.replace(pattern, `$1${answer}`);
+  }
+
+  if (updatedContent === content) {
+    return { integrated: 0, reason: 'no-changes' };
+  }
+
+  writeFileSync(clarificationsPath, updatedContent);
+  logger.info(
+    { count: answers.size, issueNumber },
+    'Integrated GitHub answers into clarifications.md',
+  );
+
+  return { integrated: answers.size };
 }
 
 // ---------------------------------------------------------------------------

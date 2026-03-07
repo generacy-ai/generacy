@@ -7,7 +7,7 @@ import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
-import { postClarifications, hasPendingClarifications } from './clarification-poster.js';
+import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -251,6 +251,11 @@ export class PhaseLoop {
         if (gate.condition === 'always') {
           gateActive = true;
         } else if (gate.condition === 'on-questions') {
+          // Defensive: integrate any GitHub answers into local clarifications.md
+          // before checking for pending questions. The Claude CLI clarify command
+          // should do this via manage_clarifications update_answer, but if it
+          // doesn't, this ensures answers aren't lost and the gate passes.
+          await integrateClarificationAnswers(context, this.logger);
           gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber);
           if (!gateActive) {
             this.logger.info(

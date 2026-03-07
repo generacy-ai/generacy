@@ -5,6 +5,7 @@ import {
   postClarifications,
   hasPendingClarifications,
   clarificationMarker,
+  integrateClarificationAnswers,
 } from '../clarification-poster.js';
 import type { WorkerContext, Logger } from '../types.js';
 
@@ -13,10 +14,12 @@ import type { WorkerContext, Logger } from '../types.js';
 // ---------------------------------------------------------------------------
 const mockReaddirSync = vi.fn<(path: string) => string[]>();
 const mockReadFileSync = vi.fn<(path: string, encoding: string) => string>();
+const mockWriteFileSync = vi.fn<(path: string, content: string) => void>();
 
 vi.mock('node:fs', () => ({
   readdirSync: (path: string) => mockReaddirSync(path),
   readFileSync: (path: string, encoding: string) => mockReadFileSync(path, encoding),
+  writeFileSync: (path: string, content: string) => mockWriteFileSync(path, content),
 }));
 
 // ---------------------------------------------------------------------------
@@ -393,6 +396,162 @@ describe('hasPendingClarifications', () => {
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
 
     expect(hasPendingClarifications('/tmp/checkout', 8)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T005: integrateClarificationAnswers tests
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('integrates answers from GitHub comments into clarifications.md', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, body: 'Q1: A\nQ2: Use PostgreSQL', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    expect(result.reason).toBeUndefined();
+    expect(mockWriteFileSync).toHaveBeenCalledOnce();
+
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+    expect(writtenContent).toContain('**Answer**: Use PostgreSQL');
+    // Already-answered Q3 should remain unchanged
+    expect(writtenContent).toContain('**Answer**: Use the existing brand colors');
+  });
+
+  it('returns no-spec-dir when spec directory not found', async () => {
+    mockReaddirSync.mockReturnValue(['99-other-issue']);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-spec-dir');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('returns no-file when clarifications.md does not exist', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-file');
+  });
+
+  it('returns no-pending when all questions already answered', async () => {
+    const allAnswered = `### Q1: Done
+**Context**: Answered.
+**Question**: Already answered?
+
+**Answer**: Yes, done.
+`;
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(allAnswered);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-pending');
+  });
+
+  it('returns no-answers when no matching answers found in comments', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, body: 'Some unrelated comment', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('handles partial answers (only some questions answered)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, body: 'Q1: OAuth 2.0', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(1);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: OAuth 2.0');
+    // Q2 should still be pending
+    expect(writtenContent).toContain('*Pending*');
+  });
+
+  it('uses last answer when multiple comments answer the same question', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, body: 'Q1: First answer', author: 'user', created_at: '', updated_at: '' },
+      { id: 2, body: 'Q1: Updated answer', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(1);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: Updated answer');
+    expect(writtenContent).not.toContain('First answer');
+  });
+
+  it('works with zero-padded spec directories', async () => {
+    mockReaddirSync.mockReturnValue(['008-fix-something']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    const ctx = createWorkerContext({
+      item: {
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 8,
+        workflowName: 'speckit-bugfix',
+        command: 'continue',
+        priority: Date.now(),
+        enqueuedAt: new Date().toISOString(),
+      },
+    });
+    (ctx.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, body: 'Q1: A\nQ2: B', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(ctx, logger);
+
+    expect(result.integrated).toBe(2);
+  });
+
+  it('handles GitHub API failure gracefully', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('API rate limit'),
+    );
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 });
 
