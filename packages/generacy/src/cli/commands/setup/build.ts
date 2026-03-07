@@ -275,44 +275,42 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
 
   logger.info('Phase 4: Installing Claude Code integration (speckit commands + Agency MCP)');
 
-  // Step 1: Register marketplace in ~/.claude/settings.json
-  const settingsPath = join(claudeDir, 'settings.json');
-  try {
-    let settings: Record<string, unknown> = {};
-    if (existsSync(settingsPath)) {
-      settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>;
+  // Step 1: Add marketplace via CLI (idempotent — skips if already registered)
+  let marketplaceRegistered = false;
+  const marketplaceList = execSafe('claude plugin marketplace list');
+  const alreadyRegistered = marketplaceList.ok && marketplaceList.stdout?.includes('generacy-marketplace');
+
+  if (alreadyRegistered) {
+    marketplaceRegistered = true;
+    logger.info('generacy-marketplace already registered');
+  } else {
+    // Use local directory if agency source is available, otherwise clone from GitHub
+    let addResult;
+    if (existsSync(join(config.agencyDir, '.claude-plugin', 'marketplace.json'))) {
+      addResult = execSafe(`claude plugin marketplace add ${config.agencyDir} --scope user`);
+    } else {
+      addResult = execSafe('claude plugin marketplace add generacy-ai/agency --scope user --sparse packages/claude-plugin-agency-spec-kit .claude-plugin');
     }
 
-    const marketplaces = (settings['extraKnownMarketplaces'] ?? {}) as Record<string, unknown>;
-    const marketplaceSource: Record<string, unknown> = {
-      source: {
-        source: 'github',
-        repo: 'generacy-ai/agency',
-      },
-    };
-    // Version pinning: add ref to source unless --latest is specified
-    if (!config.latestPlugin) {
-      (marketplaceSource['source'] as Record<string, unknown>)['ref'] = 'v1.0.0';
+    if (addResult.ok) {
+      marketplaceRegistered = true;
+      logger.info('Registered generacy-marketplace');
+    } else {
+      logger.warn({ stderr: addResult.stderr }, 'Failed to register generacy-marketplace');
     }
-    marketplaces['generacy-marketplace'] = marketplaceSource;
-    settings['extraKnownMarketplaces'] = marketplaces;
-
-    mkdirSync(claudeDir, { recursive: true });
-    writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
-    logger.info('Registered generacy-marketplace in ~/.claude/settings.json');
-  } catch (error) {
-    logger.warn({ error: String(error) }, 'Failed to register marketplace');
   }
 
-  // Step 2: Try marketplace plugin install
+  // Step 2: Install plugin from marketplace
   let pluginInstalled = false;
-  const installCmd = 'claude plugin install agency-spec-kit@generacy-marketplace --scope user';
-  const result = execSafe(installCmd);
-  if (result.ok) {
-    pluginInstalled = true;
-    logger.info('Installed agency-spec-kit plugin via marketplace');
-  } else {
-    logger.warn({ stderr: result.stderr }, 'Marketplace plugin install failed, trying fallback');
+  if (marketplaceRegistered) {
+    const installCmd = 'claude plugin install agency-spec-kit@generacy-marketplace --scope user';
+    const result = execSafe(installCmd);
+    if (result.ok) {
+      pluginInstalled = true;
+      logger.info('Installed agency-spec-kit plugin via marketplace');
+    } else {
+      logger.warn({ stderr: result.stderr }, 'Marketplace plugin install failed, trying fallback');
+    }
   }
 
   // Step 3: Fallback to file copy from agency repo (only when agency dir exists)
@@ -365,10 +363,26 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
 
   // Step 5: Add Agency MCP server to user-level Claude config (~/.claude.json)
   const claudeJsonPath = join(home, '.claude.json');
-  const agencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
+  const sourceAgencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
 
-  if (!existsSync(agencyCli)) {
-    logger.info('Skipping MCP configuration — agency not built from source');
+  // Resolve agency CLI: prefer source build, fall back to globally installed package
+  let agencyCli: string | null = null;
+  let agencyCwd: string | undefined;
+
+  if (existsSync(sourceAgencyCli)) {
+    agencyCli = sourceAgencyCli;
+    agencyCwd = config.agencyDir;
+  } else {
+    // Find globally installed @generacy-ai/agency package
+    const globalCli = execSafe('node -e "console.log(require.resolve(\'@generacy-ai/agency/dist/cli.js\'))"');
+    if (globalCli.ok && globalCli.stdout && existsSync(globalCli.stdout)) {
+      agencyCli = globalCli.stdout;
+      logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
+    }
+  }
+
+  if (!agencyCli) {
+    logger.info('Skipping MCP configuration — agency CLI not found');
     logger.info('Phase 4 complete: Claude Code integration installed');
     return;
   }
@@ -380,12 +394,15 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     }
 
     const mcpServers = (claudeJson['mcpServers'] ?? {}) as Record<string, unknown>;
-    mcpServers['agency'] = {
+    const mcpEntry: Record<string, unknown> = {
       type: 'stdio',
       command: 'node',
       args: [agencyCli],
-      cwd: config.agencyDir,
     };
+    if (agencyCwd) {
+      mcpEntry['cwd'] = agencyCwd;
+    }
+    mcpServers['agency'] = mcpEntry;
     claudeJson['mcpServers'] = mcpServers;
 
     writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2));
