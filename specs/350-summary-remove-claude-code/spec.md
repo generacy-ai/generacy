@@ -1,8 +1,10 @@
-# Feature Specification: Remove Claude Marketplace Plugin Install
+# Feature Specification: ## Summary
 
-Replace Claude Code marketplace plugin installation with npm package-based speckit command copying in `generacy setup build` Phase 4.
+Remove the Claude Code marketplace plugin installation from `generacy setup build` (Phase 4) and replace it with copying speckit command files from the `@generacy-ai/agency-plugin-spec-kit` npm package
 
 **Branch**: `350-summary-remove-claude-code` | **Date**: 2026-03-07 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -35,60 +37,35 @@ The marketplace approach is unreliable and adds unnecessary complexity. Since `@
 
 ## User Stories
 
-### US1: Developer Running Setup Build
+### US1: [Primary User Story]
 
-**As a** developer setting up a Generacy workspace,
-**I want** `generacy setup build` to reliably install speckit commands from the npm package,
-**So that** I can use speckit slash commands in Claude Code without marketplace plugin failures.
-
-**Acceptance Criteria**:
-- [ ] Running `generacy setup build` copies speckit `.md` command files to `~/.claude/commands/`
-- [ ] Commands are sourced from the `@generacy-ai/agency-plugin-spec-kit` npm package
-- [ ] No Claude marketplace plugin install is attempted
-- [ ] Setup succeeds in both tetrad-development workspace and external container environments
-
-### US2: External Developer Onboarding
-
-**As an** external developer using Generacy outside the tetrad-development monorepo,
-**I want** speckit commands to install via npm global resolution,
-**So that** I don't need the agency repo cloned locally.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] When `@generacy-ai/agency-plugin-spec-kit` is installed globally, commands resolve and copy correctly
-- [ ] When the package is in the local workspace `node_modules`, that path is preferred
-- [ ] Clear error message if the package cannot be found in either location
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Remove `claude mcp add-from-marketplace` calls from Phase 4 | P1 | Marketplace plugin install is unreliable |
-| FR-002 | Resolve `@generacy-ai/agency-plugin-spec-kit` package path via local workspace first, then npm global | P1 | Two-tier resolution strategy |
-| FR-003 | Copy all `.md` command files from package `commands/` directory to `~/.claude/commands/` | P1 | Replaces marketplace materialization |
-| FR-004 | Retain Agency MCP server configuration in `~/.claude/settings.json` | P1 | MCP server is separate from commands |
-| FR-005 | Remove marketplace plugin registration logic | P2 | Clean up unused code paths |
-| FR-006 | Log which resolution path was used (local vs global) | P2 | Aids debugging setup issues |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Setup build completes without marketplace errors | 100% | Run `generacy setup build` in tetrad-development |
-| SC-002 | Speckit commands available in `~/.claude/commands/` after setup | All commands present | Check file listing post-setup |
-| SC-003 | Setup works in external container (no local agency repo) | Pass | Run in clean container with npm global package |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- `@generacy-ai/agency-plugin-spec-kit` npm package will be updated to bundle command `.md` files before this feature ships
-- The Agency MCP server registration mechanism remains unchanged
-- Node.js `require.resolve` or equivalent can locate globally installed npm packages
+- [Assumption 1]
 
 ## Out of Scope
 
-- Changes to the Agency MCP server configuration
-- Modifying the speckit command file contents themselves
-- Updating the `@generacy-ai/agency-plugin-spec-kit` package (handled in generacy-ai/agency repo)
-- Devcontainer shared volume rework (separate issue in tetrad-development)
+- [Exclusion 1]
 
 ---
 
