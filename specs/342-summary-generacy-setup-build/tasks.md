@@ -10,25 +10,25 @@
 
 ## Phase 1: Setup & Helper Extraction
 
-- [ ] T001 Extract `resolveNpmGlobalRoot()` helper function in `packages/generacy/src/cli/commands/setup/build.ts` — move the existing `npm root -g` call (line 377) into a reusable function that returns `string | null`, and update the MCP CLI resolution (line 377-384) to use it
-- [ ] T002 [P] Check existing test coverage for `installClaudeCodeIntegration()` in `packages/generacy/src/cli/commands/setup/build.test.ts` — if no tests exist, create the test file with basic scaffolding (imports, mocks for `execSafe`, `existsSync`, `copyFileSync`, `mkdirSync`)
+- [X] T001 Extract `resolveNpmGlobalRoot()` helper function in `packages/generacy/src/cli/commands/setup/build.ts` — move the existing `npm root -g` call (line 377) into a reusable function that returns `string | null`, and update the MCP CLI resolution (line 377-384) to use it
+- [X] T002 [P] Check existing test coverage for `installClaudeCodeIntegration()` in `packages/generacy/src/cli/commands/setup/build.test.ts` — if no tests exist, create the test file with basic scaffolding (imports, mocks for `execSafe`, `existsSync`, `copyFileSync`, `mkdirSync`)
 
 ## Phase 2: Core Implementation
 
-- [ ] T003 Add npm-global fallback path in `installClaudeCodeIntegration()` (`packages/generacy/src/cli/commands/setup/build.ts`) — after the existing `else if (!pluginInstalled)` block at line 342, insert logic to: (1) call `resolveNpmGlobalRoot()`, (2) check for `<globalRoot>/@generacy-ai/agency/commands/` directory, (3) copy `.md` files to `~/.claude/commands/`, (4) log success or warning if all fallbacks fail
-- [ ] T004 [P] Update the cleanup step (lines 345-362) to also run after a successful npm-global fallback when marketplace later succeeds — ensure the `else` branch (pluginInstalled) still removes old file-copy commands regardless of whether they came from source or npm fallback
+- [X] T003 Add npm-global fallback path in `installClaudeCodeIntegration()` (`packages/generacy/src/cli/commands/setup/build.ts`) — after the existing `else if (!pluginInstalled)` block at line 342, insert logic to: (1) call `resolveNpmGlobalRoot()`, (2) check for `<globalRoot>/@generacy-ai/agency/commands/` directory, (3) copy `.md` files to `~/.claude/commands/`, (4) log success or warning if all fallbacks fail
+- [X] T004 [P] Update the cleanup step (lines 345-362) to also run after a successful npm-global fallback when marketplace later succeeds — ensure the `else` branch (pluginInstalled) still removes old file-copy commands regardless of whether they came from source or npm fallback
 
 ## Phase 3: Tests
 
-- [ ] T005 Add unit test: npm-global fallback copies `.md` files when marketplace fails and agency source is unavailable — mock `execSafe('npm root -g')` to return a valid path, mock `existsSync` to return true for npm commands dir, verify `copyFileSync` is called for each `.md` file
-- [ ] T006 [P] Add unit test: npm-global fallback is skipped when marketplace plugin installs successfully — verify the npm fallback branch is not entered
-- [ ] T007 [P] Add unit test: npm-global fallback logs warning when `npm root -g` fails or commands dir doesn't exist — verify `logger.warn` is called with appropriate message
-- [ ] T008 [P] Add unit test: verify `resolveNpmGlobalRoot()` returns trimmed path on success and `null` on failure
+- [X] T005 Add unit test: npm-global fallback copies `.md` files when marketplace fails and agency source is unavailable — mock `execSafe('npm root -g')` to return a valid path, mock `existsSync` to return true for npm commands dir, verify `copyFileSync` is called for each `.md` file
+- [X] T006 [P] Add unit test: npm-global fallback is skipped when marketplace plugin installs successfully — verify the npm fallback branch is not entered
+- [X] T007 [P] Add unit test: npm-global fallback logs warning when `npm root -g` fails or commands dir doesn't exist — verify `logger.warn` is called with appropriate message
+- [X] T008 [P] Add unit test: verify `resolveNpmGlobalRoot()` returns trimmed path on success and `null` on failure
 
 ## Phase 4: Verification
 
-- [ ] T009 Run full test suite (`pnpm test` in `packages/generacy`) and verify all tests pass
-- [ ] T010 Run linter/type-check (`pnpm lint` / `pnpm typecheck` in `packages/generacy`) and fix any issues
+- [X] T009 Run full test suite (`pnpm test` in `packages/generacy`) and verify all tests pass
+- [X] T010 Run linter/type-check (`pnpm lint` / `pnpm typecheck` in `packages/generacy`) and fix any issues
 
 ## Dependencies & Execution Order
 

@@ -264,6 +264,18 @@ const SPECKIT_COMMAND_FILES = [
 ];
 
 /**
+ * Resolve the npm global root directory (where globally installed packages live).
+ * Returns the trimmed path on success, or null if `npm root -g` fails.
+ */
+function resolveNpmGlobalRoot(): string | null {
+  const result = execSafe('npm root -g');
+  if (result.ok && result.stdout) {
+    return result.stdout.trim();
+  }
+  return null;
+}
+
+/**
  * Phase 4: Install speckit commands and configure Agency MCP for Claude Code.
  * Installs speckit slash commands via marketplace plugin with fallback to file copy.
  * Adds the Agency MCP server to the user-level Claude config.
@@ -340,7 +352,30 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
       );
     }
   } else if (!pluginInstalled) {
-    logger.info('Skipping file-copy fallback — agency source not available');
+    // Step 3b: Fallback to npm global @generacy-ai/agency/commands/
+    let npmFallbackCopied = false;
+    const globalRoot = resolveNpmGlobalRoot();
+    if (globalRoot) {
+      const npmCommandsDir = join(globalRoot, '@generacy-ai', 'agency', 'commands');
+      if (existsSync(npmCommandsDir)) {
+        const userCommandsDir = join(home, '.claude', 'commands');
+        mkdirSync(userCommandsDir, { recursive: true });
+        const files = readdirSync(npmCommandsDir).filter((f) => f.endsWith('.md'));
+        for (const file of files) {
+          copyFileSync(join(npmCommandsDir, file), join(userCommandsDir, file));
+        }
+        if (files.length > 0) {
+          npmFallbackCopied = true;
+          logger.info(
+            { count: files.length, dest: userCommandsDir },
+            'Copied speckit command definitions from npm global',
+          );
+        }
+      }
+    }
+    if (!npmFallbackCopied) {
+      logger.warn('No speckit commands available — marketplace, source, and npm fallbacks all failed');
+    }
   } else {
     // Step 4: Clean up old file-copy commands to avoid duplicates
     const userCommandsDir = join(home, '.claude', 'commands');
@@ -374,9 +409,9 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     agencyCwd = config.agencyDir;
   } else {
     // Find globally installed @generacy-ai/agency package
-    const globalRoot = execSafe('npm root -g');
-    if (globalRoot.ok && globalRoot.stdout) {
-      const globalCliPath = join(globalRoot.stdout.trim(), '@generacy-ai', 'agency', 'dist', 'cli.js');
+    const globalRoot = resolveNpmGlobalRoot();
+    if (globalRoot) {
+      const globalCliPath = join(globalRoot, '@generacy-ai', 'agency', 'dist', 'cli.js');
       if (existsSync(globalCliPath)) {
         agencyCli = globalCliPath;
         logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
