@@ -218,25 +218,47 @@ export class PhaseLoop {
 
       // 5b. Fail phases that require file changes but produced none
       if (PHASES_REQUIRING_CHANGES.has(phase) && !hasChanges) {
-        this.logger.error(
-          { phase },
-          'Phase completed with exit code 0 but produced no file changes',
-        );
-        await labelManager.onError(phase);
-        await stageCommentManager.updateStageComment({
-          stage,
-          status: 'error',
-          phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
-          startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-          prUrl: context.prUrl,
-        });
-        result.success = false;
-        result.error = {
-          message: `Phase "${phase}" succeeded but produced no file changes — expected code to be written`,
-          stderr: '',
-          phase,
-        };
-        return { results, completed: false, lastPhase: phase, gateHit: false };
+        // Check if a previous run already produced implementation changes on this
+        // branch (e.g., issue was requeued). If the branch has prior commits for
+        // this phase, treat it as a soft pass rather than an error.
+        let hasPriorImplementation = false;
+        try {
+          const defaultBranch = await context.github.getDefaultBranch();
+          const branch = await context.github.getCurrentBranch();
+          const commits = await context.github.getCommitsBetween(`origin/${defaultBranch}`, branch);
+          hasPriorImplementation = commits.some(
+            (c) => c.message.includes(`complete ${phase} phase`),
+          );
+        } catch {
+          // If we can't check, fall through to the error path
+        }
+
+        if (hasPriorImplementation) {
+          this.logger.warn(
+            { phase },
+            'Phase produced no new changes but branch has prior implementation commits — continuing',
+          );
+        } else {
+          this.logger.error(
+            { phase },
+            'Phase completed with exit code 0 but produced no file changes',
+          );
+          await labelManager.onError(phase);
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+          result.success = false;
+          result.error = {
+            message: `Phase "${phase}" succeeded but produced no file changes — expected code to be written`,
+            stderr: '',
+            phase,
+          };
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
       }
 
       // 5c. Mark phase as completed in labels
