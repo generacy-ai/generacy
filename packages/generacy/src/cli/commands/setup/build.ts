@@ -249,21 +249,6 @@ function buildGeneracy(config: BuildConfig): void {
 }
 
 /**
- * Speckit command files that may exist as old file-copy artifacts in ~/.claude/commands/.
- */
-const SPECKIT_COMMAND_FILES = [
-  'specify.md',
-  'clarify.md',
-  'plan.md',
-  'tasks.md',
-  'implement.md',
-  'checklist.md',
-  'analyze.md',
-  'constitution.md',
-  'taskstoissues.md',
-];
-
-/**
  * Resolve the npm global root directory (where globally installed packages live).
  * Returns the trimmed path on success, or null if `npm root -g` fails.
  */
@@ -276,127 +261,81 @@ function resolveNpmGlobalRoot(): string | null {
 }
 
 /**
+ * Resolve the speckit commands directory from the @generacy-ai/agency-plugin-spec-kit package.
+ * Uses a two-tier resolution strategy:
+ *   Tier 1: Local workspace node_modules (workspace root, then agency dir)
+ *   Tier 2: npm global root
+ * Returns the resolved commands directory path, or null if not found.
+ */
+function resolveSpeckitCommandsDir(config: BuildConfig): string | null {
+  const logger = getLogger();
+  const pkgSubpath = join('@generacy-ai', 'agency-plugin-spec-kit', 'commands');
+
+  // Tier 1: Local workspace node_modules
+  const localPaths = [
+    join(config.generacyDir, 'node_modules', pkgSubpath),
+    join(config.agencyDir, 'node_modules', pkgSubpath),
+  ];
+  for (const p of localPaths) {
+    if (existsSync(p)) {
+      logger.info({ path: p }, 'Resolved speckit commands from local workspace');
+      return p;
+    }
+  }
+
+  // Tier 2: npm global
+  const globalRoot = resolveNpmGlobalRoot();
+  if (globalRoot) {
+    const globalPath = join(globalRoot, pkgSubpath);
+    if (existsSync(globalPath)) {
+      logger.info({ path: globalPath }, 'Resolved speckit commands from npm global');
+      return globalPath;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Phase 4: Install speckit commands and configure Agency MCP for Claude Code.
- * Installs speckit slash commands via marketplace plugin with fallback to file copy.
+ * Copies speckit command files from @generacy-ai/agency-plugin-spec-kit package.
  * Adds the Agency MCP server to the user-level Claude config.
  */
 function installClaudeCodeIntegration(config: BuildConfig): void {
   const logger = getLogger();
   const home = homedir();
-  const claudeDir = join(home, '.claude');
 
   logger.info('Phase 4: Installing Claude Code integration (speckit commands + Agency MCP)');
 
-  // Step 1: Add marketplace via CLI (idempotent — skips if already registered)
-  let marketplaceRegistered = false;
-  const marketplaceList = execSafe('claude plugin marketplace list');
-  const alreadyRegistered = marketplaceList.ok && marketplaceList.stdout?.includes('generacy-marketplace');
+  // Step 1: Resolve speckit commands directory from npm package
+  const commandsDir = resolveSpeckitCommandsDir(config);
 
-  if (alreadyRegistered) {
-    marketplaceRegistered = true;
-    logger.info('generacy-marketplace already registered');
-  } else {
-    // Use local directory if agency source is available, otherwise clone from GitHub
-    let addResult;
-    if (existsSync(join(config.agencyDir, '.claude-plugin', 'marketplace.json'))) {
-      addResult = execSafe(`claude plugin marketplace add ${config.agencyDir} --scope user`);
-    } else {
-      addResult = execSafe('claude plugin marketplace add generacy-ai/agency --scope user --sparse packages/claude-plugin-agency-spec-kit .claude-plugin');
+  if (commandsDir) {
+    // Step 2: Copy .md command files to ~/.claude/commands/
+    const userCommandsDir = join(home, '.claude', 'commands');
+    mkdirSync(userCommandsDir, { recursive: true });
+    const files = readdirSync(commandsDir).filter((f) => f.endsWith('.md'));
+    for (const file of files) {
+      copyFileSync(join(commandsDir, file), join(userCommandsDir, file));
     }
-
-    if (addResult.ok) {
-      marketplaceRegistered = true;
-      logger.info('Registered generacy-marketplace');
-    } else {
-      logger.warn({ stderr: addResult.stderr }, 'Failed to register generacy-marketplace');
-    }
-  }
-
-  // Step 2: Install plugin from marketplace
-  let pluginInstalled = false;
-  if (marketplaceRegistered) {
-    const installCmd = 'claude plugin install agency-spec-kit@generacy-marketplace --scope user';
-    const result = execSafe(installCmd);
-    if (result.ok) {
-      pluginInstalled = true;
-      logger.info('Installed agency-spec-kit plugin via marketplace');
-    } else {
-      logger.warn({ stderr: result.stderr }, 'Marketplace plugin install failed, trying fallback');
-    }
-  }
-
-  // Step 3: Fallback to file copy from agency repo (only when agency dir exists)
-  if (!pluginInstalled && existsSync(config.agencyDir)) {
-    const pluginCommandsDir = join(
-      config.agencyDir,
-      'packages',
-      'claude-plugin-agency-spec-kit',
-      'commands',
+    logger.info(
+      { count: files.length, source: commandsDir, dest: userCommandsDir },
+      'Copied speckit command files',
     );
-    const userCommandsDir = join(home, '.claude', 'commands');
-
-    if (existsSync(pluginCommandsDir)) {
-      mkdirSync(userCommandsDir, { recursive: true });
-      const files = readdirSync(pluginCommandsDir).filter((f) => f.endsWith('.md'));
-      for (const file of files) {
-        copyFileSync(join(pluginCommandsDir, file), join(userCommandsDir, file));
-      }
-      logger.info(
-        { count: files.length, dest: userCommandsDir },
-        'Fallback: copied speckit command definitions',
-      );
-    } else {
-      logger.warn(
-        { dir: pluginCommandsDir },
-        'Speckit commands directory not found and marketplace install failed',
-      );
-    }
-  } else if (!pluginInstalled) {
-    // Step 3b: Fallback to npm global @generacy-ai/agency/commands/
-    let npmFallbackCopied = false;
-    const globalRoot = resolveNpmGlobalRoot();
-    if (globalRoot) {
-      const npmCommandsDir = join(globalRoot, '@generacy-ai', 'agency', 'commands');
-      if (existsSync(npmCommandsDir)) {
-        const userCommandsDir = join(home, '.claude', 'commands');
-        mkdirSync(userCommandsDir, { recursive: true });
-        const files = readdirSync(npmCommandsDir).filter((f) => f.endsWith('.md'));
-        for (const file of files) {
-          copyFileSync(join(npmCommandsDir, file), join(userCommandsDir, file));
-        }
-        if (files.length > 0) {
-          npmFallbackCopied = true;
-          logger.info(
-            { count: files.length, dest: userCommandsDir },
-            'Copied speckit command definitions from npm global',
-          );
-        }
-      }
-    }
-    if (!npmFallbackCopied) {
-      logger.warn('No speckit commands available — marketplace, source, and npm fallbacks all failed');
-    }
   } else {
-    // Step 4: Clean up old file-copy commands to avoid duplicates
-    const userCommandsDir = join(home, '.claude', 'commands');
-    let cleanedCount = 0;
-    for (const file of SPECKIT_COMMAND_FILES) {
-      const filePath = join(userCommandsDir, file);
-      if (existsSync(filePath)) {
-        try {
-          rmSync(filePath, { force: true });
-          cleanedCount++;
-        } catch {
-          // Ignore cleanup errors for individual files
-        }
-      }
-    }
-    if (cleanedCount > 0) {
-      logger.info({ count: cleanedCount }, 'Cleaned up old file-copy commands');
-    }
+    logger.error(
+      {
+        checkedPaths: [
+          join(config.generacyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
+          join(config.agencyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
+          '{npm root -g}/@generacy-ai/agency-plugin-spec-kit/commands',
+        ],
+      },
+      '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+    );
   }
 
-  // Step 5: Add Agency MCP server to user-level Claude config (~/.claude.json)
+  // Step 3: Add Agency MCP server to user-level Claude config (~/.claude.json)
   const claudeJsonPath = join(home, '.claude.json');
   const sourceAgencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
 
