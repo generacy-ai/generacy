@@ -374,10 +374,13 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     agencyCwd = config.agencyDir;
   } else {
     // Find globally installed @generacy-ai/agency package
-    const globalCli = execSafe('node -e "console.log(require.resolve(\'@generacy-ai/agency/dist/cli.js\'))"');
-    if (globalCli.ok && globalCli.stdout && existsSync(globalCli.stdout)) {
-      agencyCli = globalCli.stdout;
-      logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
+    const globalRoot = execSafe('npm root -g');
+    if (globalRoot.ok && globalRoot.stdout) {
+      const globalCliPath = join(globalRoot.stdout.trim(), '@generacy-ai', 'agency', 'dist', 'cli.js');
+      if (existsSync(globalCliPath)) {
+        agencyCli = globalCliPath;
+        logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
+      }
     }
   }
 
