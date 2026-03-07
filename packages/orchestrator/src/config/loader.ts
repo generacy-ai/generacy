@@ -192,6 +192,15 @@ function loadFromEnv(): Record<string, unknown> {
     );
   }
 
+  // Worker config
+  const workerWorkspaceDir = process.env['WORKER_WORKSPACE_DIR'] ?? process.env[`${ENV_PREFIX}WORKER_WORKSPACE_DIR`];
+  if (workerWorkspaceDir) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).workspaceDir = workerWorkspaceDir;
+  }
+
   // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)
   const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
   if (smeeChannelUrl) {

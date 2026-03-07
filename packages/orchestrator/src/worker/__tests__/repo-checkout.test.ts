@@ -115,9 +115,16 @@ describe('RepoCheckout', () => {
   // getCheckoutPath
   // -------------------------------------------------------------------------
   describe('getCheckoutPath()', () => {
-    it('returns the correct path for worker/owner/repo', () => {
-      const path = checkout.getCheckoutPath('worker-1', 'octocat', 'hello-world');
+    it('returns isolated path when no bootstrapped repo exists', async () => {
+      mockStat.mockRejectedValue(enoentError());
+      const path = await checkout.getCheckoutPath('worker-1', 'octocat', 'hello-world');
       expect(path).toBe('/workspace/worker-1/octocat/hello-world');
+    });
+
+    it('returns bootstrapped path when repo .git exists at {workspaceDir}/{repo}', async () => {
+      mockStat.mockResolvedValue({ isDirectory: () => true });
+      const path = await checkout.getCheckoutPath('worker-1', 'octocat', 'hello-world');
+      expect(path).toBe('/workspace/hello-world');
     });
   });
 
@@ -126,8 +133,11 @@ describe('RepoCheckout', () => {
   // -------------------------------------------------------------------------
   describe('ensureCheckout() with existing directory', () => {
     beforeEach(() => {
-      // Directory exists
-      mockStat.mockResolvedValue({ isDirectory: () => true });
+      // First stat: bootstrapped .git check → not found (fall back to isolated path)
+      // Second stat: isolated checkout path → exists
+      mockStat
+        .mockRejectedValueOnce(enoentError())   // getCheckoutPath: no bootstrapped repo
+        .mockResolvedValue({ isDirectory: () => true }); // ensureCheckout: dir exists
     });
 
     it('calls fetch origin', async () => {
@@ -205,7 +215,7 @@ describe('RepoCheckout', () => {
   // -------------------------------------------------------------------------
   describe('ensureCheckout() with non-existing directory', () => {
     beforeEach(() => {
-      // Directory does not exist
+      // Both stat calls fail: no bootstrapped repo, no isolated checkout
       mockStat.mockRejectedValue(enoentError());
     });
 
@@ -260,13 +270,51 @@ describe('RepoCheckout', () => {
   });
 
   // -------------------------------------------------------------------------
+  // ensureCheckout — bootstrapped repo (container-per-worker mode)
+  // -------------------------------------------------------------------------
+  describe('ensureCheckout() with bootstrapped repo', () => {
+    beforeEach(() => {
+      // Bootstrapped .git exists → use /workspace/repo directly
+      mockStat.mockResolvedValue({ isDirectory: () => true });
+    });
+
+    it('uses bootstrapped path instead of isolated path', async () => {
+      const path = await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+      expect(path).toBe('/workspace/repo');
+    });
+
+    it('fetches and resets in bootstrapped checkout', async () => {
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const fetchCall = findCall('git', ['fetch', 'origin']);
+      expect(fetchCall).toBeDefined();
+      expect(fetchCall![2]).toEqual({ cwd: '/workspace/repo' });
+
+      const resetCall = findCall('git', ['reset', '--hard', 'origin/develop']);
+      expect(resetCall).toBeDefined();
+      expect(resetCall![2]).toEqual({ cwd: '/workspace/repo' });
+    });
+
+    it('does not clone when bootstrapped repo exists', async () => {
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const cloneCall = findCall('git', ['clone']);
+      expect(cloneCall).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // ensureCheckout — stat error other than ENOENT
   // -------------------------------------------------------------------------
   describe('ensureCheckout() with unexpected stat error', () => {
     it('re-throws non-ENOENT errors from stat', async () => {
       const permError = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
       permError.code = 'EACCES';
-      mockStat.mockRejectedValue(permError);
+      // First stat (bootstrapped .git) → not found (normal)
+      // Second stat (isolated checkout) → permission error
+      mockStat
+        .mockRejectedValueOnce(enoentError())
+        .mockRejectedValue(permError);
 
       await expect(
         checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop'),
