@@ -1,10 +1,6 @@
-# Feature Specification: ## Summary
+# Feature Specification: Fix `generacy setup build` Phase 4 speckit installation for external projects
 
-`generacy setup build` Phase 4 (Claude Code integration — speckit commands + Agency MCP) fails for external projects because both installation paths require access to the private `generacy-ai/agency` repo
-
-**Branch**: `342-summary-generacy-setup-build` | **Date**: 2026-03-07 | **Status**: Draft
-
-## Summary
+**Branch**: `342-summary-generacy-setup-build` | **Issue**: #342 | **Date**: 2026-03-07 | **Status**: Draft
 
 ## Summary
 
@@ -93,35 +89,60 @@ Related: generacy-ai/cluster-templates#9 (worker crash loop), generacy-ai/cluste
 
 ## User Stories
 
-### US1: [Primary User Story]
+### US1: External project worker uses speckit commands
 
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
+**As an** external project worker (Claude Code agent running in a cluster-templates workspace),
+**I want** `generacy setup build` to install speckit slash commands and the Agency MCP server without requiring access to the private `generacy-ai/agency` GitHub repo,
+**So that** I can use speckit workflow commands (`/specify`, `/plan`, `/tasks`, `/implement`, etc.) immediately after build completes.
 
 **Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
+- [ ] Phase 4 succeeds when the `generacy-ai/agency` GitHub repo is inaccessible
+- [ ] All 9 speckit slash command `.md` files are installed to `~/.claude/commands/`
+- [ ] The Agency MCP server is configured in `~/.claude.json`
+- [ ] Workers no longer crash-loop after `generacy setup build` completes
+
+### US2: Internal developer retains existing workflow
+
+**As an** internal developer with access to the `generacy-ai/agency` repo,
+**I want** the existing marketplace plugin and file-copy paths to continue working,
+**So that** my current workflow is unaffected by the fix.
+
+**Acceptance Criteria**:
+- [ ] Marketplace plugin path still works when `generacy-ai/agency` repo is accessible
+- [ ] File-copy fallback from `/workspaces/agency/` source still works when available
+- [ ] New npm fallback is tried only when both existing paths fail
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
+| FR-001 | Include speckit `.md` command files in the `@generacy-ai/agency` npm package distribution | P1 | Update `files` field in package.json to include `commands/` |
+| FR-002 | Add npm-global fallback path in Phase 4 that copies `.md` files from `$(npm root -g)/@generacy-ai/agency/.../commands/` | P1 | Third fallback after marketplace and source-copy |
+| FR-003 | Preserve existing marketplace plugin installation path as primary | P2 | No changes to steps 1-2 |
+| FR-004 | Preserve existing file-copy fallback from agency source as secondary | P2 | No changes to step 3 |
+| FR-005 | Agency MCP server configuration must work with globally-installed `agency` CLI | P1 | Already partially implemented via `npm root -g` |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
+| SC-001 | External project build success | 100% of Phase 4 completions install speckit | Run `generacy setup build` in a clean external project workspace |
+| SC-002 | Worker crash-loop elimination | 0 crash loops due to missing speckit | Deploy external project via cluster-templates and verify worker stability |
+| SC-003 | Internal developer regression | 0 regressions for internal workflows | Run `generacy setup build` in internal workspace with agency repo access |
 
 ## Assumptions
 
-- [Assumption 1]
+- `@generacy-ai/agency` is already installed globally via npm in the Docker image (Dockerfile handles this)
+- The npm global install location is discoverable via `npm root -g`
+- Claude Code recognizes `.md` files in `~/.claude/commands/` as slash commands
+- The recommended approach is Option D (Hybrid) — npm package + generacy CLI installer with long-term marketplace migration
 
 ## Out of Scope
 
-- [Exclusion 1]
+- Publishing a public marketplace repo (Option C) — future work
+- Bundling commands into `@generacy-ai/generacy` (Option B) — rejected due to coupling
+- Changes to the Agency MCP server installation (already working via npm global)
+- Changes to the Docker image or Dockerfile
 
 ---
 
