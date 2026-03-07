@@ -56,13 +56,13 @@ describe('PhaseResolver', () => {
   });
 
   describe('continue command', () => {
-    it('returns "plan" when completed:clarification is present (resumes after clarify gate)', () => {
+    it('returns "clarify" when completed:clarification is present (resumes to re-run clarify for answer integration)', () => {
       expect(
         resolver.resolveStartPhase(
           ['waiting-for:clarification', 'completed:clarification'],
           'continue',
         ),
-      ).toBe('plan');
+      ).toBe('clarify');
     });
 
     it('returns "clarify" when completed:spec-review is present (resumes after spec-review gate)', () => {
@@ -118,9 +118,9 @@ describe('PhaseResolver', () => {
 
   describe('GATE_MAPPING integration', () => {
     it.each([
-      ['clarification', 'plan'],
+      ['clarification', 'clarify'],
       ['spec-review', 'clarify'],
-      ['clarification-review', 'plan'],
+      ['clarification-review', 'clarify'],
       ['plan-review', 'tasks'],
       ['tasks-review', 'implement'],
       ['implementation-review', 'validate'],
@@ -137,7 +137,7 @@ describe('PhaseResolver', () => {
           ['completed:specify', 'completed:clarification'],
           'continue',
         ),
-      ).toBe('plan');
+      ).toBe('clarify');
     });
 
     it('resolveFromProcess normalizes gate names via GATE_MAPPING', () => {
@@ -276,7 +276,7 @@ describe('PhaseResolver', () => {
             'continue',
             'speckit-epic',
           ),
-        ).toBe('plan');
+        ).toBe('clarify');
       });
     });
 

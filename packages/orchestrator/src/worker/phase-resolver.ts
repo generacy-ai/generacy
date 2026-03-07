@@ -7,9 +7,9 @@ import { PHASE_SEQUENCE, getPhaseSequence, type WorkflowPhase } from './types.js
  * - `resumeFrom`: the phase to start from when the gate is satisfied (used in resolveFromContinue)
  */
 export const GATE_MAPPING: Record<string, { phase: WorkflowPhase; resumeFrom: WorkflowPhase }> = {
-  'clarification':          { phase: 'clarify',    resumeFrom: 'plan' },
+  'clarification':          { phase: 'clarify',    resumeFrom: 'clarify' },
   'spec-review':            { phase: 'specify',    resumeFrom: 'clarify' },
-  'clarification-review':   { phase: 'clarify',    resumeFrom: 'plan' },
+  'clarification-review':   { phase: 'clarify',    resumeFrom: 'clarify' },
   'plan-review':            { phase: 'plan',       resumeFrom: 'tasks' },
   'tasks-review':           { phase: 'tasks',      resumeFrom: 'implement' },
   'implementation-review':  { phase: 'implement',  resumeFrom: 'validate' },

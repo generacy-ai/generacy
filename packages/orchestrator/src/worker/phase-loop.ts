@@ -160,7 +160,7 @@ export class PhaseLoop {
             {
               prompt: context.issueUrl,
               cwd: context.checkoutPath,
-              env: {},
+              env: { CLAUDE_HEADLESS: 'true' },
               timeoutMs: config.phaseTimeoutMs,
               signal: context.signal,
               resumeSessionId: currentSessionId,
