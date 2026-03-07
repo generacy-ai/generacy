@@ -35,11 +35,11 @@ export function getPhaseSequence(workflowName: string): WorkflowPhase[] {
  * Map each phase to its Claude CLI slash command (null = no CLI command)
  */
 export const PHASE_TO_COMMAND: Record<WorkflowPhase, string | null> = {
-  specify: '/specify',
-  clarify: '/clarify',
-  plan: '/plan',
-  tasks: '/tasks',
-  implement: '/implement',
+  specify: '/agency-spec-kit:specify',
+  clarify: '/agency-spec-kit:clarify',
+  plan: '/agency-spec-kit:plan',
+  tasks: '/agency-spec-kit:tasks',
+  implement: '/agency-spec-kit:implement',
   validate: null,
 };
 

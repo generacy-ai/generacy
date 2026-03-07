@@ -315,7 +315,7 @@ describe('ClaudeCliWorker (integration)', () => {
       // First CLI spawn should be for 'plan' (GATE_MAPPING: clarification → resumeFrom: plan)
       const firstSpawnArgs = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
       const promptArg = firstSpawnArgs[firstSpawnArgs.length - 1]!;
-      expect(promptArg).toContain('/plan');
+      expect(promptArg).toContain('/agency-spec-kit:plan');
     });
   });
 
@@ -989,10 +989,10 @@ describe('ClaudeCliWorker (integration)', () => {
         const args = call[1] as string[];
         return args[args.length - 1] ?? null;
       });
-      expect(prompts[0]).toContain('/specify');
-      expect(prompts[1]).toContain('/clarify');
-      expect(prompts[2]).toContain('/plan');
-      expect(prompts[3]).toContain('/tasks');
+      expect(prompts[0]).toContain('/agency-spec-kit:specify');
+      expect(prompts[1]).toContain('/agency-spec-kit:clarify');
+      expect(prompts[2]).toContain('/agency-spec-kit:plan');
+      expect(prompts[3]).toContain('/agency-spec-kit:tasks');
 
       // Verify workflow completed (not failed)
       const completedEvent = sseEvents.find(
@@ -1081,7 +1081,7 @@ describe('ClaudeCliWorker (integration)', () => {
       expect(spawnFn).toHaveBeenCalledTimes(2);
 
       const firstPrompt = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
-      expect(firstPrompt[firstPrompt.length - 1]).toContain('/plan');
+      expect(firstPrompt[firstPrompt.length - 1]).toContain('/agency-spec-kit:plan');
     });
   });
 
