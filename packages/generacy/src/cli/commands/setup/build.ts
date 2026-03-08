@@ -271,8 +271,11 @@ function resolveSpeckitCommandsDir(config: BuildConfig): string | null {
   const logger = getLogger();
   const pkgSubpath = join('@generacy-ai', 'agency-plugin-spec-kit', 'commands');
 
-  // Tier 1: Local workspace node_modules
+  // Tier 1: Local workspace — source package directory, then node_modules
+  // The source path handles pnpm workspaces where the package won't appear
+  // in a hoisted node_modules/@scope/pkg location.
   const localPaths = [
+    join(config.agencyDir, 'packages', 'agency-plugin-spec-kit', 'commands'),
     join(config.generacyDir, 'node_modules', pkgSubpath),
     join(config.agencyDir, 'node_modules', pkgSubpath),
   ];
@@ -326,6 +329,7 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     logger.error(
       {
         checkedPaths: [
+          join(config.agencyDir, 'packages', 'agency-plugin-spec-kit', 'commands'),
           join(config.generacyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
           join(config.agencyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
           '{npm root -g}/@generacy-ai/agency-plugin-spec-kit/commands',

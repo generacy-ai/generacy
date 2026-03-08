@@ -581,7 +581,31 @@ describe('setup build command', () => {
   });
 
   describe('Phase 4: speckit command resolution and copy', () => {
-    it('resolves commands from local generacy workspace node_modules (Tier 1)', async () => {
+    it('resolves commands from agency source packages directory (Tier 1 first)', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/workspaces/agency/packages/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from local workspace',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockCopyFileSync).toHaveBeenCalledWith(
+        '/workspaces/agency/packages/agency-plugin-spec-kit/commands/specify.md',
+        '/home/testuser/.claude/commands/specify.md',
+      );
+    });
+
+    it('resolves commands from local generacy workspace node_modules (Tier 1 fallback)', async () => {
       mockExecBehavior();
       mockFileSystem([
         '/workspaces/agency',
