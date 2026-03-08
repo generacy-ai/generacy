@@ -261,10 +261,18 @@ function resolveNpmGlobalRoot(): string | null {
 }
 
 /**
+ * Well-known shared packages directory used by cluster-templates.
+ * The orchestrator installs packages here via `npm install --prefix /shared-packages`;
+ * workers mount this volume read-only.
+ */
+const SHARED_PACKAGES_DIR = '/shared-packages';
+
+/**
  * Resolve the speckit commands directory from the @generacy-ai/agency-plugin-spec-kit package.
- * Uses a two-tier resolution strategy:
+ * Uses a three-tier resolution strategy:
  *   Tier 1: Local workspace node_modules (workspace root, then agency dir)
- *   Tier 2: npm global root
+ *   Tier 2: Shared packages volume (/shared-packages/node_modules)
+ *   Tier 3: npm global root
  * Returns the resolved commands directory path, or null if not found.
  */
 function resolveSpeckitCommandsDir(config: BuildConfig): string | null {
@@ -286,7 +294,14 @@ function resolveSpeckitCommandsDir(config: BuildConfig): string | null {
     }
   }
 
-  // Tier 2: npm global
+  // Tier 2: Shared packages volume (cluster-templates pattern)
+  const sharedPath = join(SHARED_PACKAGES_DIR, 'node_modules', pkgSubpath);
+  if (existsSync(sharedPath)) {
+    logger.info({ path: sharedPath }, 'Resolved speckit commands from shared packages volume');
+    return sharedPath;
+  }
+
+  // Tier 3: npm global
   const globalRoot = resolveNpmGlobalRoot();
   if (globalRoot) {
     const globalPath = join(globalRoot, pkgSubpath);
@@ -332,6 +347,7 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
           join(config.agencyDir, 'packages', 'agency-plugin-spec-kit', 'commands'),
           join(config.generacyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
           join(config.agencyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
+          join(SHARED_PACKAGES_DIR, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
           '{npm root -g}/@generacy-ai/agency-plugin-spec-kit/commands',
         ],
       },
@@ -351,13 +367,20 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
     agencyCli = sourceAgencyCli;
     agencyCwd = config.agencyDir;
   } else {
-    // Find globally installed @generacy-ai/agency package
-    const globalRoot = resolveNpmGlobalRoot();
-    if (globalRoot) {
-      const globalCliPath = join(globalRoot, '@generacy-ai', 'agency', 'dist', 'cli.js');
-      if (existsSync(globalCliPath)) {
-        agencyCli = globalCliPath;
-        logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
+    // Check shared packages volume (cluster-templates pattern)
+    const sharedCliPath = join(SHARED_PACKAGES_DIR, 'node_modules', '@generacy-ai', 'agency', 'dist', 'cli.js');
+    if (existsSync(sharedCliPath)) {
+      agencyCli = sharedCliPath;
+      logger.info({ path: agencyCli }, 'Using agency CLI from shared packages volume');
+    } else {
+      // Find globally installed @generacy-ai/agency package
+      const globalRoot = resolveNpmGlobalRoot();
+      if (globalRoot) {
+        const globalCliPath = join(globalRoot, '@generacy-ai', 'agency', 'dist', 'cli.js');
+        if (existsSync(globalCliPath)) {
+          agencyCli = globalCliPath;
+          logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
+        }
       }
     }
   }

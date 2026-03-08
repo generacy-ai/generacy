@@ -650,7 +650,28 @@ describe('setup build command', () => {
       expect(mockCopyFileSync).toHaveBeenCalledTimes(1);
     });
 
-    it('resolves commands from npm global (Tier 2) when local not found', async () => {
+    it('resolves commands from shared packages volume (Tier 2) when local not found', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        // No local node_modules paths, but shared volume has it
+        '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from shared packages volume',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+    });
+
+    it('resolves commands from npm global (Tier 3) when local and shared not found', async () => {
       mockExecBehavior({
         'npm root -g': { stdout: '/usr/lib/node_modules' },
       });
@@ -742,6 +763,31 @@ describe('setup build command', () => {
       });
     });
 
+    it('configures Agency MCP server from shared packages volume', async () => {
+      mockExecBehavior();
+      // No source repos — external project with shared packages volume
+      mockFileSystem([
+        '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js' },
+        'Using agency CLI from shared packages volume',
+      );
+      const claudeJsonCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude.json',
+      );
+      expect(claudeJsonCalls.length).toBeGreaterThan(0);
+      const written = JSON.parse(claudeJsonCalls[0][1] as string);
+      expect(written.mcpServers.agency).toEqual({
+        type: 'stdio',
+        command: 'node',
+        args: ['/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js'],
+      });
+    });
+
     it('skips MCP configuration with info log when Agency CLI not found', async () => {
       mockExecBehavior({
         'npm root -g': { throw: true },
@@ -804,6 +850,29 @@ describe('setup build command', () => {
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({ count: 2 }),
         'Copied speckit command files',
+      );
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it('resolves commands and agency CLI from shared packages volume', async () => {
+      mockExecBehavior();
+      // No source repos — external project with shared packages volume
+      mockFileSystem([
+        '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+        '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
+
+      await runBuildCommand([]);
+
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from shared packages volume',
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js' },
+        'Using agency CLI from shared packages volume',
       );
       expect(mockExit).not.toHaveBeenCalled();
     });
