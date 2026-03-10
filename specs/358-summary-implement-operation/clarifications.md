@@ -8,7 +8,12 @@
 
 **Question**: Should the git commands use `input.feature_dir` (consistent with other calls in the file), or should the repository root be detected separately (e.g., via `git rev-parse --show-toplevel`)? Or is `input.feature_dir` already guaranteed to be the repo root?
 
-**Answer**: *Pending*
+**Answer**: Detect the repo root via `git rev-parse --show-toplevel`. `input.feature_dir` is the spec directory (e.g., `specs/358-.../`), never the repo root. Running `git add -A` from there would only stage files under the spec directory, missing all actual implementation files. The git commands should resolve the repo root first:
+```typescript
+const { stdout: repoRoot } = await executeCommand('git', ['rev-parse', '--show-toplevel'], { cwd: input.feature_dir, timeout: 10000 });
+const rootDir = repoRoot.trim();
+// Use rootDir as cwd for all git add, commit, push, restore commands
+```
 
 ---
 
@@ -18,7 +23,13 @@
 
 **Question**: Should the `hasPriorImplementation` fallback pattern in `phase-loop.ts` be updated to also match `feat: complete T-` prefixed messages? Or should the incremental commit messages use a format that matches the existing pattern (e.g., include `complete implement phase` in the message)?
 
-**Answer**: *Pending*
+**Answer**: Update the fallback pattern to match the new commit messages. The `hasPriorImplementation` check in `phase-loop.ts` should match both old and new patterns:
+```typescript
+hasPriorImplementation = commits.some(
+  (c) => c.message.includes(`complete ${phase} phase`) || c.message.includes('feat: complete T')
+);
+```
+Don't reshape the incremental commit messages — `feat: complete T001` is more useful in git history. The fallback check should adapt to the new reality.
 
 ---
 
@@ -34,7 +45,14 @@ If `implement.ts` now commits after every task, this YAML step will produce an e
 
 **Question**: Should the scope of this feature include updating the `speckit-feature.yaml` workflow files to remove or modify the `commit-implementation` step, or is the YAML step intentionally kept as a final safety net even if it produces an empty commit?
 
-**Answer**: *Pending*
+**Answer**: Keep the YAML step as a safety net, but avoid empty commits. Replace `--allow-empty` with a check-then-commit pattern:
+```yaml
+- name: commit-implementation
+  uses: shell
+  command: 'git diff --cached --quiet && git diff --quiet || (git add -A && git commit -m "feat: implement ...")'
+  continueOnError: true
+```
+This catches anything the incremental commits missed (edge cases, partial failures) without creating noise commits.
 
 ---
 
@@ -44,7 +62,7 @@ If `implement.ts` now commits after every task, this YAML step will produce an e
 
 **Question**: For the purposes of this feature, should "parallel batch" commits be treated as future-proofing (stub the concept but commit sequentially for now), or should the spec be simplified to only address sequential task commits (removing the parallel batch language from `implement.md`)?
 
-**Answer**: *Pending*
+**Answer**: Simplify to sequential-only for now. Remove the "parallel batch" language from `implement.md`. The current `implement.ts` doesn't do parallel execution — adding commit-after-batch semantics for a non-existent feature creates spec debt. When parallel execution is actually implemented, the commit strategy can be designed alongside it.
 
 ---
 
@@ -54,4 +72,4 @@ If `implement.ts` now commits after every task, this YAML step will produce an e
 
 **Question**: Should a git commit (or at minimum a `git stash` or `git restore .`) also occur after a **failed** task to clean up partial modifications before the next task begins? Or is leaving partial changes in the working tree acceptable (and expected by the next task's Claude invocation)?
 
-**Answer**: *Pending*
+**Answer**: Clean the working tree after a failed task. Run `git checkout -- . && git clean -fd` from the repo root after a failed task to reset to a clean state. Partial modifications from a failed Claude session are unreliable and should not leak into subsequent tasks. Sequence: task fails → log error → clean working tree → proceed to next task. Do not commit partial changes from failed tasks.

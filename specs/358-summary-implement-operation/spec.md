@@ -22,25 +22,39 @@ The `/implement` command definition (`agency-plugin-spec-kit/commands/implement.
 
 ### `packages/workflow-engine/src/actions/builtin/speckit/operations/implement.ts`
 
-After each task completes successfully (after `markTaskComplete` and `writeFile` on ~line 280), add a git commit + push:
+After each task completes successfully (after `markTaskComplete` and `writeFile` on ~line 280), add a git commit + push. Git commands must run from the repository root, detected via `git rev-parse --show-toplevel`:
 
 ```typescript
-// After markTaskComplete + writeFile:
-await executeCommand('git', ['add', '-A'], { cwd: process.cwd(), timeout: 30000 });
-await executeCommand('git', ['commit', '-m', `feat: complete ${task.id}`, '--allow-empty'], { cwd: process.cwd(), timeout: 30000 });
-await executeCommand('git', ['push'], { cwd: process.cwd(), timeout: 60000 }).catch(() => {
+// Resolve repo root once before the task loop
+const { stdout: repoRootRaw } = await executeCommand('git', ['rev-parse', '--show-toplevel'], { cwd: input.feature_dir, timeout: 10000 });
+const rootDir = repoRootRaw.trim();
+
+// After markTaskComplete + writeFile (success path):
+await executeCommand('git', ['add', '-A'], { cwd: rootDir, timeout: 30000 });
+await executeCommand('git', ['commit', '-m', `feat: complete ${task.id}`], { cwd: rootDir, timeout: 30000 });
+await executeCommand('git', ['push'], { cwd: rootDir, timeout: 60000 }).catch(() => {
   // Push failure is non-fatal — progress is still saved locally
   context.logger.warn(`Push after ${task.id} failed (non-fatal)`);
 });
 ```
 
-Consider batching: commit after every task but push every N tasks (e.g., every 3) to reduce network overhead. Always push on the final task.
+After a **failed** task, clean the working tree to prevent partial modifications leaking into subsequent tasks:
+
+```typescript
+// On task failure (non-zero exit or exception):
+await executeCommand('git', ['checkout', '--', '.'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
+await executeCommand('git', ['clean', '-fd'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
+```
+
+Commit after every task. Push every 3 completed tasks and always on the final task.
 
 ### `packages/agency-plugin-spec-kit/commands/implement.md`
 
 Update the constraint in the Constraints section:
 - **Old**: "Commit after each logical group of tasks (if user requests)"
-- **New**: "**Always** commit after completing each task or parallel batch. Push after every 3 completed tasks and after the final task."
+- **New**: "**Always** commit after completing each task. Push after every 3 completed tasks and after the final task."
+
+Remove all references to "parallel batch" commits — current `implement.ts` executes tasks sequentially only. When parallel execution is implemented in a future feature, its commit strategy will be designed alongside it.
 
 Also update step 6 execution flow to include commit/push after each `mark_complete`.
 
@@ -51,6 +65,7 @@ Also update step 6 execution flow to include commit/push after each `mark_comple
 - [ ] If session crashes mid-implementation, completed tasks are preserved in git history
 - [ ] The existing `PHASES_REQUIRING_CHANGES` check in `phase-loop.ts` sees commits even if the session dies partway through
 - [ ] Commit/push failures are non-fatal (logged but don't halt execution)
+- [ ] Failed tasks trigger a working-tree cleanup (`git checkout -- . && git clean -fd`) before continuing
 
 ## References
 
@@ -95,10 +110,11 @@ Also update step 6 execution flow to include commit/push after each `mark_comple
 |----|-------------|----------|-------|
 | FR-001 | After `markTaskComplete` + `writeFile` in `implement.ts`, stage all changes and create a git commit | P1 | Commit message: `feat: complete <task.id>` |
 | FR-002 | Push to remote after every 3 completed tasks and unconditionally after the final task | P1 | Push failure must be caught and logged, not re-thrown |
-| FR-003 | Git commands must run from the repository root, not `input.feature_dir` | P1 | Detect root via `git rev-parse --show-toplevel` or equivalent |
-| FR-004 | Update `phase-loop.ts` `hasPriorImplementation` fallback to also match `feat: complete T-` prefixed messages | P1 | Avoids false "no changes" failure when all commits are incremental |
-| FR-005 | Update `agency-plugin-spec-kit/commands/implement.md` commit constraint to say "always commit after each task" | P2 | Remove the "(if user requests)" qualifier |
-| FR-006 | Decide fate of `commit-implementation` YAML step (remove, keep as safety net, or update) | P2 | See Q3 in clarifications |
+| FR-003 | Git commands must run from the repository root, detected once via `git rev-parse --show-toplevel` using `input.feature_dir` as cwd | P1 | `input.feature_dir` is the spec dir, not the repo root |
+| FR-004 | Update `phase-loop.ts` `hasPriorImplementation` fallback to also match `feat: complete T` prefixed messages: `c.message.includes('complete implement phase') \|\| c.message.includes('feat: complete T')` | P1 | Avoids false "no changes" failure when all commits are incremental |
+| FR-005 | Update `agency-plugin-spec-kit/commands/implement.md` commit constraint to say "always commit after each task"; remove parallel batch language | P2 | Parallel execution not yet implemented |
+| FR-006 | Update `commit-implementation` YAML step in both workflow files to use check-then-commit pattern (no `--allow-empty`); set `continueOnError: true` | P2 | Keeps safety net without empty-commit noise |
+| FR-007 | After a failed task, run `git checkout -- .` and `git clean -fd` from repo root to clean partial modifications | P1 | Prevents partial changes from leaking into next task |
 
 ## Success Criteria
 
@@ -113,7 +129,7 @@ Also update step 6 execution flow to include commit/push after each `mark_comple
 
 - `executeCommand` in `implement.ts` is the correct primitive for running git commands (same pattern as other shell calls in that file)
 - The implement phase always runs inside a git repository with a configured remote
-- Failed tasks (non-zero exit code) do not need a commit — partial file changes from a failed Claude invocation are left in the working tree for the next attempt
+- Failed tasks produce partial file changes that must be cleaned up (not left for the next task)
 
 ## Out of Scope
 
