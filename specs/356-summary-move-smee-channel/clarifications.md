@@ -9,7 +9,7 @@
 - A: Extend `TemplateConfigSchema` — matches the on-disk format; orchestrator loader reads the raw YAML directly
 - B: Extend `WorkspaceConfigSchema` — normalized shape; requires `convertTemplateConfig` to carry orchestrator settings through
 
-**Answer**: *Pending*
+**Answer**: **A** — Extend `TemplateConfigSchema`. The on-disk `.generacy/config.yaml` uses template format (`repos.primary/dev/clone`). The `orchestrator` block is a raw config concern that doesn't need conversion like repos do. Adding it to `TemplateConfigSchema` matches what's actually on disk, and the loader can extract it directly without routing through `convertTemplateConfig`. `WorkspaceConfigSchema` stays focused on the normalized repo representation.
 
 ---
 
@@ -20,7 +20,7 @@
 - A: Add `labelMonitor: z.boolean().default(false)` to `OrchestratorConfigSchema` and use it as an explicit on/off switch
 - B: Keep label monitoring implicit (enabled iff `repositories.length > 0`); use `orchestrator.labelMonitor` from config.yaml only in CLI pre-flight validation, not in the runtime config schema
 
-**Answer**: *Pending*
+**Answer**: **A** — Add `labelMonitor: z.boolean().default(false)` to `OrchestratorConfigSchema`. This follows the same pattern as `webhookSetup.enabled` and `smee.channelUrl`. The loader merges all sources (config.yaml → env var → CLI flag) into `config.labelMonitor`, and runtime logic becomes `config.labelMonitor && config.repositories.length > 0` (explicit intent + valid state). Unifies the currently inconsistent approach where the CLI checks a separate flag/env var while runtime just checks repo count.
 
 ---
 
@@ -31,7 +31,7 @@
 - A: New exported function in `@generacy-ai/config` (e.g. `tryLoadOrchestratorSettings`) — keeps config parsing centralised
 - B: Orchestrator's `loader.ts` reads `.generacy/config.yaml` directly for the `orchestrator` block (similar to the current repos fallback but extended) — simpler, no new public API
 
-**Answer**: *Pending*
+**Answer**: **A** — New exported function in `@generacy-ai/config` (e.g. `tryLoadOrchestratorSettings(path)`). The config package already owns `tryLoadWorkspaceConfig`, `findWorkspaceConfigPath`, `getMonitoredRepos` — this follows the same pattern, keeps YAML parsing centralized, and keeps the orchestrator loader clean.
 
 ---
 
@@ -42,4 +42,4 @@
 - A: Read from `config.labelMonitor` (requires Q2-A: new field in OrchestratorConfigSchema) — one source of truth
 - B: CLI calls `tryLoadOrchestratorSettings` / reads config.yaml directly for label monitor check, then passes the combined result to the server
 
-**Answer**: *Pending*
+**Answer**: **A** — Read from `config.labelMonitor`. Follows directly from Q2-A. Once `labelMonitor` is a real field in `OrchestratorConfigSchema`, the loader merges config.yaml + env vars + CLI flags into `config.labelMonitor`. CLI validation checks `config.labelMonitor && config.repositories.length === 0` → error. No separate config.yaml read needed — one source of truth.

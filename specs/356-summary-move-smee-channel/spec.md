@@ -1,8 +1,10 @@
-# Feature Specification: Orchestrator Config from config.yaml
+# Feature Specification: ## Summary
 
-Move `SMEE_CHANNEL_URL`, `LABEL_MONITOR_ENABLED`, and `WEBHOOK_SETUP_ENABLED` from environment variables to `.generacy/config.yaml`.
+Move `SMEE_CHANNEL_URL`, `LABEL_MONITOR_ENABLED`, and `WEBHOOK_SETUP_ENABLED` configuration from environment variables to `
 
-**Branch**: `356-summary-move-smee-channel` | **Date**: 2026-03-09 | **Status**: Draft
+**Branch**: `356-summary-move-smee-channel` | **Date**: 2026-03-10 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -37,73 +39,69 @@ defaults:
   baseBranch: main
 ```
 
-## User Stories
-
-### US1: Simplified orchestrator configuration
-
-**As a** developer setting up a Generacy project,
-**I want** orchestrator settings (SMEE channel, label monitor, webhook setup) defined in `config.yaml`,
-**So that** I only maintain one config file for orchestrator runtime settings instead of duplicating values across `.env` and `config.yaml`.
-
-**Acceptance Criteria**:
-- [ ] Orchestrator reads `labelMonitor`, `webhookSetup`, `smeeChannelUrl` from `orchestrator` block in config.yaml
-- [ ] Existing env var overrides still work for Docker/CI environments
-
-### US2: Backwards-compatible migration
-
-**As a** developer with an existing Generacy deployment using env vars,
-**I want** my env vars to continue working after this change,
-**So that** I can migrate to config.yaml at my own pace without downtime.
-
-**Acceptance Criteria**:
-- [ ] Environment variables take precedence over config.yaml values
-- [ ] No breaking changes for existing deployments
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | Extend `WorkspaceConfigSchema` with optional `orchestrator` block containing `labelMonitor` (boolean), `webhookSetup` (boolean), and `smeeChannelUrl` (string) fields | P1 | In `packages/config/src/` |
-| FR-002 | `packages/orchestrator/src/config/loader.ts` reads `orchestrator.*` settings from config.yaml after loading workspace config | P1 | Env vars must still override |
-| FR-003 | CLI validation in `packages/generacy/src/cli/commands/orchestrator.ts` checks config.yaml for label monitor / webhook settings, not just env vars | P1 | |
-| FR-004 | Environment variables (`SMEE_CHANNEL_URL`, `LABEL_MONITOR_ENABLED`, `WEBHOOK_SETUP_ENABLED`) override config.yaml values when present | P1 | Backwards compatibility |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Orchestrator starts correctly using config.yaml values | Pass | Integration test with config.yaml only (no env vars) |
-| SC-002 | Orchestrator starts correctly using env vars only (no orchestrator block in config.yaml) | Pass | Existing behavior preserved |
-| SC-003 | Env var overrides config.yaml when both are set | Pass | Unit test in loader.ts |
-
 ## Changes Required
 
 ### `packages/config/src/`
-- Extend `TemplateConfigSchema` (or `WorkspaceConfigSchema`) with optional `orchestrator` block
+- Extend `TemplateConfigSchema` (in `template-schema.ts`) with optional `orchestrator` block — **not** `WorkspaceConfigSchema` (which stays focused on the normalized repo representation)
 - Add `orchestrator.labelMonitor`, `orchestrator.webhookSetup`, `orchestrator.smeeChannelUrl` fields
+- Export a new `tryLoadOrchestratorSettings(path)` function that parses the raw `orchestrator` block from config.yaml, keeping YAML parsing centralized in the config package
+
+### `packages/orchestrator/src/config/schema.ts`
+- Add `labelMonitor: z.boolean().default(false)` to `OrchestratorConfigSchema` as an explicit on/off switch
+- Runtime label monitor check becomes `config.labelMonitor && config.repositories.length > 0`
 
 ### `packages/orchestrator/src/config/loader.ts`
-- After loading workspace config for repos, also read `orchestrator.*` settings from config.yaml
-- Environment variables should still take precedence (for Docker/CI overrides)
+- Call `tryLoadOrchestratorSettings(configPath)` from `@generacy-ai/config` to read the `orchestrator` block
+- Merge config.yaml values with env vars and CLI flags; env vars/CLI flags take precedence
 
 ### `packages/generacy/src/cli/commands/orchestrator.ts`
-- Update CLI validation to check config.yaml for label monitor / webhook settings, not just env vars
+- Read `labelMonitor` from the loaded `OrchestratorConfig` object (post-`loadConfig()`) — one source of truth
+- CLI pre-flight validation: check `config.labelMonitor && config.repositories.length === 0` → error
 
-## Assumptions
+## Acceptance Criteria
 
-- The `orchestrator` block in config.yaml is entirely optional; omitting it falls back to env vars
-- `cluster-base` migration to remove these fields from `.env` is a separate follow-up task
-
-## Out of Scope
-
-- Removing `SMEE_CHANNEL_URL`, `LABEL_MONITOR_ENABLED`, `WEBHOOK_SETUP_ENABLED` from `.env` in cluster-base (that's a follow-up)
-- Other orchestrator settings not listed in the issue
+- [ ] Orchestrator reads `labelMonitor`, `webhookSetup`, `smeeChannelUrl` from config.yaml
+- [ ] Environment variables still override config.yaml values (backwards compatible)
+- [ ] Setup scripts in cluster-base can remove these from `.env` once this lands
+- [ ] Existing deployments using env vars continue to work
 
 ## References
 
 - [Cluster base migration plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/cluster-base-migration-plan.md)
 - Current loader: `packages/orchestrator/src/config/loader.ts`
 - Config schema: `packages/config/src/workspace-schema.ts`
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
+## Assumptions
+
+- [Assumption 1]
+
+## Out of Scope
+
+- [Exclusion 1]
 
 ---
 
