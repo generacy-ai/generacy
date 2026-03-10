@@ -4,7 +4,7 @@
   "description": "Workflow development IDE for local development and cloud orchestration management",
   "version": "0.1.0",
   "publisher": "generacy-ai",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "icon": "resources/icon.png",
   "repository": {
     "type": "git",
@@ -104,6 +104,12 @@
         "title": "Reveal in Explorer",
         "category": "Generacy",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "generacy.configureEnvironment",
+        "title": "Configure Environment",
+        "category": "Generacy",
+        "icon": "$(gear)"
       },
       {
         "command": "generacy.login",
@@ -536,12 +542,12 @@
         },
         {
           "command": "generacy.queue.viewLogs",
-          "when": "view == generacy.queue && viewItem =~ /^queueItem/",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem-(running|completed|failed)/",
           "group": "inline@4"
         },
         {
           "command": "generacy.queue.viewLogs",
-          "when": "view == generacy.queue && viewItem =~ /^queueItem/",
+          "when": "view == generacy.queue && viewItem =~ /^queueItem-(running|completed|failed)/",
           "group": "navigation@2"
         }
       ]

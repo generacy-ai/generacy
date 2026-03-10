@@ -109,6 +109,7 @@ vi.mock('../../utils/logger', () => ({
 import * as vscode from 'vscode';
 import { JobNotificationService } from '../job-notification-service';
 import type { CloudJobStatusBarProvider } from '../../providers/status-bar';
+import type { ProjectConfigService } from '../project-config-service';
 
 // ---------------------------------------------------------------------------
 // Test Helpers
@@ -128,6 +129,25 @@ function createMockQueueProvider() {
 
 function createMockExtensionUri() {
   return {} as vscode.Uri;
+}
+
+function createMockProjectConfigService(
+  overrides: {
+    isConfigured?: boolean;
+    reposPrimary?: string;
+    projectName?: string;
+  } = {},
+): ProjectConfigService {
+  return {
+    isConfigured: overrides.isConfigured ?? true,
+    reposPrimary: overrides.reposPrimary,
+    projectName: overrides.projectName,
+    projectId: undefined,
+    currentConfig: undefined,
+    onDidChange: vi.fn(),
+    initialize: vi.fn(),
+    dispose: vi.fn(),
+  } as unknown as ProjectConfigService;
 }
 
 function createQueueItem(overrides: Partial<QueueItem> = {}): QueueItem {
@@ -483,6 +503,175 @@ describe('JobNotificationService', () => {
   });
 
   // ========================================================================
+  // Waiting Notifications
+  // ========================================================================
+
+  describe('waiting notifications', () => {
+    it('should show waiting notification immediately (not batched)', () => {
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: {
+          status: 'waiting',
+          workflowName: 'my-workflow',
+          waitingFor: 'human approval',
+        },
+      }));
+
+      // Waiting notifications are shown immediately, no need to advance timers
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledTimes(1);
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('my-workflow is waiting for: human approval'),
+        'View Job',
+      );
+    });
+
+    it('should show generic waiting message when waitingFor is absent', () => {
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: {
+          status: 'waiting',
+          workflowName: 'my-workflow',
+        },
+      }));
+
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('my-workflow is waiting for input'),
+        'View Job',
+      );
+    });
+
+    it('should flash status bar with waiting status', () => {
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'waiting', workflowName: 'test' },
+      }));
+
+      expect(statusBar.flash).toHaveBeenCalledWith('waiting');
+    });
+
+    it('should execute viewJobProgress when View Job is selected', async () => {
+      (vscode.window.showWarningMessage as ReturnType<typeof vi.fn>).mockResolvedValueOnce('View Job');
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { id: 'job-wait-1', status: 'waiting', workflowName: 'test' },
+      }));
+
+      // Allow the .then() handler to execute
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
+        'generacy.queue.viewProgress',
+        'job-wait-1',
+      );
+    });
+
+    it('should deduplicate waiting events', () => {
+      const handler = getSSEHandler('queue');
+      const event = createSSEEvent({
+        id: 'wait-dup-1',
+        data: { status: 'waiting', workflowName: 'test' },
+      });
+
+      handler(event);
+      handler(event);
+
+      // Only one notification
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it('should suppress waiting notifications when notifications.enabled is false', () => {
+      mockConfig({ 'notifications.enabled': false });
+      const handler = getSSEHandler('queue');
+
+      handler(createSSEEvent({
+        data: { status: 'waiting', workflowName: 'test' },
+      }));
+
+      expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
+    });
+
+    it('should always show waiting notifications when notifications are enabled (regardless of onComplete/onError)', () => {
+      mockConfig({ 'notifications.onComplete': false, 'notifications.onError': false });
+      const handler = getSSEHandler('queue');
+
+      handler(createSSEEvent({
+        data: { status: 'waiting', workflowName: 'test', waitingFor: 'approval' },
+      }));
+
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('test is waiting for: approval'),
+        'View Job',
+      );
+    });
+
+    it('should not enrich waiting notifications via getJobProgress', () => {
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'waiting', workflowName: 'test' },
+      }));
+
+      // Waiting notifications bypass enrichment entirely
+      expect(mockGetJobProgress).not.toHaveBeenCalled();
+    });
+
+    it('should not clear step failure timer for waiting events', () => {
+      const workflowHandler = getSSEHandler('workflows');
+      const queueHandler = getSSEHandler('queue');
+
+      // Step failure event
+      workflowHandler({
+        id: 'wf-evt-wait',
+        event: 'workflow:step:complete',
+        channel: 'workflows',
+        timestamp: '2026-01-01T00:10:00Z',
+        data: {
+          workflowId: 'wf-1',
+          jobId: 'job-wait-coe',
+          phaseId: 'phase-1',
+          phaseIndex: 0,
+          step: { id: 'T001', name: 'lint', status: 'failed' },
+          stepIndex: 0,
+          totalSteps: 3,
+        },
+      } as SSEEvent);
+
+      // Waiting event (should not clear the step failure timer)
+      queueHandler(createSSEEvent({
+        id: 'wait-coe-evt',
+        data: { id: 'job-wait-coe', status: 'waiting', workflowName: 'test' },
+      }));
+
+      // Advance past the continueOnError window
+      vi.advanceTimersByTime(5_000);
+
+      // Both the waiting flash and the step failure flash should have fired
+      expect(statusBar.flash).toHaveBeenCalledWith('waiting');
+      expect(statusBar.flash).toHaveBeenCalledWith('failed');
+    });
+
+    it('should include waiting in summary when batched with other statuses on refocus', async () => {
+      hoisted.mockWindowFocused = false;
+      hoisted.windowStateHandler?.({ focused: false });
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({ id: 'evt-w1', data: { id: 'j-w1', status: 'completed' } }));
+      handler(createSSEEvent({ id: 'evt-w2', data: { id: 'j-w2', status: 'completed' } }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      // Waiting notifications still fire immediately even while unfocused
+      handler(createSSEEvent({ id: 'evt-w3', data: { id: 'j-w3', status: 'waiting', workflowName: 'wf-wait' } }));
+
+      // The waiting notification is shown immediately regardless of focus
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('wf-wait is waiting for input'),
+        'View Job',
+      );
+    });
+  });
+
+  // ========================================================================
   // Action Handling
   // ========================================================================
 
@@ -814,6 +1003,13 @@ describe('JobNotificationService', () => {
 
       expect(statusBar.flash).toHaveBeenCalledWith('cancelled');
     });
+
+    it('should call flash for waiting events', async () => {
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({ id: 'evt-w', data: { status: 'waiting' } }));
+
+      expect(statusBar.flash).toHaveBeenCalledWith('waiting');
+    });
   });
 
   // ========================================================================
@@ -921,6 +1117,259 @@ describe('JobNotificationService', () => {
       // Flash should only be called once (from the terminal event, not from the step failure timer)
       expect(statusBar.flash).toHaveBeenCalledTimes(1);
       expect(statusBar.flash).toHaveBeenCalledWith('failed');
+    });
+  });
+
+  // ========================================================================
+  // Project-Scoped Filtering
+  // ========================================================================
+
+  describe('project-scoped notification filtering', () => {
+    it('should show all notifications when no ProjectConfigService is provided (default)', async () => {
+      // The default `service` in beforeEach has no ProjectConfigService
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'completed', workflowName: 'any-workflow', repository: 'other-org/other-repo' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining('any-workflow completed'),
+        expect.anything(),
+      );
+    });
+
+    it('should show all notifications when ProjectConfigService is not configured', async () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({ isConfigured: false });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'completed', workflowName: 'unfiltered', repository: 'org/other-repo' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining('unfiltered completed'),
+        expect.anything(),
+      );
+    });
+
+    it('should show notification when repository matches reposPrimary', async () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: 'org/my-repo',
+        projectName: 'my-repo',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'completed', workflowName: 'my-workflow', repository: 'org/my-repo' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining('my-workflow completed'),
+        expect.anything(),
+      );
+    });
+
+    it('should suppress toast but still flash status bar for non-matching repository', async () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: 'org/my-repo',
+        projectName: 'my-repo',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'completed', workflowName: 'other-workflow', repository: 'org/other-repo' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      // Status bar should still flash
+      expect(statusBar.flash).toHaveBeenCalledWith('completed');
+      // But no toast notification
+      expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+    });
+
+    it('should show notification when queue item has no repository (cannot filter)', async () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: 'org/my-repo',
+        projectName: 'my-repo',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'completed', workflowName: 'no-repo-workflow' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining('no-repo-workflow completed'),
+        expect.anything(),
+      );
+    });
+
+    it('should match by projectName when reposPrimary is not set', async () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: undefined,
+        projectName: 'my-project',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'completed', workflowName: 'matched-by-name', repository: 'org/my-project' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        expect.stringContaining('matched-by-name completed'),
+        expect.anything(),
+      );
+    });
+
+    it('should suppress waiting toast for non-matching project but still flash status bar', () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: 'org/my-repo',
+        projectName: 'my-repo',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'waiting', workflowName: 'other-wait', repository: 'org/other-repo' },
+      }));
+
+      // Status bar should flash
+      expect(statusBar.flash).toHaveBeenCalledWith('waiting');
+      // But no toast
+      expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
+    });
+
+    it('should show waiting toast for matching project', () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: 'org/my-repo',
+        projectName: 'my-repo',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        data: { status: 'waiting', workflowName: 'my-wait', repository: 'org/my-repo', waitingFor: 'approval' },
+      }));
+
+      expect(statusBar.flash).toHaveBeenCalledWith('waiting');
+      expect(vscode.window.showWarningMessage).toHaveBeenCalledWith(
+        expect.stringContaining('my-wait is waiting for: approval'),
+        'View Job',
+      );
+    });
+
+    it('should suppress failed toast for non-matching project but still flash status bar', async () => {
+      service.dispose();
+      sseSubscriptions.length = 0;
+
+      const configService = createMockProjectConfigService({
+        isConfigured: true,
+        reposPrimary: 'org/my-repo',
+        projectName: 'my-repo',
+      });
+      statusBar = createMockStatusBar();
+      service = new JobNotificationService(
+        statusBar,
+        createMockQueueProvider(),
+        createMockExtensionUri(),
+        configService,
+      );
+
+      const handler = getSSEHandler('queue');
+      handler(createSSEEvent({
+        id: 'evt-fail-other',
+        data: { status: 'failed', workflowName: 'other-fail', repository: 'org/other-repo' },
+      }));
+
+      await vi.advanceTimersByTimeAsync(10_000);
+
+      expect(statusBar.flash).toHaveBeenCalledWith('failed');
+      expect(vscode.window.showWarningMessage).not.toHaveBeenCalled();
     });
   });
 

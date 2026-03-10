@@ -10,7 +10,7 @@ export const GateDefinitionSchema = z.object({
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
-  condition: z.enum(['always', 'on-questions', 'on-failure']),
+  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure']),
 });
 
 /**
@@ -25,16 +25,20 @@ export const WorkerConfigSchema = z.object({
   shutdownGracePeriodMs: z.number().int().min(1000).default(5000),
   /** Command to run during the validate phase */
   validateCommand: z.string().default('pnpm test && pnpm build'),
-  /** Maximum Claude CLI turns per phase */
-  maxTurns: z.number().int().min(10).default(100),
+  /** Command to run before validation to install dependencies (empty string to skip) */
+  preValidateCommand: z.string().default('pnpm install'),
   /** Gate definitions keyed by issue label */
   gates: z.record(z.string(), z.array(GateDefinitionSchema)).default({
     'speckit-feature': [
-      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
+      { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
     ],
-    'speckit-bugfix': [],
+    'speckit-bugfix': [
+      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
+      { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'on-request' },
+    ],
     'speckit-epic': [
-      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
       { phase: 'tasks', gateLabel: 'waiting-for:tasks-review', condition: 'always' },
     ],
   }),

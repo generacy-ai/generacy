@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { EXTENSION_ID, COMMANDS } from './constants';
+import { EXTENSION_ID, COMMANDS, CONTEXT_KEYS } from './constants';
 import { getConfig, getLogger, getTelemetry, withErrorHandling, ErrorCode, GeneracyError } from './utils';
 import {
   WorkflowTreeProvider,
@@ -21,7 +21,10 @@ import {
   initializeRunner,
 } from './commands/runner';
 import { createWorkflow } from './commands/workflow';
-import { initializeExecutionStatusBar } from './providers';
+import { initializeExecutionStatusBar, ProjectStatusBarProvider, EnvStatusBarProvider } from './providers';
+import { getProjectConfigService } from './services/project-config-service';
+import { getEnvConfigService } from './services/env-config-service';
+import { handleConfigureEnvironment } from './commands/env';
 import { registerDebugAdapter } from './debug';
 import { registerCloudCommands, initializeCloudServices } from './commands/cloud';
 import { JobLogChannel } from './views/cloud/log-viewer';
@@ -75,6 +78,12 @@ export function activate(context: vscode.ExtensionContext): void {
   // Initialize execution status bar
   initializeExecutionStatusBar(context);
   logger.info('Execution status bar initialized');
+
+  // Initialize project config service (reads .generacy/config.yaml)
+  void initializeProjectConfig(context);
+
+  // Initialize env config service (watches .generacy/generacy.env)
+  void initializeEnvConfig(context);
 
   // Register debug adapter
   registerDebugAdapter(context);
@@ -173,6 +182,10 @@ function registerCommands(context: vscode.ExtensionContext): void {
     {
       id: COMMANDS.submitJob,
       handler: withErrorHandling(handleSubmitJob, { showOutput: true }),
+    },
+    {
+      id: COMMANDS.configureEnvironment,
+      handler: withErrorHandling(handleConfigureEnvironment, { showOutput: true }),
     },
   ];
 
@@ -609,6 +622,101 @@ async function handleSubmitJob(): Promise<void> {
     vscode.window.showErrorMessage(`Failed to submit job: ${msg}`);
     throw new GeneracyError(ErrorCode.ApiConnectionError, `Failed to submit job: ${msg}`);
   }
+}
+
+/**
+ * Initialize ProjectConfigService: parse .generacy/config.yaml, set context
+ * key, and wire up the project status bar provider.
+ */
+async function initializeProjectConfig(context: vscode.ExtensionContext): Promise<void> {
+  const logger = getLogger();
+
+  const configService = getProjectConfigService();
+
+  try {
+    await configService.initialize();
+  } catch (error) {
+    logger.warn('Failed to initialize project config service', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Set the context key so when-clauses can react to project config presence
+  void vscode.commands.executeCommand(
+    'setContext',
+    CONTEXT_KEYS.hasProjectConfig,
+    configService.isConfigured,
+  );
+
+  // Keep context key in sync when the config file changes
+  context.subscriptions.push(
+    configService.onDidChange((config) => {
+      void vscode.commands.executeCommand(
+        'setContext',
+        CONTEXT_KEYS.hasProjectConfig,
+        config !== undefined,
+      );
+    }),
+  );
+
+  // Show project name in the status bar
+  const projectStatusBar = new ProjectStatusBarProvider(configService);
+  context.subscriptions.push(projectStatusBar);
+
+  // Ensure the service is disposed with the extension
+  context.subscriptions.push(configService);
+
+  logger.info('Project config service initialized', {
+    isConfigured: configService.isConfigured,
+    projectName: configService.projectName,
+  });
+}
+
+/**
+ * Initialize EnvConfigService: watch .generacy/generacy.env, set context
+ * key, and wire up the env status bar provider.
+ */
+async function initializeEnvConfig(context: vscode.ExtensionContext): Promise<void> {
+  const logger = getLogger();
+
+  const envService = getEnvConfigService();
+
+  try {
+    await envService.initialize();
+  } catch (error) {
+    logger.warn('Failed to initialize env config service', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  // Set the context key so when-clauses can react to env config presence
+  void vscode.commands.executeCommand(
+    'setContext',
+    CONTEXT_KEYS.hasEnvConfig,
+    envService.status === 'ok',
+  );
+
+  // Keep context key in sync when the env file changes
+  context.subscriptions.push(
+    envService.onDidChange((status) => {
+      void vscode.commands.executeCommand(
+        'setContext',
+        CONTEXT_KEYS.hasEnvConfig,
+        status === 'ok',
+      );
+    }),
+  );
+
+  // Show env status in the status bar
+  const envStatusBar = new EnvStatusBarProvider(envService);
+  context.subscriptions.push(envStatusBar);
+
+  // Ensure the service is disposed with the extension
+  context.subscriptions.push(envService);
+
+  logger.info('Env config service initialized', {
+    status: envService.status,
+  });
 }
 
 /**

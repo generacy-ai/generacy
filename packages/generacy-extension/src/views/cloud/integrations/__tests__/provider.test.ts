@@ -3,26 +3,30 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach, type Mock } from 'vitest';
 
-// Mock dependencies before imports
-const mockGetLogger = vi.fn(() => ({
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: vi.fn(),
-  error: vi.fn(),
-}));
+// Hoist mock variables so they are available in vi.mock factories
+const { mockGetLogger, mockAuthService, mockGetAuthService, mockIntegrationsApi } = vi.hoisted(() => {
+  const mockGetLogger = vi.fn(() => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }));
 
-const mockAuthService = {
-  isAuthenticated: vi.fn(() => true),
-  onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
-};
+  const mockAuthService = {
+    isAuthenticated: vi.fn(() => true),
+    onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+  };
 
-const mockGetAuthService = vi.fn(() => mockAuthService);
+  const mockGetAuthService = vi.fn(() => mockAuthService);
 
-const mockIntegrationsApi = {
-  getIntegrations: vi.fn(),
-  getIntegrationDetails: vi.fn(),
-  getWebhooks: vi.fn(),
-};
+  const mockIntegrationsApi = {
+    getIntegrations: vi.fn(),
+    getIntegrationDetails: vi.fn(),
+    getWebhooks: vi.fn(),
+  };
+
+  return { mockGetLogger, mockAuthService, mockGetAuthService, mockIntegrationsApi };
+});
 
 // Mock modules
 vi.mock('../../../../utils/logger', () => ({
@@ -165,23 +169,23 @@ describe('IntegrationsTreeProvider', () => {
       expect(provider.getViewMode()).toBe('byType');
     });
 
-    it('should start polling when authenticated', () => {
+    it('should start polling when authenticated', async () => {
       mockAuthService.isAuthenticated.mockReturnValue(true);
 
       provider = new IntegrationsTreeProvider();
 
-      // Run timers to trigger the immediate fetch
-      vi.runAllTimers();
+      // Flush microtasks to allow the immediate fetch to complete
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalled();
     });
 
-    it('should not start polling when not authenticated', () => {
+    it('should not start polling when not authenticated', async () => {
       mockAuthService.isAuthenticated.mockReturnValue(false);
 
       provider = new IntegrationsTreeProvider();
 
-      vi.runAllTimers();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockIntegrationsApi.getIntegrations).not.toHaveBeenCalled();
     });
@@ -218,7 +222,7 @@ describe('IntegrationsTreeProvider', () => {
 
       // Trigger fetch
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       const children = await provider.getChildren();
 
@@ -235,7 +239,7 @@ describe('IntegrationsTreeProvider', () => {
 
       // Trigger fetch
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       const children = await provider.getChildren();
 
@@ -268,7 +272,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([]);
 
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalled();
     });
@@ -284,7 +288,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([github]);
 
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       const result = provider.getIntegrationByType('github');
 
@@ -295,7 +299,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([]);
 
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       const result = provider.getIntegrationByType('gitlab');
 
@@ -316,7 +320,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue(integrations);
 
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       const result = provider.getAllIntegrations();
 
@@ -339,7 +343,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue(integrations);
 
       provider.refresh();
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
 
       const result = provider.getConnectedIntegrations();
 
@@ -357,7 +361,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([]);
 
       // Initial fetch on construction
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalledTimes(1);
 
       // Advance timer by polling interval
@@ -373,7 +377,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([]);
 
       // Initial fetch
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalledTimes(1);
 
       // Pause
@@ -388,7 +392,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([]);
 
       // Initial fetch
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalledTimes(1);
 
       // Pause and resume
@@ -396,7 +400,7 @@ describe('IntegrationsTreeProvider', () => {
       provider.resumePolling();
 
       // Resume triggers immediate fetch
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalledTimes(2);
     });
 
@@ -404,7 +408,7 @@ describe('IntegrationsTreeProvider', () => {
       mockIntegrationsApi.getIntegrations.mockResolvedValue([]);
 
       // Initial fetch
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(0);
       expect(mockIntegrationsApi.getIntegrations).toHaveBeenCalledTimes(1);
 
       // Dispose

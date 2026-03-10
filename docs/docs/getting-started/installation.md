@@ -2,140 +2,101 @@
 sidebar_position: 2
 ---
 
-# Installation Guide
+# Installation
 
-This guide covers detailed installation options for the Generacy ecosystem.
+This page covers installing the Generacy CLI, Docker Desktop, and the VS Code extension. Make sure you've reviewed the [Prerequisites](./prerequisites.md) first.
 
-## System Requirements
+## Install the Generacy CLI
 
-| Requirement | Minimum | Recommended |
-|-------------|---------|-------------|
-| Node.js | 18.x | 20.x LTS |
-| npm | 9.x | 10.x |
-| Memory | 4GB | 8GB |
-| Disk | 500MB | 1GB |
-
-## Installation Methods
-
-### npm (Recommended)
-
-Install Agency globally using npm:
+Install the CLI globally with npm:
 
 ```bash
-npm install -g @generacy-ai/agency
+npm install -g @generacy-ai/generacy
 ```
 
-### pnpm
+Verify the installation:
 
 ```bash
-pnpm add -g @generacy-ai/agency
+generacy --version
 ```
 
-### From Source
+You should see a version number printed (e.g., `1.x.x`). If you get `command not found`, see the [troubleshooting guide](./troubleshooting.md#generacy-command-not-found).
 
-For development or customization:
+## Install Docker Desktop
+
+Docker is **optional for Level 1** (Agency Only) but **required for Level 2+** adoption levels.
+
+1. Download Docker Desktop from [docker.com](https://www.docker.com/products/docker-desktop/)
+2. Follow the installer for your operating system
+3. Start Docker Desktop and verify it's running:
+
+```bash
+docker --version
+```
+
+:::tip
+On Linux, you can use Docker Engine instead of Docker Desktop. See the [Docker Engine install docs](https://docs.docker.com/engine/install/) for instructions.
+:::
+
+## Install VS Code and the Generacy Extension
+
+VS Code is the recommended editor for working with Generacy. If you don't already have it installed, download it from [code.visualstudio.com](https://code.visualstudio.com/).
+
+To install the Generacy extension:
+
+1. Open VS Code
+2. Open the Extensions panel (**Ctrl+Shift+X** / **Cmd+Shift+X**)
+3. Search for **Generacy**
+4. Click **Install** on the Generacy extension
+
+<!-- Screenshot placeholder: VS Code extension install -->
+
+The extension provides project-aware tooling and integrates with the Generacy CLI for a streamlined development experience.
+
+## Alternative Installation Methods
+
+<details>
+<summary>Install with pnpm</summary>
+
+```bash
+pnpm add -g @generacy-ai/generacy
+```
+
+Verify:
+
+```bash
+generacy --version
+```
+
+</details>
+
+<details>
+<summary>Install from source</summary>
+
+For development or contributing to Generacy:
 
 ```bash
 git clone https://github.com/generacy-ai/generacy.git
-cd generacy/packages/agency
-npm install
-npm link
+cd generacy
+pnpm install
+pnpm build
 ```
 
-## Component Installation
-
-### Agency Only (Level 1)
-
-For basic agent enhancement:
+Then link the CLI globally:
 
 ```bash
-npm install -g @generacy-ai/agency
+cd packages/generacy
+pnpm link --global
 ```
 
-### Agency + Humancy (Level 2)
-
-Add human oversight capabilities:
+Verify:
 
 ```bash
-npm install -g @generacy-ai/agency @generacy-ai/humancy
+generacy --version
 ```
 
-### Full Local Stack (Level 3)
-
-Install all components:
-
-```bash
-npm install -g @generacy-ai/agency @generacy-ai/humancy @generacy-ai/generacy
-```
-
-## Configuration
-
-### Project Initialization
-
-After installation, initialize your project:
-
-```bash
-cd your-project
-agency init
-```
-
-This creates the following structure:
-
-```
-your-project/
-├── .agency/
-│   ├── config.json       # Agency configuration
-│   └── plugins/          # Local plugins directory
-└── ...
-```
-
-### Agent Configuration
-
-Configure your AI assistant to use Agency. See the [Agency Configuration](/docs/guides/agency/configuration) guide for detailed instructions on setting up:
-
-- Claude Code
-- Cursor
-- Continue
-- Other MCP-compatible assistants
-
-## Verification
-
-Verify your installation:
-
-```bash
-# Check Agency version
-agency --version
-
-# Check status
-agency status
-
-# List available tools
-agency tools list
-```
-
-## Updating
-
-Update to the latest version:
-
-```bash
-npm update -g @generacy-ai/agency
-```
-
-## Uninstallation
-
-To remove Generacy components:
-
-```bash
-npm uninstall -g @generacy-ai/agency @generacy-ai/humancy @generacy-ai/generacy
-```
-
-Remove project configuration:
-
-```bash
-rm -rf .agency .humancy
-```
+</details>
 
 ## Next Steps
 
-- [Level 1: Agency Only](/docs/getting-started/level-1-agency-only) - Start with Agency
-- [Agency Configuration](/docs/guides/agency/configuration) - Advanced configuration
+With the CLI installed, proceed to [Authentication](./authentication.md) to set up your GitHub and Anthropic credentials.

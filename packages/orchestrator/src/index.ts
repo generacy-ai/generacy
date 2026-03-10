@@ -137,6 +137,8 @@ export {
 
 export { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 
+export { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
+
 export { WorkerDispatcher } from './services/worker-dispatcher.js';
 
 export {
@@ -145,6 +147,12 @@ export {
   type WebhookSetupResult,
   type GitHubWebhook,
 } from './services/webhook-setup-service.js';
+
+export {
+  resolveClusterIdentity,
+  filterByAssignee,
+  type FilterableIssue,
+} from './services/identity.js';
 
 // Auth
 export {

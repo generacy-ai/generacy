@@ -35,11 +35,11 @@ export function getPhaseSequence(workflowName: string): WorkflowPhase[] {
  * Map each phase to its Claude CLI slash command (null = no CLI command)
  */
 export const PHASE_TO_COMMAND: Record<WorkflowPhase, string | null> = {
-  specify: '/speckit:specify',
-  clarify: '/speckit:clarify',
-  plan: '/speckit:plan',
-  tasks: '/speckit:tasks',
-  implement: '/speckit:implement',
+  specify: '/specify',
+  clarify: '/clarify',
+  plan: '/plan',
+  tasks: '/tasks',
+  implement: '/implement',
   validate: null,
 };
 
@@ -78,7 +78,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-questions' | 'on-failure';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure';
 }
 
 /**
@@ -134,8 +134,6 @@ export interface CliSpawnOptions {
   cwd: string;
   /** Environment variables to pass */
   env: Record<string, string>;
-  /** Maximum turns */
-  maxTurns: number;
   /** Timeout in milliseconds */
   timeoutMs: number;
   /** Abort signal for graceful shutdown */
@@ -202,6 +200,8 @@ export interface WorkerContext {
   checkoutPath: string;
   /** Issue URL for prompts */
   issueUrl: string;
+  /** Issue description (from metadata or GitHub fetch) */
+  description: string;
   /** PR URL — set after draft PR is created, updated by PrManager */
   prUrl?: string;
 }

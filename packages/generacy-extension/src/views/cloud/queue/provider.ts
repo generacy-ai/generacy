@@ -16,6 +16,7 @@ import type {
   WorkflowPhaseEventData,
 } from '../../../api/types';
 import { VIEWS } from '../../../constants';
+import type { ProjectConfigService } from '../../../services/project-config-service';
 import {
   QueueTreeItem,
   QueueFilterGroupItem,
@@ -78,13 +79,42 @@ export class QueueTreeProvider
   /** Progress summaries keyed by job ID, updated from workflows SSE and REST responses */
   private progressSummaries = new Map<string, QueueItemProgressSummary>();
 
-  constructor(options: QueueTreeProviderOptions = {}) {
+  /** Optional project config for default repository scoping */
+  private readonly projectConfig: ProjectConfigService | undefined;
+
+  /** Whether the project-scoped filter is active (true = show project jobs only) */
+  private projectScopeActive = false;
+
+  constructor(options: QueueTreeProviderOptions = {}, projectConfig?: ProjectConfigService) {
     const logger = getLogger();
     logger.debug('QueueTreeProvider initialized');
 
     this.pollingInterval = options.pollingInterval ?? 30000; // Default 30s
     this.viewMode = options.viewMode ?? 'flat';
     this.pageSize = options.pageSize ?? 50;
+    this.projectConfig = projectConfig;
+
+    // Apply default project-scoped filter if config is available
+    if (projectConfig?.isConfigured) {
+      this.applyProjectFilter();
+    }
+
+    // React to project config changes (file created, modified, or deleted)
+    if (projectConfig) {
+      this.disposables.push(
+        projectConfig.onDidChange((config) => {
+          if (config && this.projectScopeActive) {
+            // Config changed — update the repository filter value
+            this.applyProjectFilter();
+          } else if (!config && this.projectScopeActive) {
+            // Config was deleted — clear project scope
+            this.projectScopeActive = false;
+            this.activeFilters.repository = undefined;
+            void this.fetchQueue();
+          }
+        })
+      );
+    }
 
     // Listen for authentication changes
     const authService = getAuthService();
@@ -225,8 +255,8 @@ export class QueueTreeProvider
       statusCounts.set(item.status, count + 1);
     }
 
-    // Sort by priority: running > pending > failed > completed > cancelled
-    const statusOrder: QueueStatus[] = ['running', 'pending', 'failed', 'completed', 'cancelled'];
+    // Sort by priority: running > waiting > pending > failed > completed > cancelled
+    const statusOrder: QueueStatus[] = ['running', 'waiting', 'pending', 'failed', 'completed', 'cancelled'];
 
     return statusOrder
       .filter((status) => statusCounts.has(status))
@@ -393,7 +423,8 @@ export class QueueTreeProvider
             oldItem.priority !== updatedItem.priority ||
             oldItem.assigneeId !== updatedItem.assigneeId ||
             oldItem.startedAt !== updatedItem.startedAt ||
-            oldItem.completedAt !== updatedItem.completedAt
+            oldItem.completedAt !== updatedItem.completedAt ||
+            oldItem.waitingFor !== updatedItem.waitingFor
           ) {
             this.queueItems[updateIdx] = updatedItem;
             logger.debug(`Queue item updated via SSE: ${itemId}`);
@@ -666,7 +697,8 @@ export class QueueTreeProvider
         oldItem.status !== newItem.status ||
         oldItem.priority !== newItem.priority ||
         oldItem.startedAt !== newItem.startedAt ||
-        oldItem.completedAt !== newItem.completedAt
+        oldItem.completedAt !== newItem.completedAt ||
+        oldItem.waitingFor !== newItem.waitingFor
       ) {
         return true;
       }
@@ -740,14 +772,52 @@ export class QueueTreeProvider
   }
 
   /**
-   * Clear all filters
+   * Clear all filters. If project config is available, re-applies the
+   * project-scoped repository filter as the baseline.
    */
   public clearFilters(): void {
     const logger = getLogger();
     logger.info('Clearing all queue filters');
 
     this.activeFilters = {};
+
+    // Re-apply project scope if it was active
+    if (this.projectScopeActive && this.projectConfig?.isConfigured) {
+      this.applyProjectFilter();
+      return; // applyProjectFilter triggers fetchQueue
+    }
+
     void this.fetchQueue();
+  }
+
+  /**
+   * Toggle between project-scoped and all-org job views.
+   * When project scope is active, only jobs matching the project's repository
+   * are shown. When inactive, all org jobs are visible.
+   */
+  public toggleProjectScope(): void {
+    const logger = getLogger();
+
+    if (this.projectScopeActive) {
+      // Switch to showing all org jobs
+      this.projectScopeActive = false;
+      this.activeFilters.repository = undefined;
+      logger.info('Showing all org jobs');
+    } else if (this.projectConfig?.isConfigured) {
+      // Switch to showing project jobs only
+      this.applyProjectFilter();
+      logger.info('Showing project jobs only');
+      return; // applyProjectFilter triggers fetchQueue
+    }
+
+    void this.fetchQueue();
+  }
+
+  /**
+   * Whether the project-scoped filter is currently active
+   */
+  public get isProjectScoped(): boolean {
+    return this.projectScopeActive;
   }
 
   /**
@@ -786,6 +856,23 @@ export class QueueTreeProvider
   }
 
   // ==========================================================================
+  // Project Scoping
+  // ==========================================================================
+
+  /**
+   * Apply the project-scoped repository filter using the project config's
+   * `reposPrimary` value. Falls back to project name if no repo is configured.
+   */
+  private applyProjectFilter(): void {
+    const repoFilter = this.projectConfig?.reposPrimary ?? this.projectConfig?.projectName;
+    if (repoFilter) {
+      this.projectScopeActive = true;
+      this.activeFilters.repository = repoFilter;
+      void this.fetchQueue();
+    }
+  }
+
+  // ==========================================================================
   // Utility Methods
   // ==========================================================================
 
@@ -795,7 +882,7 @@ export class QueueTreeProvider
    * descriptions stay current. Clears the timer when no jobs are running.
    */
   private updateElapsedTimer(): void {
-    const hasRunning = this.queueItems.some((i) => i.status === 'running');
+    const hasRunning = this.queueItems.some((i) => i.status === 'running' || i.status === 'waiting');
     if (hasRunning && !this.elapsedTimer) {
       this.elapsedTimer = setInterval(() => {
         this._onDidChangeTreeData.fire();
@@ -840,9 +927,17 @@ export class QueueTreeProvider
  */
 export function createQueueTreeProvider(
   context: vscode.ExtensionContext,
-  options?: QueueTreeProviderOptions
+  options?: QueueTreeProviderOptions,
+  projectConfig?: ProjectConfigService
 ): QueueTreeProvider {
-  const provider = new QueueTreeProvider(options);
+  const provider = new QueueTreeProvider(options, projectConfig);
+
+  // Set initial project scope context key
+  void vscode.commands.executeCommand(
+    'setContext',
+    'generacy.queue.isProjectScoped',
+    provider.isProjectScoped,
+  );
 
   // Register the tree data provider
   const treeView = vscode.window.createTreeView(VIEWS.queue, {
@@ -886,7 +981,7 @@ export function createQueueTreeProvider(
   // Register filter commands
   context.subscriptions.push(
     vscode.commands.registerCommand('generacy.queue.filterByStatus', async () => {
-      const statuses: QueueStatus[] = ['pending', 'running', 'completed', 'failed', 'cancelled'];
+      const statuses: QueueStatus[] = ['pending', 'running', 'waiting', 'completed', 'failed', 'cancelled'];
       const selected = await vscode.window.showQuickPick(
         [
           { label: 'All Statuses', value: undefined },
@@ -900,6 +995,15 @@ export function createQueueTreeProvider(
     }),
     vscode.commands.registerCommand('generacy.queue.clearFilters', () => {
       provider.clearFilters();
+    }),
+    vscode.commands.registerCommand('generacy.queue.toggleProjectScope', () => {
+      provider.toggleProjectScope();
+      // Update context key so the UI label/icon can react
+      void vscode.commands.executeCommand(
+        'setContext',
+        'generacy.queue.isProjectScoped',
+        provider.isProjectScoped,
+      );
     })
   );
 

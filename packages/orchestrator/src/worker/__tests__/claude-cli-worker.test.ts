@@ -39,6 +39,14 @@ const mockGithub = {
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
   createGitHubClient: vi.fn(() => mockGithub),
+  createFeature: vi.fn().mockResolvedValue({
+    success: true,
+    branch_name: '042-test-feature',
+    feature_num: '042',
+    spec_file: '/tmp/test-checkout/specs/042-test-feature/spec.md',
+    feature_dir: '/tmp/test-checkout/specs/042-test-feature',
+    git_branch_created: true,
+  }),
 }));
 
 vi.mock('../repo-checkout.js', () => ({
@@ -115,7 +123,6 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     workspaceDir: '/tmp/test-workspaces',
     shutdownGracePeriodMs: 5000,
     validateCommand: 'pnpm test && pnpm build',
-    maxTurns: 100,
     gates: {
       'speckit-feature': [
         {
@@ -123,8 +130,24 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
           gateLabel: 'waiting-for:clarification',
           condition: 'always',
         },
+        {
+          phase: 'implement',
+          gateLabel: 'waiting-for:implementation-review',
+          condition: 'always',
+        },
       ],
-      'speckit-bugfix': [],
+      'speckit-bugfix': [
+        {
+          phase: 'clarify',
+          gateLabel: 'waiting-for:clarification',
+          condition: 'always',
+        },
+        {
+          phase: 'implement',
+          gateLabel: 'waiting-for:implementation-review',
+          condition: 'always',
+        },
+      ],
     },
     ...overrides,
   };
@@ -161,8 +184,10 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.getIssueComments.mockResolvedValue([]);
     mockGithub.addIssueComment.mockResolvedValue({ id: 1, body: '' });
     mockGithub.updateComment.mockResolvedValue(undefined);
-    // PrManager git mocks
-    mockGithub.getStatus.mockResolvedValue({ branch: 'feature/42', has_changes: false, staged: [], unstaged: [], untracked: [] });
+    // PrManager git mocks — default to has_changes: true so implement phase
+    // passes the "must produce changes" check. Tests that need has_changes: false
+    // should override this mock.
+    mockGithub.getStatus.mockResolvedValue({ branch: 'feature/42', has_changes: true, staged: [], unstaged: [], untracked: [] });
     mockGithub.stageAll.mockResolvedValue(undefined);
     mockGithub.commit.mockResolvedValue({ sha: 'abc123', files_committed: [] });
     mockGithub.push.mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' });
@@ -239,8 +264,8 @@ describe('ClaudeCliWorker (integration)', () => {
     });
   });
 
-  describe('speckit-bugfix workflow: no gates', () => {
-    it('runs all phases to completion including validate', async () => {
+  describe('speckit-bugfix workflow: gates at clarify', () => {
+    it('runs specify and clarify then hits clarification gate', async () => {
       mockGithub.getIssue.mockResolvedValue({ labels: [] });
       spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
 
@@ -252,30 +277,19 @@ describe('ClaudeCliWorker (integration)', () => {
 
       await worker.handle(createQueueItem({ workflowName: 'speckit-bugfix' }));
 
-      // Should have spawned CLI for specify, clarify, plan, tasks, implement
-      // and sh for validate = 6 total spawns
-      expect(spawnFn).toHaveBeenCalledTimes(6);
+      // Should have spawned CLI for specify and clarify only (gate hit after clarify)
+      expect(spawnFn).toHaveBeenCalledTimes(2);
 
-      // Validate phase spawns 'sh -c' instead of 'claude'
-      const lastSpawnCall = spawnFn.mock.calls[5] as [string, string[], unknown];
-      expect(lastSpawnCall[0]).toBe('sh');
-      expect(lastSpawnCall[1]).toEqual(['-c', 'pnpm test && pnpm build']);
-
-      // Workflow should be complete — agent:in-progress removed
-      expect(mockGithub.removeLabels).toHaveBeenCalledWith(
-        'test-owner', 'test-repo', 42, ['agent:in-progress'],
+      // waiting-for:clarification label should be added
+      expect(mockGithub.addLabels).toHaveBeenCalledWith(
+        'test-owner', 'test-repo', 42,
+        expect.arrayContaining(['waiting-for:clarification']),
       );
-
-      // SSE events should include workflow:completed
-      const completedEvent = sseEvents.find(
-        (e: unknown) => (e as { type: string }).type === 'workflow:completed',
-      );
-      expect(completedEvent).toBeDefined();
     });
   });
 
   describe('continue command: resume after gate', () => {
-    it('starts from plan when continue command with completed:clarification label', async () => {
+    it('starts from clarify when continue command with completed:clarification label (re-runs clarify for answer integration)', async () => {
       mockGithub.getIssue.mockResolvedValue({
         labels: [
           { name: 'completed:specify' },
@@ -298,10 +312,10 @@ describe('ClaudeCliWorker (integration)', () => {
         workflowName: 'speckit-bugfix',
       }));
 
-      // First CLI spawn should be for 'plan' (GATE_MAPPING: clarification → resumeFrom: plan)
+      // First CLI spawn should be for 'clarify' (GATE_MAPPING: clarification → resumeFrom: clarify)
       const firstSpawnArgs = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
-      const promptArg = firstSpawnArgs[firstSpawnArgs.indexOf('--prompt') + 1]!;
-      expect(promptArg).toContain('/speckit:plan');
+      const promptArg = firstSpawnArgs[firstSpawnArgs.length - 1]!;
+      expect(promptArg).toContain('/clarify');
     });
   });
 
@@ -973,13 +987,12 @@ describe('ClaudeCliWorker (integration)', () => {
       const spawnCalls = spawnFn.mock.calls as [string, string[], unknown][];
       const prompts = spawnCalls.map((call) => {
         const args = call[1] as string[];
-        const promptIdx = args.indexOf('--prompt');
-        return promptIdx >= 0 ? args[promptIdx + 1] : null;
+        return args[args.length - 1] ?? null;
       });
-      expect(prompts[0]).toContain('/speckit:specify');
-      expect(prompts[1]).toContain('/speckit:clarify');
-      expect(prompts[2]).toContain('/speckit:plan');
-      expect(prompts[3]).toContain('/speckit:tasks');
+      expect(prompts[0]).toContain('/specify');
+      expect(prompts[1]).toContain('/clarify');
+      expect(prompts[2]).toContain('/plan');
+      expect(prompts[3]).toContain('/tasks');
 
       // Verify workflow completed (not failed)
       const completedEvent = sseEvents.find(
@@ -1068,8 +1081,7 @@ describe('ClaudeCliWorker (integration)', () => {
       expect(spawnFn).toHaveBeenCalledTimes(2);
 
       const firstPrompt = (spawnFn.mock.calls[0] as [string, string[], unknown])[1] as string[];
-      const promptIdx = firstPrompt.indexOf('--prompt');
-      expect(firstPrompt[promptIdx + 1]).toContain('/speckit:plan');
+      expect(firstPrompt[firstPrompt.length - 1]).toContain('/plan');
     });
   });
 

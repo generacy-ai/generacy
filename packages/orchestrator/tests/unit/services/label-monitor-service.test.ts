@@ -34,7 +34,7 @@ function createMockGitHubClient(overrides: Record<string, unknown> = {}) {
     removeLabels: vi.fn().mockResolvedValue(undefined),
     listLabels: vi.fn().mockResolvedValue([]),
     listIssuesWithLabel: vi.fn().mockResolvedValue([]),
-    getIssue: vi.fn().mockResolvedValue({ labels: [] }),
+    getIssue: vi.fn().mockResolvedValue({ labels: [], body: 'Test issue body', title: 'Test issue title' }),
     ...overrides,
   } as unknown as ReturnType<import('@generacy-ai/workflow-engine').GitHubClientFactory>;
 }
@@ -142,7 +142,7 @@ describe('LabelMonitorService', () => {
   // ==========================================================================
 
   describe('processLabelEvent', () => {
-    it('should enqueue a process event and update labels', async () => {
+    it('should enqueue a process event with description and update labels', async () => {
       const event = {
         type: 'process' as const,
         owner: 'owner',
@@ -164,6 +164,7 @@ describe('LabelMonitorService', () => {
           issueNumber: 42,
           workflowName: 'speckit-feature',
           command: 'process',
+          metadata: { description: 'Test issue body' },
         }),
       );
       expect(mockClient.removeLabels).toHaveBeenCalledWith(
@@ -213,7 +214,7 @@ describe('LabelMonitorService', () => {
       );
     });
 
-    it('should still enqueue even if label update fails', async () => {
+    it('should use fallback description when getIssue fails', async () => {
       (mockClient.getIssue as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('API error'),
       );
@@ -232,8 +233,42 @@ describe('LabelMonitorService', () => {
       const result = await service.processLabelEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalled();
-      expect(logger.warn).toHaveBeenCalled();
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { description: 'Issue #42' },
+        }),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 42 }),
+        'Failed to fetch issue details, using fallback description',
+      );
+    });
+
+    it('should fall back to title when issue body is empty', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [],
+        body: '',
+        title: 'My issue title',
+      });
+
+      const event = {
+        type: 'process' as const,
+        owner: 'owner',
+        repo: 'repo',
+        issueNumber: 42,
+        labelName: 'process:speckit-feature',
+        parsedName: 'speckit-feature',
+        source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
+      };
+
+      await service.processLabelEvent(event);
+
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: { description: 'My issue title' },
+        }),
+      );
     });
   });
 
@@ -637,6 +672,191 @@ describe('LabelMonitorService', () => {
       const state = service.getState();
       expect(state.lastWebhookEvent).not.toBeNull();
       expect(state.webhookHealthy).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // T013: Assignee filtering in polling
+  // ==========================================================================
+
+  describe('assignee filtering in polling', () => {
+    it('should process all issues when clusterGithubUsername is undefined (backward compat)', async () => {
+      // Default service from beforeEach has no clusterGithubUsername
+      (mockClient.listIssuesWithLabel as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          number: 10,
+          title: 'Assigned issue',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'process:speckit-feature', color: '' }],
+          assignees: ['user-a'],
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          number: 20,
+          title: 'Unassigned issue',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'process:speckit-feature', color: '' }],
+          assignees: [],
+          created_at: '',
+          updated_at: '',
+        },
+      ]);
+
+      await service.poll();
+
+      // Both issues should be enqueued — no filtering when username is undefined
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 10 }),
+      );
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 20 }),
+      );
+    });
+
+    it('should only process issues assigned to cluster username when set', async () => {
+      service = new LabelMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.listIssuesWithLabel as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          number: 10,
+          title: 'Assigned to my-user',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'process:speckit-feature', color: '' }],
+          assignees: ['my-user'],
+          created_at: '',
+          updated_at: '',
+        },
+        {
+          number: 20,
+          title: 'Assigned to other-user',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'process:speckit-feature', color: '' }],
+          assignees: ['other-user'],
+          created_at: '',
+          updated_at: '',
+        },
+      ]);
+
+      await service.poll();
+
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 10 }),
+      );
+      expect(queueAdapter.enqueue).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 20 }),
+      );
+    });
+
+    it('should skip unassigned issues with warning when username is set', async () => {
+      service = new LabelMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      (mockClient.listIssuesWithLabel as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          number: 30,
+          title: 'Unassigned issue',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'process:speckit-feature', color: '' }],
+          assignees: [],
+          created_at: '',
+          updated_at: '',
+        },
+      ]);
+
+      await service.poll();
+
+      expect(queueAdapter.enqueue).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 30 }),
+      );
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 30 }),
+        expect.stringContaining('no assignees'),
+      );
+    });
+
+    it('should filter completed label issues by assignee on every 3rd cycle', async () => {
+      service = new LabelMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        'my-user',
+      );
+
+      // Set pollCycleCount to 2 so next poll() is cycle 3 (triggers completed check)
+      (service as unknown as { pollCycleCount: number }).pollCycleCount = 2;
+
+      (mockClient.listIssuesWithLabel as ReturnType<typeof vi.fn>).mockImplementation(
+        (_owner: string, _repo: string, label: string) => {
+          if (label.startsWith('completed:')) {
+            const phase = label.slice('completed:'.length);
+            return Promise.resolve([
+              {
+                number: 50,
+                title: 'Completed - assigned to my-user',
+                body: '',
+                state: 'open',
+                labels: [
+                  { name: label, color: '' },
+                  { name: `waiting-for:${phase}`, color: '' },
+                ],
+                assignees: ['my-user'],
+                created_at: '',
+                updated_at: '',
+              },
+              {
+                number: 60,
+                title: 'Completed - assigned to other-user',
+                body: '',
+                state: 'open',
+                labels: [
+                  { name: label, color: '' },
+                  { name: `waiting-for:${phase}`, color: '' },
+                ],
+                assignees: ['other-user'],
+                created_at: '',
+                updated_at: '',
+              },
+            ]);
+          }
+          // Process labels return no issues
+          return Promise.resolve([]);
+        },
+      );
+
+      await service.poll();
+
+      // Issue 50 (assigned to my-user) should be enqueued as a resume
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 50, command: 'continue' }),
+      );
+      // Issue 60 (assigned to other-user) should be filtered out
+      expect(queueAdapter.enqueue).not.toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 60 }),
+      );
     });
   });
 });

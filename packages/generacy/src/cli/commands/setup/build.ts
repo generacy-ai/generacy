@@ -5,16 +5,18 @@
  */
 import { Command } from 'commander';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getLogger } from '../../utils/logger.js';
-import { exec } from '../../utils/exec.js';
+import { exec, execSafe } from '../../utils/exec.js';
 
 /**
  * Build configuration resolved from CLI args.
@@ -26,12 +28,13 @@ interface BuildConfig {
   agencyDir: string;
   generacyDir: string;
   latencyDir: string;
+  latestPlugin: boolean;
 }
 
 /**
  * Resolve build config with three-tier priority: defaults → env vars → CLI args.
  */
-function resolveBuildConfig(cliArgs: Partial<BuildConfig>): BuildConfig {
+function resolveBuildConfig(cliArgs: Partial<BuildConfig> & { latest?: boolean }): BuildConfig {
   return {
     skipCleanup: cliArgs.skipCleanup ?? false,
     skipAgency: cliArgs.skipAgency ?? false,
@@ -39,7 +42,16 @@ function resolveBuildConfig(cliArgs: Partial<BuildConfig>): BuildConfig {
     agencyDir: cliArgs.agencyDir ?? '/workspaces/agency',
     generacyDir: cliArgs.generacyDir ?? '/workspaces/generacy',
     latencyDir: cliArgs.latencyDir ?? '/workspaces/latency',
+    latestPlugin: cliArgs.latestPlugin ?? cliArgs.latest ?? false,
   };
+}
+
+/**
+ * Check whether we're running in an external project (no source repos present).
+ * External projects use installed packages instead of building from source.
+ */
+function isExternalProject(config: BuildConfig): boolean {
+  return !existsSync(config.agencyDir) && !existsSync(config.latencyDir);
 }
 
 /**
@@ -124,7 +136,7 @@ function buildAgency(config: BuildConfig): void {
   logger.info('Phase 2: Building Agency packages');
 
   if (!existsSync(config.agencyDir)) {
-    logger.warn({ dir: config.agencyDir }, 'Agency directory not found, skipping');
+    logger.info('Skipping source build for agency/latency — using installed packages');
     return;
   }
 
@@ -199,7 +211,7 @@ function buildGeneracy(config: BuildConfig): void {
   logger.info('Phase 3: Building Generacy packages');
 
   if (!existsSync(config.generacyDir)) {
-    logger.warn({ dir: config.generacyDir }, 'Generacy directory not found, skipping');
+    logger.info('Skipping source build for generacy — using installed packages');
     return;
   }
 
@@ -237,6 +249,176 @@ function buildGeneracy(config: BuildConfig): void {
 }
 
 /**
+ * Resolve the npm global root directory (where globally installed packages live).
+ * Returns the trimmed path on success, or null if `npm root -g` fails.
+ */
+function resolveNpmGlobalRoot(): string | null {
+  const result = execSafe('npm root -g');
+  if (result.ok && result.stdout) {
+    return result.stdout.trim();
+  }
+  return null;
+}
+
+/**
+ * Well-known shared packages directory used by cluster-templates.
+ * The orchestrator installs packages here via `npm install --prefix /shared-packages`;
+ * workers mount this volume read-only.
+ */
+const SHARED_PACKAGES_DIR = '/shared-packages';
+
+/**
+ * Resolve the speckit commands directory from the @generacy-ai/agency-plugin-spec-kit package.
+ * Uses a three-tier resolution strategy:
+ *   Tier 1: Local workspace node_modules (workspace root, then agency dir)
+ *   Tier 2: Shared packages volume (/shared-packages/node_modules)
+ *   Tier 3: npm global root
+ * Returns the resolved commands directory path, or null if not found.
+ */
+function resolveSpeckitCommandsDir(config: BuildConfig): string | null {
+  const logger = getLogger();
+  const pkgSubpath = join('@generacy-ai', 'agency-plugin-spec-kit', 'commands');
+
+  // Tier 1: Local workspace — source package directory, then node_modules
+  // The source path handles pnpm workspaces where the package won't appear
+  // in a hoisted node_modules/@scope/pkg location.
+  const localPaths = [
+    join(config.agencyDir, 'packages', 'agency-plugin-spec-kit', 'commands'),
+    join(config.generacyDir, 'node_modules', pkgSubpath),
+    join(config.agencyDir, 'node_modules', pkgSubpath),
+  ];
+  for (const p of localPaths) {
+    if (existsSync(p)) {
+      logger.info({ path: p }, 'Resolved speckit commands from local workspace');
+      return p;
+    }
+  }
+
+  // Tier 2: Shared packages volume (cluster-templates pattern)
+  const sharedPath = join(SHARED_PACKAGES_DIR, 'node_modules', pkgSubpath);
+  if (existsSync(sharedPath)) {
+    logger.info({ path: sharedPath }, 'Resolved speckit commands from shared packages volume');
+    return sharedPath;
+  }
+
+  // Tier 3: npm global
+  const globalRoot = resolveNpmGlobalRoot();
+  if (globalRoot) {
+    const globalPath = join(globalRoot, pkgSubpath);
+    if (existsSync(globalPath)) {
+      logger.info({ path: globalPath }, 'Resolved speckit commands from npm global');
+      return globalPath;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Phase 4: Install speckit commands and configure Agency MCP for Claude Code.
+ * Copies speckit command files from @generacy-ai/agency-plugin-spec-kit package.
+ * Adds the Agency MCP server to the user-level Claude config.
+ */
+function installClaudeCodeIntegration(config: BuildConfig): void {
+  const logger = getLogger();
+  const home = homedir();
+
+  logger.info('Phase 4: Installing Claude Code integration (speckit commands + Agency MCP)');
+
+  // Step 1: Resolve speckit commands directory from npm package
+  const commandsDir = resolveSpeckitCommandsDir(config);
+
+  if (commandsDir) {
+    // Step 2: Copy .md command files to ~/.claude/commands/
+    const userCommandsDir = join(home, '.claude', 'commands');
+    mkdirSync(userCommandsDir, { recursive: true });
+    const files = readdirSync(commandsDir).filter((f) => f.endsWith('.md'));
+    for (const file of files) {
+      copyFileSync(join(commandsDir, file), join(userCommandsDir, file));
+    }
+    logger.info(
+      { count: files.length, source: commandsDir, dest: userCommandsDir },
+      'Copied speckit command files',
+    );
+  } else {
+    logger.error(
+      {
+        checkedPaths: [
+          join(config.agencyDir, 'packages', 'agency-plugin-spec-kit', 'commands'),
+          join(config.generacyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
+          join(config.agencyDir, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
+          join(SHARED_PACKAGES_DIR, 'node_modules', '@generacy-ai', 'agency-plugin-spec-kit', 'commands'),
+          '{npm root -g}/@generacy-ai/agency-plugin-spec-kit/commands',
+        ],
+      },
+      '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+    );
+  }
+
+  // Step 3: Add Agency MCP server to user-level Claude config (~/.claude.json)
+  const claudeJsonPath = join(home, '.claude.json');
+  const sourceAgencyCli = join(config.agencyDir, 'packages', 'agency', 'dist', 'cli.js');
+
+  // Resolve agency CLI: prefer source build, fall back to globally installed package
+  let agencyCli: string | null = null;
+  let agencyCwd: string | undefined;
+
+  if (existsSync(sourceAgencyCli)) {
+    agencyCli = sourceAgencyCli;
+    agencyCwd = config.agencyDir;
+  } else {
+    // Check shared packages volume (cluster-templates pattern)
+    const sharedCliPath = join(SHARED_PACKAGES_DIR, 'node_modules', '@generacy-ai', 'agency', 'dist', 'cli.js');
+    if (existsSync(sharedCliPath)) {
+      agencyCli = sharedCliPath;
+      logger.info({ path: agencyCli }, 'Using agency CLI from shared packages volume');
+    } else {
+      // Find globally installed @generacy-ai/agency package
+      const globalRoot = resolveNpmGlobalRoot();
+      if (globalRoot) {
+        const globalCliPath = join(globalRoot, '@generacy-ai', 'agency', 'dist', 'cli.js');
+        if (existsSync(globalCliPath)) {
+          agencyCli = globalCliPath;
+          logger.info({ path: agencyCli }, 'Using globally installed agency CLI');
+        }
+      }
+    }
+  }
+
+  if (!agencyCli) {
+    logger.info('Skipping MCP configuration — agency CLI not found');
+    logger.info('Phase 4 complete: Claude Code integration installed');
+    return;
+  }
+
+  try {
+    let claudeJson: Record<string, unknown> = {};
+    if (existsSync(claudeJsonPath)) {
+      claudeJson = JSON.parse(readFileSync(claudeJsonPath, 'utf-8')) as Record<string, unknown>;
+    }
+
+    const mcpServers = (claudeJson['mcpServers'] ?? {}) as Record<string, unknown>;
+    const mcpEntry: Record<string, unknown> = {
+      type: 'stdio',
+      command: 'node',
+      args: [agencyCli],
+    };
+    if (agencyCwd) {
+      mcpEntry['cwd'] = agencyCwd;
+    }
+    mcpServers['agency'] = mcpEntry;
+    claudeJson['mcpServers'] = mcpServers;
+
+    writeFileSync(claudeJsonPath, JSON.stringify(claudeJson, null, 2));
+    logger.info('Configured Agency MCP server in user-level Claude config');
+  } catch (error) {
+    logger.warn({ error: String(error) }, 'Failed to configure Agency MCP server');
+  }
+
+  logger.info('Phase 4 complete: Claude Code integration installed');
+}
+
+/**
  * Create the `setup build` subcommand.
  */
 export function setupBuildCommand(): Command {
@@ -247,6 +429,7 @@ export function setupBuildCommand(): Command {
     .option('--skip-cleanup', 'Skip Phase 1: Claude plugin state cleanup')
     .option('--skip-agency', 'Skip Phase 2: Agency package build')
     .option('--skip-generacy', 'Skip Phase 3: Generacy package build')
+    .option('--latest', 'Install latest plugin version instead of pinned version')
     .action(async (options) => {
       const logger = getLogger();
       const config = resolveBuildConfig(options);
@@ -272,6 +455,13 @@ export function setupBuildCommand(): Command {
         buildGeneracy(config);
       } else {
         logger.info('Skipping Phase 3: Generacy build (--skip-generacy)');
+      }
+
+      // Phase 4: Install Claude Code integration (speckit commands + Agency MCP)
+      if (!config.skipAgency) {
+        installClaudeCodeIntegration(config);
+      } else {
+        logger.info('Skipping Phase 4: Claude Code integration (--skip-agency)');
       }
 
       logger.info('Build process complete');

@@ -5,6 +5,9 @@ import type { FastifyRequest, FastifyReply, HookHandlerDoneFunction } from 'fast
  */
 const REQUEST_START_TIME = Symbol('requestStartTime');
 
+/** Paths excluded from request logging (health probes, metrics) */
+const SILENT_PATHS = new Set(['/health', '/health/live', '/health/ready', '/metrics']);
+
 /**
  * Augment FastifyRequest with start time
  */
@@ -24,13 +27,15 @@ export function requestStartHook(
 ): void {
   request[REQUEST_START_TIME] = process.hrtime.bigint();
 
-  request.log.info({
-    correlationId: request.correlationId,
-    method: request.method,
-    url: request.url,
-    userAgent: request.headers['user-agent'],
-    ip: request.ip,
-  }, 'Request started');
+  if (!SILENT_PATHS.has(request.url)) {
+    request.log.info({
+      correlationId: request.correlationId,
+      method: request.method,
+      url: request.url,
+      userAgent: request.headers['user-agent'],
+      ip: request.ip,
+    }, 'Request started');
+  }
 
   done();
 }
@@ -60,7 +65,12 @@ export function requestEndHook(
     userId: request.auth?.userId,
   };
 
-  if (reply.statusCode >= 500) {
+  if (SILENT_PATHS.has(request.url)) {
+    // Only log health/metrics requests if they fail
+    if (reply.statusCode >= 500) {
+      request.log.error(logData, 'Health check failed');
+    }
+  } else if (reply.statusCode >= 500) {
     request.log.error(logData, 'Request completed with server error');
   } else if (reply.statusCode >= 400) {
     request.log.warn(logData, 'Request completed with client error');

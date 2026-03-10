@@ -60,7 +60,7 @@ describe('SSE Events', () => {
       expect(formatted).toContain('event: workflow:started');
       expect(formatted).toContain('id: 1234567890_conn_abc_1');
       expect(formatted).toContain('data: {"message":"test"}');
-      expect(formatted).toEndWith('\n\n');
+      expect(formatted.endsWith('\n\n')).toBe(true);
     });
 
     it('should handle complex data payloads', () => {
@@ -88,7 +88,7 @@ describe('SSE Events', () => {
       const heartbeat = formatHeartbeat();
 
       expect(heartbeat).toMatch(/^: heartbeat \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
-      expect(heartbeat).toEndWith('\n\n');
+      expect(heartbeat.endsWith('\n\n')).toBe(true);
     });
   });
 

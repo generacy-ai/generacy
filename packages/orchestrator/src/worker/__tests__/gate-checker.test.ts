@@ -17,7 +17,6 @@ function makeConfig(gates: WorkerConfig['gates']): WorkerConfig {
     workspaceDir: '/tmp/orchestrator-workspaces',
     shutdownGracePeriodMs: 5000,
     validateCommand: 'pnpm test && pnpm build',
-    maxTurns: 100,
     gates,
   };
 }
@@ -29,7 +28,9 @@ describe('GateChecker', () => {
     'speckit-feature': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
     ],
-    'speckit-bugfix': [],
+    'speckit-bugfix': [
+      { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+    ],
   };
 
   it('returns gate definition for speckit-feature workflow, clarify phase (condition: always)', () => {
@@ -50,11 +51,15 @@ describe('GateChecker', () => {
     expect(result).toBeNull();
   });
 
-  it('returns null for speckit-bugfix workflow, clarify phase (empty gates)', () => {
+  it('returns gate definition for speckit-bugfix workflow, clarify phase (condition: always)', () => {
     const config = makeConfig(defaultGates);
     const result = checker.checkGate('clarify', 'speckit-bugfix', config);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      phase: 'clarify',
+      gateLabel: 'waiting-for:clarification',
+      condition: 'always',
+    });
   });
 
   it('returns null for unknown workflow name', () => {

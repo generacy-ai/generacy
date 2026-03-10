@@ -12,6 +12,9 @@ import type { OutputCapture } from './output-capture.js';
 /** Default timeout for the validate phase (10 minutes). */
 const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
 
+/** Default timeout for pre-validate dependency installation (5 minutes). */
+const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
+
 /**
  * Spawns Claude CLI processes (or shell commands for validation) and manages
  * their lifecycle: stdout/stderr capture, timeout with SIGTERM then SIGKILL,
@@ -44,10 +47,10 @@ export class CliSpawner {
     const prompt = `${command} ${options.prompt}`;
 
     const args = [
-      '--headless',
-      '--output', 'json',
-      '--print', 'all',
-      '--max-turns', String(options.maxTurns),
+      '-p',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
     ];
 
     // Resume a previous session to keep MCP servers warm and carry context
@@ -55,13 +58,12 @@ export class CliSpawner {
       args.push('--resume', options.resumeSessionId);
     }
 
-    args.push('--prompt', prompt);
+    args.push(prompt);
 
     this.logger.info(
       {
         phase,
         cwd: options.cwd,
-        maxTurns: options.maxTurns,
         timeoutMs: options.timeoutMs,
         resumeSessionId: options.resumeSessionId ?? null,
       },
@@ -98,6 +100,33 @@ export class CliSpawner {
     );
 
     const child = this.processFactory.spawn('sh', ['-c', validateCommand], {
+      cwd: checkoutPath,
+      env: {} as Record<string, string>,
+    });
+
+    return this.manageProcess(child, phase, timeoutMs, signal, undefined);
+  }
+
+  /**
+   * Run a dependency installation command before validation (e.g., `pnpm install`).
+   *
+   * Uses a shorter timeout (5 minutes) than the validate phase since install
+   * should not take as long as running the full test/build suite.
+   */
+  async runPreValidateInstall(
+    checkoutPath: string,
+    installCommand: string,
+    signal: AbortSignal,
+  ): Promise<PhaseResult> {
+    const phase: WorkflowPhase = 'validate';
+    const timeoutMs = DEFAULT_INSTALL_TIMEOUT_MS;
+
+    this.logger.info(
+      { phase, cwd: checkoutPath, installCommand, timeoutMs },
+      'Spawning pre-validate install command',
+    );
+
+    const child = this.processFactory.spawn('sh', ['-c', installCommand], {
       cwd: checkoutPath,
       env: {} as Record<string, string>,
     });

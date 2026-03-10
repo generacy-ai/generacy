@@ -154,10 +154,23 @@ export class LabelManager {
         (l) => l.startsWith('waiting-for:') || l === 'agent:paused',
       );
 
+      // Also remove completed: labels for gates being resumed, so re-entering
+      // the phase can re-activate the gate if needed (e.g., follow-up
+      // clarification questions require another pause cycle).
+      const gateSuffixes = currentLabels
+        .filter((l) => l.startsWith('waiting-for:'))
+        .map((l) => l.slice('waiting-for:'.length));
+      for (const suffix of gateSuffixes) {
+        const completedLabel = `completed:${suffix}`;
+        if (currentLabels.includes(completedLabel) && !labelsToRemove.includes(completedLabel)) {
+          labelsToRemove.push(completedLabel);
+        }
+      }
+
       if (labelsToRemove.length > 0) {
         this.logger.info(
           { labels: labelsToRemove, issue: this.issueNumber },
-          'Resume: removing waiting-for and agent:paused labels',
+          'Resume: removing waiting-for, completed gate, and agent:paused labels',
         );
         await this.github.removeLabels(this.owner, this.repo, this.issueNumber, labelsToRemove);
       }

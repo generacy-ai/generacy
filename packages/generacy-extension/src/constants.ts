@@ -36,6 +36,7 @@ export const COMMANDS = {
   openWorkflow: 'generacy.openWorkflow',
   revealInExplorer: 'generacy.revealInExplorer',
   submitJob: 'generacy.submitJob',
+  configureEnvironment: 'generacy.configureEnvironment',
 } as const;
 
 /**
@@ -72,8 +73,10 @@ export const CLOUD_COMMANDS = {
 export const CONTEXT_KEYS = {
   isAuthenticated: 'generacy.isAuthenticated',
   hasWorkspace: 'generacy.hasWorkspace',
+  hasProjectConfig: 'generacy.hasProjectConfig',
   isDebugging: 'generacy.isDebugging',
   orchestratorConnected: 'generacy.orchestratorConnected',
+  hasEnvConfig: 'generacy.hasEnvConfig',
 } as const;
 
 /**
@@ -83,11 +86,22 @@ export const CONFIG_KEYS = {
   workflowDirectory: 'workflowDirectory',
   defaultTemplate: 'defaultTemplate',
   cloudEndpoint: 'cloudEndpoint',
+  projectConfig: 'projectConfig',
   telemetryEnabled: 'telemetry.enabled',
   notificationsEnabled: 'notifications.enabled',
   notificationsOnComplete: 'notifications.onComplete',
   notificationsOnError: 'notifications.onError',
 } as const;
+
+/**
+ * Project config file path relative to workspace root
+ */
+export const PROJECT_CONFIG_FILE = '.generacy/config.yaml';
+
+/**
+ * Glob pattern for watching project config changes
+ */
+export const PROJECT_CONFIG_GLOB = '**/.generacy/config.yaml';
 
 /**
  * Default configuration values
@@ -98,6 +112,19 @@ export const DEFAULTS = {
   cloudEndpoint: 'https://api.generacy.ai',
   telemetryEnabled: false,
 } as const;
+
+/**
+ * Environment configuration file constants
+ */
+export const ENV_FILE_NAME = 'generacy.env';
+export const ENV_TEMPLATE_NAME = 'generacy.env.template';
+export const ENV_FILE_PATH = '.generacy/generacy.env';
+export const ENV_FILE_GLOB = '**/.generacy/generacy.env';
+
+/**
+ * Required keys that must have non-empty values in the env file
+ */
+export const ENV_REQUIRED_KEYS = ['GITHUB_TOKEN', 'ANTHROPIC_API_KEY'] as const;
 
 /**
  * Output channel name

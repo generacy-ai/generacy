@@ -7,10 +7,16 @@ import type { Logger } from './types.js';
 const execFileAsync = promisify(execFile);
 
 /**
- * Manages per-worker isolated git repository checkouts.
+ * Manages git repository checkouts for workers.
  *
- * Each worker gets its own checkout at `{workspaceDir}/{workerId}/{owner}/{repo}`
- * to avoid race conditions between concurrent workers.
+ * Supports two modes:
+ * - **Container-per-worker** (preferred): If a bootstrapped repo already exists
+ *   at `{workspaceDir}/{repo}`, it is reused directly. This avoids redundant
+ *   clones and ensures the checkout shares the same environment (MCP server
+ *   paths, node_modules, build artifacts) set up by the bootstrap entrypoint.
+ * - **Isolated checkout** (fallback): If no bootstrapped repo is found, a fresh
+ *   clone is created at `{workspaceDir}/{workerId}/{owner}/{repo}` to isolate
+ *   concurrent workers sharing a single process.
  */
 export class RepoCheckout {
   constructor(
@@ -20,14 +26,19 @@ export class RepoCheckout {
 
   /**
    * Compute the checkout path for a given worker and repository.
-   * Does not perform any filesystem or git operations.
    *
-   * @param workerId - Unique worker identifier
-   * @param owner - Repository owner (GitHub user or org)
-   * @param repo - Repository name
-   * @returns The absolute path where the checkout would reside
+   * Prefers a bootstrapped repo at `{workspaceDir}/{repo}` when it exists.
+   * Falls back to the isolated path `{workspaceDir}/{workerId}/{owner}/{repo}`.
    */
-  getCheckoutPath(workerId: string, owner: string, repo: string): string {
+  async getCheckoutPath(workerId: string, owner: string, repo: string): Promise<string> {
+    const bootstrappedPath = join(this.workspaceDir, repo);
+    if (await this.directoryExists(join(bootstrappedPath, '.git'))) {
+      this.logger.debug(
+        { bootstrappedPath, repo },
+        'Using bootstrapped repo checkout',
+      );
+      return bootstrappedPath;
+    }
     return join(this.workspaceDir, workerId, owner, repo);
   }
 
@@ -49,7 +60,7 @@ export class RepoCheckout {
     repo: string,
     branch: string,
   ): Promise<string> {
-    const checkoutPath = this.getCheckoutPath(workerId, owner, repo);
+    const checkoutPath = await this.getCheckoutPath(workerId, owner, repo);
 
     const exists = await this.directoryExists(checkoutPath);
 

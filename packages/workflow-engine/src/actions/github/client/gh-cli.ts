@@ -194,34 +194,35 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async getIssueComments(owner: string, repo: string, number: number): Promise<Comment[]> {
+    // Use REST API to get numeric comment IDs (gh issue view --json returns GraphQL node IDs)
     const result = await executeCommand('gh', [
-      'issue', 'view', String(number),
-      '-R', `${owner}/${repo}`,
-      '--json', 'comments',
+      'api',
+      `/repos/${owner}/${repo}/issues/${number}/comments`,
+      '--paginate',
     ], { cwd: this.workdir });
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to get comments for issue #${number}: ${result.stderr}`);
     }
 
-    const data = parseJSONSafe(result.stdout) as { comments: Array<{
-      id: string;
+    const data = parseJSONSafe(result.stdout) as Array<{
+      id: number;
       body: string;
-      author: { login: string };
-      createdAt: string;
-      updatedAt: string;
-    }> } | null;
+      user: { login: string };
+      created_at: string;
+      updated_at: string;
+    }> | null;
 
     if (!data) {
       return [];
     }
 
-    return data.comments.map(c => ({
-      id: parseInt(c.id.split('/').pop() ?? '0', 10),
+    return data.map(c => ({
+      id: c.id,
       body: c.body,
-      author: c.author.login,
-      created_at: c.createdAt,
-      updated_at: c.updatedAt,
+      author: c.user.login,
+      created_at: c.created_at,
+      updated_at: c.updated_at,
     }));
   }
 
@@ -257,32 +258,31 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--draft');
     }
 
-    // Add JSON output for details
-    args.push('--json', 'number,url,state,headRefName,baseRefName,isDraft,title,body,createdAt,updatedAt');
-
     const result = await executeCommand('gh', args, { cwd: this.workdir });
     if (result.exitCode !== 0) {
       throw new Error(`Failed to create PR: ${result.stderr}`);
     }
 
+    // gh pr create outputs the PR URL on stdout (--json is not supported)
+    const urlMatch = result.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
+    if (urlMatch) {
+      return {
+        number: parseInt(urlMatch[1]!, 10),
+        title: data.title,
+        body: data.body ?? '',
+        state: 'open',
+        draft: data.draft ?? false,
+        head: { ref: data.head, sha: '', repo: `${owner}/${repo}` },
+        base: { ref: data.base, sha: '', repo: `${owner}/${repo}` },
+        labels: [],
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    // Fallback: try parsing as JSON in case future gh versions add support
     const parsed = parseJSONSafe(result.stdout) as Record<string, unknown> | null;
     if (!parsed) {
-      // Try to extract URL from output
-      const urlMatch = result.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
-      if (urlMatch) {
-        return {
-          number: parseInt(urlMatch[1]!, 10),
-          title: data.title,
-          body: data.body ?? '',
-          state: data.draft ? 'open' : 'open',
-          draft: data.draft ?? false,
-          head: { ref: data.head, sha: '', repo: `${owner}/${repo}` },
-          base: { ref: data.base, sha: '', repo: `${owner}/${repo}` },
-          labels: [],
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        };
-      }
       throw new Error('Failed to parse PR creation response');
     }
 

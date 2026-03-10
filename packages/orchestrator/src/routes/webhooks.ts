@@ -37,6 +37,7 @@ export interface WebhookRouteOptions {
   monitorService: LabelMonitorService;
   webhookSecret?: string;
   watchedRepos: Set<string>;
+  clusterGithubUsername?: string;
 }
 
 /**
@@ -48,22 +49,7 @@ export async function setupWebhookRoutes(
   server: FastifyInstance,
   options: WebhookRouteOptions,
 ): Promise<void> {
-  const { monitorService, webhookSecret, watchedRepos } = options;
-
-  // Register a custom content type parser to capture raw body for signature verification
-  server.addContentTypeParser(
-    'application/json',
-    { parseAs: 'string' },
-    (_req, body, done) => {
-      try {
-        const json = JSON.parse(body as string);
-        // Attach raw body for signature verification
-        done(null, { parsed: json, raw: body });
-      } catch (err) {
-        done(err as Error, undefined);
-      }
-    },
-  );
+  const { monitorService, webhookSecret, watchedRepos, clusterGithubUsername } = options;
 
   // Auth is skipped for /webhooks/github via server.ts skipRoutes config.
   // Authentication is handled via HMAC-SHA256 signature verification.
@@ -91,6 +77,31 @@ export async function setupWebhookRoutes(
       const repoKey = `${payload.repository.owner.login}/${payload.repository.name}`;
       if (!watchedRepos.has(repoKey)) {
         return reply.status(200).send({ status: 'ignored', reason: 'not a watched repository' });
+      }
+
+      // Assignee filtering: only process issues assigned to this cluster
+      if (clusterGithubUsername) {
+        const assigneeLogins = (payload.issue.assignees ?? []).map(a => a.login);
+        if (assigneeLogins.length === 0) {
+          server.log.warn(
+            { issue: payload.issue.number, repo: repoKey },
+            'Webhook: skipping issue with no assignees',
+          );
+          return reply.status(200).send({
+            status: 'ignored',
+            reason: 'issue has no assignees',
+          });
+        }
+        if (!assigneeLogins.includes(clusterGithubUsername)) {
+          server.log.debug(
+            { issue: payload.issue.number, repo: repoKey, assignees: assigneeLogins },
+            'Webhook: skipping issue not assigned to this cluster',
+          );
+          return reply.status(200).send({
+            status: 'ignored',
+            reason: 'not assigned to this cluster',
+          });
+        }
       }
 
       // Parse and process the label event

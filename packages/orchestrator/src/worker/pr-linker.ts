@@ -109,9 +109,11 @@ export class PrLinker {
     }
 
     // 3. Verify the issue exists and is orchestrated (has agent:* label)
+    let issueAssignees: string[];
     try {
       const issue = await github.getIssue(owner, repo, issueNumber);
       const isOrchestrated = issue.labels.some((l) => l.name.startsWith('agent:'));
+      issueAssignees = issue.assignees;
 
       if (!isOrchestrated) {
         this.logger.debug(
@@ -137,6 +139,7 @@ export class PrLinker {
       prNumber: pr.number,
       issueNumber,
       linkMethod,
+      assignees: issueAssignees,
     };
   }
 }

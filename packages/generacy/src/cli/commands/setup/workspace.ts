@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { getLogger } from '../../utils/logger.js';
 import { exec, execSafe } from '../../utils/exec.js';
+import { tryLoadWorkspaceConfig, getRepoNames, parseRepoList, scanForWorkspaceConfig } from '@generacy-ai/config';
 
 /**
  * Workspace configuration resolved from CLI args and environment variables.
@@ -19,21 +20,8 @@ interface WorkspaceConfig {
   workdir: string;
   clean: boolean;
   githubOrg: string;
+  repoSource: 'CLI flag' | 'REPOS env var' | 'config file';
 }
-
-/**
- * Default repositories to clone.
- */
-const DEFAULT_REPOS = [
-  'tetrad-development',
-  'contracts',
-  'latency',
-  'agency',
-  'generacy',
-  'humancy',
-  'generacy-cloud',
-  'humancy-cloud',
-];
 
 /**
  * CLI options as parsed by Commander (repos is a comma-separated string).
@@ -43,28 +31,84 @@ interface WorkspaceCliOptions {
   branch?: string;
   workdir?: string;
   clean?: boolean;
+  config?: string;
 }
 
 /**
  * Resolve workspace config with three-tier priority: defaults → env vars → CLI args.
  */
 function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
+  const logger = getLogger();
   const envRepos = process.env['REPOS'];
   const cliRepos = cliArgs.repos;
+  const workdir = cliArgs.workdir ?? '/workspaces';
 
   let repos: string[];
+  let repoSource: WorkspaceConfig['repoSource'];
+  let configOrg: string | undefined;
+  let configBranch: string | undefined;
+
   if (cliRepos) {
-    repos = cliRepos.split(',').map((r) => r.trim()).filter(Boolean);
+    const parsed = parseRepoList(cliRepos, process.env['GITHUB_ORG'] ?? 'generacy-ai');
+    repos = parsed.map((r) => r.repo);
+    if (!configOrg && parsed.length > 0) configOrg = parsed[0]!.owner;
+    repoSource = 'CLI flag';
   } else if (envRepos) {
-    repos = envRepos.split(',').map((r) => r.trim()).filter(Boolean);
+    const parsed = parseRepoList(envRepos, process.env['GITHUB_ORG'] ?? 'generacy-ai');
+    repos = parsed.map((r) => r.repo);
+    if (!configOrg && parsed.length > 0) configOrg = parsed[0]!.owner;
+    repoSource = 'REPOS env var';
   } else {
-    repos = [...DEFAULT_REPOS];
+    // Try explicit config path: --config flag or CONFIG_PATH env var
+    const explicitConfigPath = cliArgs.config ?? process.env['CONFIG_PATH'];
+    let wsConfig = explicitConfigPath ? tryLoadWorkspaceConfig(explicitConfigPath) : null;
+
+    if (!wsConfig && explicitConfigPath) {
+      logger.error(
+        { path: explicitConfigPath },
+        'Config file not found or invalid at specified path',
+      );
+      return process.exit(1) as never;
+    }
+
+    // Fallback: scan workdir subdirectories for config
+    if (!wsConfig) {
+      const foundPaths = scanForWorkspaceConfig(workdir);
+
+      if (foundPaths.length > 1) {
+        logger.error(
+          { configs: foundPaths },
+          'Multiple .generacy/config.yaml files found. Use --config or CONFIG_PATH to specify which one.',
+        );
+        return process.exit(1) as never;
+      }
+
+      if (foundPaths.length === 1) {
+        wsConfig = tryLoadWorkspaceConfig(foundPaths[0]!);
+      }
+    }
+
+    if (wsConfig) {
+      repos = getRepoNames(wsConfig);
+      configOrg = wsConfig.org;
+      configBranch = wsConfig.branch;
+      repoSource = 'config file';
+    } else {
+      logger.error(
+        'No .generacy/config.yaml found. Provide one via --config, CONFIG_PATH env, ' +
+        'or ensure a project with .generacy/config.yaml is mounted under ' + workdir,
+      );
+      return process.exit(1) as never;
+    }
   }
+
+  logger.info({ source: repoSource, count: repos.length }, 'Resolved repos');
 
   const branch =
     cliArgs.branch ??
     process.env['REPO_BRANCH'] ??
     process.env['DEFAULT_BRANCH'] ??
+    configBranch ??
     'develop';
 
   const cleanEnv = process.env['CLEAN_REPOS'];
@@ -73,9 +117,10 @@ function resolveWorkspaceConfig(cliArgs: WorkspaceCliOptions): WorkspaceConfig {
   return {
     repos,
     branch,
-    workdir: cliArgs.workdir ?? '/workspaces',
+    workdir,
     clean,
-    githubOrg: process.env['GITHUB_ORG'] ?? 'generacy-ai',
+    githubOrg: process.env['GITHUB_ORG'] ?? configOrg ?? 'generacy-ai',
+    repoSource,
   };
 }
 
@@ -234,13 +279,14 @@ export function setupWorkspaceCommand(): Command {
     .description('Clone repositories and install dependencies')
     .option(
       '--repos <repos>',
-      'Comma-separated list of repos to clone (or REPOS env)',
+      'Comma-separated repos: bare names, owner/repo, or GitHub URLs (or REPOS env)',
     )
     .option(
       '--branch <branch>',
       'Target branch (or REPO_BRANCH/DEFAULT_BRANCH env)',
     )
     .option('--workdir <dir>', 'Workspace root directory', '/workspaces')
+    .option('--config <path>', 'Path to .generacy/config.yaml (or CONFIG_PATH env)')
     .option('--clean', 'Hard reset repos before updating (or CLEAN_REPOS env)')
     .action(async (options) => {
       const logger = getLogger();
@@ -248,7 +294,7 @@ export function setupWorkspaceCommand(): Command {
 
       logger.info('Setting up workspace');
       logger.info(
-        { org: config.githubOrg, branch: config.branch, repos: config.repos.length },
+        { org: config.githubOrg, branch: config.branch, repos: config.repos.length, source: config.repoSource },
         'Configuration',
       );
 
@@ -264,15 +310,7 @@ export function setupWorkspaceCommand(): Command {
       let failureCount = 0;
       const processedRepos: string[] = [];
 
-      // Process tetrad-development first if in the list
-      const orderedRepos = [...config.repos];
-      const tetradIndex = orderedRepos.indexOf('tetrad-development');
-      if (tetradIndex > 0) {
-        orderedRepos.splice(tetradIndex, 1);
-        orderedRepos.unshift('tetrad-development');
-      }
-
-      for (const repo of orderedRepos) {
+      for (const repo of config.repos) {
         if (cloneOrUpdateRepo(repo, config)) {
           successCount++;
           processedRepos.push(repo);
@@ -288,7 +326,7 @@ export function setupWorkspaceCommand(): Command {
 
       // Step 5: Report summary
       logger.info(
-        { success: successCount, failed: failureCount, total: orderedRepos.length },
+        { success: successCount, failed: failureCount, total: processedRepos.length + failureCount },
         'Workspace setup complete',
       );
 

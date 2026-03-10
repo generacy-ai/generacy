@@ -1,0 +1,51 @@
+{
+  "ignorePatterns": [
+    {
+      "pattern": "^https://generacy\\.ai",
+      "comment": "Generacy platform — may not be publicly accessible in CI"
+    },
+    {
+      "pattern": "^https://console\\.anthropic\\.com",
+      "comment": "Anthropic console — requires authentication"
+    },
+    {
+      "pattern": "^https://github\\.com/generacy-ai/generacy/tree/",
+      "comment": "GitHub tree links to specific branches/paths — may 404 if branch not merged"
+    },
+    {
+      "pattern": "^/docs/reference/",
+      "comment": "Reference docs — may be stubs or not yet published"
+    },
+    {
+      "pattern": "^/docs/guides/",
+      "comment": "Guide docs — may be stubs or not yet published"
+    },
+    {
+      "pattern": "^/docs/architecture/",
+      "comment": "Architecture docs — not yet created"
+    },
+    {
+      "pattern": "^/docs/plugins/",
+      "comment": "Plugin docs — not yet created"
+    }
+  ],
+  "replacementPatterns": [
+    {
+      "pattern": "^/docs/",
+      "replacement": "{{BASEURL}}/docs/",
+      "comment": "Resolve absolute doc paths against base URL"
+    }
+  ],
+  "httpHeaders": [
+    {
+      "urls": ["https://github.com"],
+      "headers": {
+        "Accept": "text/html"
+      }
+    }
+  ],
+  "timeout": "10s",
+  "retryOn429": true,
+  "retryCount": 3,
+  "aliveStatusCodes": [200, 206, 301, 302, 307, 308]
+}

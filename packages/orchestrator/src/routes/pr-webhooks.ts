@@ -37,6 +37,7 @@ export interface PrWebhookRouteOptions {
   monitorService: PrFeedbackMonitorService;
   webhookSecret?: string;
   watchedRepos: Set<string>;
+  clusterGithubUsername?: string;
 }
 
 /**
@@ -49,21 +50,6 @@ export async function setupPrWebhookRoutes(
   options: PrWebhookRouteOptions,
 ): Promise<void> {
   const { monitorService, webhookSecret, watchedRepos } = options;
-
-  // Register a custom content type parser to capture raw body for signature verification
-  server.addContentTypeParser(
-    'application/json',
-    { parseAs: 'string' },
-    (_req, body, done) => {
-      try {
-        const json = JSON.parse(body as string);
-        // Attach raw body for signature verification
-        done(null, { parsed: json, raw: body });
-      } catch (err) {
-        done(err as Error, undefined);
-      }
-    },
-  );
 
   // Auth is skipped for /webhooks/github/pr-review via server.ts skipRoutes config.
   // Authentication is handled via HMAC-SHA256 signature verification.

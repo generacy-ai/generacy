@@ -2,6 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
+import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -104,14 +105,39 @@ function loadFromEnv(): Record<string, unknown> {
       process.env[`${ENV_PREFIX}LOG_PRETTY`] === 'true';
   }
 
-  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES)
+  // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES, then config file)
   const reposStr = process.env['MONITORED_REPOS'] ?? process.env[`${ENV_PREFIX}REPOSITORIES`];
+  const configPath = findWorkspaceConfigPath(process.cwd());
   if (reposStr) {
     const repos = reposStr.split(',').map(r => {
       const [owner, repo] = r.trim().split('/');
       return { owner, repo };
     }).filter(r => r.owner && r.repo);
     config.repositories = repos;
+  } else {
+    // Fallback to .generacy/config.yaml workspace config
+    if (configPath) {
+      const workspaceConfig = tryLoadWorkspaceConfig(configPath);
+      if (workspaceConfig) {
+        config.repositories = getMonitoredRepos(workspaceConfig);
+      }
+    }
+  }
+
+  // Fallback: read orchestrator settings from .generacy/config.yaml
+  const orchSettings = configPath ? tryLoadOrchestratorSettings(configPath) : null;
+  if (orchSettings) {
+    if (!config.labelMonitor && orchSettings.labelMonitor !== undefined) {
+      config.labelMonitor = orchSettings.labelMonitor;
+    }
+    const smeeEnvUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
+    if (orchSettings.smeeChannelUrl && !smeeEnvUrl) {
+      config.smee = { channelUrl: orchSettings.smeeChannelUrl };
+    }
+    if (orchSettings.webhookSetup !== undefined &&
+        !process.env['WEBHOOK_SETUP_ENABLED'] && !process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`]) {
+      config.webhookSetup = { enabled: orchSettings.webhookSetup };
+    }
   }
 
   // Monitor config (POLL_INTERVAL_MS takes precedence, falls back to ORCHESTRATOR_POLL_INTERVAL_MS)
@@ -130,6 +156,15 @@ function loadFromEnv(): Record<string, unknown> {
       config.monitor = {};
     }
     (config.monitor as Record<string, unknown>).webhookSecret = webhookSecret;
+  }
+
+  // Cluster GitHub username for assignee-based issue filtering
+  const clusterGithubUsername = process.env['CLUSTER_GITHUB_USERNAME'];
+  if (clusterGithubUsername) {
+    if (!config.monitor) {
+      config.monitor = {};
+    }
+    (config.monitor as Record<string, unknown>).clusterGithubUsername = clusterGithubUsername;
   }
 
   // PR Monitor config
@@ -171,6 +206,39 @@ function loadFromEnv(): Record<string, unknown> {
       process.env['PR_MONITOR_MAX_CONCURRENT_POLLS']!,
       10
     );
+  }
+
+  // Worker config
+  const workerWorkspaceDir = process.env['WORKER_WORKSPACE_DIR'] ?? process.env[`${ENV_PREFIX}WORKER_WORKSPACE_DIR`];
+  if (workerWorkspaceDir) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).workspaceDir = workerWorkspaceDir;
+  }
+
+  // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)
+  const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
+  if (smeeChannelUrl) {
+    if (!config.smee) {
+      config.smee = {};
+    }
+    (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
+  }
+
+  // Label monitor config (LABEL_MONITOR_ENABLED takes precedence, falls back to ORCHESTRATOR_LABEL_MONITOR_ENABLED)
+  const labelMonitorEnabled = process.env['LABEL_MONITOR_ENABLED'] ?? process.env[`${ENV_PREFIX}LABEL_MONITOR_ENABLED`];
+  if (labelMonitorEnabled !== undefined) {
+    config.labelMonitor = labelMonitorEnabled === 'true';
+  }
+
+  // Webhook setup config
+  if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
+    const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];
+    if (!config.webhookSetup) {
+      config.webhookSetup = {};
+    }
+    (config.webhookSetup as Record<string, unknown>).enabled = value === 'true';
   }
 
   return config;
@@ -318,7 +386,7 @@ export function createTestConfig(
       host: '127.0.0.1',
     },
     redis: {
-      url: 'redis://localhost:6379',
+      url: 'redis://127.0.0.1:1', // Unreachable port — triggers fast failure and in-memory fallback
     },
     auth: {
       enabled: false,

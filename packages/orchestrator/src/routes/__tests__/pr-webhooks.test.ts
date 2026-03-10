@@ -93,19 +93,39 @@ interface ServerOptions {
   monitorService?: PrFeedbackMonitorService;
   webhookSecret?: string;
   watchedRepos?: Set<string>;
+  clusterGithubUsername?: string;
 }
 
 async function buildServer(options: ServerOptions = {}): Promise<FastifyInstance> {
   const server = Fastify({ logger: false });
 
+  // Register the custom content type parser that preserves raw body for
+  // signature verification (in production this is done in server.ts via
+  // an encapsulated plugin wrapping the webhook routes).
+  server.removeContentTypeParser('application/json');
+  server.addContentTypeParser(
+    'application/json',
+    { parseAs: 'string' },
+    (_req, body, done) => {
+      try {
+        const json = JSON.parse(body as string);
+        done(null, { parsed: json, raw: body });
+      } catch (err) {
+        done(err as Error, undefined);
+      }
+    },
+  );
+
   const monitorService = options.monitorService ?? createMockMonitorService();
   const webhookSecret = options.webhookSecret;
   const watchedRepos = options.watchedRepos ?? new Set(['test-org/test-repo']);
+  const clusterGithubUsername = options.clusterGithubUsername;
 
   await setupPrWebhookRoutes(server, {
     monitorService,
     webhookSecret,
     watchedRepos,
+    clusterGithubUsername,
   });
 
   return server;
@@ -1080,6 +1100,95 @@ describe('PR Webhook Route - POST /webhooks/github/pr-review', () => {
       expect(res1.statusCode).toBe(200);
       expect(res2.statusCode).toBe(200);
       expect(monitorService.processPrReviewEvent).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  // ==========================================================================
+  // Assignee Filtering Interface Compatibility (T015)
+  //
+  // PR webhook does NOT do route-level assignee filtering — the actual
+  // filtering happens in PrFeedbackMonitorService.processPrReviewEvent()
+  // (tested in T014). These tests verify that the clusterGithubUsername
+  // option is accepted without breaking anything.
+  // ==========================================================================
+
+  describe('assignee filtering interface compatibility', () => {
+    it('should accept clusterGithubUsername in options without affecting processing', async () => {
+      server = await buildServer({
+        monitorService,
+        clusterGithubUsername: 'my-bot',
+      });
+
+      const payload = createWebhookPayload();
+      const rawBody = JSON.stringify(payload);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe('processed');
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalled();
+    });
+
+    it('should work without clusterGithubUsername (backward compat)', async () => {
+      server = await buildServer({
+        monitorService,
+        clusterGithubUsername: undefined,
+      });
+
+      const payload = createWebhookPayload();
+      const rawBody = JSON.stringify(payload);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(res.json().status).toBe('processed');
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalled();
+    });
+
+    it('should delegate assignee filtering to service layer, not route layer', async () => {
+      // Even with clusterGithubUsername set, the PR webhook route should
+      // always pass events through to the monitor service (unlike label webhook
+      // which does route-level filtering)
+      (monitorService.processPrReviewEvent as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+      server = await buildServer({
+        monitorService,
+        clusterGithubUsername: 'my-bot',
+      });
+
+      const payload = createWebhookPayload();
+      const rawBody = JSON.stringify(payload);
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/webhooks/github/pr-review',
+        headers: {
+          'x-github-event': 'pull_request_review',
+          'content-type': 'application/json',
+        },
+        payload: rawBody,
+      });
+
+      expect(res.statusCode).toBe(200);
+      // Service was still called — route didn't filter
+      expect(monitorService.processPrReviewEvent).toHaveBeenCalled();
+      expect(res.json().status).toBe('duplicate');
     });
   });
 });

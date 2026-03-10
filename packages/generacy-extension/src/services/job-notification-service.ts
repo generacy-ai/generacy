@@ -1,14 +1,16 @@
 /**
- * Job Notification Service for cloud workflow terminal events.
+ * Job Notification Service for cloud workflow events.
  *
  * Subscribes to SSE `queue:updated` events and surfaces VS Code notifications
- * when jobs reach terminal states (completed, failed, cancelled). Includes:
+ * when jobs reach terminal states (completed, failed, cancelled) or need input
+ * (waiting). Includes:
  * - Event deduplication via bounded ID set (100 entries, FIFO eviction)
  * - Configuration-driven suppression (notifications.enabled, onComplete, onError)
  * - Data enrichment via JobProgress API (PR URL, failed step details)
  * - Rate limiting: 3+ notifications in 10s → single summary
  * - Focus batching: queue notifications while VS Code is unfocused
  * - continueOnError inference: step failures without terminal event → status bar only
+ * - Waiting-for-input notifications with "View Job" action
  */
 import * as vscode from 'vscode';
 import { SSESubscriptionManager } from '../api/sse';
@@ -16,6 +18,7 @@ import { queueApi } from '../api/endpoints/queue';
 import type { SSEEvent, QueueItem, JobProgress, WorkflowStepEventData } from '../api/types';
 import { CloudJobStatusBarProvider } from '../providers/status-bar';
 import type { QueueTreeProvider } from '../views/cloud/queue';
+import type { ProjectConfigService } from './project-config-service';
 import { CONFIG_KEYS, CLOUD_COMMANDS } from '../constants';
 import { getLogger } from '../utils/logger';
 
@@ -26,10 +29,13 @@ import { getLogger } from '../utils/logger';
 /** Terminal job statuses that trigger notifications */
 type TerminalStatus = 'completed' | 'failed' | 'cancelled';
 
+/** All job statuses that trigger notifications (terminal + waiting) */
+type NotifiableStatus = TerminalStatus | 'waiting';
+
 /** A notification waiting to be displayed (used for rate limiting and focus batching) */
 interface PendingNotification {
   queueItem: QueueItem;
-  status: TerminalStatus;
+  status: NotifiableStatus;
   progress?: JobProgress;
   timestamp: number;
 }
@@ -77,6 +83,7 @@ export class JobNotificationService implements vscode.Disposable {
     private readonly cloudStatusBar: CloudJobStatusBarProvider,
     _queueProvider: QueueTreeProvider,
     _extensionUri: vscode.Uri,
+    private readonly projectConfigService?: ProjectConfigService,
   ) {
     this.isFocused = vscode.window.state.focused;
 
@@ -160,17 +167,25 @@ export class JobNotificationService implements vscode.Disposable {
     const data = event.data as Partial<QueueItem> & { id?: string; itemId?: string };
     const status = data.status;
 
-    // Only process terminal statuses
-    if (status !== 'completed' && status !== 'failed' && status !== 'cancelled') return;
+    // Only process terminal statuses and waiting
+    if (
+      status !== 'completed' &&
+      status !== 'failed' &&
+      status !== 'cancelled' &&
+      status !== 'waiting'
+    ) {
+      return;
+    }
 
     // Deduplication
     if (this.isDuplicate(event.id)) return;
     this.markSeen(event.id);
 
+    const itemId = data.id ?? data.itemId;
+
     // If a terminal event arrives for a job that had a pending step-failure timer,
     // clear the timer (it's not a continueOnError situation)
-    const itemId = data.id ?? data.itemId;
-    if (itemId) {
+    if (itemId && status !== 'waiting') {
       this.clearStepFailureTimer(itemId);
     }
 
@@ -187,14 +202,26 @@ export class JobNotificationService implements vscode.Disposable {
       startedAt: data.startedAt,
       completedAt: data.completedAt,
       error: data.error,
+      waitingFor: data.waitingFor,
       progress: data.progress,
     };
 
     // Configuration check
     if (!this.shouldNotify(status)) return;
 
+    // Waiting notifications are shown immediately (not batched/enriched)
+    if (status === 'waiting') {
+      this.cloudStatusBar.flash('waiting');
+      if (!this.isProjectMatch(queueItem)) return;
+      this.showWaitingNotification(queueItem);
+      return;
+    }
+
     // Flash the status bar regardless of notification batching
     this.cloudStatusBar.flash(status);
+
+    // Skip toast for jobs outside the current project (status bar flash only)
+    if (!this.isProjectMatch(queueItem)) return;
 
     // Enrich and notify
     void this.enrichAndNotify(queueItem, status);
@@ -260,7 +287,7 @@ export class JobNotificationService implements vscode.Disposable {
   // Configuration
   // ==========================================================================
 
-  private shouldNotify(status: TerminalStatus): boolean {
+  private shouldNotify(status: NotifiableStatus): boolean {
     const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
 
     const enabled = config.get<boolean>(CONFIG_KEYS.notificationsEnabled, true);
@@ -270,8 +297,46 @@ export class JobNotificationService implements vscode.Disposable {
       return config.get<boolean>(CONFIG_KEYS.notificationsOnComplete, true);
     }
 
+    if (status === 'waiting') {
+      // Waiting notifications are always shown when notifications are enabled
+      return true;
+    }
+
     // failed and cancelled are both governed by onError
     return config.get<boolean>(CONFIG_KEYS.notificationsOnError, true);
+  }
+
+  /**
+   * Check whether a queue item belongs to the current project.
+   *
+   * When a ProjectConfigService is available and configured, only jobs whose
+   * `repository` matches the project's `repos.primary` (or whose repo name
+   * segment matches the project name) produce toast notifications. Jobs from
+   * other projects in the same org still flash the status bar but skip toasts.
+   *
+   * Returns `true` (show notification) when:
+   * - No ProjectConfigService was provided (fallback: show all)
+   * - The service has no valid config loaded (fallback: show all)
+   * - The queue item has no `repository` field (can't filter)
+   * - The repository matches the project
+   */
+  private isProjectMatch(queueItem: QueueItem): boolean {
+    if (!this.projectConfigService || !this.projectConfigService.isConfigured) {
+      return true;
+    }
+
+    if (!queueItem.repository) {
+      return true;
+    }
+
+    const repo = queueItem.repository;
+    const primary = this.projectConfigService.reposPrimary;
+    const projectName = this.projectConfigService.projectName;
+
+    if (primary && repo === primary) return true;
+    if (projectName && repo.endsWith(`/${projectName}`)) return true;
+
+    return false;
   }
 
   // ==========================================================================
@@ -414,8 +479,22 @@ export class JobNotificationService implements vscode.Disposable {
     }
   }
 
+  private showWaitingNotification(queueItem: QueueItem): void {
+    const name = queueItem.workflowName;
+    const waitingFor = queueItem.waitingFor;
+    const message = waitingFor
+      ? `⏳ ${name} is waiting for: ${waitingFor}`
+      : `⏳ ${name} is waiting for input`;
+
+    void vscode.window.showWarningMessage(message, 'View Job').then((action) => {
+      if (action === 'View Job') {
+        void vscode.commands.executeCommand(CLOUD_COMMANDS.viewJobProgress, queueItem.id);
+      }
+    });
+  }
+
   private showSummaryNotification(notifications: PendingNotification[]): void {
-    const counts = { completed: 0, failed: 0, cancelled: 0 };
+    const counts = { completed: 0, failed: 0, cancelled: 0, waiting: 0 };
     for (const n of notifications) {
       counts[n.status]++;
     }
@@ -430,11 +509,15 @@ export class JobNotificationService implements vscode.Disposable {
     if (counts.cancelled > 0) {
       parts.push(`${counts.cancelled} job${counts.cancelled !== 1 ? 's' : ''} cancelled`);
     }
+    if (counts.waiting > 0) {
+      parts.push(`${counts.waiting} job${counts.waiting !== 1 ? 's' : ''} waiting for input`);
+    }
 
     const message = parts.join(', ');
     const hasFailures = counts.failed > 0;
+    const hasWaiting = counts.waiting > 0;
 
-    const showFn = hasFailures
+    const showFn = hasFailures || hasWaiting
       ? vscode.window.showWarningMessage
       : vscode.window.showInformationMessage;
 

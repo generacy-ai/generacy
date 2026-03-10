@@ -124,6 +124,8 @@ export const MonitorConfigSchema = z.object({
   maxConcurrentPolls: z.number().int().min(1).max(20).default(5),
   /** Enable adaptive polling frequency */
   adaptivePolling: z.boolean().default(true),
+  /** GitHub username for this cluster — used to filter issues by assignee */
+  clusterGithubUsername: z.string().optional(),
 });
 export type MonitorConfig = z.infer<typeof MonitorConfigSchema>;
 
@@ -161,8 +163,6 @@ export type EpicMonitorConfig = z.infer<typeof EpicMonitorConfigSchema>;
 export const DispatchConfigSchema = z.object({
   /** Interval between queue polls in milliseconds */
   pollIntervalMs: z.number().int().min(1000).default(5000),
-  /** Maximum number of concurrent workers */
-  maxConcurrentWorkers: z.number().int().min(1).max(20).default(3),
   /** Worker heartbeat TTL in milliseconds */
   heartbeatTtlMs: z.number().int().min(5000).default(30000),
   /** Interval between heartbeat/reaper checks in milliseconds */
@@ -177,9 +177,31 @@ export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 export { WorkerConfigSchema, type WorkerConfig };
 
 /**
+ * Smee.io webhook proxy configuration
+ */
+export const SmeeConfigSchema = z.object({
+  /** Smee.io channel URL for receiving webhook events */
+  channelUrl: z.string().url().optional(),
+  /** Fallback poll interval when Smee is active (milliseconds) */
+  fallbackPollIntervalMs: z.number().int().min(30000).default(300000),
+});
+export type SmeeConfig = z.infer<typeof SmeeConfigSchema>;
+
+/**
+ * Webhook setup configuration
+ */
+export const WebhookSetupConfigSchema = z.object({
+  /** Whether automatic webhook setup is enabled */
+  enabled: z.boolean().default(false),
+});
+export type WebhookSetupConfig = z.infer<typeof WebhookSetupConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
+  /** Operating mode: 'full' runs everything, 'worker' runs only dispatch */
+  mode: z.enum(['full', 'worker']).default('full'),
   server: ServerConfigSchema.default({}),
   redis: RedisConfigSchema.default({}),
   auth: AuthConfigSchema,
@@ -192,6 +214,9 @@ export const OrchestratorConfigSchema = z.object({
   epicMonitor: EpicMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
+  smee: SmeeConfigSchema.default({}),
+  webhookSetup: WebhookSetupConfigSchema.default({}),
+  labelMonitor: z.boolean().default(false),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 

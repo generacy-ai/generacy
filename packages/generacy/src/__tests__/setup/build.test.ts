@@ -15,9 +15,11 @@ vi.mock('node:child_process', () => ({
 
 // Mock fs
 vi.mock('node:fs', () => ({
+  copyFileSync: vi.fn(),
   existsSync: vi.fn(),
   mkdirSync: vi.fn(),
   readFileSync: vi.fn(),
+  readdirSync: vi.fn(),
   rmSync: vi.fn(),
   writeFileSync: vi.fn(),
 }));
@@ -34,13 +36,16 @@ vi.mock('../../cli/utils/logger.js', () => ({
 
 // Import after mocks are set up
 const { execSync } = await import('node:child_process');
-const { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } = await import('node:fs');
+const { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } =
+  await import('node:fs');
 const { setupBuildCommand } = await import('../../cli/commands/setup/build.js');
 
 const mockExecSync = execSync as Mock;
+const mockCopyFileSync = copyFileSync as Mock;
 const mockExistsSync = existsSync as Mock;
 const mockMkdirSync = mkdirSync as Mock;
 const mockReadFileSync = readFileSync as Mock;
+const mockReaddirSync = readdirSync as Mock;
 const mockRmSync = rmSync as Mock;
 const mockWriteFileSync = writeFileSync as Mock;
 
@@ -399,15 +404,14 @@ describe('setup build command', () => {
       );
     });
 
-    it('skips Phase 2 entirely when agency directory does not exist', async () => {
+    it('skips Phase 2 with info log when agency directory does not exist', async () => {
       mockExecBehavior();
       mockFileSystem([]); // No agency dir
 
       await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { dir: '/workspaces/agency' },
-        'Agency directory not found, skipping',
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for agency/latency — using installed packages',
       );
       expect(mockExit).not.toHaveBeenCalled();
     });
@@ -547,15 +551,14 @@ describe('setup build command', () => {
       );
     });
 
-    it('skips Phase 3 when generacy directory does not exist', async () => {
+    it('skips Phase 3 with info log when generacy directory does not exist', async () => {
       mockExecBehavior();
       mockFileSystem([]); // No generacy dir
 
       await runBuildCommand(['--skip-cleanup', '--skip-agency']);
 
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { dir: '/workspaces/generacy' },
-        'Generacy directory not found, skipping',
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for generacy — using installed packages',
       );
       expect(mockExit).not.toHaveBeenCalled();
     });
@@ -574,6 +577,417 @@ describe('setup build command', () => {
         'Generacy CLI artifact missing after build',
       );
       expect(mockExit).toHaveBeenCalledWith(1);
+    });
+  });
+
+  describe('Phase 4: speckit command resolution and copy', () => {
+    it('resolves commands from agency source packages directory (Tier 1 first)', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/workspaces/agency/packages/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from local workspace',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockCopyFileSync).toHaveBeenCalledWith(
+        '/workspaces/agency/packages/agency-plugin-spec-kit/commands/specify.md',
+        '/home/testuser/.claude/commands/specify.md',
+      );
+    });
+
+    it('resolves commands from local generacy workspace node_modules (Tier 1 fallback)', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from local workspace',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockCopyFileSync).toHaveBeenCalledWith(
+        '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands/specify.md',
+        '/home/testuser/.claude/commands/specify.md',
+      );
+    });
+
+    it('resolves commands from agency workspace node_modules (Tier 1 fallback)', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        // generacy node_modules does NOT have the package
+        '/workspaces/agency/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/workspaces/agency/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from local workspace',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('resolves commands from shared packages volume (Tier 2) when local not found', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        // No local node_modules paths, but shared volume has it
+        '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from shared packages volume',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+    });
+
+    it('resolves commands from npm global (Tier 3) when local and shared not found', async () => {
+      mockExecBehavior({
+        'npm root -g': { stdout: '/usr/lib/node_modules' },
+      });
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        // No local node_modules paths
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'plan.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from npm global',
+      );
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+    });
+
+    it('returns null when package not found in any tier', async () => {
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+      );
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+    });
+
+    it('copies .md files to ~/.claude/commands/ and logs count', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/generacy/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md', 'README.txt']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // Should only copy .md files (not README.txt)
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockMkdirSync).toHaveBeenCalledWith(
+        '/home/testuser/.claude/commands',
+        { recursive: true },
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ count: 3 }),
+        'Copied speckit command files',
+      );
+    });
+
+    it('configures Agency MCP server in ~/.claude.json', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      const claudeJsonCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude.json',
+      );
+      expect(claudeJsonCalls.length).toBeGreaterThan(0);
+      const written = JSON.parse(claudeJsonCalls[0][1] as string);
+      expect(written.mcpServers.agency).toEqual({
+        type: 'stdio',
+        command: 'node',
+        args: ['/workspaces/agency/packages/agency/dist/cli.js'],
+        cwd: '/workspaces/agency',
+      });
+    });
+
+    it('configures Agency MCP server from shared packages volume', async () => {
+      mockExecBehavior();
+      // No source repos — external project with shared packages volume
+      mockFileSystem([
+        '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js' },
+        'Using agency CLI from shared packages volume',
+      );
+      const claudeJsonCalls = mockWriteFileSync.mock.calls.filter(
+        (c) => (c[0] as string) === '/home/testuser/.claude.json',
+      );
+      expect(claudeJsonCalls.length).toBeGreaterThan(0);
+      const written = JSON.parse(claudeJsonCalls[0][1] as string);
+      expect(written.mcpServers.agency).toEqual({
+        type: 'stdio',
+        command: 'node',
+        args: ['/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js'],
+      });
+    });
+
+    it('skips MCP configuration with info log when Agency CLI not found', async () => {
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        // Agency CLI missing — buildAgency would exit(1) but we mock exit
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping MCP configuration — agency CLI not found',
+      );
+    });
+  });
+
+  describe('external project scenario', () => {
+    it('completes successfully with no source repos present', async () => {
+      mockExecBehavior();
+      // No source repos exist — simulates external project environment
+      mockFileSystem([]);
+
+      await runBuildCommand([]);
+
+      // Phase 2 and 3 should skip with info-level messages
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for agency/latency — using installed packages',
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        'Skipping source build for generacy — using installed packages',
+      );
+      // Should not exit with error
+      expect(mockExit).not.toHaveBeenCalled();
+      // Build process should complete
+      expect(mockLogger.info).toHaveBeenCalledWith('Build process complete');
+    });
+
+    it('resolves commands from npm global in external project', async () => {
+      mockExecBehavior({
+        'npm root -g': { stdout: '/usr/lib/node_modules' },
+      });
+      // No source repos — external project, but npm global package exists
+      mockFileSystem([
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+        '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md']);
+
+      await runBuildCommand([]);
+
+      // Should copy files from npm global
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(2);
+      expect(mockCopyFileSync).toHaveBeenCalledWith(
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands/specify.md',
+        '/home/testuser/.claude/commands/specify.md',
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ count: 2 }),
+        'Copied speckit command files',
+      );
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it('resolves commands and agency CLI from shared packages volume', async () => {
+      mockExecBehavior();
+      // No source repos — external project with shared packages volume
+      mockFileSystem([
+        '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+        '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md', 'clarify.md', 'plan.md']);
+
+      await runBuildCommand([]);
+
+      expect(mockCopyFileSync).toHaveBeenCalledTimes(3);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency-plugin-spec-kit/commands' },
+        'Resolved speckit commands from shared packages volume',
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/shared-packages/node_modules/@generacy-ai/agency/dist/cli.js' },
+        'Using agency CLI from shared packages volume',
+      );
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it('logs error when package not found anywhere', async () => {
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
+      // No source repos, npm root fails
+      mockFileSystem([]);
+
+      await runBuildCommand([]);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+      );
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('regression: source dirs present', () => {
+    it('proceeds with full build when source directories exist', async () => {
+      mockExecBehavior();
+      mockFileSystem([
+        '/workspaces/agency',
+        '/workspaces/latency',
+        '/workspaces/generacy',
+        '/workspaces/agency/packages/agency/dist/cli.js',
+        '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+        '/workspaces/generacy/packages/generacy/dist/cli/index.js',
+      ]);
+
+      await runBuildCommand(['--skip-cleanup']);
+
+      // Phase 2 should build agency (not skip)
+      expect(mockLogger.info).toHaveBeenCalledWith('Phase 2: Building Agency packages');
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'pnpm build',
+        expect.objectContaining({ cwd: '/workspaces/agency' }),
+      );
+      // Phase 3 should build generacy (not skip)
+      expect(mockLogger.info).toHaveBeenCalledWith('Phase 3: Building Generacy packages');
+      expect(mockExecSync).toHaveBeenCalledWith(
+        'pnpm build',
+        expect.objectContaining({ cwd: '/workspaces/generacy' }),
+      );
+      // Should not log skip messages
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        'Skipping source build for agency/latency — using installed packages',
+      );
+      expect(mockLogger.info).not.toHaveBeenCalledWith(
+        'Skipping source build for generacy — using installed packages',
+      );
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Phase 4: npm-global resolution', () => {
+    it('resolveNpmGlobalRoot returns trimmed path on success', async () => {
+      // Test via the MCP CLI resolution path — when agency source is not available,
+      // the code uses resolveNpmGlobalRoot() to find the global CLI
+      mockExecBehavior({
+        'npm root -g': { stdout: '  /usr/lib/node_modules  \n' },
+      });
+      mockFileSystem([
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands',
+        '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js',
+      ]);
+      mockReaddirSync.mockReturnValue(['specify.md']);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      // Should have used the trimmed path (no leading/trailing whitespace)
+      expect(mockCopyFileSync).toHaveBeenCalledWith(
+        '/usr/lib/node_modules/@generacy-ai/agency-plugin-spec-kit/commands/specify.md',
+        '/home/testuser/.claude/commands/specify.md',
+      );
+      // MCP CLI should also be found via the trimmed path
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { path: '/usr/lib/node_modules/@generacy-ai/agency/dist/cli.js' },
+        'Using globally installed agency CLI',
+      );
+    });
+
+    it('logs error when npm root -g fails and no local paths exist', async () => {
+      mockExecBehavior({
+        'npm root -g': { throw: true },
+      });
+      mockFileSystem([]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+      );
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
+    });
+
+    it('logs error when npm root succeeds but commands dir does not exist', async () => {
+      mockExecBehavior({
+        'npm root -g': { stdout: '/usr/lib/node_modules' },
+      });
+      // npm root returns valid path but no commands/ dir in the package
+      mockFileSystem([]);
+
+      await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ checkedPaths: expect.any(Array) }),
+        '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+      );
+      expect(mockCopyFileSync).not.toHaveBeenCalled();
     });
   });
 

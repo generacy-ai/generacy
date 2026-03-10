@@ -244,5 +244,5 @@ steps:
 ## Getting Started
 
 1. [Install Humancy](/docs/getting-started/installation)
-2. [Level 2 Guide](/docs/getting-started/level-2-agency-humancy)
+2. [Level 2 Guide](/docs/getting-started/adoption-levels#level-2-agency--humancy)
 3. [Humancy Configuration](/docs/guides/humancy/configuration)

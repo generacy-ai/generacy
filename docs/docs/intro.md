@@ -62,7 +62,7 @@ You can adopt Generacy progressively, starting with just the components you need
 
 ## Getting Started
 
-Ready to begin? Check out the [Quick Start Guide](/docs/getting-started/quick-start) to get up and running in under 5 minutes.
+Ready to begin? Check out the [Getting Started Guide](/docs/getting-started) to get up and running in under 30 minutes.
 
 Or explore the component guides:
 

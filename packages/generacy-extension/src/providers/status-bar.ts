@@ -1,6 +1,10 @@
 /**
- * Status bar provider for workflow execution status.
- * Displays current execution state and progress in the VS Code status bar.
+ * Status bar providers for the Generacy VS Code extension.
+ *
+ * - ExecutionStatusBarProvider: local workflow execution progress
+ * - CloudJobStatusBarProvider: running cloud job count
+ * - ProjectStatusBarProvider: current project name from .generacy/config.yaml
+ * - EnvStatusBarProvider: environment config status (.generacy/generacy.env)
  */
 import * as vscode from 'vscode';
 import {
@@ -10,6 +14,9 @@ import {
   type ExecutionStatus,
 } from '../views/local/runner';
 import { getLogger } from '../utils';
+import { type ProjectConfigService } from '../services/project-config-service';
+import { COMMANDS } from '../constants';
+import { type EnvConfigService, type EnvStatus } from '../services/env-config-service';
 
 /**
  * Icons for different execution states
@@ -521,7 +528,7 @@ export class CloudJobStatusBarProvider implements vscode.Disposable {
    * Temporarily flash the status bar to indicate a job terminal event.
    * Changes the icon and background color for 3 seconds, then reverts.
    */
-  public flash(status: 'completed' | 'failed' | 'cancelled'): void {
+  public flash(status: 'completed' | 'failed' | 'cancelled' | 'waiting'): void {
     const previousText = this.statusBarItem.text;
     const previousBg = this.statusBarItem.backgroundColor;
 
@@ -531,6 +538,9 @@ export class CloudJobStatusBarProvider implements vscode.Disposable {
     } else if (status === 'failed') {
       this.statusBarItem.text = '$(error) Job failed';
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
+    } else if (status === 'waiting') {
+      this.statusBarItem.text = '$(bell) Job waiting for input';
+      this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
     } else {
       this.statusBarItem.text = '$(stop) Job cancelled';
       this.statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
@@ -555,5 +565,107 @@ export class CloudJobStatusBarProvider implements vscode.Disposable {
       clearTimeout(this.flashTimer);
     }
     this.statusBarItem.dispose();
+  }
+}
+
+/**
+ * Status bar provider for project name display.
+ * Shows the current project name from `.generacy/config.yaml` in the status bar.
+ * Subscribes to ProjectConfigService changes to stay in sync.
+ */
+export class ProjectStatusBarProvider implements vscode.Disposable {
+  private readonly statusBarItem: vscode.StatusBarItem;
+  private readonly disposables: vscode.Disposable[] = [];
+
+  constructor(configService: ProjectConfigService) {
+    this.statusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      98
+    );
+    this.statusBarItem.name = 'Generacy Project';
+    this.statusBarItem.command = 'generacy.openDashboard';
+
+    // Set initial state
+    this.update(configService.projectName);
+
+    // React to config changes
+    this.disposables.push(
+      configService.onDidChange((config) => {
+        this.update(config?.project.name);
+      })
+    );
+  }
+
+  private update(projectName: string | undefined): void {
+    if (projectName) {
+      this.statusBarItem.text = `$(project) ${projectName}`;
+      this.statusBarItem.tooltip = `Generacy Project: ${projectName}`;
+      this.statusBarItem.show();
+    } else {
+      this.statusBarItem.hide();
+    }
+  }
+
+  public dispose(): void {
+    this.statusBarItem.dispose();
+    for (const d of this.disposables) {
+      d.dispose();
+    }
+    this.disposables.length = 0;
+  }
+}
+
+/**
+ * Status bar provider for environment configuration status.
+ * Shows a warning when `.generacy/generacy.env` is missing or incomplete.
+ * Hides when all required keys are configured (status = 'ok').
+ * Clicking the item opens the "Generacy: Configure Environment" command.
+ */
+export class EnvStatusBarProvider implements vscode.Disposable {
+  private readonly statusBarItem: vscode.StatusBarItem;
+  private readonly disposables: vscode.Disposable[] = [];
+
+  constructor(envService: EnvConfigService) {
+    this.statusBarItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      97,
+    );
+    this.statusBarItem.name = 'Generacy Environment';
+    this.statusBarItem.command = COMMANDS.configureEnvironment;
+
+    // Set initial state
+    this.update(envService.status);
+
+    // React to status changes
+    this.disposables.push(
+      envService.onDidChange((status) => {
+        this.update(status);
+      }),
+    );
+  }
+
+  private update(status: EnvStatus): void {
+    if (status === 'ok') {
+      this.statusBarItem.hide();
+      return;
+    }
+
+    const label = status === 'missing' ? 'Env: Missing' : 'Env: Incomplete';
+    this.statusBarItem.text = `$(warning) ${label}`;
+    this.statusBarItem.backgroundColor = new vscode.ThemeColor(
+      'statusBarItem.warningBackground',
+    );
+    this.statusBarItem.tooltip = status === 'missing'
+      ? 'Environment file not found. Click to configure.'
+      : 'Environment file is missing required keys. Click to configure.';
+    this.statusBarItem.show();
+  }
+
+  public dispose(): void {
+    this.statusBarItem.dispose();
+    for (const d of this.disposables) {
+      d.dispose();
+    }
+    this.disposables.length = 0;
   }
 }

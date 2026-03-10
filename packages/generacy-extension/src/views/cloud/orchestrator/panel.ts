@@ -172,6 +172,7 @@ export class OrchestratorDashboardPanel {
 
       // Compute queue stats from items
       const queueStats = this.computeQueueStats(queueResponse.items);
+      const waitingItems = queueResponse.items.filter(item => item.status === 'waiting');
       const sseManager = getSSEManager();
 
       const data: DashboardData = {
@@ -180,6 +181,7 @@ export class OrchestratorDashboardPanel {
         agents: agentsResponse.items,
         activity: activityResponse.items,
         connected: sseManager.isConnected(),
+        waitingItems,
       };
 
       // Render full dashboard HTML
@@ -204,12 +206,15 @@ export class OrchestratorDashboardPanel {
    * Compute queue stats from queue items by counting statuses.
    */
   private computeQueueStats(items: Array<{ status: string }>): QueueStats {
-    const stats: QueueStats = { pending: 0, running: 0, completed: 0, failed: 0 };
+    const stats: QueueStats = { pending: 0, waiting: 0, running: 0, completed: 0, failed: 0 };
 
     for (const item of items) {
       switch (item.status) {
         case 'pending':
           stats.pending++;
+          break;
+        case 'waiting':
+          stats.waiting++;
           break;
         case 'running':
           stats.running++;

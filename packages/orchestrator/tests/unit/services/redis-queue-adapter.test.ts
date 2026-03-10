@@ -156,7 +156,25 @@ describe('RedisQueueAdapter', () => {
         command: 'process',
         priority: 1000,
         enqueuedAt: '2024-01-01T00:00:00Z',
+        metadata: undefined,
       });
+    });
+
+    it('should preserve metadata through claim', async () => {
+      const itemWithMeta: QueueItem = {
+        ...sampleItem,
+        metadata: { prNumber: 7, reviewThreadIds: [1, 2] },
+      };
+      const serialized = buildSerializedItem(itemWithMeta, 0);
+      const redis = createMockRedis({
+        claimItem: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      const result = await adapter.claim('worker-1');
+
+      expect(result).not.toBeNull();
+      expect(result!.metadata).toEqual({ prNumber: 7, reviewThreadIds: [1, 2] });
     });
 
     it('should call claimItem with correct keys and TTL', async () => {
@@ -482,6 +500,7 @@ describe('RedisQueueAdapter', () => {
           command: 'process',
           priority: 1000,
           enqueuedAt: '2024-01-01T00:00:00Z',
+          metadata: undefined,
         },
         score: 1000,
       });
@@ -494,9 +513,30 @@ describe('RedisQueueAdapter', () => {
           command: 'process',
           priority: 2000,
           enqueuedAt: '2024-01-01T00:00:00Z',
+          metadata: undefined,
         },
         score: 2000,
       });
+    });
+
+    it('should preserve metadata through getQueueItems', async () => {
+      const itemWithMeta: QueueItem = {
+        ...sampleItem,
+        metadata: { description: 'Test issue body' },
+      };
+      const serialized = buildSerializedItem(itemWithMeta, 0);
+      const redis = createMockRedis({
+        zrange: vi.fn().mockResolvedValue([
+          JSON.stringify(serialized),
+          '1000',
+        ]),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      const items = await adapter.getQueueItems(0, 10);
+
+      expect(items).toHaveLength(1);
+      expect(items[0].item.metadata).toEqual({ description: 'Test issue body' });
     });
 
     it('should call ZRANGE with correct offset and limit', async () => {

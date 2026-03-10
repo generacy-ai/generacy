@@ -33,6 +33,8 @@ function createMockGitHubClient(
     getDefaultBranch: vi.fn().mockResolvedValue('main'),
     createPullRequest: vi.fn().mockResolvedValue({ number: 42, url: 'https://github.com/test/repo/pull/42' }),
     markPRReady: vi.fn().mockResolvedValue(undefined),
+    getCommitsBetween: vi.fn().mockResolvedValue([]),
+    branchExists: vi.fn().mockResolvedValue(true),
 
     // Other GitHubClient methods (not used by PrManager but required by interface)
     clone: vi.fn().mockResolvedValue(undefined),
@@ -398,6 +400,77 @@ describe('PrManager', () => {
       expect(urlBeforeReady).toBe(expectedUrl);
       expect(urlAfterReady).toBe(expectedUrl);
       expect(urlBeforeReady).toBe(urlAfterReady);
+    });
+  });
+
+  describe('commitPushAndEnsurePr() - change detection', () => {
+    it('should detect changes when phase committed directly (no uncommitted changes)', async () => {
+      // No uncommitted changes, but phase made its own commit
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.getCommitsBetween = vi.fn().mockResolvedValue([
+        { sha: 'abc123', message: 'feat: implement feature' },
+      ]);
+
+      const result = await prManager.commitPushAndEnsurePr('implement');
+
+      expect(result.hasChanges).toBe(true);
+      expect(github.stageAll).not.toHaveBeenCalled();
+      expect(github.commit).not.toHaveBeenCalled();
+      expect(github.push).toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: 'implement', unpushedCount: 1 }),
+        'Phase committed its own changes — pushing to remote',
+      );
+    });
+
+    it('should return false when no uncommitted changes and no unpushed commits', async () => {
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.getCommitsBetween = vi.fn().mockResolvedValue([]);
+
+      const result = await prManager.commitPushAndEnsurePr('implement');
+
+      expect(result.hasChanges).toBe(false);
+      expect(github.push).not.toHaveBeenCalled();
+    });
+
+    it('should commit and push when there are uncommitted changes', async () => {
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getCommitsBetween = vi.fn().mockResolvedValue([
+        { sha: 'new123', message: 'chore(speckit): complete implement phase' },
+      ]);
+
+      const result = await prManager.commitPushAndEnsurePr('implement');
+
+      expect(result.hasChanges).toBe(true);
+      expect(github.stageAll).toHaveBeenCalled();
+      expect(github.commit).toHaveBeenCalled();
+      expect(github.push).toHaveBeenCalled();
+    });
+
+    it('should handle getCommitsBetween failure gracefully (treat as no unpushed)', async () => {
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.getCommitsBetween = vi.fn().mockRejectedValue(new Error('no upstream'));
+
+      const result = await prManager.commitPushAndEnsurePr('implement');
+
+      // getCommitsBetween failure caught, treated as no unpushed commits
+      expect(result.hasChanges).toBe(false);
+    });
+
+    it('should detect changes when remote branch does not exist yet', async () => {
+      // Phase committed directly, but origin/branch doesn't exist (first push)
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: false });
+      github.branchExists = vi.fn().mockResolvedValue(false);
+      github.getCommitsBetween = vi.fn().mockResolvedValue([
+        { sha: 'abc123', message: 'feat: implement feature' },
+      ]);
+
+      const result = await prManager.commitPushAndEnsurePr('implement');
+
+      expect(result.hasChanges).toBe(true);
+      expect(github.push).toHaveBeenCalled();
+      // Should compare against default branch, not origin/test-branch
+      expect(github.getCommitsBetween).toHaveBeenCalledWith('origin/main', 'test-branch');
     });
   });
 

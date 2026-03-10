@@ -152,5 +152,5 @@ All tests passing.
 Ready to use Agency? Check out:
 
 - [Installation Guide](/docs/getting-started/installation)
-- [Level 1: Agency Only](/docs/getting-started/level-1-agency-only)
+- [Level 1: Agency Only](/docs/getting-started/adoption-levels#level-1-agency-only)
 - [Agency Configuration](/docs/guides/agency/configuration)

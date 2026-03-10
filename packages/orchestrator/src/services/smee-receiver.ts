@@ -79,15 +79,17 @@ export class SmeeWebhookReceiver {
     );
 
     while (this.running && !signal.aborted) {
+      let sleepMs = this.reconnectDelayMs;
       try {
         await this.connect(signal);
         // Reset backoff counter on successful connection
         this.reconnectAttempt = 0;
+        sleepMs = this.reconnectDelayMs;
       } catch (error) {
         if (signal.aborted) break;
-        const reconnectMs = this.reconnectDelayMs;
+        sleepMs = this.reconnectDelayMs;
         this.logger.warn(
-          { err: String(error), reconnectMs, attempt: this.reconnectAttempt },
+          { err: String(error), reconnectMs: sleepMs, attempt: this.reconnectAttempt },
           'Smee connection lost, reconnecting...',
         );
 
@@ -95,9 +97,9 @@ export class SmeeWebhookReceiver {
         this.reconnectAttempt++;
       }
 
-      // Wait before reconnecting
+      // Wait before reconnecting (uses delay captured before attempt increment)
       if (this.running && !signal.aborted) {
-        await this.sleep(this.reconnectDelayMs, signal);
+        await this.sleep(sleepMs, signal);
       }
     }
 

@@ -58,6 +58,7 @@ export function getJobDetailHtml(data: JobDetailHtmlData): string {
   ${getReconnectingBanner()}
   ${getHeaderSection(item, isPinned)}
   ${getStatusBarSection(item)}
+  ${getLabelsSection(item)}
   ${getPhaseListSection()}
   ${getPRLinkSection()}
   ${getErrorSection()}
@@ -110,6 +111,21 @@ function getStatusBarSection(item: QueueItem): string {
     <span class="badge" id="priority-badge" style="background-color: ${priorityColor};">${item.priority.toUpperCase()}</span>
     <span id="phase-progress"></span>
     <span class="elapsed" id="elapsed-time"></span>
+  </div>`;
+}
+
+function getLabelsSection(item: QueueItem): string {
+  if (!item.labels || item.labels.length === 0) {
+    return '';
+  }
+
+  const badges = item.labels
+    .map((label) => `<span class="label-badge">${escapeHtml(label)}</span>`)
+    .join('');
+
+  return `
+  <div class="labels-section" id="labels-section">
+    ${badges}
   </div>`;
 }
 
@@ -167,6 +183,7 @@ function getDetailsSection(item: QueueItem): string {
 const STATUS_COLORS: Record<QueueStatus, string> = {
   pending: '#f0ad4e',
   running: '#5bc0de',
+  waiting: '#e6922e',
   completed: '#5cb85c',
   failed: '#d9534f',
   cancelled: '#777',
@@ -263,6 +280,23 @@ function getStyles(): string {
     }
     .reconnecting-banner.visible {
       display: block;
+    }
+    .labels-section {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 16px;
+    }
+    .label-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 0.8em;
+      font-weight: 500;
+      background-color: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border: 1px solid var(--vscode-panel-border);
     }
     .phase-list {
       margin-bottom: 24px;

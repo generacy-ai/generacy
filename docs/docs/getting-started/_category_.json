@@ -3,7 +3,7 @@
   "position": 2,
   "collapsed": false,
   "link": {
-    "type": "generated-index",
-    "description": "Get started with Generacy using our progressive adoption guides."
+    "type": "doc",
+    "id": "getting-started/index"
   }
 }

@@ -39,6 +39,8 @@ export {
 
 export { RedisQueueAdapter } from './redis-queue-adapter.js';
 
+export { InMemoryQueueAdapter } from './in-memory-queue-adapter.js';
+
 export { WorkerDispatcher } from './worker-dispatcher.js';
 
 export {
@@ -47,3 +49,9 @@ export {
 } from './epic-completion-monitor-service.js';
 
 export { WebhookSetupService } from './webhook-setup-service.js';
+
+export {
+  resolveClusterIdentity,
+  filterByAssignee,
+  type FilterableIssue,
+} from './identity.js';

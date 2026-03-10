@@ -186,8 +186,22 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       [{ owner: 'test-org', repo: 'test-repo' }],
     );
 
-    // Setup Fastify server with webhook routes
+    // Setup Fastify server with custom content type parser (preserves raw body
+    // for HMAC signature verification, matching production server.ts setup)
     server = Fastify({ logger: false });
+    server.removeContentTypeParser('application/json');
+    server.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string' },
+      (_req, body, done) => {
+        try {
+          const json = JSON.parse(body as string);
+          done(null, { parsed: json, raw: body });
+        } catch (err) {
+          done(err as Error, undefined);
+        }
+      },
+    );
     await setupPrWebhookRoutes(server, {
       monitorService,
       webhookSecret: WEBHOOK_SECRET,
@@ -1172,8 +1186,22 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       [{ owner: 'test-org', repo: 'test-repo' }],
     );
 
-    // Setup Fastify server with webhook routes
+    // Setup Fastify server with custom content type parser (preserves raw body
+    // for HMAC signature verification, matching production server.ts setup)
     server = Fastify({ logger: false });
+    server.removeContentTypeParser('application/json');
+    server.addContentTypeParser(
+      'application/json',
+      { parseAs: 'string' },
+      (_req, body, done) => {
+        try {
+          const json = JSON.parse(body as string);
+          done(null, { parsed: json, raw: body });
+        } catch (err) {
+          done(err as Error, undefined);
+        }
+      },
+    );
     await setupPrWebhookRoutes(server, {
       monitorService,
       webhookSecret: WEBHOOK_SECRET,
@@ -1634,7 +1662,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   let processFactory: any;
   let mockProcess: any;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     logger = createMockLogger();
     queueAdapter = new MockQueueAdapter();
@@ -1717,7 +1745,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
 
     // Mock process for Claude CLI
-    const { default: EventEmitter } = await import('node:events');
+    const { EventEmitter } = await import('node:events');
     mockProcess = {
       stdout: new EventEmitter(),
       stderr: new EventEmitter(),
@@ -1760,7 +1788,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const handler = new PrFeedbackHandler(
       {
         workspaceDir: '/tmp/workspace',
-        maxTurns: 10,
         phaseTimeoutMs: 60000,
         shutdownGracePeriodMs: 5000,
         validateCommand: 'echo ok',
@@ -1800,14 +1827,11 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(processFactory.spawn).toHaveBeenCalledWith(
       'claude',
       expect.arrayContaining([
-        '--headless',
-        '--output',
-        'json',
-        '--print',
-        'all',
-        '--max-turns',
-        '10',
-        '--prompt',
+        '-p',
+        '--output-format',
+        'stream-json',
+        '--dangerously-skip-permissions',
+        '--verbose',
         expect.stringContaining('PR #100'),
       ]),
       expect.objectContaining({
@@ -1817,7 +1841,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
 
     // Verify prompt contains all unresolved comments with file paths and line numbers
     const spawnCall = processFactory.spawn.mock.calls[0];
-    const prompt = spawnCall[1][spawnCall[1].indexOf('--prompt') + 1];
+    const prompt = spawnCall[1][spawnCall[1].length - 1];
     expect(prompt).toContain('src/index.ts:10');
     expect(prompt).toContain('src/util.ts:20');
     expect(prompt).toContain('reviewer');
@@ -1929,7 +1953,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const handler = new PrFeedbackHandler(
       {
         workspaceDir: '/tmp/workspace',
-        maxTurns: 10,
         phaseTimeoutMs: 60000,
         shutdownGracePeriodMs: 5000,
         validateCommand: 'echo ok',
@@ -1985,7 +2008,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const handler = new PrFeedbackHandler(
       {
         workspaceDir: '/tmp/workspace',
-        maxTurns: 10,
         phaseTimeoutMs: 60000,
         shutdownGracePeriodMs: 5000,
         validateCommand: 'echo ok',
@@ -2051,7 +2073,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const handler = new PrFeedbackHandler(
       {
         workspaceDir: '/tmp/workspace',
-        maxTurns: 10,
         phaseTimeoutMs: 60000,
         shutdownGracePeriodMs: 5000,
         validateCommand: 'echo ok',
@@ -2078,7 +2099,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     await handler.handle(queueItem, '/tmp/workspace/test-org/test-repo');
 
     const spawnCall = processFactory.spawn.mock.calls[0];
-    const prompt = spawnCall[1][spawnCall[1].indexOf('--prompt') + 1];
+    const prompt = spawnCall[1][spawnCall[1].length - 1];
 
     // Verify PR and issue numbers
     expect(prompt).toContain('PR #200');
@@ -2120,7 +2141,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const handler = new PrFeedbackHandler(
       {
         workspaceDir: '/tmp/workspace',
-        maxTurns: 10,
         phaseTimeoutMs: 60000,
         shutdownGracePeriodMs: 5000,
         validateCommand: 'echo ok',
@@ -2203,7 +2223,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const handler = new PrFeedbackHandler(
       {
         workspaceDir: '/tmp/workspace',
-        maxTurns: 10,
         phaseTimeoutMs: 60000,
         shutdownGracePeriodMs: 5000,
         validateCommand: 'echo ok',

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CliSpawner } from '../cli-spawner.js';
+import { WorkerConfigSchema } from '../config.js';
 import type {
   ProcessFactory,
   ChildProcessHandle,
@@ -72,7 +73,6 @@ function defaultOptions(overrides: Partial<CliSpawnOptions> = {}): CliSpawnOptio
     prompt: 'do something',
     cwd: '/tmp/repo',
     env: { PATH: '/usr/bin' },
-    maxTurns: 5,
     timeoutMs: 60_000,
     signal: new AbortController().signal,
     ...overrides,
@@ -138,7 +138,7 @@ describe('CliSpawner', () => {
       expect(spawnArgs[resumeIndex + 1]).toBe('ses-abc-123');
     });
 
-    it('places --resume before --prompt in args', async () => {
+    it('places --resume before the prompt positional arg', async () => {
       const { handle } = createMockProcess(0, 10);
       spawnFn.mockReturnValue(handle);
       const capture = createMockCapture();
@@ -151,8 +151,8 @@ describe('CliSpawner', () => {
 
       const spawnArgs = spawnFn.mock.calls[0]![1] as string[];
       const resumeIndex = spawnArgs.indexOf('--resume');
-      const promptIndex = spawnArgs.indexOf('--prompt');
-      expect(resumeIndex).toBeLessThan(promptIndex);
+      // Prompt is always the last positional argument
+      expect(resumeIndex).toBeLessThan(spawnArgs.length - 1);
     });
 
     it('includes sessionId from capture in PhaseResult', async () => {
@@ -322,5 +322,107 @@ describe('CliSpawner', () => {
       expect(result.success).toBe(true);
       expect(result.phase).toBe('validate');
     });
+  });
+
+  describe('runPreValidateInstall', () => {
+    it('spawns sh -c with the install command and correct cwd', async () => {
+      const { handle } = createMockProcess(0, 10);
+      spawnFn.mockReturnValue(handle);
+
+      const abortController = new AbortController();
+      const result = await spawner.runPreValidateInstall(
+        '/tmp/repo',
+        'pnpm install',
+        abortController.signal,
+      );
+
+      expect(spawnFn).toHaveBeenCalledWith(
+        'sh',
+        ['-c', 'pnpm install'],
+        expect.objectContaining({ cwd: '/tmp/repo' }),
+      );
+      expect(result.success).toBe(true);
+      expect(result.phase).toBe('validate');
+    });
+
+    it('returns failure when install command exits non-zero', async () => {
+      const { handle } = createMockProcess(1, 10);
+      spawnFn.mockReturnValue(handle);
+
+      const abortController = new AbortController();
+      const result = await spawner.runPreValidateInstall(
+        '/tmp/repo',
+        'pnpm install',
+        abortController.signal,
+      );
+
+      expect(result.success).toBe(false);
+      expect(result.exitCode).toBe(1);
+      expect(result.error).toBeDefined();
+    });
+
+    it('uses 5-minute timeout', async () => {
+      vi.useFakeTimers();
+
+      const stdout = new EventEmitter();
+      const stderr = new EventEmitter();
+      let exitResolve: (code: number | null) => void;
+      const exitPromise = new Promise<number | null>((resolve) => {
+        exitResolve = resolve;
+      });
+
+      const handle: ChildProcessHandle = {
+        stdout: stdout as unknown as NodeJS.ReadableStream,
+        stderr: stderr as unknown as NodeJS.ReadableStream,
+        pid: 12345,
+        kill: vi.fn((signal?: string) => {
+          if (signal === 'SIGKILL') {
+            exitResolve!(1);
+          }
+          return true;
+        }),
+        exitPromise,
+      };
+
+      spawnFn.mockReturnValue(handle);
+
+      const abortController = new AbortController();
+      const resultPromise = spawner.runPreValidateInstall(
+        '/tmp/repo',
+        'pnpm install',
+        abortController.signal,
+      );
+
+      // Advance to 5 minutes (300,000ms)
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(handle.kill).toHaveBeenCalledWith('SIGTERM');
+
+      // Advance past grace period
+      await vi.advanceTimersByTimeAsync(50);
+      expect(handle.kill).toHaveBeenCalledWith('SIGKILL');
+
+      const result = await resultPromise;
+      expect(result.success).toBe(false);
+      expect(result.error!.message).toContain('timed out');
+
+      vi.useRealTimers();
+    });
+  });
+});
+
+describe('WorkerConfigSchema - preValidateCommand', () => {
+  it('defaults to pnpm install', () => {
+    const config = WorkerConfigSchema.parse({});
+    expect(config.preValidateCommand).toBe('pnpm install');
+  });
+
+  it('accepts empty string', () => {
+    const config = WorkerConfigSchema.parse({ preValidateCommand: '' });
+    expect(config.preValidateCommand).toBe('');
+  });
+
+  it('accepts custom command', () => {
+    const config = WorkerConfigSchema.parse({ preValidateCommand: 'npm ci' });
+    expect(config.preValidateCommand).toBe('npm ci');
   });
 });

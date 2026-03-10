@@ -10,6 +10,7 @@ import type {
   ActivityEventType,
   AgentDisplayStatus,
   AgentConnectionStatus,
+  QueueItem,
 } from '../../../api/types';
 
 // ============================================================================
@@ -21,6 +22,7 @@ import type {
  */
 export interface QueueStats {
   pending: number;
+  waiting: number;
   running: number;
   completed: number;
   failed: number;
@@ -35,6 +37,8 @@ export interface DashboardData {
   agents: Agent[];
   activity: ActivityEvent[];
   connected: boolean;
+  /** Queue items with status 'waiting', rendered in the waiting-for-input section */
+  waitingItems: QueueItem[];
 }
 
 /**
@@ -76,7 +80,7 @@ export function getDashboardHtml(
     ${getDashboardHeader(data.connected)}
     <div class="content">
       <div class="main-content">
-        ${getQueueSummarySection(data.queueStats)}
+        ${getQueueSummarySection(data.queueStats, data.waitingItems)}
         ${getAgentSummarySection(data.agents, data.agentStats)}
       </div>
       <div class="sidebar">
@@ -156,8 +160,8 @@ function getDashboardHeader(connected: boolean): string {
   `;
 }
 
-function getQueueSummarySection(stats: QueueStats): string {
-  const total = stats.pending + stats.running + stats.completed + stats.failed;
+function getQueueSummarySection(stats: QueueStats, waitingItems: QueueItem[]): string {
+  const total = stats.pending + stats.waiting + stats.running + stats.completed + stats.failed;
 
   if (total === 0) {
     return `
@@ -172,12 +176,13 @@ function getQueueSummarySection(stats: QueueStats): string {
     <section class="card">
       <h2>Work Queue</h2>
       <div class="stats-grid" id="queue-stats">
-        ${getQueueStatCard('Pending', stats.pending, 'stat-pending')}
-        ${getQueueStatCard('Running', stats.running, 'stat-running')}
+        ${getQueueStatCard('Active', stats.running, 'stat-running')}
+        ${getQueueStatCard('Waiting', stats.waiting, 'stat-waiting')}
         ${getQueueStatCard('Completed', stats.completed, 'stat-completed')}
         ${getQueueStatCard('Failed', stats.failed, 'stat-failed')}
       </div>
       ${getPriorityBar(stats)}
+      ${getWaitingJobsSection(waitingItems)}
     </section>
   `;
 }
@@ -192,18 +197,19 @@ function getQueueStatCard(label: string, count: number, className: string): stri
 }
 
 function getPriorityBar(stats: QueueStats): string {
-  const active = stats.pending + stats.running;
+  const active = stats.pending + stats.waiting + stats.running;
   if (active === 0) {
     return '';
   }
 
-  const total = stats.pending + stats.running + stats.completed + stats.failed;
+  const total = stats.pending + stats.waiting + stats.running + stats.completed + stats.failed;
   if (total === 0) {
     return '';
   }
 
   const segments = [
     { label: 'Pending', count: stats.pending, className: 'bar-pending' },
+    { label: 'Waiting', count: stats.waiting, className: 'bar-waiting' },
     { label: 'Running', count: stats.running, className: 'bar-running' },
     { label: 'Completed', count: stats.completed, className: 'bar-completed' },
     { label: 'Failed', count: stats.failed, className: 'bar-failed' },
@@ -222,6 +228,38 @@ function getPriorityBar(stats: QueueStats): string {
       <div class="priority-legend">
         ${segments.map(s => `<span class="legend-item"><span class="legend-dot ${s.className}"></span>${s.label}: ${s.count}</span>`).join('')}
       </div>
+    </div>
+  `;
+}
+
+function getWaitingJobsSection(items: QueueItem[]): string {
+  if (items.length === 0) {
+    return '';
+  }
+
+  const rows = items.map(item => {
+    const waitLabel = item.waitingFor ? escapeHtml(item.waitingFor) : 'Unknown';
+    const timeWaiting = item.startedAt ? formatRelativeTime(item.startedAt) : formatRelativeTime(item.queuedAt);
+    const name = escapeHtml(item.workflowName);
+
+    return `
+      <div class="waiting-job-item" data-item-id="${escapeHtml(item.id)}">
+        <div class="waiting-job-name">${name}</div>
+        <div class="waiting-job-label">${waitLabel}</div>
+        <div class="waiting-job-time">${timeWaiting}</div>
+        <button class="waiting-job-view btn btn-secondary" onclick="openQueueItem('${escapeHtml(item.id)}')">View</button>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="waiting-jobs-list">
+      <div class="waiting-jobs-header">
+        <span class="waiting-jobs-icon">&#x26A0;</span>
+        <span class="waiting-jobs-title">Waiting for Input</span>
+        <span class="waiting-jobs-count">${items.length}</span>
+      </div>
+      ${rows}
     </div>
   `;
 }
@@ -358,6 +396,7 @@ function getConnectionStatus(connected: boolean): string {
 function getSidebarQueueSummary(stats: QueueStats): string {
   const parts: string[] = [];
   if (stats.pending > 0) { parts.push(`${stats.pending} pending`); }
+  if (stats.waiting > 0) { parts.push(`${stats.waiting} waiting`); }
   if (stats.running > 0) { parts.push(`${stats.running} running`); }
   if (stats.failed > 0) { parts.push(`${stats.failed} failed`); }
 
@@ -513,6 +552,7 @@ function getDashboardStyles(): string {
     }
 
     .stat-pending { border-left-color: var(--vscode-charts-yellow); }
+    .stat-waiting { border-left-color: var(--vscode-charts-orange); }
     .stat-running { border-left-color: var(--vscode-charts-blue); }
     .stat-completed { border-left-color: var(--vscode-charts-green); }
     .stat-failed { border-left-color: var(--vscode-charts-red); }
@@ -548,6 +588,7 @@ function getDashboardStyles(): string {
     }
 
     .bar-pending { background: var(--vscode-charts-yellow); }
+    .bar-waiting { background: var(--vscode-charts-orange); }
     .bar-running { background: var(--vscode-charts-blue); }
     .bar-completed { background: var(--vscode-charts-green); }
     .bar-failed { background: var(--vscode-charts-red); }
@@ -571,6 +612,82 @@ function getDashboardStyles(): string {
       height: 8px;
       border-radius: 50%;
       display: inline-block;
+    }
+
+    /* Waiting Jobs List */
+    .waiting-jobs-list {
+      margin-top: 16px;
+      padding-top: 16px;
+      border-top: 1px solid var(--vscode-panel-border);
+    }
+
+    .waiting-jobs-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .waiting-jobs-icon {
+      color: var(--vscode-charts-orange);
+      font-size: 14px;
+    }
+
+    .waiting-jobs-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--vscode-foreground);
+    }
+
+    .waiting-jobs-count {
+      padding: 1px 7px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 500;
+      background: var(--vscode-charts-orange);
+      color: white;
+    }
+
+    .waiting-job-item {
+      display: grid;
+      grid-template-columns: 1fr auto auto auto;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 12px;
+      margin-bottom: 4px;
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-left: 3px solid var(--vscode-charts-orange);
+      border-radius: 4px;
+    }
+
+    .waiting-job-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .waiting-job-name {
+      font-size: 13px;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .waiting-job-label {
+      font-size: 12px;
+      color: var(--vscode-charts-orange);
+      font-weight: 500;
+      white-space: nowrap;
+    }
+
+    .waiting-job-time {
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+      white-space: nowrap;
+    }
+
+    .waiting-job-view {
+      padding: 3px 10px;
+      font-size: 11px;
     }
 
     /* Agent Cards */
@@ -1077,6 +1194,7 @@ function getSidebarScript(): string {
       if (data.queueStats) {
         var parts = [];
         if (data.queueStats.pending > 0) parts.push(data.queueStats.pending + ' pending');
+        if (data.queueStats.waiting > 0) parts.push(data.queueStats.waiting + ' waiting');
         if (data.queueStats.running > 0) parts.push(data.queueStats.running + ' running');
         if (data.queueStats.failed > 0) parts.push(data.queueStats.failed + ' failed');
         var queueEl = document.getElementById('queue-summary');

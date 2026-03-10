@@ -37,6 +37,7 @@ function createMockRedis(
   return {
     set: vi.fn().mockResolvedValue('OK'),
     exists: vi.fn().mockResolvedValue(1),
+    del: vi.fn().mockResolvedValue(1),
     ...overrides,
   } as unknown as import('ioredis').Redis;
 }
@@ -54,7 +55,6 @@ const sampleItem: QueueItem = {
 // Use very short intervals so tests run fast with real timers
 const testConfig: DispatchConfig = {
   pollIntervalMs: 10,
-  maxConcurrentWorkers: 3,
   heartbeatTtlMs: 200,
   heartbeatCheckIntervalMs: 20,
   shutdownTimeoutMs: 100,
@@ -153,7 +153,7 @@ describe('WorkerDispatcher', () => {
   });
 
   describe('concurrency limit', () => {
-    it('should not claim when at maxConcurrentWorkers', async () => {
+    it('should not claim when already processing a job', async () => {
       const blockers: Array<{ resolve: () => void }> = [];
 
       handler.mockImplementation(
@@ -175,17 +175,14 @@ describe('WorkerDispatcher', () => {
       // Wait long enough for several poll cycles
       await tick(100);
 
-      // Active workers should be capped at max
-      expect(dispatcher.getActiveWorkerCount()).toBe(
-        testConfig.maxConcurrentWorkers,
-      );
+      // Only one job should be active at a time (1 per container)
+      expect(dispatcher.getActiveWorkerCount()).toBe(1);
 
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({
-          active: testConfig.maxConcurrentWorkers,
-          max: testConfig.maxConcurrentWorkers,
+          active: 1,
         }),
-        'At concurrency limit, skipping claim',
+        'Already processing a job, skipping claim',
       );
 
       // Resolve all blockers to allow cleanup
@@ -546,6 +543,97 @@ describe('WorkerDispatcher', () => {
       );
 
       await dispatcher.stop();
+      await startPromise;
+    });
+  });
+
+  describe('in-memory heartbeat (null Redis)', () => {
+    let memDispatcher: WorkerDispatcher;
+
+    beforeEach(() => {
+      memDispatcher = new WorkerDispatcher(queue, null, logger, testConfig, handler);
+    });
+
+    afterEach(async () => {
+      if (memDispatcher.isRunning()) {
+        await memDispatcher.stop();
+      }
+    });
+
+    it('should dispatch workers without Redis', async () => {
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      handler.mockResolvedValue(undefined);
+
+      const startPromise = memDispatcher.start();
+      await tick();
+
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: sampleItem.owner,
+          repo: sampleItem.repo,
+          issueNumber: sampleItem.issueNumber,
+        }),
+      );
+
+      expect(queue.complete).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ owner: sampleItem.owner }),
+      );
+
+      await memDispatcher.stop();
+      await startPromise;
+    });
+
+    it('should keep workers alive via in-memory heartbeat', async () => {
+      let resolveHandler!: () => void;
+      handler.mockImplementation(
+        () => new Promise<void>((resolve) => { resolveHandler = resolve; }),
+      );
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      const startPromise = memDispatcher.start();
+
+      // Wait for poll + several reaper cycles (heartbeat refreshes at ttl/2 = 100ms)
+      await tick(150);
+
+      // Worker should still be active (heartbeat kept alive by interval)
+      expect(memDispatcher.getActiveWorkerCount()).toBe(1);
+
+      // No reaping should have happened
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Reaping stale worker (heartbeat expired)',
+      );
+
+      resolveHandler();
+      await tick();
+
+      await memDispatcher.stop();
+      await startPromise;
+    });
+
+    it('should release items when handler fails without Redis', async () => {
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      handler.mockRejectedValue(new Error('handler failed'));
+
+      const startPromise = memDispatcher.start();
+      await tick();
+
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ owner: sampleItem.owner }),
+      );
+
+      await memDispatcher.stop();
       await startPromise;
     });
   });
