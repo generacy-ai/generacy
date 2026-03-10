@@ -39,8 +39,8 @@ export class PrManager {
    * @returns An object with the PR URL (if available) and whether changes were produced
    * (either uncommitted changes we commit, or commits the phase made directly).
    */
-  async commitPushAndEnsurePr(phase: WorkflowPhase): Promise<{ prUrl?: string; hasChanges: boolean }> {
-    const hasChanges = await this.commitAndPush(phase);
+  async commitPushAndEnsurePr(phase: WorkflowPhase, options?: { message?: string }): Promise<{ prUrl?: string; hasChanges: boolean }> {
+    const hasChanges = await this.commitAndPush(phase, options?.message);
     const prUrl = await this.ensureDraftPr();
     return { prUrl, hasChanges };
   }
@@ -53,7 +53,7 @@ export class PrManager {
    *
    * @returns true if changes were produced (committed or already committed), false otherwise.
    */
-  private async commitAndPush(phase: WorkflowPhase): Promise<boolean> {
+  private async commitAndPush(phase: WorkflowPhase, customMessage?: string): Promise<boolean> {
     try {
       let committed = false;
 
@@ -64,7 +64,7 @@ export class PrManager {
         await this.github.stageAll();
 
         // Commit with a phase-specific message
-        const message = `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
+        const message = customMessage ?? `chore(speckit): complete ${phase} phase for #${this.issueNumber}`;
         const commitResult = await this.github.commit(message);
         this.logger.info(
           { phase, sha: commitResult.sha, files: commitResult.files_committed.length },

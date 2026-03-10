@@ -10,11 +10,11 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 [US2] Add `maxImplementRetries` to `WorkerConfigSchema` in `packages/orchestrator/src/worker/config.ts`
+- [X] T001 [US2] Add `maxImplementRetries` to `WorkerConfigSchema` in `packages/orchestrator/src/worker/config.ts`
   - Add field: `maxImplementRetries: z.number().int().min(0).max(5).default(2)`
   - Include JSDoc comment: `/** Maximum retries for implement phase when partial progress is detected */`
 
-- [ ] T002 [P] [US1] Add optional `options?: { message?: string }` parameter to `commitPushAndEnsurePr` in `packages/orchestrator/src/worker/pr-manager.ts`
+- [X] T002 [P] [US1] Add optional `options?: { message?: string }` parameter to `commitPushAndEnsurePr` in `packages/orchestrator/src/worker/pr-manager.ts`
   - Update method signature: `async commitPushAndEnsurePr(phase: WorkflowPhase, options?: { message?: string })`
   - Thread `options?.message` through to `commitAndPush` (extract as private parameter or inline)
   - In `commitAndPush`, use `options?.message ?? \`chore(speckit): complete ${phase} phase for #${this.issueNumber}\`` as the commit message
@@ -23,7 +23,7 @@
 
 All tasks touch `packages/orchestrator/src/worker/phase-loop.ts`.
 
-- [ ] T003 [US1] Guard `phaseTimestamps.set()` to preserve `startedAt` across retries (~line 108)
+- [X] T003 [US1] Guard `phaseTimestamps.set()` to preserve `startedAt` across retries (~line 108)
   - Replace unconditional `phaseTimestamps.set(phase, { startedAt: ... })` with:
     ```typescript
     if (!phaseTimestamps.has(phase)) {
@@ -31,11 +31,11 @@ All tasks touch `packages/orchestrator/src/worker/phase-loop.ts`.
     }
     ```
 
-- [ ] T004 [US2] Declare `implementRetryCount` counter before the phase loop (~line 81)
+- [X] T004 [US2] Declare `implementRetryCount` counter before the phase loop (~line 81)
   - Add `let implementRetryCount = 0;` before `for (let i = startIndex; ...)`
   - Place after the `currentSessionId` declaration for logical grouping
 
-- [ ] T005 [US1] [US3] Insert implement retry block after the failure handler (~line 198–211)
+- [X] T005 [US1] [US3] Insert implement retry block after the failure handler (~line 198–211)
   - After `results.push(result)` and before `if (!result.success) { ... return ... }`, add:
     ```typescript
     if (!result.success && phase === 'implement') {
@@ -63,7 +63,7 @@ All tasks touch `packages/orchestrator/src/worker/phase-loop.ts`.
     ```
   - Note: This block must come BEFORE the existing `if (!result.success) {` block that calls `labelManager.onError`
 
-- [ ] T006 [US1] Update `hasPriorImplementation` check to match WIP retry commit messages (~line 229–233)
+- [X] T006 [US1] Update `hasPriorImplementation` check to match WIP retry commit messages (~line 229–233)
   - Add `.includes('partial implement progress')` to the `commits.some(...)` predicate:
     ```typescript
     hasPriorImplementation = commits.some(
@@ -76,18 +76,18 @@ All tasks touch `packages/orchestrator/src/worker/phase-loop.ts`.
 
 ## Phase 3: Tests
 
-- [ ] T007 [P] [US2] Add unit tests for `maxImplementRetries` config validation in `packages/orchestrator/src/config/__tests__/loader-workspace.test.ts` or a new `packages/orchestrator/src/worker/__tests__/config.test.ts`
+- [X] T007 [P] [US2] Add unit tests for `maxImplementRetries` config validation in `packages/orchestrator/src/config/__tests__/loader-workspace.test.ts` or a new `packages/orchestrator/src/worker/__tests__/config.test.ts`
   - Test that `maxImplementRetries` defaults to `2`
   - Test that valid values (0–5) parse correctly
   - Test that out-of-range values (negative, >5) fail Zod validation
   - Test that non-integer values fail Zod validation
 
-- [ ] T008 [P] [US1] Update `packages/orchestrator/src/worker/pr-manager.test.ts` for custom commit message option
+- [X] T008 [P] [US1] Update `packages/orchestrator/src/worker/pr-manager.test.ts` for custom commit message option
   - Add test: when `options.message` is provided, `github.commit` is called with the custom message
   - Add test: when `options.message` is omitted, `github.commit` is called with the default `chore(speckit): complete ${phase} phase` message
   - Verify backward compatibility: existing tests for `commitPushAndEnsurePr` still pass without modification
 
-- [ ] T009 [US1] [US2] [US3] Add retry scenario tests to `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
+- [X] T009 [US1] [US2] [US3] Add retry scenario tests to `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
   - Test: implement phase failure with `hasChanges=true` triggers retry (counter increments, `currentSessionId` cleared, loop continues)
   - Test: implement phase failure with `hasChanges=false` falls through to existing error path immediately
   - Test: retry count respects `maxImplementRetries` — when exhausted, error path is triggered

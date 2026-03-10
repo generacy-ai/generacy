@@ -78,6 +78,7 @@ export class PhaseLoop {
     // so Claude CLI can reuse the conversation (keeping MCP servers warm and
     // carrying forward accumulated context).
     let currentSessionId: string | undefined;
+    let implementRetryCount = 0;
 
     // Find the starting index in the phase sequence
     const startIndex = sequence.indexOf(context.startPhase);
@@ -104,8 +105,10 @@ export class PhaseLoop {
 
       this.logger.info({ phase, index: i }, 'Starting phase');
 
-      // Record phase start time
-      phaseTimestamps.set(phase, { startedAt: new Date().toISOString() });
+      // Record phase start time (only on first entry — preserve across retries for total wall-clock time)
+      if (!phaseTimestamps.has(phase)) {
+        phaseTimestamps.set(phase, { startedAt: new Date().toISOString() });
+      }
 
       // 1. Update labels: mark this phase as active
       await labelManager.onPhaseStart(phase);
@@ -200,6 +203,31 @@ export class PhaseLoop {
           { phase, exitCode: result.exitCode, error: result.error?.message },
           'Phase failed',
         );
+
+        // Implement phase retry: commit partial progress and retry with a fresh session
+        if (phase === 'implement') {
+          const { hasChanges } = await prManager.commitPushAndEnsurePr(phase, {
+            message: `wip(speckit): partial implement progress for #${context.item.issueNumber} (retry ${implementRetryCount + 1})`,
+          });
+          if (hasChanges && implementRetryCount < config.maxImplementRetries) {
+            implementRetryCount++;
+            currentSessionId = undefined;
+            this.logger.warn(
+              { phase, retry: implementRetryCount, maxRetries: config.maxImplementRetries },
+              'Implement phase failed with partial progress — retrying with fresh session',
+            );
+            await stageCommentManager.updateStageComment({
+              stage,
+              status: 'in_progress',
+              phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'in_progress'),
+              startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+              prUrl: context.prUrl,
+            });
+            i--;
+            continue;
+          }
+        }
+
         await labelManager.onError(phase);
         await stageCommentManager.updateStageComment({
           stage,
@@ -229,7 +257,8 @@ export class PhaseLoop {
           hasPriorImplementation = commits.some(
             (c) =>
               c.message.includes(`complete ${phase} phase`) ||
-              c.message.includes('feat: complete T'),
+              c.message.includes('feat: complete T') ||
+              c.message.includes('partial implement progress'),
           );
         } catch {
           // If we can't check, fall through to the error path

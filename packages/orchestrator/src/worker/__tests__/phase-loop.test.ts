@@ -97,6 +97,7 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     validateCommand: 'pnpm test && pnpm build',
     preValidateCommand: 'pnpm install',
     gates: {},
+    maxImplementRetries: 2,
     ...overrides,
   };
 }
@@ -211,5 +212,181 @@ describe('PhaseLoop - implement phase requires changes', () => {
     expect(result.completed).toBe(true);
     expect(deps.labelManager.onError).not.toHaveBeenCalled();
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  it('soft-passes when no new changes but prior WIP retry commit exists on branch', async () => {
+    const context = createMockContext('implement');
+    context.github = {
+      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
+      getCommitsBetween: vi.fn().mockResolvedValue([
+        { sha: 'abc', message: 'wip(speckit): partial implement progress for #8 (retry 1)' },
+      ]),
+    } as any;
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.labelManager.onError).not.toHaveBeenCalled();
+  });
+});
+
+describe('PhaseLoop - implement retry logic', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('retries implement phase when it fails with hasChanges=true', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    // Fail once, then succeed
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    // First call (retry commit): hasChanges=true; second call (success commit): hasChanges=true
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+    expect(deps.labelManager.onError).not.toHaveBeenCalled();
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
+  });
+
+  it('falls through to error path immediately when implement fails with hasChanges=false', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(false);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(1);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+  });
+
+  it('stops retrying when maxImplementRetries is exhausted', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 1 });
+
+    // Always fails
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('implement'));
+    // Always has changes (so retry is eligible each time)
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(false);
+    // 1 initial attempt + 1 retry = 2 total
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+  });
+
+  it('does NOT retry non-implement phases on failure', async () => {
+    const context = createMockContext('clarify');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('clarify'));
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['clarify']);
+
+    expect(result.completed).toBe(false);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(1);
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('clarify');
+  });
+
+  it('calls updateStageComment with status in_progress on retry', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const calls = (deps.stageCommentManager.updateStageComment as any).mock.calls;
+    const retryCall = calls.find((c: any[]) => c[0].status === 'in_progress' && c[0].phases?.some((p: any) => p.phase === 'implement' && p.status === 'in_progress'));
+    expect(retryCall).toBeDefined();
+  });
+
+  it('preserves phaseTimestamps startedAt across retries', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    const capturedStartedAts: string[] = [];
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockImplementationOnce(async () => {
+        // On second call (success), capture startedAt from stage comment calls
+        return { prUrl: null, hasChanges: true };
+      });
+
+    // Capture startedAt values from all stage comment updates
+    (deps.stageCommentManager.updateStageComment as any).mockImplementation(async (data: any) => {
+      if (data.startedAt) capturedStartedAts.push(data.startedAt);
+    });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    // All calls should use the same startedAt (the first one recorded)
+    const uniqueStartedAts = new Set(capturedStartedAts);
+    expect(uniqueStartedAts.size).toBe(1);
+  });
+
+  it('implementRetryCount resets per executeLoop call', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 1 });
+
+    // First run: fail once, then succeed
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true });
+
+    const result1 = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+    expect(result1.completed).toBe(true);
+
+    // Reset mocks for second run
+    vi.clearAllMocks();
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true });
+
+    // Second run should also be able to retry (counter reset)
+    const result2 = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+    expect(result2.completed).toBe(true);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
   });
 });
