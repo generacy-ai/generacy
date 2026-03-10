@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TemplateConfigSchema } from '../template-schema.js';
+import { OrchestratorSettingsSchema, TemplateConfigSchema } from '../template-schema.js';
 
 describe('TemplateConfigSchema', () => {
   const validFullConfig = {
@@ -94,5 +94,53 @@ describe('TemplateConfigSchema', () => {
     expect(() =>
       TemplateConfigSchema.parse({ repos: { primary: 'generacy', clone: [''] } }),
     ).toThrow();
+  });
+});
+
+describe('OrchestratorSettingsSchema', () => {
+  it('accepts a valid block with all three fields', () => {
+    const result = OrchestratorSettingsSchema.parse({
+      labelMonitor: true,
+      webhookSetup: false,
+      smeeChannelUrl: 'https://smee.io/abc123',
+    });
+    expect(result).toEqual({ labelMonitor: true, webhookSetup: false, smeeChannelUrl: 'https://smee.io/abc123' });
+  });
+
+  it('accepts a partial block with only labelMonitor', () => {
+    const result = OrchestratorSettingsSchema.parse({ labelMonitor: true });
+    expect(result.labelMonitor).toBe(true);
+    expect(result.webhookSetup).toBeUndefined();
+    expect(result.smeeChannelUrl).toBeUndefined();
+  });
+
+  it('accepts a partial block with only webhookSetup', () => {
+    const result = OrchestratorSettingsSchema.parse({ webhookSetup: true });
+    expect(result.webhookSetup).toBe(true);
+  });
+
+  it('accepts a partial block with only smeeChannelUrl', () => {
+    const result = OrchestratorSettingsSchema.parse({ smeeChannelUrl: 'https://smee.io/xyz' });
+    expect(result.smeeChannelUrl).toBe('https://smee.io/xyz');
+  });
+
+  it('rejects an invalid smeeChannelUrl (non-URL string)', () => {
+    expect(() =>
+      OrchestratorSettingsSchema.parse({ smeeChannelUrl: 'not-a-url' }),
+    ).toThrow();
+  });
+
+  it('TemplateConfigSchema parses orchestrator block when present', () => {
+    const result = TemplateConfigSchema.parse({
+      repos: { primary: 'generacy' },
+      orchestrator: { labelMonitor: true, smeeChannelUrl: 'https://smee.io/abc' },
+    });
+    expect(result.orchestrator?.labelMonitor).toBe(true);
+    expect(result.orchestrator?.smeeChannelUrl).toBe('https://smee.io/abc');
+  });
+
+  it('TemplateConfigSchema accepts missing orchestrator key', () => {
+    const result = TemplateConfigSchema.parse({ repos: { primary: 'generacy' } });
+    expect(result.orchestrator).toBeUndefined();
   });
 });

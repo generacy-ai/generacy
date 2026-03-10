@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, parse as parsePath } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { WorkspaceConfigSchema, type WorkspaceConfig } from './workspace-schema.js';
-import { TemplateConfigSchema } from './template-schema.js';
+import { OrchestratorSettingsSchema, TemplateConfigSchema, type OrchestratorSettings } from './template-schema.js';
 import { convertTemplateConfig } from './convert-template.js';
 
 /**
@@ -37,6 +37,32 @@ export function tryLoadWorkspaceConfig(configPath: string): WorkspaceConfig | nu
   }
 
   return null;
+}
+
+/**
+ * Attempt to load and validate orchestrator settings from a YAML file.
+ * Returns `null` if the file does not exist or has no `orchestrator` key.
+ * Throws if the `orchestrator` key exists but contains invalid config.
+ */
+export function tryLoadOrchestratorSettings(configPath: string): OrchestratorSettings | null {
+  if (!existsSync(configPath)) {
+    return null;
+  }
+
+  const raw = readFileSync(configPath, 'utf-8');
+  const parsed: unknown = parseYaml(raw);
+
+  if (parsed == null || typeof parsed !== 'object') {
+    return null;
+  }
+
+  const doc = parsed as Record<string, unknown>;
+
+  if (!('orchestrator' in doc) || doc['orchestrator'] == null) {
+    return null;
+  }
+
+  return OrchestratorSettingsSchema.parse(doc['orchestrator']);
 }
 
 /**

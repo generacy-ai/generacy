@@ -21,9 +21,11 @@ export { detectRepoDrift } from './drift.js';
 export {
   TemplateReposSchema,
   TemplateConfigSchema,
+  OrchestratorSettingsSchema,
   type TemplateConfig,
+  type OrchestratorSettings,
 } from './template-schema.js';
 
 export { convertTemplateConfig } from './convert-template.js';
 
-export { tryLoadWorkspaceConfig, findWorkspaceConfigPath, scanForWorkspaceConfig } from './loader.js';
+export { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, findWorkspaceConfigPath, scanForWorkspaceConfig } from './loader.js';

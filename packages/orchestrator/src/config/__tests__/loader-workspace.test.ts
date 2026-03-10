@@ -61,6 +61,11 @@ const LOADER_ENV_KEYS = [
   'PR_MONITOR_WEBHOOK_SECRET',
   'PR_MONITOR_ADAPTIVE_POLLING',
   'PR_MONITOR_MAX_CONCURRENT_POLLS',
+  'LABEL_MONITOR_ENABLED',
+  'SMEE_CHANNEL_URL',
+  'ORCHESTRATOR_SMEE_CHANNEL_URL',
+  'WEBHOOK_SETUP_ENABLED',
+  'ORCHESTRATOR_WEBHOOK_SETUP_ENABLED',
 ];
 
 beforeEach(() => {
@@ -203,5 +208,100 @@ describe('orchestrator loader – workspace config fallback', () => {
       { owner: 'generacy-ai', repo: 'tetrad-development' },
       { owner: 'generacy-ai', repo: 'generacy' },
     ]);
+  });
+});
+
+describe('orchestrator loader – orchestrator block merge from config.yaml', () => {
+  function writeOrchestratorConfig(yaml: string): void {
+    const configDir = join(tempDir, '.generacy');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.yaml'), yaml);
+  }
+
+  it('sets labelMonitor from config.yaml orchestrator.labelMonitor', () => {
+    writeOrchestratorConfig([
+      'repos:',
+      '  primary: generacy-ai/generacy',
+      'orchestrator:',
+      '  labelMonitor: true',
+    ].join('\n'));
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    expect(config.labelMonitor).toBe(true);
+  });
+
+  it('sets smee.channelUrl from config.yaml orchestrator.smeeChannelUrl', () => {
+    writeOrchestratorConfig([
+      'repos:',
+      '  primary: generacy-ai/generacy',
+      'orchestrator:',
+      '  smeeChannelUrl: https://smee.io/abc123',
+    ].join('\n'));
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    expect(config.smee.channelUrl).toBe('https://smee.io/abc123');
+  });
+
+  it('sets webhookSetup.enabled from config.yaml orchestrator.webhookSetup', () => {
+    writeOrchestratorConfig([
+      'repos:',
+      '  primary: generacy-ai/generacy',
+      'orchestrator:',
+      '  webhookSetup: true',
+    ].join('\n'));
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    expect(config.webhookSetup.enabled).toBe(true);
+  });
+
+  it('env var LABEL_MONITOR_ENABLED overrides config.yaml labelMonitor value', () => {
+    writeOrchestratorConfig([
+      'repos:',
+      '  primary: generacy-ai/generacy',
+      'orchestrator:',
+      '  labelMonitor: false',
+    ].join('\n'));
+    process.env['LABEL_MONITOR_ENABLED'] = 'true';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    expect(config.labelMonitor).toBe(true);
+  });
+
+  it('env var SMEE_CHANNEL_URL overrides config.yaml smeeChannelUrl', () => {
+    writeOrchestratorConfig([
+      'repos:',
+      '  primary: generacy-ai/generacy',
+      'orchestrator:',
+      '  smeeChannelUrl: https://smee.io/from-config',
+    ].join('\n'));
+    process.env['SMEE_CHANNEL_URL'] = 'https://smee.io/from-env';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    expect(config.smee.channelUrl).toBe('https://smee.io/from-env');
+  });
+
+  it('env var WEBHOOK_SETUP_ENABLED=true overrides config.yaml webhookSetup: false', () => {
+    writeOrchestratorConfig([
+      'repos:',
+      '  primary: generacy-ai/generacy',
+      'orchestrator:',
+      '  webhookSetup: false',
+    ].join('\n'));
+    process.env['WEBHOOK_SETUP_ENABLED'] = 'true';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    expect(config.webhookSetup.enabled).toBe(true);
   });
 });

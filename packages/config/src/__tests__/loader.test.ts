@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { findWorkspaceConfigPath, scanForWorkspaceConfig, tryLoadWorkspaceConfig } from '../loader.js';
+import { findWorkspaceConfigPath, scanForWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadWorkspaceConfig } from '../loader.js';
 
 const VALID_YAML = `
 workspace:
@@ -364,5 +364,58 @@ describe('scanForWorkspaceConfig', () => {
 
     const result = scanForWorkspaceConfig(tempDir);
     expect(result).toEqual([join(configDir, 'config.yaml')]);
+  });
+});
+
+describe('tryLoadOrchestratorSettings', () => {
+  it('returns null when file does not exist', () => {
+    const result = tryLoadOrchestratorSettings(join(tempDir, 'nonexistent.yaml'));
+    expect(result).toBeNull();
+  });
+
+  it('returns null when file has no orchestrator key', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, 'repos:\n  primary: generacy\n');
+    expect(tryLoadOrchestratorSettings(configPath)).toBeNull();
+  });
+
+  it('returns null when orchestrator key is null', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, 'orchestrator:\n');
+    expect(tryLoadOrchestratorSettings(configPath)).toBeNull();
+  });
+
+  it('returns parsed settings when orchestrator block is present', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, [
+      'repos:',
+      '  primary: generacy',
+      'orchestrator:',
+      '  labelMonitor: true',
+      '  webhookSetup: false',
+      '  smeeChannelUrl: https://smee.io/abc123',
+    ].join('\n'));
+
+    const result = tryLoadOrchestratorSettings(configPath);
+    expect(result).toEqual({
+      labelMonitor: true,
+      webhookSetup: false,
+      smeeChannelUrl: 'https://smee.io/abc123',
+    });
+  });
+
+  it('returns partial settings when only some fields are set', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, 'orchestrator:\n  labelMonitor: true\n');
+
+    const result = tryLoadOrchestratorSettings(configPath);
+    expect(result?.labelMonitor).toBe(true);
+    expect(result?.smeeChannelUrl).toBeUndefined();
+  });
+
+  it('throws when orchestrator block fails validation (invalid URL)', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, 'orchestrator:\n  smeeChannelUrl: not-a-url\n');
+    expect(() => tryLoadOrchestratorSettings(configPath)).toThrow();
   });
 });

@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
-import { tryLoadWorkspaceConfig, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -107,6 +107,7 @@ function loadFromEnv(): Record<string, unknown> {
 
   // Repositories config (MONITORED_REPOS takes precedence, falls back to ORCHESTRATOR_REPOSITORIES, then config file)
   const reposStr = process.env['MONITORED_REPOS'] ?? process.env[`${ENV_PREFIX}REPOSITORIES`];
+  const configPath = findWorkspaceConfigPath(process.cwd());
   if (reposStr) {
     const repos = reposStr.split(',').map(r => {
       const [owner, repo] = r.trim().split('/');
@@ -115,12 +116,27 @@ function loadFromEnv(): Record<string, unknown> {
     config.repositories = repos;
   } else {
     // Fallback to .generacy/config.yaml workspace config
-    const configPath = findWorkspaceConfigPath(process.cwd());
     if (configPath) {
       const workspaceConfig = tryLoadWorkspaceConfig(configPath);
       if (workspaceConfig) {
         config.repositories = getMonitoredRepos(workspaceConfig);
       }
+    }
+  }
+
+  // Fallback: read orchestrator settings from .generacy/config.yaml
+  const orchSettings = configPath ? tryLoadOrchestratorSettings(configPath) : null;
+  if (orchSettings) {
+    if (!config.labelMonitor && orchSettings.labelMonitor !== undefined) {
+      config.labelMonitor = orchSettings.labelMonitor;
+    }
+    const smeeEnvUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
+    if (orchSettings.smeeChannelUrl && !smeeEnvUrl) {
+      config.smee = { channelUrl: orchSettings.smeeChannelUrl };
+    }
+    if (orchSettings.webhookSetup !== undefined &&
+        !process.env['WEBHOOK_SETUP_ENABLED'] && !process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`]) {
+      config.webhookSetup = { enabled: orchSettings.webhookSetup };
     }
   }
 
@@ -208,6 +224,12 @@ function loadFromEnv(): Record<string, unknown> {
       config.smee = {};
     }
     (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
+  }
+
+  // Label monitor config (LABEL_MONITOR_ENABLED takes precedence, falls back to ORCHESTRATOR_LABEL_MONITOR_ENABLED)
+  const labelMonitorEnabled = process.env['LABEL_MONITOR_ENABLED'] ?? process.env[`${ENV_PREFIX}LABEL_MONITOR_ENABLED`];
+  if (labelMonitorEnabled !== undefined) {
+    config.labelMonitor = labelMonitorEnabled === 'true';
   }
 
   // Webhook setup config

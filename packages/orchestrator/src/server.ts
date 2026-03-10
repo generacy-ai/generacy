@@ -200,7 +200,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
-  if (!isWorkerMode && config.repositories.length > 0) {
+  if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
 
     // When Smee is configured, use its fallback poll interval and disable adaptive polling

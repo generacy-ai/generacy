@@ -115,12 +115,13 @@ export function orchestratorCommand(): Command {
           .filter((r): r is { owner: string; repo: string } => r !== null);
       }
 
-      // Validate label monitor requirements
-      const labelMonitorEnabled =
-        options['labelMonitor'] === true ||
-        process.env['LABEL_MONITOR_ENABLED'] === 'true';
+      // Apply --label-monitor CLI flag onto config (highest priority)
+      if (options['labelMonitor'] === true) {
+        config.labelMonitor = true;
+      }
 
-      if (labelMonitorEnabled && config.repositories.length === 0) {
+      // Validate label monitor requirements
+      if (config.labelMonitor && config.repositories.length === 0) {
         console.error(
           'Label monitor enabled but no valid repositories configured. ' +
           'Set MONITORED_REPOS env var or use --monitored-repos flag.',
@@ -145,7 +146,7 @@ export function orchestratorCommand(): Command {
         const server = await createServer({ config, apiKeyStore });
         const address = await startServer(server);
         server.log.info(
-          { address, mode: config.mode, labelMonitor: config.mode !== 'worker' && config.repositories.length > 0 },
+          { address, mode: config.mode, labelMonitor: config.labelMonitor },
           'Orchestrator server ready',
         );
       } catch (error) {
