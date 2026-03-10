@@ -228,6 +228,14 @@ export async function executeImplement(
   const errors: string[] = [];
   const timeout = (input.timeout ?? 600) * 1000;
 
+  // Resolve repo root once for all git operations (feature_dir is the spec dir, not the repo root)
+  const { stdout: repoRootRaw } = await executeCommand(
+    'git', ['rev-parse', '--show-toplevel'],
+    { cwd: input.feature_dir, timeout: 10000 }
+  );
+  const rootDir = repoRootRaw.trim();
+  let completedCount = 0;
+
   // Execute tasks
   for (const task of pendingTasks) {
     context.logger.info(`Executing task ${task.id}: ${task.description.substring(0, 50)}...`);
@@ -278,14 +286,31 @@ export async function executeImplement(
         // Update tasks.md to mark task complete
         tasksContent = markTaskComplete(tasksContent, task.id);
         await writeFile(tasksFile, tasksContent);
+
+        // Commit each completed task and push periodically
+        completedCount++;
+        await executeCommand('git', ['add', '-A'], { cwd: rootDir, timeout: 30000 });
+        await executeCommand('git', ['commit', '-m', `feat: complete ${task.id}`], { cwd: rootDir, timeout: 30000 });
+
+        const isLastTask = completedTasks.length === pendingTasks.length;
+        if (completedCount % 3 === 0 || isLastTask) {
+          await executeCommand('git', ['push'], { cwd: rootDir, timeout: 60000 })
+            .catch((err: unknown) => {
+              context.logger.warn(`Push after ${task.id} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
       } else {
         errors.push(`Task ${task.id} failed: Agent returned non-zero exit code`);
         context.logger.error(`Task ${task.id} failed`);
+        await executeCommand('git', ['checkout', '--', '.'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
+        await executeCommand('git', ['clean', '-fd'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       errors.push(`Task ${task.id} failed: ${errorMsg}`);
       context.logger.error(`Task ${task.id} failed: ${errorMsg}`);
+      await executeCommand('git', ['checkout', '--', '.'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
+      await executeCommand('git', ['clean', '-fd'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
     }
   }
 

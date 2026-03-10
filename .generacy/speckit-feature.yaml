@@ -182,7 +182,7 @@ phases:
 
       - name: commit-implementation
         uses: shell
-        command: 'git add -A && git commit -m "feat: implement ${{ steps.create-feature.output.branch_name }}" --allow-empty'
+        command: 'git diff --cached --quiet && git diff --quiet || (git add -A && git commit -m "feat: implement ${{ steps.create-feature.output.branch_name }}")'
         continueOnError: true
 
       - name: push-implementation

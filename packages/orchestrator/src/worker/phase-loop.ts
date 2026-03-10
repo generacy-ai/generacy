@@ -227,7 +227,9 @@ export class PhaseLoop {
           const branch = await context.github.getCurrentBranch();
           const commits = await context.github.getCommitsBetween(`origin/${defaultBranch}`, branch);
           hasPriorImplementation = commits.some(
-            (c) => c.message.includes(`complete ${phase} phase`),
+            (c) =>
+              c.message.includes(`complete ${phase} phase`) ||
+              c.message.includes('feat: complete T'),
           );
         } catch {
           // If we can't check, fall through to the error path
