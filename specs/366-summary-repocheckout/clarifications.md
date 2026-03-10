@@ -13,7 +13,7 @@
 - B: Also address FR-003 — add `--clean` to `bootstrap-worker.sh`'s `generacy setup workspace` calls
 - C: Also address FR-003 — make `cloneOrUpdateRepo()` in `workspace.ts` always-clean (ignore the flag)
 
-**Answer**: *Pending*
+**Answer**: **B** — Add `--clean` to `bootstrap-worker.sh`'s `generacy setup workspace` calls. The primary fix in `repo-checkout.ts` handles the runtime crash, but bootstrap also needs to handle dirty state from previous runs. Adding `--clean` is a one-line shell script change ensuring workers always start fresh. Option C (always-clean in `cloneOrUpdateRepo`) is too aggressive for non-worker contexts.
 
 ---
 
@@ -27,7 +27,7 @@
 - A: No — rely on SC-002 (existing tests are sufficient; the fix is trivial enough)
 - B: Yes — add tests verifying `reset` and `clean` are called before `checkout` in both `updateRepo()` and `switchBranch()`
 
-**Answer**: *Pending*
+**Answer**: **B** — Yes, add tests verifying `reset` and `clean` are called before `checkout` in both `updateRepo()` and `switchBranch()`. This bug caused cascading failures across all 5 workers and dead-lettered 7 items. The fix is simple but without tests it can easily regress if someone refactors the checkout logic.
 
 ---
 
@@ -41,4 +41,4 @@
 - A: `-fd` is sufficient — gitignored files don't block checkout
 - B: Use `-fdx` to ensure a fully clean state (more aggressive but safer)
 
-**Answer**: *Pending*
+**Answer**: **A** — `-fd` is sufficient. The bug is about tracked files with uncommitted modifications blocking `git checkout`. Gitignored files (`node_modules/`, `dist/`) never interfere with checkout. Using `-fdx` would unnecessarily wipe `node_modules` on every checkout, forcing a full reinstall — significant performance penalty for no benefit.

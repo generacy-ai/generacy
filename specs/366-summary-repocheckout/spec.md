@@ -1,6 +1,10 @@
-# Feature Specification: Worker Repo Checkout Dirty State Fix
+# Feature Specification: ## Summary
+
+`RepoCheckout
 
 **Branch**: `366-summary-repocheckout` | **Date**: 2026-03-10 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -40,7 +44,7 @@ Both `git checkout` and `git checkout -B` fail when uncommitted changes would be
 
 ## Fix
 
-Add `git reset --hard HEAD` + `git clean -fd` **before** the branch switch in `updateRepo()`:
+Add `git reset --hard HEAD` + `git clean -fd` **before** the branch switch in `updateRepo()`. Use `-fd` (not `-fdx`) — gitignored files like `node_modules/` don't block checkout and removing them would cause unnecessary reinstalls:
 
 ```typescript
 private async updateRepo(checkoutPath: string, branch: string): Promise<void> {
@@ -57,9 +61,9 @@ The same fix should be applied to `switchBranch()` (lines 102-121), which has th
 
 ## Also Affected: `generacy setup workspace`
 
-`packages/generacy/src/cli/commands/setup/workspace.ts` `cloneOrUpdateRepo()` (line 192-196) only cleans if `--clean` flag is passed. The bootstrap script (`bootstrap-worker.sh`) doesn't pass `--clean`. Either:
-- Always clean in worker mode (add `--clean` to bootstrap), or
-- Make `updateRepo` defensive regardless of flag
+`packages/generacy/src/cli/commands/setup/workspace.ts` `cloneOrUpdateRepo()` (line 192-196) only cleans if `--clean` flag is passed. The bootstrap script (`bootstrap-worker.sh`) doesn't pass `--clean`.
+
+**Decision**: Add `--clean` to `bootstrap-worker.sh`'s `generacy setup workspace` calls. This ensures workers always start fresh. Making `cloneOrUpdateRepo` always-clean would be too aggressive for non-worker contexts.
 
 ## Files
 
@@ -69,55 +73,44 @@ The same fix should be applied to `switchBranch()` (lines 102-121), which has th
 
 ## User Stories
 
-### US1: Resilient worker restart after dirty repo state
+### US1: Dirty Working Tree Recovery
 
-**As a** platform operator,
-**I want** workers to automatically recover from dirty repo state on startup,
-**So that** issues are not dead-lettered after a cluster stop/start due to leftover uncommitted changes.
-
-**Acceptance Criteria**:
-- [ ] Worker successfully checks out its target branch even when the working tree has uncommitted changes
-- [ ] `updateRepo()` discards dirty state before attempting branch switch
-- [ ] `switchBranch()` discards dirty state before attempting branch switch
-
-### US2: Bootstrap script produces clean worker repos
-
-**As a** platform operator,
-**I want** worker bootstrap to always start with a clean repo,
-**So that** workers begin each session in a known-good state without manual intervention.
+**As a** worker process,
+**I want** to successfully check out a branch even when the working tree has uncommitted changes from a previous run,
+**So that** issues are processed without dead-lettering due to stale dirty state.
 
 **Acceptance Criteria**:
-- [ ] `bootstrap-worker.sh` produces a clean working tree
-- [ ] Worker repos do not carry stale changes across cluster restarts
+- [ ] `updateRepo()` calls `git reset --hard HEAD` and `git clean -fd` before `git checkout`
+- [ ] `switchBranch()` calls `git reset --hard HEAD` and `git clean -fd` before `git checkout`
+- [ ] `bootstrap-worker.sh` passes `--clean` to `generacy setup workspace` calls
+- [ ] New unit tests verify `reset` and `clean` are called before `checkout` in both `updateRepo()` and `switchBranch()`
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `updateRepo()` must run `git reset --hard HEAD` and `git clean -fd` before any branch switch | P1 | Fixes the primary bug |
-| FR-002 | `switchBranch()` must run `git reset --hard HEAD` and `git clean -fd` before any branch switch | P1 | Same pattern as `updateRepo()` |
-| FR-003 | Bootstrap script must produce a clean working tree (either via `--clean` flag or always-clean logic) | P2 | Prevents dirty state from persisting across cluster restarts |
-| FR-004 | The fix must not discard intentional staged changes in non-worker contexts | P2 | Only relevant in worker execution context |
+| FR-001 | `updateRepo()` must discard dirty state with `git reset --hard HEAD` + `git clean -fd` before branch switch | P1 | |
+| FR-002 | `switchBranch()` must discard dirty state with `git reset --hard HEAD` + `git clean -fd` before branch switch | P1 | |
+| FR-003 | `bootstrap-worker.sh` must pass `--clean` to `generacy setup workspace` | P2 | Add flag to bootstrap script only |
+| FR-004 | New unit tests must verify `reset` + `clean` are called before `checkout` in both `updateRepo()` and `switchBranch()` | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Worker checkout success rate after cluster restart | 100% | No dead-lettered items due to dirty repo state |
-| SC-002 | Regression: checkout still works on clean repos | 100% pass | Existing tests pass |
-| SC-003 | Dirty state scenario handled without retries | 0 retries for dirty-state failures | Worker logs show no checkout errors |
+| SC-001 | Workers with dirty repos successfully checkout target branch | 100% | Manual test with dirty repo |
+| SC-002 | Existing tests pass | 100% | `pnpm test` |
+| SC-003 | New dirty-state tests pass | 100% | `pnpm test` in orchestrator package |
 
 ## Assumptions
 
-- Workers do not need to preserve uncommitted changes between runs — all meaningful work is committed before phase completion
-- `git reset --hard HEAD` is safe to call even on a clean working tree
-- The fix applies to both `updateRepo()` and `switchBranch()` identically
+- `git clean -fd` (without `-x`) is sufficient — gitignored files like `node_modules/` do not block `git checkout`
+- `cloneOrUpdateRepo()` in `workspace.ts` itself does not need code changes — only the bootstrap flag needs updating
 
 ## Out of Scope
 
-- Fixing the root causes that create dirty state (clarify phase not committing, implement phase timeout leaving changes)
-- Changes to how phases commit their work
-- Worker state persistence across restarts beyond repo cleanliness
+- Making `cloneOrUpdateRepo()` always-clean regardless of `--clean` flag (too aggressive for non-worker contexts)
+- Cleaning gitignored files with `-fdx` (unnecessary performance cost)
 
 ---
 
