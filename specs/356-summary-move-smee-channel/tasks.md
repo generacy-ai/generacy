@@ -10,21 +10,21 @@
 
 ## Phase 1: Config Package — Schema & Loader
 
-- [ ] T001 Add `OrchestratorSettingsSchema` and extend `TemplateConfigSchema` in `packages/config/src/template-schema.ts`
+- [X] T001 Add `OrchestratorSettingsSchema` and extend `TemplateConfigSchema` in `packages/config/src/template-schema.ts`
   - Add `OrchestratorSettingsSchema` with optional `labelMonitor`, `webhookSetup`, `smeeChannelUrl` fields
   - Add `orchestrator: OrchestratorSettingsSchema.optional()` to `TemplateConfigSchema`
   - Export `OrchestratorSettings` type
-- [ ] T002 Add `tryLoadOrchestratorSettings(configPath)` to `packages/config/src/loader.ts`
+- [X] T002 Add `tryLoadOrchestratorSettings(configPath)` to `packages/config/src/loader.ts`
   - Reads and validates the `orchestrator` block from config.yaml
   - Returns `null` if file absent or has no `orchestrator` key
   - Throws if `orchestrator` key exists but is invalid (same contract as `tryLoadWorkspaceConfig`)
-- [ ] T003 Export `OrchestratorSettingsSchema`, `OrchestratorSettings`, and `tryLoadOrchestratorSettings` from `packages/config/src/index.ts`
+- [X] T003 Export `OrchestratorSettingsSchema`, `OrchestratorSettings`, and `tryLoadOrchestratorSettings` from `packages/config/src/index.ts`
 
 ## Phase 2: Orchestrator Package
 
-- [ ] T004 [P] Add `labelMonitor: z.boolean().default(false)` to `OrchestratorConfigSchema` in `packages/orchestrator/src/config/schema.ts`
+- [X] T004 [P] Add `labelMonitor: z.boolean().default(false)` to `OrchestratorConfigSchema` in `packages/orchestrator/src/config/schema.ts`
   - Insert after `webhookSetup` field, following the established pattern
-- [ ] T005 Update `loadFromEnv()` in `packages/orchestrator/src/config/loader.ts` to read and merge `orchestrator.*` from config.yaml
+- [X] T005 Update `loadFromEnv()` in `packages/orchestrator/src/config/loader.ts` to read and merge `orchestrator.*` from config.yaml
   - Reuse existing `configPath` variable from the repos fallback block
   - Call `tryLoadOrchestratorSettings(configPath)` after the repos fallback
   - Merge: `labelMonitor`, `smeeChannelUrl` → `smee.channelUrl`, `webhookSetup` → `webhookSetup.enabled`
@@ -32,24 +32,24 @@
 
 ## Phase 3: CLI Update
 
-- [ ] T006 Update `packages/generacy/src/cli/commands/orchestrator.ts` to use `config.labelMonitor` as single source of truth
+- [X] T006 Update `packages/generacy/src/cli/commands/orchestrator.ts` to use `config.labelMonitor` as single source of truth
   - Remove manual `labelMonitorEnabled` check that reads `LABEL_MONITOR_ENABLED` directly
   - Apply `--label-monitor` CLI flag onto `config.labelMonitor` after `loadConfig()` returns
   - Change pre-flight validation to `config.labelMonitor && config.repositories.length === 0`
 
 ## Phase 4: Tests
 
-- [ ] T007 [P] Add tests for `orchestrator` block parsing in `packages/config/src/__tests__/template-schema.test.ts`
+- [X] T007 [P] Add tests for `orchestrator` block parsing in `packages/config/src/__tests__/template-schema.test.ts`
   - Valid block with all three fields
   - Valid block with partial fields (each field independently optional)
   - Invalid `smeeChannelUrl` (non-URL string) → validation error
   - Missing `orchestrator` key → parses without error
-- [ ] T008 [P] Add tests for `tryLoadOrchestratorSettings` in `packages/config/src/__tests__/loader.test.ts`
+- [X] T008 [P] Add tests for `tryLoadOrchestratorSettings` in `packages/config/src/__tests__/loader.test.ts`
   - Returns `null` when file does not exist
   - Returns `null` when file has no `orchestrator` key
   - Returns parsed settings when `orchestrator` block is present
   - Throws when `orchestrator` block fails validation
-- [ ] T009 Add merge precedence tests in `packages/orchestrator/src/config/__tests__/loader-workspace.test.ts`
+- [X] T009 Add merge precedence tests in `packages/orchestrator/src/config/__tests__/loader-workspace.test.ts`
   - config.yaml `orchestrator.labelMonitor` → `config.labelMonitor`
   - config.yaml `orchestrator.smeeChannelUrl` → `config.smee.channelUrl`
   - config.yaml `orchestrator.webhookSetup` → `config.webhookSetup.enabled`

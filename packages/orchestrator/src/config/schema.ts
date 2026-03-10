@@ -216,6 +216,7 @@ export const OrchestratorConfigSchema = z.object({
   worker: WorkerConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),
+  labelMonitor: z.boolean().default(false),
 });
 export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 
