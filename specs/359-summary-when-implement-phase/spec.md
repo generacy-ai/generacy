@@ -50,13 +50,15 @@ Combined with the incremental commits change (separate issue), this creates a ro
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | After implement phase failure, check for partial progress (uncommitted changes or recent commits) | P1 | Via `prManager.commitPushAndEnsurePr(phase)` |
+| FR-001 | After implement phase failure, check for partial progress (uncommitted changes or recent commits) | P1 | Via `prManager.commitPushAndEnsurePr(phase)` with distinct message |
 | FR-002 | If partial progress detected and retry budget remains, retry with a fresh Claude session | P1 | Reset `currentSessionId = undefined` |
 | FR-003 | Decrement phase index to re-run the implement phase | P1 | `i--; continue;` |
 | FR-004 | Track retry count; do not exceed `config.maxImplementRetries` | P1 | Default: 2 |
 | FR-005 | If no partial progress, fall through immediately to existing error handling | P1 | No retry on clean failures |
-| FR-006 | Update the GitHub stage comment to reflect retry status | P2 | Log warn message at minimum |
+| FR-006 | Call `stageCommentManager.updateStageComment` in the retry path with retry attempt/count info | P1 | `logger.warn` alone is insufficient; stage comment must be updated (US3) |
 | FR-007 | Add `maxImplementRetries` to orchestrator config schema | P1 | `z.number().int().min(0).max(5).default(2)` |
+| FR-008 | Use distinct commit message for partial-progress commits: `wip(speckit): partial implement progress for #N (retry R)` | P1 | Distinct from `complete ${phase} phase`; update `hasPriorImplementation` to match both patterns |
+| FR-009 | Preserve original `startedAt` timestamp across retries (guard with `if (!phaseTimestamps.has(phase))`) | P2 | Stage comment shows total wall-clock time across all attempts |
 
 ## Changes Required
 
@@ -68,7 +70,10 @@ After the phase failure check (~line 198), add implement-specific retry logic:
 // After: if (!result.success) {
 if (phase === 'implement') {
   // Check if partial progress was made (uncommitted changes or recent commits)
-  const { hasChanges } = await prManager.commitPushAndEnsurePr(phase);
+  // Use a distinct commit message (not "complete phase") to accurately reflect partial state
+  const { hasChanges } = await prManager.commitPushAndEnsurePr(phase, {
+    message: `wip(speckit): partial implement progress for #${issueNumber} (retry ${implementRetryCount + 1})`,
+  });
 
   if (hasChanges && implementRetryCount < config.maxImplementRetries) {
     implementRetryCount++;
@@ -77,11 +82,24 @@ if (phase === 'implement') {
       { phase, retry: implementRetryCount, maxRetries: config.maxImplementRetries },
       'Implement phase failed with partial progress — retrying with fresh session',
     );
+    // Update stage comment so GitHub issue reflects retry status (satisfies US3)
+    await stageCommentManager.updateStageComment({
+      status: 'in_progress',
+      message: `Retrying implement phase (attempt ${implementRetryCount + 1}/${config.maxImplementRetries + 1}) — partial progress committed`,
+    });
     i--; // Re-run this phase index
     continue;
   }
 }
 // ... existing error handling ...
+```
+
+**Phase timestamps on retry**: Guard the `phaseTimestamps.set()` call so `startedAt` is only set on first entry:
+```typescript
+// Only set startedAt on first entry (preserve across retries for total wall-clock time)
+if (!phaseTimestamps.has(phase)) {
+  phaseTimestamps.set(phase, { startedAt: new Date().toISOString() });
+}
 ```
 
 ### `packages/orchestrator/src/worker/config.ts`
@@ -93,6 +111,17 @@ Add retry configuration:
 maxImplementRetries: z.number().int().min(0).max(5).default(2),
 ```
 
+### `hasPriorImplementation` check (phase-loop.ts ~lines 228-242)
+
+Update to match both the normal completion message and the partial-progress retry message:
+
+```typescript
+// Before:
+c.message.includes(`complete ${phase} phase`)
+// After:
+c.message.includes(`complete ${phase} phase`) || c.message.includes('partial implement progress')
+```
+
 ### Retry Semantics
 
 - Only retry when `hasChanges` is true (partial progress detected)
@@ -100,6 +129,11 @@ maxImplementRetries: z.number().int().min(0).max(5).default(2),
 - Maximum 2-3 retries (configurable via `maxImplementRetries`)
 - Each retry benefits from existing task idempotency: completed tasks (marked `[X]` in `tasks.md`) are skipped
 - If all retries exhausted, fall through to the existing error path (`agent:error` label)
+- **Commit message**: Use `wip(speckit): partial implement progress for #${issueNumber} (retry ${retryCount})` — semantically accurate for partial/failed runs; update `hasPriorImplementation` to match this pattern in addition to `complete ${phase} phase`
+- **Stage comment**: Must call `stageCommentManager.updateStageComment` with retry attempt info (not just `logger.warn`) — log-only is not visible on the GitHub issue
+- **Multiple `PhaseResult` entries**: The `results` array may contain multiple entries for `implement` (one per attempt); this is intentional — callers only check top-level `completed`/`gateHit`, not individual phase entries
+- **Timestamps**: Guard `phaseTimestamps.set()` with `if (!phaseTimestamps.has(phase))` so `startedAt` spans all retry attempts
+- **Label management**: Do not call `labelManager.onError` before retry; `onPhaseStart` is idempotent and calling it on re-entry is safe and correct
 
 ## Success Criteria
 
