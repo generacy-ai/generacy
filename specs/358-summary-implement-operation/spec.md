@@ -60,35 +60,66 @@ Also update step 6 execution flow to include commit/push after each `mark_comple
 
 ## User Stories
 
-### US1: [Primary User Story]
+### US1: Automated session crash recovery
 
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
+**As a** developer running speckit in headless/automated mode,
+**I want** each completed task to be committed immediately after it finishes,
+**So that** a session crash or context-window exhaustion only loses the current in-progress task, not all prior completed work.
 
 **Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
+- [ ] Each successfully completed task produces a git commit containing the task ID in the message
+- [ ] Commits are visible in `git log` before the overall implement phase finishes
+
+### US2: Periodic pushes to remote
+
+**As a** developer running speckit in CI or a remote devcontainer,
+**I want** completed work to be pushed to the remote periodically (not just at the end),
+**So that** a total host failure does not discard locally-committed work.
+
+**Acceptance Criteria**:
+- [ ] Push occurs after every ~3 completed tasks and always after the final task
+- [ ] Push failures are non-fatal — logged as warnings but do not halt execution
+
+### US3: Phase-loop compatibility
+
+**As a** workflow author,
+**I want** the `phase-loop.ts` "no changes produced" guard to correctly recognise incremental commits,
+**So that** the implement phase is not incorrectly marked as having produced no work.
+
+**Acceptance Criteria**:
+- [ ] `hasPriorImplementation` fallback pattern in `phase-loop.ts` matches the new incremental commit message format
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
+| FR-001 | After `markTaskComplete` + `writeFile` in `implement.ts`, stage all changes and create a git commit | P1 | Commit message: `feat: complete <task.id>` |
+| FR-002 | Push to remote after every 3 completed tasks and unconditionally after the final task | P1 | Push failure must be caught and logged, not re-thrown |
+| FR-003 | Git commands must run from the repository root, not `input.feature_dir` | P1 | Detect root via `git rev-parse --show-toplevel` or equivalent |
+| FR-004 | Update `phase-loop.ts` `hasPriorImplementation` fallback to also match `feat: complete T-` prefixed messages | P1 | Avoids false "no changes" failure when all commits are incremental |
+| FR-005 | Update `agency-plugin-spec-kit/commands/implement.md` commit constraint to say "always commit after each task" | P2 | Remove the "(if user requests)" qualifier |
+| FR-006 | Decide fate of `commit-implementation` YAML step (remove, keep as safety net, or update) | P2 | See Q3 in clarifications |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
+| SC-001 | Work lost on session crash | At most 1 in-progress task | Manually kill session mid-task; check git log |
+| SC-002 | Push failure impact | Zero — execution continues | Simulate network failure; verify no exception thrown |
+| SC-003 | Phase-loop false negatives | Zero | Run implement phase end-to-end and verify no "no changes" error |
+| SC-004 | Empty commit noise from YAML step | Resolved (removed or justified) | Inspect git log after full workflow run |
 
 ## Assumptions
 
-- [Assumption 1]
+- `executeCommand` in `implement.ts` is the correct primitive for running git commands (same pattern as other shell calls in that file)
+- The implement phase always runs inside a git repository with a configured remote
+- Failed tasks (non-zero exit code) do not need a commit — partial file changes from a failed Claude invocation are left in the working tree for the next attempt
 
 ## Out of Scope
 
-- [Exclusion 1]
+- Implementing true parallel task execution (`isParallel` flag) — the "parallel batch" language in `implement.md` will be simplified to "sequential task" commits
+- Retry logic for push failures
+- Squash/rebase of incremental commits before the final PR merge
 
 ---
 
