@@ -397,7 +397,11 @@ describe('AI-Dependent Operations', () => {
       expect(result.success).toBe(true);
       expect(result.tasks_completed).toBe(2);
       expect(result.tasks_total).toBe(2);
-      expect(executeCommand).toHaveBeenCalledTimes(2);
+      // 2 claude invocations (one per task) + git operations (rev-parse, add, commit, push)
+      const claudeCalls = vi.mocked(executeCommand).mock.calls.filter(
+        (call) => call[0] === 'claude'
+      );
+      expect(claudeCalls).toHaveLength(2);
     });
 
     it('should skip already completed tasks', async () => {
@@ -434,7 +438,11 @@ describe('AI-Dependent Operations', () => {
 
       expect(result.tasks_skipped).toBe(1);
       expect(result.tasks_completed).toBe(1);
-      expect(executeCommand).toHaveBeenCalledTimes(1);
+      // 1 claude invocation (skipped task doesn't invoke claude) + git operations
+      const claudeCalls = vi.mocked(executeCommand).mock.calls.filter(
+        (call) => call[0] === 'claude'
+      );
+      expect(claudeCalls).toHaveLength(1);
     });
 
     it('should filter tasks when task_filter provided', async () => {
@@ -470,7 +478,10 @@ describe('AI-Dependent Operations', () => {
       );
 
       // Should only execute T001 and T002, not T003
-      expect(executeCommand).toHaveBeenCalledTimes(2);
+      const claudeCalls = vi.mocked(executeCommand).mock.calls.filter(
+        (call) => call[0] === 'claude'
+      );
+      expect(claudeCalls).toHaveLength(2);
     });
   });
 });
