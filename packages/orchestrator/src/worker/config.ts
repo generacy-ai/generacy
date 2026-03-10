@@ -27,6 +27,8 @@ export const WorkerConfigSchema = z.object({
   validateCommand: z.string().default('pnpm test && pnpm build'),
   /** Command to run before validation to install dependencies (empty string to skip) */
   preValidateCommand: z.string().default('pnpm install'),
+  /** Maximum retries for implement phase when partial progress is detected */
+  maxImplementRetries: z.number().int().min(0).max(5).default(2),
   /** Gate definitions keyed by issue label */
   gates: z.record(z.string(), z.array(GateDefinitionSchema)).default({
     'speckit-feature': [
