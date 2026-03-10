@@ -146,7 +146,7 @@ export function orchestratorCommand(): Command {
         const server = await createServer({ config, apiKeyStore });
         const address = await startServer(server);
         server.log.info(
-          { address, mode: config.mode, labelMonitor: config.mode !== 'worker' && config.repositories.length > 0 },
+          { address, mode: config.mode, labelMonitor: config.labelMonitor },
           'Orchestrator server ready',
         );
       } catch (error) {

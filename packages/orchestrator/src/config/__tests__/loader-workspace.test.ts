@@ -260,7 +260,7 @@ describe('orchestrator loader – orchestrator block merge from config.yaml', ()
     expect(config.webhookSetup.enabled).toBe(true);
   });
 
-  it('env var LABEL_MONITOR_ENABLED does not override config.yaml (loader does not read it; CLI does)', () => {
+  it('env var LABEL_MONITOR_ENABLED overrides config.yaml labelMonitor value', () => {
     writeOrchestratorConfig([
       'repos:',
       '  primary: generacy-ai/generacy',
@@ -270,11 +270,9 @@ describe('orchestrator loader – orchestrator block merge from config.yaml', ()
     process.env['LABEL_MONITOR_ENABLED'] = 'true';
     Object.assign(process.env, AUTH_ENV);
 
-    // The loader itself does not read LABEL_MONITOR_ENABLED — that's a CLI concern.
-    // config.labelMonitor stays at false (config.yaml value) since no loader env reads it.
     const config = loadConfig({ loadEnv: true });
 
-    expect(config.labelMonitor).toBe(false);
+    expect(config.labelMonitor).toBe(true);
   });
 
   it('env var SMEE_CHANNEL_URL overrides config.yaml smeeChannelUrl', () => {

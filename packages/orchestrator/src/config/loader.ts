@@ -226,6 +226,12 @@ function loadFromEnv(): Record<string, unknown> {
     (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
   }
 
+  // Label monitor config (LABEL_MONITOR_ENABLED takes precedence, falls back to ORCHESTRATOR_LABEL_MONITOR_ENABLED)
+  const labelMonitorEnabled = process.env['LABEL_MONITOR_ENABLED'] ?? process.env[`${ENV_PREFIX}LABEL_MONITOR_ENABLED`];
+  if (labelMonitorEnabled !== undefined) {
+    config.labelMonitor = labelMonitorEnabled === 'true';
+  }
+
   // Webhook setup config
   if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
     const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];

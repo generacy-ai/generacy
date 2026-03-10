@@ -123,6 +123,7 @@ describe('T022: label monitoring with Fastify server', () => {
         },
       },
       logging: { level: 'error', pretty: false },
+      labelMonitor: true,
       repositories: [{ owner: WATCHED_OWNER, repo: WATCHED_REPO }],
       monitor: {
         pollIntervalMs: 300000, // Very long to prevent auto-polling during tests
