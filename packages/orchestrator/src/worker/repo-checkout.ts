@@ -108,7 +108,7 @@ export class RepoCheckout {
       await execFileAsync('git', ['checkout', branch], { cwd: checkoutPath });
     } catch {
       this.logger.debug({ checkoutPath, branch }, 'Local branch not found, creating tracking branch');
-      await execFileAsync('git', ['checkout', '-b', branch, `origin/${branch}`], {
+      await execFileAsync('git', ['checkout', '-B', branch, `origin/${branch}`], {
         cwd: checkoutPath,
       });
     }
@@ -202,7 +202,7 @@ export class RepoCheckout {
         { checkoutPath, branch },
         'Local branch not found, creating tracking branch',
       );
-      await execFileAsync('git', ['checkout', '-b', branch, `origin/${branch}`], {
+      await execFileAsync('git', ['checkout', '-B', branch, `origin/${branch}`], {
         cwd: checkoutPath,
       });
     }

@@ -176,7 +176,7 @@ describe('RepoCheckout', () => {
 
       await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
 
-      const call = findCall('git', ['checkout', '-b', 'develop', 'origin/develop']);
+      const call = findCall('git', ['checkout', '-B', 'develop', 'origin/develop']);
       expect(call).toBeDefined();
     });
 
@@ -361,7 +361,7 @@ describe('RepoCheckout', () => {
 
       await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
 
-      const call = findCall('git', ['checkout', '-b', 'feature-42', 'origin/feature-42']);
+      const call = findCall('git', ['checkout', '-B', 'feature-42', 'origin/feature-42']);
       expect(call).toBeDefined();
     });
 
