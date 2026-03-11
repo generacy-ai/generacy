@@ -23,9 +23,9 @@
 
 ## Phase 3: Tests
 
-- [ ] T008 [US1] Write unit tests for increment counter logic in `implement.ts`: counter increments per task and per parallel batch, limit check before sequential task, limit check before parallel batch, returns `partial: true` with correct counts, no partial when all tasks complete in one increment
-- [ ] T009 [P] [US1] Write unit tests for sentinel parsing in `output-capture.ts`: valid sentinel parsed correctly, malformed JSON ignored, non-sentinel text lines ignored, getter returns undefined when no sentinel seen
-- [ ] T010 [US1] Write integration test for `phase-loop.ts` re-invocation: mock partial result triggers commit/push/fresh-session/re-invoke, zero-progress guard fails correctly, normal completion (no sentinel) takes standard path
+- [X] T008 [US1] Write unit tests for increment counter logic in `implement.ts`: counter increments per task and per parallel batch, limit check before sequential task, limit check before parallel batch, returns `partial: true` with correct counts, no partial when all tasks complete in one increment
+- [X] T009 [P] [US1] Write unit tests for sentinel parsing in `output-capture.ts`: valid sentinel parsed correctly, malformed JSON ignored, non-sentinel text lines ignored, getter returns undefined when no sentinel seen
+- [X] T010 [US1] Write integration test for `phase-loop.ts` re-invocation: mock partial result triggers commit/push/fresh-session/re-invoke, zero-progress guard fails correctly, normal completion (no sentinel) takes standard path
 
 ## Dependencies & Execution Order
 
