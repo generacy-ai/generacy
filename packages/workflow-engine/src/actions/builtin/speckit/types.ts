@@ -138,6 +138,8 @@ export interface ImplementInput {
   task_filter?: string;
   /** Agent timeout in seconds per task (default: 600) */
   timeout?: number;
+  /** Maximum tasks to complete before returning partial result for a fresh session (default: 10) */
+  max_tasks_per_increment?: number;
 }
 
 // --- Output Types ---
@@ -275,6 +277,10 @@ export interface ImplementOutput {
   files_modified: string[];
   tests_passed?: boolean;
   errors?: string[];
+  /** True when the increment limit was reached and more tasks remain */
+  partial?: boolean;
+  /** Number of tasks still pending after this increment */
+  tasks_remaining?: number;
 }
 
 // --- Error Types ---

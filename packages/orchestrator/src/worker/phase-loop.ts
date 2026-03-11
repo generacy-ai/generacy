@@ -80,6 +80,10 @@ export class PhaseLoop {
     let currentSessionId: string | undefined;
     let implementRetryCount = 0;
 
+    // Track last seen tasks_remaining for the implement increment guard.
+    // Prevents infinite loops when no progress is made between increments.
+    let lastTasksRemaining: number | undefined;
+
     // Find the starting index in the phase sequence
     const startIndex = sequence.indexOf(context.startPhase);
     if (startIndex === -1) {
@@ -195,6 +199,62 @@ export class PhaseLoop {
           this.logger.info({ sessionId: result.sessionId, phase }, 'Captured initial session ID for conversation reuse');
         }
         currentSessionId = result.sessionId;
+      }
+
+      // 3c. Increment boundary: re-invoke implement with a fresh session if partial
+      if (phase === 'implement' && result.success && result.implementResult?.partial) {
+        const tasksRemaining = result.implementResult.tasks_remaining ?? 0;
+
+        // Guard: fail if no progress made (prevents infinite loop)
+        if (lastTasksRemaining !== undefined && tasksRemaining >= lastTasksRemaining) {
+          this.logger.error(
+            { phase, tasksRemaining, lastTasksRemaining },
+            'Implement increment made no progress — failing to prevent infinite loop',
+          );
+          await labelManager.onError(phase);
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+          result.success = false;
+          result.error = {
+            message: 'Implement increment made no progress — aborting to prevent infinite loop',
+            stderr: '',
+            phase,
+          };
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
+        lastTasksRemaining = tasksRemaining;
+
+        // Commit, push, and ensure PR with a WIP message
+        const { prUrl: partialPrUrl } = await prManager.commitPushAndEnsurePr(phase, {
+          message: `wip(speckit): implement increment for #${context.item.issueNumber} (${result.implementResult.tasks_completed ?? 0} tasks done, ${tasksRemaining} remaining)`,
+        });
+        if (partialPrUrl) context.prUrl = partialPrUrl;
+
+        // Clear session for a fresh context window on next increment
+        currentSessionId = undefined;
+
+        // Update stage comment with incremental progress
+        await stageCommentManager.updateStageComment({
+          stage,
+          status: 'in_progress',
+          phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'in_progress'),
+          startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          prUrl: context.prUrl,
+        });
+
+        this.logger.info({ tasksRemaining }, 'Implement increment complete — re-invoking with fresh session');
+        i--; // Re-run implement phase
+        continue;
+      }
+
+      // Reset increment tracking when leaving the implement phase normally
+      if (phase !== 'implement') {
+        lastTasksRemaining = undefined;
       }
 
       // 4. Handle phase failure

@@ -227,6 +227,8 @@ export async function executeImplement(
   const filesModified: Set<string> = new Set();
   const errors: string[] = [];
   const timeout = (input.timeout ?? 600) * 1000;
+  const MAX_TASKS = input.max_tasks_per_increment ?? 10;
+  let tasksThisIncrement = 0;
 
   // Resolve repo root once for all git operations (feature_dir is the spec dir, not the repo root)
   const { stdout: repoRootRaw } = await executeCommand(
@@ -244,6 +246,23 @@ export async function executeImplement(
     if (context.signal.aborted) {
       context.logger.warn('Implementation cancelled');
       break;
+    }
+
+    // Check increment boundary before each task
+    if (tasksThisIncrement >= MAX_TASKS) {
+      const tasksRemaining = pendingTasks.length - completedTasks.length;
+      context.logger.info(
+        `Increment limit reached (${MAX_TASKS} tasks). Returning partial result for fresh session. Tasks remaining: ${tasksRemaining}`,
+      );
+      return {
+        success: true,
+        partial: true,
+        tasks_completed: completedTasks.length,
+        tasks_total: tasks.length,
+        tasks_skipped: skippedTasks.length,
+        tasks_remaining: tasksRemaining,
+        files_modified: [...filesModified],
+      };
     }
 
     const prompt = buildTaskPrompt(task, input.feature_dir, specContent, planContent);
@@ -277,6 +296,7 @@ export async function executeImplement(
 
       if (result.exitCode === 0) {
         completedTasks.push(task.id);
+        tasksThisIncrement++;
         // Track files that were supposed to be modified
         for (const file of task.files) {
           filesModified.add(file);

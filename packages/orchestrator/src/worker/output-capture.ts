@@ -1,4 +1,4 @@
-import type { OutputChunk, Logger } from './types.js';
+import type { OutputChunk, Logger, ImplementPartialResult } from './types.js';
 
 /**
  * Valid OutputChunk type values recognized from Claude CLI JSON output.
@@ -36,6 +36,9 @@ export class OutputCapture {
   /** Session ID extracted from the Claude CLI `init` event (if present). */
   private _sessionId: string | undefined;
 
+  /** Implement partial result parsed from SPECKIT_IMPLEMENT_PARTIAL sentinel (if present). */
+  private _implementResult: ImplementPartialResult | undefined;
+
   constructor(
     private readonly workflowId: string,
     private readonly logger: Logger,
@@ -48,6 +51,14 @@ export class OutputCapture {
    */
   get sessionId(): string | undefined {
     return this._sessionId;
+  }
+
+  /**
+   * Get the implement partial result parsed from the SPECKIT_IMPLEMENT_PARTIAL sentinel.
+   * Returns undefined if no sentinel was seen in the output.
+   */
+  get implementResult(): ImplementPartialResult | undefined {
+    return this._implementResult;
   }
 
   /**
@@ -100,10 +111,34 @@ export class OutputCapture {
     this.buffer = [];
   }
 
+  /** Prefix used by the implement operation to signal a partial result. */
+  private static readonly SENTINEL_PREFIX = 'SPECKIT_IMPLEMENT_PARTIAL: ';
+
   /**
    * Parse a single line of JSON and push the resulting OutputChunk.
    */
   private parseLine(line: string): void {
+    // Check for the implement partial sentinel before attempting JSON parse.
+    // The sentinel is embedded in text chunks output by the Claude CLI.
+    if (line.startsWith(OutputCapture.SENTINEL_PREFIX)) {
+      const jsonPart = line.slice(OutputCapture.SENTINEL_PREFIX.length);
+      try {
+        const parsed = JSON.parse(jsonPart) as ImplementPartialResult;
+        this._implementResult = parsed;
+        this.logger.debug({ implementResult: this._implementResult }, 'Parsed SPECKIT_IMPLEMENT_PARTIAL sentinel');
+      } catch {
+        this.logger.warn({ line }, 'Malformed SPECKIT_IMPLEMENT_PARTIAL sentinel — ignoring');
+      }
+      // Still push as a text chunk so the full output is preserved
+      const chunk: OutputChunk = {
+        type: 'text',
+        data: { text: line },
+        timestamp: new Date().toISOString(),
+      };
+      this.buffer.push(chunk);
+      return;
+    }
+
     let parsed: Record<string, unknown>;
 
     try {
