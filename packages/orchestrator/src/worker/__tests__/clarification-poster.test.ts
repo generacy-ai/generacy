@@ -553,6 +553,108 @@ describe('integrateClarificationAnswers', () => {
     expect(result.reason).toBe('no-answers');
     expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
+
+  it('integrates answers from heading format (### Q1: Topic + **Answer: X**)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 1,
+        body: `## Clarification Answers
+
+### Q1: Authentication method
+**Answer: A** — OAuth 2.0 is the standard for our stack.
+
+We already use OAuth in the existing services.
+
+### Q2: Database choice
+**Answer: B** — Use PostgreSQL for consistency with our other services.`,
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A — OAuth 2.0 is the standard for our stack.');
+    expect(writtenContent).toContain('**Answer**: B — Use PostgreSQL for consistency with our other services.');
+    // No phantom Q2 injected into Q1's section
+    expect(writtenContent).not.toContain('**Answer**: *Pending*');
+  });
+
+  it('heading-format answers override template instructions text (last wins)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      // System-posted comment with template instructions
+      {
+        id: 1,
+        body: `<!-- generacy-clarifications:42 -->
+## Clarification Questions
+
+### Q1: Authentication method
+**Context**: The spec mentions user auth.
+**Question**: Which authentication method?
+
+---
+
+**How to answer**: Reply to this issue with your answers in the format:
+\`\`\`
+Q1: your answer here
+Q2: your answer here
+\`\`\`
+`,
+      },
+      // User's answer in heading format
+      {
+        id: 2,
+        body: `## Answers
+
+### Q1: Authentication method
+**Answer: A** — Use OAuth 2.0.
+
+### Q2: Database choice
+**Answer**: PostgreSQL`,
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    // Real answers should win, not "your answer here" from template
+    expect(writtenContent).toContain('**Answer**: A — Use OAuth 2.0.');
+    expect(writtenContent).toContain('**Answer**: PostgreSQL');
+    expect(writtenContent).not.toContain('your answer here');
+  });
+
+  it('does not treat *Pending* from question comments as real answers', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    // Only the question comment exists — no user answers
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 1,
+        body: `### Q1: Authentication method
+**Context**: The spec mentions user auth.
+**Question**: Which authentication method?
+
+**Answer**: *Pending*
+
+### Q2: Database choice
+**Context**: Multiple databases could work.
+**Question**: PostgreSQL or MongoDB?
+
+**Answer**: *Pending*`,
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
