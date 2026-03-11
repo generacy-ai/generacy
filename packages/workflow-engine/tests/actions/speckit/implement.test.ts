@@ -68,7 +68,7 @@ describe('executeImplement — increment boundary logic', () => {
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
 
   it('returns partial: true when increment limit is reached before all tasks complete', async () => {

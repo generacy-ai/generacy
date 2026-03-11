@@ -10,16 +10,16 @@
 
 ## Phase 1: Type Definitions
 
-- [ ] T001 [US1] Add `max_tasks_per_increment` to `ImplementInput` and `partial`/`tasks_remaining` to `ImplementOutput` in `packages/workflow-engine/src/actions/builtin/speckit/types.ts`
-- [ ] T002 [P] [US1] Add `ImplementPartialResult` interface and `implementResult?` field to `PhaseResult` in `packages/orchestrator/src/worker/types.ts`
+- [X] T001 [US1] Add `max_tasks_per_increment` to `ImplementInput` and `partial`/`tasks_remaining` to `ImplementOutput` in `packages/workflow-engine/src/actions/builtin/speckit/types.ts`
+- [X] T002 [P] [US1] Add `ImplementPartialResult` interface and `implementResult?` field to `PhaseResult` in `packages/orchestrator/src/worker/types.ts`
 
 ## Phase 2: Core Implementation
 
-- [ ] T003 [US1] Implement increment boundary logic in `packages/workflow-engine/src/actions/builtin/speckit/operations/implement.ts`: read `max_tasks_per_increment`, track `tasksThisIncrement` counter, check limit before each sequential task or parallel batch, return `partial: true` early when limit reached
-- [ ] T004 [P] [US1] Add sentinel parsing in `packages/orchestrator/src/worker/output-capture.ts`: private `_implementResult` field, parse `SPECKIT_IMPLEMENT_PARTIAL: {...}` prefix from text chunks in `parseLine`, expose via getter
-- [ ] T005 [P] [US1] Populate `result.implementResult` from `capture?.implementResult` in `packages/orchestrator/src/worker/cli-spawner.ts`
-- [ ] T006 [US1] Add partial re-invocation loop in `packages/orchestrator/src/worker/phase-loop.ts`: declare `lastTasksRemaining`, after successful implement phase check `result.implementResult?.partial`, call `commitPushAndEnsurePr` with wip message, clear `currentSessionId`, update stage comment, guard against infinite loop (fail if no progress), decrement `i` and continue
-- [ ] T007 [P] [US1] Update `/workspaces/agency/packages/agency-plugin-spec-kit/commands/implement.md`: output `SPECKIT_IMPLEMENT_PARTIAL: {...}` sentinel when MCP result has `partial: true`, and add Task Increment Boundaries documentation section
+- [X] T003 [US1] Implement increment boundary logic in `packages/workflow-engine/src/actions/builtin/speckit/operations/implement.ts`: read `max_tasks_per_increment`, track `tasksThisIncrement` counter, check limit before each sequential task or parallel batch, return `partial: true` early when limit reached
+- [X] T004 [P] [US1] Add sentinel parsing in `packages/orchestrator/src/worker/output-capture.ts`: private `_implementResult` field, parse `SPECKIT_IMPLEMENT_PARTIAL: {...}` prefix from text chunks in `parseLine`, expose via getter
+- [X] T005 [P] [US1] Populate `result.implementResult` from `capture?.implementResult` in `packages/orchestrator/src/worker/cli-spawner.ts`
+- [X] T006 [US1] Add partial re-invocation loop in `packages/orchestrator/src/worker/phase-loop.ts`: declare `lastTasksRemaining`, after successful implement phase check `result.implementResult?.partial`, call `commitPushAndEnsurePr` with wip message, clear `currentSessionId`, update stage comment, guard against infinite loop (fail if no progress), decrement `i` and continue
+- [X] T007 [P] [US1] Update `/workspaces/agency/packages/agency-plugin-spec-kit/commands/implement.md`: output `SPECKIT_IMPLEMENT_PARTIAL: {...}` sentinel when MCP result has `partial: true`, and add Task Increment Boundaries documentation section
 
 ## Phase 3: Tests
 
