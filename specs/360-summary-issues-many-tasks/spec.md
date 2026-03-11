@@ -1,6 +1,10 @@
-# Feature Specification: Task Chunking with Session Restart for Large Task Lists
+# Feature Specification: ## Summary
 
-**Branch**: `360-summary-issues-many-tasks` | **Date**: 2026-03-10 | **Status**: Draft
+For issues with many tasks (>10), break implementation into increments of ~8-10 tasks per Claude session
+
+**Branch**: `360-summary-issues-many-tasks` | **Date**: 2026-03-11 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -114,56 +118,35 @@ Document the increment behavior:
 
 ## User Stories
 
-### US1: Proactive context management for large implementations
+### US1: [Primary User Story]
 
-**As a** workflow orchestrator running speckit implement phases,
-**I want** implementation to automatically chunk into increments of ≤10 tasks per Claude session,
-**So that** context exhaustion is prevented before it causes failures, rather than requiring recovery after the fact.
-
-**Acceptance Criteria**:
-- [ ] After completing 10 tasks, the implement operation commits progress and returns `partial: true`
-- [ ] The phase loop detects `partial: true` and re-invokes with a fresh session
-- [ ] Already-completed tasks (marked `[X]`) are skipped on re-invocation
-
-### US2: Transparent incremental progress
-
-**As a** developer monitoring a workflow run,
-**I want** stage comments to reflect incremental progress across session boundaries,
-**So that** I can see what has been completed even when the implementation spans multiple sessions.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Stage comment is updated after each increment boundary
-- [ ] Comment shows tasks_completed / tasks_total counts
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Implement operation accepts `max_tasks_per_increment` parameter (default: 10) | P1 | Per-invocation config |
-| FR-002 | When task count reaches limit, operation commits progress and returns `partial: true` with `tasks_remaining` count | P1 | Uses existing git commit/push logic |
-| FR-003 | Phase loop detects `partial: true` on implement result and re-invokes with `currentSessionId = undefined` | P1 | Fresh context per increment |
-| FR-004 | Parallel task batches count as number-of-tasks-in-batch toward the increment limit | P2 | Prevents oversized increments |
-| FR-005 | `implement.md` command documentation describes increment boundary behavior | P2 | User-facing docs |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | No context exhaustion failures on issues with >10 tasks | 0 failures | Monitor workflow runs |
-| SC-002 | Incremental re-invocation correctly skips completed tasks | 100% skip accuracy | Verify `[X]` tasks are not re-executed |
-| SC-003 | Total implementation output matches single-session runs | Equivalent results | Compare completed task sets |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The implement operation's idempotency (skipping `[X]` tasks) is reliable and already tested
-- Committing and pushing at increment boundaries is acceptable (no "all-or-nothing" requirement)
-- 10 tasks per increment is a conservative default; actual tuning can follow later
+- [Assumption 1]
 
 ## Out of Scope
 
-- Dynamic increment sizing based on task complexity
-- User-configurable increment size in workflow YAML (config is per-invocation via operation input)
-- Changes to any phase other than `implement` in the phase loop
+- [Exclusion 1]
 
 ---
 
