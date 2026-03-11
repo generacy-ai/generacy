@@ -82,6 +82,17 @@ export interface GateDefinition {
 }
 
 /**
+ * Partial result from the implement operation when an increment boundary is reached.
+ * Communicated via the SPECKIT_IMPLEMENT_PARTIAL sentinel in CLI text output.
+ */
+export interface ImplementPartialResult {
+  partial?: boolean;
+  tasks_completed?: number;
+  tasks_remaining?: number;
+  tasks_total?: number;
+}
+
+/**
  * Result from executing a single phase
  */
 export interface PhaseResult {
@@ -108,6 +119,8 @@ export interface PhaseResult {
     stderr: string;
     phase: WorkflowPhase;
   };
+  /** Partial implement result parsed from sentinel output (implement phase only) */
+  implementResult?: ImplementPartialResult;
 }
 
 /**

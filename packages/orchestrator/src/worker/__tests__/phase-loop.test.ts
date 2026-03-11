@@ -358,6 +358,20 @@ describe('PhaseLoop - implement retry logic', () => {
     expect(uniqueStartedAts.size).toBe(1);
   });
 
+  it('does not trigger partial re-invocation when implement succeeds without implementResult', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    // Standard success with no implementResult (no sentinel parsed)
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(1);
+  });
+
   it('implementRetryCount resets per executeLoop call', async () => {
     const context = createMockContext('implement');
     const config = createConfig({ maxImplementRetries: 1 });
@@ -388,5 +402,142 @@ describe('PhaseLoop - implement retry logic', () => {
     const result2 = await phaseLoop.executeLoop(context, config, deps, ['implement']);
     expect(result2.completed).toBe(true);
     expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Implement increment / partial re-invocation
+// ---------------------------------------------------------------------------
+
+/** Build a PhaseResult with a partial implementResult (sentinel parsed). */
+function makePartialResult(tasksCompleted: number, tasksRemaining: number): PhaseResult {
+  return {
+    phase: 'implement',
+    success: true,
+    exitCode: 0,
+    durationMs: 100,
+    output: [],
+    implementResult: {
+      partial: true,
+      tasks_completed: tasksCompleted,
+      tasks_remaining: tasksRemaining,
+      tasks_total: tasksCompleted + tasksRemaining,
+    },
+  };
+}
+
+describe('PhaseLoop - implement partial re-invocation', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('re-invokes implement with a fresh session when partial result is received', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    // First call: partial (8 done, 5 remaining). Second: full success.
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(8, 5))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValue({ prUrl: 'https://github.com/pr/1', hasChanges: true });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(true);
+    // Should have been called twice (once partial, once complete)
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+    // commitPushAndEnsurePr should be called for the partial increment and then for the final
+    expect(deps.prManager.commitPushAndEnsurePr).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears session ID between increments so next call gets a fresh session', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    const capturedSessionIds: (string | undefined)[] = [];
+
+    (deps.cliSpawner.spawnPhase as any).mockImplementation(
+      async (_phase: WorkflowPhase, options: { resumeSessionId?: string }) => {
+        capturedSessionIds.push(options.resumeSessionId);
+        // First call returns partial with a session ID; second returns success
+        if (capturedSessionIds.length === 1) {
+          return { ...makePartialResult(5, 5), sessionId: 'ses-increment-1' };
+        }
+        return makeSuccessResult('implement');
+      },
+    );
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    // First call: no previous session (undefined)
+    expect(capturedSessionIds[0]).toBeUndefined();
+    // Second call: session should be cleared (undefined, not the old ses-increment-1)
+    expect(capturedSessionIds[1]).toBeUndefined();
+  });
+
+  it('fails with error when no progress is made between increments (infinite loop guard)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    // Both calls return the same tasks_remaining — no progress
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(0, 10))  // 10 remaining
+      .mockResolvedValueOnce(makePartialResult(0, 10)); // still 10 remaining — no progress
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(result.completed).toBe(false);
+    expect(result.lastPhase).toBe('implement');
+    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
+    // Should have been called at most twice (first partial OK, second triggers guard)
+    expect(deps.cliSpawner.spawnPhase).toHaveBeenCalledTimes(2);
+  });
+
+  it('posts a WIP commit message with task counts during partial re-invocation', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(8, 5))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const calls = (deps.prManager.commitPushAndEnsurePr as any).mock.calls;
+    // First call should have the WIP partial message with task counts
+    const wipCall = calls[0];
+    expect(wipCall[1]?.message).toMatch(/wip\(speckit\)/);
+    expect(wipCall[1]?.message).toMatch(/8 tasks done/);
+    expect(wipCall[1]?.message).toMatch(/5 remaining/);
+  });
+
+  it('updates stage comment with in_progress status during partial increment', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(5, 5))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const calls = (deps.stageCommentManager.updateStageComment as any).mock.calls;
+    // Should have at least one in_progress comment update during the partial phase
+    const inProgressCall = calls.find((c: any[]) => c[0].status === 'in_progress');
+    expect(inProgressCall).toBeDefined();
   });
 });
