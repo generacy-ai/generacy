@@ -676,6 +676,70 @@ describe('LabelMonitorService', () => {
   });
 
   // ==========================================================================
+  // T005: failed:* label cleanup on process events
+  // ==========================================================================
+
+  describe('failed:* label cleanup', () => {
+    it('should remove failed:* labels alongside completed:* labels on process events', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [
+          { name: 'completed:specify', color: '' },
+          { name: 'failed:validate', color: '' },
+          { name: 'workflow:speckit-feature', color: '' },
+        ],
+        body: 'Test issue body',
+        title: 'Test issue title',
+      });
+
+      const event = {
+        type: 'process' as const,
+        owner: 'owner',
+        repo: 'repo',
+        issueNumber: 42,
+        labelName: 'process:speckit-feature',
+        parsedName: 'speckit-feature',
+        source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
+      };
+
+      await service.processLabelEvent(event);
+
+      expect(mockClient.removeLabels).toHaveBeenCalledWith(
+        'owner', 'repo', 42,
+        expect.arrayContaining(['process:speckit-feature', 'agent:error', 'completed:specify', 'failed:validate']),
+      );
+    });
+
+    it('should not include failed:* labels in removal when none exist', async () => {
+      (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
+        labels: [
+          { name: 'completed:specify', color: '' },
+        ],
+        body: 'Test issue body',
+        title: 'Test issue title',
+      });
+
+      const event = {
+        type: 'process' as const,
+        owner: 'owner',
+        repo: 'repo',
+        issueNumber: 42,
+        labelName: 'process:speckit-feature',
+        parsedName: 'speckit-feature',
+        source: 'webhook' as const,
+        issueLabels: ['process:speckit-feature'],
+      };
+
+      await service.processLabelEvent(event);
+
+      expect(mockClient.removeLabels).toHaveBeenCalledWith(
+        'owner', 'repo', 42,
+        ['process:speckit-feature', 'agent:error', 'completed:specify'],
+      );
+    });
+  });
+
+  // ==========================================================================
   // T013: Assignee filtering in polling
   // ==========================================================================
 
