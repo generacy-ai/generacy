@@ -119,6 +119,17 @@ git commit -m "chore: initialize generacy project"
 
 Do **not** add `.generacy/generacy.env` — it contains secrets and is gitignored by default.
 
+## Onboarding PR and Cluster Setup
+
+When you create a project through the Generacy web app or GitHub App, an **onboarding PR** is automatically created on your repository. This PR uses a **merge commit** to bring in the cluster base repo — it's not a file copy, but a real Git merge that establishes an upstream relationship with the base repo.
+
+The onboarding PR includes:
+- **Cluster base files** — dev container configuration, orchestrator scripts, and workflows merged from the appropriate base repo (`cluster-base` or `cluster-microservices`)
+- **Project-specific configuration** — `.devcontainer/.env` with your project's `REPO_URL`, `MONITORED_REPOS`, and `WORKER_COUNT`; `.generacy/config.yaml` with your project and org IDs
+- **Tracking file** — `.generacy/cluster-base.json`, which records which base repo version was merged and when (used by the Generacy UI to detect available updates)
+
+Because this is a merge commit (not a flat copy), you can later pull updates from the base repo with a standard `git fetch` + `git merge`. See [Cluster Setup](./cluster-setup.md) for full details on the update workflow and troubleshooting.
+
 ## Re-running `generacy init`
 
 You can safely re-run `generacy init` on an existing project. The command detects existing files and prompts you to overwrite, skip, or view a diff for each conflict. Mergeable files like `.vscode/extensions.json` are smart-merged automatically.

@@ -175,4 +175,7 @@ Alpine, RHEL, and other non-Debian distributions are not currently supported.
 
 ## Next Steps
 
-With your dev environment ready, proceed to [Verify Setup](./verify-setup.md) to validate that everything is working correctly.
+With your dev environment ready:
+
+- **Configure your cluster setup** — If your project uses a cluster base repo, see [Cluster Setup](./cluster-setup.md) to understand the upstream relationship and how to pull updates.
+- **Verify your setup** — Proceed to [Verify Setup](./verify-setup.md) to validate that everything is working correctly.
