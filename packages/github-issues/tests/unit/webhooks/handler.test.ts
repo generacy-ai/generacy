@@ -189,7 +189,7 @@ describe('WebhookHandler', () => {
       expect(result.type).toBe('no_action');
     });
 
-    it('should detect autodev:ready label as trigger', async () => {
+    it('should detect ready label as trigger', async () => {
       const handler = new WebhookHandler({});
 
       const payload: IssuesEventPayload = {
@@ -218,7 +218,7 @@ describe('WebhookHandler', () => {
           htmlUrl: '',
           private: false,
         },
-        label: { id: 1, name: 'autodev:ready', color: '00ff00', description: null },
+        label: { id: 1, name: 'ready', color: '00ff00', description: null },
       };
 
       const result = await handler.handle('issues', payload);

@@ -5,6 +5,7 @@ import {
   DefaultsConfigSchema,
   OrchestratorSettingsSchema,
   GeneracyConfigSchema,
+  SpecKitConfigSchema,
   validateConfig,
 } from '../schema.js';
 
@@ -788,5 +789,115 @@ describe('validateConfig', () => {
       },
     };
     expect(() => validateConfig(config)).toThrow();
+  });
+});
+
+describe('SpecKitConfigSchema', () => {
+  it('should provide all defaults when given empty object', () => {
+    const result = SpecKitConfigSchema.parse({});
+    expect(result.paths.specs).toEqual('specs');
+    expect(result.paths.templates).toEqual('.specify/templates');
+    expect(result.files.spec).toEqual('spec.md');
+    expect(result.files.plan).toEqual('plan.md');
+    expect(result.files.tasks).toEqual('tasks.md');
+    expect(result.files.clarifications).toEqual('clarifications.md');
+    expect(result.files.research).toEqual('research.md');
+    expect(result.files.dataModel).toEqual('data-model.md');
+    expect(result.branches.pattern).toEqual('{paddedNumber}-{slug}');
+    expect(result.branches.numberPadding).toEqual(3);
+    expect(result.branches.slugOptions.maxLength).toEqual(30);
+    expect(result.branches.slugOptions.separator).toEqual('-');
+    expect(result.branches.slugOptions.removeStopWords).toEqual(true);
+    expect(result.branches.slugOptions.maxWords).toEqual(4);
+  });
+
+  it('should allow full override of all fields', () => {
+    const config = {
+      paths: { specs: 'features', templates: 'my-templates' },
+      files: {
+        spec: 'specification.md',
+        plan: 'design.md',
+        tasks: 'todo.md',
+        clarifications: 'questions.md',
+        research: 'notes.md',
+        dataModel: 'entities.md',
+      },
+      branches: {
+        pattern: '{number}-{slug}',
+        numberPadding: 5,
+        slugOptions: {
+          maxLength: 50,
+          separator: '_',
+          removeStopWords: false,
+          maxWords: 6,
+        },
+      },
+    };
+    const result = SpecKitConfigSchema.parse(config);
+    expect(result.paths.specs).toEqual('features');
+    expect(result.files.spec).toEqual('specification.md');
+    expect(result.branches.pattern).toEqual('{number}-{slug}');
+    expect(result.branches.numberPadding).toEqual(5);
+    expect(result.branches.slugOptions.maxLength).toEqual(50);
+    expect(result.branches.slugOptions.separator).toEqual('_');
+  });
+
+  it('should allow partial override with defaults for omitted fields', () => {
+    const config = {
+      paths: { specs: 'features' },
+    };
+    const result = SpecKitConfigSchema.parse(config);
+    expect(result.paths.specs).toEqual('features');
+    expect(result.paths.templates).toEqual('.specify/templates');
+    expect(result.files.spec).toEqual('spec.md');
+    expect(result.branches.pattern).toEqual('{paddedNumber}-{slug}');
+  });
+
+  it('should reject numberPadding less than 1', () => {
+    const config = {
+      branches: { numberPadding: 0 },
+    };
+    expect(() => SpecKitConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject slugOptions.maxLength less than 1', () => {
+    const config = {
+      branches: { slugOptions: { maxLength: 0 } },
+    };
+    expect(() => SpecKitConfigSchema.parse(config)).toThrow();
+  });
+
+  it('should reject slugOptions.maxWords less than 1', () => {
+    const config = {
+      branches: { slugOptions: { maxWords: 0 } },
+    };
+    expect(() => SpecKitConfigSchema.parse(config)).toThrow();
+  });
+});
+
+describe('GeneracyConfigSchema with speckit', () => {
+  const minimalConfig = {
+    project: { id: 'proj_test123', name: 'My Project' },
+    repos: { primary: 'github.com/acme/main-api' },
+  };
+
+  it('should validate config without speckit section', () => {
+    const result = GeneracyConfigSchema.parse(minimalConfig);
+    expect(result.speckit).toBeUndefined();
+  });
+
+  it('should validate config with empty speckit section', () => {
+    const result = GeneracyConfigSchema.parse({ ...minimalConfig, speckit: {} });
+    expect(result.speckit).toBeDefined();
+    expect(result.speckit!.paths.specs).toEqual('specs');
+  });
+
+  it('should validate config with partial speckit section', () => {
+    const result = GeneracyConfigSchema.parse({
+      ...minimalConfig,
+      speckit: { paths: { specs: 'my-specs' } },
+    });
+    expect(result.speckit!.paths.specs).toEqual('my-specs');
+    expect(result.speckit!.files.spec).toEqual('spec.md');
   });
 });
