@@ -6,6 +6,7 @@ import {
   hasPendingClarifications,
   clarificationMarker,
   integrateClarificationAnswers,
+  isQuestionComment,
 } from '../clarification-poster.js';
 import type { WorkerContext, Logger } from '../types.js';
 
@@ -654,6 +655,171 @@ Q2: your answer here
     expect(result.integrated).toBe(0);
     expect(result.reason).toBe('no-answers');
     expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T006: isQuestionComment tests
+// ---------------------------------------------------------------------------
+describe('isQuestionComment', () => {
+  it('detects orchestrator-posted clarification comment (marker)', () => {
+    expect(isQuestionComment('<!-- generacy-clarifications:42 -->\n## Clarification Questions')).toBe(true);
+  });
+
+  it('detects CLI-posted clarification comment (marker)', () => {
+    expect(isQuestionComment('<!-- generacy-clarification:batch-1 -->\n## Questions')).toBe(true);
+  });
+
+  it('detects stage tracking comment', () => {
+    expect(isQuestionComment('<!-- generacy-stage:specification -->\n## Specification Stage')).toBe(true);
+  });
+
+  it('detects clarify operation direct posting (plain heading)', () => {
+    expect(isQuestionComment('## Clarification Questions\n\nThe following areas need clarification:')).toBe(true);
+  });
+
+  it('detects clarify operation direct posting (emoji heading)', () => {
+    expect(isQuestionComment('## 🔍 Clarification Questions — Batch 1\n\nThe following questions were identified:')).toBe(true);
+  });
+
+  it('detects follow-up clarification questions', () => {
+    expect(isQuestionComment('## Follow-up Clarification Questions\n\nAfter reviewing your answers:')).toBe(true);
+  });
+
+  it('does not flag simple answer comment', () => {
+    expect(isQuestionComment('Q1: A\nQ2: Use PostgreSQL')).toBe(false);
+  });
+
+  it('does not flag heading-format answer comment', () => {
+    expect(isQuestionComment('## Answers\n\n### Q1: Auth\n**Answer: A** — OAuth')).toBe(false);
+  });
+
+  it('does not flag unrelated comment', () => {
+    expect(isQuestionComment('This looks great, thanks for the update!')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T007: regression test — bot's own questions comment must not be parsed as answers
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers — regression: bot self-answer', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('does not treat the bot question comment Q headings as answers (#375)', async () => {
+    // Reproduce the exact scenario from issue #375:
+    // 1. Clarify phase generates questions and posts them to the issue
+    // 2. integrateClarificationAnswers fetches comments and sees the questions comment
+    // 3. The Q patterns in the questions comment (### Q1: Topic) must NOT be parsed as answers
+    mockReaddirSync.mockReturnValue(['375-summary-generacy-init-cli']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    const ctx = createWorkerContext({
+      item: {
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 375,
+        workflowName: 'speckit-feature',
+        command: 'process',
+        priority: Date.now(),
+        enqueuedAt: new Date().toISOString(),
+      },
+    });
+
+    // The only comment is the bot's clarification questions — no human answers yet
+    (ctx.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 1,
+        body: `## 🔍 Clarification Questions — Batch 1
+
+The following questions were identified during spec analysis. Please answer to unblock implementation.
+
+---
+
+### Q1: Authentication method
+**Context**: The spec mentions user auth but doesn't specify OAuth vs JWT.
+
+**Question**: Which authentication method should be used?
+
+- **A**: OAuth 2.0
+- **B**: JWT tokens
+- **C**: Session-based auth
+
+---
+
+### Q2: Database choice
+**Context**: Multiple databases could work for this use case.
+
+**Question**: Should we use PostgreSQL or MongoDB?
+
+- **A**: PostgreSQL
+- **B**: MongoDB
+
+---
+
+*Please reply with answers in format: \`Q1: A\`, \`Q2: B\`, etc.*`,
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(ctx, logger);
+
+    // The bot's own comment should be filtered out — no answers to integrate
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('still integrates real answers when bot comment is also present (#375)', async () => {
+    mockReaddirSync.mockReturnValue(['375-summary-generacy-init-cli']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    const ctx = createWorkerContext({
+      item: {
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 375,
+        workflowName: 'speckit-feature',
+        command: 'process',
+        priority: Date.now(),
+        enqueuedAt: new Date().toISOString(),
+      },
+    });
+
+    (ctx.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      // Bot's questions comment
+      {
+        id: 1,
+        body: `## 🔍 Clarification Questions — Batch 1
+
+### Q1: Authentication method
+**Context**: The spec mentions user auth.
+**Question**: Which authentication method?
+- **A**: OAuth 2.0
+- **B**: JWT tokens
+
+### Q2: Database choice
+**Context**: Multiple databases could work.
+**Question**: PostgreSQL or MongoDB?`,
+      },
+      // Human's actual answers
+      {
+        id: 2,
+        body: 'Q1: A\nQ2: PostgreSQL',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(ctx, logger);
+
+    expect(result.integrated).toBe(2);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+    expect(writtenContent).toContain('**Answer**: PostgreSQL');
   });
 });
 
