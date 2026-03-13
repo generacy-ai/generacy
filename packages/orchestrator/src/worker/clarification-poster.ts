@@ -83,6 +83,35 @@ export function clarificationMarker(issueNumber: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// isQuestionComment
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect whether a comment body is a clarification *questions* comment
+ * (posted by the bot) rather than a human *answers* comment.
+ *
+ * The bot posts questions in two ways:
+ * 1. Via `postClarifications()` — includes `<!-- generacy-clarifications:N -->` marker
+ * 2. Via the clarify CLI operation — includes a "Clarification Questions" heading
+ * 3. Via the CLI marker — includes `<!-- generacy-clarification:` prefix
+ * 4. Via the stage comment — includes `<!-- generacy-stage:` prefix
+ *
+ * Human answers typically look like `Q1: B` or `Q1: answer text` without
+ * these markers.
+ */
+export function isQuestionComment(body: string): boolean {
+  // Orchestrator-posted clarification comment
+  if (body.includes(MARKER_PREFIX)) return true;
+  // CLI-posted clarification comment
+  if (body.includes('<!-- generacy-clarification:')) return true;
+  // Stage tracking comment
+  if (body.includes('<!-- generacy-stage:')) return true;
+  // Clarify operation's direct posting (with or without emoji)
+  if (/##\s+.*Clarification Questions/.test(body)) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // parseClarifications
 // ---------------------------------------------------------------------------
 
@@ -382,7 +411,13 @@ export async function integrateClarificationAnswers(
     return { integrated: 0, reason: 'no-answers' };
   }
 
-  const answers = parseAnswersFromComments(comments, pendingNumbers);
+  // Filter out comments that contain the clarification questions themselves.
+  // Without this, parseAnswersFromComments matches Q patterns from the bot's
+  // own questions comment (e.g., "### Q1: Topic") and treats the topic text
+  // as an answer, causing the gate to incorrectly see all questions as answered.
+  const answerComments = comments.filter((c) => !isQuestionComment(c.body));
+
+  const answers = parseAnswersFromComments(answerComments, pendingNumbers);
   if (answers.size === 0) {
     return { integrated: 0, reason: 'no-answers' };
   }
