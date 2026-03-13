@@ -5,7 +5,7 @@
  *   1. Detect git root
  *   2. Resolve options (flags + prompts + auto-detection)
  *   3. GitHub validation (advisory)
- *   4. Fetch cluster templates from GitHub
+ *   4. Fetch cluster base repo files from GitHub
  *   5. Collect existing files for merge support
  *   6. Generate CLI-owned files (config, env, gitignore, extensions)
  *   7. Merge template + CLI files
@@ -51,7 +51,7 @@ export function initCommand(): Command {
       new Option('--variant <variant>', 'Cluster variant (standard = DooD, microservices = DinD)')
         .choices(['standard', 'microservices']),
     )
-    .option('--template-ref <ref>', 'Git ref for cluster-templates repo (branch, tag, or commit)')
+    .option('--template-ref <ref>', 'Git ref for cluster base repo (branch, tag, or commit)')
     .option('--refresh-templates', 'Bypass template cache and re-download')
     .option('--force', 'Overwrite existing files without prompting')
     .option('--dry-run', 'Preview files without writing')
@@ -94,7 +94,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
   // ── 3. GitHub validation (unless skipped) ──────────────────────────────
   await runGitHubValidation(initOptions);
 
-  // ── 4. Fetch cluster templates from GitHub ──────────────────────────────
+  // ── 4. Fetch cluster base repo files from GitHub ────────────────────────
   // TODO: [FR-017] When API integration is available, fetch project details
   //       from the Generacy API if --project-id was provided.
   // TODO: [FR-018] When API integration is available, optionally create a
@@ -109,7 +109,7 @@ async function initAction(flags: Record<string, unknown>): Promise<void> {
     });
   } catch (error) {
     p.log.error(
-      `Failed to fetch cluster templates: ${error instanceof Error ? error.message : String(error)}`,
+      `Failed to fetch cluster base repo: ${error instanceof Error ? error.message : String(error)}`,
     );
     process.exit(1);
   }

@@ -20,7 +20,7 @@ const multiRepoConfig: WorkspaceConfig = {
     { name: 'tetrad-development', monitor: true },
     { name: 'generacy', monitor: true },
     { name: 'contracts', monitor: false },
-    { name: 'cluster-templates', monitor: true },
+    { name: 'cluster-base', monitor: true },
   ],
 };
 
@@ -31,7 +31,7 @@ describe('getWorkspaceRepos', () => {
       { owner: 'generacy-ai', repo: 'tetrad-development' },
       { owner: 'generacy-ai', repo: 'generacy' },
       { owner: 'generacy-ai', repo: 'contracts' },
-      { owner: 'generacy-ai', repo: 'cluster-templates' },
+      { owner: 'generacy-ai', repo: 'cluster-base' },
     ]);
   });
 
@@ -66,7 +66,7 @@ describe('getMonitoredRepos', () => {
     expect(repos).toEqual([
       { owner: 'generacy-ai', repo: 'tetrad-development' },
       { owner: 'generacy-ai', repo: 'generacy' },
-      { owner: 'generacy-ai', repo: 'cluster-templates' },
+      { owner: 'generacy-ai', repo: 'cluster-base' },
     ]);
   });
 
@@ -109,7 +109,7 @@ describe('getRepoNames', () => {
       'tetrad-development',
       'generacy',
       'contracts',
-      'cluster-templates',
+      'cluster-base',
     ]);
   });
 
