@@ -139,6 +139,57 @@ export const ClusterConfigSchema = z.object({
 export type ClusterConfig = z.infer<typeof ClusterConfigSchema>;
 
 /**
+ * Slug generation options for branch naming
+ */
+export const SlugOptionsSchema = z.object({
+  maxLength: z.number().int().min(1).default(30),
+  separator: z.string().default('-'),
+  removeStopWords: z.boolean().default(true),
+  maxWords: z.number().int().min(1).default(4),
+}).default({});
+
+/**
+ * Branch naming configuration
+ */
+export const SpecKitBranchesSchema = z.object({
+  pattern: z.string().default('{paddedNumber}-{slug}'),
+  numberPadding: z.number().int().min(1).default(3),
+  slugOptions: SlugOptionsSchema,
+}).default({});
+
+/**
+ * Speckit paths configuration
+ */
+export const SpecKitPathsSchema = z.object({
+  specs: z.string().default('specs'),
+  templates: z.string().default('.specify/templates'),
+}).default({});
+
+/**
+ * Speckit file names configuration
+ */
+export const SpecKitFilesSchema = z.object({
+  spec: z.string().default('spec.md'),
+  plan: z.string().default('plan.md'),
+  tasks: z.string().default('tasks.md'),
+  clarifications: z.string().default('clarifications.md'),
+  research: z.string().default('research.md'),
+  dataModel: z.string().default('data-model.md'),
+}).default({});
+
+/**
+ * Speckit configuration schema
+ * Configures paths, files, and branch naming for speckit operations
+ */
+export const SpecKitConfigSchema = z.object({
+  paths: SpecKitPathsSchema,
+  files: SpecKitFilesSchema,
+  branches: SpecKitBranchesSchema,
+});
+
+export type SpecKitConfig = z.infer<typeof SpecKitConfigSchema>;
+
+/**
  * Complete Generacy configuration schema
  * Root configuration object for .generacy/config.yaml
  */
@@ -181,6 +232,12 @@ export const GeneracyConfigSchema = z.object({
    * Defines the org, default branch, and repos to clone/monitor
    */
   workspace: WorkspaceConfigSchema.optional(),
+
+  /**
+   * Speckit configuration (optional)
+   * Configures paths, files, and branch naming for speckit operations
+   */
+  speckit: SpecKitConfigSchema.optional(),
 });
 
 export type GeneracyConfig = z.infer<typeof GeneracyConfigSchema>;

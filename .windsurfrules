@@ -58,7 +58,6 @@ Follow standard conventions
 - 016-plugin-generacy-ai-generacy: Added configuration
 - 015-plugin-generacy-ai-generacy: Added configuration
 - 014-plugin-generacy-ai-generacy: Added configuration
-- 157-migrate-autodev-workflow-capabilities: Added configuration
 - 156-define-speckit-generacy-workflow: Added configuration
 - 163-g2-implement-workflow-humancy: Added configuration
 - 162-g1-design-tasks-issues: Added configuration

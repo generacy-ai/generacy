@@ -4,6 +4,7 @@
  */
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 /**
  * Read file contents as string
@@ -106,20 +107,19 @@ export async function findRepoRoot(startPath: string): Promise<string | null> {
 
 /**
  * Resolve the specs directory path
- * Checks for configured path in autodev.json, otherwise defaults to 'specs'
+ * Checks for configured path in .generacy/config.yaml, otherwise defaults to 'specs'
  */
 export async function resolveSpecsPath(workDir: string): Promise<string | null> {
   const repoRoot = await findRepoRoot(workDir);
   if (!repoRoot) return null;
 
-  // Check for configured path in autodev.json
-  const configPath = join(repoRoot, '.claude', 'autodev.json');
+  const configPath = join(repoRoot, '.generacy', 'config.yaml');
   if (await exists(configPath)) {
     try {
       const content = await readFile(configPath);
-      const config = JSON.parse(content);
-      if (config.paths?.specs) {
-        return join(repoRoot, config.paths.specs);
+      const config = parseYaml(content);
+      if (config?.speckit?.paths?.specs) {
+        return join(repoRoot, config.speckit.paths.specs);
       }
     } catch {
       // Ignore parse errors, fall through to default
@@ -131,20 +131,19 @@ export async function resolveSpecsPath(workDir: string): Promise<string | null> 
 
 /**
  * Resolve the templates directory path
- * Checks for configured path in autodev.json, otherwise defaults to '.specify/templates'
+ * Checks for configured path in .generacy/config.yaml, otherwise defaults to '.specify/templates'
  */
 export async function resolveTemplatesPath(workDir: string): Promise<string | null> {
   const repoRoot = await findRepoRoot(workDir);
   if (!repoRoot) return null;
 
-  // Check for configured path in autodev.json
-  const configPath = join(repoRoot, '.claude', 'autodev.json');
+  const configPath = join(repoRoot, '.generacy', 'config.yaml');
   if (await exists(configPath)) {
     try {
       const content = await readFile(configPath);
-      const config = JSON.parse(content);
-      if (config.paths?.templates) {
-        return join(repoRoot, config.paths.templates);
+      const config = parseYaml(content);
+      if (config?.speckit?.paths?.templates) {
+        return join(repoRoot, config.speckit.paths.templates);
       }
     } catch {
       // Ignore parse errors, fall through to default
@@ -167,7 +166,7 @@ export interface FilesConfig {
 }
 
 /**
- * Get files configuration from autodev.json or use defaults
+ * Get files configuration from .generacy/config.yaml or use defaults
  */
 export async function getFilesConfig(repoRoot: string): Promise<FilesConfig> {
   const defaults: FilesConfig = {
@@ -179,19 +178,20 @@ export async function getFilesConfig(repoRoot: string): Promise<FilesConfig> {
     dataModel: 'data-model.md',
   };
 
-  const configPath = join(repoRoot, '.claude', 'autodev.json');
+  const configPath = join(repoRoot, '.generacy', 'config.yaml');
   if (await exists(configPath)) {
     try {
       const content = await readFile(configPath);
-      const config = JSON.parse(content);
-      if (config.files) {
+      const config = parseYaml(content);
+      if (config?.speckit?.files) {
+        const files = config.speckit.files;
         return {
-          spec: config.files.spec || defaults.spec,
-          plan: config.files.plan || defaults.plan,
-          tasks: config.files.tasks || defaults.tasks,
-          clarifications: config.files.clarifications || defaults.clarifications,
-          research: config.files.research || defaults.research,
-          dataModel: config.files.dataModel || defaults.dataModel,
+          spec: files.spec || defaults.spec,
+          plan: files.plan || defaults.plan,
+          tasks: files.tasks || defaults.tasks,
+          clarifications: files.clarifications || defaults.clarifications,
+          research: files.research || defaults.research,
+          dataModel: files.dataModel || defaults.dataModel,
         };
       }
     } catch {
