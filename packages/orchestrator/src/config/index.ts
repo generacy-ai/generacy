@@ -30,6 +30,8 @@ export {
   type DispatchConfig,
   WorkerConfigSchema,
   type WorkerConfig,
+  RelayConfigSchema,
+  type RelayConfig,
   OrchestratorConfigSchema,
   type OrchestratorConfig,
   validateConfig,

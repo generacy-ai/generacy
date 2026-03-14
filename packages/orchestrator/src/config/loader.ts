@@ -232,6 +232,21 @@ function loadFromEnv(): Record<string, unknown> {
     config.labelMonitor = labelMonitorEnabled === 'true';
   }
 
+  // Relay config (GENERACY_API_KEY for cloud connectivity)
+  const relayApiKey = process.env['GENERACY_API_KEY'];
+  const relayCloudUrl = process.env['GENERACY_CLOUD_URL'];
+  if (relayApiKey || relayCloudUrl) {
+    if (!config.relay) {
+      config.relay = {};
+    }
+    if (relayApiKey) {
+      (config.relay as Record<string, unknown>).apiKey = relayApiKey;
+    }
+    if (relayCloudUrl) {
+      (config.relay as Record<string, unknown>).cloudUrl = relayCloudUrl;
+    }
+  }
+
   // Webhook setup config
   if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
     const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];

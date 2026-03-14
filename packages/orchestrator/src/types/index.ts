@@ -136,6 +136,20 @@ export {
   parseEventId,
 } from './sse.js';
 
+// Relay Types
+export {
+  type ClusterRelayClient,
+  type ClusterRelayClientOptions,
+  type RelayMessage,
+  type RelayApiRequest,
+  type RelayApiResponse,
+  type RelayEvent,
+  type RelayMetadata,
+  type ClusterMetadataPayload,
+  type GitRemoteInfo,
+  type RelayBridgeOptions,
+} from './relay.js';
+
 // Webhook Types
 export {
   type GitHubWebhook,
