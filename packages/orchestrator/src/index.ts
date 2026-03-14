@@ -17,6 +17,7 @@ export {
   type MonitorConfig,
   type RepositoryConfig,
   type DispatchConfig,
+  type RelayConfig,
 } from './config/index.js';
 
 // Types
@@ -80,6 +81,17 @@ export {
   type SSEConnectionOptions,
   type SSEStreamConfig,
   DEFAULT_SSE_CONFIG,
+  // Relay
+  type ClusterRelayClient,
+  type ClusterRelayClientOptions,
+  type RelayMessage,
+  type RelayApiRequest,
+  type RelayApiResponse,
+  type RelayEvent,
+  type RelayMetadata,
+  type ClusterMetadataPayload,
+  type GitRemoteInfo,
+  type RelayBridgeOptions,
   // Monitor
   type QueueItem,
   type LabelEvent,
@@ -129,6 +141,8 @@ export {
   SmeeWebhookReceiver,
   type SmeeReceiverOptions,
 } from './services/smee-receiver.js';
+
+export { RelayBridge } from './services/relay-bridge.js';
 
 export {
   PhaseTrackerService,

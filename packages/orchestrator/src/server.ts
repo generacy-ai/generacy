@@ -11,6 +11,7 @@ import { setupRateLimit } from './middleware/rate-limit.js';
 import { requestStartHook, requestEndHook } from './middleware/request-logger.js';
 import { createAuthMiddleware, InMemoryApiKeyStore } from './auth/index.js';
 import { registerRoutes, InMemoryIntegrationRegistry, closeAllSSEConnections, setupHealthRoutes } from './routes/index.js';
+import { getSSESubscriptionManager } from './sse/subscriptions.js';
 import { WorkflowService, InMemoryWorkflowStore } from './services/workflow-service.js';
 import { QueueService, InMemoryQueueStore } from './services/queue-service.js';
 import { AgentRegistry } from './services/agent-registry.js';
@@ -22,6 +23,7 @@ import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { SmeeWebhookReceiver } from './services/smee-receiver.js';
+import { RelayBridge } from './services/relay-bridge.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
@@ -246,6 +248,32 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     }
   }
 
+  // Initialize relay bridge (full mode only, when API key is configured)
+  let relayBridge: RelayBridge | null = null;
+  if (!isWorkerMode && config.relay.apiKey) {
+    try {
+      // Dynamic import — @generacy-ai/cluster-relay may not be installed yet (Phase 2.1)
+      const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+      const relayClient = new RelayClientImpl({
+        apiKey: config.relay.apiKey,
+        cloudUrl: config.relay.cloudUrl,
+      });
+      relayBridge = new RelayBridge({
+        client: relayClient,
+        server,
+        sseManager: getSSESubscriptionManager(),
+        logger: server.log,
+        config: config.relay,
+      });
+      server.log.info('Relay bridge configured');
+    } catch (error) {
+      // Package not installed or import failed — skip silently (local-only mode)
+      server.log.info(
+        `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   // Register routes (unless skipped for testing)
   if (!options.skipRoutes) {
     if (isWorkerMode) {
@@ -366,6 +394,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           server.log.error({ err: error }, 'Webhook setup failed');
         });
       }
+
+      if (relayBridge) {
+        relayBridge.start().catch((error) => {
+          server.log.error({ err: error }, 'Relay bridge start failed');
+        });
+      }
     }
   });
 
@@ -384,7 +418,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             await workerDispatcher.stop();
           }
         } else {
-          // Full mode: stop monitors, Smee, SSE
+          // Full mode: stop relay, monitors, Smee, SSE
+          if (relayBridge) {
+            await relayBridge.stop();
+          }
           if (smeeReceiver) {
             smeeReceiver.stop();
           }

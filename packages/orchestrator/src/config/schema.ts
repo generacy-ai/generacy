@@ -177,6 +177,21 @@ export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 export { WorkerConfigSchema, type WorkerConfig };
 
 /**
+ * Relay configuration for cloud connectivity
+ */
+export const RelayConfigSchema = z.object({
+  /** API key for cloud authentication (from GENERACY_API_KEY env var) */
+  apiKey: z.string().min(1).optional(),
+  /** Cloud relay WebSocket URL */
+  cloudUrl: z.string().url().default('wss://api.generacy.ai/relay'),
+  /** Interval for periodic metadata refresh in ms */
+  metadataIntervalMs: z.number().int().min(10000).default(60000),
+  /** Path to cluster.yaml relative to workspace root */
+  clusterYamlPath: z.string().min(1).default('.generacy/cluster.yaml'),
+});
+export type RelayConfig = z.infer<typeof RelayConfigSchema>;
+
+/**
  * Smee.io webhook proxy configuration
  */
 export const SmeeConfigSchema = z.object({
@@ -214,6 +229,7 @@ export const OrchestratorConfigSchema = z.object({
   epicMonitor: EpicMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
+  relay: RelayConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),
   labelMonitor: z.boolean().default(false),
