@@ -71,7 +71,7 @@
   - Export relay types: `ClusterRelayClient`, `ClusterRelayClientOptions`, `RelayMessage`, `RelayApiRequest`, `RelayApiResponse`, `RelayEvent`, `RelayMetadata`, `ClusterMetadataPayload`, `GitRemoteInfo`, `RelayConfig`, `RelayBridgeOptions`
   - Export `RelayBridge` class
 
-- [ ] T008 Write integration/degradation tests in `packages/orchestrator/src/__tests__/relay-integration.test.ts`
+- [X] T008 Write integration/degradation tests in `packages/orchestrator/src/__tests__/relay-integration.test.ts`
   - Test orchestrator starts normally when `GENERACY_API_KEY` is not set (no relay)
   - Test orchestrator starts normally when `@generacy-ai/cluster-relay` package is missing
   - Test orchestrator starts normally when relay connection fails (continues local-only)
