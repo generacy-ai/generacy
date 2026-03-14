@@ -10,7 +10,7 @@
 - B: All REST — lifecycle and streaming both go through Fastify routes (streaming via SSE)
 - C: All `conversation` message type — bypass Fastify entirely for conversations
 
-**Answer**: *Pending*
+**Answer**: **A (Hybrid)** — REST-via-relay for lifecycle (start/end/list map naturally to Fastify routes via existing `api_request`/`api_response`), new `conversation` message type for real-time I/O streaming. The reference doc lists "conversation streaming" as a distinct multiplexed type alongside "orchestrator API proxy" and "SSE event forwarding," confirming this separation.
 
 ### Q2: Claude CLI Interactive Mode with Structured Output
 **Context**: The existing `CliSpawner` uses `-p --output-format stream-json` which is headless/print mode. The spec requires "interactive mode (not `--print` mode)" but also needs structured JSON output for parsing. It's unclear whether Claude CLI supports `--output-format stream-json` without the `-p` flag in true interactive mode.
@@ -20,7 +20,7 @@
 - B: Use `-p --output-format stream-json` and write messages to stdin (simulated interactive via piped stdin)
 - C: Research Claude CLI capabilities first and decide based on what's supported
 
-**Answer**: *Pending*
+**Answer**: **C (Research first)** — Claude CLI's `--output-format stream-json` may work in interactive mode (without `-p`), which would be ideal (true multi-turn over stdin with structured output). If not, the fallback is `-p --output-format stream-json` with `--resume` for per-message invocations. A quick spike to confirm CLI capabilities before committing is warranted given this is foundational.
 
 ### Q3: Permission Handling in Interactive Conversations
 **Context**: The existing workflow spawner uses `--dangerously-skip-permissions` for automation since no human is in the loop. For interactive conversations, a user IS actively present in the cloud UI. Tool permission requests (file edits, command execution, etc.) could either be auto-approved or forwarded to the user for explicit approval.
@@ -30,7 +30,7 @@
 - B: Forward permission prompts to UI for user approval — safer, better UX, but requires bidirectional permission flow
 - C: Configurable per-conversation — let the caller decide on start
 
-**Answer**: *Pending*
+**Answer**: **C (Configurable per-conversation)** — Add a `skipPermissions` boolean to start options. Default to `true` (auto-approve) for v1 simplicity. Curated onboarding commands (4.4) use auto-approve; general chat (4.3) can opt into permission forwarding once the UI supports rendering approval prompts. This avoids blocking 4.1 on bidirectional permission flow while keeping the door open.
 
 ### Q4: Working Directory Resolution
 **Context**: The spec says `workingDirectory` specifies "which repo to run in" and technical notes say "Conversations run in the primary or dev repos, not in isolated worker directories." The orchestrator likely has configured repo paths. It's unclear whether `workingDirectory` is an absolute filesystem path from the caller or a logical repo identifier resolved by the orchestrator.
@@ -40,7 +40,7 @@
 - B: Repo identifier — orchestrator maps names like "primary"/"dev" to configured paths
 - C: Either — accept both, with repo identifiers resolved first, then fall back to absolute paths
 
-**Answer**: *Pending*
+**Answer**: **B (Repo identifier)** — Cloud UI sends identifiers like `"primary"` or `"dev"` that the orchestrator resolves to configured workspace paths. This avoids exposing filesystem internals through the relay, prevents path traversal, and maintains the abstraction layer. The orchestrator already knows its workspace layout.
 
 ### Q5: Output Streaming Channel
 **Context**: The existing relay forwards SSE events on named channels (`workflows`, `queue`, `agents`). The spec defines cluster→cloud `conversation` messages with events like `output`, `tool_use`, `tool_result`. It's unclear whether conversation output should use the existing SSE event forwarding mechanism (adding a new `conversations` channel) or the new `conversation` relay message type, which would be a different transport path than existing event streaming.
@@ -50,4 +50,4 @@
 - B: New `conversation` relay message type — dedicated path, better separation of concerns
 - C: Both — SSE for local/direct access, relay message type for cloud access
 
-**Answer**: *Pending*
+**Answer**: **B (New `conversation` relay message type)** — Conversations require bidirectional, per-conversation-id multiplexed streaming that doesn't fit the existing SSE channel model (which is unidirectional broadcast). The reference doc lists "conversation streaming" as separate from "SSE event forwarding," confirming a dedicated message type is the intended architecture.
