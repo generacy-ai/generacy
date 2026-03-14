@@ -1,73 +1,35 @@
-# Feature Specification: Conversation Metadata JSONL Logging
+# Feature Specification: ## Phase 1
 
 **Branch**: `378-phase-1-7-cloud` | **Date**: 2026-03-14 | **Status**: Draft
 
 ## Summary
 
-Extend the orchestrator's phase-loop output capture to write summary metadata JSONL files alongside spec artifacts, committed to source control at phase completion. This provides the cloud UI (Phase 3) with lightweight metadata to display workflow history and locate full conversations via the cluster relay.
+## Phase 1.7 — Cloud Platform Buildout
 
-## Context
+### Summary
+Extend the orchestrator's phase-loop output capture to write summary metadata JSONL files alongside spec artifacts, committed to source control at phase completion.
 
-The cloud UI needs to display workflow history and load conversations on demand. Rather than centralizing conversation data, we store lightweight metadata in the repo alongside specs. This metadata provides enough info (session IDs, timestamps, model info) to locate and load full conversations via the cluster relay.
+### Context
+The cloud UI (Phase 3) needs to display workflow history and load conversations on demand. Rather than centralizing conversation data, we store lightweight metadata in the repo alongside specs. This metadata provides enough info (session IDs, timestamps, model info) to locate and load full conversations via the cluster relay.
 
-## User Stories
+### Requirements
 
-### US1: Workflow History Viewer
+**JSONL file output**:
+- Path: `specs/{issue-number}/conversation-log.jsonl` (same directory as spec.md, plan.md, etc.)
+- One JSON object per line
+- Hybrid write strategy: buffer events in memory with periodic flush (every 50 events or 30 seconds), plus final flush at phase completion
 
-**As a** developer using the cloud UI,
-**I want** to see a timeline of all workflow phases executed on an issue,
-**So that** I can understand what happened, when, and which model was used.
+**Event types captured**:
+- `phase_start`, `phase_complete`, `error` — phase boundary events
+- `tool_use`, `tool_result` — tool call events with metadata
+- Text events are **omitted** — full conversation content is available via cluster relay by session ID; JSONL files contain metadata only
 
-**Acceptance Criteria**:
-- [ ] Each phase execution produces JSONL entries with timestamps, session IDs, and model info
-- [ ] The JSONL file is committed alongside spec artifacts and available in the repo
-- [ ] Multiple workflow runs on the same issue append to the same file (preserving history)
-
-### US2: Conversation Locator
-
-**As a** cloud UI component rendering a conversation viewer,
-**I want** session IDs and metadata stored in the JSONL log,
-**So that** I can request the full conversation from the cluster relay by session ID.
-
-**Acceptance Criteria**:
-- [ ] Session ID is captured from Claude CLI init events and included in every JSONL entry
-- [ ] Token usage (in/out) is captured from complete events
-- [ ] Tool usage is logged with tool name and affected file paths
-
-### US3: Cost & Performance Tracking
-
-**As a** team lead monitoring AI usage,
-**I want** token counts and durations logged per event,
-**So that** I can track cost and performance across workflow runs.
-
-**Acceptance Criteria**:
-- [ ] `tokens_in` and `tokens_out` are recorded for each event where available
-- [ ] `duration_ms` is recorded for tool calls and phase execution
-- [ ] Data is machine-readable (JSONL format, one object per line)
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | Write JSONL file to `specs/{issue-number}/conversation-log.jsonl` | P1 | Same directory as spec.md |
-| FR-002 | Write one JSON object per line, incrementally as events occur | P1 | Append-only within a run |
-| FR-003 | Capture event types: `phase_start`, `tool_use`, `tool_result`, `text`, `phase_complete`, `error` | P1 | Maps to existing OutputCapture event types |
-| FR-004 | Include `timestamp`, `phase`, `event_type`, `session_id`, `model` in every entry | P1 | Core metadata fields |
-| FR-005 | Include `tokens_in`, `tokens_out` when available (from complete events) | P2 | May not be present in all events |
-| FR-006 | Include `tool_name` and `file_paths` for tool_use/tool_result events | P1 | For traceability |
-| FR-007 | Include `duration_ms` for tool calls and phase boundaries | P2 | For performance tracking |
-| FR-008 | Extend `OutputCapture` class to write JSONL | P1 | `packages/orchestrator/src/worker/output-capture.ts` |
-| FR-009 | Extract model and token metadata from Claude CLI output events | P1 | init and complete events |
-| FR-010 | Add JSONL file to git stage at phase completion | P1 | Same commit as spec artifacts |
-| FR-011 | New workflow runs append to existing JSONL file | P1 | Preserves history across runs |
-
-## JSONL Line Format
-
+**Line format**:
 ```json
 {
   "timestamp": "2026-03-14T10:30:00Z",
   "phase": "specify",
-  "event_type": "phase_start | tool_use | tool_result | text | phase_complete | error",
+  "event_type": "phase_start | tool_use | tool_result | phase_complete | error",
   "session_id": "session_abc123",
   "model": "claude-sonnet-4-6",
   "tokens_in": 1500,
@@ -78,52 +40,105 @@ The cloud UI needs to display workflow history and load conversations on demand.
 }
 ```
 
-## Integration Points
+**Token counts** (`tokens_in`, `tokens_out`):
+- Best-effort extraction from Claude CLI output events
+- Include when available, omit when not (no error on missing data)
+- Graceful degradation — do not block on unverified CLI output format
 
-- **OutputCapture** (`packages/orchestrator/src/worker/output-capture.ts`): Primary integration — extend to write JSONL alongside event parsing
-- **Phase-loop** (`packages/orchestrator/src/worker/phase-loop.ts`): Provides spec directory path; handles git staging at phase completion
-- **Claude CLI output**: Source of init, complete, tool_use, tool_result, text, and error events
+**Tool call duration** (`duration_ms`):
+- Calculated by pairing `tool_use` → `tool_result` events using tool call ID
+- Maintain a `Map<toolCallId, startTimestamp>` in OutputCapture, cleared after each pairing
+- Pre-calculated in JSONL so consumers don't need temporal pairing logic
 
-## Technical Notes
+**File paths** (`file_paths`):
+- Populated on both `tool_use` and `tool_result` events
+- `tool_result`: use existing `filePath` extraction
+- `tool_use`: best-effort extraction from tool input parameters for well-known tools (Read, Write, Edit, Glob, Grep)
+- Graceful fallback for tools with non-obvious inputs (Bash, etc.)
 
+**Integration points**:
+- Extend `OutputCapture` class (`packages/orchestrator/src/worker/output-capture.ts`) to write JSONL
+- Extract model and token metadata from Claude CLI output events (init, complete events)
+- Write at phase boundaries and on significant events (tool calls, errors)
+- Committed alongside other spec artifacts in the phase completion git commit
+
+**Commit behavior**:
+- The JSONL file is added to the git stage at phase completion (same commit as spec artifacts)
+- Append-only within a workflow run — new phases append to the same file
+- New workflow runs on the same issue append to the existing file (preserves history)
+
+### Technical Notes
 - `OutputCapture` already parses Claude CLI newline-delimited JSON output
 - It tracks event types: init, tool_use, tool_result, text, complete, error
 - Session ID is already extracted from init events
+- The phase-loop (`packages/orchestrator/src/worker/phase-loop.ts`) manages the spec directory path
 - Token counts may be available in `complete` events from Claude CLI
+- Text events are not logged to JSONL (metadata-only files)
+
+### Dependencies
+- None (can start immediately)
+- Consumed by: issues 3.3 (workflow history), 3.4 (conversation viewer)
+
+### Reference
+See `docs/cloud-platform-buildout-reference.md` in tetrad-development for full architectural context.
+
+### Labels
+`process:speckit-feature`
+
+## User Stories
+
+### US1: Workflow History Visibility
+
+**As a** cloud UI user,
+**I want** lightweight metadata about each workflow phase stored in the repo,
+**So that** I can browse workflow history and load full conversations on demand via the cluster relay.
+
+**Acceptance Criteria**:
+- [ ] A `conversation-log.jsonl` file is created/appended in the spec directory during phase execution
+- [ ] Each JSONL entry contains timestamp, phase, event_type, session_id, and model fields
+- [ ] Tool events include tool_name, file_paths, and duration_ms
+- [ ] Token counts are included when available from CLI output
+- [ ] The JSONL file is committed alongside spec artifacts at phase completion
+- [ ] Text content events are not logged (metadata only)
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Write JSONL to `specs/{issue-number}/conversation-log.jsonl` | P1 | Same directory as spec artifacts |
+| FR-002 | Hybrid write strategy — buffer with periodic flush (50 events / 30s) | P1 | Balances crash resilience with I/O efficiency |
+| FR-003 | Capture phase_start, tool_use, tool_result, phase_complete, error events | P1 | Text events omitted — metadata only |
+| FR-004 | Extract session_id and model from init events | P1 | Already available in OutputCapture |
+| FR-005 | Best-effort token count extraction (tokens_in, tokens_out) | P2 | Omit gracefully when unavailable |
+| FR-006 | Extract file_paths from tool_use (best-effort) and tool_result (existing) | P1 | Well-known tools: Read, Write, Edit, Glob, Grep |
+| FR-007 | Calculate duration_ms by pairing tool_use → tool_result via tool call ID | P1 | Map<toolCallId, startTimestamp> |
+| FR-008 | Extend OutputCapture class to produce JSONL entries | P1 | Existing event parsing infrastructure |
+| FR-009 | Append-only JSONL — new phases and workflow runs append to existing file | P1 | Preserves full history |
+| FR-010 | Add JSONL file to git stage at phase completion | P1 | Same commit as spec artifacts |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | JSONL file created for every phase execution | 100% of runs | Check file existence after phase completion |
-| SC-002 | All required fields present in each JSONL entry | No missing core fields | Validate against schema |
-| SC-003 | JSONL file committed with spec artifacts | Every phase completion commit | Check git log for file inclusion |
-| SC-004 | Append behavior across runs | No data loss | Run multiple workflows, verify all entries preserved |
-| SC-005 | Cloud UI can parse and display entries | Entries load correctly | Integration test with workflow history component |
+| SC-001 | JSONL file produced | Every phase execution produces entries | Run a workflow and verify file exists |
+| SC-002 | Metadata completeness | All tool events have tool_name, file_paths, duration_ms | Parse JSONL and validate fields |
+| SC-003 | File size | Reasonable size without text events | Compare with/without text logging |
+| SC-004 | Crash resilience | Periodic flush preserves recent events | Kill process mid-phase, check JSONL |
 
 ## Assumptions
 
-- `OutputCapture` already has access to all needed event data from Claude CLI output
-- Token counts are available in Claude CLI `complete` events
-- The phase-loop's git commit step can be extended to include the JSONL file
-- The JSONL file size will remain manageable (metadata only, not full conversation content)
+- OutputCapture already parses Claude CLI newline-delimited JSON output
+- Session ID is already extracted from init events
+- Token counts may or may not be available in Claude CLI complete events (best-effort)
+- The phase-loop manages the spec directory path and can pass it to OutputCapture
+- Tool call IDs are available in both tool_use and tool_result events for duration pairing
 
 ## Out of Scope
 
-- Full conversation content storage (handled by cluster relay)
-- Cloud UI implementation (issues 3.3 and 3.4)
-- JSONL file rotation or cleanup
-- Real-time streaming of JSONL to cloud UI (future enhancement)
-- Authentication/authorization for accessing JSONL data
-
-## Dependencies
-
-- **None** — can start immediately
-- **Consumed by**: Issue 3.3 (workflow history), Issue 3.4 (conversation viewer)
-
-## Reference
-
-See `docs/cloud-platform-buildout-reference.md` in tetrad-development for full architectural context.
+- Storing full conversation text content in JSONL (available via cluster relay)
+- Centralized conversation storage
+- Real-time streaming of JSONL to cloud UI
+- JSONL file rotation or size management
 
 ---
 
