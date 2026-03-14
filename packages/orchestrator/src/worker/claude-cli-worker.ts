@@ -44,6 +44,7 @@ const defaultProcessFactory: ProcessFactory = {
     });
 
     return {
+      stdin: null,
       stdout: child.stdout,
       stderr: child.stderr,
       pid: child.pid,

@@ -68,13 +68,40 @@ export interface ClusterRelayClientOptions {
 // =============================================================================
 
 /**
+ * Conversation message from cloud to cluster (user input).
+ */
+export interface RelayConversationInput {
+  type: 'conversation';
+  conversationId: string;
+  data: {
+    action: 'message';
+    content: string;
+  };
+}
+
+/**
+ * Conversation message from cluster to cloud (CLI output).
+ */
+export interface RelayConversationOutput {
+  type: 'conversation';
+  conversationId: string;
+  data: {
+    event: 'output' | 'tool_use' | 'tool_result' | 'complete' | 'error';
+    payload: unknown;
+    timestamp: string;
+  };
+}
+
+/**
  * Discriminated union of all relay message types.
  */
 export type RelayMessage =
   | RelayApiRequest
   | RelayApiResponse
   | RelayEvent
-  | RelayMetadata;
+  | RelayMetadata
+  | RelayConversationInput
+  | RelayConversationOutput;
 
 /**
  * API request forwarded from cloud to cluster.

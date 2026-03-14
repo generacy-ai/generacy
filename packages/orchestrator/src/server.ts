@@ -32,6 +32,10 @@ import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { resolveClusterIdentity } from './services/identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
+import { ConversationManager } from './conversation/conversation-manager.js';
+import { ConversationSpawner } from './conversation/conversation-spawner.js';
+import { conversationProcessFactory } from './conversation/process-factory.js';
+import { setupConversationRoutes } from './routes/conversations.js';
 
 /**
  * Server creation options
@@ -274,6 +278,30 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     }
   }
 
+  // Initialize ConversationManager (full mode only, when workspaces are configured)
+  let conversationManager: ConversationManager | null = null;
+  if (!isWorkerMode && Object.keys(config.conversations.workspaces).length > 0) {
+    const conversationSpawner = new ConversationSpawner(
+      conversationProcessFactory,
+      config.conversations.shutdownGracePeriodMs,
+    );
+    conversationManager = new ConversationManager(
+      config.conversations,
+      conversationSpawner,
+      server.log,
+    );
+
+    // Wire conversation output to relay bridge
+    if (relayBridge) {
+      relayBridge.setConversationManager(conversationManager);
+    }
+
+    server.log.info(
+      { workspaces: Object.keys(config.conversations.workspaces) },
+      'Conversation manager configured',
+    );
+  }
+
   // Register routes (unless skipped for testing)
   if (!options.skipRoutes) {
     if (isWorkerMode) {
@@ -352,6 +380,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      // Register conversation routes (if manager is available)
+      if (conversationManager) {
+        await setupConversationRoutes(server, conversationManager);
+      }
+
       // Register dispatch queue routes
       await setupDispatchRoutes(server, queueAdapter);
 
@@ -418,7 +451,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             await workerDispatcher.stop();
           }
         } else {
-          // Full mode: stop relay, monitors, Smee, SSE
+          // Full mode: stop conversations, relay, monitors, Smee, SSE
+          if (conversationManager) {
+            await conversationManager.stop();
+          }
           if (relayBridge) {
             await relayBridge.stop();
           }

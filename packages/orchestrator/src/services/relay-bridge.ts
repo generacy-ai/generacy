@@ -24,6 +24,9 @@ import type {
   RelayBridgeOptions,
 } from '../types/relay.js';
 import type { SSEChannel, SSEEvent } from '../types/sse.js';
+import type { ConversationManager } from '../conversation/conversation-manager.js';
+import { ConversationRelayInputSchema } from '../conversation/types.js';
+import type { ConversationOutputEvent } from '../conversation/types.js';
 
 export class RelayBridge {
   private readonly client: ClusterRelayClient;
@@ -31,6 +34,7 @@ export class RelayBridge {
   private readonly sseManager: SSESubscriptionManager;
   private readonly logger: RelayBridgeOptions['logger'];
   private readonly config: RelayBridgeOptions['config'];
+  private conversationManager: ConversationManager | null = null;
 
   private running = false;
   private metadataTimer: NodeJS.Timeout | null = null;
@@ -146,10 +150,25 @@ export class RelayBridge {
     );
   }
 
+  /**
+   * Wire a ConversationManager to receive incoming conversation messages
+   * and forward output events through the relay.
+   */
+  setConversationManager(manager: ConversationManager): void {
+    this.conversationManager = manager;
+
+    // Forward conversation output events through the relay
+    manager.setOutputCallback((conversationId: string, event: ConversationOutputEvent) => {
+      this.sendConversationOutput(conversationId, event);
+    });
+  }
+
   private handleMessage(msg: RelayMessage): void {
     try {
       if (msg.type === 'api_request') {
         this.handleApiRequest(msg);
+      } else if (msg.type === 'conversation') {
+        this.handleConversationMessage(msg as RelayMessage & { type: 'conversation'; conversationId: string; data: unknown });
       }
     } catch (error) {
       this.logger.error(
@@ -264,6 +283,57 @@ export class RelayBridge {
     if (this.originalBroadcast) {
       this.sseManager.broadcast = this.originalBroadcast;
       this.originalBroadcast = null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Conversation Message Handling
+  // ---------------------------------------------------------------------------
+
+  private handleConversationMessage(msg: { conversationId: string; data: unknown }): void {
+    if (!this.conversationManager) {
+      this.logger.warn('Received conversation message but no ConversationManager is configured');
+      return;
+    }
+
+    const parsed = ConversationRelayInputSchema.safeParse(msg.data);
+    if (!parsed.success) {
+      this.logger.warn(
+        { conversationId: msg.conversationId, error: parsed.error.message },
+        'Invalid conversation relay input',
+      );
+      return;
+    }
+
+    this.conversationManager.sendMessage(msg.conversationId, parsed.data.content).catch((error) => {
+      this.logger.error(
+        { conversationId: msg.conversationId, err: error instanceof Error ? error.message : String(error) },
+        'Error routing conversation message to manager',
+      );
+    });
+  }
+
+  /**
+   * Send a conversation output event through the relay.
+   */
+  private sendConversationOutput(conversationId: string, event: ConversationOutputEvent): void {
+    try {
+      if (this.client.isConnected) {
+        this.client.send({
+          type: 'conversation',
+          conversationId,
+          data: {
+            event: event.event,
+            payload: event.payload,
+            timestamp: event.timestamp,
+          },
+        } as unknown as RelayMessage);
+      }
+    } catch (error) {
+      this.logger.error(
+        { conversationId, err: error instanceof Error ? error.message : String(error) },
+        'Error sending conversation output through relay',
+      );
     }
   }
 
