@@ -10,7 +10,7 @@
 - B: Raw `.claude/commands/*.md` files in cluster-base — simpler, no plugin infrastructure needed
 - C: Raw command files initially (B), with a plan to migrate to a plugin package later
 
-**Answer**: *Pending*
+**Answer**: **A** — New agency plugin package (`agency-plugin-onboard`) distributed via marketplace, consistent with speckit commands. The existing speckit commands use a two-layer architecture: an MCP server package (`agency-plugin-spec-kit`) with tool implementations, plus a Claude Code plugin package (`claude-plugin-agency-spec-kit`) with command `.md` files. Following the established pattern keeps distribution, versioning, and updates consistent.
 
 ### Q2: Plugin Catalog Source
 **Context**: `/onboard-plugins` needs to present available Generacy & Agency plugins with descriptions and recommend plugins based on the detected tech stack. Currently the only known plugin is `agency-plugin-spec-kit`. Without a defined catalog, the command cannot present meaningful choices or make recommendations.
@@ -20,7 +20,7 @@
 - B: Dynamic discovery from the agency marketplace registry
 - C: Hardcoded initially with a TODO to switch to dynamic discovery once the marketplace API supports it
 
-**Answer**: *Pending*
+**Answer**: **C** — Hardcoded initially with a TODO to switch to dynamic discovery once the marketplace API supports it. There is no marketplace API or plugin registry implemented yet — only local filesystem discovery via `PluginDiscovery` scanning `node_modules`. The 6 known plugins are: `git`, `npm`, `docker`, `firebase`, `humancy`, and `spec-kit`. Hardcoding these now is the only realistic option.
 
 ### Q3: MCP Server Catalog Source
 **Context**: `/onboard-mcp` needs to present available MCP servers and recommend them based on project needs. Existing `.mcp.json` files in the codebase reference `playwright` and `vscode-mcp-server`, but there's no defined catalog of recommended servers or mapping from project characteristics to server recommendations.
@@ -30,7 +30,7 @@
 - B: Reference an external MCP server registry/catalog
 - C: Hardcoded map initially, extensible via a config file in `.generacy/` for custom additions
 
-**Answer**: *Pending*
+**Answer**: **C** — Hardcoded map initially, extensible via a config file in `.generacy/` for custom additions. Currently only 3 MCP servers are configured (Agency, Playwright, VS Code). A hardcoded recommendation map (e.g., web project → Playwright) with extensibility via a `.generacy/` config file lets teams add project-specific MCP server recommendations without waiting for a registry.
 
 ### Q4: Tech Stack Document Output
 **Context**: `/onboard-stack` generates a "tech stack summary document" but the spec doesn't define the file name, format, or location. This affects whether other commands or tools can programmatically consume the output, and whether it integrates with existing documentation conventions.
@@ -40,7 +40,7 @@
 - B: `docs/tech-stack.md` — human-readable markdown in the conventional docs location
 - C: Both — a structured `.generacy/stack.yaml` for tooling and a `docs/tech-stack.md` for humans
 
-**Answer**: *Pending*
+**Answer**: **A** — `.generacy/stack.yaml` — structured YAML, machine-readable, consumed by other onboarding commands. The `.generacy/` directory already hosts structured YAML files (`config.yaml`, `cluster.yaml`). Other onboarding commands (`/onboard-plugins`, `/onboard-mcp`) need to programmatically consume the detected tech stack to make recommendations.
 
 ### Q5: Readiness Scoring Methodology
 **Context**: `/onboard-evaluate` reports a "readiness score with specific gaps identified" but the spec doesn't define the scoring methodology. Without a defined system, different runs could produce inconsistent assessments, and it's unclear what threshold constitutes "ready" vs "needs work."
@@ -50,4 +50,4 @@
 - B: Percentage score (0-100%) with weighted categories and a defined "ready" threshold (e.g., 80%)
 - C: Traffic-light per category (red/yellow/green) with an overall status derived from worst category
 
-**Answer**: *Pending*
+**Answer**: **C** — Traffic-light per category (red/yellow/green) with an overall status derived from worst category. A traffic-light system per category gives clear at-a-glance understanding without the false precision of percentages. Deriving overall status from the worst category is conservative and safe. Categories: environment, configuration, permissions, documentation.
