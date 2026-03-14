@@ -20,26 +20,26 @@ These commands enable AI-assisted project onboarding from the cloud UI (via the 
    - Check for required files (.devcontainer/, .generacy/, package.json, etc.)
    - Verify environment prerequisites (Node.js version, Docker, etc.)
    - Check GitHub permissions and access
-   - Report readiness using traffic-light scoring (red/yellow/green) per category: environment, configuration, permissions, documentation — overall status derived from worst category
+   - Report readiness score with specific gaps identified
    - Suggest next steps based on findings
 
 2. **`/onboard-stack`** — Document technical stack
    - Analyze project to identify languages, frameworks, build tools
    - Identify testing frameworks and CI/CD setup
    - Document required system tools (databases, message queues, etc.)
-   - Generate or update `.generacy/stack.yaml` — structured YAML, machine-readable, consumed by other onboarding commands (`/onboard-plugins`, `/onboard-mcp`)
+   - Generate or update a tech stack summary document
    - Identify tools needed for fully-enabled/end-to-end testing
 
 3. **`/onboard-plugins`** — Configure Generacy & Agency plugins
-   - Present available plugins from hardcoded catalog: `git`, `npm`, `docker`, `firebase`, `humancy`, `spec-kit` (TODO: switch to dynamic marketplace discovery once API exists)
-   - Recommend plugins based on detected tech stack (reads `.generacy/stack.yaml`)
+   - Present available plugins with descriptions
+   - Recommend plugins based on detected tech stack
    - Walk through configuration for selected plugins
    - Write plugin configuration to `.generacy/config.yaml`
    - Validate configuration
 
 4. **`/onboard-mcp`** — Configure MCP servers
-   - Present available MCP servers from hardcoded recommendation map (e.g., web project → Playwright), extensible via `.generacy/` config file for custom additions
-   - Recommend servers based on detected tech stack (reads `.generacy/stack.yaml`)
+   - Present available MCP servers with descriptions
+   - Recommend servers based on project needs (e.g., Playwright for web projects)
    - Help configure `.mcp.json` with appropriate server entries
    - Test MCP server connectivity if possible
 
@@ -64,9 +64,11 @@ These commands enable AI-assisted project onboarding from the cloud UI (via the 
    - Apply appropriate labels for workflow processing
 
 **Distribution**:
-- Implemented as a new agency plugin package (`agency-plugin-onboard`) with a corresponding Claude Code plugin (`claude-plugin-agency-onboard`), following the two-layer architecture established by speckit commands
-- Command `.md` files in the Claude Code plugin, tool implementations in the MCP server package
-- Distributed via the agency marketplace, consistent with `agency-plugin-spec-kit`
+- Slash commands defined as CLAUDE.md custom commands or `.claude/commands/` directory
+- Distributed via:
+  - cluster-base repo (available after merge)
+  - Generacy devcontainer feature (available in devcontainer)
+  - Could also be published as a standalone package
 
 **Common patterns**:
 - All commands start by reading the current project state
