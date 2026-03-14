@@ -1,0 +1,255 @@
+openapi: 3.0.3
+info:
+  title: Conversation API
+  description: |
+    REST endpoints for interactive conversation lifecycle management.
+    Accessible via direct HTTP or REST-over-relay (api_request/api_response pattern).
+    Real-time I/O streaming uses the separate `conversation` relay message type.
+  version: 1.0.0
+
+paths:
+  /conversations:
+    post:
+      summary: Start a new interactive conversation
+      operationId: startConversation
+      tags: [conversations]
+      security:
+        - apiKey: []
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationStartRequest'
+      responses:
+        '201':
+          description: Conversation started successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConversationInfo'
+        '400':
+          description: Invalid request (bad workspace ID, missing fields)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: Conversation ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '429':
+          description: Max concurrent conversations reached
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+    get:
+      summary: List active conversations
+      operationId: listConversations
+      tags: [conversations]
+      security:
+        - apiKey: []
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of active conversations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversations:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ConversationInfo'
+                  maxConcurrent:
+                    type: integer
+                    description: Configured max concurrent conversations
+                required:
+                  - conversations
+                  - maxConcurrent
+
+  /conversations/{conversationId}/message:
+    post:
+      summary: Send a message to an active conversation
+      operationId: sendMessage
+      tags: [conversations]
+      security:
+        - apiKey: []
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConversationMessageRequest'
+      responses:
+        '202':
+          description: Message accepted and delivered to conversation process
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationId:
+                    type: string
+                  accepted:
+                    type: boolean
+                required:
+                  - conversationId
+                  - accepted
+        '404':
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+        '409':
+          description: Conversation not in active state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+  /conversations/{conversationId}:
+    delete:
+      summary: End an active conversation
+      operationId: endConversation
+      tags: [conversations]
+      security:
+        - apiKey: []
+        - bearerAuth: []
+      parameters:
+        - name: conversationId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Conversation ended successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  conversationId:
+                    type: string
+                  state:
+                    type: string
+                    enum: [ending, ended]
+                required:
+                  - conversationId
+                  - state
+        '404':
+          description: Conversation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetail'
+
+components:
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: x-api-key
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ConversationStartRequest:
+      type: object
+      required:
+        - conversationId
+        - workingDirectory
+      properties:
+        conversationId:
+          type: string
+          minLength: 1
+          maxLength: 128
+          description: Unique identifier for this conversation (caller-provided)
+        workingDirectory:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Workspace identifier (e.g., "primary", "dev") resolved by orchestrator
+        initialCommand:
+          type: string
+          maxLength: 4096
+          description: Optional first message/command (e.g., '/onboard-evaluate')
+        model:
+          type: string
+          maxLength: 64
+          description: Claude model to use (uses CLI default if omitted)
+        skipPermissions:
+          type: boolean
+          default: true
+          description: Skip tool permission prompts (default true)
+
+    ConversationMessageRequest:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 65536
+
+    ConversationInfo:
+      type: object
+      required:
+        - conversationId
+        - workspaceId
+        - skipPermissions
+        - startedAt
+        - state
+      properties:
+        conversationId:
+          type: string
+        workspaceId:
+          type: string
+        model:
+          type: string
+        skipPermissions:
+          type: boolean
+        startedAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [starting, active, ending, ended]
+
+    ProblemDetail:
+      type: object
+      description: RFC 7807 Problem Details
+      required:
+        - type
+        - title
+        - status
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
