@@ -1,4 +1,5 @@
 import type { OutputChunk, Logger, ImplementPartialResult } from './types.js';
+import type { ConversationLogger } from './conversation-logger.js';
 
 /**
  * Valid OutputChunk type values recognized from Claude CLI JSON output.
@@ -43,6 +44,7 @@ export class OutputCapture {
     private readonly workflowId: string,
     private readonly logger: Logger,
     private readonly emitter?: SSEEventEmitter,
+    private readonly conversationLogger?: ConversationLogger,
   ) {}
 
   /**
@@ -179,6 +181,7 @@ export class OutputCapture {
     }
 
     this.buffer.push(chunk);
+    this.conversationLogger?.logEvent(chunk);
     this.emitSSEEvent(chunk);
   }
 

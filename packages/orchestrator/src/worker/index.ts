@@ -11,6 +11,8 @@ export {
   type ProcessFactory,
   type ChildProcessHandle,
   type Logger,
+  type JournalEventType,
+  type JournalEntry,
   PHASE_SEQUENCE,
   PHASE_TO_COMMAND,
   PHASE_TO_STAGE,
@@ -34,6 +36,9 @@ export { RepoCheckout } from './repo-checkout.js';
 // Phase loop and assembly
 export { PhaseLoop, type PhaseLoopDeps, type PhaseLoopResult } from './phase-loop.js';
 export { ClaudeCliWorker, type ClaudeCliWorkerDeps } from './claude-cli-worker.js';
+
+// Conversation logging
+export { ConversationLogger } from './conversation-logger.js';
 
 // Epic workflow handlers
 export { EpicPostTasks, type EpicPostTasksResult } from './epic-post-tasks.js';
