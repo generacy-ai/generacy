@@ -270,6 +270,8 @@ export interface ProcessFactory {
  * Handle to a spawned child process
  */
 export interface ChildProcessHandle {
+  /** Process stdin stream (null when stdio[0] is 'ignore') */
+  stdin: NodeJS.WritableStream | null;
   /** Process stdout stream */
   stdout: NodeJS.ReadableStream | null;
   /** Process stderr stream */

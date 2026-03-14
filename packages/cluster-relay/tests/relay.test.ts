@@ -118,6 +118,11 @@ describe('ClusterRelay', () => {
 
     await waitFor(() => relay.state === 'connected');
 
+    // Capture final state before stopping poller (poller may not have fired yet)
+    const finalState = relay.state;
+    if (observedStates[observedStates.length - 1] !== finalState) {
+      observedStates.push(finalState);
+    }
     clearInterval(poller);
 
     // Verify we went through the expected transitions
@@ -204,7 +209,7 @@ describe('ClusterRelay', () => {
               JSON.stringify({
                 type: 'conversation',
                 conversationId: 'conv-1',
-                data: { text: 'hello' },
+                data: { action: 'message', content: 'hello' },
               }),
             );
           }, 50);
@@ -225,7 +230,7 @@ describe('ClusterRelay', () => {
     expect(conversationMsg).toEqual({
       type: 'conversation',
       conversationId: 'conv-1',
-      data: { text: 'hello' },
+      data: { action: 'message', content: 'hello' },
     });
 
     await relay.disconnect();

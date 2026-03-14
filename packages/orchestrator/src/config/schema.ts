@@ -212,6 +212,21 @@ export const WebhookSetupConfigSchema = z.object({
 export type WebhookSetupConfig = z.infer<typeof WebhookSetupConfigSchema>;
 
 /**
+ * Conversation configuration for interactive Claude Code sessions
+ */
+export const ConversationConfigSchema = z.object({
+  /** Maximum concurrent conversations (0 = disabled) */
+  maxConcurrent: z.number().int().min(0).max(20).default(3),
+  /** Grace period for SIGKILL after SIGTERM (ms) */
+  shutdownGracePeriodMs: z.number().int().min(1000).max(60000).default(5000),
+  /** Workspace identifier → filesystem path mapping */
+  workspaces: z.record(z.string(), z.string()).default({}),
+  /** Default model (optional — uses Claude CLI default if omitted) */
+  defaultModel: z.string().optional(),
+});
+export type ConversationConfig = z.infer<typeof ConversationConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
@@ -229,6 +244,7 @@ export const OrchestratorConfigSchema = z.object({
   epicMonitor: EpicMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
+  conversations: ConversationConfigSchema.default({}),
   relay: RelayConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),

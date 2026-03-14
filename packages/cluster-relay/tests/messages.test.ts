@@ -51,14 +51,34 @@ describe('messages', () => {
       expect(result).toEqual(msg);
     });
 
-    it('parses a valid conversation message', () => {
+    it('parses a valid conversation input message', () => {
+      const msg = {
+        type: 'conversation',
+        conversationId: 'conv-1',
+        data: { action: 'message', content: 'hello' },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid conversation output message', () => {
+      const msg = {
+        type: 'conversation',
+        conversationId: 'conv-1',
+        data: { event: 'output', payload: { text: 'response' }, timestamp: '2026-03-14T00:00:00Z' },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('returns null for conversation message with invalid data', () => {
       const msg = {
         type: 'conversation',
         conversationId: 'conv-1',
         data: { text: 'hello' },
       };
       const result = parseRelayMessage(msg);
-      expect(result).toEqual(msg);
+      expect(result).toBeNull();
     });
 
     it('parses a valid heartbeat message', () => {

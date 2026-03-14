@@ -98,6 +98,7 @@ function createMockProcess(exitCode = 0, exitDelay = 10) {
   });
 
   const handle: ChildProcessHandle = {
+    stdin: null,
     stdout: stdout as unknown as NodeJS.ReadableStream,
     stderr: stderr as unknown as NodeJS.ReadableStream,
     pid: 12345,

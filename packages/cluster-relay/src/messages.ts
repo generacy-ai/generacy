@@ -25,11 +25,26 @@ export interface EventMessage {
   event: unknown;
 }
 
-export interface ConversationMessage {
+export interface ConversationInputMessage {
   type: 'conversation';
   conversationId: string;
-  data: unknown;
+  data: {
+    action: 'message';
+    content: string;
+  };
 }
+
+export interface ConversationOutputMessage {
+  type: 'conversation';
+  conversationId: string;
+  data: {
+    event: 'output' | 'tool_use' | 'tool_result' | 'complete' | 'error';
+    payload: unknown;
+    timestamp: string;
+  };
+}
+
+export type ConversationMessage = ConversationInputMessage | ConversationOutputMessage;
 
 export interface HeartbeatMessage {
   type: 'heartbeat';
@@ -108,10 +123,21 @@ const EventMessageSchema = z.object({
   event: z.unknown(),
 });
 
+const ConversationInputDataSchema = z.object({
+  action: z.literal('message'),
+  content: z.string().min(1),
+});
+
+const ConversationOutputDataSchema = z.object({
+  event: z.enum(['output', 'tool_use', 'tool_result', 'complete', 'error']),
+  payload: z.unknown(),
+  timestamp: z.string(),
+});
+
 const ConversationMessageSchema = z.object({
   type: z.literal('conversation'),
   conversationId: z.string().min(1),
-  data: z.unknown(),
+  data: z.union([ConversationInputDataSchema, ConversationOutputDataSchema]),
 });
 
 const HeartbeatMessageSchema = z.object({
