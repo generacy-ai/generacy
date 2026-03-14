@@ -62,16 +62,16 @@
 
 ## Phase 6: Testing
 
-- [ ] T050 [P] [US2] Write unit tests for detectors — `tests/detectors.test.ts` testing each detector with fixture project directories (empty, Node.js, Go, Python, monorepo)
-- [ ] T051 [P] [US1] Write unit tests for `evaluate_readiness` tool — `tests/evaluate-readiness.test.ts` testing scoring logic, category aggregation, worst-wins overall
-- [ ] T052 [P] [US2] Write unit tests for `detect_stack` tool — `tests/detect-stack.test.ts` testing detector orchestration and `.generacy/stack.yaml` output
-- [ ] T053 [P] [US3] Write unit tests for `configure_plugins` tool — `tests/configure-plugins.test.ts` testing stack signal matching, catalog lookups, config writing
-- [ ] T054 [P] [US4] Write unit tests for `configure_mcp` tool — `tests/configure-mcp.test.ts` testing stack signal matching, custom server loading, `.mcp.json` writing
-- [ ] T055 [P] [US5] Write unit tests for `init_project` tool — `tests/init-project.test.ts` testing CLAUDE.md creation, .gitignore updates, devcontainer verification
-- [ ] T056 [P] [US6] Write unit tests for `analyze_architecture` tool — `tests/analyze-architecture.test.ts` testing directory scanning, pattern detection
-- [ ] T057 [P] [US7] Write unit tests for `populate_backlog` tool — `tests/populate-backlog.test.ts` testing issue suggestion, batching, Octokit integration
-- [ ] T058 Write idempotency tests — `tests/idempotency.test.ts` running each config-writing tool twice, verifying no duplication or corruption
-- [ ] T059 Write integration test — `tests/integration.test.ts` full flow: detect stack → configure plugins → configure mcp → verify outputs are consistent
+- [X] T050 [P] [US2] Write unit tests for detectors — `tests/detectors.test.ts` testing each detector with fixture project directories (empty, Node.js, Go, Python, monorepo)
+- [X] T051 [P] [US1] Write unit tests for `evaluate_readiness` tool — `tests/evaluate-readiness.test.ts` testing scoring logic, category aggregation, worst-wins overall
+- [X] T052 [P] [US2] Write unit tests for `detect_stack` tool — `tests/detect-stack.test.ts` testing detector orchestration and `.generacy/stack.yaml` output
+- [X] T053 [P] [US3] Write unit tests for `configure_plugins` tool — `tests/configure-plugins.test.ts` testing stack signal matching, catalog lookups, config writing
+- [X] T054 [P] [US4] Write unit tests for `configure_mcp` tool — `tests/configure-mcp.test.ts` testing stack signal matching, custom server loading, `.mcp.json` writing
+- [X] T055 [P] [US5] Write unit tests for `init_project` tool — `tests/init-project.test.ts` testing CLAUDE.md creation, .gitignore updates, devcontainer verification
+- [X] T056 [P] [US6] Write unit tests for `analyze_architecture` tool — `tests/analyze-architecture.test.ts` testing directory scanning, pattern detection
+- [X] T057 [P] [US7] Write unit tests for `populate_backlog` tool — `tests/populate-backlog.test.ts` testing issue suggestion, batching, Octokit integration
+- [X] T058 Write idempotency tests — `tests/idempotency.test.ts` running each config-writing tool twice, verifying no duplication or corruption
+- [X] T059 Write integration test — `tests/integration.test.ts` full flow: detect stack → configure plugins → configure mcp → verify outputs are consistent
 
 ## Dependencies & Execution Order
 
