@@ -10,13 +10,13 @@
 
 ## Phase 1: Types & Setup
 
-- [ ] T001 [US1] Add `JournalEventType` and `JournalEntry` types to `packages/orchestrator/src/worker/types.ts`
+- [X] T001 [US1] Add `JournalEventType` and `JournalEntry` types to `packages/orchestrator/src/worker/types.ts`
   - Add `JournalEventType = 'phase_start' | 'phase_complete' | 'tool_use' | 'tool_result' | 'error'`
   - Add `JournalEntry` interface with required fields (`timestamp`, `phase`, `event_type`, `session_id`) and optional fields (`model`, `tokens_in`, `tokens_out`, `tool_name`, `tool_call_id`, `file_paths`, `duration_ms`, `error_message`)
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Implement `ConversationLogger` class in `packages/orchestrator/src/worker/conversation-logger.ts`
+- [X] T002 [US1] Implement `ConversationLogger` class in `packages/orchestrator/src/worker/conversation-logger.ts`
   - Constructor accepts `specDir: string`, computes `filePath` as `specDir/conversation-log.jsonl`
   - `setPhase(phase, sessionId, model?)` — stores phase state, emits `phase_start` entry, starts 30s flush timer
   - `logEvent(chunk: OutputChunk)` — processes `tool_use`, `tool_result`, `complete`, `error` events into `JournalEntry` objects; skips `text` and `init` events (init handled by setPhase)
@@ -30,29 +30,29 @@
 
 ## Phase 3: Integration
 
-- [ ] T003 [US1] Wire `ConversationLogger` into `OutputCapture` in `packages/orchestrator/src/worker/output-capture.ts`
+- [X] T003 [US1] Wire `ConversationLogger` into `OutputCapture` in `packages/orchestrator/src/worker/output-capture.ts`
   - Add optional `conversationLogger?: ConversationLogger` as fourth constructor parameter
   - In `processChunk()`, after parsing each JSON line into `OutputChunk`, call `this.conversationLogger?.logEvent(chunk)`
 
-- [ ] T004 [P] [US1] Wire `ConversationLogger` through `CliSpawner` in `packages/orchestrator/src/worker/cli-spawner.ts`
+- [X] T004 [P] [US1] Wire `ConversationLogger` through `CliSpawner` in `packages/orchestrator/src/worker/cli-spawner.ts`
   - Add optional `conversationLogger?: ConversationLogger` parameter to `spawnPhase()` method
   - Pass it through to `OutputCapture` constructor
 
-- [ ] T005 [US1] Wire `ConversationLogger` into `PhaseLoop` in `packages/orchestrator/src/worker/phase-loop.ts`
+- [X] T005 [US1] Wire `ConversationLogger` into `PhaseLoop` in `packages/orchestrator/src/worker/phase-loop.ts`
   - Create `ConversationLogger` instance at loop start with spec directory path (derived from `context.checkoutPath` and issue number)
   - At each phase start (before `spawnPhase`): call `logger.setPhase(phase, sessionId, model)`
   - Pass logger to `cliSpawner.spawnPhase()` and through to `OutputCapture`
   - At each phase end: call `logger.close()` to trigger final flush + `phase_complete` entry
   - Logger instance persists across phases (single JSONL file, append-only)
 
-- [ ] T006 [US1] Ensure JSONL file is included in git stage at phase completion
+- [X] T006 [US1] Ensure JSONL file is included in git stage at phase completion
   - Verify that `prManager.commitAndPush()` uses `github.stageAll()` which would include the JSONL file
   - If `stageAll()` already stages all changes, no code change needed — just verify behavior
   - If explicit staging is needed, add `conversation-log.jsonl` path to the staging step
 
 ## Phase 4: Tests
 
-- [ ] T007 [US1] Write unit tests for `ConversationLogger` in `packages/orchestrator/src/worker/__tests__/conversation-logger.test.ts`
+- [X] T007 [US1] Write unit tests for `ConversationLogger` in `packages/orchestrator/src/worker/__tests__/conversation-logger.test.ts`
   - Test JSONL line format for each event type (`phase_start`, `tool_use`, `tool_result`, `phase_complete`, `error`)
   - Test buffer auto-flush at 50 events threshold
   - Test timer-based periodic flush at 30s (use fake timers)
@@ -66,7 +66,7 @@
   - Test unknown/unsupported tool_use events produce entries without `file_paths`
   - Test `setPhase()` resets state correctly for a new phase
 
-- [ ] T008 [P] [US1] Add integration-level tests verifying OutputCapture → ConversationLogger wiring
+- [X] T008 [P] [US1] Add integration-level tests verifying OutputCapture → ConversationLogger wiring
   - Test that `OutputCapture.processChunk()` calls `ConversationLogger.logEvent()` for each parsed chunk
   - Test that a mock ConversationLogger receives expected events from a sample Claude CLI output stream
   - Test that passing no ConversationLogger (undefined) doesn't break OutputCapture
