@@ -17,6 +17,7 @@ import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
+import { ConversationLogger } from './conversation-logger.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -271,10 +272,15 @@ export class ClaudeCliWorker {
         this.config.shutdownGracePeriodMs,
       );
 
+      const conversationLogger = featureResult.feature_dir
+        ? new ConversationLogger(featureResult.feature_dir)
+        : undefined;
+
       const outputCapture = new OutputCapture(
         workflowId,
         workerLogger,
         this.sseEmitter,
+        conversationLogger,
       );
 
       const prManager = new PrManager(
@@ -333,6 +339,7 @@ export class ClaudeCliWorker {
         cliSpawner,
         outputCapture,
         prManager,
+        conversationLogger,
       }, phaseSequence);
 
       // 9. Handle completion

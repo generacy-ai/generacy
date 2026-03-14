@@ -7,6 +7,42 @@ import type { GitHubClient } from '@generacy-ai/workflow-engine';
 export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'validate';
 
 /**
+ * Event types captured in the conversation JSONL log.
+ */
+export type JournalEventType = 'phase_start' | 'phase_complete' | 'tool_use' | 'tool_result' | 'error';
+
+/**
+ * A single entry in the conversation JSONL log file.
+ * Optional fields are included when available and omitted when not.
+ */
+export interface JournalEntry {
+  /** ISO 8601 timestamp */
+  timestamp: string;
+  /** Workflow phase that produced this entry */
+  phase: WorkflowPhase;
+  /** Type of event */
+  event_type: JournalEventType;
+  /** Claude CLI session ID */
+  session_id: string;
+  /** Model name (e.g., "claude-sonnet-4-6") */
+  model?: string;
+  /** Input token count from complete event */
+  tokens_in?: number;
+  /** Output token count from complete event */
+  tokens_out?: number;
+  /** Tool name for tool_use/tool_result events */
+  tool_name?: string;
+  /** Tool call ID for pairing tool_use → tool_result */
+  tool_call_id?: string;
+  /** File paths touched by tool */
+  file_paths?: string[];
+  /** Tool execution duration in ms (on tool_result only) */
+  duration_ms?: number;
+  /** Error description (on error events only) */
+  error_message?: string;
+}
+
+/**
  * Ordered sequence of all workflow phases (default for feature/bugfix workflows)
  */
 export const PHASE_SEQUENCE: WorkflowPhase[] = [

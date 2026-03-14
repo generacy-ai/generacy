@@ -7,6 +7,7 @@ import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
@@ -22,6 +23,7 @@ export interface PhaseLoopDeps {
   cliSpawner: CliSpawner;
   outputCapture: OutputCapture;
   prManager: PrManager;
+  conversationLogger?: ConversationLogger;
 }
 
 /**
@@ -70,7 +72,7 @@ export class PhaseLoop {
     phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
     const sequence = phaseSequence ?? PHASE_SEQUENCE;
-    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager } = deps;
+    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger } = deps;
     const results: PhaseResult[] = [];
 
     // Track session ID across phases for conversation resume.
@@ -161,6 +163,11 @@ export class PhaseLoop {
             context.signal,
           );
         } else {
+          // Set up conversation logger for this CLI phase
+          if (conversationLogger) {
+            conversationLogger.setPhase(phase, currentSessionId ?? '', undefined);
+          }
+
           // CLI phase — spawn Claude CLI (resume previous session if available)
           result = await cliSpawner.spawnPhase(
             phase,
@@ -192,6 +199,18 @@ export class PhaseLoop {
       }
 
       results.push(result);
+
+      // 3a-bis. Close conversation logger for this phase (flush + phase_complete entry)
+      if (conversationLogger && PHASE_TO_COMMAND[phase] !== null) {
+        try {
+          await conversationLogger.close();
+        } catch (err) {
+          this.logger.warn(
+            { phase, error: String(err) },
+            'ConversationLogger.close() failed — continuing',
+          );
+        }
+      }
 
       // 3b. Capture session ID for resume in subsequent phases
       if (result.sessionId) {
