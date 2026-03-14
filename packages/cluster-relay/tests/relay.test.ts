@@ -204,7 +204,7 @@ describe('ClusterRelay', () => {
               JSON.stringify({
                 type: 'conversation',
                 conversationId: 'conv-1',
-                data: { text: 'hello' },
+                data: { action: 'message', content: 'hello' },
               }),
             );
           }, 50);
@@ -225,7 +225,7 @@ describe('ClusterRelay', () => {
     expect(conversationMsg).toEqual({
       type: 'conversation',
       conversationId: 'conv-1',
-      data: { text: 'hello' },
+      data: { action: 'message', content: 'hello' },
     });
 
     await relay.disconnect();
