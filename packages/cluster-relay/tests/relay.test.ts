@@ -118,6 +118,11 @@ describe('ClusterRelay', () => {
 
     await waitFor(() => relay.state === 'connected');
 
+    // Capture final state before stopping poller (poller may not have fired yet)
+    const finalState = relay.state;
+    if (observedStates[observedStates.length - 1] !== finalState) {
+      observedStates.push(finalState);
+    }
     clearInterval(poller);
 
     // Verify we went through the expected transitions
