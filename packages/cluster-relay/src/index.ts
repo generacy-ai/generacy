@@ -1,5 +1,5 @@
-export { ClusterRelay } from './relay.js';
-export type { RelayState } from './relay.js';
+export { ClusterRelay, ClusterRelay as ClusterRelayClient } from './relay.js';
+export type { RelayState, ClusterRelayClientOptions } from './relay.js';
 
 export {
   type RelayMessage,
