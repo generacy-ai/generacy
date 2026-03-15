@@ -1,5 +1,6 @@
 import WebSocket from 'ws';
 import type { RelayConfig } from './config.js';
+import { RelayConfigSchema } from './config.js';
 import type { RelayMessage, ClusterMetadata } from './messages.js';
 import { parseRelayMessage } from './messages.js';
 import { collectMetadata } from './metadata.js';
@@ -15,6 +16,23 @@ export interface Logger {
   error(msg: string): void;
   error(obj: Record<string, unknown>, msg: string): void;
 }
+
+/** Options accepted by ClusterRelayClient (orchestrator-facing API). */
+export interface ClusterRelayClientOptions {
+  /** API key for cloud authentication (GENERACY_API_KEY) */
+  apiKey: string;
+  /** Cloud relay WebSocket URL (GENERACY_CLOUD_URL) */
+  cloudUrl?: string;
+  /** Base reconnect delay in ms (default: 5000) */
+  baseReconnectDelayMs?: number;
+}
+
+type EventMap = {
+  message: (msg: RelayMessage) => void;
+  connected: () => void;
+  disconnected: (reason: string) => void;
+  error: (error: Error) => void;
+};
 
 const defaultLogger: Logger = {
   info(...args: unknown[]) {
@@ -37,6 +55,7 @@ export class ClusterRelay {
   private readonly config: RelayConfig;
   private readonly logger: Logger;
   private readonly messageHandlers: Array<(message: RelayMessage) => void> = [];
+  private readonly eventHandlers: Map<string, Set<(...args: unknown[]) => void>> = new Map();
   private running = false;
   private abortController: AbortController | null = null;
   private reconnectAttempt = 0;
@@ -44,9 +63,60 @@ export class ClusterRelay {
   private pongReceived = true;
   private metadataOverride: Partial<ClusterMetadata> | null = null;
 
-  constructor(config: RelayConfig, logger?: Logger) {
-    this.config = config;
+  /**
+   * Accept either a full RelayConfig or a ClusterRelayClientOptions (orchestrator API).
+   * ClusterRelayClientOptions uses `cloudUrl` instead of `relayUrl`.
+   */
+  constructor(config: RelayConfig | ClusterRelayClientOptions, logger?: Logger) {
+    if ('relayUrl' in config) {
+      this.config = config as RelayConfig;
+    } else {
+      const opts = config as ClusterRelayClientOptions;
+      this.config = RelayConfigSchema.parse({
+        apiKey: opts.apiKey,
+        relayUrl: opts.cloudUrl,
+        baseReconnectDelayMs: opts.baseReconnectDelayMs,
+      });
+    }
     this.logger = logger ?? defaultLogger;
+  }
+
+  /** Whether the relay is currently connected (orchestrator-facing API). */
+  get isConnected(): boolean {
+    return this._state === 'connected';
+  }
+
+  /** Register an event handler (orchestrator-facing EventEmitter API). */
+  on<K extends keyof EventMap>(event: K, handler: EventMap[K]): void {
+    if (!this.eventHandlers.has(event)) {
+      this.eventHandlers.set(event, new Set());
+    }
+    this.eventHandlers.get(event)!.add(handler as (...args: unknown[]) => void);
+    // Also register message handlers in the legacy array for backward compat
+    if (event === 'message') {
+      this.messageHandlers.push(handler as EventMap['message']);
+    }
+  }
+
+  /** Remove an event handler (orchestrator-facing EventEmitter API). */
+  off(event: string, handler: (...args: unknown[]) => void): void {
+    this.eventHandlers.get(event)?.delete(handler);
+    if (event === 'message') {
+      const idx = this.messageHandlers.indexOf(handler as (msg: RelayMessage) => void);
+      if (idx !== -1) this.messageHandlers.splice(idx, 1);
+    }
+  }
+
+  private emit<K extends keyof EventMap>(event: K, ...args: Parameters<EventMap[K]>): void {
+    const handlers = this.eventHandlers.get(event);
+    if (!handlers) return;
+    for (const handler of handlers) {
+      try {
+        (handler as (...a: unknown[]) => void)(...(args as unknown[]));
+      } catch (err) {
+        this.logger.error({ err: String(err) }, `Event handler error for '${event}'`);
+      }
+    }
   }
 
   get state(): RelayState {
@@ -175,6 +245,19 @@ export class ClusterRelay {
       };
       signal.addEventListener('abort', onAbort, { once: true });
 
+      // Capture HTTP error response body for better diagnostics
+      ws.on('unexpected-response', (_req, res) => {
+        let body = '';
+        res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
+        res.on('end', () => {
+          this.logger.error(
+            { statusCode: res.statusCode, body: body.trim() },
+            `Relay connection rejected (HTTP ${res.statusCode})`
+          );
+          reject(new Error(`HTTP ${res.statusCode}: ${body.trim() || res.statusMessage}`));
+        });
+      });
+
       ws.on('open', () => {
         this._state = 'authenticating';
         this.ws = ws;
@@ -204,6 +287,7 @@ export class ClusterRelay {
           this._state = 'connected';
           this.logger.info('Relay authenticated and connected');
           this.startHeartbeat();
+          this.emit('connected');
         }
 
         // If we receive any valid message while authenticating, consider us connected
@@ -211,6 +295,7 @@ export class ClusterRelay {
           this._state = 'connected';
           this.logger.info('Relay connected');
           this.startHeartbeat();
+          this.emit('connected');
         }
 
         // Handle api_request by proxying to orchestrator
@@ -241,7 +326,9 @@ export class ClusterRelay {
         this.stopHeartbeat();
         this.ws = null;
         this._state = 'disconnected';
-        this.logger.info({ code, reason: reason.toString() }, 'WebSocket closed');
+        const reasonStr = reason.toString() || 'connection closed';
+        this.logger.info({ code, reason: reasonStr }, 'WebSocket closed');
+        this.emit('disconnected', reasonStr);
         resolve();
       });
 
@@ -250,6 +337,7 @@ export class ClusterRelay {
         this.stopHeartbeat();
         this.ws = null;
         this._state = 'disconnected';
+        this.emit('error', err);
         reject(err);
       });
     });

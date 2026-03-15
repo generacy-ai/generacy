@@ -243,7 +243,23 @@ function loadFromEnv(): Record<string, unknown> {
       (config.relay as Record<string, unknown>).apiKey = relayApiKey;
     }
     if (relayCloudUrl) {
-      (config.relay as Record<string, unknown>).cloudUrl = relayCloudUrl;
+      // Auto-append ?projectId from .generacy/config.yaml if not already in the URL
+      let resolvedUrl = relayCloudUrl;
+      if (!relayCloudUrl.includes('projectId=') && configPath) {
+        try {
+          const raw = readFileSync(configPath, 'utf-8');
+          const doc = parseYaml(raw) as Record<string, unknown>;
+          const project = doc['project'] as Record<string, unknown> | undefined;
+          const projectId = project?.['id'];
+          if (typeof projectId === 'string' && projectId) {
+            const sep = relayCloudUrl.includes('?') ? '&' : '?';
+            resolvedUrl = `${relayCloudUrl}${sep}projectId=${projectId}`;
+          }
+        } catch {
+          // Non-fatal: proceed with URL as-is
+        }
+      }
+      (config.relay as Record<string, unknown>).cloudUrl = resolvedUrl;
     }
   }
 
