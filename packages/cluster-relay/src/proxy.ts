@@ -41,7 +41,7 @@ export async function handleApiRequest(
 
     return {
       type: 'api_response',
-      id: request.id,
+      correlationId: request.correlationId,
       status: response.status,
       headers: responseHeaders,
       body,
@@ -50,7 +50,7 @@ export async function handleApiRequest(
     if (error instanceof DOMException && error.name === 'TimeoutError') {
       return {
         type: 'api_response',
-        id: request.id,
+        correlationId: request.correlationId,
         status: 504,
         body: { error: 'Gateway Timeout', message: 'Request to orchestrator timed out' },
       };
@@ -58,7 +58,7 @@ export async function handleApiRequest(
 
     return {
       type: 'api_response',
-      id: request.id,
+      correlationId: request.correlationId,
       status: 502,
       body: { error: 'Bad Gateway', message: `Failed to reach orchestrator: ${String(error)}` },
     };
