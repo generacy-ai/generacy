@@ -9,7 +9,7 @@ describe('messages', () => {
     it('parses a valid api_request message', () => {
       const msg = {
         type: 'api_request',
-        id: 'req-1',
+        correlationId: 'req-1',
         method: 'GET',
         path: '/workflows',
       };
@@ -20,7 +20,7 @@ describe('messages', () => {
     it('parses a valid api_request with optional fields', () => {
       const msg = {
         type: 'api_request',
-        id: 'req-2',
+        correlationId: 'req-2',
         method: 'POST',
         path: '/workflows',
         headers: { 'Content-Type': 'application/json' },
@@ -33,7 +33,7 @@ describe('messages', () => {
     it('parses a valid api_response message', () => {
       const msg = {
         type: 'api_response',
-        id: 'req-1',
+        correlationId: 'req-1',
         status: 200,
         body: { data: 'test' },
       };
@@ -123,10 +123,10 @@ describe('messages', () => {
       expect(result).toBeNull();
     });
 
-    it('returns null for api_request with empty id', () => {
+    it('returns null for api_request with empty correlationId', () => {
       const result = parseRelayMessage({
         type: 'api_request',
-        id: '',
+        correlationId: '',
         method: 'GET',
         path: '/test',
       });
@@ -136,7 +136,7 @@ describe('messages', () => {
     it('returns null for api_response with invalid status', () => {
       const result = parseRelayMessage({
         type: 'api_response',
-        id: 'req-1',
+        correlationId: 'req-1',
         status: 999,
       });
       expect(result).toBeNull();

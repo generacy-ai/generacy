@@ -18,7 +18,7 @@ const baseConfig: RelayConfig = {
 
 const baseRequest: ApiRequestMessage = {
   type: 'api_request',
-  id: 'req-1',
+  correlationId: 'req-1',
   method: 'GET',
   path: '/workflows',
 };
@@ -50,7 +50,7 @@ describe('handleApiRequest', () => {
 
     expect(result).toEqual({
       type: 'api_response',
-      id: 'req-1',
+      correlationId: 'req-1',
       status: 200,
       headers: { 'content-type': 'application/json' },
       body: responseBody,
@@ -63,7 +63,7 @@ describe('handleApiRequest', () => {
     const result = await handleApiRequest(baseRequest, baseConfig);
 
     expect(result.type).toBe('api_response');
-    expect(result.id).toBe('req-1');
+    expect(result.correlationId).toBe('req-1');
     expect(result.status).toBe(502);
     expect(result.body).toEqual({
       error: 'Bad Gateway',
@@ -79,7 +79,7 @@ describe('handleApiRequest', () => {
 
     expect(result).toEqual({
       type: 'api_response',
-      id: 'req-1',
+      correlationId: 'req-1',
       status: 504,
       body: { error: 'Gateway Timeout', message: 'Request to orchestrator timed out' },
     });
@@ -112,7 +112,7 @@ describe('handleApiRequest', () => {
     const requestBody = { name: 'new-workflow', config: { steps: 3 } };
     const postRequest: ApiRequestMessage = {
       type: 'api_request',
-      id: 'req-1',
+      correlationId: 'req-1',
       method: 'POST',
       path: '/workflows',
       body: requestBody,

@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 export interface ApiRequestMessage {
   type: 'api_request';
-  id: string;
+  correlationId: string;
   method: string;
   path: string;
   headers?: Record<string, string>;
@@ -13,7 +13,7 @@ export interface ApiRequestMessage {
 
 export interface ApiResponseMessage {
   type: 'api_response';
-  id: string;
+  correlationId: string;
   status: number;
   headers?: Record<string, string>;
   body?: unknown;
@@ -102,19 +102,21 @@ const ClusterMetadataSchema = z.object({
 
 const ApiRequestMessageSchema = z.object({
   type: z.literal('api_request'),
-  id: z.string().min(1),
+  correlationId: z.string().min(1),
   method: z.string().min(1),
   path: z.string().min(1),
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),
+  timestamp: z.string().optional(),
 });
 
 const ApiResponseMessageSchema = z.object({
   type: z.literal('api_response'),
-  id: z.string().min(1),
+  correlationId: z.string().min(1),
   status: z.number().int().min(100).max(599),
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),
+  timestamp: z.string().optional(),
 });
 
 const EventMessageSchema = z.object({
