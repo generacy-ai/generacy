@@ -61,6 +61,12 @@ export interface ClusterRelayClientOptions {
 
   /** Base reconnect delay in ms (default: 5000). Backoff: 5s→10s→20s→...→300s. */
   baseReconnectDelayMs?: number;
+
+  /** URL of the local orchestrator API (default: http://localhost:3000) */
+  orchestratorUrl?: string;
+
+  /** API key for authenticating relay-proxied requests to the orchestrator */
+  orchestratorApiKey?: string;
 }
 
 // =============================================================================
