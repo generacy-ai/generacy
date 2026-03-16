@@ -25,6 +25,10 @@ export interface ClusterRelayClientOptions {
   cloudUrl?: string;
   /** Base reconnect delay in ms (default: 5000) */
   baseReconnectDelayMs?: number;
+  /** URL of the local orchestrator API (default: http://localhost:3000) */
+  orchestratorUrl?: string;
+  /** API key for authenticating relay-proxied requests to the orchestrator */
+  orchestratorApiKey?: string;
 }
 
 type EventMap = {
@@ -76,6 +80,8 @@ export class ClusterRelay {
         apiKey: opts.apiKey,
         relayUrl: opts.cloudUrl,
         baseReconnectDelayMs: opts.baseReconnectDelayMs,
+        orchestratorUrl: opts.orchestratorUrl,
+        orchestratorApiKey: opts.orchestratorApiKey,
       });
     }
     this.logger = logger ?? defaultLogger;

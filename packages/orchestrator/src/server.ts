@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -258,9 +259,20 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     try {
       // Dynamic import — @generacy-ai/cluster-relay may not be installed yet (Phase 2.1)
       const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+
+      // Generate internal API key for relay-proxied requests
+      const relayInternalKey = crypto.randomUUID();
+      apiKeyStore.addKey(relayInternalKey, {
+        name: 'relay-internal',
+        scopes: ['admin'],
+        createdAt: new Date().toISOString(),
+      });
+
       const relayClient = new RelayClientImpl({
         apiKey: config.relay.apiKey,
         cloudUrl: config.relay.cloudUrl,
+        orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
+        orchestratorApiKey: relayInternalKey,
       });
       relayBridge = new RelayBridge({
         client: relayClient,
