@@ -191,18 +191,9 @@ phases:
         continueOnError: true
 
   # Phase 7: Verification
-  # Uses --if-present so repos without test/lint scripts don't fail.
-  # For monorepos, -r runs in all workspaces that define the script.
+  # Uses build.validate to auto-detect package manager and run all validation scripts.
   - name: verification
     steps:
-      - name: run-tests
-        uses: verification.check
-        with:
-          command: 'if [ -f pnpm-workspace.yaml ]; then pnpm -r run --if-present test; elif [ -f package.json ]; then pnpm run --if-present test; else echo "No package.json found, skipping tests"; fi'
-        continueOnError: true
-
-      - name: run-lint
-        uses: verification.check
-        with:
-          command: 'if [ -f pnpm-workspace.yaml ]; then pnpm -r run --if-present lint; elif [ -f package.json ]; then pnpm run --if-present lint; else echo "No package.json found, skipping lint"; fi'
+      - name: validate
+        uses: build.validate
         continueOnError: true

@@ -10,12 +10,12 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [P] [US1] Replace verification steps in `speckit-feature.yaml` — Remove the `run-tests` and `run-lint` steps (lines 198–208) in Phase 7 and replace with a single `build.validate` step with `continueOnError: true`. Update or remove the phase comment about `--if-present` and monorepo detection (lines 193–195). File: `.generacy/speckit-feature.yaml`
-- [ ] T002 [P] [US1] Replace verification steps in `speckit-bugfix.yaml` — Remove the `run-tests` and `run-lint` steps (lines 166–176) in Phase 6 and replace with a single `build.validate` step with `continueOnError: true`. File: `.generacy/speckit-bugfix.yaml`
+- [X] T001 [P] [US1] Replace verification steps in `speckit-feature.yaml` — Remove the `run-tests` and `run-lint` steps (lines 198–208) in Phase 7 and replace with a single `build.validate` step with `continueOnError: true`. Update or remove the phase comment about `--if-present` and monorepo detection (lines 193–195). File: `.generacy/speckit-feature.yaml`
+- [X] T002 [P] [US1] Replace verification steps in `speckit-bugfix.yaml` — Remove the `run-tests` and `run-lint` steps (lines 166–176) in Phase 6 and replace with a single `build.validate` step with `continueOnError: true`. File: `.generacy/speckit-bugfix.yaml`
 
 ## Phase 2: Verification
 
-- [ ] T003 [US1] Verify no hardcoded `pnpm` references remain in verification phases — Grep both files' verification phases for `pnpm` to confirm SC-001. Confirm each file has exactly 1 verification step using `build.validate` (SC-002). Confirm `continueOnError: true` is present (FR-004). Confirm no changes outside the verification phase (Out of Scope constraint).
+- [X] T003 [US1] Verify no hardcoded `pnpm` references remain in verification phases — Grep both files' verification phases for `pnpm` to confirm SC-001. Confirm each file has exactly 1 verification step using `build.validate` (SC-002). Confirm `continueOnError: true` is present (FR-004). Confirm no changes outside the verification phase (Out of Scope constraint).
 
 ## Dependencies & Execution Order
 
