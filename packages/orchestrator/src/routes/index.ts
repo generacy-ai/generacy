@@ -6,6 +6,7 @@ import { setupQueueRoutes } from './queue.js';
 import { setupAgentRoutes } from './agents.js';
 import { setupIntegrationRoutes, type IntegrationRegistry } from './integrations.js';
 import { setupEventsRoutes } from './events.js';
+import { setupFileRoutes } from './files.js';
 import type { WorkflowService } from '../services/workflow-service.js';
 import type { QueueService } from '../services/queue-service.js';
 import type { AgentRegistry } from '../services/agent-registry.js';
@@ -43,6 +44,9 @@ export async function registerRoutes(
   await setupAgentRoutes(server, options.agentRegistry);
   await setupIntegrationRoutes(server, options.integrationRegistry);
 
+  // File read/write routes (used by relay for cluster config, etc.)
+  await setupFileRoutes(server);
+
   // SSE event routes
   await setupEventsRoutes(server);
 }
@@ -63,6 +67,7 @@ export {
   getActiveConnectionCount,
   closeAllSSEConnections,
 } from './events.js';
+export { setupFileRoutes } from './files.js';
 export {
   setupWebhookRoutes,
   type WebhookRouteOptions,
