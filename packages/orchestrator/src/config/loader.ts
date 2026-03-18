@@ -402,7 +402,21 @@ export function loadConfig(options: LoadConfigOptions = {}): OrchestratorConfig 
   const mergedConfig = deepMerge(fileConfig, envConfig);
 
   // Validate and return
-  return validateConfig(mergedConfig);
+  const config = validateConfig(mergedConfig);
+
+  // Auto-populate conversations.workspaces from repositories when empty.
+  // Maps each repo "owner/name" → "/workspaces/name" if the directory exists.
+  if (Object.keys(config.conversations.workspaces).length === 0 && config.repositories.length > 0) {
+    for (const repo of config.repositories) {
+      const repoKey = `${repo.owner}/${repo.repo}`;
+      const workspacePath = `/workspaces/${repo.repo}`;
+      if (existsSync(workspacePath)) {
+        config.conversations.workspaces[repoKey] = workspacePath;
+      }
+    }
+  }
+
+  return config;
 }
 
 /**
