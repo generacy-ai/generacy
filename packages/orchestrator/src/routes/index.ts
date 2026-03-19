@@ -75,7 +75,7 @@ export {
   closeAllSSEConnections,
 } from './events.js';
 export { setupFileRoutes } from './files.js';
-export { setupSessionRoutes } from './sessions.js';
+export { setupSessionRoutes, setupSessionDetailRoutes } from './sessions.js';
 export {
   setupWebhookRoutes,
   type WebhookRouteOptions,

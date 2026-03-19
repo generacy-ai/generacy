@@ -37,6 +37,7 @@ import { ConversationManager } from './conversation/conversation-manager.js';
 import { ConversationSpawner } from './conversation/conversation-spawner.js';
 import { conversationProcessFactory } from './conversation/process-factory.js';
 import { setupConversationRoutes } from './routes/conversations.js';
+import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
 
 /**
@@ -401,6 +402,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       if (conversationManager) {
         await setupConversationRoutes(server, conversationManager);
       }
+
+      // Register session detail routes (manager is optional — isActive defaults to false without it)
+      await setupSessionDetailRoutes(server, conversationManager);
 
       // Register dispatch queue routes
       await setupDispatchRoutes(server, queueAdapter);
