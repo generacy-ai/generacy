@@ -310,6 +310,7 @@ export class ConversationManager {
     return {
       conversationId: handle.conversationId,
       workspaceId: handle.workspaceId,
+      sessionId: handle.sessionId,
       model: handle.model,
       skipPermissions: handle.skipPermissions,
       startedAt: handle.startedAt,

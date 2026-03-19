@@ -35,6 +35,7 @@ export interface ConversationHandle {
 export interface ConversationInfo {
   conversationId: string;
   workspaceId: string;
+  sessionId?: string;
   model?: string;
   skipPermissions: boolean;
   startedAt: string;
