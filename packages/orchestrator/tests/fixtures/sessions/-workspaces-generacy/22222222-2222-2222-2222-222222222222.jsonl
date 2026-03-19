@@ -1,0 +1,3 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-03-11T08:00:00.000Z","sessionId":"22222222-2222-2222-2222-222222222222","content":"Automated task"}
+{"type":"user","message":{"role":"user","content":"Run tests"},"uuid":"u1","timestamp":"2026-03-11T08:00:01.000Z","userType":"external","permissionMode":"bypassPermissions","slug":null,"gitBranch":"feature-branch","sessionId":"22222222-2222-2222-2222-222222222222"}
+{"type":"assistant","message":{"role":"assistant","content":"Running tests...","model":"claude-sonnet-4-20250514","usage":{"input_tokens":15,"output_tokens":8}},"uuid":"a1","timestamp":"2026-03-11T08:00:05.000Z","sessionId":"22222222-2222-2222-2222-222222222222"}

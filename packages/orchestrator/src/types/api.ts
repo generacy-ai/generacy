@@ -214,6 +214,39 @@ export const HealthResponseSchema = z.object({
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
 // ============================================================================
+// Session Types
+// ============================================================================
+
+export const SessionTypeSchema = z.enum(['automated', 'developer']);
+export type SessionType = z.infer<typeof SessionTypeSchema>;
+
+export const SessionMetadataSchema = z.object({
+  sessionId: z.string().uuid(),
+  slug: z.string().nullable(),
+  startedAt: z.string().datetime(),
+  lastActivityAt: z.string().datetime(),
+  messageCount: z.number().int().nonnegative(),
+  model: z.string().nullable(),
+  gitBranch: z.string().nullable(),
+  type: SessionTypeSchema,
+  workspace: z.string().nullable(),
+});
+export type SessionMetadata = z.infer<typeof SessionMetadataSchema>;
+
+export const ListSessionsQuerySchema = z.object({
+  workspace: z.string().optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type ListSessionsQuery = z.infer<typeof ListSessionsQuerySchema>;
+
+export const SessionListResponseSchema = z.object({
+  sessions: z.array(SessionMetadataSchema),
+  pagination: PaginationSchema,
+});
+export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
+
+// ============================================================================
 // Authentication Types
 // ============================================================================
 
@@ -223,6 +256,7 @@ export const ApiScopeSchema = z.enum([
   'queue:read',
   'queue:write',
   'agents:read',
+  'sessions:read',
   'admin',
 ]);
 export type ApiScope = z.infer<typeof ApiScopeSchema>;

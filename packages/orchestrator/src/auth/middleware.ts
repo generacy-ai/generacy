@@ -153,7 +153,7 @@ export function requireAdmin() {
 /**
  * Create read scope check for a resource
  */
-export function requireRead(resource: 'workflows' | 'queue' | 'agents') {
+export function requireRead(resource: 'workflows' | 'queue' | 'agents' | 'sessions') {
   return requireScopes(`${resource}:read` as ApiScope, 'admin');
 }
 

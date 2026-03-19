@@ -7,9 +7,11 @@ import { setupAgentRoutes } from './agents.js';
 import { setupIntegrationRoutes, type IntegrationRegistry } from './integrations.js';
 import { setupEventsRoutes } from './events.js';
 import { setupFileRoutes } from './files.js';
+import { setupSessionRoutes } from './sessions.js';
 import type { WorkflowService } from '../services/workflow-service.js';
 import type { QueueService } from '../services/queue-service.js';
 import type { AgentRegistry } from '../services/agent-registry.js';
+import type { SessionService } from '../services/session-service.js';
 
 /**
  * Route registration options
@@ -23,6 +25,8 @@ export interface RouteRegistrationOptions {
   agentRegistry: AgentRegistry;
   /** Integration registry */
   integrationRegistry: IntegrationRegistry;
+  /** Session service */
+  sessionService: SessionService;
   /** Health check options */
   healthCheckOptions?: HealthCheckOptions;
 }
@@ -43,6 +47,9 @@ export async function registerRoutes(
   await setupQueueRoutes(server, options.queueService);
   await setupAgentRoutes(server, options.agentRegistry);
   await setupIntegrationRoutes(server, options.integrationRegistry);
+
+  // Session routes (auth required)
+  await setupSessionRoutes(server, options.sessionService);
 
   // File read/write routes (used by relay for cluster config, etc.)
   await setupFileRoutes(server);
@@ -68,6 +75,7 @@ export {
   closeAllSSEConnections,
 } from './events.js';
 export { setupFileRoutes } from './files.js';
+export { setupSessionRoutes } from './sessions.js';
 export {
   setupWebhookRoutes,
   type WebhookRouteOptions,
