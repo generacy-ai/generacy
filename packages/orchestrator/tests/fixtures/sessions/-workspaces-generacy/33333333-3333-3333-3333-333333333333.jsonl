@@ -1,0 +1,2 @@
+{"type":"queue-operation","operation":"enqueue","timestamp":"2026-03-09T12:00:00.000Z","sessionId":"33333333-3333-3333-3333-333333333333"}
+{"type":"user","message":{"role":"user","content":"Hello"},"uuid":"u1","timestamp":"2026-03-09T12:00:01.000Z","userType":"external","slug":null,"sessionId":"33333333-3333-3333-3333-333333333333"}

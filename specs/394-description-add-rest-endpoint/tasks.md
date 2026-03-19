@@ -10,12 +10,12 @@
 
 ## Phase 1: Types & Schemas
 
-- [ ] T001 Add Session Zod schemas and types to `packages/orchestrator/src/types/api.ts` — add `SessionTypeSchema`, `SessionMetadataSchema`, `ListSessionsQuerySchema`, `SessionListResponseSchema`, and `sessions:read` to `ApiScopeSchema`
-- [ ] T002 [P] Export new Session types from `packages/orchestrator/src/types/index.ts`
+- [X] T001 Add Session Zod schemas and types to `packages/orchestrator/src/types/api.ts` — add `SessionTypeSchema`, `SessionMetadataSchema`, `ListSessionsQuerySchema`, `SessionListResponseSchema`, and `sessions:read` to `ApiScopeSchema`
+- [X] T002 [P] Export new Session types from `packages/orchestrator/src/types/index.ts`
 
 ## Phase 2: Service Implementation
 
-- [ ] T003 Create `packages/orchestrator/src/services/session-service.ts` — implement `SessionService` class with:
+- [X] T003 Create `packages/orchestrator/src/services/session-service.ts` — implement `SessionService` class with:
   - `discoverDirectories(claudeProjectsDir)` — scan `~/.claude/projects/` for workspace directories
   - `parseSessionFile(filePath, workspace)` — stream-parse JSONL via `node:readline` to extract `SessionMetadata`
   - `list(query: ListSessionsQuery)` — discover, parse, filter by workspace, sort by `lastActivityAt` desc, paginate
@@ -24,18 +24,18 @@
 
 ## Phase 3: Route & Wiring
 
-- [ ] T004 Create `packages/orchestrator/src/routes/sessions.ts` — implement `setupSessionRoutes(server, sessionService)` with:
+- [X] T004 Create `packages/orchestrator/src/routes/sessions.ts` — implement `setupSessionRoutes(server, sessionService)` with:
   - `GET /sessions` with `requireRead('sessions')` preHandler
   - Zod validation of query params (`workspace`, `page`, `pageSize`)
   - Call `sessionService.list()` and return `SessionListResponse`
-- [ ] T005 Register session routes in `packages/orchestrator/src/routes/index.ts` — add `sessionService` to `RouteRegistrationOptions`, call `setupSessionRoutes()` in `registerRoutes()`
-- [ ] T006 Wire `SessionService` in `packages/orchestrator/src/server.ts` — instantiate in `createServer()`, pass to `registerRoutes()`
+- [X] T005 Register session routes in `packages/orchestrator/src/routes/index.ts` — add `sessionService` to `RouteRegistrationOptions`, call `setupSessionRoutes()` in `registerRoutes()`
+- [X] T006 Wire `SessionService` in `packages/orchestrator/src/server.ts` — instantiate in `createServer()`, pass to `registerRoutes()`
 
 ## Phase 4: Tests
 
-- [ ] T007 Create test fixture JSONL files in `packages/orchestrator/tests/fixtures/sessions/` — sample session files covering: normal session, automated session (`bypassPermissions`), session with missing fields, malformed lines, empty file
-- [ ] T008 [P] Create unit tests `packages/orchestrator/tests/unit/services/session-service.test.ts` — test `parseSessionFile()` (metadata extraction, malformed line handling, empty files), `discoverDirectories()` (directory scanning, missing dir), `list()` (filtering, sorting, pagination)
-- [ ] T009 [P] Create integration tests `packages/orchestrator/tests/integration/routes/sessions.test.ts` — test `GET /sessions` (200 response shape, pagination, workspace filter, empty results, auth)
+- [X] T007 Create test fixture JSONL files in `packages/orchestrator/tests/fixtures/sessions/` — sample session files covering: normal session, automated session (`bypassPermissions`), session with missing fields, malformed lines, empty file
+- [X] T008 [P] Create unit tests `packages/orchestrator/tests/unit/services/session-service.test.ts` — test `parseSessionFile()` (metadata extraction, malformed line handling, empty files), `discoverDirectories()` (directory scanning, missing dir), `list()` (filtering, sorting, pagination)
+- [X] T009 [P] Create integration tests `packages/orchestrator/tests/integration/routes/sessions.test.ts` — test `GET /sessions` (200 response shape, pagination, workspace filter, empty results, auth)
 
 ## Dependencies & Execution Order
 

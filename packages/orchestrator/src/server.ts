@@ -37,6 +37,7 @@ import { ConversationManager } from './conversation/conversation-manager.js';
 import { ConversationSpawner } from './conversation/conversation-spawner.js';
 import { conversationProcessFactory } from './conversation/process-factory.js';
 import { setupConversationRoutes } from './routes/conversations.js';
+import { SessionService } from './services/session-service.js';
 
 /**
  * Server creation options
@@ -336,12 +337,16 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
       const agentRegistry = new AgentRegistry();
       const integrationRegistry = new InMemoryIntegrationRegistry();
+      const sessionService = new SessionService({
+        workspaces: config.conversations.workspaces,
+      });
 
       await registerRoutes(server, {
         workflowService,
         queueService,
         agentRegistry,
         integrationRegistry,
+        sessionService,
       });
 
       // Register webhook routes inside an encapsulated plugin so the custom

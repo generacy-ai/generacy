@@ -50,6 +50,15 @@ export {
   type AgentConnectionStatus,
   ConnectedAgentSchema,
   type ConnectedAgent,
+  // Sessions
+  SessionTypeSchema,
+  type SessionType,
+  SessionMetadataSchema,
+  type SessionMetadata,
+  ListSessionsQuerySchema,
+  type ListSessionsQuery,
+  SessionListResponseSchema,
+  type SessionListResponse,
   // Integrations
   IntegrationTypeSchema,
   type IntegrationType,
