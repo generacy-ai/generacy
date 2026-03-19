@@ -311,6 +311,7 @@ export class ConversationManager {
       conversationId: handle.conversationId,
       workspaceId: handle.workspaceId,
       model: handle.model,
+      sessionId: handle.sessionId,
       skipPermissions: handle.skipPermissions,
       startedAt: handle.startedAt,
       state: handle.state,
