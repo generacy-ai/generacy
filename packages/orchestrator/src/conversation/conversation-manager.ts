@@ -109,10 +109,35 @@ export class ConversationManager {
       },
     });
 
-    // Attach stdout parser
+    // Attach stdout parser with bypass-prompt auto-acceptance.
+    // When using a PTY, Claude shows a bypass-permissions confirmation dialog.
+    // We detect it and send keystrokes to accept (down-arrow → Enter).
+    let bypassAccepted = false;
     if (processHandle.stdout) {
+      let rawBuffer = '';
       processHandle.stdout.on('data', (data: Buffer | string) => {
-        parser.processChunk(typeof data === 'string' ? data : data.toString('utf-8'));
+        const text = typeof data === 'string' ? data : data.toString('utf-8');
+
+        // Before the init JSON arrives, watch for the bypass prompt
+        if (!bypassAccepted) {
+          rawBuffer += text;
+          if (rawBuffer.includes('Yes') && rawBuffer.includes('accept')) {
+            // Send down-arrow (select "Yes, I accept") then Enter
+            this.writeToStdin(handle, '\x1b[B\r');
+            bypassAccepted = true;
+            rawBuffer = '';
+            return; // Don't parse the prompt text
+          }
+          // If we get JSON, the prompt was skipped (no PTY or already accepted)
+          if (text.includes('{"type":')) {
+            bypassAccepted = true;
+            rawBuffer = '';
+            parser.processChunk(text);
+          }
+          return;
+        }
+
+        parser.processChunk(text);
       });
     }
 

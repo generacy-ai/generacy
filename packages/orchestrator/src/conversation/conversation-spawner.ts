@@ -22,46 +22,25 @@ export interface ConversationProcessHandle extends ChildProcessHandle {
 }
 
 /**
- * Python wrapper script that creates a PTY for stdout only.
+ * Python PTY wrapper using pty.spawn for proper session/terminal setup.
  *
  * Claude Code is a native binary that uses full stdout buffering when
- * writing to a pipe. This prevents streaming events from reaching the
- * output parser until the process exits.
+ * writing to a pipe. pty.spawn creates a proper PTY with correct
+ * session and controlling terminal setup, forcing line-buffered output.
  *
- * A full PTY (via `script -qec`) would fix the buffering but makes
- * Claude show interactive prompts (bypass-permissions dialog) since
- * it detects a terminal on stdin.
- *
- * This wrapper allocates a PTY for stdout/stderr only (via Python's
- * pty.openpty), keeping stdin as a regular pipe. Claude sees a TTY
- * on stdout (line-buffered output) but a pipe on stdin (no interactive
- * prompts).
+ * The `read` callback forwards Claude's output to Python's stdout
+ * (pipe to Node.js). The `stdin_read` callback forwards Node.js stdin
+ * through the PTY to Claude.
  */
-const PTY_WRAPPER = `
-import pty, os, sys, signal
-
-master_fd, slave_fd = pty.openpty()
-pid = os.fork()
-if pid == 0:
-    os.close(master_fd)
-    os.dup2(slave_fd, 1)
-    os.dup2(slave_fd, 2)
-    os.close(slave_fd)
-    os.execvp(sys.argv[1], sys.argv[1:])
-else:
-    os.close(slave_fd)
-    signal.signal(signal.SIGTERM, lambda *a: os.kill(pid, signal.SIGTERM))
-    while True:
-        try:
-            data = os.read(master_fd, 65536)
-            if not data:
-                break
-            os.write(1, data)
-        except OSError:
-            break
-    _, status = os.waitpid(pid, 0)
-    sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
-`.trim();
+const PTY_WRAPPER = [
+  'import pty, os, sys',
+  'def read(fd):',
+  '    data = os.read(fd, 65536)',
+  '    sys.stdout.buffer.write(data)',
+  '    sys.stdout.buffer.flush()',
+  '    return data',
+  'pty.spawn(sys.argv[1:], read)',
+].join('\n');
 
 /**
  * Spawns Claude CLI in interactive mode with stream-json output.
@@ -79,9 +58,12 @@ export class ConversationSpawner {
   /**
    * Spawn an interactive Claude CLI process.
    *
-   * Uses a Python PTY wrapper to give Claude unbuffered stdout
-   * (via a pseudo-TTY) while keeping stdin as a regular pipe
-   * to avoid interactive prompt dialogs.
+   * Uses a Python pty.spawn wrapper to give Claude a proper PTY
+   * (required for unbuffered streaming output from the native binary).
+   *
+   * When skipPermissions is true, Claude shows a bypass-permissions
+   * confirmation dialog in the PTY. The caller must handle this by
+   * watching stdout for the prompt and sending acceptance keystrokes.
    */
   spawn(options: ConversationSpawnOptions): ConversationProcessHandle {
     const claudeArgs = [
@@ -98,7 +80,7 @@ export class ConversationSpawner {
       claudeArgs.push('--model', options.model);
     }
 
-    const child = this.processFactory.spawn('python3', ['-c', PTY_WRAPPER, ...claudeArgs], {
+    const child = this.processFactory.spawn('python3', ['-u', '-c', PTY_WRAPPER, ...claudeArgs], {
       cwd: options.cwd,
       env: {},
     });
