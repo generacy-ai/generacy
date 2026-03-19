@@ -245,6 +245,19 @@ export class ConversationManager {
   }
 
   /**
+   * Check if a session is currently active by matching sessionId
+   * across all conversation handles.
+   */
+  isSessionActive(sessionId: string): boolean {
+    for (const handle of this.conversations.values()) {
+      if (handle.sessionId === sessionId) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * List all active conversations.
    */
   list(): ConversationInfo[] {

@@ -10,14 +10,14 @@
 
 ## Phase 1: Setup & Types
 
-- [ ] T001 [US1] Define TypeScript interfaces and Zod schemas for session endpoint in `packages/orchestrator/src/services/session-reader.ts`
+- [X] T001 [US1] Define TypeScript interfaces and Zod schemas for session endpoint in `packages/orchestrator/src/services/session-reader.ts`
   - `SessionMessage`, `ContentBlock` (TextBlock | ToolUseBlock | ToolResultBlock), `TokenUsage`, `SessionMetadata`, `SessionResponse`
   - `SessionParamsSchema` (sessionId: string, min 1, max 128)
   - `SessionQuerySchema` (workspace: optional string)
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Implement `SessionReader` service — JSONL file discovery and parsing in `packages/orchestrator/src/services/session-reader.ts`
+- [X] T002 [US1] Implement `SessionReader` service — JSONL file discovery and parsing in `packages/orchestrator/src/services/session-reader.ts`
   - `findSessionFile(sessionId, workspace?)`: locate JSONL file at `~/.claude/projects/<path-encoded>/<sessionId>.jsonl`
   - With workspace: encode path (`/` → `-`), resolve via `config.conversations.workspaces`, look in specific directory
   - Without workspace: scan all subdirectories of `~/.claude/projects/` for matching file
@@ -27,11 +27,11 @@
   - Transform assistant entries: emit as `role: 'assistant'` with `model` and `usage`
   - Extract metadata: `slug`, `gitBranch` from first assistant entry; accumulate token totals
 
-- [ ] T003 [US1] Expose active session check on `ConversationManager` in `packages/orchestrator/src/conversation/conversation-manager.ts`
+- [X] T003 [US1] Expose active session check on `ConversationManager` in `packages/orchestrator/src/conversation/conversation-manager.ts`
   - Add `isSessionActive(sessionId: string): boolean` method that iterates internal `conversations` map and checks handles for matching `sessionId`
   - This avoids exposing `sessionId` on the public `ConversationInfo` type
 
-- [ ] T004 [P] [US1] Implement session route handler in `packages/orchestrator/src/routes/sessions.ts`
+- [X] T004 [P] [US1] Implement session route handler in `packages/orchestrator/src/routes/sessions.ts`
   - Export `setupSessionRoutes(server, manager?)` following existing pattern (see `conversations.ts`)
   - `GET /sessions/:sessionId` with optional `?workspace=` query param
   - Validate params/query with Zod schemas
@@ -39,13 +39,13 @@
   - Check `manager?.isSessionActive(sessionId)` for `isActive` metadata field
   - Return `SessionResponse` (200), or RFC 7807 errors (400 for bad workspace, 404 for not found, 500 for filesystem errors)
 
-- [ ] T005 [US1] Register session routes in `packages/orchestrator/src/server.ts`
+- [X] T005 [US1] Register session routes in `packages/orchestrator/src/server.ts`
   - Import `setupSessionRoutes` from `./routes/sessions`
   - Call `setupSessionRoutes(server, conversationManager)` in the `registerRoutes()` function alongside existing route registrations
 
 ## Phase 3: Testing
 
-- [ ] T006 [P] [US1] Write unit tests for `SessionReader` in `packages/orchestrator/tests/unit/services/session-reader.test.ts`
+- [X] T006 [P] [US1] Write unit tests for `SessionReader` in `packages/orchestrator/tests/unit/services/session-reader.test.ts`
   - Test JSONL parsing: user messages, assistant messages with content blocks
   - Test tool result promotion: user entries with `tool_result` blocks → separate top-level messages
   - Test entry filtering: `queue-operation` and `last-prompt` excluded
@@ -54,7 +54,7 @@
   - Test file discovery: with workspace (direct path lookup), without workspace (directory scan)
   - Use temp files or mocked filesystem
 
-- [ ] T007 [P] [US1] Write integration tests for sessions endpoint in `packages/orchestrator/tests/integration/routes/sessions.test.ts`
+- [X] T007 [P] [US1] Write integration tests for sessions endpoint in `packages/orchestrator/tests/integration/routes/sessions.test.ts`
   - Use `server.inject()` pattern (see existing integration tests)
   - Test 200 response with correct message structure and metadata
   - Test 404 for unknown session ID
