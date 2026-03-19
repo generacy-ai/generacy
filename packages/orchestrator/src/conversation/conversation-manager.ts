@@ -220,7 +220,7 @@ export class ConversationManager {
     handle.state = 'ending';
 
     // Kill any running turn process
-    if (handle.process && handle.process.kill) {
+    if (handle.process) {
       this.spawner.gracefulKill(handle.process);
       try {
         await handle.process.exitPromise;
