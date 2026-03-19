@@ -40,6 +40,7 @@ export class ConversationSpawner {
   spawn(options: ConversationSpawnOptions): ConversationProcessHandle {
     const args = [
       '--output-format', 'stream-json',
+      '--verbose',
     ];
 
     if (options.skipPermissions) {

@@ -1,20 +1,14 @@
 import type { ConversationOutputEvent, ConversationEventType } from './types.js';
 
 /**
- * Maps Claude CLI stream-json event types to conversation event types.
- */
-const CLI_EVENT_MAP: Record<string, ConversationEventType> = {
-  init: 'output',
-  text: 'output',
-  tool_use: 'tool_use',
-  tool_result: 'tool_result',
-  complete: 'complete',
-  error: 'error',
-};
-
-/**
- * Parses newline-delimited JSON from Claude CLI stdout and emits
- * ConversationOutputEvent instances via a callback.
+ * Parses newline-delimited JSON from Claude CLI stdout (stream-json --verbose)
+ * and emits ConversationOutputEvent instances via a callback.
+ *
+ * Claude CLI stream-json format uses these top-level types:
+ * - system (subtype: init)  — session initialized
+ * - assistant               — message with content blocks (text, tool_use)
+ * - tool_result             — tool execution result (only in interactive mode)
+ * - result (subtype: success/error) — turn completed
  *
  * Handles partial lines (buffering until a newline is received)
  * and malformed JSON (logs warning and skips).
@@ -78,61 +72,75 @@ export class ConversationOutputParser {
       return;
     }
 
-    // Capture session ID from init event
-    if (cliType === 'init' && typeof parsed.session_id === 'string') {
-      this.onSessionId(parsed.session_id);
-    }
+    const timestamp = new Date().toISOString();
 
-    const eventType = CLI_EVENT_MAP[cliType];
-    if (!eventType) {
-      // Unknown event type — skip silently
-      return;
-    }
-
-    // Build the payload based on event type
-    let payload: unknown;
     switch (cliType) {
-      case 'init':
-        payload = {
-          sessionId: parsed.session_id,
-          model: parsed.model,
-        };
+      case 'system': {
+        // Init event: {"type":"system","subtype":"init","session_id":"...","model":"..."}
+        if (parsed.subtype === 'init' && typeof parsed.session_id === 'string') {
+          this.onSessionId(parsed.session_id);
+          this.emit('output', {
+            sessionId: parsed.session_id,
+            model: parsed.model,
+          }, timestamp);
+        }
         break;
-      case 'text':
-        payload = { text: parsed.text };
-        break;
-      case 'tool_use':
-        payload = {
-          toolName: parsed.tool_name,
-          callId: parsed.call_id,
-          input: parsed.input,
-        };
-        break;
-      case 'tool_result':
-        payload = {
-          toolName: parsed.tool_name,
-          callId: parsed.call_id,
-          output: parsed.output,
-          filePath: parsed.filePath,
-        };
-        break;
-      case 'complete':
-        payload = {
-          tokensIn: parsed.tokens_in,
-          tokensOut: parsed.tokens_out,
-        };
-        break;
-      case 'error':
-        payload = { message: parsed.message };
-        break;
-      default:
-        payload = parsed;
-    }
+      }
 
-    this.onEvent({
-      event: eventType,
-      payload,
-      timestamp: new Date().toISOString(),
-    });
+      case 'assistant': {
+        // Assistant message: {"type":"assistant","message":{"content":[...],...},...}
+        const message = parsed.message as Record<string, unknown> | undefined;
+        if (!message) break;
+
+        const content = message.content as Array<Record<string, unknown>> | undefined;
+        if (!Array.isArray(content)) break;
+
+        for (const block of content) {
+          if (block.type === 'text' && typeof block.text === 'string') {
+            this.emit('output', { text: block.text }, timestamp);
+          } else if (block.type === 'tool_use') {
+            this.emit('tool_use', {
+              toolName: block.name,
+              callId: block.id,
+              input: block.input,
+            }, timestamp);
+          }
+        }
+        break;
+      }
+
+      case 'tool_result': {
+        // Tool result: {"type":"tool_result","tool_use_id":"...","content":"..."}
+        this.emit('tool_result', {
+          callId: parsed.tool_use_id ?? parsed.call_id,
+          output: parsed.content ?? parsed.output,
+        }, timestamp);
+        break;
+      }
+
+      case 'result': {
+        // Turn completed: {"type":"result","subtype":"success","usage":{...},...}
+        const usage = parsed.usage as Record<string, unknown> | undefined;
+        if (parsed.is_error || parsed.subtype === 'error') {
+          this.emit('error', {
+            message: (parsed.error as string) ?? (parsed.result as string) ?? 'Unknown error',
+          }, timestamp);
+        } else {
+          this.emit('complete', {
+            tokensIn: usage?.input_tokens ?? 0,
+            tokensOut: usage?.output_tokens ?? 0,
+          }, timestamp);
+        }
+        break;
+      }
+
+      // Skip rate_limit_event and unknown types silently
+      default:
+        break;
+    }
+  }
+
+  private emit(event: ConversationEventType, payload: unknown, timestamp: string): void {
+    this.onEvent({ event, payload, timestamp });
   }
 }
