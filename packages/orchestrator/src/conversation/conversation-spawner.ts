@@ -46,11 +46,13 @@ export interface ConversationProcessHandle extends ChildProcessHandle {
  */
 const PTY_WRAPPER = [
   'import pty, os, sys',
+  '# Prevent PTY line wrapping by setting huge terminal width',
+  'os.environ["COLUMNS"] = "50000"',
   'def read(fd):',
   '    data = os.read(fd, 65536)',
-  '    sys.stdout.buffer.write(data)',
-  '    sys.stdout.buffer.flush()',
-  '    return data',
+  '    # Strip CRLF that PTY adds, return cleaned data',
+  '    # (pty._copy writes our return value to stdout)',
+  '    return data.replace(b"\\r\\n", b"\\n")',
   'pty.spawn(sys.argv[1:], read)',
 ].join('\n');
 
