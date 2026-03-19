@@ -22,6 +22,48 @@ export interface ConversationProcessHandle extends ChildProcessHandle {
 }
 
 /**
+ * Python wrapper script that creates a PTY for stdout only.
+ *
+ * Claude Code is a native binary that uses full stdout buffering when
+ * writing to a pipe. This prevents streaming events from reaching the
+ * output parser until the process exits.
+ *
+ * A full PTY (via `script -qec`) would fix the buffering but makes
+ * Claude show interactive prompts (bypass-permissions dialog) since
+ * it detects a terminal on stdin.
+ *
+ * This wrapper allocates a PTY for stdout/stderr only (via Python's
+ * pty.openpty), keeping stdin as a regular pipe. Claude sees a TTY
+ * on stdout (line-buffered output) but a pipe on stdin (no interactive
+ * prompts).
+ */
+const PTY_WRAPPER = `
+import pty, os, sys, signal
+
+master_fd, slave_fd = pty.openpty()
+pid = os.fork()
+if pid == 0:
+    os.close(master_fd)
+    os.dup2(slave_fd, 1)
+    os.dup2(slave_fd, 2)
+    os.close(slave_fd)
+    os.execvp(sys.argv[1], sys.argv[1:])
+else:
+    os.close(slave_fd)
+    signal.signal(signal.SIGTERM, lambda *a: os.kill(pid, signal.SIGTERM))
+    while True:
+        try:
+            data = os.read(master_fd, 65536)
+            if not data:
+                break
+            os.write(1, data)
+        except OSError:
+            break
+    _, status = os.waitpid(pid, 0)
+    sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+`.trim();
+
+/**
  * Spawns Claude CLI in interactive mode with stream-json output.
  *
  * Unlike CliSpawner (which uses `-p` for single-prompt execution),
@@ -37,9 +79,9 @@ export class ConversationSpawner {
   /**
    * Spawn an interactive Claude CLI process.
    *
-   * Uses `script -qec` to allocate a PTY so Claude's native binary
-   * uses line-buffered stdout instead of full buffering (which would
-   * hold all output in an internal buffer until process exit).
+   * Uses a Python PTY wrapper to give Claude unbuffered stdout
+   * (via a pseudo-TTY) while keeping stdin as a regular pipe
+   * to avoid interactive prompt dialogs.
    */
   spawn(options: ConversationSpawnOptions): ConversationProcessHandle {
     const claudeArgs = [
@@ -56,10 +98,9 @@ export class ConversationSpawner {
       claudeArgs.push('--model', options.model);
     }
 
-    // Wrap with `script -qec` to provide a PTY for unbuffered stdout
-    const child = this.processFactory.spawn('script', ['-qec', claudeArgs.join(' '), '/dev/null'], {
+    const child = this.processFactory.spawn('python3', ['-c', PTY_WRAPPER, ...claudeArgs], {
       cwd: options.cwd,
-      env: { TERM: 'dumb' },
+      env: {},
     });
 
     if (!child.stdin) {
