@@ -13,12 +13,28 @@ export interface ConversationSpawnOptions {
 }
 
 /**
- * Handle returned by ConversationSpawner.spawn().
- * Wraps a ChildProcessHandle and adds stdin access.
+ * Options for running a single conversation turn.
+ */
+export interface ConversationTurnOptions {
+  /** Working directory for the CLI process */
+  cwd: string;
+  /** The user message to send */
+  message: string;
+  /** Session ID to resume (omit for first turn) */
+  sessionId?: string;
+  /** Model to use */
+  model?: string;
+  /** Skip permission prompts */
+  skipPermissions: boolean;
+}
+
+/**
+ * Handle returned by ConversationSpawner.spawnTurn().
+ * Wraps a ChildProcessHandle with stdout/stderr access.
  */
 export interface ConversationProcessHandle extends ChildProcessHandle {
-  /** Writable stream for sending messages to stdin */
-  stdin: NodeJS.WritableStream;
+  /** Writable stream for stdin (not used in -p mode but required by interface) */
+  stdin: NodeJS.WritableStream | null;
 }
 
 /**
@@ -27,10 +43,6 @@ export interface ConversationProcessHandle extends ChildProcessHandle {
  * Claude Code is a native binary that uses full stdout buffering when
  * writing to a pipe. pty.spawn creates a proper PTY with correct
  * session and controlling terminal setup, forcing line-buffered output.
- *
- * The `read` callback forwards Claude's output to Python's stdout
- * (pipe to Node.js). The `stdin_read` callback forwards Node.js stdin
- * through the PTY to Claude.
  */
 const PTY_WRAPPER = [
   'import pty, os, sys',
@@ -43,11 +55,12 @@ const PTY_WRAPPER = [
 ].join('\n');
 
 /**
- * Spawns Claude CLI in interactive mode with stream-json output.
+ * Spawns Claude CLI for conversation turns using -p (print) mode.
  *
- * Unlike CliSpawner (which uses `-p` for single-prompt execution),
- * ConversationSpawner creates long-lived interactive processes that
- * accept messages on stdin and stream structured JSON on stdout.
+ * Instead of a long-lived interactive process, each message spawns a
+ * new Claude CLI process with `-p` and `--resume` for session continuity.
+ * This avoids the PTY stdin issues that cause the bypass-permissions
+ * dialog and ensures reliable streaming output.
  */
 export class ConversationSpawner {
   constructor(
@@ -56,14 +69,42 @@ export class ConversationSpawner {
   ) {}
 
   /**
-   * Spawn an interactive Claude CLI process.
+   * Spawn a single conversation turn using -p mode.
    *
-   * Uses a Python pty.spawn wrapper to give Claude a proper PTY
-   * (required for unbuffered streaming output from the native binary).
-   *
-   * When skipPermissions is true, Claude shows a bypass-permissions
-   * confirmation dialog in the PTY. The caller must handle this by
-   * watching stdout for the prompt and sending acceptance keystrokes.
+   * Uses Python pty.spawn wrapper for unbuffered stdout streaming,
+   * with `-p` for the message and `--resume` for session continuity.
+   */
+  spawnTurn(options: ConversationTurnOptions): ConversationProcessHandle {
+    const claudeArgs = [
+      'claude',
+      '-p', options.message,
+      '--output-format', 'stream-json',
+      '--verbose',
+    ];
+
+    if (options.sessionId) {
+      claudeArgs.push('--resume', options.sessionId);
+    }
+
+    if (options.skipPermissions) {
+      claudeArgs.push('--dangerously-skip-permissions');
+    }
+
+    if (options.model) {
+      claudeArgs.push('--model', options.model);
+    }
+
+    const child = this.processFactory.spawn('python3', ['-u', '-c', PTY_WRAPPER, ...claudeArgs], {
+      cwd: options.cwd,
+      env: {},
+    });
+
+    return child as ConversationProcessHandle;
+  }
+
+  /**
+   * Legacy spawn for interface compatibility. Use spawnTurn instead.
+   * @deprecated Use spawnTurn for per-message execution.
    */
   spawn(options: ConversationSpawnOptions): ConversationProcessHandle {
     const claudeArgs = [

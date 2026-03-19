@@ -13,8 +13,10 @@ import type {
 /**
  * Manages interactive Claude Code conversation processes.
  *
- * Handles lifecycle (start/sendMessage/end/list), concurrency limiting,
- * workspace resolution, output streaming, and process cleanup.
+ * Uses a per-turn spawning model: each message spawns a new Claude CLI
+ * process with `-p` and `--resume` for session continuity. This avoids
+ * PTY/buffering issues with long-lived interactive processes while
+ * maintaining conversation context across turns.
  */
 export class ConversationManager {
   private readonly conversations = new Map<string, ConversationHandle>();
@@ -66,104 +68,20 @@ export class ConversationManager {
     const skipPermissions = options.skipPermissions ?? true;
     const model = options.model ?? this.config.defaultModel;
 
-    // Spawn the CLI process
-    const processHandle = this.spawner.spawn({
-      cwd: workingDirectory,
-      model,
-      skipPermissions,
-    });
-
     const handle: ConversationHandle = {
       conversationId: options.conversationId,
       workingDirectory,
       workspaceId: options.workingDirectory,
       skipPermissions,
-      process: processHandle,
+      process: null as any, // No long-lived process; per-turn spawning
       startedAt: new Date().toISOString(),
       model,
       initialCommand: options.initialCommand,
-      state: 'starting',
-      stdin: processHandle.stdin,
+      state: 'active',
+      stdin: null,
     };
 
     this.conversations.set(options.conversationId, handle);
-
-    // Set up output parsing
-    const parser = new ConversationOutputParser({
-      onEvent: (event: ConversationOutputEvent) => {
-        this.handleOutputEvent(options.conversationId, event);
-      },
-      onSessionId: (sessionId: string) => {
-        handle.sessionId = sessionId;
-        handle.state = 'active';
-        this.logger.info(
-          { conversationId: options.conversationId, sessionId },
-          'Conversation session initialized',
-        );
-      },
-      onError: (error: string) => {
-        this.logger.warn(
-          { conversationId: options.conversationId, error },
-          'Conversation output parse error',
-        );
-      },
-    });
-
-    // Attach stdout parser with bypass-prompt auto-acceptance.
-    // When using a PTY, Claude shows a bypass-permissions confirmation dialog.
-    // We detect it and send keystrokes to accept (down-arrow → Enter).
-    let bypassAccepted = false;
-    if (processHandle.stdout) {
-      let rawBuffer = '';
-      processHandle.stdout.on('data', (data: Buffer | string) => {
-        const text = typeof data === 'string' ? data : data.toString('utf-8');
-
-        // Before the init JSON arrives, watch for the bypass prompt
-        if (!bypassAccepted) {
-          rawBuffer += text;
-          if (rawBuffer.includes('Yes') && rawBuffer.includes('accept')) {
-            // Send down-arrow (select "Yes, I accept") then Enter
-            this.writeToStdin(handle, '\x1b[B\r');
-            bypassAccepted = true;
-            rawBuffer = '';
-            return; // Don't parse the prompt text
-          }
-          // If we get JSON, the prompt was skipped (no PTY or already accepted)
-          if (text.includes('{"type":')) {
-            bypassAccepted = true;
-            rawBuffer = '';
-            parser.processChunk(text);
-          }
-          return;
-        }
-
-        parser.processChunk(text);
-      });
-    }
-
-    // Attach stderr logging
-    if (processHandle.stderr) {
-      processHandle.stderr.on('data', (data: Buffer | string) => {
-        const text = typeof data === 'string' ? data : data.toString('utf-8');
-        this.logger.debug(
-          { conversationId: options.conversationId, stderr: text.trim() },
-          'Conversation stderr',
-        );
-      });
-    }
-
-    // Handle unexpected process exit
-    this.attachExitHandler(options.conversationId, parser);
-
-    // Transition to active (even without init event, after setup)
-    if (handle.state === 'starting') {
-      handle.state = 'active';
-    }
-
-    // Send initial command if provided
-    if (options.initialCommand) {
-      this.writeToStdin(handle, options.initialCommand);
-    }
 
     this.logger.info(
       {
@@ -173,6 +91,11 @@ export class ConversationManager {
       },
       'Conversation started',
     );
+
+    // Run initial command as the first turn
+    if (options.initialCommand) {
+      this.runTurn(options.conversationId, options.initialCommand);
+    }
 
     return this.toInfo(handle);
   }
@@ -196,7 +119,87 @@ export class ConversationManager {
       throw error;
     }
 
-    this.writeToStdin(handle, message);
+    this.runTurn(conversationId, message);
+  }
+
+  /**
+   * Run a single conversation turn by spawning Claude CLI with -p and --resume.
+   */
+  private runTurn(conversationId: string, message: string): void {
+    const handle = this.conversations.get(conversationId);
+    if (!handle) return;
+
+    const processHandle = this.spawner.spawnTurn({
+      cwd: handle.workingDirectory,
+      message,
+      sessionId: handle.sessionId,
+      model: handle.model,
+      skipPermissions: handle.skipPermissions,
+    });
+
+    // Track current process for cleanup
+    handle.process = processHandle;
+
+    // Set up output parsing
+    const parser = new ConversationOutputParser({
+      onEvent: (event: ConversationOutputEvent) => {
+        this.emitOutputEvent(conversationId, event);
+      },
+      onSessionId: (sessionId: string) => {
+        // Capture session ID from first turn for --resume on subsequent turns
+        if (!handle.sessionId) {
+          handle.sessionId = sessionId;
+          this.logger.info(
+            { conversationId, sessionId },
+            'Conversation session initialized',
+          );
+        }
+      },
+      onError: (error: string) => {
+        this.logger.warn(
+          { conversationId, error },
+          'Conversation output parse error',
+        );
+      },
+    });
+
+    // Attach stdout parser
+    if (processHandle.stdout) {
+      processHandle.stdout.on('data', (data: Buffer | string) => {
+        parser.processChunk(typeof data === 'string' ? data : data.toString('utf-8'));
+      });
+    }
+
+    // Attach stderr logging
+    if (processHandle.stderr) {
+      processHandle.stderr.on('data', (data: Buffer | string) => {
+        const text = typeof data === 'string' ? data : data.toString('utf-8');
+        this.logger.debug(
+          { conversationId, stderr: text.trim() },
+          'Conversation stderr',
+        );
+      });
+    }
+
+    // Handle process exit
+    void processHandle.exitPromise.then((exitCode) => {
+      parser.flush();
+
+      const currentHandle = this.conversations.get(conversationId);
+      if (!currentHandle) return;
+
+      // Clear process reference — ready for next turn
+      if (currentHandle.process === processHandle) {
+        currentHandle.process = null as any;
+      }
+
+      if (exitCode !== 0 && exitCode !== null) {
+        this.logger.warn(
+          { conversationId, exitCode },
+          'Conversation turn exited with non-zero code',
+        );
+      }
+    });
   }
 
   /**
@@ -216,23 +219,14 @@ export class ConversationManager {
 
     handle.state = 'ending';
 
-    // Close stdin to signal EOF
-    if (handle.stdin) {
+    // Kill any running turn process
+    if (handle.process && handle.process.kill) {
+      this.spawner.gracefulKill(handle.process);
       try {
-        (handle.stdin as NodeJS.WritableStream & { end: () => void }).end();
+        await handle.process.exitPromise;
       } catch {
-        // stdin may already be closed
+        // Process may have already exited
       }
-    }
-
-    // Graceful kill
-    this.spawner.gracefulKill(handle.process);
-
-    // Wait for process to exit
-    try {
-      await handle.process.exitPromise;
-    } catch {
-      // Process may have already exited
     }
 
     handle.state = 'ended';
@@ -286,19 +280,6 @@ export class ConversationManager {
     return path;
   }
 
-  private writeToStdin(handle: ConversationHandle, message: string): void {
-    if (!handle.stdin) {
-      throw new Error(`Conversation ${handle.conversationId} stdin is not available`);
-    }
-
-    const data = message.endsWith('\n') ? message : message + '\n';
-    (handle.stdin as NodeJS.WritableStream & { write: (data: string) => boolean }).write(data);
-  }
-
-  private handleOutputEvent(conversationId: string, event: ConversationOutputEvent): void {
-    this.emitOutputEvent(conversationId, event);
-  }
-
   private emitOutputEvent(conversationId: string, event: ConversationOutputEvent): void {
     if (this.onOutput) {
       try {
@@ -310,36 +291,6 @@ export class ConversationManager {
         );
       }
     }
-  }
-
-  private attachExitHandler(conversationId: string, parser: ConversationOutputParser): void {
-    const handle = this.conversations.get(conversationId);
-    if (!handle) return;
-
-    void handle.process.exitPromise.then((exitCode) => {
-      // Flush any remaining parser buffer
-      parser.flush();
-
-      // Only handle unexpected exits (not our own end() call)
-      const currentHandle = this.conversations.get(conversationId);
-      if (!currentHandle || currentHandle.state === 'ending' || currentHandle.state === 'ended') {
-        return;
-      }
-
-      this.logger.warn(
-        { conversationId, exitCode },
-        'Conversation process exited unexpectedly',
-      );
-
-      currentHandle.state = 'ended';
-      this.conversations.delete(conversationId);
-
-      this.emitOutputEvent(conversationId, {
-        event: 'error',
-        payload: { message: 'Process exited', exitCode },
-        timestamp: new Date().toISOString(),
-      });
-    });
   }
 
   private toInfo(handle: ConversationHandle): ConversationInfo {
