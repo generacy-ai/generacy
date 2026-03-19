@@ -36,24 +36,30 @@ export class ConversationSpawner {
 
   /**
    * Spawn an interactive Claude CLI process.
+   *
+   * Uses `script -qec` to allocate a PTY so Claude's native binary
+   * uses line-buffered stdout instead of full buffering (which would
+   * hold all output in an internal buffer until process exit).
    */
   spawn(options: ConversationSpawnOptions): ConversationProcessHandle {
-    const args = [
+    const claudeArgs = [
+      'claude',
       '--output-format', 'stream-json',
       '--verbose',
     ];
 
     if (options.skipPermissions) {
-      args.push('--dangerously-skip-permissions');
+      claudeArgs.push('--dangerously-skip-permissions');
     }
 
     if (options.model) {
-      args.push('--model', options.model);
+      claudeArgs.push('--model', options.model);
     }
 
-    const child = this.processFactory.spawn('claude', args, {
+    // Wrap with `script -qec` to provide a PTY for unbuffered stdout
+    const child = this.processFactory.spawn('script', ['-qec', claudeArgs.join(' '), '/dev/null'], {
       cwd: options.cwd,
-      env: {},
+      env: { TERM: 'dumb' },
     });
 
     if (!child.stdin) {
