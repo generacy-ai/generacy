@@ -1,0 +1,4 @@
+not valid json at all
+{"type":"user","message":{"role":"user","content":"test"},"uuid":"u1","timestamp":"2026-03-08T09:00:00.000Z","sessionId":"44444444-4444-4444-4444-444444444444"}
+{totally broken
+{"type":"assistant","message":{"role":"assistant","content":"ok","model":"claude-sonnet-4-20250514"},"uuid":"a1","timestamp":"2026-03-08T09:00:05.000Z","sessionId":"44444444-4444-4444-4444-444444444444"}
