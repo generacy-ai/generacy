@@ -1860,4 +1860,93 @@ describe('ClaudeCliWorker (integration)', () => {
       expect(mockGithub.removeLabels).toHaveBeenCalled();
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // Job lifecycle event emission
+  // ---------------------------------------------------------------------------
+  describe('job lifecycle event emission', () => {
+    it('emits job:created when processing starts', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [], body: 'test issue' });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const jobEventEmitter = vi.fn();
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+        jobEventEmitter,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // job:created should have been emitted
+      expect(jobEventEmitter).toHaveBeenCalledWith(
+        'job:created',
+        expect.objectContaining({
+          jobId: expect.any(String),
+          workflowName: 'no-gates',
+          owner: 'test-owner',
+          repo: 'test-repo',
+          issueNumber: 42,
+          status: 'active',
+          currentStep: expect.any(String),
+        }),
+      );
+
+      // job:created should be one of the first calls
+      const firstCall = jobEventEmitter.mock.calls[0];
+      expect(firstCall![0]).toBe('job:created');
+    });
+
+    it('emits job:failed on phase failure', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [], body: 'test issue' });
+
+      // First phase succeeds, second phase fails
+      spawnFn
+        .mockReturnValueOnce(createMockProcess(0, 5).handle)
+        .mockReturnValueOnce(createMockProcess(1, 5).handle);
+
+      const jobEventEmitter = vi.fn();
+      const config = createConfig({ gates: {} });
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+        sseEmitter: (event: unknown) => { sseEvents.push(event); },
+        jobEventEmitter,
+      });
+
+      await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
+
+      // job:failed should have been emitted
+      expect(jobEventEmitter).toHaveBeenCalledWith(
+        'job:failed',
+        expect.objectContaining({
+          jobId: expect.any(String),
+          workflowName: 'no-gates',
+          owner: 'test-owner',
+          repo: 'test-repo',
+          issueNumber: 42,
+          status: 'failed',
+        }),
+      );
+    });
+
+    it('does not fail when jobEventEmitter is not provided', async () => {
+      mockGithub.getIssue.mockResolvedValue({ labels: [], body: 'test issue' });
+      spawnFn.mockImplementation(() => createMockProcess(0, 5).handle);
+
+      const config = createConfig({ gates: {} });
+      // Create worker WITHOUT jobEventEmitter
+      const worker = new ClaudeCliWorker(config, mockLogger, {
+        processFactory: factory,
+      });
+
+      // Should complete without throwing
+      await expect(
+        worker.handle(createQueueItem({ workflowName: 'no-gates' })),
+      ).resolves.toBeUndefined();
+
+      // Verify the worker actually processed phases (CLI was spawned)
+      expect(spawnFn).toHaveBeenCalled();
+    });
+  });
 });

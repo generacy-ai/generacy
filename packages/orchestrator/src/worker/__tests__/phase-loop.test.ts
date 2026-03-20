@@ -541,3 +541,101 @@ describe('PhaseLoop - implement partial re-invocation', () => {
     expect(inProgressCall).toBeDefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Job lifecycle events
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - job lifecycle events', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('emits job:phase_changed at the start of each phase', async () => {
+    const context = { ...createMockContext('specify'), jobId: 'test-job-id' };
+    const config = createConfig();
+
+    deps.jobEventEmitter = vi.fn();
+
+    // Both phases succeed via CLI spawner
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeSuccessResult('specify'))
+      .mockResolvedValueOnce(makeSuccessResult('clarify'));
+
+    await phaseLoop.executeLoop(context, config, deps, ['specify', 'clarify']);
+
+    const emitter = deps.jobEventEmitter;
+    // Should have been called at least twice (once per phase) with job:phase_changed
+    const phaseChangedCalls = (emitter as any).mock.calls.filter(
+      (c: any[]) => c[0] === 'job:phase_changed',
+    );
+    expect(phaseChangedCalls.length).toBe(2);
+
+    // First call: specify
+    expect(phaseChangedCalls[0][1]).toMatchObject({
+      jobId: 'test-job-id',
+      currentStep: 'specify',
+      status: 'active',
+    });
+
+    // Second call: clarify
+    expect(phaseChangedCalls[1][1]).toMatchObject({
+      jobId: 'test-job-id',
+      currentStep: 'clarify',
+      status: 'active',
+    });
+  });
+
+  it('emits job:paused when gate activates', async () => {
+    const context = { ...createMockContext('clarify'), jobId: 'test-job-id' };
+    context.github = {
+      getIssue: vi.fn().mockResolvedValue({ labels: [] }),
+    } as any;
+    const config = createConfig();
+
+    deps.jobEventEmitter = vi.fn();
+
+    // clarify phase succeeds
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('clarify'));
+
+    // Gate checker returns a gate for clarify
+    (deps.gateChecker.checkGate as any).mockReturnValue({
+      phase: 'clarify',
+      gateLabel: 'waiting-for:clarification',
+      condition: 'always',
+    });
+
+    await phaseLoop.executeLoop(context, config, deps, ['clarify']);
+
+    const emitter = deps.jobEventEmitter;
+    const pausedCalls = (emitter as any).mock.calls.filter(
+      (c: any[]) => c[0] === 'job:paused',
+    );
+    expect(pausedCalls.length).toBe(1);
+    expect(pausedCalls[0][1]).toMatchObject({
+      jobId: 'test-job-id',
+      status: 'paused',
+      gateLabel: 'waiting-for:clarification',
+      currentStep: 'clarify',
+    });
+  });
+
+  it('does not emit events when jobEventEmitter is not provided', async () => {
+    const context = { ...createMockContext('specify'), jobId: 'test-job-id' };
+    const config = createConfig();
+
+    // Ensure no jobEventEmitter is set
+    delete deps.jobEventEmitter;
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    // Should complete without errors
+    const result = await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    expect(result.completed).toBe(true);
+  });
+});

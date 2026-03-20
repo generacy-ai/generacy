@@ -117,6 +117,31 @@ export class RelayBridge {
   }
 
   // ---------------------------------------------------------------------------
+  // Job Event Emission
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Emit a job lifecycle event through the relay WebSocket.
+   * Fire-and-forget — no-ops when disconnected, never throws.
+   */
+  emitJobEvent(event: string, data: Record<string, unknown>): void {
+    try {
+      if (!this.client.isConnected) return;
+      this.client.send({
+        type: 'event' as const,
+        event,
+        data,
+        timestamp: new Date().toISOString(),
+      } as RelayMessage);
+    } catch (error) {
+      this.logger.warn(
+        { err: error instanceof Error ? error.message : String(error), event },
+        'Failed to emit job event (non-fatal)',
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
   // Event Handlers
   // ---------------------------------------------------------------------------
 

@@ -99,12 +99,28 @@ export interface RelayConversationOutput {
 }
 
 /**
+ * Job lifecycle event sent from worker to cloud via relay WebSocket.
+ * Matches the cloud API's EventMessage type for direct handling by
+ * MessageHandler.handleEvent().
+ */
+export interface RelayJobEvent {
+  type: 'event';
+  /** Job lifecycle event name (e.g., 'job:created', 'job:phase_changed') */
+  event: string;
+  /** Event payload with job metadata */
+  data: Record<string, unknown>;
+  /** ISO 8601 timestamp of event emission */
+  timestamp: string;
+}
+
+/**
  * Discriminated union of all relay message types.
  */
 export type RelayMessage =
   | RelayApiRequest
   | RelayApiResponse
   | RelayEvent
+  | RelayJobEvent
   | RelayMetadata
   | RelayConversationInput
   | RelayConversationOutput;
