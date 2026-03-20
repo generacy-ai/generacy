@@ -10,13 +10,13 @@
 - B: Introduce a new relay message type matching the flat format shown in the spec exactly
 - C: The cloud API already handles both formats
 
-**Answer**: *Pending*
+**Answer**: Use whatever relay message structure maps to the cloud API's `EventMessage` type `{ type: 'event', event: string, data: Record<string, unknown>, timestamp: string }`. The key requirement is that `message.event` is a string like `'job:created'` and `message.data` contains the job payload. If the existing `RelayEvent` structure gets parsed into this shape by the relay server, use that; otherwise match the flat format.
 
 ### Q2: Job ID Source
 **Context**: The spec shows `jobId: "uuid"` in the event payload, implying a UUID. However, the current codebase uses composite keys like `owner/repo#issueNumber` as workflow identifiers (see `ClaudeCliWorker.handle()`). There's no UUID generation for jobs currently. Using the wrong ID format would break cloud API Firestore document lookups.
 **Question**: Should we generate a new UUID for each job when it starts processing, or use the existing composite `owner/repo#issueNumber` format as the jobId? If UUID, should it be stored/passed through the workflow context?
 
-**Answer**: *Pending*
+**Answer**: Generate a new UUID for each job when it is dequeued (at `job:created` time). Store it in the workflow context so subsequent events (`phase_changed`, `completed`, `failed`) reference the same ID. The composite `owner/repo#issueNumber` should be included in the `data` payload as metadata, not used as the jobId.
 
 ### Q3: Gate/Pause Event Emission
 **Context**: The workflow engine supports "gates" where processing pauses (e.g., waiting for clarification answers). The existing SSE system already emits `workflow:paused` events at gates. The spec lists only 4 events (`job:created`, `job:phase_changed`, `job:completed`, `job:failed`) and doesn't mention paused states. A workflow could be paused for hours/days at a clarification gate — without a pause event, the dashboard would show it as "active" indefinitely.
@@ -26,7 +26,7 @@
 - B: Use `job:phase_changed` with `status: "paused"` to indicate gate hits
 - C: No pause events — keep to the 4 specified events only (dashboard shows as active until completed/failed)
 
-**Answer**: *Pending*
+**Answer**: A — Add a `job:paused` event (5th event type) emitted at gates. Workflows can be paused at clarification gates for hours/days, and without a pause event the dashboard would show a stale "active" state. The cloud API's `handleEvent()` already handles any `job:*` prefix, so no cloud-side changes needed. Emit `job:paused` when hitting a gate; when the gate is resolved, emit `job:phase_changed` to indicate the next phase starting.
 
 ### Q4: Phase Change Trigger Point
 **Context**: The `PhaseLoop` executes phases sequentially (specify → clarify → plan → implement → verify). The spec says emit `job:phase_changed` "when the workflow transitions between phases" but doesn't specify whether this means at the START of each new phase or at the END/completion of each phase. This affects where the hook is placed and what `currentStep` value is sent.
@@ -36,7 +36,7 @@
 - B: Fire at phase COMPLETION — `currentStep` is the phase that just finished
 - C: Fire at both START and COMPLETION with a status field distinguishing them
 
-**Answer**: *Pending*
+**Answer**: A — Fire at phase START. `currentStep` should be the phase about to begin. This is more useful for the dashboard — users want to see "currently running: clarify" not "just finished: specify". The natural hook point is the top of the phase loop iteration, right before the phase executor runs.
 
 ### Q5: Worker Count Acceptance Criterion Scope
 **Context**: The acceptance criteria include "Worker count reflects actual connected workers" but the implementation tasks only cover job lifecycle events (`job:created/phase_changed/completed/failed`). Worker count is typically handled by the relay connection/disconnection itself (metadata events), not by job events. The `RelayBridge` already sends metadata on connect.
@@ -45,4 +45,4 @@
 - A: Already handled — worker count comes from relay connection metadata (out of scope for this issue)
 - B: Needs fixing — the existing metadata doesn't properly report worker count and should be addressed here
 
-**Answer**: *Pending*
+**Answer**: A — Already handled, out of scope. Worker count comes from the relay handshake metadata and the `/dispatch/queue/workers` relay proxy endpoint (addressed by generacy-cloud#227). Remove this from the acceptance criteria for this issue to avoid scope creep.

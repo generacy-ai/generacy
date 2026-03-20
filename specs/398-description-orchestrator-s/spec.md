@@ -1,16 +1,16 @@
 # Feature Specification: Orchestrator Job Lifecycle Events via Relay WebSocket
 
-Emit job lifecycle events (`job:created`, `job:phase_changed`, `job:completed`, `job:failed`) from the orchestrator's workflow engine through the relay WebSocket so the cloud dashboard can display real-time workflow status.
+The orchestrator's workflow engine processes issues and runs workflows, but never emits job lifecycle events through the relay WebSocket to the cloud API.
 
 **Branch**: `398-description-orchestrator-s` | **Date**: 2026-03-20 | **Status**: Draft
 
 ## Summary
 
-The orchestrator processes workflows but never notifies the cloud API about job state changes. The cloud API already handles these events (generacy-cloud#228) and bridges them to SSE/Firestore for the dashboard, but the orchestrator never sends them. This feature adds outbound event emission at each workflow lifecycle point so the dashboard shows live workflow activity.
+Add job lifecycle event emission to the orchestrator's workflow engine so the dashboard can display active workflows, workflow history, and real-time activity. The cloud API already handles these events (generacy-cloud#228) — the orchestrator just needs to send them.
 
 ## Description
 
-The orchestrator's workflow engine processes issues and runs workflows, but never emits job lifecycle events (`job:created`, `job:phase_changed`, `job:completed`, `job:failed`) through the relay WebSocket to the cloud API.
+The orchestrator's workflow engine processes issues and runs workflows, but never emits job lifecycle events (`job:created`, `job:phase_changed`, `job:completed`, `job:failed`, `job:paused`) through the relay WebSocket to the cloud API.
 
 The cloud API has been updated to handle these events (generacy-cloud#228) — it bridges them to SSE channels and writes to Firestore for the dashboard. But the orchestrator side never sends them, so the dashboard always shows 0 active workflows and an empty activity feed.
 
@@ -20,14 +20,14 @@ The `RelayBridge` in the orchestrator handles incoming relay messages (request/r
 
 ## Expected Behavior
 
-When the orchestrator workflow engine changes job state, it should send an `event` message through the relay WebSocket:
+When the orchestrator workflow engine changes job state, it should send an `event` message through the relay WebSocket. The message must conform to the cloud API's `EventMessage` type:
 
 ```json
 {
   "type": "event",
   "event": "job:created",
   "data": {
-    "jobId": "uuid",
+    "jobId": "550e8400-e29b-41d4-a716-446655440000",
     "workflowName": "speckit-feature",
     "owner": "christrudelpw",
     "repo": "todo-list-example1",
@@ -39,23 +39,44 @@ When the orchestrator workflow engine changes job state, it should send an `even
 }
 ```
 
-Events to emit:
-- `job:created` — when a workflow is dequeued and starts processing
-- `job:phase_changed` — when the workflow transitions between phases (specify → clarify → plan → etc.)
+### Message Format
+
+Events must arrive at the cloud API's `MessageHandler.handleEvent()` as `{ type: 'event', event: string, data: Record<string, unknown>, timestamp: string }`. Use whatever relay message structure maps to this shape — if the existing `RelayEvent` structure gets parsed into this by the relay server, use that; otherwise use the flat format directly.
+
+### Job ID
+
+Generate a new UUID for each job when it is dequeued (at `job:created` time). Store the UUID in the workflow context so all subsequent events reference the same ID. Include the composite `owner/repo#issueNumber` in the `data` payload as metadata, not as the jobId.
+
+### Events to Emit
+
+- `job:created` — when a workflow is dequeued and starts processing (generate UUID here)
+- `job:phase_changed` — fired at phase **START** (`currentStep` = phase about to begin, e.g., "clarify")
+- `job:paused` — when a workflow hits a gate (e.g., waiting for clarification answers); when the gate resolves, emit `job:phase_changed` for the next phase
 - `job:completed` — when the workflow finishes successfully
-- `job:failed` — when the workflow fails with an error
+- `job:failed` — when the workflow fails with an error (include error details in `data`)
+
+### Phase Change Timing
+
+`job:phase_changed` fires at the START of each phase — `currentStep` is the phase about to begin. The hook point is at the top of the phase loop iteration, before the phase executor runs.
 
 ## Tasks
 
 - Add an `emitEvent(event: string, data: Record<string, unknown>)` method to the `RelayBridge` or `ClusterRelayClient`
-- Hook into the workflow engine's state transitions to emit events at each lifecycle point
-- Include relevant metadata: jobId, workflowName, owner, repo, issueNumber, status, currentStep, error (for failures)
+- Generate a UUID for each job at dequeue time and store in workflow context
+- Hook into the workflow engine's state transitions to emit events at each lifecycle point:
+  - `job:created` at job dequeue
+  - `job:phase_changed` at phase START (top of phase loop)
+  - `job:paused` at gate entry
+  - `job:completed` at successful workflow completion
+  - `job:failed` at workflow failure
+- Include relevant metadata: jobId (UUID), workflowName, owner, repo, issueNumber, status, currentStep, error (for failures)
 - Ensure events are only emitted when the relay is connected (no-op when disconnected)
 
 ## Context
 
 - Cloud API event handler: generacy-cloud#228 (merged, deployed)
 - Cloud API Firestore write on job events: `MessageHandler.handleEvent()` in `services/relay/message-handler.ts`
+- Cloud API `EventMessage` type: `{ type: 'event', event: string, data: Record<string, unknown>, timestamp: string }`
 - Dashboard metadata fix: generacy-cloud#226 (merged, deployed)
 - Worker count fix: generacy-cloud#227 (merged, deployed)
 
@@ -64,76 +85,46 @@ Events to emit:
 - Dashboard shows active workflows when issues are being processed
 - Workflow History tab shows completed/failed workflows
 - Activity feed shows real-time job lifecycle events
-- Worker count reflects actual connected workers
+- Dashboard correctly shows "paused" state when workflows are waiting at gates
 
 ## User Stories
 
-### US1: Dashboard Operator Monitors Active Workflows
+### US1: Dashboard Workflow Visibility
 
-**As a** dashboard operator,
-**I want** to see active workflows and their current phase in real time,
-**So that** I can monitor orchestrator activity and identify stalled or failing jobs.
-
-**Acceptance Criteria**:
-- [ ] Dashboard shows active workflow count > 0 when issues are being processed
-- [ ] Each active workflow displays its current phase (specify, clarify, plan, etc.)
-- [ ] Workflow transitions appear in the activity feed within seconds
-
-### US2: Dashboard Operator Reviews Workflow History
-
-**As a** dashboard operator,
-**I want** to see completed and failed workflows in the history tab,
-**So that** I can audit past work and investigate failures.
+**As a** project admin,
+**I want** to see active, paused, and completed workflows on the dashboard,
+**So that** I can monitor processing status and identify stuck or failed workflows.
 
 **Acceptance Criteria**:
-- [ ] Completed workflows appear in history with final status
-- [ ] Failed workflows include error information
-- [ ] History updates without requiring page refresh
-
-### US3: Graceful Degradation on Relay Disconnect
-
-**As a** system operator,
-**I want** event emission to no-op when the relay is disconnected,
-**So that** workflow processing is not disrupted by relay connectivity issues.
-
-**Acceptance Criteria**:
-- [ ] Workflows continue processing normally when relay is disconnected
-- [ ] No errors thrown due to missing relay connection
-- [ ] Events resume automatically when relay reconnects
+- [ ] Active workflows appear in real-time when issues start processing
+- [ ] Paused workflows show as paused (not falsely active) when waiting at gates
+- [ ] Completed/failed workflows appear in the History tab
+- [ ] Activity feed updates in real-time with lifecycle events
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `emitEvent(event, data)` method to `RelayBridge` or `ClusterRelayClient` that sends `{ type: "event", event, data, timestamp }` over WebSocket | P1 | Must match cloud API's expected message format |
-| FR-002 | Emit `job:created` when a workflow is dequeued and starts processing | P1 | Include jobId, workflowName, owner, repo, issueNumber, status, currentStep |
-| FR-003 | Emit `job:phase_changed` when workflow transitions between phases | P1 | Include updated currentStep and status |
-| FR-004 | Emit `job:completed` when workflow finishes successfully | P1 | Include final status |
-| FR-005 | Emit `job:failed` when workflow fails with an error | P1 | Include error message/details |
-| FR-006 | Guard event emission on relay connection state (no-op when disconnected) | P1 | Avoid errors or queuing when relay is down |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Active workflow visibility | 100% of running workflows shown on dashboard | Process a test issue, verify dashboard reflects it |
-| SC-002 | Phase transition accuracy | All phase changes reflected in activity feed | Run full speckit workflow, verify all phases appear |
-| SC-003 | Completion/failure recording | All terminal states recorded in history | Verify completed and failed workflows appear in history tab |
-| SC-004 | Event latency | < 2 seconds from state change to dashboard update | Measure time between orchestrator log and SSE receipt |
+| FR-001 | `emitEvent()` method on RelayBridge/ClusterRelayClient | P1 | No-op when relay disconnected |
+| FR-002 | UUID generation per job at dequeue time | P1 | Stored in workflow context |
+| FR-003 | Emit `job:created` at job dequeue | P1 | |
+| FR-004 | Emit `job:phase_changed` at phase start | P1 | `currentStep` = phase about to begin |
+| FR-005 | Emit `job:paused` at gate entry | P1 | Resume emits `job:phase_changed` |
+| FR-006 | Emit `job:completed` at successful completion | P1 | |
+| FR-007 | Emit `job:failed` at workflow failure | P1 | Include error in data |
+| FR-008 | Event payload includes jobId, workflowName, owner, repo, issueNumber, status, currentStep | P1 | |
 
 ## Assumptions
 
-- The cloud API event handler (generacy-cloud#228) is deployed and functioning correctly
-- The relay WebSocket connection between orchestrator and cloud API is already established for request/response proxying
-- The `WorkflowService` / `WorkflowRunner` has identifiable state transition points that can be hooked into
-- Job metadata (owner, repo, issueNumber, workflowName) is available at each lifecycle point
+- The cloud API's `handleEvent()` already handles any `job:*` prefixed event (no cloud-side changes needed for `job:paused`)
+- The relay server correctly forwards `event` type messages from orchestrator to cloud API
+- UUID v4 generation is available in the orchestrator runtime
 
 ## Out of Scope
 
-- Retry/queuing of missed events during relay disconnect (events are fire-and-forget)
-- Backfilling historical job data for workflows that ran before this feature
-- Changes to the cloud API event handler (already deployed)
-- Dashboard UI changes (already implemented, waiting for events)
+- Worker count reporting (handled by relay connection metadata, generacy-cloud#227)
+- Cloud API changes (already deployed via generacy-cloud#228)
+- SSE channel setup (already exists)
 
 ---
 
