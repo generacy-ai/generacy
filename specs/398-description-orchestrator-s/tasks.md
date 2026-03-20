@@ -10,33 +10,33 @@
 
 ## Phase 1: Types & Interfaces
 
-- [ ] T001 [US1] Add `RelayJobEvent` interface and update `RelayMessage` union in `packages/orchestrator/src/types/relay.ts`
+- [X] T001 [US1] Add `RelayJobEvent` interface and update `RelayMessage` union in `packages/orchestrator/src/types/relay.ts`
   - Add `RelayJobEvent` with `type: 'event'`, `event: string`, `data: Record<string, unknown>`, `timestamp: string`
   - Add `RelayJobEvent` to the `RelayMessage` discriminated union
 
-- [ ] T002 [P] [US1] Add `jobId` to `WorkerContext` and export `JobEventEmitter` type in `packages/orchestrator/src/worker/types.ts`
+- [X] T002 [P] [US1] Add `jobId` to `WorkerContext` and export `JobEventEmitter` type in `packages/orchestrator/src/worker/types.ts`
   - Add `jobId: string` to `WorkerContext` interface
   - Export `JobEventEmitter` type: `(event: string, data: Record<string, unknown>) => void`
 
 ## Phase 2: Event Emission Infrastructure
 
-- [ ] T003 [US1] Add `emitJobEvent()` method to `RelayBridge` in `packages/orchestrator/src/services/relay-bridge.ts`
+- [X] T003 [US1] Add `emitJobEvent()` method to `RelayBridge` in `packages/orchestrator/src/services/relay-bridge.ts`
   - Public method: `emitJobEvent(event: string, data: Record<string, unknown>): void`
   - Sends `{ type: 'event', event, data, timestamp: new Date().toISOString() }` via `this.client.send()`
   - No-op when `!this.client.isConnected`
   - Wrapped in try/catch with error logging (fire-and-forget)
 
-- [ ] T004 [P] [US1] Add `jobEventEmitter` to `ClaudeCliWorkerDeps` in `packages/orchestrator/src/worker/claude-cli-worker.ts`
+- [X] T004 [P] [US1] Add `jobEventEmitter` to `ClaudeCliWorkerDeps` in `packages/orchestrator/src/worker/claude-cli-worker.ts`
   - Add `jobEventEmitter?: JobEventEmitter` to the deps interface
   - Store as instance field for use in `handle()`
 
-- [ ] T005 [P] [US1] Add `jobEventEmitter` to `PhaseLoopDeps` in `packages/orchestrator/src/worker/phase-loop.ts`
+- [X] T005 [P] [US1] Add `jobEventEmitter` to `PhaseLoopDeps` in `packages/orchestrator/src/worker/phase-loop.ts`
   - Add `jobEventEmitter?: JobEventEmitter` to deps interface
   - Store for use in `executeLoop()`
 
 ## Phase 3: Core Event Emission
 
-- [ ] T006 [US1] Emit `job:created`, `job:completed`, and `job:failed` in `ClaudeCliWorker.handle()` (`packages/orchestrator/src/worker/claude-cli-worker.ts`)
+- [X] T006 [US1] Emit `job:created`, `job:completed`, and `job:failed` in `ClaudeCliWorker.handle()` (`packages/orchestrator/src/worker/claude-cli-worker.ts`)
   - Generate `jobId = crypto.randomUUID()` at job dequeue
   - Add `jobId` to `WorkerContext`
   - Emit `job:created` after context creation with payload: `{ jobId, workflowName, owner, repo, issueNumber, status: 'active', currentStep: startPhase }`
@@ -44,13 +44,13 @@
   - Emit `job:failed` at each failure point with `status: 'failed'` and `error` message
   - Pass `jobEventEmitter` to `PhaseLoop` via `PhaseLoopDeps`
 
-- [ ] T007 [US1] Emit `job:phase_changed` and `job:paused` in `PhaseLoop.executeLoop()` (`packages/orchestrator/src/worker/phase-loop.ts`)
+- [X] T007 [US1] Emit `job:phase_changed` and `job:paused` in `PhaseLoop.executeLoop()` (`packages/orchestrator/src/worker/phase-loop.ts`)
   - At TOP of phase loop iteration (before `labelManager.onPhaseStart()`), emit `job:phase_changed` with `{ jobId, currentStep: phase, status: 'active', workflowName, owner, repo, issueNumber }`
   - When gate activates (before returning `gateHit: true`), emit `job:paused` with `{ jobId, currentStep: phase, status: 'paused', gateLabel, workflowName, owner, repo, issueNumber }`
 
 ## Phase 4: Worker Mode Wiring
 
-- [ ] T008 [US1] Wire relay client into worker mode in `packages/orchestrator/src/server.ts`
+- [X] T008 [US1] Wire relay client into worker mode in `packages/orchestrator/src/server.ts`
   - In `isWorkerMode` block, check if `config.relay.apiKey` is set
   - If set, create a `ClusterRelayClient` for event emission
   - Create `JobEventEmitter` callback that sends through this client
@@ -59,9 +59,9 @@
 
 ## Phase 5: Tests
 
-- [ ] T009 [US1] Add unit test for `RelayBridge.emitJobEvent()` — test event sending and no-op when disconnected
-- [ ] T010 [P] [US1] Update `ClaudeCliWorker` tests to verify `job:created`, `job:completed`, `job:failed` emissions
-- [ ] T011 [P] [US1] Update/add `PhaseLoop` tests to verify `job:phase_changed` and `job:paused` emissions
+- [X] T009 [US1] Add unit test for `RelayBridge.emitJobEvent()` — test event sending and no-op when disconnected
+- [X] T010 [P] [US1] Update `ClaudeCliWorker` tests to verify `job:created`, `job:completed`, `job:failed` emissions
+- [X] T011 [P] [US1] Update/add `PhaseLoop` tests to verify `job:phase_changed` and `job:paused` emissions
 
 ## Dependencies & Execution Order
 

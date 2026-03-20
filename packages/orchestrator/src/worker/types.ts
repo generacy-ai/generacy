@@ -230,11 +230,19 @@ export interface Logger {
 }
 
 /**
+ * Callback for emitting job lifecycle events through the relay WebSocket.
+ * Fire-and-forget — implementations must not throw.
+ */
+export type JobEventEmitter = (event: string, data: Record<string, unknown>) => void;
+
+/**
  * Context passed through the worker during processing
  */
 export interface WorkerContext {
   /** Worker ID from dispatcher (UUID) */
   workerId: string;
+  /** Job UUID generated at dequeue time for lifecycle event correlation */
+  jobId: string;
   /** Queue item being processed */
   item: QueueItem;
   /** Resolved starting phase */

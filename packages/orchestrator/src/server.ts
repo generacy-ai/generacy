@@ -194,8 +194,42 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Create CLI worker and dispatcher (worker mode only)
   let workerDispatcher: WorkerDispatcher | null = null;
+  let workerRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
   if (isWorkerMode) {
-    const cliWorker = new ClaudeCliWorker(config.worker, server.log);
+    // Create a lightweight relay client for job event emission (if API key is configured)
+    let jobEventEmitter: import('./worker/types.js').JobEventEmitter | undefined;
+    if (config.relay.apiKey) {
+      try {
+        const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+        workerRelayClient = new RelayClientImpl({
+          apiKey: config.relay.apiKey,
+          cloudUrl: config.relay.cloudUrl,
+        });
+        jobEventEmitter = (event: string, data: Record<string, unknown>) => {
+          try {
+            if (!workerRelayClient?.isConnected) return;
+            workerRelayClient.send({
+              type: 'event' as const,
+              event,
+              data,
+              timestamp: new Date().toISOString(),
+            } as import('./types/relay.js').RelayMessage);
+          } catch (err) {
+            server.log.warn(
+              { err: err instanceof Error ? err.message : String(err), event },
+              'Failed to emit job event (non-fatal)',
+            );
+          }
+        };
+        server.log.info('Worker relay client configured for job event emission');
+      } catch (error) {
+        server.log.info(
+          `Worker relay client not available: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
       redisClient,
@@ -416,7 +450,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Start services on server ready
   server.addHook('onReady', async () => {
     if (isWorkerMode) {
-      // Worker mode: only start the dispatcher
+      // Worker mode: connect relay client (for job events) and start dispatcher
+      if (workerRelayClient) {
+        workerRelayClient.connect().catch((error) => {
+          server.log.warn({ err: error }, 'Worker relay client connection failed (job events disabled)');
+        });
+      }
       if (workerDispatcher) {
         workerDispatcher.start().catch((error) => {
           server.log.error({ err: error }, 'Worker dispatcher failed');
@@ -467,9 +506,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     cleanup: [
       async () => {
         if (isWorkerMode) {
-          // Worker mode: stop dispatcher
+          // Worker mode: stop dispatcher and disconnect relay client
           if (workerDispatcher) {
             await workerDispatcher.stop();
+          }
+          if (workerRelayClient) {
+            await workerRelayClient.disconnect();
           }
         } else {
           // Full mode: stop conversations, relay, monitors, Smee, SSE

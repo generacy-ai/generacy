@@ -552,6 +552,49 @@ describe('RelayBridge', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // Job Event Emission
+  // ---------------------------------------------------------------------------
+
+  describe('emitJobEvent', () => {
+    it('should send event through relay when connected', () => {
+      mockClient.isConnected = true;
+
+      bridge.emitJobEvent('job:created', { jobId: 'test-123', status: 'active' });
+
+      expect(mockClient.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'event',
+          event: 'job:created',
+          data: { jobId: 'test-123', status: 'active' },
+          timestamp: expect.any(String),
+        }),
+      );
+    });
+
+    it('should no-op when client is disconnected', () => {
+      bridge.emitJobEvent('job:created', { jobId: 'test-123' });
+
+      expect(mockClient.send).not.toHaveBeenCalled();
+    });
+
+    it('should not throw when send fails', () => {
+      mockClient.isConnected = true;
+      mockClient.send.mockImplementation(() => {
+        throw new Error('WebSocket closed');
+      });
+
+      expect(() => {
+        bridge.emitJobEvent('job:failed', { jobId: 'test-123' });
+      }).not.toThrow();
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: 'WebSocket closed', event: 'job:failed' }),
+        'Failed to emit job event (non-fatal)',
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Error Handling
   // ---------------------------------------------------------------------------
 

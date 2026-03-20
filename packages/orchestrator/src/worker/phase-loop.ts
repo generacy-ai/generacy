@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_COMMAND, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { LabelManager } from './label-manager.js';
@@ -24,6 +24,8 @@ export interface PhaseLoopDeps {
   outputCapture: OutputCapture;
   prManager: PrManager;
   conversationLogger?: ConversationLogger;
+  /** Optional callback for emitting job lifecycle events */
+  jobEventEmitter?: JobEventEmitter;
 }
 
 /**
@@ -72,7 +74,7 @@ export class PhaseLoop {
     phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
     const sequence = phaseSequence ?? PHASE_SEQUENCE;
-    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger } = deps;
+    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger, jobEventEmitter } = deps;
     const results: PhaseResult[] = [];
 
     // Track session ID across phases for conversation resume.
@@ -110,6 +112,17 @@ export class PhaseLoop {
       }
 
       this.logger.info({ phase, index: i }, 'Starting phase');
+
+      // Emit job:phase_changed before any label/comment updates
+      jobEventEmitter?.('job:phase_changed', {
+        jobId: context.jobId,
+        workflowName: context.item.workflowName,
+        owner: context.item.owner,
+        repo: context.item.repo,
+        issueNumber: context.item.issueNumber,
+        status: 'active',
+        currentStep: phase,
+      });
 
       // Record phase start time (only on first entry — preserve across retries for total wall-clock time)
       if (!phaseTimestamps.has(phase)) {
@@ -417,6 +430,19 @@ export class PhaseLoop {
             { phase, gateLabel: gate.gateLabel },
             'Gate hit, pausing workflow',
           );
+
+          // Emit job:paused before gate label management
+          jobEventEmitter?.('job:paused', {
+            jobId: context.jobId,
+            workflowName: context.item.workflowName,
+            owner: context.item.owner,
+            repo: context.item.repo,
+            issueNumber: context.item.issueNumber,
+            status: 'paused',
+            currentStep: phase,
+            gateLabel: gate.gateLabel,
+          });
+
           await labelManager.onGateHit(phase, gate.gateLabel);
 
           // Post clarification questions to the issue when clarify gate is hit
