@@ -25,13 +25,13 @@
 - [X] T006 [US1] Update `QueuePanel` (`generacy-cloud/packages/web/src/components/projects/detail/dashboard/QueuePanel.tsx`) — consume `useOrgCapacity()`, show "Waiting for slot" text + amber badge styling on pending items when at capacity
 - [X] T007 [P] [US1] Update `ActiveWorkflowsPanel` (`generacy-cloud/packages/web/src/components/projects/detail/dashboard/ActiveWorkflowsPanel.tsx`) — add slot-waiting badge on pending workflow entries when at capacity
 - [X] T008 [P] [US1] Update `WorkflowJobCard` (`generacy-cloud/packages/web/src/components/projects/detail/workflows/WorkflowJobCard.tsx`) — add amber "Waiting for slot" badge alongside status badge for pending jobs when at capacity
-- [ ] T009 [US1] Update `WorkflowJobDetail` (`generacy-cloud/packages/web/src/components/projects/detail/workflows/WorkflowJobDetail.tsx`) — show capacity breakdown ("X/Y execution slots in use") in detail view when slot-waiting
+- [X] T009 [US1] Update `WorkflowJobDetail` (`generacy-cloud/packages/web/src/components/projects/detail/workflows/WorkflowJobDetail.tsx`) — show capacity breakdown ("X/Y execution slots in use") in detail view when slot-waiting
 
 ## Phase 4: Testing
 
-- [ ] T010 [P] [US1] Add tree item tests (`packages/generacy-extension/src/views/cloud/queue/__tests__/tree-item.test.ts`) — test slot-waiting icon, description, and tooltip rendering; test normal pending unchanged; test unlimited tier (never slot-waiting)
-- [ ] T011 [P] [US1] Add provider tests (`packages/generacy-extension/src/views/cloud/queue/__tests__/provider.test.ts`) — test capacity polling alongside queue refresh, test capacity passed to tree items, test graceful fallback when capacity data unavailable
-- [ ] T012 [P] [US1] Add `useOrgCapacity` hook tests (`generacy-cloud/packages/web/src/lib/hooks/__tests__/use-org-capacity.test.ts`) — test polling interval, cleanup on unmount, unlimited tier handling, error/fallback behavior
+- [X] T010 [P] [US1] Add tree item tests (`packages/generacy-extension/src/views/cloud/queue/__tests__/tree-item.test.ts`) — test slot-waiting icon, description, and tooltip rendering; test normal pending unchanged; test unlimited tier (never slot-waiting)
+- [X] T011 [P] [US1] Add provider tests (`packages/generacy-extension/src/views/cloud/queue/__tests__/provider.test.ts`) — test capacity polling alongside queue refresh, test capacity passed to tree items, test graceful fallback when capacity data unavailable
+- [X] T012 [P] [US1] Add `useOrgCapacity` hook tests (`generacy-cloud/packages/web/src/lib/hooks/__tests__/use-org-capacity.test.ts`) — test polling interval, cleanup on unmount, unlimited tier handling, error/fallback behavior
 
 ## Dependencies & Execution Order
 
