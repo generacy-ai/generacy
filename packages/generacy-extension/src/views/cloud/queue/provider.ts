@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import { getLogger } from '../../../utils/logger';
 import { getAuthService } from '../../../api/auth';
 import { queueApi, QueueFilterOptions } from '../../../api/endpoints/queue';
+import { getOrgCapacity, type OrgCapacity } from '../../../api/endpoints/orgs';
 import { getSSEManager } from '../../../api/sse';
 import type {
   QueueItem,
@@ -78,6 +79,9 @@ export class QueueTreeProvider
 
   /** Progress summaries keyed by job ID, updated from workflows SSE and REST responses */
   private progressSummaries = new Map<string, QueueItemProgressSummary>();
+
+  /** Current org execution capacity, fetched alongside queue data */
+  private orgCapacity: OrgCapacity | undefined;
 
   /** Optional project config for default repository scoping */
   private readonly projectConfig: ProjectConfigService | undefined;
@@ -228,7 +232,7 @@ export class QueueTreeProvider
 
     switch (this.viewMode) {
       case 'flat':
-        return this.queueItems.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id)));
+        return this.queueItems.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id), this.orgCapacity));
 
       case 'byStatus':
         return this.getStatusGroups();
@@ -240,7 +244,7 @@ export class QueueTreeProvider
         return this.getAssigneeGroups();
 
       default:
-        return this.queueItems.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id)));
+        return this.queueItems.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id), this.orgCapacity));
     }
   }
 
@@ -352,7 +356,7 @@ export class QueueTreeProvider
         filtered = [];
     }
 
-    return filtered.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id)));
+    return filtered.map((item) => new QueueTreeItem(item, this.progressSummaries.get(item.id), this.orgCapacity));
   }
 
   // ==========================================================================
@@ -637,15 +641,27 @@ export class QueueTreeProvider
     try {
       logger.debug('Fetching queue items', { filters: this.activeFilters });
 
-      const response = await queueApi.getQueue({
-        ...this.activeFilters,
-        pageSize: this.pageSize,
-      });
+      // Fetch queue items and org capacity in parallel
+      const orgId = getAuthService().getOrganizationId();
+      const [response, capacity] = await Promise.all([
+        queueApi.getQueue({
+          ...this.activeFilters,
+          pageSize: this.pageSize,
+        }),
+        orgId ? getOrgCapacity(orgId).catch((err) => {
+          logger.warn('Failed to fetch org capacity', err);
+          return undefined;
+        }) : Promise.resolve(undefined),
+      ]);
 
       // Check if data has changed
-      const hasChanges = this.hasQueueChanged(response.items);
+      const capacityChanged =
+        this.orgCapacity?.isAtCapacity !== capacity?.isAtCapacity ||
+        this.orgCapacity?.activeExecutions !== capacity?.activeExecutions;
+      const hasChanges = this.hasQueueChanged(response.items) || capacityChanged;
 
       this.queueItems = response.items;
+      this.orgCapacity = capacity;
       this.loadError = undefined;
 
       // Populate progress summaries from REST response (initial/fallback data)
@@ -853,6 +869,13 @@ export class QueueTreeProvider
    */
   public getProgressSummary(jobId: string): QueueItemProgressSummary | undefined {
     return this.progressSummaries.get(jobId);
+  }
+
+  /**
+   * Get current org execution capacity
+   */
+  public getOrgCapacity(): OrgCapacity | undefined {
+    return this.orgCapacity;
   }
 
   // ==========================================================================

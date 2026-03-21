@@ -11,20 +11,20 @@
 
 ## Phase 1: Org Capacity Data Layer
 
-- [ ] T001 [US1] Add `OrgCapacity` type and `getOrgCapacity()` method to extension API (`packages/generacy-extension/src/api/endpoints/orgs.ts`) — return `{ activeExecutions, maxConcurrentAgents, isAtCapacity }` derived from org data
-- [ ] T002 [P] [US1] Create `useOrgCapacity()` hook (`generacy-cloud/packages/web/src/lib/hooks/use-org-capacity.ts`) — poll `GET /orgs/{orgId}` every 15s, expose `{ isAtCapacity, activeExecutions, maxConcurrentAgents }`, handle unlimited tier (`maxConcurrentAgents === -1`)
+- [X] T001 [US1] Add `OrgCapacity` type and `getOrgCapacity()` method to extension API (`packages/generacy-extension/src/api/endpoints/orgs.ts`) — return `{ activeExecutions, maxConcurrentAgents, isAtCapacity }` derived from org data
+- [X] T002 [P] [US1] Create `useOrgCapacity()` hook (`generacy-cloud/packages/web/src/lib/hooks/use-org-capacity.ts`) — poll `GET /orgs/{orgId}` every 15s, expose `{ isAtCapacity, activeExecutions, maxConcurrentAgents }`, handle unlimited tier (`maxConcurrentAgents === -1`)
 
 ## Phase 2: VS Code Extension Views
 
-- [ ] T003 [US1] Update `QueueTreeProvider` (`packages/generacy-extension/src/views/cloud/queue/provider.ts`) — fetch org capacity alongside queue data in `refresh()`, store as `this.orgCapacity`, pass to tree items
-- [ ] T004 [US1] Update `QueueTreeItem` (`packages/generacy-extension/src/views/cloud/queue/tree-item.ts`) — when item is `pending` and org at capacity: use distinct icon (`$(watch)` amber), prepend "waiting for slot" to description, add "Execution Slots: X/Y in use" to tooltip
-- [ ] T005 [US1] Update detail HTML (`packages/generacy-extension/src/views/cloud/queue/detail-html.ts`) — show "Queued — waiting for execution slot" status and "X/Y execution slots in use" capacity section when item is slot-waiting
+- [X] T003 [US1] Update `QueueTreeProvider` (`packages/generacy-extension/src/views/cloud/queue/provider.ts`) — fetch org capacity alongside queue data in `refresh()`, store as `this.orgCapacity`, pass to tree items
+- [X] T004 [US1] Update `QueueTreeItem` (`packages/generacy-extension/src/views/cloud/queue/tree-item.ts`) — when item is `pending` and org at capacity: use distinct icon (`$(watch)` amber), prepend "waiting for slot" to description, add "Execution Slots: X/Y in use" to tooltip
+- [X] T005 [US1] Update detail HTML (`packages/generacy-extension/src/views/cloud/queue/detail-html.ts`) — show "Queued — waiting for execution slot" status and "X/Y execution slots in use" capacity section when item is slot-waiting
 
 ## Phase 3: Cloud Web Dashboard Views
 
-- [ ] T006 [US1] Update `QueuePanel` (`generacy-cloud/packages/web/src/components/projects/detail/dashboard/QueuePanel.tsx`) — consume `useOrgCapacity()`, show "Waiting for slot" text + amber badge styling on pending items when at capacity
-- [ ] T007 [P] [US1] Update `ActiveWorkflowsPanel` (`generacy-cloud/packages/web/src/components/projects/detail/dashboard/ActiveWorkflowsPanel.tsx`) — add slot-waiting badge on pending workflow entries when at capacity
-- [ ] T008 [P] [US1] Update `WorkflowJobCard` (`generacy-cloud/packages/web/src/components/projects/detail/workflows/WorkflowJobCard.tsx`) — add amber "Waiting for slot" badge alongside status badge for pending jobs when at capacity
+- [X] T006 [US1] Update `QueuePanel` (`generacy-cloud/packages/web/src/components/projects/detail/dashboard/QueuePanel.tsx`) — consume `useOrgCapacity()`, show "Waiting for slot" text + amber badge styling on pending items when at capacity
+- [X] T007 [P] [US1] Update `ActiveWorkflowsPanel` (`generacy-cloud/packages/web/src/components/projects/detail/dashboard/ActiveWorkflowsPanel.tsx`) — add slot-waiting badge on pending workflow entries when at capacity
+- [X] T008 [P] [US1] Update `WorkflowJobCard` (`generacy-cloud/packages/web/src/components/projects/detail/workflows/WorkflowJobCard.tsx`) — add amber "Waiting for slot" badge alongside status badge for pending jobs when at capacity
 - [ ] T009 [US1] Update `WorkflowJobDetail` (`generacy-cloud/packages/web/src/components/projects/detail/workflows/WorkflowJobDetail.tsx`) — show capacity breakdown ("X/Y execution slots in use") in detail view when slot-waiting
 
 ## Phase 4: Testing

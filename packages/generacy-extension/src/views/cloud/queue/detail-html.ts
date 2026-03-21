@@ -15,6 +15,7 @@ import type {
   QueuePriority,
   JobProgress,
 } from '../../../api/types';
+import type { OrgCapacity } from '../../../api/endpoints/orgs';
 
 // ============================================================================
 // Types
@@ -30,6 +31,8 @@ export interface JobDetailHtmlData {
   expandedPhases: Set<string>;
   /** Whether the panel is pinned */
   isPinned: boolean;
+  /** Org execution capacity (for slot-waiting indicator) */
+  orgCapacity?: OrgCapacity;
 }
 
 // ============================================================================
@@ -41,7 +44,8 @@ export interface JobDetailHtmlData {
  */
 export function getJobDetailHtml(data: JobDetailHtmlData): string {
   const nonce = getNonce();
-  const { item, progress, expandedPhases, isPinned } = data;
+  const { item, progress, expandedPhases, isPinned, orgCapacity } = data;
+  const isSlotWaiting = item.status === 'pending' && !!orgCapacity?.isAtCapacity;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -57,7 +61,8 @@ export function getJobDetailHtml(data: JobDetailHtmlData): string {
 <body>
   ${getReconnectingBanner()}
   ${getHeaderSection(item, isPinned)}
-  ${getStatusBarSection(item)}
+  ${getStatusBarSection(item, isSlotWaiting)}
+  ${getCapacitySection(isSlotWaiting, orgCapacity)}
   ${getLabelsSection(item)}
   ${getPhaseListSection()}
   ${getPRLinkSection()}
@@ -101,16 +106,28 @@ function getHeaderSection(item: QueueItem, isPinned: boolean): string {
   </div>`;
 }
 
-function getStatusBarSection(item: QueueItem): string {
-  const statusColor = STATUS_COLORS[item.status];
+function getStatusBarSection(item: QueueItem, isSlotWaiting: boolean): string {
+  const statusColor = isSlotWaiting ? '#e6922e' : STATUS_COLORS[item.status];
+  const statusLabel = isSlotWaiting ? 'QUEUED — WAITING FOR SLOT' : item.status.toUpperCase();
   const priorityColor = PRIORITY_COLORS[item.priority];
 
   return `
   <div class="status-bar" id="status-bar">
-    <span class="badge" id="status-badge" style="background-color: ${statusColor};">${item.status.toUpperCase()}</span>
+    <span class="badge" id="status-badge" style="background-color: ${statusColor};">${statusLabel}</span>
     <span class="badge" id="priority-badge" style="background-color: ${priorityColor};">${item.priority.toUpperCase()}</span>
     <span id="phase-progress"></span>
     <span class="elapsed" id="elapsed-time"></span>
+  </div>`;
+}
+
+function getCapacitySection(isSlotWaiting: boolean, capacity?: OrgCapacity): string {
+  if (!isSlotWaiting || !capacity) {
+    return '';
+  }
+
+  return `
+  <div class="capacity-section">
+    <span class="capacity-label">${capacity.activeExecutions}/${capacity.maxConcurrentAgents} execution slots in use</span>
   </div>`;
 }
 
@@ -268,6 +285,21 @@ function getStyles(): string {
     }
     .status-bar .elapsed {
       color: var(--vscode-descriptionForeground);
+    }
+    .capacity-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 16px;
+      padding: 8px 12px;
+      background-color: rgba(230, 146, 46, 0.15);
+      border: 1px solid rgba(230, 146, 46, 0.4);
+      border-radius: 4px;
+      font-size: 0.9em;
+    }
+    .capacity-label {
+      color: #e6922e;
+      font-weight: 500;
     }
     .reconnecting-banner {
       display: none;
