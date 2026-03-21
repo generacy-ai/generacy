@@ -1,96 +1,76 @@
-# Feature Specification: Display Execution Slot and Cluster Usage in Cloud Dashboard
+# Feature Specification: ## Context
+
+Part of the [Billing & Concurrent Workflow Enforcement](https://github
 
 **Branch**: `400-context-part-billing` | **Date**: 2026-03-21 | **Status**: Draft
 
 ## Summary
 
-Update the Generacy VS Code extension's cloud dashboard to display execution slot usage and cluster connection counts, including progress bars, threshold warnings, overage states, and upgrade prompts. Part of the [Billing & Concurrent Workflow Enforcement](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/billing-concurrent-workflow-enforcement.md) plan — **Phase 4: Frontend Visibility**.
-
 ## Context
 
-Users currently have no visibility into how many execution slots or cluster connections they are consuming relative to their plan limits. This feature adds usage indicators to the cloud dashboard so users can monitor capacity, receive warnings before hitting limits, and are prompted to upgrade when at capacity.
+Part of the [Billing & Concurrent Workflow Enforcement](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/billing-concurrent-workflow-enforcement.md) plan — **Phase 4: Frontend Visibility**.
+
+## Task
+
+Update the Generacy VS Code extension's cloud dashboard to display execution slot usage and cluster connection counts.
+
+### Changes
+
+**Dashboard overview section:**
+- Show "X of Y execution slots used" with a progress bar
+- Show "X of Y clusters connected" with a progress bar
+- Warning state at 75% usage, critical at 90%
+- Show overage state during downgrades (e.g., "5 of 3 slots active — 2 completing from prior plan")
+
+**Upgrade prompts:**
+- When at execution slot capacity: "All execution slots in use. Upgrade your plan for more concurrent workflows."
+- When at cluster limit: "Cluster limit reached. Upgrade to connect additional clusters."
+- Link to billing management / upgrade flow
+
+**Data source:**
+- Use `activeExecutions` and `connectedClusters` from the organization document
+- Use tier limits from subscription data
+
+### Acceptance Criteria
+
+- [ ] Execution slot usage displayed with progress bar
+- [ ] Cluster connection count displayed with progress bar
+- [ ] Warning/critical thresholds at 75%/90%
+- [ ] Overage state shown during downgrades
+- [ ] Upgrade prompts shown when at capacity
+- [ ] Real-time updates via existing SSE/polling
 
 ## User Stories
 
-### US1: Monitor Execution Slot Usage
+### US1: [Primary User Story]
 
-**As a** team lead managing concurrent workflows,
-**I want** to see how many execution slots are in use versus my plan's limit,
-**So that** I can plan workflow scheduling and avoid hitting capacity unexpectedly.
-
-**Acceptance Criteria**:
-- [ ] Progress bar shows "X of Y execution slots used"
-- [ ] Warning state renders at 75% usage
-- [ ] Critical state renders at 90% usage
-
-### US2: Monitor Cluster Connections
-
-**As a** DevOps engineer managing infrastructure,
-**I want** to see how many clusters are connected versus my plan's limit,
-**So that** I can manage cluster provisioning within my plan constraints.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Progress bar shows "X of Y clusters connected"
-- [ ] Warning state renders at 75% usage
-- [ ] Critical state renders at 90% usage
-
-### US3: Understand Overage During Downgrades
-
-**As a** billing administrator who has recently downgraded,
-**I want** to see that active slots exceed my new plan's limit with an explanation,
-**So that** I understand why executions are still running beyond my current tier and when they will complete.
-
-**Acceptance Criteria**:
-- [ ] Overage state displayed (e.g., "5 of 3 slots active — 2 completing from prior plan")
-- [ ] Overage is visually distinct from normal/warning/critical states
-
-### US4: Upgrade When At Capacity
-
-**As a** user who has hit execution or cluster limits,
-**I want** to see a clear prompt to upgrade my plan,
-**So that** I can quickly unblock my team by increasing capacity.
-
-**Acceptance Criteria**:
-- [ ] Upgrade prompt shown when execution slots are full
-- [ ] Upgrade prompt shown when cluster limit is reached
-- [ ] Prompt links to billing management / upgrade flow
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Display execution slot usage as progress bar with "X of Y" label | P1 | Dashboard overview section |
-| FR-002 | Display cluster connection count as progress bar with "X of Y" label | P1 | Dashboard overview section |
-| FR-003 | Apply warning visual state at 75% usage threshold | P1 | Both slots and clusters |
-| FR-004 | Apply critical visual state at 90% usage threshold | P1 | Both slots and clusters |
-| FR-005 | Display overage state when active count exceeds tier limit | P1 | Post-downgrade scenario |
-| FR-006 | Show upgrade prompt when execution slots are at capacity | P2 | Links to upgrade flow |
-| FR-007 | Show upgrade prompt when cluster limit is reached | P2 | Links to upgrade flow |
-| FR-008 | Read `activeExecutions` and `connectedClusters` from organization document | P1 | Existing data source |
-| FR-009 | Read tier limits from subscription data | P1 | Existing data source |
-| FR-010 | Real-time updates via existing SSE/polling mechanism | P1 | No new transport needed |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Usage bars render correctly | 100% of states (normal, warning, critical, overage) | Manual + automated UI tests |
-| SC-002 | Data accuracy | Slot/cluster counts match backend org document | Compare dashboard with API response |
-| SC-003 | Real-time responsiveness | Updates within existing SSE/polling interval | Observe dashboard after starting/stopping a workflow |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The organization document already contains `activeExecutions` and `connectedClusters` fields
-- Subscription/tier limit data is already accessible from the frontend
-- An existing SSE or polling mechanism is in place for real-time dashboard updates
-- The cloud dashboard webview already exists and this adds new components to it
+- [Assumption 1]
 
 ## Out of Scope
 
-- Backend changes to compute or store usage data (handled in earlier billing phases)
-- Billing/payment processing or plan change flows
-- Historical usage analytics or trend charts
-- Email or push notifications for threshold warnings
+- [Exclusion 1]
 
 ---
 
