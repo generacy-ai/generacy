@@ -391,7 +391,7 @@ describe('Queue Actions', () => {
 
       await viewQueueItemDetails(item, mockExtensionUri);
 
-      expect(mockShowPreview).toHaveBeenCalledWith(item, mockExtensionUri);
+      expect(mockShowPreview).toHaveBeenCalledWith(item, mockExtensionUri, undefined);
     });
 
     it('should fetch fresh data from API', async () => {
@@ -402,7 +402,7 @@ describe('Queue Actions', () => {
       await viewQueueItemDetails(item, mockExtensionUri);
 
       expect(queueApi.getQueueItem).toHaveBeenCalledWith(item.id);
-      expect(mockShowPreview).toHaveBeenCalledWith(freshItem, mockExtensionUri);
+      expect(mockShowPreview).toHaveBeenCalledWith(freshItem, mockExtensionUri, undefined);
     });
 
     it('should use cached data when API fetch fails', async () => {
@@ -412,7 +412,7 @@ describe('Queue Actions', () => {
       await viewQueueItemDetails(item, mockExtensionUri);
 
       // Should still show preview with cached data
-      expect(mockShowPreview).toHaveBeenCalledWith(item, mockExtensionUri);
+      expect(mockShowPreview).toHaveBeenCalledWith(item, mockExtensionUri, undefined);
     });
 
     it('should pass fresh item with error details to panel', async () => {
@@ -426,7 +426,8 @@ describe('Queue Actions', () => {
 
       expect(mockShowPreview).toHaveBeenCalledWith(
         expect.objectContaining({ error: 'Connection timeout' }),
-        mockExtensionUri
+        mockExtensionUri,
+        undefined
       );
     });
   });
