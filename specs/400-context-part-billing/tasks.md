@@ -15,34 +15,34 @@
 
 ## Phase 1: Type & Data Layer Updates
 
-- [ ] T001 [P] [US1] Add `activeExecutions` optional field to `OrgUsage` interface and `OrgUsageSchema` in `packages/generacy-extension/src/api/types.ts`
-- [ ] T002 [P] [US2] Add `connectedClusters` optional field to `OrgUsage` interface and `OrgUsageSchema` in `packages/generacy-extension/src/api/types.ts`
-- [ ] T003 [US1] Rename `concurrentAgents` → `executionSlots` in `getTierLimits()` return type and all three tier cases in `packages/generacy-extension/src/api/endpoints/orgs.ts`
-- [ ] T004 [US2] Add `maxClusters` to `getTierLimits()` return type and switch cases (starter: 1, team: 3, enterprise: -1) in `packages/generacy-extension/src/api/endpoints/orgs.ts`
+- [X] T001 [P] [US1] Add `activeExecutions` optional field to `OrgUsage` interface and `OrgUsageSchema` in `packages/generacy-extension/src/api/types.ts`
+- [X] T002 [P] [US2] Add `connectedClusters` optional field to `OrgUsage` interface and `OrgUsageSchema` in `packages/generacy-extension/src/api/types.ts`
+- [X] T003 [US1] Rename `concurrentAgents` → `executionSlots` in `getTierLimits()` return type and all three tier cases in `packages/generacy-extension/src/api/endpoints/orgs.ts`
+- [X] T004 [US2] Add `maxClusters` to `getTierLimits()` return type and switch cases (starter: 1, team: 3, enterprise: -1) in `packages/generacy-extension/src/api/endpoints/orgs.ts`
 
 ## Phase 2: Dashboard UI Updates — Overview Section
 
-- [ ] T005 [US1] Rename "Concurrent Agents" label → "Execution Slots" in `getOverviewSection()` and update `tierLimits.concurrentAgents` → `tierLimits.executionSlots` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts` (line ~104)
-- [ ] T006 [US2] Add "Clusters" stat item to `getOverviewSection()` showing `connectedClusters` / `maxClusters` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
+- [X] T005 [US1] Rename "Concurrent Agents" label → "Execution Slots" in `getOverviewSection()` and update `tierLimits.concurrentAgents` → `tierLimits.executionSlots` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts` (line ~104)
+- [X] T006 [US2] Add "Clusters" stat item to `getOverviewSection()` showing `connectedClusters` / `maxClusters` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
 
 ## Phase 3: Dashboard UI Updates — Usage Section
 
-- [ ] T007 [US1] Rename "Concurrent Agents" progress bar → "Execution Slots" in `getUsageSection()` and update variable names from `concurrentPercent` → `executionSlotPercent` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts` (line ~131–162)
-- [ ] T008 [US1] Add threshold classes (warning/critical) to execution slots progress bar — currently only agent hours has them. Use `activeExecutions ?? currentConcurrentAgents` as the current value and `tierLimits.executionSlots` as the limit in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
-- [ ] T009 [US1] Add overage state for execution slots: when `activeExecutions > limit`, show bar at 100% with `critical` class and text "X of Y slots active — Z completing from prior plan" in `getUsageSection()`
-- [ ] T010 [US2] Add new "Cluster Connections" progress bar in `getUsageSection()` with threshold classes (normal/warning/critical) using `connectedClusters` (fallback 0) and `tierLimits.maxClusters` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
-- [ ] T011 [US2] Add overage state for cluster connections: same pattern as T009, "X of Y clusters connected — Z completing from prior plan" in `getUsageSection()`
+- [X] T007 [US1] Rename "Concurrent Agents" progress bar → "Execution Slots" in `getUsageSection()` and update variable names from `concurrentPercent` → `executionSlotPercent` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts` (line ~131–162)
+- [X] T008 [US1] Add threshold classes (warning/critical) to execution slots progress bar — currently only agent hours has them. Use `activeExecutions ?? currentConcurrentAgents` as the current value and `tierLimits.executionSlots` as the limit in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
+- [X] T009 [US1] Add overage state for execution slots: when `activeExecutions > limit`, show bar at 100% with `critical` class and text "X of Y slots active — Z completing from prior plan" in `getUsageSection()`
+- [X] T010 [US2] Add new "Cluster Connections" progress bar in `getUsageSection()` with threshold classes (normal/warning/critical) using `connectedClusters` (fallback 0) and `tierLimits.maxClusters` in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
+- [X] T011 [US2] Add overage state for cluster connections: same pattern as T009, "X of Y clusters connected — Z completing from prior plan" in `getUsageSection()`
 
 ## Phase 4: Upgrade Prompts & Styling
 
-- [ ] T012 [US3] Add inline upgrade prompt below execution slots bar when at capacity: "All execution slots in use. Upgrade your plan for more concurrent workflows." with link to upgrade flow in `getUsageSection()`
-- [ ] T013 [US3] Add inline upgrade prompt below cluster connections bar when at cluster limit: "Cluster limit reached. Upgrade to connect additional clusters." with link to upgrade flow in `getUsageSection()`
-- [ ] T014 [US3] Add `.usage-upgrade-prompt` CSS class in `getStyles()` for capacity-specific upgrade prompts in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
+- [X] T012 [US3] Add inline upgrade prompt below execution slots bar when at capacity: "All execution slots in use. Upgrade your plan for more concurrent workflows." with link to upgrade flow in `getUsageSection()`
+- [X] T013 [US3] Add inline upgrade prompt below cluster connections bar when at cluster limit: "Cluster limit reached. Upgrade to connect additional clusters." with link to upgrade flow in `getUsageSection()`
+- [X] T014 [US3] Add `.usage-upgrade-prompt` CSS class in `getStyles()` for capacity-specific upgrade prompts in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts`
 
 ## Phase 5: Update Call Sites & Compile Check
 
-- [ ] T015 Update `getDashboardHtml()` to pass `usage` data to `getOverviewSection()` (needed for `connectedClusters` display) in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts` (line ~41)
-- [ ] T016 Run TypeScript compile check (`pnpm tsc --noEmit`) to verify no type errors from the `concurrentAgents` → `executionSlots` rename across all call sites
+- [X] T015 Update `getDashboardHtml()` to pass `usage` data to `getOverviewSection()` (needed for `connectedClusters` display) in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts` (line ~41)
+- [X] T016 Run TypeScript compile check (`pnpm tsc --noEmit`) to verify no type errors from the `concurrentAgents` → `executionSlots` rename across all call sites
 
 ## Dependencies & Execution Order
 

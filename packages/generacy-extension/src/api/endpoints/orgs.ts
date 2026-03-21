@@ -156,26 +156,30 @@ export async function getOrganizationDashboard(orgId: string): Promise<OrgDashbo
  * Get tier limits for display
  */
 export function getTierLimits(tier: Organization['tier']): {
-  concurrentAgents: number;
+  executionSlots: number;
+  maxClusters: number;
   agentHoursPerMonth: number;
   features: string[];
 } {
   switch (tier) {
     case 'starter':
       return {
-        concurrentAgents: 3,
+        executionSlots: 3,
+        maxClusters: 1,
         agentHoursPerMonth: 100,
         features: ['GitHub integration', 'Basic support'],
       };
     case 'team':
       return {
-        concurrentAgents: 10,
+        executionSlots: 10,
+        maxClusters: 3,
         agentHoursPerMonth: 500,
         features: ['All integrations', 'SSO', 'Priority support'],
       };
     case 'enterprise':
       return {
-        concurrentAgents: -1, // Unlimited
+        executionSlots: -1, // Unlimited
+        maxClusters: -1, // Unlimited
         agentHoursPerMonth: -1, // Unlimited
         features: ['All integrations', 'SSO', 'Dedicated support', 'SLA', 'Custom limits'],
       };
