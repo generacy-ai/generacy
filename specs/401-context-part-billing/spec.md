@@ -1,69 +1,66 @@
-# Feature Specification: Show 'waiting for slot' indicator on queued workflows
+# Feature Specification: ## Context
+
+Part of the [Billing & Concurrent Workflow Enforcement](https://github
 
 **Branch**: `401-context-part-billing` | **Date**: 2026-03-21 | **Status**: Draft
 
 ## Summary
 
-Update workflow list and queue views to visually indicate when workflows are queued because the organization's execution slots are full, rather than simply waiting in the normal queue.
-
 ## Context
 
 Part of the [Billing & Concurrent Workflow Enforcement](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/billing-concurrent-workflow-enforcement.md) plan — **Phase 4: Frontend Visibility**.
 
-When an organization hits its tier's concurrent execution limit, new workflows are queued. Currently, users see a generic "Queued" status with no indication of *why* they're waiting. This feature adds clarity so users understand the bottleneck and can take action (e.g., upgrade their plan or wait for running workflows to finish).
+## Task
+
+Update workflow list and queue views to indicate when items are queued because execution slots are full.
+
+### Changes
+
+**Workflow list / queue views:**
+- When a workflow's status is `queued` and the org is at execution slot capacity, show "Queued — waiting for execution slot" instead of just "Queued"
+- Use a distinct visual indicator (e.g., clock icon or muted styling) to differentiate slot-waiting from normal queue position
+
+**Determination logic:**
+- If `org.activeExecutions >= tierLimit` and item status is `queued` → show slot-waiting indicator
+- Otherwise show normal queued status
+
+### Acceptance Criteria
+
+- [ ] Queued workflows show "waiting for slot" when org is at capacity
+- [ ] Visual distinction between slot-waiting and normal queued state
+- [ ] Indicator updates in real-time as slots open/close
 
 ## User Stories
 
-### US1: Org member understands queue reason
+### US1: [Primary User Story]
 
-**As an** organization member,
-**I want** to see why my workflow is queued (slot capacity vs. normal queue position),
-**So that** I understand whether I need to wait for other workflows to finish or if my workflow will start soon.
-
-**Acceptance Criteria**:
-- [ ] Queued workflows show "Queued — waiting for execution slot" when org is at capacity
-- [ ] Queued workflows show normal "Queued" status when org has available slots
-
-### US2: Org admin monitors slot utilization
-
-**As an** organization admin,
-**I want** to see at a glance which workflows are blocked by slot limits,
-**So that** I can decide whether to upgrade our plan or manage running workflows.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Slot-waiting workflows are visually distinct from normally queued workflows
-- [ ] Status updates in real-time as slots open/close
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | When `org.activeExecutions >= tierLimit` and workflow status is `queued`, display "Queued — waiting for execution slot" | P1 | Core feature |
-| FR-002 | Use a distinct visual indicator (clock icon or muted styling) for slot-waiting state | P1 | Differentiate from normal queue |
-| FR-003 | When `org.activeExecutions < tierLimit` and workflow status is `queued`, display normal "Queued" status | P1 | Default behavior |
-| FR-004 | Indicator must update in real-time as execution slots open/close | P1 | No page refresh required |
-| FR-005 | Fetch `org.activeExecutions` and `tierLimit` from backend API or real-time subscription | P2 | Data dependency |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Slot-waiting state correctly displayed | 100% accuracy | Queued workflows at capacity show indicator |
-| SC-002 | Real-time updates | < 5s latency | Status changes reflected without refresh |
-| SC-003 | No regressions | 0 broken tests | Existing workflow list tests still pass |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Backend already exposes `org.activeExecutions` and `tierLimit` (or equivalent) via API
-- Workflow status `queued` is already surfaced in the frontend workflow list
-- Real-time updates can leverage existing WebSocket/SSE subscription infrastructure
+- [Assumption 1]
 
 ## Out of Scope
 
-- Billing/upgrade prompts or CTAs when at capacity (separate feature)
-- Admin controls to manage/prioritize the queue
-- Historical slot utilization analytics
-- Changes to the actual queueing/scheduling logic
+- [Exclusion 1]
 
 ---
 
