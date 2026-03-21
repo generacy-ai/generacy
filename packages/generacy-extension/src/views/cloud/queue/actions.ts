@@ -316,7 +316,8 @@ export async function setPriority(
  */
 export async function viewQueueItemDetails(
   item: QueueTreeItem | QueueItem,
-  extensionUri: vscode.Uri
+  extensionUri: vscode.Uri,
+  provider?: QueueTreeProvider
 ): Promise<void> {
   const logger = getLogger();
   const queueItem = 'queueItem' in item ? item.queueItem : item;
@@ -333,7 +334,7 @@ export async function viewQueueItemDetails(
     freshItem = queueItem;
   }
 
-  JobDetailPanel.showPreview(freshItem, extensionUri);
+  JobDetailPanel.showPreview(freshItem, extensionUri, provider?.getOrgCapacity());
 }
 
 /**
@@ -420,7 +421,7 @@ export function registerQueueActions(
           vscode.window.showWarningMessage('Please select a queue item to view');
           return;
         }
-        await viewQueueItemDetails(item, context.extensionUri);
+        await viewQueueItemDetails(item, context.extensionUri, provider);
       }
     )
   );

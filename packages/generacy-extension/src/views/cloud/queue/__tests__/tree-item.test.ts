@@ -3,6 +3,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { QueueItem, QueueItemProgressSummary } from '../../../../api/types';
+import type { OrgCapacity } from '../../../../api/endpoints/orgs';
 
 // Mock vscode before imports
 vi.mock('vscode', () => ({
@@ -798,6 +799,90 @@ describe('QueueTreeItem', () => {
         expect(getTooltipValue(treeItem)).toContain('### Progress');
         expect(getTooltipValue(treeItem)).toContain('Phase 8/8');
       });
+    });
+  });
+
+  describe('slot-waiting', () => {
+    const atCapacity: OrgCapacity = {
+      activeExecutions: 3,
+      maxConcurrentAgents: 3,
+      isAtCapacity: true,
+    };
+
+    it('should use watch icon for slot-waiting pending item', () => {
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item, undefined, atCapacity);
+
+      expect(getIconId(treeItem)).toBe('watch');
+    });
+
+    it('should use charts.orange color for slot-waiting pending item', () => {
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item, undefined, atCapacity);
+
+      expect(getIconColor(treeItem)).toBe('charts.orange');
+    });
+
+    it('should include "waiting for slot" in description', () => {
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item, undefined, atCapacity);
+
+      expect(treeItem.description).toContain('waiting for slot');
+    });
+
+    it('should show execution slots info in tooltip', () => {
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item, undefined, atCapacity);
+      const tooltip = getTooltipValue(treeItem);
+
+      expect(tooltip).toContain('**Execution Slots:** 3/3 in use');
+    });
+
+    it('should use normal clock icon for pending item without capacity at limit', () => {
+      const notAtCapacity: OrgCapacity = {
+        activeExecutions: 1,
+        maxConcurrentAgents: 3,
+        isAtCapacity: false,
+      };
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item, undefined, notAtCapacity);
+
+      expect(getIconId(treeItem)).toBe('clock');
+    });
+
+    it('should not show slot-waiting for unlimited tier', () => {
+      const unlimited: OrgCapacity = {
+        activeExecutions: 10,
+        maxConcurrentAgents: -1,
+        isAtCapacity: false,
+      };
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item, undefined, unlimited);
+
+      expect(treeItem.isSlotWaiting).toBe(false);
+      expect(getIconId(treeItem)).toBe('clock');
+      expect(treeItem.description).not.toContain('waiting for slot');
+    });
+
+    it('should not be slot-waiting for non-pending items even when at capacity', () => {
+      const item = createMockQueueItem({
+        status: 'running',
+        startedAt: new Date().toISOString(),
+      });
+      const treeItem = new QueueTreeItem(item, undefined, atCapacity);
+
+      expect(treeItem.isSlotWaiting).toBe(false);
+      expect(getIconId(treeItem)).toBe('sync~spin');
+      expect(treeItem.description).not.toContain('waiting for slot');
+    });
+
+    it('should not be slot-waiting for pending item with no capacity data', () => {
+      const item = createMockQueueItem({ status: 'pending' });
+      const treeItem = new QueueTreeItem(item);
+
+      expect(treeItem.isSlotWaiting).toBe(false);
+      expect(getIconId(treeItem)).toBe('clock');
+      expect(treeItem.description).not.toContain('waiting for slot');
     });
   });
 });

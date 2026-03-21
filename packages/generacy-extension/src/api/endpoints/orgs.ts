@@ -87,6 +87,23 @@ const OrgDashboardDataSchema = z.object({
 const PaginatedMembersSchema = createPaginatedSchema(OrgMemberSchema);
 
 // ============================================================================
+// Org Capacity Types
+// ============================================================================
+
+/**
+ * Org execution capacity — derived from org usage data.
+ * Used by UI to determine if pending workflows are slot-waiting.
+ */
+export interface OrgCapacity {
+  /** Number of currently running workflows */
+  activeExecutions: number;
+  /** Tier-defined limit for concurrent agents (-1 = unlimited) */
+  maxConcurrentAgents: number;
+  /** Whether activeExecutions >= maxConcurrentAgents */
+  isAtCapacity: boolean;
+}
+
+// ============================================================================
 // API Functions
 // ============================================================================
 
@@ -150,6 +167,24 @@ export async function getOrganizationDashboard(orgId: string): Promise<OrgDashbo
   const client = getApiClient();
   const response = await client.getValidated(`/orgs/${orgId}/dashboard`, OrgDashboardDataSchema);
   return response.data;
+}
+
+/**
+ * Get org execution capacity by fetching org details and usage in parallel.
+ * Returns derived capacity state for slot-waiting determination.
+ */
+export async function getOrgCapacity(orgId: string): Promise<OrgCapacity> {
+  const [org, usage] = await Promise.all([
+    getOrganization(orgId),
+    getOrganizationUsage(orgId),
+  ]);
+
+  const maxConcurrentAgents = org.maxConcurrentAgents;
+  const activeExecutions = usage.currentConcurrentAgents;
+  const isAtCapacity =
+    maxConcurrentAgents !== -1 && activeExecutions >= maxConcurrentAgents;
+
+  return { activeExecutions, maxConcurrentAgents, isAtCapacity };
 }
 
 /**
