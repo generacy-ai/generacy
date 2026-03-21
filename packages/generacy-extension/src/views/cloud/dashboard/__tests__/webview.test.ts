@@ -128,7 +128,7 @@ describe('Organization Dashboard Webview', () => {
 
       expect(html).toContain('Seats');
       expect(html).toContain('5');
-      expect(html).toContain('Concurrent Agents');
+      expect(html).toContain('Execution Slots');
       expect(html).toContain('10');
     });
 

@@ -38,7 +38,7 @@ export function getDashboardHtml(
     ${getHeader(organization)}
     <div class="content">
       <div class="main-content">
-        ${getOverviewSection(organization, tierLimits)}
+        ${getOverviewSection(organization, tierLimits, usage)}
         ${getUsageSection(usage, tierLimits)}
         ${getMembersSection(members)}
       </div>
@@ -90,8 +90,10 @@ function getHeader(organization: OrgDashboardData['organization']): string {
 
 function getOverviewSection(
   organization: OrgDashboardData['organization'],
-  tierLimits: ReturnType<typeof getTierLimits>
+  tierLimits: ReturnType<typeof getTierLimits>,
+  usage: OrgDashboardData['usage']
 ): string {
+  const connectedClusters = usage.connectedClusters ?? 0;
   return `
     <section class="card">
       <h2>Organization Overview</h2>
@@ -101,9 +103,13 @@ function getOverviewSection(
           <div class="stat-value">${organization.seats}</div>
         </div>
         <div class="stat-item">
-          <div class="stat-label">Concurrent Agents</div>
+          <div class="stat-label">Execution Slots</div>
           <div class="stat-value">${organization.maxConcurrentAgents}</div>
-          <div class="stat-limit">${formatLimit(tierLimits.concurrentAgents)} max</div>
+          <div class="stat-limit">${formatLimit(tierLimits.executionSlots)} max</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Clusters</div>
+          <div class="stat-value">${connectedClusters} / ${formatLimit(tierLimits.maxClusters)}</div>
         </div>
         <div class="stat-item">
           <div class="stat-label">Agent Hours/Month</div>
@@ -124,13 +130,31 @@ function getUsageSection(
   usage: OrgDashboardData['usage'],
   tierLimits: ReturnType<typeof getTierLimits>
 ): string {
+  // Agent hours
   const usagePercent = usage.agentHoursLimit > 0
     ? Math.min(100, (usage.agentHoursUsed / usage.agentHoursLimit) * 100)
     : 0;
   const usageClass = usagePercent > 90 ? 'critical' : usagePercent > 75 ? 'warning' : 'normal';
-  const concurrentPercent = tierLimits.concurrentAgents > 0
-    ? Math.min(100, (usage.currentConcurrentAgents / tierLimits.concurrentAgents) * 100)
+
+  // Execution slots (with fallback to currentConcurrentAgents)
+  const activeExecutions = usage.activeExecutions ?? usage.currentConcurrentAgents;
+  const executionSlotLimit = tierLimits.executionSlots;
+  const executionSlotPercent = executionSlotLimit > 0
+    ? Math.min(100, (activeExecutions / executionSlotLimit) * 100)
     : 0;
+  const executionSlotClass = executionSlotPercent > 90 ? 'critical' : executionSlotPercent > 75 ? 'warning' : 'normal';
+  const isSlotOverage = activeExecutions > executionSlotLimit && executionSlotLimit > 0;
+  const slotOverageCount = Math.max(0, activeExecutions - executionSlotLimit);
+
+  // Cluster connections (fallback to 0)
+  const connectedClusters = usage.connectedClusters ?? 0;
+  const clusterLimit = tierLimits.maxClusters;
+  const clusterPercent = clusterLimit > 0
+    ? Math.min(100, (connectedClusters / clusterLimit) * 100)
+    : 0;
+  const clusterClass = clusterPercent > 90 ? 'critical' : clusterPercent > 75 ? 'warning' : 'normal';
+  const isClusterOverage = connectedClusters > clusterLimit && clusterLimit > 0;
+  const clusterOverageCount = Math.max(0, connectedClusters - clusterLimit);
 
   const periodStart = new Date(usage.periodStart).toLocaleDateString();
   const periodEnd = new Date(usage.periodEnd).toLocaleDateString();
@@ -142,6 +166,30 @@ function getUsageSection(
 
       <div class="usage-item">
         <div class="usage-header">
+          <span>Execution Slots</span>
+          <span class="usage-numbers">${activeExecutions} / ${formatLimit(executionSlotLimit)}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill ${isSlotOverage ? 'critical' : executionSlotClass}" style="width: ${isSlotOverage ? 100 : executionSlotPercent}%"></div>
+        </div>
+        ${isSlotOverage ? `<p class="usage-warning">${activeExecutions} of ${executionSlotLimit} slots active &mdash; ${slotOverageCount} completing from prior plan</p>` : ''}
+        ${executionSlotPercent >= 100 && !isSlotOverage && executionSlotLimit > 0 ? `<p class="usage-upgrade-prompt">All execution slots in use. <a href="#" onclick="upgrade('${tierLimits.executionSlots === 3 ? 'team' : 'enterprise'}'); return false;">Upgrade your plan</a> for more concurrent workflows.</p>` : ''}
+      </div>
+
+      <div class="usage-item">
+        <div class="usage-header">
+          <span>Cluster Connections</span>
+          <span class="usage-numbers">${connectedClusters} / ${formatLimit(clusterLimit)}</span>
+        </div>
+        <div class="progress-bar">
+          <div class="progress-fill ${isClusterOverage ? 'critical' : clusterClass}" style="width: ${isClusterOverage ? 100 : clusterPercent}%"></div>
+        </div>
+        ${isClusterOverage ? `<p class="usage-warning">${connectedClusters} of ${clusterLimit} clusters connected &mdash; ${clusterOverageCount} completing from prior plan</p>` : ''}
+        ${clusterPercent >= 100 && !isClusterOverage && clusterLimit > 0 ? `<p class="usage-upgrade-prompt">Cluster limit reached. <a href="#" onclick="upgrade('${tierLimits.maxClusters === 1 ? 'team' : 'enterprise'}'); return false;">Upgrade</a> to connect additional clusters.</p>` : ''}
+      </div>
+
+      <div class="usage-item">
+        <div class="usage-header">
           <span>Agent Hours</span>
           <span class="usage-numbers">${usage.agentHoursUsed.toFixed(1)} / ${usage.agentHoursLimit} hours</span>
         </div>
@@ -149,16 +197,6 @@ function getUsageSection(
           <div class="progress-fill ${usageClass}" style="width: ${usagePercent}%"></div>
         </div>
         ${usagePercent > 75 ? `<p class="usage-warning">You've used ${usagePercent.toFixed(0)}% of your agent hours</p>` : ''}
-      </div>
-
-      <div class="usage-item">
-        <div class="usage-header">
-          <span>Concurrent Agents</span>
-          <span class="usage-numbers">${usage.currentConcurrentAgents} / ${formatLimit(tierLimits.concurrentAgents)}</span>
-        </div>
-        <div class="progress-bar">
-          <div class="progress-fill" style="width: ${concurrentPercent}%"></div>
-        </div>
       </div>
     </section>
   `;
@@ -392,7 +430,7 @@ function getStyles(): string {
 
     .stats-grid {
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(4, 1fr);
       gap: 16px;
       margin-bottom: 20px;
     }
@@ -491,6 +529,22 @@ function getStyles(): string {
       font-size: 12px;
       color: var(--vscode-editorWarning-foreground);
       margin-top: 8px;
+    }
+
+    .usage-upgrade-prompt {
+      font-size: 12px;
+      color: var(--vscode-editorInfo-foreground);
+      margin-top: 8px;
+    }
+
+    .usage-upgrade-prompt a {
+      color: var(--vscode-textLink-foreground);
+      text-decoration: underline;
+      cursor: pointer;
+    }
+
+    .usage-upgrade-prompt a:hover {
+      color: var(--vscode-textLink-activeForeground);
     }
 
     .members-table {

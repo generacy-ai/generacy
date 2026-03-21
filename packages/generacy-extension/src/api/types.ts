@@ -254,6 +254,10 @@ export interface OrgUsage {
   agentHoursLimit: number;
   /** Current concurrent agents */
   currentConcurrentAgents: number;
+  /** Current active execution slots (from lease system) */
+  activeExecutions?: number;
+  /** Current connected cluster count */
+  connectedClusters?: number;
 }
 
 /**
@@ -265,6 +269,8 @@ export const OrgUsageSchema = z.object({
   agentHoursUsed: z.number().nonnegative(),
   agentHoursLimit: z.number().positive(),
   currentConcurrentAgents: z.number().int().nonnegative(),
+  activeExecutions: z.number().int().nonnegative().optional(),
+  connectedClusters: z.number().int().nonnegative().optional(),
 });
 
 // ============================================================================
