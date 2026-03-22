@@ -1,6 +1,7 @@
 import type { Redis } from 'ioredis';
 import type { QueueItem, QueueItemWithScore, QueueManager, SerializedQueueItem } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
+import { getPriorityScore } from './queue-priority.js';
 
 const PENDING_KEY = 'orchestrator:queue:pending';
 const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
@@ -80,16 +81,18 @@ export class RedisQueueAdapter implements QueueManager {
 
   async enqueue(item: QueueItem): Promise<void> {
     const itemKey = buildItemKey(item);
+    const priority = getPriorityScore(item.queueReason);
     const serialized: SerializedQueueItem = {
       ...item,
+      priority,
       attemptCount: 0,
       itemKey,
     };
 
     try {
-      await this.redis.zadd(PENDING_KEY, item.priority, JSON.stringify(serialized));
+      await this.redis.zadd(PENDING_KEY, priority, JSON.stringify(serialized));
       this.logger.info(
-        { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority: item.priority },
+        { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority },
         'Item enqueued to Redis sorted set'
       );
     } catch (error) {
@@ -135,6 +138,7 @@ export class RedisQueueAdapter implements QueueManager {
         priority: serialized.priority,
         enqueuedAt: serialized.enqueuedAt,
         metadata: serialized.metadata,
+        queueReason: serialized.queueReason,
       };
     } catch (error) {
       this.logger.warn(
@@ -176,13 +180,16 @@ export class RedisQueueAdapter implements QueueManager {
           'Item dead-lettered after max retries'
         );
       } else {
-        // Re-queue with original priority
+        // Re-queue with retry priority
+        const retryPriority = getPriorityScore('retry');
         const requeueItem: SerializedQueueItem = {
           ...item,
+          queueReason: 'retry',
+          priority: retryPriority,
           attemptCount,
           itemKey,
         };
-        await this.redis.zadd(PENDING_KEY, item.priority, JSON.stringify(requeueItem));
+        await this.redis.zadd(PENDING_KEY, retryPriority, JSON.stringify(requeueItem));
         this.logger.info(
           { workerId, itemKey, attemptCount },
           'Item released back to pending queue'
@@ -252,6 +259,7 @@ export class RedisQueueAdapter implements QueueManager {
             priority: serialized.priority,
             enqueuedAt: serialized.enqueuedAt,
             metadata: serialized.metadata,
+            queueReason: serialized.queueReason,
           },
           score,
         });

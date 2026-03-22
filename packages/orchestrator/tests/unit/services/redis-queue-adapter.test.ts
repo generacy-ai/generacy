@@ -64,7 +64,7 @@ describe('RedisQueueAdapter', () => {
 
       expect(redis.zadd).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        sampleItem.priority,
+        expect.any(Number),
         expect.any(String)
       );
 
@@ -79,7 +79,7 @@ describe('RedisQueueAdapter', () => {
       expect(parsed.issueNumber).toBe(42);
       expect(parsed.workflowName).toBe('speckit-feature');
       expect(parsed.command).toBe('process');
-      expect(parsed.priority).toBe(1000);
+      expect(typeof parsed.priority).toBe('number');
       expect(parsed.enqueuedAt).toBe('2024-01-01T00:00:00Z');
     });
 
@@ -94,7 +94,7 @@ describe('RedisQueueAdapter', () => {
           owner: 'test-org',
           repo: 'test-repo',
           issue: 42,
-          priority: 1000,
+          priority: expect.any(Number),
         },
         'Item enqueued to Redis sorted set'
       );
@@ -254,10 +254,10 @@ describe('RedisQueueAdapter', () => {
         'orchestrator:worker:worker-1:heartbeat'
       );
 
-      // Should re-queue with incremented attemptCount
+      // Should re-queue with retry priority
       expect(redis.zadd).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        sampleItem.priority,
+        expect.any(Number),
         expect.any(String)
       );
 
@@ -266,6 +266,7 @@ describe('RedisQueueAdapter', () => {
       ) as SerializedQueueItem;
       expect(requeuedPayload.attemptCount).toBe(1);
       expect(requeuedPayload.itemKey).toBe('test-org/test-repo#42');
+      expect(requeuedPayload.queueReason).toBe('retry');
     });
 
     it('should re-queue with attemptCount 0 when no claimed data exists', async () => {
@@ -276,10 +277,10 @@ describe('RedisQueueAdapter', () => {
 
       await adapter.release('worker-1', sampleItem);
 
-      // attemptCount starts at 0 when no claimed data
+      // attemptCount starts at 0 when no claimed data, re-queued with retry priority
       expect(redis.zadd).toHaveBeenCalledWith(
         'orchestrator:queue:pending',
-        sampleItem.priority,
+        expect.any(Number),
         expect.any(String)
       );
 
@@ -287,6 +288,7 @@ describe('RedisQueueAdapter', () => {
         (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][2] as string
       ) as SerializedQueueItem;
       expect(requeuedPayload.attemptCount).toBe(0);
+      expect(requeuedPayload.queueReason).toBe('retry');
     });
 
     it('should move to dead-letter set after maxRetries exceeded', async () => {
@@ -682,6 +684,86 @@ describe('RedisQueueAdapter', () => {
         { err: expect.any(Error) },
         'Redis error in getActiveWorkerCount'
       );
+    });
+  });
+
+  describe('queue priority', () => {
+    it('should enqueue resume items with 0.x priority score', async () => {
+      const redis = createMockRedis();
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.enqueue({ ...sampleItem, queueReason: 'resume' });
+
+      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      expect(score).toBeGreaterThan(0);
+      expect(score).toBeLessThan(1);
+    });
+
+    it('should enqueue retry items with 1.x priority score', async () => {
+      const redis = createMockRedis();
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.enqueue({ ...sampleItem, queueReason: 'retry' });
+
+      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      expect(score).toBeGreaterThan(1);
+      expect(score).toBeLessThan(2);
+    });
+
+    it('should enqueue new items with Date.now() priority score', async () => {
+      const redis = createMockRedis();
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      const before = Date.now();
+      await adapter.enqueue({ ...sampleItem, queueReason: 'new' });
+      const after = Date.now();
+
+      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      expect(score).toBeGreaterThanOrEqual(before);
+      expect(score).toBeLessThanOrEqual(after);
+    });
+
+    it('should produce scores in order: resume < retry < new', async () => {
+      const redis = createMockRedis();
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.enqueue({ ...sampleItem, issueNumber: 1, queueReason: 'resume' });
+      await adapter.enqueue({ ...sampleItem, issueNumber: 2, queueReason: 'retry' });
+      await adapter.enqueue({ ...sampleItem, issueNumber: 3, queueReason: 'new' });
+
+      const scores = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call: unknown[]) => call[1] as number
+      );
+      expect(scores[0]).toBeLessThan(scores[1]); // resume < retry
+      expect(scores[1]).toBeLessThan(scores[2]); // retry < new
+    });
+
+    it('should set retry priority on release re-queue', async () => {
+      const serialized = buildSerializedItem(sampleItem, 0);
+      const redis = createMockRedis({
+        hget: vi.fn().mockResolvedValue(JSON.stringify(serialized)),
+      });
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      await adapter.release('worker-1', sampleItem);
+
+      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      // Retry priority is 1.{timestamp}
+      expect(score).toBeGreaterThan(1);
+      expect(score).toBeLessThan(2);
+    });
+
+    it('should default to Date.now() priority for items without queueReason (backwards compat)', async () => {
+      const redis = createMockRedis();
+      const adapter = new RedisQueueAdapter(redis, logger);
+
+      const before = Date.now();
+      await adapter.enqueue({ ...sampleItem }); // no queueReason
+      const after = Date.now();
+
+      const score = (redis.zadd as ReturnType<typeof vi.fn>).mock.calls[0][1] as number;
+      expect(score).toBeGreaterThanOrEqual(before);
+      expect(score).toBeLessThanOrEqual(after);
     });
   });
 
