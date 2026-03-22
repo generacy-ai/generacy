@@ -303,6 +303,7 @@ export class LabelMonitorService {
       priority: Date.now(),
       enqueuedAt: new Date().toISOString(),
       metadata: { description },
+      queueReason: type === 'process' ? 'new' : 'resume',
     };
 
     // Enqueue

@@ -10,29 +10,29 @@
 
 ## Phase 1: Type & Utility Setup
 
-- [ ] T001 Add `QueueReason` type and `queueReason` field to `QueueItem` in `packages/orchestrator/src/types/monitor.ts`
-- [ ] T002 [P] Create priority score helper `getPriorityScore()` in `packages/orchestrator/src/services/queue-priority.ts`
-- [ ] T003 [P] Create unit tests for priority helper in `packages/orchestrator/tests/unit/services/queue-priority.test.ts`
+- [X] T001 Add `QueueReason` type and `queueReason` field to `QueueItem` in `packages/orchestrator/src/types/monitor.ts`
+- [X] T002 [P] Create priority score helper `getPriorityScore()` in `packages/orchestrator/src/services/queue-priority.ts`
+- [X] T003 [P] Create unit tests for priority helper in `packages/orchestrator/tests/unit/services/queue-priority.test.ts`
 
 ## Phase 2: Adapter Updates
 
-- [ ] T004 Update `RedisQueueAdapter.enqueue()` to compute priority from `item.queueReason` via `getPriorityScore()` in `packages/orchestrator/src/services/redis-queue-adapter.ts`
-- [ ] T005 Update `RedisQueueAdapter.claim()` to include `queueReason` in returned QueueItem in `packages/orchestrator/src/services/redis-queue-adapter.ts`
-- [ ] T006 Update `RedisQueueAdapter.release()` to set `queueReason: 'retry'` and use `getPriorityScore('retry')` on re-queue in `packages/orchestrator/src/services/redis-queue-adapter.ts`
-- [ ] T007 [P] Update `InMemoryQueueAdapter.enqueue()` to compute priority from `item.queueReason` via `getPriorityScore()` in `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
-- [ ] T008 [P] Update `InMemoryQueueAdapter.claim()` to include `queueReason` in returned QueueItem in `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
-- [ ] T009 [P] Update `InMemoryQueueAdapter.release()` to set `queueReason: 'retry'` and use `getPriorityScore('retry')` on re-queue in `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
+- [X] T004 Update `RedisQueueAdapter.enqueue()` to compute priority from `item.queueReason` via `getPriorityScore()` in `packages/orchestrator/src/services/redis-queue-adapter.ts`
+- [X] T005 Update `RedisQueueAdapter.claim()` to include `queueReason` in returned QueueItem in `packages/orchestrator/src/services/redis-queue-adapter.ts`
+- [X] T006 Update `RedisQueueAdapter.release()` to set `queueReason: 'retry'` and use `getPriorityScore('retry')` on re-queue in `packages/orchestrator/src/services/redis-queue-adapter.ts`
+- [X] T007 [P] Update `InMemoryQueueAdapter.enqueue()` to compute priority from `item.queueReason` via `getPriorityScore()` in `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
+- [X] T008 [P] Update `InMemoryQueueAdapter.claim()` to include `queueReason` in returned QueueItem in `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
+- [X] T009 [P] Update `InMemoryQueueAdapter.release()` to set `queueReason: 'retry'` and use `getPriorityScore('retry')` on re-queue in `packages/orchestrator/src/services/in-memory-queue-adapter.ts`
 
 ## Phase 3: Enqueue Site Updates
 
-- [ ] T010 [P] Update `LabelMonitorService.processLabelEvent()` (~line 303) to set `queueReason: 'new'` for process events and `queueReason: 'resume'` for continue events in `packages/orchestrator/src/services/label-monitor-service.ts`
-- [ ] T011 [P] Update `PrFeedbackMonitorService.processPrReviewEvent()` (~line 202) to set `queueReason: 'resume'` in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
+- [X] T010 [P] Update `LabelMonitorService.processLabelEvent()` (~line 303) to set `queueReason: 'new'` for process events and `queueReason: 'resume'` for continue events in `packages/orchestrator/src/services/label-monitor-service.ts`
+- [X] T011 [P] Update `PrFeedbackMonitorService.processPrReviewEvent()` (~line 202) to set `queueReason: 'resume'` in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`
 
 ## Phase 4: Integration Tests
 
-- [ ] T012 [P] Add priority ordering tests to `packages/orchestrator/tests/unit/services/redis-queue-adapter.test.ts` — enqueue resume/retry/new items and verify claim order
-- [ ] T013 [P] Add priority ordering tests to `packages/orchestrator/tests/unit/services/in-memory-queue-adapter.test.ts` — enqueue resume/retry/new items and verify claim order
-- [ ] T014 Add backwards-compatibility test: enqueue item with no `queueReason`, verify it gets `Date.now()` priority (in either adapter test file)
+- [X] T012 [P] Add priority ordering tests to `packages/orchestrator/tests/unit/services/redis-queue-adapter.test.ts` — enqueue resume/retry/new items and verify claim order
+- [X] T013 [P] Add priority ordering tests to `packages/orchestrator/tests/unit/services/in-memory-queue-adapter.test.ts` — enqueue resume/retry/new items and verify claim order
+- [X] T014 Add backwards-compatibility test: enqueue item with no `queueReason`, verify it gets `Date.now()` priority (in either adapter test file)
 
 ## Dependencies & Execution Order
 

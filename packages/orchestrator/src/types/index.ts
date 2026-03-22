@@ -86,6 +86,7 @@ export {
 
 // Monitor Types
 export {
+  type QueueReason,
   type QueueItem,
   type LabelEvent,
   type GitHubWebhookPayload,
