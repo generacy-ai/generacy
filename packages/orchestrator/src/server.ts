@@ -270,7 +270,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       smeeReceiver = new SmeeWebhookReceiver(
         server.log,
         labelMonitorService,
-        { channelUrl: config.smee.channelUrl, watchedRepos },
+        { channelUrl: config.smee.channelUrl, watchedRepos, clusterGithubUsername },
       );
       server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
     }
