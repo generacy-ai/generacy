@@ -234,7 +234,15 @@ function loadFromEnv(): Record<string, unknown> {
 
   // Relay config (GENERACY_API_KEY for cloud connectivity)
   const relayApiKey = process.env['GENERACY_API_KEY'];
-  const relayCloudUrl = process.env['GENERACY_CLOUD_URL'];
+  let relayCloudUrl = process.env['GENERACY_CLOUD_URL'];
+
+  // Derive relay URL from GENERACY_CHANNEL when GENERACY_CLOUD_URL is not set
+  if (!relayCloudUrl) {
+    const channel = process.env['GENERACY_CHANNEL'] ?? 'stable';
+    const relayHost = channel === 'preview' ? 'api-staging.generacy.ai' : 'api.generacy.ai';
+    relayCloudUrl = `wss://${relayHost}/relay`;
+  }
+
   if (relayApiKey || relayCloudUrl) {
     if (!config.relay) {
       config.relay = {};
