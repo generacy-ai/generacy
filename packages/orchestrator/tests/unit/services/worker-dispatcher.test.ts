@@ -181,8 +181,9 @@ describe('WorkerDispatcher', () => {
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({
           active: 1,
+          max: 1,
         }),
-        'Already processing a job, skipping claim',
+        'At worker cap, skipping claim',
       );
 
       // Resolve all blockers to allow cleanup

@@ -25,6 +25,7 @@ import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { SmeeWebhookReceiver } from './services/smee-receiver.js';
 import { RelayBridge } from './services/relay-bridge.js';
+import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
@@ -237,6 +238,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       config.dispatch,
       cliWorker.handle.bind(cliWorker),
     );
+
+    // Wire lease manager into dispatcher (if relay client is available)
+    if (workerRelayClient) {
+      const workerLeaseManager = new LeaseManager(workerRelayClient, server.log, config.lease);
+      workerDispatcher.setLeaseManager(workerLeaseManager);
+    }
   }
 
   // Initialize label monitor service (full mode only)
@@ -317,6 +324,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         logger: server.log,
         config: config.relay,
       });
+
+      // Wire lease manager into relay bridge (full mode)
+      const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
+      relayBridge.setLeaseManager(fullModeLeaseManager);
+
       server.log.info('Relay bridge configured');
     } catch (error) {
       // Package not installed or import failed — skip silently (local-only mode)

@@ -32,6 +32,8 @@ export {
   type WorkerConfig,
   RelayConfigSchema,
   type RelayConfig,
+  LeaseConfigSchema,
+  type LeaseConfig,
   OrchestratorConfigSchema,
   type OrchestratorConfig,
   validateConfig,

@@ -27,6 +27,7 @@ import type { SSEChannel, SSEEvent } from '../types/sse.js';
 import type { ConversationManager } from '../conversation/conversation-manager.js';
 import { ConversationRelayInputSchema } from '../conversation/types.js';
 import type { ConversationOutputEvent } from '../conversation/types.js';
+import type { LeaseManager } from './lease-manager.js';
 
 export class RelayBridge {
   private readonly client: ClusterRelayClient;
@@ -35,6 +36,7 @@ export class RelayBridge {
   private readonly logger: RelayBridgeOptions['logger'];
   private readonly config: RelayBridgeOptions['config'];
   private conversationManager: ConversationManager | null = null;
+  private leaseManager: LeaseManager | null = null;
 
   private running = false;
   private metadataTimer: NodeJS.Timeout | null = null;
@@ -188,12 +190,47 @@ export class RelayBridge {
     });
   }
 
+  /**
+   * Wire a LeaseManager to receive incoming lease protocol messages
+   * and route them to the appropriate handler.
+   */
+  setLeaseManager(manager: LeaseManager): void {
+    this.leaseManager = manager;
+  }
+
   private handleMessage(msg: RelayMessage): void {
     try {
       if (msg.type === 'api_request') {
         this.handleApiRequest(msg);
       } else if (msg.type === 'conversation') {
         this.handleConversationMessage(msg as RelayMessage & { type: 'conversation'; conversationId: string; data: unknown });
+      } else if (msg.type === 'lease_granted' || msg.type === 'lease_denied') {
+        if (this.leaseManager) {
+          this.leaseManager.handleLeaseResponse(msg);
+        }
+      } else if (msg.type === 'slot_available') {
+        if (this.leaseManager) {
+          this.leaseManager.handleSlotAvailable(msg);
+        }
+      } else if (msg.type === 'tier_info') {
+        if (this.leaseManager) {
+          this.leaseManager.handleTierInfo(msg);
+        }
+      } else if (msg.type === 'cluster_rejected') {
+        if (this.leaseManager) {
+          this.leaseManager.handleClusterRejected(msg);
+        }
+        // Broadcast error to connected SSE clients
+        this.sseManager.broadcast('workflows' as SSEChannel, {
+          event: 'error',
+          id: `cluster-rejected-${Date.now()}`,
+          data: {
+            message: 'Active cluster limit reached for your plan.',
+            reason: msg.reason,
+            tier: msg.tier,
+          },
+          timestamp: new Date().toISOString(),
+        } as SSEEvent);
       }
     } catch (error) {
       this.logger.error(

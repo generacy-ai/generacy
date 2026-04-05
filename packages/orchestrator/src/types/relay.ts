@@ -8,6 +8,16 @@
 import type { SSEChannel, SSEEvent } from './sse.js';
 import type { SSESubscriptionManager } from '../sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
+import type {
+  RelayLeaseRequest,
+  RelayLeaseGranted,
+  RelayLeaseDenied,
+  RelayLeaseRelease,
+  RelayLeaseHeartbeat,
+  RelaySlotAvailable,
+  RelayTierInfo,
+  RelayClusterRejected,
+} from './lease.js';
 
 // =============================================================================
 // Relay Client Interface
@@ -123,7 +133,27 @@ export type RelayMessage =
   | RelayJobEvent
   | RelayMetadata
   | RelayConversationInput
-  | RelayConversationOutput;
+  | RelayConversationOutput
+  | RelayLeaseRequest
+  | RelayLeaseGranted
+  | RelayLeaseDenied
+  | RelayLeaseRelease
+  | RelayLeaseHeartbeat
+  | RelaySlotAvailable
+  | RelayTierInfo
+  | RelayClusterRejected;
+
+// Re-export lease protocol types
+export type {
+  RelayLeaseRequest,
+  RelayLeaseGranted,
+  RelayLeaseDenied,
+  RelayLeaseRelease,
+  RelayLeaseHeartbeat,
+  RelaySlotAvailable,
+  RelayTierInfo,
+  RelayClusterRejected,
+} from './lease.js';
 
 /**
  * API request forwarded from cloud to cluster.
