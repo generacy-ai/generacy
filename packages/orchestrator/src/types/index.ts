@@ -158,7 +158,24 @@ export {
   type ClusterMetadataPayload,
   type GitRemoteInfo,
   type RelayBridgeOptions,
+  type RelayLeaseRequest,
+  type RelayLeaseGranted,
+  type RelayLeaseDenied,
+  type RelayLeaseRelease,
+  type RelayLeaseHeartbeat,
+  type RelaySlotAvailable,
+  type RelayTierInfo,
+  type RelayClusterRejected,
 } from './relay.js';
+
+// Lease Types
+export {
+  type Lease,
+  type LeaseRequestResult,
+  type TierInfo,
+  type LeaseConfig,
+  type ILeaseManager,
+} from './lease.js';
 
 // Webhook Types
 export {

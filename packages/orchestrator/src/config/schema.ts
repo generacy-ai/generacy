@@ -174,6 +174,19 @@ export const DispatchConfigSchema = z.object({
 });
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 
+/**
+ * Lease configuration for per-user execution lease protocol
+ */
+export const LeaseConfigSchema = z.object({
+  /** Timeout for lease_request response (ms) */
+  requestTimeoutMs: z.number().int().min(5000).default(30000),
+  /** Interval between lease heartbeats (ms) */
+  heartbeatIntervalMs: z.number().int().min(5000).default(30000),
+  /** Consecutive heartbeat send failures before local expiry */
+  maxHeartbeatFailures: z.number().int().min(1).default(3),
+});
+export type LeaseConfig = z.infer<typeof LeaseConfigSchema>;
+
 export { WorkerConfigSchema, type WorkerConfig };
 
 /**
@@ -246,6 +259,7 @@ export const OrchestratorConfigSchema = z.object({
   worker: WorkerConfigSchema.default({}),
   conversations: ConversationConfigSchema.default({}),
   relay: RelayConfigSchema.default({}),
+  lease: LeaseConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),
   labelMonitor: z.boolean().default(false),

@@ -28,6 +28,8 @@ export interface QueueItem {
   metadata?: Record<string, unknown>;
   /** Why this item was enqueued — adapters use this to compute priority */
   queueReason?: QueueReason;
+  /** Cluster owner's user ID — used for lease requests */
+  userId?: string;
 }
 
 /**

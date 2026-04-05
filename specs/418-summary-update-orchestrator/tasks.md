@@ -10,14 +10,14 @@
 
 ## Phase 1: Types & Configuration
 
-- [ ] T001 [P] Create lease types file (`src/types/lease.ts`) — Define `Lease`, `LeaseState`, `LeaseRequestResult`, `TierInfo`, `LeaseConfig`, `ILeaseManager` interfaces per contracts/relay-lease-protocol.ts
-- [ ] T002 [P] Add lease message types to relay union (`src/types/relay.ts`) — Add `RelayLeaseRequest`, `RelayLeaseGranted`, `RelayLeaseDenied`, `RelayLeaseRelease`, `RelayLeaseHeartbeat`, `RelaySlotAvailable`, `RelayTierInfo`, `RelayClusterRejected` interfaces and extend the `RelayMessage` union (L119-126)
-- [ ] T003 [P] Add `userId` field to QueueItem (`src/types/monitor.ts`) — Add optional `userId?: string` to `QueueItem` interface (L12-31)
-- [ ] T004 [P] Add lease config schema (`src/config/schema.ts`) — Add `LeaseConfigSchema` with `requestTimeoutMs` (default 30000), `heartbeatIntervalMs` (default 30000), `maxHeartbeatFailures` (default 3) and nest into `OrchestratorConfigSchema` (L232-253)
+- [X] T001 [P] Create lease types file (`src/types/lease.ts`) — Define `Lease`, `LeaseState`, `LeaseRequestResult`, `TierInfo`, `LeaseConfig`, `ILeaseManager` interfaces per contracts/relay-lease-protocol.ts
+- [X] T002 [P] Add lease message types to relay union (`src/types/relay.ts`) — Add `RelayLeaseRequest`, `RelayLeaseGranted`, `RelayLeaseDenied`, `RelayLeaseRelease`, `RelayLeaseHeartbeat`, `RelaySlotAvailable`, `RelayTierInfo`, `RelayClusterRejected` interfaces and extend the `RelayMessage` union (L119-126)
+- [X] T003 [P] Add `userId` field to QueueItem (`src/types/monitor.ts`) — Add optional `userId?: string` to `QueueItem` interface (L12-31)
+- [X] T004 [P] Add lease config schema (`src/config/schema.ts`) — Add `LeaseConfigSchema` with `requestTimeoutMs` (default 30000), `heartbeatIntervalMs` (default 30000), `maxHeartbeatFailures` (default 3) and nest into `OrchestratorConfigSchema` (L232-253)
 
 ## Phase 2: Core Implementation
 
-- [ ] T010 [AC1,AC2,AC3] Create LeaseManager service (`src/services/lease-manager.ts`) — Implement `ILeaseManager` extending `EventEmitter`:
+- [X] T010 [AC1,AC2,AC3] Create LeaseManager service (`src/services/lease-manager.ts`) — Implement `ILeaseManager` extending `EventEmitter`:
   - `requestLease(userId, queueItemId, jobId)` — send `lease_request` via relay, return promise resolving to granted/denied/timeout within 30s using correlation ID pattern
   - `releaseLease(leaseId)` — send `lease_release`, stop heartbeat, remove from activeLeases map
   - `startHeartbeat(leaseId)` — send `lease_heartbeat` every 30s, track consecutive failures, emit `lease:expired` after 3 failures
@@ -28,7 +28,7 @@
   - `handleClusterRejected(msg)` — set `clusterRejected` flag, emit `cluster:rejected` event
   - Internal state: `activeLeases` Map, `pendingRequests` Map, `userTierLimit`, `clusterRejected`
 
-- [ ] T011 [AC1,AC4,AC6] Integrate lease gating into WorkerDispatcher (`src/services/worker-dispatcher.ts`) — Modify `pollOnce()` (L164-202):
+- [X] T011 [AC1,AC4,AC6] Integrate lease gating into WorkerDispatcher (`src/services/worker-dispatcher.ts`) — Modify `pollOnce()` (L164-202):
   - After `queue.claim()`, call `leaseManager.requestLease()` instead of immediately running worker
   - On `lease_granted`: proceed with `runWorker()`, pass `leaseId`
   - On `lease_denied`: call `queue.release()` to re-enqueue, stop polling until `slot:available`
@@ -40,7 +40,7 @@
   - Add `setLeaseManager(manager)` method
   - Graceful fallback: skip lease gating if `leaseManager` not set or `userTierLimit` is null
 
-- [ ] T012 [AC4,AC7] Extend RelayBridge message routing (`src/services/relay-bridge.ts`) — Modify `handleMessage()` (L191-204):
+- [X] T012 [AC4,AC7] Extend RelayBridge message routing (`src/services/relay-bridge.ts`) — Modify `handleMessage()` (L191-204):
   - Add `setLeaseManager(manager)` method following `setConversationManager()` pattern (L182-189)
   - Route incoming `lease_granted`, `lease_denied` to `leaseManager.handleLeaseResponse()`
   - Route `slot_available` to `leaseManager.handleSlotAvailable()`
@@ -51,7 +51,7 @@
 
 ## Phase 3: Wiring
 
-- [ ] T020 Wire LeaseManager into orchestrator startup — Instantiate `LeaseManager` with config, inject into both `WorkerDispatcher` and `RelayBridge` via setter methods. Ensure proper shutdown (clear all heartbeats, release active leases).
+- [X] T020 Wire LeaseManager into orchestrator startup — Instantiate `LeaseManager` with config, inject into both `WorkerDispatcher` and `RelayBridge` via setter methods. Ensure proper shutdown (clear all heartbeats, release active leases).
 
 ## Phase 4: Tests
 
