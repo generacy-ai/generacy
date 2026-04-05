@@ -197,19 +197,33 @@ export function getTierLimits(tier: Organization['tier']): {
   features: string[];
 } {
   switch (tier) {
-    case 'starter':
+    case 'free':
       return {
-        executionSlots: 3,
+        executionSlots: 1,
         maxClusters: 1,
-        agentHoursPerMonth: 100,
-        features: ['GitHub integration', 'Basic support'],
+        agentHoursPerMonth: 50,
+        features: ['GitHub integration'],
       };
-    case 'team':
+    case 'basic':
       return {
-        executionSlots: 10,
+        executionSlots: 2,
+        maxClusters: 2,
+        agentHoursPerMonth: 100,
+        features: ['GitHub integration', 'Basic support', 'Cloud UI'],
+      };
+    case 'standard':
+      return {
+        executionSlots: 5,
         maxClusters: 3,
         agentHoursPerMonth: 500,
-        features: ['All integrations', 'SSO', 'Priority support'],
+        features: ['All integrations', 'SSO', 'Priority support', 'Cloud UI'],
+      };
+    case 'professional':
+      return {
+        executionSlots: 10,
+        maxClusters: 4,
+        agentHoursPerMonth: 1000,
+        features: ['All integrations', 'SSO', 'Dedicated support', 'Cloud UI'],
       };
     case 'enterprise':
       return {
@@ -226,10 +240,14 @@ export function getTierLimits(tier: Organization['tier']): {
  */
 export function getTierDisplayName(tier: Organization['tier']): string {
   switch (tier) {
-    case 'starter':
-      return 'Starter';
-    case 'team':
-      return 'Team';
+    case 'free':
+      return 'Free';
+    case 'basic':
+      return 'Basic';
+    case 'standard':
+      return 'Standard';
+    case 'professional':
+      return 'Professional';
     case 'enterprise':
       return 'Enterprise';
   }
@@ -240,10 +258,14 @@ export function getTierDisplayName(tier: Organization['tier']): string {
  */
 export function getTierPricing(tier: Organization['tier']): { price: number | null; description: string } {
   switch (tier) {
-    case 'starter':
-      return { price: 49, description: '$49/seat/month (min 3 seats)' };
-    case 'team':
-      return { price: 99, description: '$99/seat/month (min 5 seats)' };
+    case 'free':
+      return { price: 0, description: 'Free (1 seat)' };
+    case 'basic':
+      return { price: 20, description: '$20/seat/month' };
+    case 'standard':
+      return { price: 50, description: '$50/seat/month' };
+    case 'professional':
+      return { price: 100, description: '$100/seat/month' };
     case 'enterprise':
       return { price: null, description: 'Contact sales for pricing' };
   }

@@ -10,29 +10,29 @@
 
 ## Phase 1: Type Definitions
 
-- [ ] T001 [US3] Update `OrgTier` type union in `packages/generacy-extension/src/api/types.ts:179` — replace `'starter' | 'team' | 'enterprise'` with `'free' | 'basic' | 'standard' | 'professional' | 'enterprise'`
-- [ ] T002 [US3] Update Zod enum in `packages/generacy-extension/src/api/types.ts:213` — replace `z.enum(['starter', 'team', 'enterprise'])` with `z.enum(['free', 'basic', 'standard', 'professional', 'enterprise'])`
+- [X] T001 [US3] Update `OrgTier` type union in `packages/generacy-extension/src/api/types.ts:179` — replace `'starter' | 'team' | 'enterprise'` with `'free' | 'basic' | 'standard' | 'professional' | 'enterprise'`
+- [X] T002 [US3] Update Zod enum in `packages/generacy-extension/src/api/types.ts:213` — replace `z.enum(['starter', 'team', 'enterprise'])` with `z.enum(['free', 'basic', 'standard', 'professional', 'enterprise'])`
 
 ## Phase 2: Core Implementation
 
-- [ ] T003 [US1] Update `getTierLimits()` in `packages/generacy-extension/src/api/endpoints/orgs.ts` — replace 3-case switch with 5 cases: free(1/1/50), basic(2/2/100), standard(5/3/500), professional(10/4/1000), enterprise(unlimited)
-- [ ] T004 [P] [US1] Update `getTierDisplayName()` in `packages/generacy-extension/src/api/endpoints/orgs.ts` — add Free, Basic, Standard, Professional display names, remove Starter/Team
-- [ ] T005 [P] [US1] Update `getTierPricing()` in `packages/generacy-extension/src/api/endpoints/orgs.ts` — set basic=$20, standard=$50, professional=$100, free=$0, enterprise=null; remove old min seat references
-- [ ] T006 [US2] Update CSS tier badge classes in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:389` — replace `.tier-starter`/`.tier-team` with `.tier-free`/`.tier-basic`/`.tier-standard`/`.tier-professional`
-- [ ] T007 [P] [US2] Update execution slot upgrade prompt in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:176` — implement full tier progression (free→basic→standard→professional→enterprise)
-- [ ] T008 [P] [US2] Update cluster upgrade prompt in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:188` — same tier progression logic
-- [ ] T009 [US2] Update Quick Actions upgrade CTA in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:299-307` — replace binary starter→team/team→enterprise with full tier progression using `getNextTier()` helper or inline map
+- [X] T003 [US1] Update `getTierLimits()` in `packages/generacy-extension/src/api/endpoints/orgs.ts` — replace 3-case switch with 5 cases: free(1/1/50), basic(2/2/100), standard(5/3/500), professional(10/4/1000), enterprise(unlimited)
+- [X] T004 [P] [US1] Update `getTierDisplayName()` in `packages/generacy-extension/src/api/endpoints/orgs.ts` — add Free, Basic, Standard, Professional display names, remove Starter/Team
+- [X] T005 [P] [US1] Update `getTierPricing()` in `packages/generacy-extension/src/api/endpoints/orgs.ts` — set basic=$20, standard=$50, professional=$100, free=$0, enterprise=null; remove old min seat references
+- [X] T006 [US2] Update CSS tier badge classes in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:389` — replace `.tier-starter`/`.tier-team` with `.tier-free`/`.tier-basic`/`.tier-standard`/`.tier-professional`
+- [X] T007 [P] [US2] Update execution slot upgrade prompt in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:176` — implement full tier progression (free→basic→standard→professional→enterprise)
+- [X] T008 [P] [US2] Update cluster upgrade prompt in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:188` — same tier progression logic
+- [X] T009 [US2] Update Quick Actions upgrade CTA in `packages/generacy-extension/src/views/cloud/dashboard/webview.ts:299-307` — replace binary starter→team/team→enterprise with full tier progression using `getNextTier()` helper or inline map
 
 ## Phase 3: Tests & Documentation
 
-- [ ] T010 [US1] Update test fixtures in `packages/generacy-extension/src/views/cloud/dashboard/__tests__/webview.test.ts` — change mockDashboardData tier from `'team'`→`'standard'`, billing plan `'Team'`→`'Standard'`, pricePerSeat `99`→`50`, update assertions
-- [ ] T011 [P] Update pricing table in `packages/generacy-extension/README.md:105-109` — replace 3-tier table with 5-tier model
+- [X] T010 [US1] Update test fixtures in `packages/generacy-extension/src/views/cloud/dashboard/__tests__/webview.test.ts` — change mockDashboardData tier from `'team'`→`'standard'`, billing plan `'Team'`→`'Standard'`, pricePerSeat `99`→`50`, update assertions
+- [X] T011 [P] Update pricing table in `packages/generacy-extension/README.md:105-109` — replace 3-tier table with 5-tier model
 
 ## Phase 4: Verification
 
-- [ ] T012 Run `pnpm tsc --noEmit` in extension package — zero type errors
-- [ ] T013 Run `pnpm vitest run` in extension package — all tests pass
-- [ ] T014 [P] Grep for old tier references — confirm zero hits for `'starter'`/`'team'` as tier values, `$49`/`$99`, `min 3`/`min 5` across `packages/generacy-extension/src/`
+- [X] T012 Run `pnpm tsc --noEmit` in extension package — zero type errors
+- [X] T013 Run `pnpm vitest run` in extension package — all tests pass
+- [X] T014 [P] Grep for old tier references — confirm zero hits for `'starter'`/`'team'` as tier values, `$49`/`$99`, `min 3`/`min 5` across `packages/generacy-extension/src/`
 
 ## Dependencies & Execution Order
 

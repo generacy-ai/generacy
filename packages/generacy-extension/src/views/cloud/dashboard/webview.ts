@@ -5,6 +5,19 @@
 import * as vscode from 'vscode';
 import type { OrgDashboardData } from '../../../api/endpoints/orgs';
 import { getTierDisplayName, getTierLimits, getTierPricing } from '../../../api/endpoints/orgs';
+import type { OrgTier } from '../../../api/types';
+
+const TIER_ORDER: OrgTier[] = ['free', 'basic', 'standard', 'professional', 'enterprise'];
+
+function getNextTier(current: OrgTier): OrgTier | null {
+  const idx = TIER_ORDER.indexOf(current);
+  return idx < TIER_ORDER.length - 1 ? TIER_ORDER[idx + 1] : null;
+}
+
+function getNextTierDisplayName(current: OrgTier): string {
+  const next = getNextTier(current);
+  return next ? getTierDisplayName(next) : '';
+}
 
 // ============================================================================
 // HTML Generation
@@ -39,7 +52,7 @@ export function getDashboardHtml(
     <div class="content">
       <div class="main-content">
         ${getOverviewSection(organization, tierLimits, usage)}
-        ${getUsageSection(usage, tierLimits)}
+        ${getUsageSection(organization, usage, tierLimits)}
         ${getMembersSection(members)}
       </div>
       <div class="sidebar">
@@ -127,6 +140,7 @@ function getOverviewSection(
 }
 
 function getUsageSection(
+  organization: OrgDashboardData['organization'],
   usage: OrgDashboardData['usage'],
   tierLimits: ReturnType<typeof getTierLimits>
 ): string {
@@ -173,7 +187,7 @@ function getUsageSection(
           <div class="progress-fill ${isSlotOverage ? 'critical' : executionSlotClass}" style="width: ${isSlotOverage ? 100 : executionSlotPercent}%"></div>
         </div>
         ${isSlotOverage ? `<p class="usage-warning">${activeExecutions} of ${executionSlotLimit} slots active &mdash; ${slotOverageCount} completing from prior plan</p>` : ''}
-        ${executionSlotPercent >= 100 && !isSlotOverage && executionSlotLimit > 0 ? `<p class="usage-upgrade-prompt">All execution slots in use. <a href="#" onclick="upgrade('${tierLimits.executionSlots === 3 ? 'team' : 'enterprise'}'); return false;">Upgrade your plan</a> for more concurrent workflows.</p>` : ''}
+        ${executionSlotPercent >= 100 && !isSlotOverage && executionSlotLimit > 0 ? `<p class="usage-upgrade-prompt">All execution slots in use. <a href="#" onclick="upgrade('${getNextTier(organization.tier)}'); return false;">Upgrade your plan</a> for more concurrent workflows.</p>` : ''}
       </div>
 
       <div class="usage-item">
@@ -185,7 +199,7 @@ function getUsageSection(
           <div class="progress-fill ${isClusterOverage ? 'critical' : clusterClass}" style="width: ${isClusterOverage ? 100 : clusterPercent}%"></div>
         </div>
         ${isClusterOverage ? `<p class="usage-warning">${connectedClusters} of ${clusterLimit} clusters connected &mdash; ${clusterOverageCount} completing from prior plan</p>` : ''}
-        ${clusterPercent >= 100 && !isClusterOverage && clusterLimit > 0 ? `<p class="usage-upgrade-prompt">Cluster limit reached. <a href="#" onclick="upgrade('${tierLimits.maxClusters === 1 ? 'team' : 'enterprise'}'); return false;">Upgrade</a> to connect additional clusters.</p>` : ''}
+        ${clusterPercent >= 100 && !isClusterOverage && clusterLimit > 0 ? `<p class="usage-upgrade-prompt">Cluster limit reached. <a href="#" onclick="upgrade('${getNextTier(organization.tier)}'); return false;">Upgrade</a> to connect additional clusters.</p>` : ''}
       </div>
 
       <div class="usage-item">
@@ -296,12 +310,13 @@ function getBillingSection(
 }
 
 function getQuickActionsSection(organization: OrgDashboardData['organization']): string {
-  const upgradeCta = organization.tier !== 'enterprise' ? `
+  const nextTier = getNextTier(organization.tier);
+  const upgradeCta = nextTier ? `
     <div class="upgrade-cta">
       <h3>Need more?</h3>
       <p>Upgrade your plan for more agents and features.</p>
-      <button class="btn btn-primary btn-full" onclick="upgrade('${organization.tier === 'starter' ? 'team' : 'enterprise'}')">
-        Upgrade to ${organization.tier === 'starter' ? 'Team' : 'Enterprise'}
+      <button class="btn btn-primary btn-full" onclick="upgrade('${nextTier}')">
+        Upgrade to ${getNextTierDisplayName(organization.tier)}
       </button>
     </div>
   ` : '';
@@ -386,8 +401,10 @@ function getStyles(): string {
       text-transform: uppercase;
     }
 
-    .tier-starter { background: var(--vscode-charts-blue); color: white; }
-    .tier-team { background: var(--vscode-charts-purple); color: white; }
+    .tier-free { background: var(--vscode-charts-green); color: white; }
+    .tier-basic { background: var(--vscode-charts-blue); color: white; }
+    .tier-standard { background: var(--vscode-charts-purple); color: white; }
+    .tier-professional { background: var(--vscode-charts-yellow); color: white; }
     .tier-enterprise { background: var(--vscode-charts-orange); color: white; }
 
     .content {

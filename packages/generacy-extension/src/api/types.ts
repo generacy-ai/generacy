@@ -176,7 +176,7 @@ export const UserSchema = z.object({
 /**
  * Organization tier
  */
-export type OrgTier = 'starter' | 'team' | 'enterprise';
+export type OrgTier = 'free' | 'basic' | 'standard' | 'professional' | 'enterprise';
 
 /**
  * Organization member role
@@ -210,7 +210,7 @@ export const OrganizationSchema = z.object({
   id: z.string(),
   name: z.string(),
   slug: z.string(),
-  tier: z.enum(['starter', 'team', 'enterprise']),
+  tier: z.enum(['free', 'basic', 'standard', 'professional', 'enterprise']),
   seats: z.number().int().positive(),
   maxConcurrentAgents: z.number().int().positive(),
   createdAt: z.string().datetime(),
