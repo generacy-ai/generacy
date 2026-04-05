@@ -55,7 +55,7 @@
 
 ## Phase 4: Tests
 
-- [ ] T030 [P] [AC8] Unit tests for LeaseManager (`tests/unit/lease-manager.test.ts`):
+- [X] T030 [P] [AC8] Unit tests for LeaseManager (`tests/unit/lease-manager.test.ts`):
   - Lease request → granted flow (correlation ID matching)
   - Lease request → denied flow (re-enqueue signal)
   - Lease request → timeout (30s, rejects with timeout status)
@@ -68,7 +68,7 @@
   - `cluster_rejected` sets flag and emits event
   - Duplicate re-enqueue prevention guard
 
-- [ ] T031 [P] [AC8] Unit tests for WorkerDispatcher lease integration (`tests/unit/worker-dispatcher-lease.test.ts`):
+- [X] T031 [P] [AC8] Unit tests for WorkerDispatcher lease integration (`tests/unit/worker-dispatcher-lease.test.ts`):
   - Dispatch gated on `lease_granted`
   - Dispatch blocked and re-enqueued on `lease_denied`
   - Worker cap respects `userTierLimit`
@@ -76,7 +76,7 @@
   - `slot_available` triggers `pollOnce()`
   - Graceful fallback when lease manager not set
 
-- [ ] T032 [AC9] Integration tests with mock relay (`tests/integration/lease-relay.test.ts`):
+- [X] T032 [AC9] Integration tests with mock relay (`tests/integration/lease-relay.test.ts`):
   - Full lifecycle: enqueue → lease_request → granted → dispatch → complete → release
   - Denied flow with slot_available recovery
   - Heartbeat failure and re-enqueue
