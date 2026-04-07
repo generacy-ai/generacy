@@ -63,30 +63,29 @@ function buildTarGz(...entries: Buffer[]): Buffer {
 }
 
 // ---------------------------------------------------------------------------
-// Build a tarball mimicking the GitHub structure for cluster-templates
+// Build a tarball mimicking the GitHub structure for cluster-base
 // ---------------------------------------------------------------------------
 
-const HASH_PREFIX = 'generacy-ai-cluster-templates-abc1234';
+const HASH_PREFIX = 'generacy-ai-cluster-base-abc1234';
 
 function buildStandardTarball(): Buffer {
   return buildTarGz(
     makeDirEntry(`${HASH_PREFIX}/`),
-    makeDirEntry('standard/', HASH_PREFIX),
-    makeDirEntry('.devcontainer/', `${HASH_PREFIX}/standard`),
+    makeDirEntry('.devcontainer/', HASH_PREFIX),
     makeTarEntry({
       name: 'Dockerfile',
       content: 'FROM node:20',
-      prefix: `${HASH_PREFIX}/standard/.devcontainer`,
+      prefix: `${HASH_PREFIX}/.devcontainer`,
     }),
     makeTarEntry({
       name: 'docker-compose.yml',
       content: 'version: "3.8"',
-      prefix: `${HASH_PREFIX}/standard/.devcontainer`,
+      prefix: `${HASH_PREFIX}/.devcontainer`,
     }),
     makeTarEntry({
       name: 'devcontainer.json',
       content: '{ "name": "dev" }',
-      prefix: `${HASH_PREFIX}/standard/.devcontainer`,
+      prefix: `${HASH_PREFIX}/.devcontainer`,
     }),
   );
 }
@@ -170,7 +169,7 @@ describe('fetchClusterTemplates', () => {
       expect(files.get('.devcontainer/devcontainer.json')).toBe('{ "name": "dev" }');
     });
 
-    it('defaults ref to "develop" when not specified', async () => {
+    it('defaults ref to "main" when not specified', async () => {
       const tarball = buildStandardTarball();
 
       globalThis.fetch = vi.fn().mockResolvedValue({
@@ -182,7 +181,7 @@ describe('fetchClusterTemplates', () => {
       await fetchClusterTemplates({ variant: 'standard' });
 
       expect(globalThis.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/tarball/develop'),
+        expect.stringContaining('/tarball/main'),
         expect.any(Object),
       );
     });
@@ -193,12 +192,12 @@ describe('fetchClusterTemplates', () => {
   // -------------------------------------------------------------------------
 
   describe('path mapping', () => {
-    it('maps {hash}/standard/.devcontainer/Dockerfile to .devcontainer/Dockerfile', async () => {
+    it('maps {hash}/.devcontainer/Dockerfile to .devcontainer/Dockerfile', async () => {
       const tarball = buildTarGz(
         makeTarEntry({
           name: 'Dockerfile',
           content: 'FROM ubuntu',
-          prefix: `${HASH_PREFIX}/standard/.devcontainer`,
+          prefix: `${HASH_PREFIX}/.devcontainer`,
         }),
       );
 
@@ -221,7 +220,7 @@ describe('fetchClusterTemplates', () => {
         makeTarEntry({
           name: 'entrypoint.sh',
           content: '#!/bin/bash',
-          prefix: `${HASH_PREFIX}/standard/.devcontainer/scripts`,
+          prefix: `${HASH_PREFIX}/.devcontainer/scripts`,
         }),
       );
 
@@ -239,34 +238,6 @@ describe('fetchClusterTemplates', () => {
       expect(files.get('.devcontainer/scripts/entrypoint.sh')).toBe('#!/bin/bash');
     });
 
-    it('excludes files from other variants', async () => {
-      const tarball = buildTarGz(
-        makeTarEntry({
-          name: 'Dockerfile',
-          content: 'FROM node:20',
-          prefix: `${HASH_PREFIX}/standard/.devcontainer`,
-        }),
-        makeTarEntry({
-          name: 'Dockerfile',
-          content: 'FROM node:20-slim',
-          prefix: `${HASH_PREFIX}/microservices/.devcontainer`,
-        }),
-      );
-
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        status: 200,
-        arrayBuffer: () => Promise.resolve(tarball.buffer.slice(tarball.byteOffset, tarball.byteOffset + tarball.byteLength)),
-      });
-
-      const files = await fetchClusterTemplates({
-        variant: 'standard',
-        ref: 'v1',
-      });
-
-      expect(files.size).toBe(1);
-      expect(files.get('.devcontainer/Dockerfile')).toBe('FROM node:20');
-    });
   });
 
   // -------------------------------------------------------------------------
@@ -339,7 +310,7 @@ describe('fetchClusterTemplates', () => {
         ref: 'dir-test',
       });
 
-      const cacheDir = join(testHomeDir, '.generacy/template-cache/dir-test/standard');
+      const cacheDir = join(testHomeDir, '.generacy/template-cache/cluster-base/dir-test');
       expect(existsSync(cacheDir)).toBe(true);
       expect(existsSync(join(cacheDir, '.devcontainer/Dockerfile'))).toBe(true);
     });
@@ -423,7 +394,7 @@ describe('fetchClusterTemplates', () => {
           variant: 'standard',
           ref: 'nonexistent-tag',
         }),
-      ).rejects.toThrow("Template ref 'nonexistent-tag' not found");
+      ).rejects.toThrow("Template ref 'nonexistent-tag' not found in generacy-ai/cluster-base");
     });
 
     it('throws auth error on HTTP 401', async () => {
@@ -456,7 +427,7 @@ describe('fetchClusterTemplates', () => {
 
       await expect(
         fetchClusterTemplates({ variant: 'standard', ref: 'v1' }),
-      ).rejects.toThrow('Failed to fetch cluster templates (HTTP 500)');
+      ).rejects.toThrow('Failed to fetch cluster-base (HTTP 500)');
     });
 
     it('throws network connectivity error on fetch rejection', async () => {
@@ -464,7 +435,7 @@ describe('fetchClusterTemplates', () => {
 
       await expect(
         fetchClusterTemplates({ variant: 'standard', ref: 'v1' }),
-      ).rejects.toThrow('Failed to fetch cluster templates — check your network connection');
+      ).rejects.toThrow('Failed to fetch cluster-base — check your network connection');
     });
   });
 
@@ -488,7 +459,7 @@ describe('fetchClusterTemplates', () => {
       });
 
       expect(mockFetch).toHaveBeenCalledWith(
-        'https://api.github.com/repos/generacy-ai/cluster-templates/tarball/v2.0.0',
+        'https://api.github.com/repos/generacy-ai/cluster-base/tarball/v2.0.0',
         expect.any(Object),
       );
     });

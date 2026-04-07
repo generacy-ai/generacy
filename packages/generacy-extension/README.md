@@ -104,8 +104,10 @@ This is an initial release. Please report issues at: https://github.com/generacy
 **Cloud Mode** (Organization):
 | Tier | Price | Features |
 |------|-------|----------|
-| Starter | $49/seat/mo (min 3) | 3 concurrent agents, GitHub only |
-| Team | $99/seat/mo (min 5) | 10 concurrent agents, all integrations, SSO |
+| Free | $0 (1 seat) | 1 concurrent agent, GitHub only |
+| Basic | $20/seat/mo | 2 concurrent agents, GitHub, Cloud UI |
+| Standard | $50/seat/mo | 5 concurrent agents, all integrations, SSO |
+| Professional | $100/seat/mo | 10 concurrent agents, all integrations, SSO |
 | Enterprise | Custom | Unlimited, compliance, SLA |
 
 ---

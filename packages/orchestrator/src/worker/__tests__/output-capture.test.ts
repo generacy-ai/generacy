@@ -121,6 +121,56 @@ describe('OutputCapture', () => {
     });
   });
 
+  describe('SPECKIT_IMPLEMENT_PARTIAL sentinel parsing', () => {
+    it('returns undefined implementResult when no sentinel has been seen', () => {
+      expect(capture.implementResult).toBeUndefined();
+    });
+
+    it('parses a valid sentinel and exposes it via implementResult getter', () => {
+      const sentinel = 'SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_completed":8,"tasks_remaining":5,"tasks_total":13}';
+      capture.processChunk(`${sentinel}\n`);
+
+      expect(capture.implementResult).toEqual({
+        partial: true,
+        tasks_completed: 8,
+        tasks_remaining: 5,
+        tasks_total: 13,
+      });
+    });
+
+    it('also pushes the sentinel line as a text chunk so output is preserved', () => {
+      const sentinel = 'SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_completed":2,"tasks_remaining":3,"tasks_total":5}';
+      capture.processChunk(`${sentinel}\n`);
+
+      const output = capture.getOutput();
+      expect(output).toHaveLength(1);
+      expect(output[0]!.type).toBe('text');
+      expect((output[0]!.data as { text: string }).text).toBe(sentinel);
+    });
+
+    it('ignores a sentinel with malformed JSON', () => {
+      capture.processChunk('SPECKIT_IMPLEMENT_PARTIAL: {not valid json}\n');
+
+      expect(capture.implementResult).toBeUndefined();
+      // Still pushed as text chunk
+      expect(capture.getOutput()).toHaveLength(1);
+    });
+
+    it('does not parse non-sentinel text lines as sentinel', () => {
+      capture.processChunk('Some unrelated output line\n');
+
+      expect(capture.implementResult).toBeUndefined();
+    });
+
+    it('retains the last seen sentinel if multiple sentinels arrive', () => {
+      capture.processChunk('SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_completed":5,"tasks_remaining":8,"tasks_total":13}\n');
+      capture.processChunk('SPECKIT_IMPLEMENT_PARTIAL: {"partial":true,"tasks_completed":10,"tasks_remaining":3,"tasks_total":13}\n');
+
+      expect(capture.implementResult?.tasks_completed).toBe(10);
+      expect(capture.implementResult?.tasks_remaining).toBe(3);
+    });
+  });
+
   describe('sessionId extraction', () => {
     it('extracts session_id from init chunks', () => {
       expect(capture.sessionId).toBeUndefined();

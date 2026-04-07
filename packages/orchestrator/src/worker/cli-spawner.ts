@@ -233,6 +233,7 @@ export class CliSpawner {
       durationMs,
       output: capture ? capture.getOutput() : [],
       sessionId: capture?.sessionId,
+      implementResult: capture?.implementResult,
     };
 
     if (!success) {

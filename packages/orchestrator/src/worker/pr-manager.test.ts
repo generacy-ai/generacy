@@ -403,6 +403,42 @@ describe('PrManager', () => {
     });
   });
 
+  describe('commitPushAndEnsurePr() - custom commit message', () => {
+    it('uses default phase message when options.message is omitted', async () => {
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getCommitsBetween = vi.fn().mockResolvedValue([{ sha: 'abc', message: 'x' }]);
+
+      await prManager.commitPushAndEnsurePr('implement');
+
+      expect(github.commit).toHaveBeenCalledWith(
+        `chore(speckit): complete implement phase for #${issueNumber}`,
+      );
+    });
+
+    it('uses custom message when options.message is provided', async () => {
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getCommitsBetween = vi.fn().mockResolvedValue([{ sha: 'abc', message: 'x' }]);
+      const customMessage = `wip(speckit): partial implement progress for #${issueNumber} (retry 1)`;
+
+      await prManager.commitPushAndEnsurePr('implement', { message: customMessage });
+
+      expect(github.commit).toHaveBeenCalledWith(customMessage);
+    });
+
+    it('existing callers without options still work (backward compatibility)', async () => {
+      github.getStatus = vi.fn().mockResolvedValue({ has_changes: true });
+      github.getCommitsBetween = vi.fn().mockResolvedValue([{ sha: 'abc', message: 'x' }]);
+
+      // Call with no second argument — should not throw
+      const result = await prManager.commitPushAndEnsurePr('specify');
+
+      expect(result.hasChanges).toBe(true);
+      expect(github.commit).toHaveBeenCalledWith(
+        `chore(speckit): complete specify phase for #${issueNumber}`,
+      );
+    });
+  });
+
   describe('commitPushAndEnsurePr() - change detection', () => {
     it('should detect changes when phase committed directly (no uncommitted changes)', async () => {
       // No uncommitted changes, but phase made its own commit

@@ -102,13 +102,17 @@ export class RepoCheckout {
   async switchBranch(checkoutPath: string, branch: string): Promise<void> {
     this.logger.info({ checkoutPath, branch }, 'Switching to branch');
 
+    // Discard any leftover dirty state from previous worker runs
+    await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: checkoutPath });
+    await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
+
     await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
 
     try {
       await execFileAsync('git', ['checkout', branch], { cwd: checkoutPath });
     } catch {
       this.logger.debug({ checkoutPath, branch }, 'Local branch not found, creating tracking branch');
-      await execFileAsync('git', ['checkout', '-b', branch, `origin/${branch}`], {
+      await execFileAsync('git', ['checkout', '-B', branch, `origin/${branch}`], {
         cwd: checkoutPath,
       });
     }
@@ -191,6 +195,11 @@ export class RepoCheckout {
       'Updating existing checkout',
     );
 
+    // Discard any leftover dirty state from previous worker runs
+    this.logger.debug({ checkoutPath }, 'Discarding dirty state before branch switch');
+    await execFileAsync('git', ['reset', '--hard', 'HEAD'], { cwd: checkoutPath });
+    await execFileAsync('git', ['clean', '-fd'], { cwd: checkoutPath });
+
     this.logger.debug({ checkoutPath }, 'Fetching from origin');
     await execFileAsync('git', ['fetch', 'origin'], { cwd: checkoutPath });
 
@@ -202,7 +211,7 @@ export class RepoCheckout {
         { checkoutPath, branch },
         'Local branch not found, creating tracking branch',
       );
-      await execFileAsync('git', ['checkout', '-b', branch, `origin/${branch}`], {
+      await execFileAsync('git', ['checkout', '-B', branch, `origin/${branch}`], {
         cwd: checkoutPath,
       });
     }

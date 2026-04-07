@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_COMMAND, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { LabelManager } from './label-manager.js';
@@ -7,6 +7,7 @@ import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
@@ -22,6 +23,9 @@ export interface PhaseLoopDeps {
   cliSpawner: CliSpawner;
   outputCapture: OutputCapture;
   prManager: PrManager;
+  conversationLogger?: ConversationLogger;
+  /** Optional callback for emitting job lifecycle events */
+  jobEventEmitter?: JobEventEmitter;
 }
 
 /**
@@ -70,7 +74,7 @@ export class PhaseLoop {
     phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
     const sequence = phaseSequence ?? PHASE_SEQUENCE;
-    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager } = deps;
+    const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger, jobEventEmitter } = deps;
     const results: PhaseResult[] = [];
 
     // Track session ID across phases for conversation resume.
@@ -78,6 +82,11 @@ export class PhaseLoop {
     // so Claude CLI can reuse the conversation (keeping MCP servers warm and
     // carrying forward accumulated context).
     let currentSessionId: string | undefined;
+    let implementRetryCount = 0;
+
+    // Track last seen tasks_remaining for the implement increment guard.
+    // Prevents infinite loops when no progress is made between increments.
+    let lastTasksRemaining: number | undefined;
 
     // Find the starting index in the phase sequence
     const startIndex = sequence.indexOf(context.startPhase);
@@ -104,8 +113,21 @@ export class PhaseLoop {
 
       this.logger.info({ phase, index: i }, 'Starting phase');
 
-      // Record phase start time
-      phaseTimestamps.set(phase, { startedAt: new Date().toISOString() });
+      // Emit job:phase_changed before any label/comment updates
+      jobEventEmitter?.('job:phase_changed', {
+        jobId: context.jobId,
+        workflowName: context.item.workflowName,
+        owner: context.item.owner,
+        repo: context.item.repo,
+        issueNumber: context.item.issueNumber,
+        status: 'active',
+        currentStep: phase,
+      });
+
+      // Record phase start time (only on first entry — preserve across retries for total wall-clock time)
+      if (!phaseTimestamps.has(phase)) {
+        phaseTimestamps.set(phase, { startedAt: new Date().toISOString() });
+      }
 
       // 1. Update labels: mark this phase as active
       await labelManager.onPhaseStart(phase);
@@ -154,6 +176,11 @@ export class PhaseLoop {
             context.signal,
           );
         } else {
+          // Set up conversation logger for this CLI phase
+          if (conversationLogger) {
+            conversationLogger.setPhase(phase, currentSessionId ?? '', undefined);
+          }
+
           // CLI phase — spawn Claude CLI (resume previous session if available)
           result = await cliSpawner.spawnPhase(
             phase,
@@ -186,6 +213,18 @@ export class PhaseLoop {
 
       results.push(result);
 
+      // 3a-bis. Close conversation logger for this phase (flush + phase_complete entry)
+      if (conversationLogger && PHASE_TO_COMMAND[phase] !== null) {
+        try {
+          await conversationLogger.close();
+        } catch (err) {
+          this.logger.warn(
+            { phase, error: String(err) },
+            'ConversationLogger.close() failed — continuing',
+          );
+        }
+      }
+
       // 3b. Capture session ID for resume in subsequent phases
       if (result.sessionId) {
         if (!currentSessionId) {
@@ -194,12 +233,93 @@ export class PhaseLoop {
         currentSessionId = result.sessionId;
       }
 
+      // 3c. Increment boundary: re-invoke implement with a fresh session if partial
+      if (phase === 'implement' && result.success && result.implementResult?.partial) {
+        const tasksRemaining = result.implementResult.tasks_remaining ?? 0;
+
+        // Guard: fail if no progress made (prevents infinite loop)
+        if (lastTasksRemaining !== undefined && tasksRemaining >= lastTasksRemaining) {
+          this.logger.error(
+            { phase, tasksRemaining, lastTasksRemaining },
+            'Implement increment made no progress — failing to prevent infinite loop',
+          );
+          await labelManager.onError(phase);
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+          result.success = false;
+          result.error = {
+            message: 'Implement increment made no progress — aborting to prevent infinite loop',
+            stderr: '',
+            phase,
+          };
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
+        lastTasksRemaining = tasksRemaining;
+
+        // Commit, push, and ensure PR with a WIP message
+        const { prUrl: partialPrUrl } = await prManager.commitPushAndEnsurePr(phase, {
+          message: `wip(speckit): implement increment for #${context.item.issueNumber} (${result.implementResult.tasks_completed ?? 0} tasks done, ${tasksRemaining} remaining)`,
+        });
+        if (partialPrUrl) context.prUrl = partialPrUrl;
+
+        // Clear session for a fresh context window on next increment
+        currentSessionId = undefined;
+
+        // Update stage comment with incremental progress
+        await stageCommentManager.updateStageComment({
+          stage,
+          status: 'in_progress',
+          phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'in_progress'),
+          startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          prUrl: context.prUrl,
+        });
+
+        this.logger.info({ tasksRemaining }, 'Implement increment complete — re-invoking with fresh session');
+        i--; // Re-run implement phase
+        continue;
+      }
+
+      // Reset increment tracking when leaving the implement phase normally
+      if (phase !== 'implement') {
+        lastTasksRemaining = undefined;
+      }
+
       // 4. Handle phase failure
       if (!result.success) {
         this.logger.error(
           { phase, exitCode: result.exitCode, error: result.error?.message },
           'Phase failed',
         );
+
+        // Implement phase retry: commit partial progress and retry with a fresh session
+        if (phase === 'implement') {
+          const { hasChanges } = await prManager.commitPushAndEnsurePr(phase, {
+            message: `wip(speckit): partial implement progress for #${context.item.issueNumber} (retry ${implementRetryCount + 1})`,
+          });
+          if (hasChanges && implementRetryCount < config.maxImplementRetries) {
+            implementRetryCount++;
+            currentSessionId = undefined;
+            this.logger.warn(
+              { phase, retry: implementRetryCount, maxRetries: config.maxImplementRetries },
+              'Implement phase failed with partial progress — retrying with fresh session',
+            );
+            await stageCommentManager.updateStageComment({
+              stage,
+              status: 'in_progress',
+              phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'in_progress'),
+              startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+              prUrl: context.prUrl,
+            });
+            i--;
+            continue;
+          }
+        }
+
         await labelManager.onError(phase);
         await stageCommentManager.updateStageComment({
           stage,
@@ -227,7 +347,10 @@ export class PhaseLoop {
           const branch = await context.github.getCurrentBranch();
           const commits = await context.github.getCommitsBetween(`origin/${defaultBranch}`, branch);
           hasPriorImplementation = commits.some(
-            (c) => c.message.includes(`complete ${phase} phase`),
+            (c) =>
+              c.message.includes(`complete ${phase} phase`) ||
+              c.message.includes('feat: complete T') ||
+              c.message.includes('partial implement progress'),
           );
         } catch {
           // If we can't check, fall through to the error path
@@ -307,6 +430,19 @@ export class PhaseLoop {
             { phase, gateLabel: gate.gateLabel },
             'Gate hit, pausing workflow',
           );
+
+          // Emit job:paused before gate label management
+          jobEventEmitter?.('job:paused', {
+            jobId: context.jobId,
+            workflowName: context.item.workflowName,
+            owner: context.item.owner,
+            repo: context.item.repo,
+            issueNumber: context.item.issueNumber,
+            status: 'paused',
+            currentStep: phase,
+            gateLabel: gate.gateLabel,
+          });
+
           await labelManager.onGateHit(phase, gate.gateLabel);
 
           // Post clarification questions to the issue when clarify gate is hit

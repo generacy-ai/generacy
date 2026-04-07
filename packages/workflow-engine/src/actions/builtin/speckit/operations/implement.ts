@@ -227,6 +227,16 @@ export async function executeImplement(
   const filesModified: Set<string> = new Set();
   const errors: string[] = [];
   const timeout = (input.timeout ?? 600) * 1000;
+  const MAX_TASKS = input.max_tasks_per_increment ?? 10;
+  let tasksThisIncrement = 0;
+
+  // Resolve repo root once for all git operations (feature_dir is the spec dir, not the repo root)
+  const { stdout: repoRootRaw } = await executeCommand(
+    'git', ['rev-parse', '--show-toplevel'],
+    { cwd: input.feature_dir, timeout: 10000 }
+  );
+  const rootDir = repoRootRaw.trim();
+  let completedCount = 0;
 
   // Execute tasks
   for (const task of pendingTasks) {
@@ -236,6 +246,23 @@ export async function executeImplement(
     if (context.signal.aborted) {
       context.logger.warn('Implementation cancelled');
       break;
+    }
+
+    // Check increment boundary before each task
+    if (tasksThisIncrement >= MAX_TASKS) {
+      const tasksRemaining = pendingTasks.length - completedTasks.length;
+      context.logger.info(
+        `Increment limit reached (${MAX_TASKS} tasks). Returning partial result for fresh session. Tasks remaining: ${tasksRemaining}`,
+      );
+      return {
+        success: true,
+        partial: true,
+        tasks_completed: completedTasks.length,
+        tasks_total: tasks.length,
+        tasks_skipped: skippedTasks.length,
+        tasks_remaining: tasksRemaining,
+        files_modified: [...filesModified],
+      };
     }
 
     const prompt = buildTaskPrompt(task, input.feature_dir, specContent, planContent);
@@ -269,6 +296,7 @@ export async function executeImplement(
 
       if (result.exitCode === 0) {
         completedTasks.push(task.id);
+        tasksThisIncrement++;
         // Track files that were supposed to be modified
         for (const file of task.files) {
           filesModified.add(file);
@@ -278,14 +306,31 @@ export async function executeImplement(
         // Update tasks.md to mark task complete
         tasksContent = markTaskComplete(tasksContent, task.id);
         await writeFile(tasksFile, tasksContent);
+
+        // Commit each completed task and push periodically
+        completedCount++;
+        await executeCommand('git', ['add', '-A'], { cwd: rootDir, timeout: 30000 });
+        await executeCommand('git', ['commit', '-m', `feat: complete ${task.id}`], { cwd: rootDir, timeout: 30000 });
+
+        const isLastTask = completedTasks.length === pendingTasks.length;
+        if (completedCount % 3 === 0 || isLastTask) {
+          await executeCommand('git', ['push'], { cwd: rootDir, timeout: 60000 })
+            .catch((err: unknown) => {
+              context.logger.warn(`Push after ${task.id} failed (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+            });
+        }
       } else {
         errors.push(`Task ${task.id} failed: Agent returned non-zero exit code`);
         context.logger.error(`Task ${task.id} failed`);
+        await executeCommand('git', ['checkout', '--', '.'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
+        await executeCommand('git', ['clean', '-fd'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       errors.push(`Task ${task.id} failed: ${errorMsg}`);
       context.logger.error(`Task ${task.id} failed: ${errorMsg}`);
+      await executeCommand('git', ['checkout', '--', '.'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
+      await executeCommand('git', ['clean', '-fd'], { cwd: rootDir, timeout: 30000 }).catch(() => {});
     }
   }
 

@@ -310,7 +310,7 @@ export async function executeClaudeSession(
     const sessionIdRegex = /(?:"sessionId"|Session)[":\s]+([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i;
 
     // Phase detection regex - matches <command-message>speckit:plan is running…</command-message>
-    const phaseRegex = /<command-message>(speckit|autodev):(\w+) is running/;
+    const phaseRegex = /<command-message>(speckit):(\w+) is running/;
 
     // Handle timeout
     let timeoutId: NodeJS.Timeout | undefined;

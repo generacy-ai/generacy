@@ -132,7 +132,7 @@ describe('createFeature()', () => {
     // Default filesystem: repo with .git, no existing feature dir
     existsFor({
       '.git': true,          // isGitRepo → true
-      'autodev.json': false, // no custom branch config
+      'config.yaml': false, // no custom branch config
     });
   });
 
@@ -260,7 +260,7 @@ describe('createFeature()', () => {
     it('does not sync default branch when feature directory already exists', async () => {
       existsFor({
         '.git': true,
-        'autodev.json': false,
+        'config.yaml': false,
         '042-test-feature': true, // feature dir exists
         'spec.md': true,
       });
@@ -295,7 +295,7 @@ describe('createFeature()', () => {
     it('checks out existing local branch on resume', async () => {
       existsFor({
         '.git': true,
-        'autodev.json': false,
+        'config.yaml': false,
         '042-test-feature': true,
         'spec.md': true,
       });
@@ -318,7 +318,7 @@ describe('createFeature()', () => {
     it('creates branch from default when dir exists but no local or remote branch', async () => {
       existsFor({
         '.git': true,
-        'autodev.json': false,
+        'config.yaml': false,
         '042-test-feature': true,
         'spec.md': false,
       });
@@ -355,7 +355,7 @@ describe('createFeature()', () => {
     it('returns success: false when checkout fails silently (branch mismatch)', async () => {
       existsFor({
         '.git': true,
-        'autodev.json': false,
+        'config.yaml': false,
         '042-test-feature': true,
         'spec.md': false,
       });
@@ -381,7 +381,7 @@ describe('createFeature()', () => {
     it('sets git_branch_created to true when branch is newly created in resume path', async () => {
       existsFor({
         '.git': true,
-        'autodev.json': false,
+        'config.yaml': false,
         '042-test-feature': true,
         'spec.md': false,
       });
@@ -411,7 +411,7 @@ describe('createFeature()', () => {
 
       existsFor({
         '.git': true,
-        'autodev.json': false,
+        'config.yaml': false,
         '042-test-feature': true,
         'spec.md': true,
       });

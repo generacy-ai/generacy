@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyServerOptions } from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -11,6 +12,7 @@ import { setupRateLimit } from './middleware/rate-limit.js';
 import { requestStartHook, requestEndHook } from './middleware/request-logger.js';
 import { createAuthMiddleware, InMemoryApiKeyStore } from './auth/index.js';
 import { registerRoutes, InMemoryIntegrationRegistry, closeAllSSEConnections, setupHealthRoutes } from './routes/index.js';
+import { getSSESubscriptionManager } from './sse/subscriptions.js';
 import { WorkflowService, InMemoryWorkflowStore } from './services/workflow-service.js';
 import { QueueService, InMemoryQueueStore } from './services/queue-service.js';
 import { AgentRegistry } from './services/agent-registry.js';
@@ -22,6 +24,8 @@ import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { SmeeWebhookReceiver } from './services/smee-receiver.js';
+import { RelayBridge } from './services/relay-bridge.js';
+import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
@@ -30,6 +34,12 @@ import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { resolveClusterIdentity } from './services/identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
+import { ConversationManager } from './conversation/conversation-manager.js';
+import { ConversationSpawner } from './conversation/conversation-spawner.js';
+import { conversationProcessFactory } from './conversation/process-factory.js';
+import { setupConversationRoutes } from './routes/conversations.js';
+import { setupSessionDetailRoutes } from './routes/sessions.js';
+import { SessionService } from './services/session-service.js';
 
 /**
  * Server creation options
@@ -185,8 +195,42 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Create CLI worker and dispatcher (worker mode only)
   let workerDispatcher: WorkerDispatcher | null = null;
+  let workerRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
   if (isWorkerMode) {
-    const cliWorker = new ClaudeCliWorker(config.worker, server.log);
+    // Create a lightweight relay client for job event emission (if API key is configured)
+    let jobEventEmitter: import('./worker/types.js').JobEventEmitter | undefined;
+    if (config.relay.apiKey) {
+      try {
+        const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+        workerRelayClient = new RelayClientImpl({
+          apiKey: config.relay.apiKey,
+          cloudUrl: config.relay.cloudUrl,
+        });
+        jobEventEmitter = (event: string, data: Record<string, unknown>) => {
+          try {
+            if (!workerRelayClient?.isConnected) return;
+            workerRelayClient.send({
+              type: 'event' as const,
+              event,
+              data,
+              timestamp: new Date().toISOString(),
+            } as import('./types/relay.js').RelayMessage);
+          } catch (err) {
+            server.log.warn(
+              { err: err instanceof Error ? err.message : String(err), event },
+              'Failed to emit job event (non-fatal)',
+            );
+          }
+        };
+        server.log.info('Worker relay client configured for job event emission');
+      } catch (error) {
+        server.log.info(
+          `Worker relay client not available: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+
+    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
       redisClient,
@@ -194,6 +238,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       config.dispatch,
       cliWorker.handle.bind(cliWorker),
     );
+
+    // Wire lease manager into dispatcher (if relay client is available)
+    if (workerRelayClient) {
+      const workerLeaseManager = new LeaseManager(workerRelayClient, server.log, config.lease);
+      workerDispatcher.setLeaseManager(workerLeaseManager);
+    }
   }
 
   // Initialize label monitor service (full mode only)
@@ -227,7 +277,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       smeeReceiver = new SmeeWebhookReceiver(
         server.log,
         labelMonitorService,
-        { channelUrl: config.smee.channelUrl, watchedRepos },
+        { channelUrl: config.smee.channelUrl, watchedRepos, clusterGithubUsername },
       );
       server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
     }
@@ -244,6 +294,72 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         clusterGithubUsername,
       );
     }
+  }
+
+  // Initialize relay bridge (full mode only, when API key is configured)
+  let relayBridge: RelayBridge | null = null;
+  if (!isWorkerMode && config.relay.apiKey) {
+    try {
+      // Dynamic import — @generacy-ai/cluster-relay may not be installed yet (Phase 2.1)
+      const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+
+      // Generate internal API key for relay-proxied requests
+      const relayInternalKey = crypto.randomUUID();
+      apiKeyStore.addKey(relayInternalKey, {
+        name: 'relay-internal',
+        scopes: ['admin'],
+        createdAt: new Date().toISOString(),
+      });
+
+      const relayClient = new RelayClientImpl({
+        apiKey: config.relay.apiKey,
+        cloudUrl: config.relay.cloudUrl,
+        orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
+        orchestratorApiKey: relayInternalKey,
+      });
+      relayBridge = new RelayBridge({
+        client: relayClient,
+        server,
+        sseManager: getSSESubscriptionManager(),
+        logger: server.log,
+        config: config.relay,
+      });
+
+      // Wire lease manager into relay bridge (full mode)
+      const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
+      relayBridge.setLeaseManager(fullModeLeaseManager);
+
+      server.log.info('Relay bridge configured');
+    } catch (error) {
+      // Package not installed or import failed — skip silently (local-only mode)
+      server.log.info(
+        `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  // Initialize ConversationManager (full mode only, when workspaces are configured)
+  let conversationManager: ConversationManager | null = null;
+  if (!isWorkerMode && Object.keys(config.conversations.workspaces).length > 0) {
+    const conversationSpawner = new ConversationSpawner(
+      conversationProcessFactory,
+      config.conversations.shutdownGracePeriodMs,
+    );
+    conversationManager = new ConversationManager(
+      config.conversations,
+      conversationSpawner,
+      server.log,
+    );
+
+    // Wire conversation output to relay bridge
+    if (relayBridge) {
+      relayBridge.setConversationManager(conversationManager);
+    }
+
+    server.log.info(
+      { workspaces: Object.keys(config.conversations.workspaces) },
+      'Conversation manager configured',
+    );
   }
 
   // Register routes (unless skipped for testing)
@@ -268,12 +384,16 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
       const agentRegistry = new AgentRegistry();
       const integrationRegistry = new InMemoryIntegrationRegistry();
+      const sessionService = new SessionService({
+        workspaces: config.conversations.workspaces,
+      });
 
       await registerRoutes(server, {
         workflowService,
         queueService,
         agentRegistry,
         integrationRegistry,
+        sessionService,
       });
 
       // Register webhook routes inside an encapsulated plugin so the custom
@@ -324,6 +444,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      // Register conversation routes (if manager is available)
+      if (conversationManager) {
+        await setupConversationRoutes(server, conversationManager);
+      }
+
+      // Register session detail routes (manager is optional — isActive defaults to false without it)
+      await setupSessionDetailRoutes(server, conversationManager);
+
       // Register dispatch queue routes
       await setupDispatchRoutes(server, queueAdapter);
 
@@ -334,7 +462,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Start services on server ready
   server.addHook('onReady', async () => {
     if (isWorkerMode) {
-      // Worker mode: only start the dispatcher
+      // Worker mode: connect relay client (for job events) and start dispatcher
+      if (workerRelayClient) {
+        workerRelayClient.connect().catch((error) => {
+          server.log.warn({ err: error }, 'Worker relay client connection failed (job events disabled)');
+        });
+      }
       if (workerDispatcher) {
         workerDispatcher.start().catch((error) => {
           server.log.error({ err: error }, 'Worker dispatcher failed');
@@ -366,6 +499,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           server.log.error({ err: error }, 'Webhook setup failed');
         });
       }
+
+      if (relayBridge) {
+        relayBridge.start().catch((error) => {
+          server.log.error({ err: error }, 'Relay bridge start failed');
+        });
+      }
     }
   });
 
@@ -379,12 +518,21 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     cleanup: [
       async () => {
         if (isWorkerMode) {
-          // Worker mode: stop dispatcher
+          // Worker mode: stop dispatcher and disconnect relay client
           if (workerDispatcher) {
             await workerDispatcher.stop();
           }
+          if (workerRelayClient) {
+            await workerRelayClient.disconnect();
+          }
         } else {
-          // Full mode: stop monitors, Smee, SSE
+          // Full mode: stop conversations, relay, monitors, Smee, SSE
+          if (conversationManager) {
+            await conversationManager.stop();
+          }
+          if (relayBridge) {
+            await relayBridge.stop();
+          }
           if (smeeReceiver) {
             smeeReceiver.stop();
           }

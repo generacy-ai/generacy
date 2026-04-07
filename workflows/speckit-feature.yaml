@@ -1,13 +1,19 @@
 # Speckit Feature Development Workflow
 #
 # Standard feature development workflow using the speckit methodology:
-# specify → clarify → plan → tasks → implement → validate
+# specify → clarify → plan → tasks → implement
 #
-# Draft PR is created by the orchestrator after the specify phase and
-# updated (commit + push) after every subsequent phase.
+# Each phase commits and pushes its artifacts. A draft PR is created
+# after specification so progress is visible from the start.
+#
+# Clarification uses the label-driven protocol (Humancy deferred to post-MVP):
+# - Agent posts questions as issue comment
+# - Adds waiting-for:clarification label, workflow pauses
+# - Developer answers via comment + adds completed:clarification label
+# - Orchestrator resumes the workflow
 #
 # Usage:
-#   generacy run workflows/speckit-feature.yaml --input description="Your feature description"
+#   generacy run speckit-feature.yaml --input description="Your feature description"
 #
 # Inputs:
 #   - description: Feature description text (required)
@@ -18,12 +24,11 @@ name: speckit-feature
 
 description: |
   Standard feature development workflow following spec-driven development.
-  Creates a feature branch, generates specification, clarifies requirements,
-  plans implementation, generates tasks, and executes implementation.
-  A draft PR is created after the specify phase and kept up-to-date
-  via commits after each phase.
+  Creates a feature branch, generates specification, creates a draft PR,
+  then proceeds through clarification, planning, task generation, and
+  implementation — committing and pushing after each phase.
 
-version: "1.1.0"
+version: "1.3.0"
 
 inputs:
   - name: description
@@ -34,6 +39,11 @@ inputs:
   - name: issue_url
     description: GitHub issue URL for additional context
     type: string
+    required: false
+
+  - name: issue_number
+    description: GitHub issue number to use as feature number
+    type: number
     required: false
 
   - name: short_name
@@ -50,9 +60,9 @@ phases:
         with:
           description: ${{ inputs.description }}
           short_name: ${{ inputs.short_name }}
+          number: ${{ inputs.issue_number }}
 
   # Phase 2: Specification
-  # After completion: orchestrator commits, pushes, and creates draft PR
   - name: specification
     steps:
       - name: specify
@@ -60,16 +70,55 @@ phases:
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
           issue_url: ${{ inputs.issue_url }}
+          timeout: 600
+        timeout: 660000  # 11 min
+
+      - name: commit-spec
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add specification for ${{ steps.create-feature.output.branch_name }}" --allow-empty'
+        continueOnError: true
+
+      - name: push-spec
+        uses: shell
+        command: git push --force-with-lease -u origin HEAD
+        continueOnError: true
+
+      - name: create-pr
+        uses: pr.create
+        with:
+          title: "feat: ${{ steps.create-feature.output.branch_name }}"
+          body: |
+            Closes #${{ inputs.issue_number }}
+
+            ## Summary
+            ${{ steps.specify.output.summary }}
+
+            ---
+            *Draft PR created by speckit-feature workflow. Implementation in progress.*
+          draft: true
+        continueOnError: true
 
   # Phase 3: Clarification
-  # In headless mode: posts questions to issue, exits; orchestrator pauses via gate
-  # On resume: reads answers from issue comments, integrates into spec
+  # In headless mode: posts questions to issue, exits; orchestrator pauses via labels
+  # Developer answers via issue comment + adds completed:clarification label to resume
   - name: clarification
     steps:
       - name: clarify
         uses: speckit.clarify
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
+          timeout: 600
+        timeout: 660000  # 11 min
+
+      - name: commit-clarifications
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add clarification questions" --allow-empty'
+        continueOnError: true
+
+      - name: push-clarifications
+        uses: shell
+        command: git push
+        continueOnError: true
 
   # Phase 4: Planning
   - name: planning
@@ -78,6 +127,18 @@ phases:
         uses: speckit.plan
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
+          timeout: 900
+        timeout: 960000  # 16 min
+
+      - name: commit-plan
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add implementation plan" --allow-empty'
+        continueOnError: true
+
+      - name: push-plan
+        uses: shell
+        command: git push
+        continueOnError: true
 
   # Phase 5: Task Generation
   - name: task-generation
@@ -86,6 +147,18 @@ phases:
         uses: speckit.tasks
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
+          timeout: 600
+        timeout: 660000  # 11 min
+
+      - name: commit-tasks
+        uses: shell
+        command: 'git add -A && git commit -m "spec: add task breakdown" --allow-empty'
+        continueOnError: true
+
+      - name: push-tasks
+        uses: shell
+        command: git push
+        continueOnError: true
 
   # Phase 6: Implementation
   - name: implementation
@@ -95,19 +168,23 @@ phases:
         with:
           feature_dir: ${{ steps.create-feature.output.feature_dir }}
         timeout: 3600000  # 1 hour max
+        continueOnError: true  # partial work should still be committed/pushed
 
-  # Phase 7: Verification
-  # After completion: orchestrator marks PR ready for review
-  - name: verification
-    steps:
-      - name: run-tests
-        uses: verification.check
-        with:
-          command: npm test
+      - name: commit-implementation
+        uses: shell
+        command: 'git add -A && git commit -m "feat: implement ${{ steps.create-feature.output.branch_name }}" --allow-empty'
         continueOnError: true
 
-      - name: run-lint
-        uses: verification.check
-        with:
-          command: npm run lint
+      - name: push-implementation
+        uses: shell
+        command: git push
+        continueOnError: true
+
+  # Phase 7: Verification
+  # build.validate auto-detects the package manager and discovers available
+  # validation scripts (test, lint, format:check, typecheck, etc.).
+  - name: verification
+    steps:
+      - name: run-validate
+        uses: build.validate
         continueOnError: true

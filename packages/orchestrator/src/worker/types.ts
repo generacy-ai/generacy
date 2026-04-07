@@ -7,6 +7,42 @@ import type { GitHubClient } from '@generacy-ai/workflow-engine';
 export type WorkflowPhase = 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement' | 'validate';
 
 /**
+ * Event types captured in the conversation JSONL log.
+ */
+export type JournalEventType = 'phase_start' | 'phase_complete' | 'tool_use' | 'tool_result' | 'error';
+
+/**
+ * A single entry in the conversation JSONL log file.
+ * Optional fields are included when available and omitted when not.
+ */
+export interface JournalEntry {
+  /** ISO 8601 timestamp */
+  timestamp: string;
+  /** Workflow phase that produced this entry */
+  phase: WorkflowPhase;
+  /** Type of event */
+  event_type: JournalEventType;
+  /** Claude CLI session ID */
+  session_id: string;
+  /** Model name (e.g., "claude-sonnet-4-6") */
+  model?: string;
+  /** Input token count from complete event */
+  tokens_in?: number;
+  /** Output token count from complete event */
+  tokens_out?: number;
+  /** Tool name for tool_use/tool_result events */
+  tool_name?: string;
+  /** Tool call ID for pairing tool_use → tool_result */
+  tool_call_id?: string;
+  /** File paths touched by tool */
+  file_paths?: string[];
+  /** Tool execution duration in ms (on tool_result only) */
+  duration_ms?: number;
+  /** Error description (on error events only) */
+  error_message?: string;
+}
+
+/**
  * Ordered sequence of all workflow phases (default for feature/bugfix workflows)
  */
 export const PHASE_SEQUENCE: WorkflowPhase[] = [
@@ -82,6 +118,17 @@ export interface GateDefinition {
 }
 
 /**
+ * Partial result from the implement operation when an increment boundary is reached.
+ * Communicated via the SPECKIT_IMPLEMENT_PARTIAL sentinel in CLI text output.
+ */
+export interface ImplementPartialResult {
+  partial?: boolean;
+  tasks_completed?: number;
+  tasks_remaining?: number;
+  tasks_total?: number;
+}
+
+/**
  * Result from executing a single phase
  */
 export interface PhaseResult {
@@ -108,6 +155,8 @@ export interface PhaseResult {
     stderr: string;
     phase: WorkflowPhase;
   };
+  /** Partial implement result parsed from sentinel output (implement phase only) */
+  implementResult?: ImplementPartialResult;
 }
 
 /**
@@ -181,11 +230,19 @@ export interface Logger {
 }
 
 /**
+ * Callback for emitting job lifecycle events through the relay WebSocket.
+ * Fire-and-forget — implementations must not throw.
+ */
+export type JobEventEmitter = (event: string, data: Record<string, unknown>) => void;
+
+/**
  * Context passed through the worker during processing
  */
 export interface WorkerContext {
   /** Worker ID from dispatcher (UUID) */
   workerId: string;
+  /** Job UUID generated at dequeue time for lifecycle event correlation */
+  jobId: string;
   /** Queue item being processed */
   item: QueueItem;
   /** Resolved starting phase */
@@ -221,6 +278,8 @@ export interface ProcessFactory {
  * Handle to a spawned child process
  */
 export interface ChildProcessHandle {
+  /** Process stdin stream (null when stdio[0] is 'ignore') */
+  stdin: NodeJS.WritableStream | null;
   /** Process stdout stream */
   stdout: NodeJS.ReadableStream | null;
   /** Process stderr stream */

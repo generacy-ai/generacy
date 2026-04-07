@@ -50,6 +50,15 @@ export {
   type AgentConnectionStatus,
   ConnectedAgentSchema,
   type ConnectedAgent,
+  // Sessions
+  SessionTypeSchema,
+  type SessionType,
+  SessionMetadataSchema,
+  type SessionMetadata,
+  ListSessionsQuerySchema,
+  type ListSessionsQuery,
+  SessionListResponseSchema,
+  type SessionListResponse,
   // Integrations
   IntegrationTypeSchema,
   type IntegrationType,
@@ -77,6 +86,7 @@ export {
 
 // Monitor Types
 export {
+  type QueueReason,
   type QueueItem,
   type LabelEvent,
   type GitHubWebhookPayload,
@@ -135,6 +145,37 @@ export {
   type EventIdComponents,
   parseEventId,
 } from './sse.js';
+
+// Relay Types
+export {
+  type ClusterRelayClient,
+  type ClusterRelayClientOptions,
+  type RelayMessage,
+  type RelayApiRequest,
+  type RelayApiResponse,
+  type RelayEvent,
+  type RelayMetadata,
+  type ClusterMetadataPayload,
+  type GitRemoteInfo,
+  type RelayBridgeOptions,
+  type RelayLeaseRequest,
+  type RelayLeaseGranted,
+  type RelayLeaseDenied,
+  type RelayLeaseRelease,
+  type RelayLeaseHeartbeat,
+  type RelaySlotAvailable,
+  type RelayTierInfo,
+  type RelayClusterRejected,
+} from './relay.js';
+
+// Lease Types
+export {
+  type Lease,
+  type LeaseRequestResult,
+  type TierInfo,
+  type LeaseConfig,
+  type ILeaseManager,
+} from './lease.js';
 
 // Webhook Types
 export {

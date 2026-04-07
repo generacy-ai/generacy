@@ -4,6 +4,7 @@
  */
 import * as vscode from 'vscode';
 import { QueueItem, QueueItemProgressSummary, QueueStatus, QueuePriority } from '../../../api/types';
+import type { OrgCapacity } from '../../../api/endpoints/orgs';
 import { TREE_ITEM_CONTEXT } from '../../../constants';
 
 /**
@@ -34,11 +35,16 @@ const PRIORITY_ICONS: Record<QueuePriority, string> = {
 export class QueueTreeItem extends vscode.TreeItem {
   public readonly queueItem: QueueItem;
   private readonly progress: QueueItemProgressSummary | undefined;
+  private readonly capacity: OrgCapacity | undefined;
+  /** Whether this item is pending because org execution slots are full */
+  public readonly isSlotWaiting: boolean;
 
-  constructor(item: QueueItem, progress?: QueueItemProgressSummary) {
+  constructor(item: QueueItem, progress?: QueueItemProgressSummary, capacity?: OrgCapacity) {
     super(item.workflowName, vscode.TreeItemCollapsibleState.None);
     this.queueItem = item;
     this.progress = progress;
+    this.capacity = capacity;
+    this.isSlotWaiting = item.status === 'pending' && !!capacity?.isAtCapacity;
 
     // Set context value for menus
     this.contextValue = this.getContextValue();
@@ -68,9 +74,13 @@ export class QueueTreeItem extends vscode.TreeItem {
   }
 
   /**
-   * Get the status icon with color
+   * Get the status icon with color.
+   * Slot-waiting items use a distinct `watch` icon with amber color.
    */
   private getStatusIcon(): vscode.ThemeIcon {
+    if (this.isSlotWaiting) {
+      return new vscode.ThemeIcon('watch', new vscode.ThemeColor('charts.orange'));
+    }
     const statusConfig = STATUS_ICONS[this.queueItem.status];
     const color = statusConfig.color
       ? new vscode.ThemeColor(statusConfig.color)
@@ -90,6 +100,11 @@ export class QueueTreeItem extends vscode.TreeItem {
     // Add repository if present
     if (this.queueItem.repository) {
       parts.push(this.queueItem.repository);
+    }
+
+    // Add slot-waiting indicator
+    if (this.isSlotWaiting) {
+      parts.push('waiting for slot');
     }
 
     // Add waitingFor label for waiting items
@@ -221,6 +236,11 @@ export class QueueTreeItem extends vscode.TreeItem {
     // Priority
     const priorityIcon = PRIORITY_ICONS[priority];
     md.appendMarkdown(`**Priority:** $(${priorityIcon}) ${this.capitalizeFirst(priority)}\n\n`);
+
+    // Slot-waiting capacity info
+    if (this.isSlotWaiting && this.capacity) {
+      md.appendMarkdown(`**Execution Slots:** ${this.capacity.activeExecutions}/${this.capacity.maxConcurrentAgents} in use\n\n`);
+    }
 
     // Waiting for info
     if (this.queueItem.waitingFor) {

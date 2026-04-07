@@ -174,7 +174,35 @@ export const DispatchConfigSchema = z.object({
 });
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 
+/**
+ * Lease configuration for per-user execution lease protocol
+ */
+export const LeaseConfigSchema = z.object({
+  /** Timeout for lease_request response (ms) */
+  requestTimeoutMs: z.number().int().min(5000).default(30000),
+  /** Interval between lease heartbeats (ms) */
+  heartbeatIntervalMs: z.number().int().min(5000).default(30000),
+  /** Consecutive heartbeat send failures before local expiry */
+  maxHeartbeatFailures: z.number().int().min(1).default(3),
+});
+export type LeaseConfig = z.infer<typeof LeaseConfigSchema>;
+
 export { WorkerConfigSchema, type WorkerConfig };
+
+/**
+ * Relay configuration for cloud connectivity
+ */
+export const RelayConfigSchema = z.object({
+  /** API key for cloud authentication (from GENERACY_API_KEY env var) */
+  apiKey: z.string().min(1).optional(),
+  /** Cloud relay WebSocket URL */
+  cloudUrl: z.string().url().default('wss://api.generacy.ai/relay'),
+  /** Interval for periodic metadata refresh in ms */
+  metadataIntervalMs: z.number().int().min(10000).default(60000),
+  /** Path to cluster.yaml relative to workspace root */
+  clusterYamlPath: z.string().min(1).default('.generacy/cluster.yaml'),
+});
+export type RelayConfig = z.infer<typeof RelayConfigSchema>;
 
 /**
  * Smee.io webhook proxy configuration
@@ -197,6 +225,21 @@ export const WebhookSetupConfigSchema = z.object({
 export type WebhookSetupConfig = z.infer<typeof WebhookSetupConfigSchema>;
 
 /**
+ * Conversation configuration for interactive Claude Code sessions
+ */
+export const ConversationConfigSchema = z.object({
+  /** Maximum concurrent conversations (0 = disabled) */
+  maxConcurrent: z.number().int().min(0).max(20).default(3),
+  /** Grace period for SIGKILL after SIGTERM (ms) */
+  shutdownGracePeriodMs: z.number().int().min(1000).max(60000).default(5000),
+  /** Workspace identifier → filesystem path mapping */
+  workspaces: z.record(z.string(), z.string()).default({}),
+  /** Default model (optional — uses Claude CLI default if omitted) */
+  defaultModel: z.string().optional(),
+});
+export type ConversationConfig = z.infer<typeof ConversationConfigSchema>;
+
+/**
  * Complete orchestrator configuration
  */
 export const OrchestratorConfigSchema = z.object({
@@ -214,6 +257,9 @@ export const OrchestratorConfigSchema = z.object({
   epicMonitor: EpicMonitorConfigSchema.default({}),
   dispatch: DispatchConfigSchema.default({}),
   worker: WorkerConfigSchema.default({}),
+  conversations: ConversationConfigSchema.default({}),
+  relay: RelayConfigSchema.default({}),
+  lease: LeaseConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),
   labelMonitor: z.boolean().default(false),

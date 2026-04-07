@@ -81,6 +81,7 @@ vi.mock('../../../../api/auth', () => ({
   getAuthService: () => ({
     isAuthenticated: vi.fn(() => true),
     onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+    getOrganizationId: vi.fn(() => 'org-123'),
   }),
 }));
 
@@ -94,6 +95,10 @@ vi.mock('../../../../api/endpoints/queue', () => ({
   },
 }));
 
+vi.mock('../../../../api/endpoints/orgs', () => ({
+  getOrgCapacity: vi.fn(),
+}));
+
 vi.mock('../../../../constants', () => ({
   VIEWS: { queue: 'generacy.queue' },
   TREE_ITEM_CONTEXT: { queueItem: 'queueItem' },
@@ -103,9 +108,11 @@ vi.mock('../../../../constants', () => ({
 import { QueueTreeProvider } from '../provider';
 import { QueueTreeItem, QueueEmptyItem, QueueLoadingItem, QueueFilterGroupItem } from '../tree-item';
 import { queueApi } from '../../../../api/endpoints/queue';
+import { getOrgCapacity } from '../../../../api/endpoints/orgs';
 
 // Get reference to the mocked API
 const mockQueueApi = vi.mocked(queueApi);
+const mockGetOrgCapacity = vi.mocked(getOrgCapacity);
 
 describe('QueueTreeProvider', () => {
   let provider: QueueTreeProvider;
@@ -131,6 +138,11 @@ describe('QueueTreeProvider', () => {
     vi.clearAllMocks();
     vi.useFakeTimers();
     mockQueueApi.getQueue.mockResolvedValue(createMockResponse([]));
+    mockGetOrgCapacity.mockResolvedValue({
+      activeExecutions: 0,
+      maxConcurrentAgents: 5,
+      isAtCapacity: false,
+    });
   });
 
   afterEach(() => {
@@ -704,6 +716,94 @@ describe('QueueTreeProvider', () => {
 
       await vi.advanceTimersByTimeAsync(10000);
       expect(provider.getAllItems()[0]?.waitingFor).toBe('review complete');
+    });
+  });
+
+  describe('org capacity', () => {
+    it('should fetch capacity alongside queue', async () => {
+      const items = [createMockQueueItem({ status: 'pending' })];
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse(items));
+      mockGetOrgCapacity.mockResolvedValue({
+        activeExecutions: 3,
+        maxConcurrentAgents: 5,
+        isAtCapacity: false,
+      });
+
+      provider = new QueueTreeProvider();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockQueueApi.getQueue).toHaveBeenCalled();
+      expect(mockGetOrgCapacity).toHaveBeenCalledWith('org-123');
+    });
+
+    it('should pass capacity to tree items so pending items at capacity are slot-waiting', async () => {
+      const items = [
+        createMockQueueItem({ id: 'pending-1', status: 'pending' }),
+        createMockQueueItem({ id: 'running-1', status: 'running' }),
+      ];
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse(items));
+      mockGetOrgCapacity.mockResolvedValue({
+        activeExecutions: 5,
+        maxConcurrentAgents: 5,
+        isAtCapacity: true,
+      });
+
+      provider = new QueueTreeProvider({ viewMode: 'flat' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const children = await provider.getChildren();
+      expect(children).toHaveLength(2);
+
+      const pendingChild = children.find(
+        (c) => c instanceof QueueTreeItem && c.queueItem.id === 'pending-1'
+      ) as QueueTreeItem;
+      const runningChild = children.find(
+        (c) => c instanceof QueueTreeItem && c.queueItem.id === 'running-1'
+      ) as QueueTreeItem;
+
+      expect(pendingChild).toBeDefined();
+      expect(pendingChild.isSlotWaiting).toBe(true);
+
+      expect(runningChild).toBeDefined();
+      expect(runningChild.isSlotWaiting).toBe(false);
+    });
+
+    it('should gracefully render queue items when capacity fetch fails', async () => {
+      const items = [
+        createMockQueueItem({ id: 'item-1', status: 'pending' }),
+        createMockQueueItem({ id: 'item-2', status: 'running' }),
+      ];
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse(items));
+      mockGetOrgCapacity.mockRejectedValue(new Error('Network error'));
+
+      provider = new QueueTreeProvider({ viewMode: 'flat' });
+      await vi.advanceTimersByTimeAsync(0);
+
+      const children = await provider.getChildren();
+      expect(children).toHaveLength(2);
+      expect(children.every((c) => c instanceof QueueTreeItem)).toBe(true);
+
+      // Without capacity data, no item should be slot-waiting
+      const pendingChild = children.find(
+        (c) => c instanceof QueueTreeItem && c.queueItem.id === 'item-1'
+      ) as QueueTreeItem;
+      expect(pendingChild.isSlotWaiting).toBe(false);
+    });
+
+    it('should expose capacity via getOrgCapacity() accessor', async () => {
+      const capacity = {
+        activeExecutions: 2,
+        maxConcurrentAgents: 10,
+        isAtCapacity: false,
+      };
+      mockQueueApi.getQueue.mockResolvedValue(createMockResponse([]));
+      mockGetOrgCapacity.mockResolvedValue(capacity);
+
+      provider = new QueueTreeProvider();
+      await vi.advanceTimersByTimeAsync(0);
+
+      const result = provider.getOrgCapacity();
+      expect(result).toEqual(capacity);
     });
   });
 });

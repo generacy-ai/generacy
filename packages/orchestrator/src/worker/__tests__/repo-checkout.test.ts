@@ -176,7 +176,7 @@ describe('RepoCheckout', () => {
 
       await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
 
-      const call = findCall('git', ['checkout', '-b', 'develop', 'origin/develop']);
+      const call = findCall('git', ['checkout', '-B', 'develop', 'origin/develop']);
       expect(call).toBeDefined();
     });
 
@@ -192,7 +192,7 @@ describe('RepoCheckout', () => {
       expect(path).toBe('/workspace/worker-1/octocat/repo');
     });
 
-    it('runs fetch before reset (correct order)', async () => {
+    it('runs fetch before reset origin/<branch> (correct order)', async () => {
       const callOrder: string[] = [];
       mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
         if (cmd === 'git' && args[0]) {
@@ -204,7 +204,9 @@ describe('RepoCheckout', () => {
       await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
 
       const fetchIdx = callOrder.indexOf('fetch');
-      const resetIdx = callOrder.indexOf('reset');
+      // Use lastIndexOf: the first 'reset' is the new dirty-state reset --hard HEAD;
+      // the final 'reset' is the post-checkout reset --hard origin/<branch>
+      const resetIdx = callOrder.lastIndexOf('reset');
       expect(fetchIdx).toBeGreaterThanOrEqual(0);
       expect(resetIdx).toBeGreaterThan(fetchIdx);
     });
@@ -361,7 +363,7 @@ describe('RepoCheckout', () => {
 
       await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
 
-      const call = findCall('git', ['checkout', '-b', 'feature-42', 'origin/feature-42']);
+      const call = findCall('git', ['checkout', '-B', 'feature-42', 'origin/feature-42']);
       expect(call).toBeDefined();
     });
 
@@ -381,7 +383,7 @@ describe('RepoCheckout', () => {
       expect(call).toBeDefined();
     });
 
-    it('runs fetch → checkout → reset in order', async () => {
+    it('runs fetch → checkout → reset origin/<branch> in order', async () => {
       const callOrder: string[] = [];
       mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
         if (cmd === 'git') {
@@ -394,7 +396,9 @@ describe('RepoCheckout', () => {
 
       const fetchIdx = callOrder.findIndex((c) => c.startsWith('fetch'));
       const checkoutIdx = callOrder.findIndex((c) => c.startsWith('checkout'));
-      const resetIdx = callOrder.findIndex((c) => c.startsWith('reset'));
+      // Use findLastIndex: the first 'reset' is the new dirty-state reset --hard HEAD;
+      // the final 'reset' is the post-checkout reset --hard origin/<branch>
+      const resetIdx = callOrder.findLastIndex((c) => c.startsWith('reset'));
 
       expect(fetchIdx).toBeGreaterThanOrEqual(0);
       expect(checkoutIdx).toBeGreaterThan(fetchIdx);
@@ -489,6 +493,151 @@ describe('RepoCheckout', () => {
         recursive: true,
         force: true,
       });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // dirty-state recovery — ensureCheckout() (updateRepo path)
+  // -------------------------------------------------------------------------
+  describe('ensureCheckout() dirty-state recovery (updateRepo path)', () => {
+    beforeEach(() => {
+      // No bootstrapped repo; existing isolated checkout
+      mockStat
+        .mockRejectedValueOnce(enoentError())
+        .mockResolvedValue({ isDirectory: () => true });
+    });
+
+    it('calls reset --hard HEAD before git fetch origin', async () => {
+      const callOrder: Array<{ cmd: string; args: string[] }> = [];
+      mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
+        callOrder.push({ cmd, args: [...args] });
+        return { stdout: '', stderr: '' };
+      });
+
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const resetHeadIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'reset' && c.args[1] === '--hard' && c.args[2] === 'HEAD',
+      );
+      const fetchIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'fetch' && c.args[1] === 'origin',
+      );
+
+      expect(resetHeadIdx).toBeGreaterThanOrEqual(0);
+      expect(fetchIdx).toBeGreaterThan(resetHeadIdx);
+    });
+
+    it('calls clean -fd before git fetch origin', async () => {
+      const callOrder: Array<{ cmd: string; args: string[] }> = [];
+      mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
+        callOrder.push({ cmd, args: [...args] });
+        return { stdout: '', stderr: '' };
+      });
+
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const cleanIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'clean' && c.args[1] === '-fd',
+      );
+      const fetchIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'fetch' && c.args[1] === 'origin',
+      );
+
+      expect(cleanIdx).toBeGreaterThanOrEqual(0);
+      expect(fetchIdx).toBeGreaterThan(cleanIdx);
+    });
+
+    it('runs reset HEAD → clean → fetch → checkout → reset origin/<branch> in order', async () => {
+      const callOrder: string[] = [];
+      mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
+        if (cmd === 'git') {
+          callOrder.push(`${args[0]}(${args.slice(1).join(',')})`);
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await checkout.ensureCheckout('worker-1', 'octocat', 'repo', 'develop');
+
+      const resetHeadIdx = callOrder.findIndex((c) => c === 'reset(--hard,HEAD)');
+      const cleanIdx = callOrder.findIndex((c) => c === 'clean(-fd)');
+      const fetchIdx = callOrder.findIndex((c) => c === 'fetch(origin)');
+      const checkoutIdx = callOrder.findIndex((c) => c.startsWith('checkout'));
+      const resetOriginIdx = callOrder.findIndex((c) => c === 'reset(--hard,origin/develop)');
+
+      expect(resetHeadIdx).toBeGreaterThanOrEqual(0);
+      expect(cleanIdx).toBeGreaterThan(resetHeadIdx);
+      expect(fetchIdx).toBeGreaterThan(cleanIdx);
+      expect(checkoutIdx).toBeGreaterThan(fetchIdx);
+      expect(resetOriginIdx).toBeGreaterThan(checkoutIdx);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // dirty-state recovery — switchBranch()
+  // -------------------------------------------------------------------------
+  describe('switchBranch() dirty-state recovery', () => {
+    it('calls reset --hard HEAD before git fetch origin', async () => {
+      const callOrder: Array<{ cmd: string; args: string[] }> = [];
+      mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
+        callOrder.push({ cmd, args: [...args] });
+        return { stdout: '', stderr: '' };
+      });
+
+      await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
+
+      const resetHeadIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'reset' && c.args[1] === '--hard' && c.args[2] === 'HEAD',
+      );
+      const fetchIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'fetch' && c.args[1] === 'origin',
+      );
+
+      expect(resetHeadIdx).toBeGreaterThanOrEqual(0);
+      expect(fetchIdx).toBeGreaterThan(resetHeadIdx);
+    });
+
+    it('calls clean -fd before git fetch origin', async () => {
+      const callOrder: Array<{ cmd: string; args: string[] }> = [];
+      mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
+        callOrder.push({ cmd, args: [...args] });
+        return { stdout: '', stderr: '' };
+      });
+
+      await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'feature-42');
+
+      const cleanIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'clean' && c.args[1] === '-fd',
+      );
+      const fetchIdx = callOrder.findIndex(
+        (c) => c.cmd === 'git' && c.args[0] === 'fetch' && c.args[1] === 'origin',
+      );
+
+      expect(cleanIdx).toBeGreaterThanOrEqual(0);
+      expect(fetchIdx).toBeGreaterThan(cleanIdx);
+    });
+
+    it('runs reset HEAD → clean → fetch → checkout → reset origin/<branch> in order', async () => {
+      const callOrder: string[] = [];
+      mockExecFile.mockImplementation(async (cmd: string, args: string[]) => {
+        if (cmd === 'git') {
+          callOrder.push(`${args[0]}(${args.slice(1).join(',')})`);
+        }
+        return { stdout: '', stderr: '' };
+      });
+
+      await checkout.switchBranch('/workspace/worker-1/octocat/repo', 'my-branch');
+
+      const resetHeadIdx = callOrder.findIndex((c) => c === 'reset(--hard,HEAD)');
+      const cleanIdx = callOrder.findIndex((c) => c === 'clean(-fd)');
+      const fetchIdx = callOrder.findIndex((c) => c === 'fetch(origin)');
+      const checkoutIdx = callOrder.findIndex((c) => c.startsWith('checkout'));
+      const resetOriginIdx = callOrder.findIndex((c) => c === 'reset(--hard,origin/my-branch)');
+
+      expect(resetHeadIdx).toBeGreaterThanOrEqual(0);
+      expect(cleanIdx).toBeGreaterThan(resetHeadIdx);
+      expect(fetchIdx).toBeGreaterThan(cleanIdx);
+      expect(checkoutIdx).toBeGreaterThan(fetchIdx);
+      expect(resetOriginIdx).toBeGreaterThan(checkoutIdx);
     });
   });
 });

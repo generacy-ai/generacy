@@ -81,7 +81,7 @@ jobs:
         id: version-check
         run: |
           CURRENT="${{ steps.version.outputs.version }}"
-          MARKETPLACE=$(npx vsce show generacy-ai.generacy --json 2>/dev/null \
+          MARKETPLACE=$(npx vsce show generacy-ai.generacy-extension --json 2>/dev/null \
             | node -p "JSON.parse(require('fs').readFileSync('/dev/stdin','utf8')).versions[0].version" 2>/dev/null \
             || echo "")
 

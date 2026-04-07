@@ -336,25 +336,25 @@ describe('extractTarGz', () => {
   // GitHub tarball-like structure (strip top-level prefix)
   // -------------------------------------------------------------------------
 
-  it('supports filtering by variant subdirectory like GitHub tarballs', async () => {
+  it('supports filtering files from GitHub tarballs', async () => {
     const archive = buildTarGz(
-      makeDirEntry('generacy-ai-cluster-templates-abc1234/'),
-      makeDirEntry('generacy-ai-cluster-templates-abc1234/standard/'),
+      makeDirEntry('generacy-ai-cluster-base-abc1234/'),
+      makeDirEntry('generacy-ai-cluster-base-abc1234/standard/'),
       makeTarEntry({
         name: 'Dockerfile',
         content: 'FROM node:20',
-        prefix: 'generacy-ai-cluster-templates-abc1234/standard',
+        prefix: 'generacy-ai-cluster-base-abc1234/standard',
       }),
       makeTarEntry({
         name: 'docker-compose.yml',
         content: 'version: "3"',
-        prefix: 'generacy-ai-cluster-templates-abc1234/standard',
+        prefix: 'generacy-ai-cluster-base-abc1234/standard',
       }),
-      makeDirEntry('generacy-ai-cluster-templates-abc1234/microservices/'),
+      makeDirEntry('generacy-ai-cluster-base-abc1234/microservices/'),
       makeTarEntry({
         name: 'Dockerfile',
         content: 'FROM node:20-slim',
-        prefix: 'generacy-ai-cluster-templates-abc1234/microservices',
+        prefix: 'generacy-ai-cluster-base-abc1234/microservices',
       }),
     );
 
@@ -366,12 +366,12 @@ describe('extractTarGz', () => {
     expect(files.size).toBe(2);
     expect(
       files.get(
-        'generacy-ai-cluster-templates-abc1234/standard/Dockerfile',
+        'generacy-ai-cluster-base-abc1234/standard/Dockerfile',
       ),
     ).toBe('FROM node:20');
     expect(
       files.get(
-        'generacy-ai-cluster-templates-abc1234/standard/docker-compose.yml',
+        'generacy-ai-cluster-base-abc1234/standard/docker-compose.yml',
       ),
     ).toBe('version: "3"');
   });

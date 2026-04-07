@@ -83,6 +83,35 @@ export function clarificationMarker(issueNumber: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// isQuestionComment
+// ---------------------------------------------------------------------------
+
+/**
+ * Detect whether a comment body is a clarification *questions* comment
+ * (posted by the bot) rather than a human *answers* comment.
+ *
+ * The bot posts questions in two ways:
+ * 1. Via `postClarifications()` — includes `<!-- generacy-clarifications:N -->` marker
+ * 2. Via the clarify CLI operation — includes a "Clarification Questions" heading
+ * 3. Via the CLI marker — includes `<!-- generacy-clarification:` prefix
+ * 4. Via the stage comment — includes `<!-- generacy-stage:` prefix
+ *
+ * Human answers typically look like `Q1: B` or `Q1: answer text` without
+ * these markers.
+ */
+export function isQuestionComment(body: string): boolean {
+  // Orchestrator-posted clarification comment
+  if (body.includes(MARKER_PREFIX)) return true;
+  // CLI-posted clarification comment
+  if (body.includes('<!-- generacy-clarification:')) return true;
+  // Stage tracking comment
+  if (body.includes('<!-- generacy-stage:')) return true;
+  // Clarify operation's direct posting (with or without emoji)
+  if (/##\s+.*Clarification Questions/.test(body)) return true;
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // parseClarifications
 // ---------------------------------------------------------------------------
 
@@ -244,11 +273,42 @@ export function hasPendingClarifications(
 // ---------------------------------------------------------------------------
 
 /**
+ * Extract the actual answer from a multi-line captured section.
+ *
+ * When Q is inside a heading (`### Q1: Topic`), the text after `Q1:` starts
+ * with the topic name, not the answer. This helper looks for an embedded
+ * `**Answer: value**` or `**Answer**: value` line and returns the answer
+ * portion. Returns `undefined` if no embedded answer is found.
+ */
+function extractEmbeddedAnswer(text: string): string | undefined {
+  // Format: **Answer: value** with optional trailing text
+  const m1 = text.match(/\*\*Answer:\s*(.+?)\*\*(.*)$/m);
+  if (m1) {
+    return (m1[1]! + m1[2]!).trim();
+  }
+
+  // Format: **Answer**: value
+  const m2 = text.match(/\*\*Answer\*\*:\s*(.+)$/m);
+  if (m2) {
+    return m2[1]!.trim();
+  }
+
+  return undefined;
+}
+
+/**
  * Parse answers from GitHub issue comments.
  *
  * Scans comment bodies for patterns like `Q1: answer text` and extracts
  * answers keyed by question number. Later answers for the same question
  * override earlier ones (last wins).
+ *
+ * Supports two answer formats:
+ * - Simple:  `Q1: answer text`
+ * - Heading: `### Q1: Topic\n**Answer: B** — explanation`
+ *
+ * For heading format, the actual answer is extracted from the embedded
+ * `**Answer**` line rather than the topic name after `Q1:`.
  */
 function parseAnswersFromComments(
   comments: Array<{ body: string }>,
@@ -257,8 +317,12 @@ function parseAnswersFromComments(
   const answers = new Map<number, string>();
 
   for (const comment of comments) {
+    // Match Q patterns with optional heading markers (### Q1:) and bold (**Q1**:).
+    // The lookahead also handles heading-prefixed Q patterns so that sections
+    // like `### Q1: ...` and `### Q2: ...` are properly delimited instead of
+    // Q1 consuming everything up to $ when headings are used.
     const regex =
-      /(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
+      /(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
 
     let match: RegExpExecArray | null;
     while ((match = regex.exec(comment.body)) !== null) {
@@ -266,9 +330,19 @@ function parseAnswersFromComments(
       const answerStr = match[2];
       if (!numStr || answerStr === undefined) continue;
       const questionNumber = parseInt(numStr, 10);
-      const answer = answerStr.trim();
+      let answer = answerStr.trim();
 
-      if (answer && questionNumbers.includes(questionNumber)) {
+      // When Q is in a heading (### Q1: Topic), the captured text starts with
+      // the topic name, not the answer. Look for an embedded **Answer** line.
+      if (answer.includes('\n')) {
+        const embedded = extractEmbeddedAnswer(answer);
+        if (embedded) {
+          answer = embedded;
+        }
+      }
+
+      // Skip placeholder text that is not a real answer
+      if (answer && answer !== '*Pending*' && questionNumbers.includes(questionNumber)) {
         answers.set(questionNumber, answer);
       }
     }
@@ -337,7 +411,13 @@ export async function integrateClarificationAnswers(
     return { integrated: 0, reason: 'no-answers' };
   }
 
-  const answers = parseAnswersFromComments(comments, pendingNumbers);
+  // Filter out comments that contain the clarification questions themselves.
+  // Without this, parseAnswersFromComments matches Q patterns from the bot's
+  // own questions comment (e.g., "### Q1: Topic") and treats the topic text
+  // as an answer, causing the gate to incorrectly see all questions as answered.
+  const answerComments = comments.filter((c) => !isQuestionComment(c.body));
+
+  const answers = parseAnswersFromComments(answerComments, pendingNumbers);
   if (answers.size === 0) {
     return { integrated: 0, reason: 'no-answers' };
   }

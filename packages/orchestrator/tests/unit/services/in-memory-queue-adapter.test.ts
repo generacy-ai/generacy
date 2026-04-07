@@ -43,7 +43,7 @@ describe('InMemoryQueueAdapter', () => {
       await adapter.enqueue(makeItem());
 
       expect(logger.info).toHaveBeenCalledWith(
-        { owner: 'test-org', repo: 'test-repo', issue: 42, priority: 1000 },
+        { owner: 'test-org', repo: 'test-repo', issue: 42, priority: expect.any(Number) },
         'Item enqueued to in-memory queue'
       );
     });
@@ -90,29 +90,29 @@ describe('InMemoryQueueAdapter', () => {
   });
 
   describe('priority ordering', () => {
-    it('should claim higher priority items first (lower score = higher priority)', async () => {
-      await adapter.enqueue(makeItem({ issueNumber: 1, priority: 3000 }));
-      await adapter.enqueue(makeItem({ issueNumber: 2, priority: 1000 }));
-      await adapter.enqueue(makeItem({ issueNumber: 3, priority: 2000 }));
+    it('should claim resume items before retry and new items', async () => {
+      await adapter.enqueue(makeItem({ issueNumber: 1, queueReason: 'new' }));
+      await adapter.enqueue(makeItem({ issueNumber: 2, queueReason: 'resume' }));
+      await adapter.enqueue(makeItem({ issueNumber: 3, queueReason: 'retry' }));
 
       const first = await adapter.claim('worker-1');
       const second = await adapter.claim('worker-2');
       const third = await adapter.claim('worker-3');
 
-      expect(first!.issueNumber).toBe(2);  // priority 1000
-      expect(second!.issueNumber).toBe(3); // priority 2000
-      expect(third!.issueNumber).toBe(1);  // priority 3000
+      expect(first!.issueNumber).toBe(2);  // resume (0.x)
+      expect(second!.issueNumber).toBe(3); // retry (1.x)
+      expect(third!.issueNumber).toBe(1);  // new (Date.now())
     });
 
-    it('should use FIFO ordering within the same priority', async () => {
+    it('should use FIFO ordering within the same priority tier', async () => {
       await adapter.enqueue(
-        makeItem({ issueNumber: 1, priority: 1000, enqueuedAt: '2024-01-01T00:00:01Z' })
+        makeItem({ issueNumber: 1, queueReason: 'new', enqueuedAt: '2024-01-01T00:00:01Z' })
       );
       await adapter.enqueue(
-        makeItem({ issueNumber: 2, priority: 1000, enqueuedAt: '2024-01-01T00:00:02Z' })
+        makeItem({ issueNumber: 2, queueReason: 'new', enqueuedAt: '2024-01-01T00:00:02Z' })
       );
       await adapter.enqueue(
-        makeItem({ issueNumber: 3, priority: 1000, enqueuedAt: '2024-01-01T00:00:03Z' })
+        makeItem({ issueNumber: 3, queueReason: 'new', enqueuedAt: '2024-01-01T00:00:03Z' })
       );
 
       const first = await adapter.claim('worker-1');
@@ -125,9 +125,9 @@ describe('InMemoryQueueAdapter', () => {
     });
 
     it('should insert items in sorted order regardless of enqueue order', async () => {
-      await adapter.enqueue(makeItem({ issueNumber: 3, priority: 3000 }));
-      await adapter.enqueue(makeItem({ issueNumber: 1, priority: 1000 }));
-      await adapter.enqueue(makeItem({ issueNumber: 2, priority: 2000 }));
+      await adapter.enqueue(makeItem({ issueNumber: 3, queueReason: 'new' }));
+      await adapter.enqueue(makeItem({ issueNumber: 1, queueReason: 'resume' }));
+      await adapter.enqueue(makeItem({ issueNumber: 2, queueReason: 'retry' }));
 
       const items = await adapter.getQueueItems(0, 10);
       expect(items.map((i) => i.item.issueNumber)).toEqual([1, 2, 3]);
@@ -152,7 +152,7 @@ describe('InMemoryQueueAdapter', () => {
         issueNumber: 42,
         workflowName: 'speckit-feature',
         command: 'process',
-        priority: 1000,
+        priority: expect.any(Number),
         enqueuedAt: '2024-01-01T00:00:00Z',
         metadata: undefined,
       });
@@ -384,20 +384,17 @@ describe('InMemoryQueueAdapter', () => {
     });
 
     it('should return items with scores in priority order', async () => {
-      await adapter.enqueue(makeItem({ issueNumber: 1, priority: 2000 }));
-      await adapter.enqueue(makeItem({ issueNumber: 2, priority: 1000 }));
+      await adapter.enqueue(makeItem({ issueNumber: 1, queueReason: 'new' }));
+      await adapter.enqueue(makeItem({ issueNumber: 2, queueReason: 'resume' }));
 
       const items = await adapter.getQueueItems(0, 10);
 
       expect(items).toHaveLength(2);
-      expect(items[0]).toEqual({
-        item: expect.objectContaining({ issueNumber: 2, priority: 1000 }),
-        score: 1000,
-      });
-      expect(items[1]).toEqual({
-        item: expect.objectContaining({ issueNumber: 1, priority: 2000 }),
-        score: 2000,
-      });
+      // Resume (0.x) should come before new (Date.now())
+      expect(items[0].item.issueNumber).toBe(2);
+      expect(items[0].score).toBeLessThan(1);
+      expect(items[1].item.issueNumber).toBe(1);
+      expect(items[1].score).toBeGreaterThan(1);
     });
 
     it('should strip internal fields from returned items', async () => {
@@ -467,6 +464,54 @@ describe('InMemoryQueueAdapter', () => {
       await adapter.release('worker-1', item!);
 
       expect(await adapter.getActiveWorkerCount()).toBe(0);
+    });
+  });
+
+  describe('queue reason priority', () => {
+    it('should claim in order: resume → retry → new', async () => {
+      await adapter.enqueue(makeItem({ issueNumber: 1, queueReason: 'new' }));
+      await adapter.enqueue(makeItem({ issueNumber: 2, queueReason: 'retry' }));
+      await adapter.enqueue(makeItem({ issueNumber: 3, queueReason: 'resume' }));
+
+      const first = await adapter.claim('worker-1');
+      const second = await adapter.claim('worker-2');
+      const third = await adapter.claim('worker-3');
+
+      expect(first!.issueNumber).toBe(3);   // resume
+      expect(first!.queueReason).toBe('resume');
+      expect(second!.issueNumber).toBe(2);  // retry
+      expect(second!.queueReason).toBe('retry');
+      expect(third!.issueNumber).toBe(1);   // new
+      expect(third!.queueReason).toBe('new');
+    });
+
+    it('should set retry priority on release re-queue', async () => {
+      await adapter.enqueue(makeItem({ issueNumber: 1, queueReason: 'new' }));
+      const claimed = await adapter.claim('worker-1');
+      await adapter.release('worker-1', claimed!);
+
+      // Enqueue a new item — the retried item should dequeue first
+      await adapter.enqueue(makeItem({ issueNumber: 2, queueReason: 'new' }));
+
+      const first = await adapter.claim('worker-2');
+      const second = await adapter.claim('worker-3');
+
+      expect(first!.issueNumber).toBe(1);   // retried item dequeues before new
+      expect(first!.queueReason).toBe('retry');
+      expect(second!.issueNumber).toBe(2);  // new item
+    });
+
+    it('should default to Date.now() priority for items without queueReason (backwards compat)', async () => {
+      // Item without queueReason should get Date.now() priority (same as 'new')
+      await adapter.enqueue(makeItem({ issueNumber: 1 })); // no queueReason
+      await adapter.enqueue(makeItem({ issueNumber: 2, queueReason: 'resume' }));
+
+      const first = await adapter.claim('worker-1');
+      const second = await adapter.claim('worker-2');
+
+      // Resume should dequeue before the no-reason item (which defaults to Date.now())
+      expect(first!.issueNumber).toBe(2);  // resume
+      expect(second!.issueNumber).toBe(1); // default (Date.now())
     });
   });
 

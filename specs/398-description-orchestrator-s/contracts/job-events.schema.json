@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelayJobEvent",
+  "description": "Job lifecycle event sent from orchestrator worker to cloud API via relay WebSocket",
+  "type": "object",
+  "required": ["type", "event", "data", "timestamp"],
+  "properties": {
+    "type": {
+      "const": "event"
+    },
+    "event": {
+      "type": "string",
+      "enum": ["job:created", "job:phase_changed", "job:paused", "job:completed", "job:failed"]
+    },
+    "data": {
+      "type": "object",
+      "required": ["jobId", "workflowName", "owner", "repo", "issueNumber", "status", "currentStep"],
+      "properties": {
+        "jobId": {
+          "type": "string",
+          "format": "uuid",
+          "description": "UUID v4 generated at job dequeue time"
+        },
+        "workflowName": {
+          "type": "string",
+          "enum": ["speckit-feature", "speckit-bugfix", "speckit-epic"],
+          "description": "Workflow type being executed"
+        },
+        "owner": {
+          "type": "string",
+          "description": "GitHub repository owner"
+        },
+        "repo": {
+          "type": "string",
+          "description": "GitHub repository name"
+        },
+        "issueNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "GitHub issue number"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "paused", "completed", "failed"],
+          "description": "Current job status"
+        },
+        "currentStep": {
+          "type": "string",
+          "enum": ["specify", "clarify", "plan", "tasks", "implement", "validate", "address-pr-feedback"],
+          "description": "Current or last workflow phase"
+        },
+        "error": {
+          "type": "string",
+          "description": "Error message (only present on job:failed events)"
+        },
+        "gateLabel": {
+          "type": "string",
+          "description": "Gate label (only present on job:paused events, e.g., 'waiting-for:clarification')"
+        }
+      },
+      "additionalProperties": false
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp of event emission"
+    }
+  },
+  "additionalProperties": false
+}

@@ -40,7 +40,7 @@ describe('Organization Dashboard Webview', () => {
       id: 'org-123',
       name: 'Test Organization',
       slug: 'test-org',
-      tier: 'team',
+      tier: 'standard',
       seats: 5,
       maxConcurrentAgents: 10,
       createdAt: '2024-01-01T00:00:00.000Z',
@@ -79,11 +79,11 @@ describe('Organization Dashboard Webview', () => {
       currentConcurrentAgents: 3,
     },
     billing: {
-      plan: 'Team',
-      pricePerSeat: 99,
+      plan: 'Standard',
+      pricePerSeat: 50,
       billingCycle: 'monthly',
       nextBillingDate: '2024-02-01T00:00:00.000Z',
-      amountDue: 495,
+      amountDue: 250,
       currency: 'USD',
       isActive: true,
       paymentMethod: 'Visa ending in 4242',
@@ -112,8 +112,8 @@ describe('Organization Dashboard Webview', () => {
     it('should display tier badge', () => {
       const html = getDashboardHtml(mockWebview, mockExtensionUri, mockDashboardData);
 
-      expect(html).toContain('tier-team');
-      expect(html).toContain('Team');
+      expect(html).toContain('tier-standard');
+      expect(html).toContain('Standard');
     });
 
     it('should include CSP meta tag with nonce', () => {
@@ -128,7 +128,7 @@ describe('Organization Dashboard Webview', () => {
 
       expect(html).toContain('Seats');
       expect(html).toContain('5');
-      expect(html).toContain('Concurrent Agents');
+      expect(html).toContain('Execution Slots');
       expect(html).toContain('10');
     });
 
@@ -164,7 +164,7 @@ describe('Organization Dashboard Webview', () => {
       const html = getDashboardHtml(mockWebview, mockExtensionUri, mockDashboardData);
 
       expect(html).toContain('Billing Summary');
-      expect(html).toContain('Team');
+      expect(html).toContain('Standard');
       expect(html).toContain('Monthly');
       expect(html).toContain('Visa ending in 4242');
     });
@@ -172,7 +172,7 @@ describe('Organization Dashboard Webview', () => {
     it('should include upgrade CTA for non-enterprise tiers', () => {
       const html = getDashboardHtml(mockWebview, mockExtensionUri, mockDashboardData);
 
-      expect(html).toContain('Upgrade to Enterprise');
+      expect(html).toContain('Upgrade to Professional');
     });
 
     it('should not include upgrade CTA for enterprise tier', () => {

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createGitHubClient, createFeature } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
-import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger } from './types.js';
+import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
@@ -17,6 +17,7 @@ import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
+import { ConversationLogger } from './conversation-logger.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -43,6 +44,7 @@ const defaultProcessFactory: ProcessFactory = {
     });
 
     return {
+      stdin: null,
       stdout: child.stdout,
       stderr: child.stderr,
       pid: child.pid,
@@ -58,6 +60,8 @@ const defaultProcessFactory: ProcessFactory = {
 export interface ClaudeCliWorkerDeps {
   processFactory?: ProcessFactory;
   sseEmitter?: SSEEventEmitter;
+  /** Callback for emitting job lifecycle events through the relay */
+  jobEventEmitter?: JobEventEmitter;
 }
 
 /**
@@ -78,6 +82,7 @@ export interface ClaudeCliWorkerDeps {
 export class ClaudeCliWorker {
   private readonly processFactory: ProcessFactory;
   private readonly sseEmitter?: SSEEventEmitter;
+  private readonly jobEventEmitter?: JobEventEmitter;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
 
@@ -88,6 +93,7 @@ export class ClaudeCliWorker {
   ) {
     this.processFactory = deps.processFactory ?? defaultProcessFactory;
     this.sseEmitter = deps.sseEmitter;
+    this.jobEventEmitter = deps.jobEventEmitter;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
   }
@@ -108,6 +114,7 @@ export class ClaudeCliWorker {
    */
   async handle(item: QueueItem): Promise<void> {
     const workerId = crypto.randomUUID();
+    const jobId = crypto.randomUUID();
     const workflowId = `${item.owner}/${item.repo}#${item.issueNumber}`;
 
     const workerLogger = this.logger.child({
@@ -236,6 +243,7 @@ export class ClaudeCliWorker {
       // 6. Build WorkerContext
       const context: WorkerContext = {
         workerId,
+        jobId,
         item,
         startPhase,
         github,
@@ -245,6 +253,22 @@ export class ClaudeCliWorker {
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
       };
+
+      // Helper to build job event base payload
+      const jobEventBase = () => ({
+        jobId,
+        workflowName: item.workflowName,
+        owner: item.owner,
+        repo: item.repo,
+        issueNumber: item.issueNumber,
+      });
+
+      // Emit job:created
+      this.jobEventEmitter?.('job:created', {
+        ...jobEventBase(),
+        status: 'active',
+        currentStep: startPhase,
+      });
 
       // 7. Create sub-components
       labelManager = new LabelManager(
@@ -271,10 +295,15 @@ export class ClaudeCliWorker {
         this.config.shutdownGracePeriodMs,
       );
 
+      const conversationLogger = featureResult.feature_dir
+        ? new ConversationLogger(featureResult.feature_dir)
+        : undefined;
+
       const outputCapture = new OutputCapture(
         workflowId,
         workerLogger,
         this.sseEmitter,
+        conversationLogger,
       );
 
       const prManager = new PrManager(
@@ -319,6 +348,12 @@ export class ClaudeCliWorker {
             },
           });
 
+          this.jobEventEmitter?.('job:completed', {
+            ...jobEventBase(),
+            status: 'completed',
+            currentStep: 'tasks',
+          });
+
           return;
         }
       }
@@ -333,6 +368,8 @@ export class ClaudeCliWorker {
         cliSpawner,
         outputCapture,
         prManager,
+        conversationLogger,
+        jobEventEmitter: this.jobEventEmitter,
       }, phaseSequence);
 
       // 9. Handle completion
@@ -363,6 +400,12 @@ export class ClaudeCliWorker {
               totalPhases: loopResult.results.length,
             },
           });
+
+          this.jobEventEmitter?.('job:completed', {
+            ...jobEventBase(),
+            status: 'completed',
+            currentStep: loopResult.lastPhase,
+          });
         } else {
           // Non-epic workflows: standard completion flow
           await labelManager.onWorkflowComplete();
@@ -378,6 +421,12 @@ export class ClaudeCliWorker {
               lastPhase: loopResult.lastPhase,
               totalPhases: loopResult.results.length,
             },
+          });
+
+          this.jobEventEmitter?.('job:completed', {
+            ...jobEventBase(),
+            status: 'completed',
+            currentStep: loopResult.lastPhase,
           });
         }
       } else if (loopResult.gateHit) {
@@ -401,6 +450,13 @@ export class ClaudeCliWorker {
             lastPhase: loopResult.lastPhase,
             totalPhases: loopResult.results.length,
           },
+        });
+
+        this.jobEventEmitter?.('job:failed', {
+          ...jobEventBase(),
+          status: 'failed',
+          currentStep: loopResult.lastPhase,
+          error: loopResult.results.at(-1)?.error?.message ?? 'Phase failure',
         });
       }
     } catch (error) {
@@ -426,6 +482,17 @@ export class ClaudeCliWorker {
             command: item.command,
             error: error instanceof Error ? error.message : String(error),
           },
+        });
+
+        this.jobEventEmitter?.('job:failed', {
+          jobId,
+          workflowName: item.workflowName,
+          owner: item.owner,
+          repo: item.repo,
+          issueNumber: item.issueNumber,
+          status: 'failed',
+          currentStep: 'unknown',
+          error: error instanceof Error ? error.message : String(error),
         });
 
         throw error;

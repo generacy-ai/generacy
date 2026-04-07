@@ -54,7 +54,7 @@ export interface InitOptions {
   /** Accept all defaults without interactive prompts. */
   yes: boolean;
 
-  /** Git ref (branch, tag, or commit) for the cluster-templates repository. */
+  /** Git ref (branch, tag, or commit) for the cluster base repository. */
   templateRef: string;
 
   /** Bypass the local template cache and re-download from GitHub. */

@@ -32,7 +32,6 @@ export interface TriggerConfig {
  */
 const DEFAULT_RESUME_PATTERNS = [
   /@agent\s+continue/i,
-  /@autodev\s+continue/i,
   /\/continue/i,
 ];
 
@@ -96,7 +95,7 @@ function evaluateIssuesEvent(
 
   // Check for ready label (common pattern)
   if (action === 'labeled' && label) {
-    if (label.name === 'autodev:ready' || label.name === 'ready') {
+    if (label.name === 'ready') {
       return startWorkflow(issue.number);
     }
   }

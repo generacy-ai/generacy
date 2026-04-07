@@ -202,6 +202,7 @@ export class PrFeedbackMonitorService {
       priority: Date.now(),
       enqueuedAt: new Date().toISOString(),
       metadata: metadata as unknown as Record<string, unknown>,
+      queueReason: 'resume',
     };
 
     await this.queueAdapter.enqueue(queueItem);

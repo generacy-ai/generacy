@@ -43,6 +43,8 @@ export { InMemoryQueueAdapter } from './in-memory-queue-adapter.js';
 
 export { WorkerDispatcher } from './worker-dispatcher.js';
 
+export { LeaseManager } from './lease-manager.js';
+
 export {
   EpicCompletionMonitorService,
   type EpicMonitorConfig,

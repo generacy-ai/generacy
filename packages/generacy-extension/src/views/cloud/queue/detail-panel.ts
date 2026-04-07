@@ -14,6 +14,7 @@
 import * as vscode from 'vscode';
 import { getLogger } from '../../../utils/logger';
 import { queueApi } from '../../../api/endpoints/queue';
+import type { OrgCapacity } from '../../../api/endpoints/orgs';
 import { getSSEManager } from '../../../api/sse';
 import type { SSEConnectionState } from '../../../api/sse';
 import type {
@@ -77,13 +78,18 @@ export class JobDetailPanel {
   /** Whether the SSE connection is currently active */
   private isSSEConnected = true;
 
+  /** Org execution capacity for slot-waiting indicator */
+  private orgCapacity: OrgCapacity | undefined;
+
   private constructor(
     panel: vscode.WebviewPanel,
     item: QueueItem,
-    progress: JobProgress | null
+    progress: JobProgress | null,
+    orgCapacity?: OrgCapacity
   ) {
     this.panel = panel;
     this.queueItem = item;
+    this.orgCapacity = orgCapacity;
     this.progressState = new JobProgressState();
 
     if (progress) {
@@ -96,6 +102,7 @@ export class JobDetailPanel {
       progress,
       expandedPhases: this.progressState.getExpandedPhases(),
       isPinned: this.isPinned,
+      orgCapacity,
     });
 
     // Listen for messages from webview
@@ -129,13 +136,13 @@ export class JobDetailPanel {
    * - If no unpinned preview exists (or the current one is pinned), a new panel is created.
    * - Fetches both the queue item and progress data in parallel on creation.
    */
-  public static showPreview(item: QueueItem, extensionUri: vscode.Uri): JobDetailPanel {
+  public static showPreview(item: QueueItem, extensionUri: vscode.Uri, orgCapacity?: OrgCapacity): JobDetailPanel {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
     // Reuse existing unpinned preview
     if (JobDetailPanel.previewInstance && !JobDetailPanel.previewInstance.isDisposed) {
       const instance = JobDetailPanel.previewInstance;
-      instance.switchToItem(item);
+      instance.switchToItem(item, orgCapacity);
       instance.panel.reveal(column);
       return instance;
     }
@@ -154,7 +161,7 @@ export class JobDetailPanel {
 
     panel.iconPath = new vscode.ThemeIcon('list-selection');
 
-    const instance = new JobDetailPanel(panel, item, null);
+    const instance = new JobDetailPanel(panel, item, null, orgCapacity);
     JobDetailPanel.previewInstance = instance;
 
     // Kick off initial data loading
@@ -219,12 +226,13 @@ export class JobDetailPanel {
    * Switch to displaying a different queue item.
    * Clears previous state, sets new content, and loads fresh data.
    */
-  private switchToItem(item: QueueItem): void {
+  private switchToItem(item: QueueItem, orgCapacity?: OrgCapacity): void {
     // Clear previous subscriptions and timers
     this.clearTimers();
     this.disposeSubscriptions();
 
     this.queueItem = item;
+    this.orgCapacity = orgCapacity;
     this.progressState.reset();
 
     this.panel.title = this.isPinned
@@ -237,6 +245,7 @@ export class JobDetailPanel {
       progress: null,
       expandedPhases: this.progressState.getExpandedPhases(),
       isPinned: this.isPinned,
+      orgCapacity: this.orgCapacity,
     });
 
     // Re-subscribe to SSE for the new item if not terminal

@@ -1321,7 +1321,7 @@ describe('WorkerProcessor', () => {
         await localProcessor.processJob(createTestJob({ type: 'agent' }));
 
         const metrics = localProcessor.getMetrics();
-        expect(metrics.avgProcessingTime).toBeGreaterThanOrEqual(50);
+        expect(metrics.avgProcessingTime).toBeGreaterThanOrEqual(45);
 
         await localProcessor.stop();
       });

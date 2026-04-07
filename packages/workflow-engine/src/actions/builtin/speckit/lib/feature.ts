@@ -4,6 +4,7 @@
  */
 import { join } from 'node:path';
 import { simpleGit, type SimpleGit } from 'simple-git';
+import { parse as parseYaml } from 'yaml';
 import {
   exists,
   mkdir,
@@ -54,10 +55,10 @@ interface BranchConfig {
 }
 
 /**
- * Load branch configuration from autodev.json
+ * Load branch configuration from .generacy/config.yaml
  */
 async function loadBranchConfig(repoRoot: string): Promise<BranchConfig> {
-  const configPath = join(repoRoot, '.claude', 'autodev.json');
+  const configPath = join(repoRoot, '.generacy', 'config.yaml');
 
   if (!(await exists(configPath))) {
     return DEFAULT_BRANCH_CONFIG;
@@ -65,18 +66,19 @@ async function loadBranchConfig(repoRoot: string): Promise<BranchConfig> {
 
   try {
     const content = await readFile(configPath);
-    const config = JSON.parse(content);
+    const config = parseYaml(content);
 
-    if (!config.branches) {
+    if (!config?.speckit?.branches) {
       return DEFAULT_BRANCH_CONFIG;
     }
 
+    const branches = config.speckit.branches;
     return {
-      pattern: config.branches.pattern ?? DEFAULT_BRANCH_CONFIG.pattern,
-      numberPadding: config.branches.numberPadding ?? DEFAULT_BRANCH_CONFIG.numberPadding,
+      pattern: branches.pattern ?? DEFAULT_BRANCH_CONFIG.pattern,
+      numberPadding: branches.numberPadding ?? DEFAULT_BRANCH_CONFIG.numberPadding,
       slugOptions: {
         ...DEFAULT_BRANCH_CONFIG.slugOptions,
-        ...config.branches.slugOptions,
+        ...branches.slugOptions,
       },
     };
   } catch {

@@ -305,3 +305,44 @@ describe('orchestrator loader – orchestrator block merge from config.yaml', ()
     expect(config.webhookSetup.enabled).toBe(true);
   });
 });
+
+describe('orchestrator loader – auto-populate conversations.workspaces', () => {
+  it('populates conversations.workspaces from repos when workspace dirs exist', () => {
+    // Create a fake /workspaces/todo-app directory to simulate the convention
+    const fakeWorkspace = join(tempDir, 'fake-workspace');
+    mkdirSync(fakeWorkspace, { recursive: true });
+
+    // We can't easily test /workspaces/todo-app since that's absolute,
+    // so we test via orchestrator.yaml that already sets conversations.workspaces.
+    // Instead, verify the config loader leaves workspaces empty when dirs don't exist.
+    process.env['MONITORED_REPOS'] = 'acme/nonexistent-repo';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+
+    // /workspaces/nonexistent-repo doesn't exist, so workspaces stays empty
+    expect(config.conversations.workspaces).toEqual({});
+  });
+
+  it('does not overwrite explicitly configured workspaces', () => {
+    const configDir = join(tempDir, 'config');
+    mkdirSync(configDir, { recursive: true });
+    const configFile = join(configDir, 'orchestrator.yaml');
+    writeFileSync(configFile, [
+      'auth:',
+      '  enabled: false',
+      '  jwt:',
+      '    secret: test-secret-at-least-32-characters-long!!',
+      'repositories:',
+      '  - owner: acme',
+      '    repo: my-repo',
+      'conversations:',
+      '  workspaces:',
+      '    "acme/my-repo": /custom/path',
+    ].join('\n'));
+
+    const config = loadConfig({ configFile, loadEnv: false });
+
+    expect(config.conversations.workspaces).toEqual({ 'acme/my-repo': '/custom/path' });
+  });
+});

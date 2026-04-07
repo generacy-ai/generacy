@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type { QueueManager, WorkerHandler, WorkerInfo } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
+import type { LeaseManager } from './lease-manager.js';
 
 export type LabelCleanupFn = (owner: string, repo: string, issueNumber: number) => Promise<void>;
 
@@ -41,6 +42,11 @@ export class WorkerDispatcher {
   private readonly heartbeatTimestamps = new Map<string, number>();
   private abortController: AbortController | null = null;
   private running = false;
+  private leaseManager: LeaseManager | null = null;
+  /** Tracks leaseId for each active workerId */
+  private readonly workerLeases = new Map<string, string>();
+  /** Whether polling is paused (e.g., after lease_denied, waiting for slot_available) */
+  private pollingPaused = false;
 
   constructor(
     queue: QueueManager,
@@ -149,6 +155,82 @@ export class WorkerDispatcher {
     return this.running;
   }
 
+  /**
+   * Inject lease manager for per-user lease gating.
+   * When set, dispatch is gated on lease_granted from the cloud.
+   * When not set, dispatch proceeds without lease gating (graceful fallback).
+   */
+  setLeaseManager(manager: LeaseManager): void {
+    this.leaseManager = manager;
+
+    // On slot:available, resume polling and attempt dispatch
+    manager.on('slot:available', () => {
+      if (this.pollingPaused) {
+        this.pollingPaused = false;
+        this.logger.info('Slot available, resuming polling');
+        // Trigger an immediate poll attempt
+        this.pollOnce().catch((error) => {
+          this.logger.error({ err: error }, 'Error during slot:available poll');
+        });
+      }
+    });
+
+    // On lease:expired, re-enqueue with resume priority
+    manager.on('lease:expired', (data) => {
+      this.handleLeaseExpired(data).catch((error) => {
+        this.logger.error({ err: error }, 'Error handling lease:expired');
+      });
+    });
+
+    this.logger.info('Lease manager configured for dispatch gating');
+  }
+
+  private async handleLeaseExpired(data: { leaseId: string; queueItemId: string; workerId: string }): Promise<void> {
+    // Find the active worker for this lease
+    let targetWorkerId: string | null = null;
+    for (const [wid, leaseId] of this.workerLeases) {
+      if (leaseId === data.leaseId) {
+        targetWorkerId = wid;
+        break;
+      }
+    }
+
+    if (!targetWorkerId) return;
+
+    const worker = this.activeWorkers.get(targetWorkerId);
+    if (!worker) return;
+
+    this.logger.warn(
+      { workerId: targetWorkerId, leaseId: data.leaseId },
+      'Lease expired, cancelling worker and re-enqueuing with resume priority',
+    );
+
+    // Clean up worker
+    clearInterval(worker.heartbeatInterval);
+    this.clearHeartbeat(targetWorkerId);
+    this.workerLeases.delete(targetWorkerId);
+    this.activeWorkers.delete(targetWorkerId);
+
+    // Re-enqueue with resume priority (0) — check for duplicates first
+    const existingItems = await this.queue.getQueueItems(0, 100);
+    const itemKey = `${worker.item.owner}/${worker.item.repo}#${worker.item.issueNumber}`;
+    const isDuplicate = existingItems.some(
+      (qi) => `${qi.item.owner}/${qi.item.repo}#${qi.item.issueNumber}` === itemKey,
+    );
+
+    if (!isDuplicate) {
+      await this.queue.enqueue({
+        ...worker.item,
+        priority: 0, // Resume priority (highest)
+        queueReason: 'resume',
+        enqueuedAt: new Date().toISOString(),
+      });
+      this.logger.info({ itemKey }, 'Re-enqueued with resume priority after lease expiry');
+    } else {
+      this.logger.info({ itemKey }, 'Skipped re-enqueue (duplicate already in queue)');
+    }
+  }
+
   private async pollLoop(signal: AbortSignal): Promise<void> {
     while (!signal.aborted) {
       try {
@@ -162,12 +244,24 @@ export class WorkerDispatcher {
   }
 
   private async pollOnce(): Promise<void> {
-    // Each container processes exactly one job at a time for full isolation.
-    // Scale by adding container replicas, not concurrent workers.
-    if (this.activeWorkers.size >= 1) {
+    // Skip polling if paused (waiting for slot_available after lease_denied)
+    if (this.pollingPaused) return;
+
+    // Skip if cluster has been rejected
+    if (this.leaseManager?.isClusterRejected) {
+      this.logger.debug('Cluster rejected, skipping poll');
+      return;
+    }
+
+    // Worker cap: respect tier limit when lease manager is active
+    const maxWorkers = this.leaseManager?.userTierLimit != null
+      ? Math.min(1, this.leaseManager.userTierLimit)
+      : 1;
+
+    if (this.activeWorkers.size >= maxWorkers) {
       this.logger.debug(
-        { active: this.activeWorkers.size },
-        'Already processing a job, skipping claim',
+        { active: this.activeWorkers.size, max: maxWorkers },
+        'At worker cap, skipping claim',
       );
       return;
     }
@@ -177,6 +271,42 @@ export class WorkerDispatcher {
 
     if (!item) {
       return;
+    }
+
+    // Gate dispatch on lease if lease manager is configured and tier_info has been received
+    if (this.leaseManager && this.leaseManager.userTierLimit != null) {
+      const queueItemId = `${item.owner}/${item.repo}#${item.issueNumber}`;
+      const userId = item.userId ?? '';
+      const jobId = queueItemId;
+
+      this.logger.info(
+        { workerId, queueItemId },
+        'Requesting lease before dispatch',
+      );
+
+      const result = await this.leaseManager.requestLease(userId, queueItemId, jobId);
+
+      if (result.status === 'denied') {
+        // Re-enqueue and pause polling until slot_available
+        this.logger.info(
+          { reason: result.reason, queueItemId },
+          'Lease denied, re-enqueuing and pausing polling',
+        );
+        await this.queue.release(workerId, item);
+        this.pollingPaused = true;
+        return;
+      }
+
+      if (result.status === 'timeout') {
+        // Re-enqueue with retry priority
+        this.logger.warn({ queueItemId }, 'Lease request timed out, re-enqueuing');
+        await this.queue.release(workerId, item);
+        return;
+      }
+
+      // Granted — start lease heartbeat and track the lease
+      this.leaseManager.startHeartbeat(result.leaseId, userId, queueItemId, workerId);
+      this.workerLeases.set(workerId, result.leaseId);
     }
 
     this.logger.info(
@@ -225,6 +355,12 @@ export class WorkerDispatcher {
     } finally {
       clearInterval(heartbeatInterval);
       this.clearHeartbeat(workerId);
+      // Release lease if one was acquired
+      const leaseId = this.workerLeases.get(workerId);
+      if (leaseId && this.leaseManager) {
+        this.leaseManager.releaseLease(leaseId);
+        this.workerLeases.delete(workerId);
+      }
       this.activeWorkers.delete(workerId);
     }
   }

@@ -1,5 +1,6 @@
 import type { QueueItem, QueueItemWithScore, QueueManager, SerializedQueueItem } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
+import { getPriorityScore } from './queue-priority.js';
 
 interface Logger {
   info(msg: string): void;
@@ -59,8 +60,10 @@ export class InMemoryQueueAdapter implements QueueManager {
       }
     }
 
+    const priority = getPriorityScore(item.queueReason);
     const serialized: SerializedQueueItem = {
       ...item,
+      priority,
       attemptCount: this.attemptCounts.get(itemKey) ?? 0,
       itemKey,
     };
@@ -68,7 +71,7 @@ export class InMemoryQueueAdapter implements QueueManager {
     this.insertSorted(serialized);
 
     this.logger.info(
-      { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority: item.priority },
+      { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority },
       'Item enqueued to in-memory queue'
     );
   }
@@ -103,6 +106,7 @@ export class InMemoryQueueAdapter implements QueueManager {
       priority: serialized.priority,
       enqueuedAt: serialized.enqueuedAt,
       metadata: serialized.metadata,
+      queueReason: serialized.queueReason,
     };
   }
 
@@ -138,9 +142,12 @@ export class InMemoryQueueAdapter implements QueueManager {
         'Item dead-lettered after max retries'
       );
     } else {
-      // Re-queue with original priority
+      // Re-queue with retry priority
+      const retryPriority = getPriorityScore('retry');
       const requeueItem: SerializedQueueItem = {
         ...item,
+        queueReason: 'retry',
+        priority: retryPriority,
         attemptCount,
         itemKey,
       };
@@ -187,6 +194,7 @@ export class InMemoryQueueAdapter implements QueueManager {
         priority: serialized.priority,
         enqueuedAt: serialized.enqueuedAt,
         metadata: serialized.metadata,
+        queueReason: serialized.queueReason,
       },
       score: serialized.priority,
     }));

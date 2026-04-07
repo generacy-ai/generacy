@@ -25,6 +25,8 @@ export interface SmeeReceiverOptions {
   channelUrl: string;
   /** Set of "owner/repo" strings to filter events */
   watchedRepos: Set<string>;
+  /** Cluster's GitHub username for assignee-based filtering */
+  clusterGithubUsername?: string;
   /**
    * Base delay before reconnecting after disconnect (ms).
    * Uses exponential backoff: 5s → 10s → 20s → 40s → 80s → 160s → 300s (capped).
@@ -44,6 +46,7 @@ export class SmeeWebhookReceiver {
 
   private readonly channelUrl: string;
   private readonly watchedRepos: Set<string>;
+  private readonly clusterGithubUsername: string | undefined;
   private readonly baseReconnectDelayMs: number;
   private abortController: AbortController | null = null;
   private running = false;
@@ -56,6 +59,7 @@ export class SmeeWebhookReceiver {
   ) {
     this.channelUrl = options.channelUrl;
     this.watchedRepos = options.watchedRepos;
+    this.clusterGithubUsername = options.clusterGithubUsername;
     this.baseReconnectDelayMs = options.baseReconnectDelayMs ?? SmeeWebhookReceiver.BASE_RECONNECT_DELAY_MS;
   }
 
@@ -216,6 +220,25 @@ export class SmeeWebhookReceiver {
     if (!payload.repository?.owner?.login || !payload.repository?.name) return;
     const repoKey = `${payload.repository.owner.login}/${payload.repository.name}`;
     if (!this.watchedRepos.has(repoKey)) return;
+
+    // Assignee filtering: only process issues assigned to this cluster
+    if (this.clusterGithubUsername) {
+      const assigneeLogins = (payload.issue?.assignees ?? []).map(a => a.login);
+      if (assigneeLogins.length === 0) {
+        this.logger.warn(
+          { issue: payload.issue.number, repo: repoKey },
+          'Smee: skipping issue with no assignees',
+        );
+        return;
+      }
+      if (!assigneeLogins.includes(this.clusterGithubUsername)) {
+        this.logger.info(
+          { issue: payload.issue.number, repo: repoKey, assignees: assigneeLogins },
+          'Smee: skipping issue not assigned to this cluster',
+        );
+        return;
+      }
+    }
 
     // Parse and process the label event
     const issueLabels = payload.issue?.labels?.map(l => l.name) ?? [];

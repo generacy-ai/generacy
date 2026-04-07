@@ -1,4 +1,12 @@
 /**
+ * Reason an item was enqueued — determines priority tier.
+ * - 'resume': Continue in-progress work (highest priority)
+ * - 'retry': Re-attempt failed work
+ * - 'new': Fresh issue trigger (lowest priority, FIFO)
+ */
+export type QueueReason = 'new' | 'resume' | 'retry';
+
+/**
  * Queue item for workflow processing
  */
 export interface QueueItem {
@@ -18,6 +26,10 @@ export interface QueueItem {
   enqueuedAt: string;
   /** Optional metadata for command-specific data */
   metadata?: Record<string, unknown>;
+  /** Why this item was enqueued — adapters use this to compute priority */
+  queueReason?: QueueReason;
+  /** Cluster owner's user ID — used for lease requests */
+  userId?: string;
 }
 
 /**

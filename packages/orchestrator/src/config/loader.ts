@@ -232,6 +232,45 @@ function loadFromEnv(): Record<string, unknown> {
     config.labelMonitor = labelMonitorEnabled === 'true';
   }
 
+  // Relay config (GENERACY_API_KEY for cloud connectivity)
+  const relayApiKey = process.env['GENERACY_API_KEY'];
+  let relayCloudUrl = process.env['GENERACY_CLOUD_URL'];
+
+  // Derive relay URL from GENERACY_CHANNEL when GENERACY_CLOUD_URL is not set
+  if (!relayCloudUrl) {
+    const channel = process.env['GENERACY_CHANNEL'] ?? 'stable';
+    const relayHost = channel === 'preview' ? 'api-staging.generacy.ai' : 'api.generacy.ai';
+    relayCloudUrl = `wss://${relayHost}/relay`;
+  }
+
+  if (relayApiKey || relayCloudUrl) {
+    if (!config.relay) {
+      config.relay = {};
+    }
+    if (relayApiKey) {
+      (config.relay as Record<string, unknown>).apiKey = relayApiKey;
+    }
+    if (relayCloudUrl) {
+      // Auto-append ?projectId from .generacy/config.yaml if not already in the URL
+      let resolvedUrl = relayCloudUrl;
+      if (!relayCloudUrl.includes('projectId=') && configPath) {
+        try {
+          const raw = readFileSync(configPath, 'utf-8');
+          const doc = parseYaml(raw) as Record<string, unknown>;
+          const project = doc['project'] as Record<string, unknown> | undefined;
+          const projectId = project?.['id'];
+          if (typeof projectId === 'string' && projectId) {
+            const sep = relayCloudUrl.includes('?') ? '&' : '?';
+            resolvedUrl = `${relayCloudUrl}${sep}projectId=${projectId}`;
+          }
+        } catch {
+          // Non-fatal: proceed with URL as-is
+        }
+      }
+      (config.relay as Record<string, unknown>).cloudUrl = resolvedUrl;
+    }
+  }
+
   // Webhook setup config
   if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
     const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];
@@ -371,7 +410,21 @@ export function loadConfig(options: LoadConfigOptions = {}): OrchestratorConfig 
   const mergedConfig = deepMerge(fileConfig, envConfig);
 
   // Validate and return
-  return validateConfig(mergedConfig);
+  const config = validateConfig(mergedConfig);
+
+  // Auto-populate conversations.workspaces from repositories when empty.
+  // Maps each repo "owner/name" → "/workspaces/name" if the directory exists.
+  if (Object.keys(config.conversations.workspaces).length === 0 && config.repositories.length > 0) {
+    for (const repo of config.repositories) {
+      const repoKey = `${repo.owner}/${repo.repo}`;
+      const workspacePath = `/workspaces/${repo.repo}`;
+      if (existsSync(workspacePath)) {
+        config.conversations.workspaces[repoKey] = workspacePath;
+      }
+    }
+  }
+
+  return config;
 }
 
 /**
