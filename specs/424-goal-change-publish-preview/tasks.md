@@ -10,15 +10,15 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Replace push trigger with workflow_dispatch in `.github/workflows/publish-preview.yml` (lines 3–5): change `on: push: branches: [develop]` to `on: workflow_dispatch:`
-- [ ] T002 [US2] Add inline YAML comment block at top of `.github/workflows/publish-preview.yml` explaining why the trigger was changed (spawn-refactor safety) and how to manually trigger (`gh workflow run publish-preview.yml --ref develop` or Actions UI)
+- [X] T001 [US1] Replace push trigger with workflow_dispatch in `.github/workflows/publish-preview.yml` (lines 3–5): change `on: push: branches: [develop]` to `on: workflow_dispatch:`
+- [X] T002 [US2] Add inline YAML comment block at top of `.github/workflows/publish-preview.yml` explaining why the trigger was changed (spawn-refactor safety) and how to manually trigger (`gh workflow run publish-preview.yml --ref develop` or Actions UI)
 
 ## Phase 2: Verification & Documentation
 
-- [ ] T003 [US1] Verify `publish-devcontainer-feature` job `needs: publish-npm` chain is unaffected by trigger change (review `.github/workflows/publish-preview.yml` lines 69–74 — no code change expected)
-- [ ] T004 [US1] Verify `concurrency` group (`github.workflow`) remains valid under `workflow_dispatch` trigger (review line 8 — no code change expected)
-- [ ] T005 [P] [US1] Confirm `.github/workflows/release.yml` is completely untouched (FR-004 guard rail)
-- [ ] T006 [P] [US2] Verify `specs/424-goal-change-publish-preview/quickstart.md` covers manual dispatch instructions for PR description reference
+- [X] T003 [US1] Verify `publish-devcontainer-feature` job `needs: publish-npm` chain is unaffected by trigger change (review `.github/workflows/publish-preview.yml` lines 69–74 — no code change expected)
+- [X] T004 [US1] Verify `concurrency` group (`github.workflow`) remains valid under `workflow_dispatch` trigger (review line 8 — no code change expected)
+- [X] T005 [P] [US1] Confirm `.github/workflows/release.yml` is completely untouched (FR-004 guard rail)
+- [X] T006 [P] [US2] Verify `specs/424-goal-change-publish-preview/quickstart.md` covers manual dispatch instructions for PR description reference
 
 ## Dependencies & Execution Order
 
