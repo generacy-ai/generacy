@@ -27,6 +27,7 @@
     "@fastify/oauth2": "^8.0.0",
     "@fastify/rate-limit": "^10.0.0",
     "@generacy-ai/config": "workspace:^",
+    "@generacy-ai/generacy-plugin-claude-code": "workspace:^",
     "@generacy-ai/workflow-engine": "workspace:^",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.0",

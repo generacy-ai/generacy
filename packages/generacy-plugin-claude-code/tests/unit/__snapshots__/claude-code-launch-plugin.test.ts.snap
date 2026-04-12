@@ -1,0 +1,248 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > conversation-turn intent > snapshot: all flags (sessionId + skipPermissions + model) 1`] = `
+{
+  "args": [
+    "-u",
+    "-c",
+    "import pty, os, sys
+# Prevent PTY line wrapping by setting huge terminal width
+os.environ["COLUMNS"] = "50000"
+def read(fd):
+    data = os.read(fd, 65536)
+    # Strip CRLF that PTY adds, return cleaned data
+    # (pty._copy writes our return value to stdout)
+    return data.replace(b"\\r\\n", b"\\n")
+pty.spawn(sys.argv[1:], read)",
+    "claude",
+    "-p",
+    "Hello Claude",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--resume",
+    "session-xyz",
+    "--dangerously-skip-permissions",
+    "--model",
+    "claude-opus-4-6",
+  ],
+  "command": "python3",
+  "stdioProfile": "interactive",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > conversation-turn intent > snapshot: basic turn (skipPermissions=false, no session, no model) 1`] = `
+{
+  "args": [
+    "-u",
+    "-c",
+    "import pty, os, sys
+# Prevent PTY line wrapping by setting huge terminal width
+os.environ["COLUMNS"] = "50000"
+def read(fd):
+    data = os.read(fd, 65536)
+    # Strip CRLF that PTY adds, return cleaned data
+    # (pty._copy writes our return value to stdout)
+    return data.replace(b"\\r\\n", b"\\n")
+pty.spawn(sys.argv[1:], read)",
+    "claude",
+    "-p",
+    "Hello Claude",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+  ],
+  "command": "python3",
+  "stdioProfile": "interactive",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > conversation-turn intent > snapshot: skipPermissions=true 1`] = `
+{
+  "args": [
+    "-u",
+    "-c",
+    "import pty, os, sys
+# Prevent PTY line wrapping by setting huge terminal width
+os.environ["COLUMNS"] = "50000"
+def read(fd):
+    data = os.read(fd, 65536)
+    # Strip CRLF that PTY adds, return cleaned data
+    # (pty._copy writes our return value to stdout)
+    return data.replace(b"\\r\\n", b"\\n")
+pty.spawn(sys.argv[1:], read)",
+    "claude",
+    "-p",
+    "Hello Claude",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--dangerously-skip-permissions",
+  ],
+  "command": "python3",
+  "stdioProfile": "interactive",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > conversation-turn intent > snapshot: with model override 1`] = `
+{
+  "args": [
+    "-u",
+    "-c",
+    "import pty, os, sys
+# Prevent PTY line wrapping by setting huge terminal width
+os.environ["COLUMNS"] = "50000"
+def read(fd):
+    data = os.read(fd, 65536)
+    # Strip CRLF that PTY adds, return cleaned data
+    # (pty._copy writes our return value to stdout)
+    return data.replace(b"\\r\\n", b"\\n")
+pty.spawn(sys.argv[1:], read)",
+    "claude",
+    "-p",
+    "Hello Claude",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--model",
+    "claude-opus-4-6",
+  ],
+  "command": "python3",
+  "stdioProfile": "interactive",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > conversation-turn intent > snapshot: with sessionId (resume) 1`] = `
+{
+  "args": [
+    "-u",
+    "-c",
+    "import pty, os, sys
+# Prevent PTY line wrapping by setting huge terminal width
+os.environ["COLUMNS"] = "50000"
+def read(fd):
+    data = os.read(fd, 65536)
+    # Strip CRLF that PTY adds, return cleaned data
+    # (pty._copy writes our return value to stdout)
+    return data.replace(b"\\r\\n", b"\\n")
+pty.spawn(sys.argv[1:], read)",
+    "claude",
+    "-p",
+    "Hello Claude",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--resume",
+    "session-xyz",
+  ],
+  "command": "python3",
+  "stdioProfile": "interactive",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase "clarify" 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "/clarify https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase "implement" 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "/implement https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase "plan" 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "/plan https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase "specify" 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "/specify https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase "tasks" 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "/tasks https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase with sessionId (resume path) 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "--resume",
+    "abc-123-session",
+    "/implement https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > pr-feedback intent > snapshot for pr-feedback 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "Please address the review feedback on PR #42.",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;

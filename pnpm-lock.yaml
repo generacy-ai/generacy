@@ -412,6 +412,9 @@ importers:
       '@generacy-ai/config':
         specifier: workspace:^
         version: link:../config
+      '@generacy-ai/generacy-plugin-claude-code':
+        specifier: workspace:^
+        version: link:../generacy-plugin-claude-code
       '@generacy-ai/workflow-engine':
         specifier: workspace:^
         version: link:../workflow-engine

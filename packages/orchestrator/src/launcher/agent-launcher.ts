@@ -87,7 +87,7 @@ export class AgentLauncher {
       signal: request.signal,
     });
 
-    const outputParser = plugin.createOutputParser();
+    const outputParser = plugin.createOutputParser(intent);
 
     return {
       process: childProcess,
