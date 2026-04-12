@@ -16,7 +16,53 @@
   },
   "rules": {
     "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
-    "@typescript-eslint/no-explicit-any": "warn"
+    "@typescript-eslint/no-explicit-any": "warn",
+    "no-restricted-imports": ["error", {
+      "paths": [
+        {
+          "name": "child_process",
+          "message": "Direct child_process usage is forbidden. Use ProcessFactory or AgentLauncher instead. See #437."
+        },
+        {
+          "name": "node:child_process",
+          "message": "Direct child_process usage is forbidden. Use ProcessFactory or AgentLauncher instead. See #437."
+        }
+      ]
+    }]
   },
+  "overrides": [
+    {
+      "files": [
+        "packages/orchestrator/src/worker/claude-cli-worker.ts",
+        "packages/orchestrator/src/conversation/process-factory.ts",
+        "packages/workflow-engine/src/actions/cli-utils.ts",
+        "packages/orchestrator/src/services/relay-bridge.ts",
+        "packages/orchestrator/src/worker/repo-checkout.ts",
+        "packages/orchestrator/src/services/identity.ts",
+        "packages/cluster-relay/src/metadata.ts",
+        "packages/workflow-engine/src/actions/epic/create-pr.ts",
+        "packages/generacy/src/cli/commands/setup/services.ts",
+        "packages/generacy/src/cli/utils/exec.ts",
+        "packages/generacy/src/agency/subprocess.ts",
+        "packages/generacy-extension/src/views/local/runner/actions/cli-utils.ts",
+        "packages/generacy-extension/src/commands/env.ts",
+        "packages/generacy-extension/src/commands/runner.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    },
+    {
+      "files": [
+        "**/__tests__/**",
+        "**/tests/**",
+        "**/*.test.ts",
+        "**/*.spec.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": "off"
+      }
+    }
+  ],
   "ignorePatterns": ["dist/", "node_modules/"]
 }
