@@ -30,18 +30,18 @@
 
 ## Phase 4: Tests
 
-- [ ] T012 [US1] Create unit tests in `packages/generacy/src/agency/__tests__/subprocess.test.ts` — launcher path: mock AgentLauncher, verify `launch()` called with correct intent, verify stdin/stdout wiring
-- [ ] T013 [P] [US1] Create unit test for fallback path: verify direct spawn when no launcher provided
-- [ ] T014 [P] [US1] Create unit test for error propagation: verify launcher `launch()` throw is not silently caught, connect() rejects
-- [ ] T015 [P] [US1] Create unit test for spawn error: verify ENOENT-like error produces immediate rejection via exitPromise rejection
-- [ ] T016 [US1] Create snapshot parity test in `packages/generacy/src/agency/__tests__/subprocess-snapshot.test.ts` — use `RecordingProcessFactory` to assert `{command, args, env, cwd, stdio}` is byte-identical between launcher and direct paths
-- [ ] T017 [P] [US1] Add type-level test asserting `SubprocessAgencyOptions` is assignable to the original shape (no new required fields)
+- [X] T012 [US1] Create unit tests in `packages/generacy/src/agency/__tests__/subprocess.test.ts` — launcher path: mock AgentLauncher, verify `launch()` called with correct intent, verify stdin/stdout wiring
+- [X] T013 [P] [US1] Create unit test for fallback path: verify direct spawn when no launcher provided
+- [X] T014 [P] [US1] Create unit test for error propagation: verify launcher `launch()` throw is not silently caught, connect() rejects
+- [X] T015 [P] [US1] Create unit test for spawn error: verify ENOENT-like error produces immediate rejection via exitPromise rejection
+- [X] T016 [US1] Create snapshot parity test in `packages/generacy/src/agency/__tests__/subprocess-snapshot.test.ts` — use `RecordingProcessFactory` to assert `{command, args, env, cwd, stdio}` is byte-identical between launcher and direct paths
+- [X] T017 [P] [US1] Add type-level test asserting `SubprocessAgencyOptions` is assignable to the original shape (no new required fields)
 
 ## Phase 5: Verification
 
-- [ ] T018 [US1] Run all existing SubprocessAgency tests — verify 100% pass rate unchanged
-- [ ] T019 [P] [US1] Run orchestrator tests — verify stdioProfile changes don't break existing tests
-- [ ] T020 [US1] Verify `packages/generacy/src/index.ts` exports are unchanged (read-only check)
+- [X] T018 [US1] Run all existing SubprocessAgency tests — verify 100% pass rate unchanged
+- [X] T019 [P] [US1] Run orchestrator tests — verify stdioProfile changes don't break existing tests
+- [X] T020 [US1] Verify `packages/generacy/src/index.ts` exports are unchanged (read-only check)
 
 ## Dependencies & Execution Order
 
