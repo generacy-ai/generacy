@@ -4,6 +4,8 @@ import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger, ProcessFactory } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 
@@ -65,6 +67,7 @@ export class PrFeedbackHandler {
     private readonly logger: Logger,
     private readonly processFactory: ProcessFactory,
     private readonly sseEmitter?: SSEEventEmitter,
+    private readonly agentLauncher?: AgentLauncher,
   ) {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
   }
@@ -158,6 +161,7 @@ export class PrFeedbackHandler {
         checkoutPath,
         prompt,
         workflowId,
+        prNumber,
       );
 
       // 7. Commit and push changes (even on timeout — partial completion strategy)
@@ -286,6 +290,7 @@ Please proceed with addressing the feedback.`;
     checkoutPath: string,
     prompt: string,
     workflowId: string,
+    prNumber: number,
   ): Promise<boolean> {
     const args = [
       '-p',
@@ -302,10 +307,23 @@ Please proceed with addressing the feedback.`;
 
     let child;
     try {
-      child = this.processFactory.spawn('claude', args, {
-        cwd: checkoutPath,
-        env: {} as Record<string, string>,
-      });
+      if (this.agentLauncher) {
+        const handle = this.agentLauncher.launch({
+          intent: {
+            kind: 'pr-feedback',
+            prNumber,
+            prompt,
+          } as PrFeedbackIntent,
+          cwd: checkoutPath,
+          env: {},
+        });
+        child = handle.process;
+      } else {
+        child = this.processFactory.spawn('claude', args, {
+          cwd: checkoutPath,
+          env: {} as Record<string, string>,
+        });
+      }
     } catch (error) {
       this.logger.error(
         { error: String(error), cwd: checkoutPath },
