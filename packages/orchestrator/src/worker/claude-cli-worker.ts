@@ -210,6 +210,7 @@ export class ClaudeCliWorker {
           workerLogger,
           this.processFactory,
           this.sseEmitter,
+          this.agentLauncher,
         );
 
         await prFeedbackHandler.handle(item, checkoutPath);
@@ -331,6 +332,7 @@ export class ClaudeCliWorker {
       const gateChecker = new GateChecker(workerLogger);
 
       const cliSpawner = new CliSpawner(
+        this.agentLauncher,
         this.processFactory,
         workerLogger,
         this.config.shutdownGracePeriodMs,

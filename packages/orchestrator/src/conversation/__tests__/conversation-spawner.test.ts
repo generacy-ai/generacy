@@ -169,6 +169,7 @@ describe('ConversationSpawner', () => {
     });
   });
 
+
   describe('gracefulKill', () => {
     it('sends SIGTERM first', () => {
       const launcher = { launch: vi.fn() } as unknown as AgentLauncher;
