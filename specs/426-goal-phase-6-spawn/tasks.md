@@ -10,22 +10,22 @@
 
 ## Phase 1: Interface Extension
 
-- [ ] T001 [US1] Add `uid?: number` and `gid?: number` to `ProcessFactory.spawn` options type in `packages/orchestrator/src/worker/types.ts:269-275`
+- [X] T001 [US1] Add `uid?: number` and `gid?: number` to `ProcessFactory.spawn` options type in `packages/orchestrator/src/worker/types.ts:269-275`
 
 ## Phase 2: Implementation
 
-- [ ] T002 [P] [US1] Update `defaultProcessFactory.spawn` in `packages/orchestrator/src/worker/claude-cli-worker.ts:25-54` to forward `uid`/`gid` to `child_process.spawn` using conditional spread (only include when defined)
-- [ ] T003 [P] [US1] Update `conversationProcessFactory.spawn` in `packages/orchestrator/src/conversation/process-factory.ts:10-40` to forward `uid`/`gid` to `child_process.spawn` using conditional spread (only include when defined)
+- [X] T002 [P] [US1] Update `defaultProcessFactory.spawn` in `packages/orchestrator/src/worker/claude-cli-worker.ts:25-54` to forward `uid`/`gid` to `child_process.spawn` using conditional spread (only include when defined)
+- [X] T003 [P] [US1] Update `conversationProcessFactory.spawn` in `packages/orchestrator/src/conversation/process-factory.ts:10-40` to forward `uid`/`gid` to `child_process.spawn` using conditional spread (only include when defined)
 
 ## Phase 3: Tests
 
-- [ ] T004 [P] [US2] Add unit tests for `defaultProcessFactory` uid/gid forwarding in `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` — mock `child_process.spawn` at module level, assert uid/gid present in spawn options when provided, assert uid/gid keys absent when omitted
-- [ ] T005 [P] [US2] Add unit tests for `conversationProcessFactory` uid/gid forwarding — create `packages/orchestrator/src/conversation/__tests__/process-factory.test.ts` or extend existing tests — mock `child_process.spawn` at module level, assert uid/gid present when provided, assert keys absent when omitted
+- [X] T004 [P] [US2] Add unit tests for `defaultProcessFactory` uid/gid forwarding in `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts` — mock `child_process.spawn` at module level, assert uid/gid present in spawn options when provided, assert uid/gid keys absent when omitted
+- [X] T005 [P] [US2] Add unit tests for `conversationProcessFactory` uid/gid forwarding — create `packages/orchestrator/src/conversation/__tests__/process-factory.test.ts` or extend existing tests — mock `child_process.spawn` at module level, assert uid/gid present when provided, assert keys absent when omitted
 
 ## Phase 4: Validation
 
-- [ ] T006 [US1] Run `pnpm test` in orchestrator package to verify all existing and new tests pass
-- [ ] T007 [US1] Verify no callers were modified — `git diff` should show no changes to files outside the 3 source files and test files
+- [X] T006 [US1] Run `pnpm test` in orchestrator package to verify all existing and new tests pass
+- [X] T007 [US1] Verify no callers were modified — `git diff` should show no changes to files outside the 3 source files and test files
 
 ## Dependencies & Execution Order
 

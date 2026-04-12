@@ -11,12 +11,14 @@ export const conversationProcessFactory: ProcessFactory = {
   spawn(
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal },
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number },
   ): ChildProcessHandle {
     const child: ChildProcess = spawn(command, args, {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: ['pipe', 'pipe', 'pipe'],
+      ...(options.uid !== undefined && { uid: options.uid }),
+      ...(options.gid !== undefined && { gid: options.gid }),
     });
 
     const exitPromise = new Promise<number | null>((resolve) => {
