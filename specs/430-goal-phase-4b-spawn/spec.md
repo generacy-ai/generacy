@@ -1,10 +1,10 @@
-# Feature Specification: Phase 4b — Migrate executeCommand / executeShellCommand to AgentLauncher
+# Feature Specification: ## Goal
+
+Phase 4b of the [spawn refactor](https://github
 
 **Branch**: `430-goal-phase-4b-spawn` | **Date**: 2026-04-12 | **Status**: Draft
 
 ## Summary
-
-Route `executeCommand` / `executeShellCommand` through `AgentLauncher` + `GenericSubprocessPlugin` using module-level registration, preserving all public API signatures and process-group semantics.
 
 ## Goal
 
@@ -18,21 +18,6 @@ Phase 4b of the [spawn refactor](https://github.com/generacy-ai/tetrad-developme
 - Preserve `onStdout` / `onStderr` callbacks and piping behavior exactly.
 - Preserve abort-signal propagation.
 
-## Design Decisions (from clarifications)
-
-### Cross-package dependency: Module-level registration
-`workflow-engine` defines a `LaunchFunction` type locally and exposes `registerProcessLauncher(launcher)`. The orchestrator calls this once at boot to wire the AgentLauncher's generic-subprocess path. No orchestrator types are imported into workflow-engine.
-
-### Process-group support: Extend ProcessFactory + wrapper-level group-kill
-- Add `detached?: boolean` to `ProcessFactory.spawn()` options (coordinate with #426 which is already extending the same interface).
-- `GenericSubprocessPlugin` passes `detached` through in its `LaunchSpec` when requested.
-- Group-kill remains at the wrapper level: `process.kill(-handle.pid, 'SIGTERM')` using the existing `handle.pid` exposure. No `killGroup()` method needed on the interface.
-
-### Backward compatibility: Module-level registration with direct-spawn fallback
-- When `registerProcessLauncher()` has been called (internal/orchestrator callers): the launcher path is exercised fully.
-- When no launcher is registered (external npm consumers): fall back to direct `child_process.spawn` — identical to today's behavior, zero breaking change.
-- The fallback path should be allow-listed in the Wave 5 lint rule (#437) with an explanatory comment.
-
 ## Acceptance criteria
 
 - Public signatures of `executeCommand` and `executeShellCommand` unchanged.
@@ -44,17 +29,48 @@ Phase 4b of the [spawn refactor](https://github.com/generacy-ai/tetrad-developme
 
 - Migrating `SubprocessAgency` (separate Wave 2 issue, Phase 4a).
 - Any changes to workflow action implementations that call these utilities.
-- Changes to `GenericSubprocessPlugin` or `AgentLauncher` public APIs.
 
 ## Dependencies
 
 - Depends on Wave 1 Agent Launcher issue (`GenericSubprocessPlugin`).
-- Coordinate `ProcessFactory.spawn()` options extension with #426.
 - Parallel-safe with the other Wave 2 issues.
 
 ## References
 
 - Parent tracking: #423
+
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
+## Assumptions
+
+- [Assumption 1]
+
+## Out of Scope
+
+- [Exclusion 1]
 
 ---
 
