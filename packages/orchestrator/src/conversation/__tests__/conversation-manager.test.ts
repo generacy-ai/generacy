@@ -58,6 +58,7 @@ function createMockProcessHandle(): {
 function createSpawnerMock(processHandle: ChildProcessHandle) {
   const spawner = {
     spawn: vi.fn().mockReturnValue(processHandle),
+    spawnTurn: vi.fn().mockReturnValue(processHandle),
     gracefulKill: vi.fn((handle: ChildProcessHandle) => {
       handle.kill('SIGTERM');
     }),
@@ -93,12 +94,8 @@ describe('ConversationManager', () => {
       expect(info.workspaceId).toBe('primary');
       expect(info.state).toBe('active');
       expect(info.skipPermissions).toBe(true);
-      expect(spawner.spawn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cwd: '/workspace/primary',
-          skipPermissions: true,
-        }),
-      );
+      // Per-turn model: start without initialCommand does not spawn a process
+      expect(spawner.spawnTurn).not.toHaveBeenCalled();
     });
 
     it('sends initial command if provided', async () => {
@@ -108,7 +105,13 @@ describe('ConversationManager', () => {
         initialCommand: '/onboard-evaluate',
       });
 
-      expect(proc.stdin.write).toHaveBeenCalledWith('/onboard-evaluate\n');
+      // Per-turn model: initialCommand triggers spawnTurn with the command as message
+      expect(spawner.spawnTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/workspace/primary',
+          message: '/onboard-evaluate',
+        }),
+      );
     });
 
     it('uses configured default model', async () => {
@@ -165,7 +168,7 @@ describe('ConversationManager', () => {
   });
 
   describe('sendMessage', () => {
-    it('writes message to stdin', async () => {
+    it('spawns a new turn for each message', async () => {
       await manager.start({
         conversationId: 'conv-1',
         workingDirectory: 'primary',
@@ -173,7 +176,13 @@ describe('ConversationManager', () => {
 
       await manager.sendMessage('conv-1', 'Hello, Claude!');
 
-      expect(proc.stdin.write).toHaveBeenCalledWith('Hello, Claude!\n');
+      // Per-turn model: sendMessage calls spawnTurn with the message
+      expect(spawner.spawnTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cwd: '/workspace/primary',
+          message: 'Hello, Claude!',
+        }),
+      );
     });
 
     it('rejects for unknown conversation with 404', async () => {
@@ -182,16 +191,14 @@ describe('ConversationManager', () => {
       ).rejects.toMatchObject({ statusCode: 404 });
     });
 
-    it('rejects for non-active conversation with 409', async () => {
+    it('rejects for non-active conversation with 404', async () => {
       await manager.start({
         conversationId: 'conv-1',
         workingDirectory: 'primary',
       });
 
-      // End the conversation to change state
-      const endPromise = manager.end('conv-1');
-      proc.resolveExit(0);
-      await endPromise;
+      // End the conversation (no running process, so end completes synchronously)
+      await manager.end('conv-1');
 
       await expect(
         manager.sendMessage('conv-1', 'hello'),
@@ -206,12 +213,14 @@ describe('ConversationManager', () => {
         workingDirectory: 'primary',
       });
 
+      // Trigger a turn so there's a running process to kill
+      await manager.sendMessage('conv-1', 'hello');
+
       const endPromise = manager.end('conv-1');
       proc.resolveExit(0);
       const info = await endPromise;
 
       expect(info.state).toBe('ended');
-      expect(proc.stdin.end).toHaveBeenCalled();
       expect(spawner.gracefulKill).toHaveBeenCalled();
     });
 
@@ -227,25 +236,16 @@ describe('ConversationManager', () => {
         workingDirectory: 'primary',
       });
 
-      const endPromise = manager.end('conv-1');
-      proc.resolveExit(0);
-      await endPromise;
+      // End without a running process — should still clean up
+      const info = await manager.end('conv-1');
 
+      expect(info.state).toBe('ended');
       expect(manager.list()).toHaveLength(0);
     });
   });
 
   describe('list', () => {
     it('returns all active conversations', async () => {
-      const proc2 = createMockProcessHandle();
-      const spawnerMulti = {
-        spawn: vi.fn()
-          .mockReturnValueOnce(proc.handle)
-          .mockReturnValueOnce(proc2.handle),
-        gracefulKill: vi.fn(),
-      } as unknown as ConversationSpawner;
-      manager = new ConversationManager(config, spawnerMulti, mockLogger);
-
       await manager.start({ conversationId: 'conv-1', workingDirectory: 'primary' });
       await manager.start({ conversationId: 'conv-2', workingDirectory: 'dev' });
 
@@ -257,29 +257,17 @@ describe('ConversationManager', () => {
 
   describe('stop (shutdown)', () => {
     it('ends all active conversations', async () => {
-      const proc2 = createMockProcessHandle();
-      const spawnerMulti = {
-        spawn: vi.fn()
-          .mockReturnValueOnce(proc.handle)
-          .mockReturnValueOnce(proc2.handle),
-        gracefulKill: vi.fn((h: ChildProcessHandle) => h.kill('SIGTERM')),
-      } as unknown as ConversationSpawner;
-      manager = new ConversationManager(config, spawnerMulti, mockLogger);
-
       await manager.start({ conversationId: 'conv-1', workingDirectory: 'primary' });
       await manager.start({ conversationId: 'conv-2', workingDirectory: 'dev' });
 
-      const stopPromise = manager.stop();
-      proc.resolveExit(0);
-      proc2.resolveExit(0);
-      await stopPromise;
+      await manager.stop();
 
       expect(manager.list()).toHaveLength(0);
     });
   });
 
   describe('unexpected process exit', () => {
-    it('emits error event and removes conversation', async () => {
+    it('handles non-zero exit from a turn', async () => {
       const outputEvents: { id: string; event: ConversationOutputEvent }[] = [];
       manager.setOutputCallback((id, event) => {
         outputEvents.push({ id, event });
@@ -290,18 +278,17 @@ describe('ConversationManager', () => {
         workingDirectory: 'primary',
       });
 
-      // Simulate unexpected exit
+      // Trigger a turn to attach a process
+      await manager.sendMessage('conv-1', 'hello');
+
+      // Simulate non-zero exit from the turn
       proc.resolveExit(137);
 
       // Give event loop time to process the exit handler
       await new Promise((r) => setTimeout(r, 10));
 
-      expect(manager.list()).toHaveLength(0);
-      const errorEvent = outputEvents.find((e) => e.event.event === 'error');
-      expect(errorEvent).toBeDefined();
-      expect(errorEvent!.event.payload).toEqual(
-        expect.objectContaining({ message: 'Process exited', exitCode: 137 }),
-      );
+      // Conversation should still be active (per-turn model: process exit ≠ conversation end)
+      expect(manager.list()).toHaveLength(1);
     });
   });
 
@@ -317,8 +304,11 @@ describe('ConversationManager', () => {
         workingDirectory: 'primary',
       });
 
-      // Simulate CLI stdout
-      proc.stdout.emit('data', '{"type":"text","text":"Hello!"}\n');
+      // Trigger a turn so stdout listeners are attached
+      await manager.sendMessage('conv-1', 'hello');
+
+      // Simulate CLI stdout in stream-json verbose format
+      proc.stdout.emit('data', '{"type":"assistant","message":{"content":[{"type":"text","text":"Hello!"}]}}\n');
 
       expect(outputEvents).toHaveLength(1);
       expect(outputEvents[0].id).toBe('conv-1');

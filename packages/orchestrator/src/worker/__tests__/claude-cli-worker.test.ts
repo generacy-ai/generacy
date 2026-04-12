@@ -47,6 +47,8 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
     feature_dir: '/tmp/test-checkout/specs/042-test-feature',
     git_branch_created: true,
   }),
+  registerProcessLauncher: vi.fn(),
+  clearProcessLauncher: vi.fn(),
 }));
 
 vi.mock('../repo-checkout.js', () => ({

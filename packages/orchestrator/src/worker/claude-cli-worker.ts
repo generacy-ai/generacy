@@ -21,6 +21,7 @@ import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { AgentLauncher } from '../launcher/agent-launcher.js';
 import { GenericSubprocessPlugin } from '../launcher/generic-subprocess-plugin.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
 
 /**
@@ -113,6 +114,7 @@ export class ClaudeCliWorker {
       ]),
     );
     this.agentLauncher.registerPlugin(new GenericSubprocessPlugin());
+    this.agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
 
     // Wire workflow-engine's process launcher to route through AgentLauncher
     clearProcessLauncher();

@@ -30,6 +30,7 @@ describe('GenericSubprocessPlugin', () => {
             "--version",
           ],
           "command": "node",
+          "detached": undefined,
           "env": {
             "NODE_ENV": "test",
           },
@@ -52,12 +53,36 @@ describe('GenericSubprocessPlugin', () => {
             "echo "hello world" | wc -w",
           ],
           "command": "sh",
+          "detached": undefined,
           "env": {
             "SHELL_VAR": "val",
           },
           "stdioProfile": "default",
         }
       `);
+    });
+
+    it('passes through stdioProfile from generic-subprocess intent', () => {
+      const intent: GenericSubprocessIntent = {
+        kind: 'generic-subprocess',
+        command: 'node',
+        args: ['server.js'],
+        stdioProfile: 'interactive',
+      };
+
+      const spec = plugin.buildLaunch(intent);
+      expect(spec.stdioProfile).toBe('interactive');
+    });
+
+    it('defaults stdioProfile to "default" when omitted', () => {
+      const intent: GenericSubprocessIntent = {
+        kind: 'generic-subprocess',
+        command: 'node',
+        args: ['--version'],
+      };
+
+      const spec = plugin.buildLaunch(intent);
+      expect(spec.stdioProfile).toBe('default');
     });
 
     it('handles generic-subprocess intent without optional env', () => {

@@ -22,7 +22,7 @@ export class GenericSubprocessPlugin implements AgentLaunchPlugin {
           command: intent.command,
           args: intent.args,
           env: intent.env,
-          stdioProfile: 'default',
+          stdioProfile: intent.stdioProfile ?? 'default',
           detached: intent.detached,
         };
       case 'shell':
@@ -38,7 +38,7 @@ export class GenericSubprocessPlugin implements AgentLaunchPlugin {
     }
   }
 
-  createOutputParser(): OutputParser {
+  createOutputParser(_intent: LaunchIntent): OutputParser {
     return {
       processChunk(_stream: 'stdout' | 'stderr', _data: string): void {
         // no-op pass-through

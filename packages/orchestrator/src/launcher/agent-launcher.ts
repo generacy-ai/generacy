@@ -89,7 +89,7 @@ export class AgentLauncher {
       ...(detached !== undefined && { detached }),
     });
 
-    const outputParser = plugin.createOutputParser();
+    const outputParser = plugin.createOutputParser(intent);
 
     return {
       process: childProcess,

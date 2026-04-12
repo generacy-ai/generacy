@@ -1,4 +1,5 @@
 import type { ChildProcessHandle } from '../worker/types.js';
+import type { ClaudeCodeIntent } from '@generacy-ai/generacy-plugin-claude-code';
 
 /**
  * Intent for launching a generic subprocess with explicit command/args.
@@ -9,6 +10,8 @@ export interface GenericSubprocessIntent {
   args: string[];
   env?: Record<string, string>;
   detached?: boolean;
+  /** Stdio profile selecting which ProcessFactory to use. Default: 'default' */
+  stdioProfile?: 'default' | 'interactive';
 }
 
 /**
@@ -24,9 +27,9 @@ export interface ShellIntent {
 /**
  * Discriminated union of all launch intent kinds.
  * Phase 1: generic-subprocess, shell
- * Future waves add: phase, pr-feedback, conversation-turn
+ * Phase 2: phase, pr-feedback, conversation-turn (ClaudeCodeIntent)
  */
-export type LaunchIntent = GenericSubprocessIntent | ShellIntent;
+export type LaunchIntent = GenericSubprocessIntent | ShellIntent | ClaudeCodeIntent;
 
 /**
  * Request to launch a process through the AgentLauncher.
@@ -81,8 +84,9 @@ export interface AgentLaunchPlugin {
   /**
    * Create a new OutputParser instance for this launch.
    * Called once per launch; the parser is attached to the LaunchHandle.
+   * @param intent - The launch intent (plugins may use this to select parser behavior)
    */
-  createOutputParser(): OutputParser;
+  createOutputParser(intent: LaunchIntent): OutputParser;
 }
 
 /**
