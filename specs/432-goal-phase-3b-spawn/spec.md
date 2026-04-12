@@ -1,0 +1,89 @@
+# Feature Specification: Migrate pr-feedback-handler to AgentLauncher
+
+**Branch**: `432-goal-phase-3b-spawn` | **Date**: 2026-04-12 | **Status**: Draft
+
+## Summary
+
+Phase 3b of the spawn refactor. Route the PR feedback Claude invocation in `pr-feedback-handler.ts` through `AgentLauncher` + `ClaudeCodeLaunchPlugin` instead of directly spawning `claude` via `processFactory.spawn()`. This consolidates all Claude CLI spawns behind a single launch abstraction while preserving byte-identical stream-json output.
+
+## Goal
+
+Phase 3b of the [spawn refactor](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/spawn-refactor-plan.md#phase-3--migrate-orchestrator-spawn-sites). Route PR feedback Claude invocations through `AgentLauncher` + `ClaudeCodeLaunchPlugin`.
+
+## Scope
+
+- Migrate `packages/orchestrator/src/worker/pr-feedback-handler.ts:305` from direct `claude -p --output-format stream-json` spawn to `agentLauncher.launch({ pluginId: "claude-code", intent: { kind: "pr-feedback", prNumber }, params, cwd, env, signal })`.
+- **Preserve stream-json stdout parsing exactly** — downstream log formatting and PR comment generation depend on its exact shape.
+- Preserve current stdio, env merging, and abort-signal handling.
+- Do NOT delete any remaining Claude flags from orchestrator internals — the Wave 3 Cleanup issue handles that.
+
+## User Stories
+
+### US1: Consistent Agent Launch Path
+
+**As a** platform engineer maintaining the orchestrator,
+**I want** PR feedback Claude invocations to route through `AgentLauncher`,
+**So that** all Claude CLI spawns use a single, tested abstraction and future changes (flags, environment, logging) only need to happen in one place.
+
+**Acceptance Criteria**:
+- [ ] `pr-feedback-handler.ts` calls `agentLauncher.launch()` with `intent.kind = "pr-feedback"` instead of directly spawning `claude`
+- [ ] The `ClaudeCodeLaunchPlugin` builds the identical argv (`-p --output-format stream-json --dangerously-skip-permissions --verbose`) for the `pr-feedback` intent
+- [ ] Environment merging follows the AgentLauncher 3-layer strategy (process.env ← plugin env ← caller env)
+
+### US2: Zero-Regression Stream Output
+
+**As a** developer relying on PR feedback comments,
+**I want** the migration to produce byte-identical stream-json output,
+**So that** downstream log formatting and PR comment generation continue to work without changes.
+
+**Acceptance Criteria**:
+- [ ] Stream-json stdout parsing produces identical output before and after migration
+- [ ] Abort-signal handling (SIGTERM → SIGKILL) behaves the same through `LaunchHandle`
+- [ ] All existing PR feedback tests pass without modification
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Replace `processFactory.spawn('claude', args, ...)` at line 305 with `agentLauncher.launch()` using `pr-feedback` intent | P1 | Core migration |
+| FR-002 | `ClaudeCodeLaunchPlugin.buildLaunch()` for `pr-feedback` intent must produce identical argv to current inline construction (lines 290-296) | P1 | Already implemented in plugin |
+| FR-003 | Preserve timeout/abort handling — SIGTERM then SIGKILL sequence on the spawned process | P1 | Use `LaunchHandle.process` for signal delivery |
+| FR-004 | Preserve environment variable merging semantics | P1 | AgentLauncher's 3-layer merge replaces manual merge |
+| FR-005 | Wire `AgentLauncher` dependency into `PrFeedbackHandler` (constructor injection or DI) | P2 | Follow existing DI patterns |
+| FR-006 | Do NOT remove any Claude flags from orchestrator internals | P1 | Deferred to Wave 3 Cleanup issue |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Spawn snapshot byte-identical | 100% match | Wave 1 snapshot harness comparison |
+| SC-002 | Existing PR feedback tests | All pass | CI test suite, zero modifications to existing tests |
+| SC-003 | Stream-json output parity | Identical shape | argv-inspecting integration test |
+
+## Assumptions
+
+- Wave 2 Claude Plugin issue is complete — `ClaudeCodeLaunchPlugin` already supports the `pr-feedback` intent kind
+- `AgentLauncher` is available and injectable in the orchestrator's DI context
+- The snapshot harness from Wave 1 (#427) is in place for validating byte-identical spawn composition
+
+## Out of Scope
+
+- Other orchestrator spawn sites (separate Wave 3 issues)
+- Changes to the stream-json parser itself
+- Removing legacy Claude flags from orchestrator internals (Wave 3 Cleanup)
+- Modifying `ClaudeCodeLaunchPlugin` behavior (already handles `pr-feedback` intent)
+
+## Dependencies
+
+- Depends on Wave 2 Claude Plugin issue (#428)
+- Depends on Wave 1 snapshot harness (#427)
+- Parallel-safe with the other Wave 3 issues (#429, #430)
+
+## References
+
+- Parent tracking: #423
+- [Spawn refactor plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/spawn-refactor-plan.md#phase-3--migrate-orchestrator-spawn-sites)
+
+---
+
+*Generated by speckit*
