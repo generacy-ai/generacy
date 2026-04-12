@@ -3,6 +3,8 @@ import { CliSpawner } from '../cli-spawner.js';
 import type { Logger, CliSpawnOptions } from '../types.js';
 import type { OutputCapture } from '../output-capture.js';
 import { RecordingProcessFactory, normalizeSpawnRecords } from '../../test-utils/index.js';
+import { AgentLauncher } from '../../launcher/agent-launcher.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
 
 // ---------------------------------------------------------------------------
 // Minimal stubs
@@ -30,7 +32,9 @@ function mockCapture(): OutputCapture {
 describe('CliSpawner.spawnPhase — spawn snapshots', () => {
   it('captures basic spawnPhase without session resume', async () => {
     const factory = new RecordingProcessFactory();
-    const spawner = new CliSpawner(factory, noopLogger);
+    const launcher = new AgentLauncher(new Map([['default', factory]]));
+    launcher.registerPlugin(new ClaudeCodeLaunchPlugin());
+    const spawner = new CliSpawner(launcher, factory, noopLogger);
 
     const options: CliSpawnOptions = {
       prompt: 'https://github.com/org/repo/issues/42',
@@ -47,7 +51,9 @@ describe('CliSpawner.spawnPhase — spawn snapshots', () => {
 
   it('captures spawnPhase with resumeSessionId', async () => {
     const factory = new RecordingProcessFactory();
-    const spawner = new CliSpawner(factory, noopLogger);
+    const launcher = new AgentLauncher(new Map([['default', factory]]));
+    launcher.registerPlugin(new ClaudeCodeLaunchPlugin());
+    const spawner = new CliSpawner(launcher, factory, noopLogger);
 
     const options: CliSpawnOptions = {
       prompt: 'https://github.com/org/repo/issues/42',

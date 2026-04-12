@@ -9,6 +9,8 @@ import type {
   CliSpawnOptions,
 } from '../types.js';
 import type { OutputCapture } from '../output-capture.js';
+import { AgentLauncher } from '../../launcher/agent-launcher.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
 
 // ---------------------------------------------------------------------------
 // Mock Logger
@@ -91,8 +93,11 @@ describe('CliSpawner', () => {
   beforeEach(() => {
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
+    // Wire AgentLauncher with real ClaudeCodeLaunchPlugin and mock factory
+    const agentLauncher = new AgentLauncher(new Map([['default', factory]]));
+    agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
     // Use a short grace period (50ms) for tests
-    spawner = new CliSpawner(factory, mockLogger, 50);
+    spawner = new CliSpawner(agentLauncher, factory, mockLogger, 50);
   });
 
   describe('spawnPhase - successful spawn', () => {
