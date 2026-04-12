@@ -15,7 +15,7 @@ export const conversationProcessFactory: ProcessFactory = {
   ): ChildProcessHandle {
     const child: ChildProcess = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: options.env,
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(options.uid !== undefined && { uid: options.uid }),
       ...(options.gid !== undefined && { gid: options.gid }),

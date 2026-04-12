@@ -1,0 +1,15 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ConversationSpawner > spawnTurn — LaunchRequest snapshot > captures full LaunchRequest for a conversation turn 1`] = `
+{
+  "cwd": "/workspace",
+  "env": {},
+  "intent": {
+    "kind": "conversation-turn",
+    "message": "Tell me about TypeScript",
+    "model": "claude-sonnet-4-6",
+    "sessionId": "ses-abc",
+    "skipPermissions": true,
+  },
+}
+`;

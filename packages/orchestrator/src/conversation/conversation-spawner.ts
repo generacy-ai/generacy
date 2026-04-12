@@ -1,5 +1,5 @@
-import type { ProcessFactory, ChildProcessHandle } from '../worker/types.js';
-import { PTY_WRAPPER } from '@generacy-ai/generacy-plugin-claude-code';
+import type { ChildProcessHandle } from '../worker/types.js';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
 
 /**
  * Options for running a single conversation turn.
@@ -33,10 +33,13 @@ export interface ConversationProcessHandle extends ChildProcessHandle {
  * new Claude CLI process with `-p` and `--resume` for session continuity.
  * This avoids the PTY stdin issues that cause the bypass-permissions
  * dialog and ensures reliable streaming output.
+ *
+ * Routes through AgentLauncher + ClaudeCodeLaunchPlugin, which owns
+ * the PTY wrapper script and command composition.
  */
 export class ConversationSpawner {
   constructor(
-    private readonly processFactory: ProcessFactory,
+    private readonly agentLauncher: AgentLauncher,
     private readonly shutdownGracePeriodMs: number = 5000,
   ) {}
 
@@ -47,31 +50,19 @@ export class ConversationSpawner {
    * with `-p` for the message and `--resume` for session continuity.
    */
   spawnTurn(options: ConversationTurnOptions): ConversationProcessHandle {
-    const claudeArgs = [
-      'claude',
-      '-p', options.message,
-      '--output-format', 'stream-json',
-      '--verbose',
-    ];
-
-    if (options.sessionId) {
-      claudeArgs.push('--resume', options.sessionId);
-    }
-
-    if (options.skipPermissions) {
-      claudeArgs.push('--dangerously-skip-permissions');
-    }
-
-    if (options.model) {
-      claudeArgs.push('--model', options.model);
-    }
-
-    const child = this.processFactory.spawn('python3', ['-u', '-c', PTY_WRAPPER, ...claudeArgs], {
+    const launchHandle = this.agentLauncher.launch({
+      intent: {
+        kind: 'conversation-turn',
+        message: options.message,
+        sessionId: options.sessionId,
+        model: options.model,
+        skipPermissions: options.skipPermissions,
+      },
       cwd: options.cwd,
       env: {},
     });
 
-    return child as ConversationProcessHandle;
+    return launchHandle.process as ConversationProcessHandle;
   }
 
   /**
