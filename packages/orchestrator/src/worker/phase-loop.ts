@@ -183,7 +183,7 @@ export class PhaseLoop {
 
           // CLI phase — spawn Claude CLI (resume previous session if available)
           result = await cliSpawner.spawnPhase(
-            phase,
+            phase as Exclude<typeof phase, 'validate'>,
             {
               prompt: context.issueUrl,
               cwd: context.checkoutPath,

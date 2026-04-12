@@ -337,6 +337,7 @@ export class ClaudeCliWorker {
       const gateChecker = new GateChecker(workerLogger);
 
       const cliSpawner = new CliSpawner(
+        this.agentLauncher,
         this.processFactory,
         workerLogger,
         this.config.shutdownGracePeriodMs,

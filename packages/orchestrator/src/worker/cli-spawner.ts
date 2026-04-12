@@ -7,6 +7,7 @@ import type {
   WorkflowPhase,
 } from './types.js';
 import type { OutputCapture } from './output-capture.js';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
 
 /** Default timeout for the validate phase (10 minutes). */
 const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
@@ -21,6 +22,7 @@ const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
  */
 export class CliSpawner {
   constructor(
+    private readonly agentLauncher: AgentLauncher,
     private readonly processFactory: ProcessFactory,
     private readonly logger: Logger,
     private readonly shutdownGracePeriodMs: number = 5000,
@@ -29,36 +31,15 @@ export class CliSpawner {
   /**
    * Spawn a Claude CLI process for the given workflow phase.
    *
-   * Derives the slash command from the phase name (`/${phase}`), captures
-   * stdout via the provided OutputCapture, and handles timeout / abort with a
-   * SIGTERM -> grace period -> SIGKILL sequence.
+   * Delegates command/args/env composition to AgentLauncher (ClaudeCodeLaunchPlugin),
+   * captures stdout via the provided OutputCapture, and handles timeout / abort
+   * with a SIGTERM -> grace period -> SIGKILL sequence.
    */
   async spawnPhase(
-    phase: WorkflowPhase,
+    phase: Exclude<WorkflowPhase, 'validate'>,
     options: CliSpawnOptions,
     capture: OutputCapture,
   ): Promise<PhaseResult> {
-    if (phase === 'validate') {
-      throw new Error(`Phase "${phase}" has no CLI command (use runValidatePhase instead)`);
-    }
-    const command = `/${phase}`;
-
-    const prompt = `${command} ${options.prompt}`;
-
-    const args = [
-      '-p',
-      '--output-format', 'stream-json',
-      '--dangerously-skip-permissions',
-      '--verbose',
-    ];
-
-    // Resume a previous session to keep MCP servers warm and carry context
-    if (options.resumeSessionId) {
-      args.push('--resume', options.resumeSessionId);
-    }
-
-    args.push(prompt);
-
     this.logger.info(
       {
         phase,
@@ -67,14 +48,21 @@ export class CliSpawner {
         resumeSessionId: options.resumeSessionId ?? null,
       },
       options.resumeSessionId
-        ? 'Resuming Claude CLI session for phase'
-        : 'Spawning new Claude CLI session for phase',
+        ? 'Resuming Claude CLI session for phase (via AgentLauncher)'
+        : 'Spawning new Claude CLI session for phase (via AgentLauncher)',
     );
 
-    const child = this.processFactory.spawn('claude', args, {
+    const handle = this.agentLauncher.launch({
+      intent: {
+        kind: 'phase',
+        phase,
+        prompt: options.prompt,
+        sessionId: options.resumeSessionId,
+      },
       cwd: options.cwd,
       env: options.env,
     });
+    const child = handle.process;
 
     return this.manageProcess(child, phase, options.timeoutMs, options.signal, capture);
   }
