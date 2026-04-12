@@ -6,7 +6,6 @@ import type {
   ProcessFactory,
   WorkflowPhase,
 } from './types.js';
-import { PHASE_TO_COMMAND } from './types.js';
 import type { OutputCapture } from './output-capture.js';
 
 /** Default timeout for the validate phase (10 minutes). */
@@ -30,8 +29,8 @@ export class CliSpawner {
   /**
    * Spawn a Claude CLI process for the given workflow phase.
    *
-   * Builds the command line from PHASE_TO_COMMAND, captures stdout via the
-   * provided OutputCapture, and handles timeout / abort with a
+   * Derives the slash command from the phase name (`/${phase}`), captures
+   * stdout via the provided OutputCapture, and handles timeout / abort with a
    * SIGTERM -> grace period -> SIGKILL sequence.
    */
   async spawnPhase(
@@ -39,10 +38,10 @@ export class CliSpawner {
     options: CliSpawnOptions,
     capture: OutputCapture,
   ): Promise<PhaseResult> {
-    const command = PHASE_TO_COMMAND[phase];
-    if (command === null) {
+    if (phase === 'validate') {
       throw new Error(`Phase "${phase}" has no CLI command (use runValidatePhase instead)`);
     }
+    const command = `/${phase}`;
 
     const prompt = `${command} ${options.prompt}`;
 
