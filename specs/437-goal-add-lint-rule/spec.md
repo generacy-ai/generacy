@@ -1,48 +1,18 @@
-# Feature Specification: Add lint rule forbidding direct child_process.spawn
+# Feature Specification: ## Goal
+
+Add a lint rule forbidding direct `child_process
 
 **Branch**: `437-goal-add-lint-rule` | **Date**: 2026-04-12 | **Status**: Draft
 
 ## Summary
 
-Add an ESLint rule that forbids direct `child_process.spawn` (and related functions) outside sanctioned `ProcessFactory` implementations and `AgentLauncher` internals. This prevents new direct-spawn call sites from sneaking into the codebase after the spawn refactor (Waves 1-4).
+## Goal
 
-## User Stories
-
-### US1: Codebase Guardian
-
-**As a** developer contributing to the orchestrator,
-**I want** the linter to block any direct `child_process` usage outside approved files,
-**So that** new code is forced to use `ProcessFactory` or `AgentLauncher`, maintaining the spawn consolidation from the refactor.
-
-**Acceptance Criteria**:
-- [ ] `pnpm lint` fails if `child_process.spawn`, `spawn`, `exec`, `execFile`, or `fork` is used in a non-allowlisted file
-- [ ] Error message clearly explains why direct spawn is forbidden and where to look instead
-
-### US2: CI Enforcement
-
-**As a** reviewer,
-**I want** the lint rule to run automatically in CI,
-**So that** violations are caught before code is merged, without relying on manual review.
-
-**Acceptance Criteria**:
-- [ ] Rule runs as part of `pnpm lint` in CI pipeline
-- [ ] No false positives on the current `develop` branch (post Waves 1-4)
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | Forbid importing `child_process` module (spawn, exec, execFile, fork) in non-allowlisted files | P1 | Covers both `require` and `import` |
-| FR-002 | Forbid direct calls to `spawn`, `exec`, `execFile`, `fork` from `child_process` | P1 | Catch destructured imports |
-| FR-003 | Allow-list by file path, not inline comments | P1 | New files forbidden by default |
-| FR-004 | Allow-listed paths: `claude-cli-worker.ts`, `process-factory.ts`, `agent-launcher/` internals | P1 | |
-| FR-005 | Allow test files and test fixtures by path glob | P1 | e.g., `**/*.test.ts`, `**/*.spec.ts`, `**/test/**`, `**/__tests__/**` |
-| FR-006 | Clear error message pointing to the rationale and approved alternatives | P2 | |
-| FR-007 | Rule documented in ESLint config with rationale comment | P2 | |
+Add a lint rule forbidding direct `child_process.spawn` outside the two sanctioned `ProcessFactory` implementations and `AgentLauncher` internals. Prevents new direct-spawn call sites from sneaking into the codebase post-refactor.
 
 ## Scope
 
-- Add an ESLint rule (custom rule or `no-restricted-imports`/`no-restricted-modules` with overrides) that forbids importing or calling `child_process.spawn`, `spawn`, `exec`, `execFile`, and `fork` outside these allow-listed file paths:
+- Add an ESLint rule (or custom check, per repo conventions) that forbids importing or calling `child_process.spawn`, `spawn`, `exec`, `execFile`, and `fork` outside these allow-listed file paths:
   - `packages/orchestrator/src/worker/claude-cli-worker.ts` (`defaultProcessFactory`)
   - `packages/orchestrator/src/conversation/process-factory.ts` (`conversationProcessFactory`)
   - Any new files under an `agent-launcher/` internals directory, if one exists
@@ -50,30 +20,57 @@ Add an ESLint rule that forbids direct `child_process.spawn` (and related functi
 - Allow-list via file-path matching, not inline comments — so new files are forbidden by default.
 - Rule runs in CI as part of `pnpm lint`.
 
+## Acceptance criteria
+
+- `pnpm lint` passes on `develop` after this rule lands (assuming Waves 1-4 have already cleaned up direct spawns).
+- A deliberately regressing branch (adding `child_process.spawn` to a random file) fails lint with a clear error message pointing at the rule.
+- The lint rule itself is documented in the eslint config or in a short comment explaining the rationale.
+
+## Out of scope
+
+- Runtime sandbox enforcement.
+- Enforcing `ProcessFactory` or `AgentLauncher` usage via type-level tricks.
+
+## Dependencies
+
+- Depends on Waves 1-4 all landing (otherwise the rule would fail on existing unmigrated code).
+
+## References
+
+- Parent tracking: #423
+
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `pnpm lint` passes on `develop` | 0 violations | Run lint on develop after rule lands |
-| SC-002 | Regression detection | Lint failure within seconds | Add `child_process.spawn` to a random file, verify lint fails |
-| SC-003 | Error message clarity | Developer understands what to do instead | Message references ProcessFactory/AgentLauncher |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Waves 1-4 of the spawn refactor have already landed, so no unmigrated direct-spawn call sites remain on `develop`
-- The project uses ESLint (or a compatible linter) with existing configuration
-- CI already runs `pnpm lint` as part of the check suite
+- [Assumption 1]
 
 ## Out of Scope
 
-- Runtime sandbox enforcement
-- Enforcing `ProcessFactory` or `AgentLauncher` usage via type-level tricks
-- Migrating any remaining direct-spawn call sites (that's Waves 1-4)
-
-## Dependencies
-
-- Waves 1-4 all landing (otherwise the rule would fail on existing unmigrated code)
-- Parent tracking: #423
+- [Exclusion 1]
 
 ---
 
