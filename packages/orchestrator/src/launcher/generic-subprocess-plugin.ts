@@ -36,7 +36,7 @@ export class GenericSubprocessPlugin implements AgentLaunchPlugin {
     }
   }
 
-  createOutputParser(): OutputParser {
+  createOutputParser(_intent: LaunchIntent): OutputParser {
     return {
       processChunk(_stream: 'stdout' | 'stderr', _data: string): void {
         // no-op pass-through
