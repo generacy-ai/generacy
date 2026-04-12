@@ -60,12 +60,14 @@ type MockProcess = ReturnType<typeof createMockProcessHandle>;
 
 function createSpawnerWithProcesses(processes: MockProcess[]) {
   let callIndex = 0;
+  const getNextProcess = () => {
+    const proc = processes[callIndex++];
+    if (!proc) throw new Error('No more mock processes');
+    return proc.handle;
+  };
   return {
-    spawn: vi.fn(() => {
-      const proc = processes[callIndex++];
-      if (!proc) throw new Error('No more mock processes');
-      return proc.handle;
-    }),
+    spawn: vi.fn(getNextProcess),
+    spawnTurn: vi.fn(getNextProcess),
     gracefulKill: vi.fn((h: ChildProcessHandle) => h.kill('SIGTERM')),
   } as unknown as ConversationSpawner;
 }
@@ -101,22 +103,24 @@ describe('Integration: full conversation lifecycle', () => {
     expect(info.workspaceId).toBe('primary');
     expect(manager.list()).toHaveLength(1);
 
-    // 2. Send a message
+    // 2. Send a message (per-turn model: spawns a new process)
     await manager.sendMessage('lifecycle-1', 'What is TypeScript?');
-    expect(proc.stdin.write).toHaveBeenCalledWith('What is TypeScript?\n');
+    expect(spawner.spawnTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ message: 'What is TypeScript?' }),
+    );
 
-    // 3. Simulate CLI output events
+    // 3. Simulate CLI output events in stream-json verbose format
     proc.stdout.emit(
       'data',
-      '{"type":"init","session_id":"ses-abc","model":"claude-sonnet-4-6"}\n',
+      '{"type":"system","subtype":"init","session_id":"ses-abc","model":"claude-sonnet-4-6"}\n',
     );
     proc.stdout.emit(
       'data',
-      '{"type":"text","text":"TypeScript is a typed superset of JavaScript."}\n',
+      '{"type":"assistant","message":{"content":[{"type":"text","text":"TypeScript is a typed superset of JavaScript."}]}}\n',
     );
     proc.stdout.emit(
       'data',
-      '{"type":"complete","tokens_in":100,"tokens_out":50}\n',
+      '{"type":"result","subtype":"success","usage":{"input_tokens":100,"output_tokens":50}}\n',
     );
 
     expect(outputEvents).toHaveLength(3);
@@ -141,7 +145,6 @@ describe('Integration: full conversation lifecycle', () => {
     const endInfo = await endPromise;
 
     expect(endInfo.state).toBe('ended');
-    expect(proc.stdin.end).toHaveBeenCalled();
     expect(spawner.gracefulKill).toHaveBeenCalled();
 
     // 5. Verify cleanup
@@ -152,14 +155,16 @@ describe('Integration: full conversation lifecycle', () => {
     expect(completeEvents.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('start with initial command sends command immediately', async () => {
+  it('start with initial command spawns a turn immediately', async () => {
     await manager.start({
       conversationId: 'init-cmd',
       workingDirectory: 'primary',
       initialCommand: '/onboard-evaluate',
     });
 
-    expect(proc.stdin.write).toHaveBeenCalledWith('/onboard-evaluate\n');
+    expect(spawner.spawnTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ message: '/onboard-evaluate' }),
+    );
   });
 
   it('receives tool_use and tool_result events', async () => {
@@ -168,13 +173,16 @@ describe('Integration: full conversation lifecycle', () => {
       workingDirectory: 'primary',
     });
 
+    // Need a running turn to have stdout listeners
+    await manager.sendMessage('tools-test', 'read a file');
+
     proc.stdout.emit(
       'data',
-      '{"type":"tool_use","tool_name":"Read","call_id":"call-1","input":{"path":"/foo.ts"}}\n',
+      '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","id":"call-1","input":{"path":"/foo.ts"}}]}}\n',
     );
     proc.stdout.emit(
       'data',
-      '{"type":"tool_result","tool_name":"Read","call_id":"call-1","output":"contents","filePath":"/foo.ts"}\n',
+      '{"type":"tool_result","tool_use_id":"call-1","content":"contents"}\n',
     );
 
     expect(outputEvents).toHaveLength(2);
@@ -186,14 +194,17 @@ describe('Integration: full conversation lifecycle', () => {
     });
     expect(outputEvents[1].event.event).toBe('tool_result');
     expect(outputEvents[1].event.payload).toEqual({
-      toolName: 'Read',
       callId: 'call-1',
       output: 'contents',
-      filePath: '/foo.ts',
     });
   });
 
   it('handles multi-turn conversation', async () => {
+    const proc2 = createMockProcessHandle();
+    spawner = createSpawnerWithProcesses([proc, proc2]);
+    manager = new ConversationManager(config, spawner, mockLogger);
+    manager.setOutputCallback((id, event) => outputEvents.push({ id, event }));
+
     await manager.start({
       conversationId: 'multi-turn',
       workingDirectory: 'primary',
@@ -201,16 +212,16 @@ describe('Integration: full conversation lifecycle', () => {
 
     // Turn 1
     await manager.sendMessage('multi-turn', 'Hello');
-    proc.stdout.emit('data', '{"type":"text","text":"Hi there!"}\n');
+    proc.stdout.emit('data', '{"type":"assistant","message":{"content":[{"type":"text","text":"Hi there!"}]}}\n');
+    proc.resolveExit(0);
+    await new Promise((r) => setTimeout(r, 10));
 
     // Turn 2
     await manager.sendMessage('multi-turn', 'How are you?');
-    proc.stdout.emit('data', '{"type":"text","text":"I am doing well!"}\n');
+    proc2.stdout.emit('data', '{"type":"assistant","message":{"content":[{"type":"text","text":"I am doing well!"}]}}\n');
 
     expect(outputEvents).toHaveLength(2);
-    expect(proc.stdin.write).toHaveBeenCalledTimes(2);
-    expect(proc.stdin.write).toHaveBeenNthCalledWith(1, 'Hello\n');
-    expect(proc.stdin.write).toHaveBeenNthCalledWith(2, 'How are you?\n');
+    expect((spawner.spawnTurn as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -254,10 +265,8 @@ describe('Integration: concurrency and error paths', () => {
     await manager.start({ conversationId: 'c1', workingDirectory: 'primary' });
     await manager.start({ conversationId: 'c2', workingDirectory: 'dev' });
 
-    // End one conversation
-    const endPromise = manager.end('c1');
-    proc1.resolveExit(0);
-    await endPromise;
+    // End one conversation (no running process)
+    await manager.end('c1');
 
     // Now should be able to start another
     const info = await manager.start({ conversationId: 'c3', workingDirectory: 'primary' });
@@ -277,30 +286,22 @@ describe('Integration: concurrency and error paths', () => {
     expect(manager.list()).toHaveLength(0);
   });
 
-  it('notifies on unexpected process exit', async () => {
+  it('handles turn process exit without removing conversation', async () => {
     const proc = createMockProcessHandle();
     const spawner = createSpawnerWithProcesses([proc]);
     const manager = new ConversationManager(config, spawner, mockLogger);
-    const events: { id: string; event: ConversationOutputEvent }[] = [];
-    manager.setOutputCallback((id, event) => events.push({ id, event }));
 
     await manager.start({ conversationId: 'c1', workingDirectory: 'primary' });
-    expect(manager.list()).toHaveLength(1);
 
-    // Process exits unexpectedly (e.g., OOM killed)
+    // Send a message to start a turn
+    await manager.sendMessage('c1', 'hello');
+
+    // Process exits (per-turn model: this is normal)
     proc.resolveExit(137);
     await new Promise((r) => setTimeout(r, 20));
 
-    // Should be removed from active map
-    expect(manager.list()).toHaveLength(0);
-
-    // Should emit error event
-    const errorEvent = events.find((e) => e.event.event === 'error');
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent!.id).toBe('c1');
-    expect(errorEvent!.event.payload).toEqual(
-      expect.objectContaining({ message: 'Process exited', exitCode: 137 }),
-    );
+    // Per-turn model: conversation remains active after turn ends
+    expect(manager.list()).toHaveLength(1);
   });
 
   it('rejects duplicate conversation ID', async () => {
@@ -327,15 +328,13 @@ describe('Integration: concurrency and error paths', () => {
 
     expect(manager.list()).toHaveLength(2);
 
-    const stopPromise = manager.stop();
-    proc1.resolveExit(0);
-    proc2.resolveExit(0);
-    await stopPromise;
+    // No running processes (per-turn model), so stop completes immediately
+    await manager.stop();
 
     expect(manager.list()).toHaveLength(0);
   });
 
-  it('slots freed by unexpected exit become available', async () => {
+  it('slots freed by ending become available', async () => {
     const proc1 = createMockProcessHandle();
     const proc2 = createMockProcessHandle();
     const proc3 = createMockProcessHandle();
@@ -345,9 +344,8 @@ describe('Integration: concurrency and error paths', () => {
     await manager.start({ conversationId: 'c1', workingDirectory: 'primary' });
     await manager.start({ conversationId: 'c2', workingDirectory: 'dev' });
 
-    // c1 exits unexpectedly
-    proc1.resolveExit(1);
-    await new Promise((r) => setTimeout(r, 20));
+    // End c1 to free a slot
+    await manager.end('c1');
 
     // Slot is now free
     const info = await manager.start({ conversationId: 'c3', workingDirectory: 'primary' });
@@ -355,15 +353,14 @@ describe('Integration: concurrency and error paths', () => {
     expect(manager.list()).toHaveLength(2);
   });
 
-  it('sendMessage after unexpected exit returns 404', async () => {
+  it('sendMessage after end returns 404', async () => {
     const proc = createMockProcessHandle();
     const spawner = createSpawnerWithProcesses([proc]);
     const manager = new ConversationManager(config, spawner, mockLogger);
 
     await manager.start({ conversationId: 'c1', workingDirectory: 'primary' });
 
-    proc.resolveExit(1);
-    await new Promise((r) => setTimeout(r, 20));
+    await manager.end('c1');
 
     await expect(
       manager.sendMessage('c1', 'hello'),

@@ -31,7 +31,7 @@ function createMockProcess(options?: { withStdin?: boolean }) {
 
 describe('ConversationSpawner', () => {
   describe('spawn', () => {
-    it('spawns claude with --output-format stream-json', () => {
+    it('spawns claude via python3 PTY wrapper with --output-format stream-json', () => {
       const spawnFn = vi.fn();
       const { handle } = createMockProcess();
       spawnFn.mockReturnValue(handle);
@@ -41,8 +41,8 @@ describe('ConversationSpawner', () => {
       spawner.spawn({ cwd: '/workspace', skipPermissions: true });
 
       expect(spawnFn).toHaveBeenCalledWith(
-        'claude',
-        expect.arrayContaining(['--output-format', 'stream-json']),
+        'python3',
+        expect.arrayContaining(['claude', '--output-format', 'stream-json']),
         expect.objectContaining({ cwd: '/workspace' }),
       );
     });

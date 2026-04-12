@@ -30,6 +30,7 @@ describe('GenericSubprocessPlugin', () => {
             "--version",
           ],
           "command": "node",
+          "detached": undefined,
           "env": {
             "NODE_ENV": "test",
           },
@@ -52,6 +53,7 @@ describe('GenericSubprocessPlugin', () => {
             "echo "hello world" | wc -w",
           ],
           "command": "sh",
+          "detached": undefined,
           "env": {
             "SHELL_VAR": "val",
           },

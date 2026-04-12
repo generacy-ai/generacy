@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createGitHubClient, createFeature } from '@generacy-ai/workflow-engine';
+import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
+import type { LaunchFunctionRequest, LaunchFunctionHandle } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
@@ -30,7 +31,7 @@ export const defaultProcessFactory: ProcessFactory = {
   spawn(
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number },
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number; detached?: boolean },
   ): ChildProcessHandle {
     const child: ChildProcess = spawn(command, args, {
       cwd: options.cwd,
@@ -38,6 +39,7 @@ export const defaultProcessFactory: ProcessFactory = {
       stdio: ['ignore', 'pipe', 'pipe'],
       ...(options.uid !== undefined && { uid: options.uid }),
       ...(options.gid !== undefined && { gid: options.gid }),
+      ...(options.detached !== undefined && { detached: options.detached }),
     });
 
     const exitPromise = new Promise<number | null>((resolve) => {
@@ -113,6 +115,33 @@ export class ClaudeCliWorker {
     );
     this.agentLauncher.registerPlugin(new GenericSubprocessPlugin());
     this.agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+
+    // Wire workflow-engine's process launcher to route through AgentLauncher
+    clearProcessLauncher();
+    registerProcessLauncher((request: LaunchFunctionRequest): LaunchFunctionHandle => {
+      const launchHandle = this.agentLauncher.launch({
+        intent: {
+          kind: request.kind,
+          command: request.command,
+          ...(request.kind === 'generic-subprocess'
+            ? { args: request.args }
+            : {}),
+          env: request.env,
+          detached: request.detached,
+        } as import('../launcher/types.js').LaunchIntent,
+        cwd: request.cwd,
+        env: request.env,
+        signal: request.signal,
+        detached: request.detached,
+      });
+      return {
+        stdout: launchHandle.process.stdout,
+        stderr: launchHandle.process.stderr,
+        pid: launchHandle.process.pid,
+        kill: (sig?: NodeJS.Signals) => launchHandle.process.kill(sig),
+        exitPromise: launchHandle.process.exitPromise,
+      };
+    });
   }
 
   /**

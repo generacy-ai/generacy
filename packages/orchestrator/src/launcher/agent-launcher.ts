@@ -81,10 +81,12 @@ export class AgentLauncher {
     }
 
     // 5. Spawn and return handle
+    const detached = request.detached ?? launchSpec.detached;
     const childProcess = factory.spawn(launchSpec.command, launchSpec.args, {
       cwd: request.cwd,
       env: mergedEnv,
       signal: request.signal,
+      ...(detached !== undefined && { detached }),
     });
 
     const outputParser = plugin.createOutputParser(intent);
