@@ -4,6 +4,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Logger } from '@generacy-ai/workflow-engine';
+import type { AgentLauncher } from '@generacy-ai/orchestrator';
 import type { AgencyConnection, ToolCallRequest, ToolCallResponse } from './index.js';
 
 /**
@@ -46,6 +47,16 @@ interface MCPMessage {
 }
 
 /**
+ * Internal handle covering both ChildProcess and ChildProcessHandle.
+ */
+interface ProcessHandle {
+  stdin: NodeJS.WritableStream | null;
+  stdout: NodeJS.ReadableStream | null;
+  stderr: NodeJS.ReadableStream | null;
+  kill(signal?: NodeJS.Signals | number): boolean;
+}
+
+/**
  * Agency connection via subprocess
  */
 export class SubprocessAgency implements AgencyConnection {
@@ -55,8 +66,9 @@ export class SubprocessAgency implements AgencyConnection {
   private readonly timeout: number;
   private readonly cwd?: string;
   private readonly env?: Record<string, string>;
+  private readonly agentLauncher?: AgentLauncher;
 
-  private process: ChildProcess | null = null;
+  private process: ProcessHandle | null = null;
   private connected = false;
   private messageId = 0;
   private pendingRequests = new Map<number, {
@@ -65,13 +77,14 @@ export class SubprocessAgency implements AgencyConnection {
   }>();
   private buffer = '';
 
-  constructor(options: SubprocessAgencyOptions) {
+  constructor(options: SubprocessAgencyOptions, agentLauncher?: AgentLauncher) {
     this.command = options.command;
     this.args = options.args ?? [];
     this.logger = options.logger;
     this.timeout = options.timeout ?? 30000;
     this.cwd = options.cwd;
     this.env = options.env;
+    this.agentLauncher = agentLauncher;
   }
 
   async connect(): Promise<void> {
@@ -87,22 +100,50 @@ export class SubprocessAgency implements AgencyConnection {
         this.disconnect();
       }, this.timeout);
 
-      this.process = spawn(this.command, this.args, {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        cwd: this.cwd,
-        env: { ...process.env, ...this.env },
-      });
+      if (this.agentLauncher) {
+        // Launcher path
+        const handle = this.agentLauncher.launch({
+          intent: {
+            kind: 'generic-subprocess',
+            command: this.command,
+            args: this.args,
+            stdioProfile: 'interactive',
+          },
+          cwd: this.cwd ?? process.cwd(),
+          env: this.env,
+        });
 
-      this.process.on('error', (error) => {
-        clearTimeout(timeoutId);
-        this.logger.error(`Agency process error: ${error.message}`);
-        reject(error);
-      });
+        this.process = handle.process;
 
-      this.process.on('exit', (code, signal) => {
-        this.connected = false;
-        this.logger.info(`Agency process exited with code ${code}, signal ${signal}`);
-      });
+        handle.process.exitPromise.then((code) => {
+          this.connected = false;
+          this.logger.info(`Agency process exited with code ${code}`);
+        }, (error) => {
+          clearTimeout(timeoutId);
+          this.logger.error(`Agency process error: ${error instanceof Error ? error.message : String(error)}`);
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+      } else {
+        // Direct-spawn fallback path
+        const child: ChildProcess = spawn(this.command, this.args, {
+          stdio: ['pipe', 'pipe', 'pipe'],
+          cwd: this.cwd,
+          env: { ...process.env, ...this.env },
+        });
+
+        this.process = child;
+
+        child.on('error', (error) => {
+          clearTimeout(timeoutId);
+          this.logger.error(`Agency process error: ${error.message}`);
+          reject(error);
+        });
+
+        child.on('exit', (code, signal) => {
+          this.connected = false;
+          this.logger.info(`Agency process exited with code ${code}, signal ${signal}`);
+        });
+      }
 
       this.process.stdout?.on('data', (data: Buffer) => {
         this.handleData(data.toString());

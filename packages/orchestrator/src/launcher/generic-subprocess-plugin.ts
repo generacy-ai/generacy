@@ -22,7 +22,7 @@ export class GenericSubprocessPlugin implements AgentLaunchPlugin {
           command: intent.command,
           args: intent.args,
           env: intent.env,
-          stdioProfile: 'default',
+          stdioProfile: intent.stdioProfile ?? 'default',
         };
       case 'shell':
         return {
