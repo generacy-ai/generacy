@@ -15,14 +15,13 @@ Phase 2 of the [spawn refactor](https://github.com/generacy-ai/tetrad-developmen
 - Create `ClaudeCodeLaunchPlugin` inside [packages/generacy-plugin-claude-code](https://github.com/generacy-ai/generacy/tree/develop/packages/generacy-plugin-claude-code). The package continues to export `ClaudeCodePlugin` (Latency `AbstractDevAgentPlugin` base, container-managed) and adds the new launch plugin as a sibling export. Resolved open question #3: a single plugin package can implement both interfaces.
 - Implement the `AgentLaunchPlugin` interface from Wave 1. Copy the following into the plugin WITHOUT deleting from orchestrator internals (Wave 3 cleanup does the deletion):
   - `PHASE_TO_COMMAND` map from [packages/orchestrator/src/worker/types.ts:73-80](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/worker/types.ts#L73-L80)
-  - Claude CLI flags: `--verbose`, `--resume`, `--output-format stream-json`, `--dangerously-skip-permissions`
+  - Claude CLI flags: `--resume`, `--output-format stream-json`, `--dangerously-skip-permissions`
   - PTY wrapper Python script currently embedded in [packages/orchestrator/src/conversation/conversation-spawner.ts:99](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/conversation/conversation-spawner.ts#L99) (resolved open question #4: PTY wrapper belongs here, not in the generic launcher)
 - Implement `buildLaunch(intent, params)` for each supported intent:
-  - `{ kind: "phase", phase: "specify" | "clarify" | "plan" | "tasks" | "implement", sessionId? }` → `claude <phase-command>` + resume flags if sessionId provided. `validate` is excluded from `PhaseIntent.phase` type (compile-time prevention) — the validate phase runs via `GenericSubprocessPlugin` as a `{ kind: "shell" }` intent.
-  - `{ kind: "pr-feedback", prNumber: number, prompt: string }` → `claude -p <prompt> --output-format stream-json` with PR context. The caller (PrFeedbackHandler) pre-builds the prompt via `buildFeedbackPrompt()` and passes it on the intent. `prNumber` is retained for logging/tracing.
-  - `{ kind: "conversation-turn", message: string, sessionId?: string, model?: string, skipPermissions: boolean }` → `python3 -u -c <PTY_WRAPPER> claude ...` with interactive stdio. Fields are flattened directly on the intent (no nested `turn` object). `cwd` is a spawn-level concern on `LaunchRequest.cwd`.
-- CLI flags: `--verbose` is always included for all intents. `--dangerously-skip-permissions` is always included for `phase` and `pr-feedback` intents, but conditional on `skipPermissions` for `conversation-turn`.
-- Implement `createOutputParser(intent: LaunchIntent)` returning the appropriate parser (stream-json for phase / pr-feedback, PTY output parser for conversation-turn). Requires updating the Wave 1 `AgentLaunchPlugin` interface to accept `intent: LaunchIntent` parameter on `createOutputParser` (coordination change on #425 PR, not a breaking change since Wave 1 hasn't shipped).
+  - `{ kind: "phase", phase, sessionId? }` → `claude <phase-command>` + resume flags if sessionId provided
+  - `{ kind: "pr-feedback", prNumber }` → `claude -p --output-format stream-json` with PR context
+  - `{ kind: "conversation-turn", turn }` → `python3 -u -c <PTY_WRAPPER> claude ...` with interactive stdio
+- Implement `createOutputParser(intent)` returning the appropriate parser (stream-json for phase / pr-feedback, PTY output parser for conversation-turn).
 - Register the plugin with `AgentLauncher` at orchestrator boot — explicit import + `registry.register()`, no dynamic discovery.
 
 ## Acceptance criteria
