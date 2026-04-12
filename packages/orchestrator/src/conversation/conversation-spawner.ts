@@ -1,16 +1,5 @@
 import type { ProcessFactory, ChildProcessHandle } from '../worker/types.js';
-
-/**
- * Options for spawning an interactive conversation process.
- */
-export interface ConversationSpawnOptions {
-  /** Working directory for the CLI process */
-  cwd: string;
-  /** Model to use (omit for CLI default) */
-  model?: string;
-  /** Skip permission prompts */
-  skipPermissions: boolean;
-}
+import { PTY_WRAPPER } from '@generacy-ai/generacy-plugin-claude-code';
 
 /**
  * Options for running a single conversation turn.
@@ -36,25 +25,6 @@ export interface ConversationProcessHandle extends ChildProcessHandle {
   /** Writable stream for stdin (not used in -p mode but required by interface) */
   stdin: NodeJS.WritableStream | null;
 }
-
-/**
- * Python PTY wrapper using pty.spawn for proper session/terminal setup.
- *
- * Claude Code is a native binary that uses full stdout buffering when
- * writing to a pipe. pty.spawn creates a proper PTY with correct
- * session and controlling terminal setup, forcing line-buffered output.
- */
-const PTY_WRAPPER = [
-  'import pty, os, sys',
-  '# Prevent PTY line wrapping by setting huge terminal width',
-  'os.environ["COLUMNS"] = "50000"',
-  'def read(fd):',
-  '    data = os.read(fd, 65536)',
-  '    # Strip CRLF that PTY adds, return cleaned data',
-  '    # (pty._copy writes our return value to stdout)',
-  '    return data.replace(b"\\r\\n", b"\\n")',
-  'pty.spawn(sys.argv[1:], read)',
-].join('\n');
 
 /**
  * Spawns Claude CLI for conversation turns using -p (print) mode.
@@ -100,37 +70,6 @@ export class ConversationSpawner {
       cwd: options.cwd,
       env: {},
     });
-
-    return child as ConversationProcessHandle;
-  }
-
-  /**
-   * Legacy spawn for interface compatibility. Use spawnTurn instead.
-   * @deprecated Use spawnTurn for per-message execution.
-   */
-  spawn(options: ConversationSpawnOptions): ConversationProcessHandle {
-    const claudeArgs = [
-      'claude',
-      '--output-format', 'stream-json',
-      '--verbose',
-    ];
-
-    if (options.skipPermissions) {
-      claudeArgs.push('--dangerously-skip-permissions');
-    }
-
-    if (options.model) {
-      claudeArgs.push('--model', options.model);
-    }
-
-    const child = this.processFactory.spawn('python3', ['-u', '-c', PTY_WRAPPER, ...claudeArgs], {
-      cwd: options.cwd,
-      env: {},
-    });
-
-    if (!child.stdin) {
-      throw new Error('Failed to open stdin for conversation process');
-    }
 
     return child as ConversationProcessHandle;
   }

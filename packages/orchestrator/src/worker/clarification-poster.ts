@@ -106,8 +106,10 @@ export function isQuestionComment(body: string): boolean {
   if (body.includes('<!-- generacy-clarification:')) return true;
   // Stage tracking comment
   if (body.includes('<!-- generacy-stage:')) return true;
-  // Clarify operation's direct posting (with or without emoji)
-  if (/##\s+.*Clarification Questions/.test(body)) return true;
+  // Clarify operation's direct posting (with or without emoji).
+  // Negative lookahead excludes answer headings like
+  // "## Answers to Clarification Questions".
+  if (/##\s+(?!Answers\b).*Clarification Questions/.test(body)) return true;
   return false;
 }
 

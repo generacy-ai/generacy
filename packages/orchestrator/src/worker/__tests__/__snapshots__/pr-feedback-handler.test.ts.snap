@@ -1,0 +1,31 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`PrFeedbackHandler > Snapshot test: spawn-arg parity (T008) > launcher path produces identical spawn records to direct path 1`] = `
+[
+  {
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "You are addressing PR review feedback for PR #100 (linked to issue #42).
+
+The following unresolved review comments need to be addressed:
+
+1. **reviewer** (src/index.ts:10):
+   Review comment 1
+
+**Instructions:**
+1. Read and understand each review comment above
+2. Make the necessary code changes to address each comment
+3. The changes will be automatically committed and pushed to the PR branch
+4. Do NOT resolve any review threads — the human reviewer will resolve them after verifying your changes
+
+Please proceed with addressing the feedback.",
+    ],
+    "command": "claude",
+    "cwd": "/tmp/workspace/test-owner/test-repo",
+  },
+]
+`;

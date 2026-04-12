@@ -1,5 +1,5 @@
 import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter } from './types.js';
-import { PHASE_SEQUENCE, PHASE_TO_COMMAND, PHASE_TO_STAGE } from './types.js';
+import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
@@ -144,7 +144,7 @@ export class PhaseLoop {
       // 3. Execute the phase
       let result: PhaseResult;
       try {
-        if (PHASE_TO_COMMAND[phase] === null) {
+        if (phase === 'validate') {
           // Pre-validate: install dependencies if configured
           if (config.preValidateCommand) {
             const installResult = await cliSpawner.runPreValidateInstall(
@@ -214,7 +214,7 @@ export class PhaseLoop {
       results.push(result);
 
       // 3a-bis. Close conversation logger for this phase (flush + phase_complete entry)
-      if (conversationLogger && PHASE_TO_COMMAND[phase] !== null) {
+      if (conversationLogger && phase !== 'validate') {
         try {
           await conversationLogger.close();
         } catch (err) {

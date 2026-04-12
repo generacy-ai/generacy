@@ -215,6 +215,7 @@ export class ClaudeCliWorker {
           workerLogger,
           this.processFactory,
           this.sseEmitter,
+          this.agentLauncher,
         );
 
         await prFeedbackHandler.handle(item, checkoutPath);
