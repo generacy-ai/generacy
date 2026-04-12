@@ -47,6 +47,19 @@ export interface ConversationTurnIntent {
 }
 
 /**
+ * Intent for invoking Claude CLI with a raw command string.
+ * Used by the root-level ClaudeCodeInvoker adapter.
+ * Produces: claude --print --dangerously-skip-permissions <command>
+ */
+export interface InvokeIntent {
+  kind: 'invoke';
+  /** Raw command string (e.g., "/speckit:specify https://...") */
+  command: string;
+  /** Whether to stream output (reserved for future use) */
+  streaming?: boolean;
+}
+
+/**
  * Union of all Claude Code-specific intent types.
  */
-export type ClaudeCodeIntent = PhaseIntent | PrFeedbackIntent | ConversationTurnIntent;
+export type ClaudeCodeIntent = PhaseIntent | PrFeedbackIntent | ConversationTurnIntent | InvokeIntent;

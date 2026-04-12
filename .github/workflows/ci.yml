@@ -35,11 +35,11 @@ jobs:
       - name: Lint (packages)
         run: pnpm -r run --if-present lint
 
-      - name: Build (root)
-        run: pnpm build
-
       - name: Build (packages)
         run: pnpm -r run --if-present build
+
+      - name: Build (root)
+        run: pnpm build
 
       - name: Typecheck (packages)
         run: pnpm -r --filter '!generacy-extension' run --if-present typecheck

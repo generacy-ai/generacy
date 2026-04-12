@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { spawn, type ChildProcess } from 'child_process';
 import { EventEmitter } from 'events';
 import {
   ClaudeCodeInvoker,
@@ -8,61 +7,98 @@ import {
   InvocationErrorCodes,
   type InvocationConfig,
 } from '../../src/agents/index.js';
+import type { AgentLauncher, LaunchHandle } from '@generacy-ai/orchestrator';
 
-// Mock child_process
-vi.mock('child_process', () => ({
-  spawn: vi.fn(),
-}));
-
-const mockSpawn = spawn as ReturnType<typeof vi.fn>;
-
-interface MockProcess extends EventEmitter {
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  kill: ReturnType<typeof vi.fn>;
-  pid: number;
-}
-
-function createMockProcess(options?: {
-  exitCode?: number;
+/**
+ * Create a mock ChildProcessHandle for testing.
+ */
+function createMockProcessHandle(options?: {
+  exitCode?: number | null;
   stdout?: string;
   stderr?: string;
   delay?: number;
-  killSignal?: string;
-}): MockProcess {
-  const process = new EventEmitter() as MockProcess;
-  process.stdout = new EventEmitter();
-  process.stderr = new EventEmitter();
-  process.kill = vi.fn().mockImplementation((signal?: string) => {
-    if (options?.killSignal) {
-      process.emit('close', null, options.killSignal);
-    }
-    return true;
-  });
-  process.pid = 12345;
-
-  // Simulate async behavior
+}): {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  stdin: null;
+  pid: number;
+  kill: ReturnType<typeof vi.fn>;
+  exitPromise: Promise<number | null>;
+  _emitOutput: () => void;
+} {
+  const stdoutEmitter = new EventEmitter();
+  const stderrEmitter = new EventEmitter();
   const delay = options?.delay ?? 10;
-  setTimeout(() => {
+  const exitCode = options?.exitCode ?? 0;
+
+  let resolveExit: (code: number | null) => void;
+  const exitPromise = new Promise<number | null>((resolve) => {
+    resolveExit = resolve;
+  });
+
+  const _emitOutput = () => {
     if (options?.stdout) {
-      process.stdout.emit('data', Buffer.from(options.stdout));
+      stdoutEmitter.emit('data', Buffer.from(options.stdout));
     }
     if (options?.stderr) {
-      process.stderr.emit('data', Buffer.from(options.stderr));
+      stderrEmitter.emit('data', Buffer.from(options.stderr));
     }
     setTimeout(() => {
-      process.emit('close', options?.exitCode ?? 0);
+      resolveExit(exitCode);
     }, delay);
-  }, delay);
+  };
 
-  return process;
+  // Auto-emit after delay
+  setTimeout(_emitOutput, delay);
+
+  return {
+    stdout: stdoutEmitter,
+    stderr: stderrEmitter,
+    stdin: null,
+    pid: 12345,
+    kill: vi.fn().mockImplementation(() => {
+      setTimeout(() => resolveExit(null), 5);
+      return true;
+    }),
+    exitPromise,
+    _emitOutput,
+  };
+}
+
+/**
+ * Create a mock LaunchHandle wrapping a mock process.
+ */
+function createMockLaunchHandle(processHandle: ReturnType<typeof createMockProcessHandle>): LaunchHandle {
+  return {
+    process: processHandle as any,
+    outputParser: {
+      processChunk: () => {},
+      flush: () => {},
+    },
+    metadata: {
+      pluginId: 'claude-code',
+      intentKind: 'invoke',
+    },
+  };
+}
+
+/**
+ * Create a mock AgentLauncher.
+ */
+function createMockLauncher(): AgentLauncher & { launch: ReturnType<typeof vi.fn> } {
+  return {
+    launch: vi.fn(),
+    registerPlugin: vi.fn(),
+  } as any;
 }
 
 describe('ClaudeCodeInvoker', () => {
+  let mockLauncher: ReturnType<typeof createMockLauncher>;
   let invoker: ClaudeCodeInvoker;
 
   beforeEach(() => {
-    invoker = new ClaudeCodeInvoker();
+    mockLauncher = createMockLauncher();
+    invoker = new ClaudeCodeInvoker(mockLauncher);
     vi.clearAllMocks();
   });
 
@@ -87,27 +123,30 @@ describe('ClaudeCodeInvoker', () => {
   });
 
   describe('isAvailable', () => {
-    it('returns true when claude CLI exists', async () => {
-      const mockProcess = createMockProcess({ exitCode: 0 });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+    it('returns true when launch succeeds with exit code 0', async () => {
+      const mockProcess = createMockProcessHandle({ exitCode: 0 });
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.isAvailable();
       expect(result).toBe(true);
+      expect(mockLauncher.launch).toHaveBeenCalledWith({
+        intent: { kind: 'generic-subprocess', command: 'claude', args: ['--version'] },
+        cwd: expect.any(String),
+      });
     });
 
-    it('returns false when claude CLI is missing', async () => {
-      const mockProcess = new EventEmitter() as MockProcess;
-      mockProcess.stdout = new EventEmitter();
-      mockProcess.stderr = new EventEmitter();
-      mockProcess.kill = vi.fn();
-      mockProcess.pid = 12345;
+    it('returns false when launch succeeds with non-zero exit code', async () => {
+      const mockProcess = createMockProcessHandle({ exitCode: 1 });
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      const result = await invoker.isAvailable();
+      expect(result).toBe(false);
+    });
 
-      // Emit error asynchronously
-      setTimeout(() => {
-        mockProcess.emit('error', new Error('ENOENT: command not found'));
-      }, 10);
+    it('returns false when launch throws', async () => {
+      mockLauncher.launch.mockImplementation(() => {
+        throw new Error('Launch failed');
+      });
 
       const result = await invoker.isAvailable();
       expect(result).toBe(false);
@@ -116,24 +155,16 @@ describe('ClaudeCodeInvoker', () => {
 
   describe('initialize', () => {
     it('succeeds when CLI is available', async () => {
-      const mockProcess = createMockProcess({ exitCode: 0 });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      const mockProcess = createMockProcessHandle({ exitCode: 0 });
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       await expect(invoker.initialize()).resolves.not.toThrow();
     });
 
     it('throws AgentInitializationError when CLI is unavailable', async () => {
-      const mockProcess = new EventEmitter() as MockProcess;
-      mockProcess.stdout = new EventEmitter();
-      mockProcess.stderr = new EventEmitter();
-      mockProcess.kill = vi.fn();
-      mockProcess.pid = 12345;
-
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
-
-      setTimeout(() => {
-        mockProcess.emit('error', new Error('ENOENT'));
-      }, 10);
+      mockLauncher.launch.mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
 
       await expect(invoker.initialize()).rejects.toThrow(AgentInitializationError);
     });
@@ -147,13 +178,26 @@ describe('ClaudeCodeInvoker', () => {
       },
     };
 
+    it('builds LaunchRequest with invoke intent and correct cwd', async () => {
+      const mockProcess = createMockProcessHandle({ exitCode: 0, stdout: 'output' });
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
+
+      await invoker.invoke(baseConfig);
+
+      expect(mockLauncher.launch).toHaveBeenCalledWith({
+        intent: { kind: 'invoke', command: '/speckit:specify' },
+        cwd: '/test/workspace',
+        env: {},
+      });
+    });
+
     it('executes command and captures stdout/stderr', async () => {
-      const mockProcess = createMockProcess({
+      const mockProcess = createMockProcessHandle({
         exitCode: 0,
         stdout: 'output from stdout',
         stderr: 'output from stderr',
       });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.invoke(baseConfig);
 
@@ -163,11 +207,11 @@ describe('ClaudeCodeInvoker', () => {
     });
 
     it('returns success=true with output on zero exit code', async () => {
-      const mockProcess = createMockProcess({
+      const mockProcess = createMockProcessHandle({
         exitCode: 0,
         stdout: 'success output',
       });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.invoke(baseConfig);
 
@@ -177,11 +221,11 @@ describe('ClaudeCodeInvoker', () => {
     });
 
     it('returns success=false with COMMAND_FAILED error on non-zero exit', async () => {
-      const mockProcess = createMockProcess({
+      const mockProcess = createMockProcessHandle({
         exitCode: 1,
         stderr: 'command failed',
       });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.invoke(baseConfig);
 
@@ -191,19 +235,32 @@ describe('ClaudeCodeInvoker', () => {
     });
 
     it('returns success=false with TIMEOUT error when timeout exceeded', async () => {
-      const mockProcess = new EventEmitter() as MockProcess;
-      mockProcess.stdout = new EventEmitter();
-      mockProcess.stderr = new EventEmitter();
-      mockProcess.kill = vi.fn().mockImplementation(() => {
-        // Emit close after kill
-        setTimeout(() => {
-          mockProcess.emit('close', null, 'SIGTERM');
-        }, 5);
-        return true;
+      // Create a process that never exits on its own
+      const stdoutEmitter = new EventEmitter();
+      const stderrEmitter = new EventEmitter();
+      let resolveExit: (code: number | null) => void;
+      const exitPromise = new Promise<number | null>((resolve) => {
+        resolveExit = resolve;
       });
-      mockProcess.pid = 12345;
 
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      const mockProcess = {
+        stdout: stdoutEmitter,
+        stderr: stderrEmitter,
+        stdin: null,
+        pid: 12345,
+        kill: vi.fn().mockImplementation(() => {
+          // Simulate process dying after kill
+          setTimeout(() => resolveExit(null), 5);
+          return true;
+        }),
+        exitPromise,
+      };
+
+      mockLauncher.launch.mockReturnValue({
+        process: mockProcess as any,
+        outputParser: { processChunk: () => {}, flush: () => {} },
+        metadata: { pluginId: 'claude-code', intentKind: 'invoke' },
+      });
 
       const config: InvocationConfig = {
         ...baseConfig,
@@ -217,34 +274,36 @@ describe('ClaudeCodeInvoker', () => {
       expect(mockProcess.kill).toHaveBeenCalled();
     });
 
-    it('passes mode via environment variable', async () => {
-      const mockProcess = createMockProcess({ exitCode: 0 });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+    it('passes environment variables including CLAUDE_MODE via LaunchRequest.env', async () => {
+      const mockProcess = createMockProcessHandle({ exitCode: 0 });
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const config: InvocationConfig = {
         command: '/speckit:specify',
         context: {
           workingDirectory: '/test/workspace',
           mode: 'test-mode',
+          environment: {
+            CUSTOM_VAR: 'custom-value',
+          },
         },
       };
 
       await invoker.invoke(config);
 
-      expect(mockSpawn).toHaveBeenCalledWith(
-        'claude',
-        expect.any(Array),
-        expect.objectContaining({
-          env: expect.objectContaining({
-            CLAUDE_MODE: 'test-mode',
-          }),
-        })
-      );
+      expect(mockLauncher.launch).toHaveBeenCalledWith({
+        intent: { kind: 'invoke', command: '/speckit:specify' },
+        cwd: '/test/workspace',
+        env: {
+          CUSTOM_VAR: 'custom-value',
+          CLAUDE_MODE: 'test-mode',
+        },
+      });
     });
 
-    it('uses working directory from context', async () => {
-      const mockProcess = createMockProcess({ exitCode: 0 });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+    it('passes working directory from context as cwd', async () => {
+      const mockProcess = createMockProcessHandle({ exitCode: 0 });
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const config: InvocationConfig = {
         command: '/test:command',
@@ -255,38 +314,9 @@ describe('ClaudeCodeInvoker', () => {
 
       await invoker.invoke(config);
 
-      expect(mockSpawn).toHaveBeenCalledWith(
-        'claude',
-        expect.any(Array),
+      expect(mockLauncher.launch).toHaveBeenCalledWith(
         expect.objectContaining({
           cwd: '/custom/workspace',
-        })
-      );
-    });
-
-    it('merges environment variables from context', async () => {
-      const mockProcess = createMockProcess({ exitCode: 0 });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
-
-      const config: InvocationConfig = {
-        command: '/test:command',
-        context: {
-          workingDirectory: '/test/workspace',
-          environment: {
-            CUSTOM_VAR: 'custom-value',
-          },
-        },
-      };
-
-      await invoker.invoke(config);
-
-      expect(mockSpawn).toHaveBeenCalledWith(
-        'claude',
-        expect.any(Array),
-        expect.objectContaining({
-          env: expect.objectContaining({
-            CUSTOM_VAR: 'custom-value',
-          }),
         })
       );
     });
@@ -309,11 +339,11 @@ describe('ClaudeCodeInvoker', () => {
         ],
       });
 
-      const mockProcess = createMockProcess({
+      const mockProcess = createMockProcessHandle({
         exitCode: 0,
         stdout: `Some output\n---TOOL_CALLS---\n${toolCallOutput}\n---END_TOOL_CALLS---\nMore output`,
       });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.invoke(baseConfig);
 
@@ -325,11 +355,11 @@ describe('ClaudeCodeInvoker', () => {
     });
 
     it('returns empty toolCalls when parsing fails (graceful degradation)', async () => {
-      const mockProcess = createMockProcess({
+      const mockProcess = createMockProcessHandle({
         exitCode: 0,
         stdout: 'Normal output without tool calls',
       });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.invoke(baseConfig);
 
@@ -338,15 +368,28 @@ describe('ClaudeCodeInvoker', () => {
     });
 
     it('tracks duration of invocation', async () => {
-      const mockProcess = createMockProcess({
+      const mockProcess = createMockProcessHandle({
         exitCode: 0,
         delay: 50,
       });
-      mockSpawn.mockReturnValue(mockProcess as unknown as ChildProcess);
+      mockLauncher.launch.mockReturnValue(createMockLaunchHandle(mockProcess));
 
       const result = await invoker.invoke(baseConfig);
 
       expect(result.duration).toBeGreaterThanOrEqual(0);
+    });
+
+    it('returns AGENT_ERROR when launch throws', async () => {
+      mockLauncher.launch.mockImplementation(() => {
+        throw new Error('Unknown intent kind "invoke"');
+      });
+
+      const result = await invoker.invoke(baseConfig);
+
+      expect(result.success).toBe(false);
+      expect(result.error?.code).toBe(InvocationErrorCodes.AGENT_ERROR);
+      expect(result.error?.message).toContain('Unknown intent kind');
+      expect(result.toolCalls).toEqual([]);
     });
   });
 

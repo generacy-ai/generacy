@@ -235,6 +235,7 @@ export {
 export {
   AgentLauncher,
   GenericSubprocessPlugin,
+  createAgentLauncher,
   type GenericSubprocessIntent,
   type ShellIntent,
   type LaunchIntent,
@@ -244,6 +245,10 @@ export {
   type OutputParser,
   type LaunchHandle,
 } from './launcher/index.js';
+
+// Process factories
+export { defaultProcessFactory } from './worker/claude-cli-worker.js';
+export { conversationProcessFactory } from './conversation/process-factory.js';
 
 // Utils
 export {

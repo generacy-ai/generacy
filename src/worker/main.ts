@@ -18,6 +18,7 @@ import { IntegrationHandler, type IntegrationPlugin } from './handlers/integrati
 import { createWorkerConfig } from './config/index.js';
 import { JobScheduler, RedisBackend } from '../scheduler/index.js';
 import { AgentRegistry, ClaudeCodeInvoker } from '../agents/index.js';
+import { createAgentLauncher, defaultProcessFactory, conversationProcessFactory } from '@generacy-ai/orchestrator';
 import { MessageRouter, CorrelationManager } from '../router/index.js';
 import type { WorkerConfig, HeartbeatConfig, HealthConfig } from './types.js';
 import type { RedisConfig } from '../types/config.js';
@@ -136,9 +137,13 @@ async function main(): Promise<void> {
   const scheduler = new JobScheduler({ backend });
   console.log('[worker] Job scheduler initialized');
 
-  // Create agent registry
+  // Create agent launcher and registry
+  const agentLauncher = createAgentLauncher({
+    default: defaultProcessFactory,
+    interactive: conversationProcessFactory,
+  });
   const registry = new AgentRegistry();
-  const claudeCode = new ClaudeCodeInvoker();
+  const claudeCode = new ClaudeCodeInvoker(agentLauncher);
   registry.register(claudeCode);
   registry.setDefault(claudeCode.name);
   console.log('[worker] Agent registry initialized');

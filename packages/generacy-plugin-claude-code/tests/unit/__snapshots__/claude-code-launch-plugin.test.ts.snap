@@ -140,6 +140,30 @@ pty.spawn(sys.argv[1:], read)",
 }
 `;
 
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > invoke intent > snapshot for invoke 1`] = `
+{
+  "args": [
+    "--print",
+    "--dangerously-skip-permissions",
+    "/speckit:specify https://github.com/org/repo/issues/42",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > invoke intent > snapshot for invoke with streaming 1`] = `
+{
+  "args": [
+    "--print",
+    "--dangerously-skip-permissions",
+    "/speckit:plan https://github.com/org/repo/issues/42",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
 exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase "clarify" 1`] = `
 {
   "args": [
