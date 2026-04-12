@@ -1,6 +1,6 @@
 # Feature Specification: Introduce AgentLauncher + GenericSubprocessPlugin (Phase 1)
 
-**Branch**: `425-goal-phase-1-spawn` | **Issue**: #425 | **Date**: 2026-04-12 | **Status**: Draft
+**Branch**: `425-goal-phase-1-spawn` | **Issue**: #425 | **Date**: 2026-04-12 | **Status**: Clarified
 
 ## Summary
 
@@ -13,13 +13,14 @@ Phase 1 of the [spawn refactor](https://github.com/generacy-ai/tetrad-developmen
 ## Scope
 
 - Create `AgentLauncher` inside `@generacy-ai/orchestrator` (internal module, not re-exported from `packages/orchestrator/src/index.ts`).
-- Define types per the [plan Target design section](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/spawn-refactor-plan.md#target-design): `LaunchRequest`, `LaunchHandle`, `LaunchIntent` (discriminated union with `phase`, `pr-feedback`, `conversation-turn`, `generic-subprocess`, `shell`), `LaunchSpec`, `AgentLaunchPlugin`, `OutputParser`.
+- Define types per the [plan Target design section](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/spawn-refactor-plan.md#target-design): `LaunchRequest`, `LaunchHandle`, `LaunchIntent` (discriminated union — Phase 1 defines `generic-subprocess` and `shell` only; remaining kinds added in their respective waves), `LaunchSpec`, `AgentLaunchPlugin`, `OutputParser`.
 - Implement `AgentLauncher.launch(request)`:
   - Resolves plugin from a `Map<pluginId, AgentLaunchPlugin>` registry
   - Delegates command/args/env construction to the plugin's `buildLaunch()`
-  - Merges plugin env with caller env (caller wins for overrides)
-  - Spawns via existing `ProcessFactory.spawn()` primitive
-  - Returns a `LaunchHandle` wrapping the `ChildProcessHandle` with plugin-aware output parser
+  - Merges env: `process.env` ← plugin env ← caller env (caller wins for overrides)
+  - Selects `ProcessFactory` by `LaunchSpec.stdioProfile` (map of profile name → factory instance)
+  - Spawns via selected `ProcessFactory.spawn()` primitive
+  - Returns a thin `LaunchHandle` wrapping the `ChildProcessHandle` with plugin-aware output parser (no lifecycle ownership)
 - Ship `GenericSubprocessPlugin` in the same change (orchestrator-local), handling `kind: "generic-subprocess"` and `kind: "shell"` intents as the escape hatch / pass-through.
 - Register `GenericSubprocessPlugin` with the launcher at orchestrator boot (explicit registration, no dynamic discovery).
 
@@ -86,14 +87,14 @@ Phase 1 of the [spawn refactor](https://github.com/generacy-ai/tetrad-developmen
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Define `LaunchIntent` as a discriminated union type with `kind` field | P1 | At minimum `generic-subprocess` and `shell` for Phase 1 |
+| FR-001 | Define `LaunchIntent` as a discriminated union type with `kind` field — only `generic-subprocess` and `shell` in Phase 1; remaining kinds added in their respective waves | P1 | Union is naturally additive in TypeScript |
 | FR-002 | Define `LaunchRequest` type containing intent, caller env overrides, and optional abort signal | P1 | |
-| FR-003 | Define `LaunchSpec` type as plugin output (command, args, env, stdio config) | P1 | |
+| FR-003 | Define `LaunchSpec` type as plugin output (command, args, env, `stdioProfile?: string` defaulting to `"default"`) | P1 | Launcher selects `ProcessFactory` by stdio profile |
 | FR-004 | Define `AgentLaunchPlugin` interface with `pluginId`, `buildLaunch(intent)`, and `createOutputParser()` | P1 | |
-| FR-005 | Define `OutputParser` interface for plugin-aware stream parsing | P1 | Shape TBD per clarification Q2 |
-| FR-006 | Define `LaunchHandle` wrapping `ChildProcessHandle` with output parser and exit promise | P1 | |
+| FR-005 | Define `OutputParser` interface: `processChunk(stream: 'stdout'\|'stderr', data: string): void` + `flush(): void` | P1 | Stateful processor, aligns with existing `OutputCapture` / `ConversationOutputParser` |
+| FR-006 | Define `LaunchHandle` as thin wrapper exposing `process: ChildProcessHandle` (with `kill()`, `exitPromise`), `outputParser`, and metadata — no lifecycle ownership | P1 | Lifecycle consolidation deferred to Wave 3 |
 | FR-007 | Implement `AgentLauncher` with `Map<pluginId, AgentLaunchPlugin>` registry and `launch(request)` method | P1 | |
-| FR-008 | Env merge: plugin env ← caller env (caller wins on conflicts) | P1 | `process.env` handling TBD per Q4 |
+| FR-008 | Env merge: `process.env` ← plugin env ← caller env (caller wins). Factories updated to NOT merge `process.env` | P1 | Factory change lands in same PR |
 | FR-009 | Spawn via existing `ProcessFactory.spawn()` — no new spawn primitives | P1 | |
 | FR-010 | Implement `GenericSubprocessPlugin` for `generic-subprocess` and `shell` intents | P1 | |
 | FR-011 | Register `GenericSubprocessPlugin` at orchestrator boot (explicit, not dynamic) | P1 | |
