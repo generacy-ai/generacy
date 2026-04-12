@@ -1,10 +1,10 @@
-# Feature Specification: ## Goal
+# Feature Specification: Introduce AgentLauncher + GenericSubprocessPlugin (Phase 1)
 
-Phase 1 of the [spawn refactor](https://github
-
-**Branch**: `425-goal-phase-1-spawn` | **Date**: 2026-04-12 | **Status**: Draft
+**Branch**: `425-goal-phase-1-spawn` | **Issue**: #425 | **Date**: 2026-04-12 | **Status**: Draft
 
 ## Summary
+
+Introduce the `AgentLauncher` abstraction layer inside `@generacy-ai/orchestrator` as new, additive code with zero caller migrations. This establishes the plugin registry, core type definitions, and a `GenericSubprocessPlugin` pass-through that later waves will build upon to consolidate all process spawning behind a unified interface.
 
 ## Goal
 
@@ -50,35 +50,78 @@ Phase 1 of the [spawn refactor](https://github.com/generacy-ai/tetrad-developmen
 
 ## User Stories
 
-### US1: [Primary User Story]
+### US1: Plugin-based process launching
 
-**As a** [user type],
-**I want** [capability],
-**So that** [benefit].
+**As an** orchestrator developer,
+**I want** a centralized `AgentLauncher` that dispatches process launches through registered plugins,
+**So that** new launch strategies (Claude Code, shell validators, etc.) can be added in later waves without modifying existing callers.
 
 **Acceptance Criteria**:
-- [ ] [Criterion 1]
-- [ ] [Criterion 2]
+- [ ] `AgentLauncher` accepts a `LaunchRequest` and resolves the correct plugin from its registry
+- [ ] Plugin's `buildLaunch()` output is used to construct the spawn call
+- [ ] A `LaunchHandle` is returned wrapping the child process with a plugin-aware output parser
+
+### US2: Generic subprocess pass-through
+
+**As an** orchestrator developer,
+**I want** a `GenericSubprocessPlugin` that handles `generic-subprocess` and `shell` intents as a transparent pass-through,
+**So that** the launcher can be exercised end-to-end in Phase 1 without migrating any existing callers.
+
+**Acceptance Criteria**:
+- [ ] `GenericSubprocessPlugin` is registered at orchestrator boot
+- [ ] It handles `kind: "generic-subprocess"` and `kind: "shell"` intents
+- [ ] It passes through command, args, and env without transformation
+
+### US3: Signal propagation through LaunchHandle
+
+**As an** orchestrator developer,
+**I want** abort signals to propagate from `LaunchRequest` through to the spawned child process,
+**So that** callers can cancel launched processes using standard `AbortSignal` patterns.
+
+**Acceptance Criteria**:
+- [ ] `LaunchRequest` accepts an optional `AbortSignal`
+- [ ] Signal abort triggers process termination via the underlying `ChildProcessHandle`
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | [Description] | P1 | |
+| FR-001 | Define `LaunchIntent` as a discriminated union type with `kind` field | P1 | At minimum `generic-subprocess` and `shell` for Phase 1 |
+| FR-002 | Define `LaunchRequest` type containing intent, caller env overrides, and optional abort signal | P1 | |
+| FR-003 | Define `LaunchSpec` type as plugin output (command, args, env, stdio config) | P1 | |
+| FR-004 | Define `AgentLaunchPlugin` interface with `pluginId`, `buildLaunch(intent)`, and `createOutputParser()` | P1 | |
+| FR-005 | Define `OutputParser` interface for plugin-aware stream parsing | P1 | Shape TBD per clarification Q2 |
+| FR-006 | Define `LaunchHandle` wrapping `ChildProcessHandle` with output parser and exit promise | P1 | |
+| FR-007 | Implement `AgentLauncher` with `Map<pluginId, AgentLaunchPlugin>` registry and `launch(request)` method | P1 | |
+| FR-008 | Env merge: plugin env ← caller env (caller wins on conflicts) | P1 | `process.env` handling TBD per Q4 |
+| FR-009 | Spawn via existing `ProcessFactory.spawn()` — no new spawn primitives | P1 | |
+| FR-010 | Implement `GenericSubprocessPlugin` for `generic-subprocess` and `shell` intents | P1 | |
+| FR-011 | Register `GenericSubprocessPlugin` at orchestrator boot (explicit, not dynamic) | P1 | |
+| FR-012 | `AgentLauncher` must NOT be re-exported from `packages/orchestrator/src/index.ts` | P1 | Internal module only |
+| FR-013 | Throw descriptive error on unknown `pluginId` lookup | P2 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | [Metric] | [Target] | [How to measure] |
+| SC-001 | Zero caller changes | 0 existing callers modified | `git diff develop -- packages/orchestrator/src/worker/ packages/orchestrator/src/conversation/` shows no changes to existing spawn callers |
+| SC-002 | Existing tests pass | 100% pass rate | All existing orchestrator, generacy, and workflow-engine tests pass unchanged |
+| SC-003 | New unit test coverage | Registry lookup, unknown pluginId error, env merge precedence, ProcessFactory invocation, signal propagation | New test file(s) with passing assertions for each scenario |
+| SC-004 | Snapshot tests for GenericSubprocessPlugin | `buildLaunch()` snapshots for both `generic-subprocess` and `shell` intents | Vitest snapshot tests |
+| SC-005 | Internal-only export | `AgentLauncher` not in public API | `packages/orchestrator/src/index.ts` does not export launcher module |
 
 ## Assumptions
 
-- [Assumption 1]
+- Wave 0 (`ProcessFactory` extraction) has landed on `develop` and its types are available.
+- `ProcessFactory.spawn()` interface remains stable during Phase 1 implementation.
+- Explicit plugin registration (no dynamic discovery or plugin scanning) is sufficient for all planned waves.
 
 ## Out of Scope
 
-- [Exclusion 1]
+- Caller migrations (Waves 2-4) — no existing code changes to use `AgentLauncher`.
+- `ClaudeCodeLaunchPlugin` (Wave 2).
+- Credentials / uid / gid plumbing (separate Wave 1 ProcessFactory issue).
+- Dynamic plugin discovery or configuration-driven registration.
 
 ---
 
