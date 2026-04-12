@@ -10,30 +10,30 @@
 
 ## Phase 1: Verify Prerequisites
 
-- [ ] T001 [US1] Verify plugin exports `PTY_WRAPPER` — confirm `PTY_WRAPPER` is exported from `@generacy-ai/generacy-plugin-claude-code` public API (`packages/generacy-plugin-claude-code/src/launch/constants.ts` and barrel export). If not, add it to the package's barrel export.
+- [X] T001 [US1] Verify plugin exports `PTY_WRAPPER` — confirm `PTY_WRAPPER` is exported from `@generacy-ai/generacy-plugin-claude-code` public API (`packages/generacy-plugin-claude-code/src/launch/constants.ts` and barrel export). If not, add it to the package's barrel export.
 
 ## Phase 2: Core Deletions
 
-- [ ] T002 [P] [US1] Delete `PHASE_TO_COMMAND` from `packages/orchestrator/src/worker/types.ts` — remove the constant and its JSDoc comment (lines 70-80)
-- [ ] T003 [P] [US1] Remove `PHASE_TO_COMMAND` re-export from `packages/orchestrator/src/worker/index.ts` — delete `PHASE_TO_COMMAND,` from the re-export block (line 17)
-- [ ] T004 [P] [US1] Delete `PTY_WRAPPER` constant from `packages/orchestrator/src/conversation/conversation-spawner.ts` — remove lines 40-57 and add import from `@generacy-ai/generacy-plugin-claude-code`
-- [ ] T005 [P] [US1] Delete deprecated `spawn()` method and `ConversationSpawnOptions` interface from `packages/orchestrator/src/conversation/conversation-spawner.ts` — remove lines 6-13 (interface) and lines 107-136 (method)
+- [X] T002 [P] [US1] Delete `PHASE_TO_COMMAND` from `packages/orchestrator/src/worker/types.ts` — remove the constant and its JSDoc comment (lines 70-80)
+- [X] T003 [P] [US1] Remove `PHASE_TO_COMMAND` re-export from `packages/orchestrator/src/worker/index.ts` — delete `PHASE_TO_COMMAND,` from the re-export block (line 17)
+- [X] T004 [P] [US1] Delete `PTY_WRAPPER` constant from `packages/orchestrator/src/conversation/conversation-spawner.ts` — remove lines 40-57 and add import from `@generacy-ai/generacy-plugin-claude-code`
+- [X] T005 [P] [US1] Delete deprecated `spawn()` method and `ConversationSpawnOptions` interface from `packages/orchestrator/src/conversation/conversation-spawner.ts` — remove lines 6-13 (interface) and lines 107-136 (method)
 
 ## Phase 3: Caller Updates
 
-- [ ] T006 [P] [US1] Update `packages/orchestrator/src/worker/phase-loop.ts` — remove `PHASE_TO_COMMAND` import; replace `PHASE_TO_COMMAND[phase] === null` with `phase === 'validate'` (line 147); replace `PHASE_TO_COMMAND[phase] !== null` with `phase !== 'validate'` (line 217)
-- [ ] T007 [P] [US1] Update `packages/orchestrator/src/worker/cli-spawner.ts` — remove `PHASE_TO_COMMAND` import; replace `const command = PHASE_TO_COMMAND[phase]` with `` const command = `/${phase}` `` (line 42); delete null guard (line 43); update JSDoc (lines 33-35)
+- [X] T006 [P] [US1] Update `packages/orchestrator/src/worker/phase-loop.ts` — remove `PHASE_TO_COMMAND` import; replace `PHASE_TO_COMMAND[phase] === null` with `phase === 'validate'` (line 147); replace `PHASE_TO_COMMAND[phase] !== null` with `phase !== 'validate'` (line 217)
+- [X] T007 [P] [US1] Update `packages/orchestrator/src/worker/cli-spawner.ts` — remove `PHASE_TO_COMMAND` import; replace `const command = PHASE_TO_COMMAND[phase]` with `` const command = `/${phase}` `` (line 42); delete null guard (line 43); update JSDoc (lines 33-35)
 
 ## Phase 4: Test Updates
 
-- [ ] T008 [P] [US1] Update `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` and `cli-spawner-snapshot.test.ts` — remove any `PHASE_TO_COMMAND` references; update snapshots for inline command derivation
-- [ ] T009 [P] [US1] Update `packages/orchestrator/src/conversation/__tests__/conversation-spawner.test.ts` — remove tests for deprecated `spawn()` method; verify `spawnTurn()` tests work with imported `PTY_WRAPPER`
-- [ ] T010 [P] [US1] Verify `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` — confirm validate-phase routing tests pass with inline `phase === 'validate'` check
+- [X] T008 [P] [US1] Update `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` and `cli-spawner-snapshot.test.ts` — remove any `PHASE_TO_COMMAND` references; update snapshots for inline command derivation
+- [X] T009 [P] [US1] Update `packages/orchestrator/src/conversation/__tests__/conversation-spawner.test.ts` — remove tests for deprecated `spawn()` method; verify `spawnTurn()` tests work with imported `PTY_WRAPPER`
+- [X] T010 [P] [US1] Verify `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` — confirm validate-phase routing tests pass with inline `phase === 'validate'` check
 
 ## Phase 5: Verification
 
-- [ ] T011 [US2] Run grep verification — confirm `grep -rn "PHASE_TO_COMMAND" packages/orchestrator/src/` returns 0 results; confirm `grep -rn '"claude"' packages/orchestrator/src/` returns only process command references (cli-spawner.ts, pr-feedback-handler.ts, conversation-spawner.ts)
-- [ ] T012 [US2] Run full test suite — `pnpm --filter @generacy-ai/orchestrator test` and `pnpm --filter @generacy-ai/orchestrator build` to confirm clean compilation and all tests pass
+- [X] T011 [US2] Run grep verification — confirm `grep -rn "PHASE_TO_COMMAND" packages/orchestrator/src/` returns 0 results; confirm `grep -rn '"claude"' packages/orchestrator/src/` returns only process command references (cli-spawner.ts, pr-feedback-handler.ts, conversation-spawner.ts)
+- [X] T012 [US2] Run full test suite — `pnpm --filter @generacy-ai/orchestrator test` and `pnpm --filter @generacy-ai/orchestrator build` to confirm clean compilation and all tests pass
 
 ## Dependencies & Execution Order
 
