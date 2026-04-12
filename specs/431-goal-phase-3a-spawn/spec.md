@@ -17,7 +17,7 @@ Flip the orchestrator's primary phase-loop spawn in `cli-spawner.ts:spawnPhase()
 **Acceptance Criteria**:
 - [ ] `spawnPhase()` calls `agentLauncher.launch()` with a `PhaseIntent` instead of building args and calling `processFactory.spawn()` directly
 - [ ] The `AgentLauncher` instance is injected into `CliSpawner` via the constructor, alongside the existing `Logger` and `shutdownGracePeriodMs` parameters
-- [ ] The spawned process args/env are byte-identical to the pre-refactor output (verified by snapshot test)
+- [ ] The spawned process args/env are byte-identical to the pre-refactor output (verified by snapshot test through full AgentLauncher → ClaudeCodeLaunchPlugin → RecordingProcessFactory chain)
 
 ### US2: Testable AgentLauncher Injection
 
@@ -27,19 +27,19 @@ Flip the orchestrator's primary phase-loop spawn in `cli-spawner.ts:spawnPhase()
 
 **Acceptance Criteria**:
 - [ ] `CliSpawner` constructor accepts an `AgentLauncher` parameter
-- [ ] Existing test behavioral assertions (phase sequencing, session resume, abort, env inheritance) continue to pass with updated constructor call-sites
-- [ ] Snapshot test validates the composed spawn through the full `AgentLauncher` → `ClaudeCodeLaunchPlugin` → `ProcessFactory` chain
+- [ ] Existing test behavioral assertions (phase sequencing, session resume, abort, env inheritance) continue to pass with updated constructor call-sites (constructor wiring changes are acceptable; assertion/behavioral logic changes are not)
+- [ ] Snapshot test validates the composed spawn through the full `AgentLauncher` → `ClaudeCodeLaunchPlugin` → `RecordingProcessFactory` chain, comparing against pre-refactor snapshot from Wave 1 harness (#427)
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Add `AgentLauncher` as a constructor parameter to `CliSpawner` | P1 | Mirrors existing `ProcessFactory` injection pattern |
-| FR-002 | Replace `processFactory.spawn('claude', args, ...)` in `spawnPhase()` with `agentLauncher.launch({ intent: { kind: 'phase', phase, prompt, sessionId }, cwd, env, signal })` | P1 | Core migration |
-| FR-003 | Extract `LaunchHandle.process` from `launch()` return and pass to existing `manageProcess()` | P1 | `manageProcess()` is unchanged |
-| FR-004 | Continue using `OutputCapture` for stdout parsing (ignore `LaunchHandle.outputParser`) | P1 | Plugin's outputParser is no-op; OutputCapture transition is out of scope |
-| FR-005 | Preserve abort-signal handling exclusively in `manageProcess()` | P1 | Do NOT pass `signal` to `agentLauncher.launch()` to avoid double-kill race |
-| FR-006 | Do NOT delete `PHASE_TO_COMMAND` mapping or Claude-specific flags | P1 | Cleanup deferred to Wave 3 Cleanup issue |
+| FR-002 | Replace `processFactory.spawn('claude', args, ...)` in `spawnPhase()` with `agentLauncher.launch({ intent: { kind: 'phase', phase, prompt, sessionId }, cwd, env })` — omit `signal` | P1 | Core migration; signal omitted per Q2 clarification |
+| FR-003 | Extract `LaunchHandle.process` from `launch()` return and pass to existing `manageProcess()`; ignore `LaunchHandle.outputParser` | P1 | `manageProcess()` is unchanged; outputParser ignored per Q3 (intentional tech debt) |
+| FR-004 | Continue using `OutputCapture` for stdout parsing (ignore `LaunchHandle.outputParser`) | P1 | Plugin's outputParser is no-op; OutputCapture transition is out of scope (future follow-on after all Wave 3 migrations) |
+| FR-005 | Preserve abort-signal handling exclusively in `manageProcess()`; do NOT pass `signal` to `agentLauncher.launch()` | P1 | Prevents double-kill race; `LaunchRequest.signal` is for callers without their own signal logic |
+| FR-006 | Do NOT delete `PHASE_TO_COMMAND` mapping or Claude-specific flags; however, remove the pre-spawn validation check from `spawnPhase()` — plugin owns validation | P1 | Constant stays (referenced by `runValidatePhase`); validation check removed per Q5. `PhaseIntent.phase` type excludes invalid values at compile time. Cleanup deferred to Wave 3 (#435) |
 | FR-007 | Update `claude-cli-worker.ts` to pass `AgentLauncher` when constructing `CliSpawner` | P1 | `agentLauncher` is already constructed at lines 109-117 |
 | FR-008 | Remove `ProcessFactory` from `CliSpawner` constructor (no longer directly used by `spawnPhase`) | P2 | Only if `runValidatePhase`/`runPreValidateInstall` also migrate; otherwise keep for those methods |
 
@@ -47,8 +47,8 @@ Flip the orchestrator's primary phase-loop spawn in `cli-spawner.ts:spawnPhase()
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Spawn args/env parity | Byte-identical to pre-refactor snapshot | `cli-spawner-snapshot.test.ts` updated to spawn through `AgentLauncher` path; snapshot matches |
-| SC-002 | Existing test pass rate | 100% of existing cli-spawner test assertions pass | `cli-spawner.test.ts` — constructor call-sites updated, but behavioral assertions unchanged |
+| SC-001 | Spawn args/env parity | Byte-identical to pre-refactor snapshot | `cli-spawner-snapshot.test.ts` updated to spawn end-to-end through `AgentLauncher` → `ClaudeCodeLaunchPlugin` → `RecordingProcessFactory` path; snapshot matches Wave 1 harness (#427) |
+| SC-002 | Existing test pass rate | 100% of existing cli-spawner test assertions pass | `cli-spawner.test.ts` — constructor call-sites updated (wiring changes acceptable), but behavioral assertions unchanged |
 | SC-003 | Integration test | Full phase loop completes with identical argv+env | End-to-end test against mock `claude` binary echoing argv+env |
 | SC-004 | No runtime behavior change | Zero diff in phase sequencing, resume, abort, env, stream-json parsing | Manual + automated verification |
 
