@@ -10,20 +10,20 @@
 
 ## Phase 1: Setup & Types
 
-- [ ] T001 [US1] Create `packages/orchestrator/src/launcher/` directory and `types.ts` with all core type definitions: `GenericSubprocessIntent`, `ShellIntent`, `LaunchIntent` union, `LaunchRequest`, `LaunchSpec`, `AgentLaunchPlugin`, `OutputParser`, `LaunchHandle` — per data-model.md
+- [X] T001 [US1] Create `packages/orchestrator/src/launcher/` directory and `types.ts` with all core type definitions: `GenericSubprocessIntent`, `ShellIntent`, `LaunchIntent` union, `LaunchRequest`, `LaunchSpec`, `AgentLaunchPlugin`, `OutputParser`, `LaunchHandle` — per data-model.md
   - File: `packages/orchestrator/src/launcher/types.ts`
   - Import `ChildProcessHandle` from `../worker/types.js`
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Implement `AgentLauncher` class with plugin registry and `launch()` method
+- [X] T002 [US1] Implement `AgentLauncher` class with plugin registry and `launch()` method
   - File: `packages/orchestrator/src/launcher/agent-launcher.ts`
   - Constructor accepts `Map<string, ProcessFactory>` (stdio profile → factory)
   - `registerPlugin(plugin)`: builds `kind → plugin` map, throws on duplicate kind
   - `launch(request)`: resolve plugin by `intent.kind`, call `buildLaunch()`, 3-layer env merge (`process.env ← plugin env ← caller env`), select factory by `stdioProfile`, spawn, return `LaunchHandle`
   - Throw descriptive errors for unknown intent kind (FR-013) and unknown stdio profile
 
-- [ ] T003 [P] [US2] Implement `GenericSubprocessPlugin` class
+- [X] T003 [P] [US2] Implement `GenericSubprocessPlugin` class
   - File: `packages/orchestrator/src/launcher/generic-subprocess-plugin.ts`
   - `pluginId: "generic-subprocess"`, `supportedKinds: ["generic-subprocess", "shell"]`
   - `buildLaunch()`: pass-through for `generic-subprocess`; wrap in `sh -c` for `shell`
@@ -32,7 +32,7 @@
 
 ## Phase 3: Boot Registration
 
-- [ ] T004 [US2] Register `AgentLauncher` + `GenericSubprocessPlugin` at orchestrator boot
+- [X] T004 [US2] Register `AgentLauncher` + `GenericSubprocessPlugin` at orchestrator boot
   - File: `packages/orchestrator/src/worker/claude-cli-worker.ts` (modify)
   - Create `AgentLauncher` in constructor with `{ "default": defaultProcessFactory, "interactive": conversationProcessFactory }`
   - Register `GenericSubprocessPlugin`
@@ -41,7 +41,7 @@
 
 ## Phase 4: Tests
 
-- [ ] T005 [US1] Write unit tests for `AgentLauncher`
+- [X] T005 [US1] Write unit tests for `AgentLauncher`
   - File: `packages/orchestrator/src/launcher/__tests__/agent-launcher.test.ts`
   - Test cases:
     - Registry lookup succeeds for registered plugin
@@ -53,7 +53,7 @@
     - `AbortSignal` propagated to `ProcessFactory.spawn()`
     - `LaunchHandle` exposes process, outputParser, and metadata
 
-- [ ] T006 [P] [US2] Write snapshot + unit tests for `GenericSubprocessPlugin`
+- [X] T006 [P] [US2] Write snapshot + unit tests for `GenericSubprocessPlugin`
   - File: `packages/orchestrator/src/launcher/__tests__/generic-subprocess-plugin.test.ts`
   - Snapshot tests:
     - `buildLaunch()` output for `kind: "generic-subprocess"` intent
@@ -64,7 +64,7 @@
 
 ## Phase 5: Validation
 
-- [ ] T007 Verify zero caller changes and all existing tests pass
+- [X] T007 Verify zero caller changes and all existing tests pass
   - Run full orchestrator test suite: `pnpm --filter @generacy-ai/orchestrator test`
   - Verify `packages/orchestrator/src/index.ts` does NOT export launcher module
   - Verify no modifications to existing spawn callers via `git diff develop -- packages/orchestrator/src/worker/ packages/orchestrator/src/conversation/` (excluding boot registration in claude-cli-worker.ts)

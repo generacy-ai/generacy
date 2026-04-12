@@ -18,6 +18,9 @@ import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
+import { AgentLauncher } from '../launcher/agent-launcher.js';
+import { GenericSubprocessPlugin } from '../launcher/generic-subprocess-plugin.js';
+import { conversationProcessFactory } from '../conversation/process-factory.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -85,6 +88,7 @@ export class ClaudeCliWorker {
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
+  private readonly agentLauncher: AgentLauncher;
 
   constructor(
     private readonly config: WorkerConfig,
@@ -96,6 +100,15 @@ export class ClaudeCliWorker {
     this.jobEventEmitter = deps.jobEventEmitter;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
+
+    // AgentLauncher: plugin-based process dispatch (Phase 1 — unused by existing code paths)
+    this.agentLauncher = new AgentLauncher(
+      new Map([
+        ['default', this.processFactory],
+        ['interactive', conversationProcessFactory],
+      ]),
+    );
+    this.agentLauncher.registerPlugin(new GenericSubprocessPlugin());
   }
 
   /**
