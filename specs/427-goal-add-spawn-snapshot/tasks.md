@@ -10,22 +10,22 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Create `packages/orchestrator/src/test-utils/` directory and barrel export `index.ts` re-exporting all test utilities
+- [X] T001 Create `packages/orchestrator/src/test-utils/` directory and barrel export `index.ts` re-exporting all test utilities
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 Implement `SpawnRecord` type and `RecordingProcessFactory` class in `packages/orchestrator/src/test-utils/recording-process-factory.ts` — implements `ProcessFactory`, records `{command, args, cwd, env}` to `calls[]`, returns dummy `ChildProcessHandle` with `EventEmitter`-based stdout/stderr, deterministic pid `12345`, configurable exit code, and `reset()` method
-- [ ] T003 [P] Implement `normalizeSpawnRecords()` helper in `packages/orchestrator/src/test-utils/spawn-snapshot.ts` — sorts env keys alphabetically for deterministic snapshot output
-- [ ] T004 Update barrel export `packages/orchestrator/src/test-utils/index.ts` to re-export `RecordingProcessFactory`, `SpawnRecord`, and `normalizeSpawnRecords`
+- [X] T002 Implement `SpawnRecord` type and `RecordingProcessFactory` class in `packages/orchestrator/src/test-utils/recording-process-factory.ts` — implements `ProcessFactory`, records `{command, args, cwd, env}` to `calls[]`, returns dummy `ChildProcessHandle` with `EventEmitter`-based stdout/stderr, deterministic pid `12345`, configurable exit code, and `reset()` method
+- [X] T003 [P] Implement `normalizeSpawnRecords()` helper in `packages/orchestrator/src/test-utils/spawn-snapshot.ts` — sorts env keys alphabetically for deterministic snapshot output
+- [X] T004 Update barrel export `packages/orchestrator/src/test-utils/index.ts` to re-export `RecordingProcessFactory`, `SpawnRecord`, and `normalizeSpawnRecords`
 
 ## Phase 3: Baseline Snapshot Test
 
-- [ ] T005 Write baseline snapshot test in `packages/orchestrator/src/worker/__tests__/cli-spawner-snapshot.test.ts` — two scenarios: (1) basic `spawnPhase` without session resume capturing `claude` command, all flags, phase command + prompt, cwd, env overrides; (2) `spawnPhase` with `resumeSessionId` capturing additional `--resume <id>` args. Uses `RecordingProcessFactory` + `normalizeSpawnRecords` + Vitest `toMatchSnapshot()`
+- [X] T005 Write baseline snapshot test in `packages/orchestrator/src/worker/__tests__/cli-spawner-snapshot.test.ts` — two scenarios: (1) basic `spawnPhase` without session resume capturing `claude` command, all flags, phase command + prompt, cwd, env overrides; (2) `spawnPhase` with `resumeSessionId` capturing additional `--resume <id>` args. Uses `RecordingProcessFactory` + `normalizeSpawnRecords` + Vitest `toMatchSnapshot()`
 
 ## Phase 4: Documentation & Verification
 
-- [ ] T006 Add JSDoc/README comment block at the top of `packages/orchestrator/src/test-utils/index.ts` explaining how Waves 2-3 issues should use the harness (import path, recording pattern, snapshot update workflow)
-- [ ] T007 [P] Run `pnpm --filter orchestrator test` to verify all existing tests pass and new snapshot test passes
+- [X] T006 Add JSDoc/README comment block at the top of `packages/orchestrator/src/test-utils/index.ts` explaining how Waves 2-3 issues should use the harness (import path, recording pattern, snapshot update workflow)
+- [X] T007 [P] Run `pnpm --filter orchestrator test` to verify all existing tests pass and new snapshot test passes
 
 ## Dependencies & Execution Order
 

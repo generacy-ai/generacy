@@ -1,0 +1,45 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CliSpawner.spawnPhase — spawn snapshots > captures basic spawnPhase without session resume 1`] = `
+[
+  {
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "/implement https://github.com/org/repo/issues/42",
+    ],
+    "command": "claude",
+    "cwd": "/workspace/repo",
+    "env": {
+      "CLAUDE_CODE_MAX_TURNS": "50",
+      "PATH": "/usr/bin",
+    },
+  },
+]
+`;
+
+exports[`CliSpawner.spawnPhase — spawn snapshots > captures spawnPhase with resumeSessionId 1`] = `
+[
+  {
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--resume",
+      "ses-abc-123",
+      "/plan https://github.com/org/repo/issues/42",
+    ],
+    "command": "claude",
+    "cwd": "/workspace/repo",
+    "env": {
+      "CLAUDE_CODE_MAX_TURNS": "50",
+      "PATH": "/usr/bin",
+    },
+  },
+]
+`;
