@@ -10,23 +10,23 @@
 
 ## Phase 1: Orchestrator — Enable stdioProfile on GenericSubprocessIntent
 
-- [ ] T001 [US1] Add `stdioProfile?: 'default' | 'interactive'` field to `GenericSubprocessIntent` in `packages/orchestrator/src/launcher/types.ts`
-- [ ] T002 [US1] Update `GenericSubprocessPlugin.buildLaunch()` to pass `intent.stdioProfile ?? 'default'` to `LaunchSpec.stdioProfile` in `packages/orchestrator/src/launcher/generic-subprocess-plugin.ts`
-- [ ] T003 [P] [US1] Add unit tests for stdioProfile pass-through in `packages/orchestrator/src/launcher/__tests__/generic-subprocess-plugin.test.ts` — test 'interactive' reflects in LaunchSpec, test omission defaults to 'default'
+- [X] T001 [US1] Add `stdioProfile?: 'default' | 'interactive'` field to `GenericSubprocessIntent` in `packages/orchestrator/src/launcher/types.ts`
+- [X] T002 [US1] Update `GenericSubprocessPlugin.buildLaunch()` to pass `intent.stdioProfile ?? 'default'` to `LaunchSpec.stdioProfile` in `packages/orchestrator/src/launcher/generic-subprocess-plugin.ts`
+- [X] T003 [P] [US1] Add unit tests for stdioProfile pass-through in `packages/orchestrator/src/launcher/__tests__/generic-subprocess-plugin.test.ts` — test 'interactive' reflects in LaunchSpec, test omission defaults to 'default'
 
 ## Phase 2: Orchestrator — Export Launcher Types
 
-- [ ] T004 [US1] Create barrel export `packages/orchestrator/src/launcher/index.ts` exporting `AgentLauncher`, `GenericSubprocessPlugin`, and all types from `types.ts`
-- [ ] T005 [US1] Add re-export of launcher module from `packages/orchestrator/src/index.ts`
+- [X] T004 [US1] Create barrel export `packages/orchestrator/src/launcher/index.ts` exporting `AgentLauncher`, `GenericSubprocessPlugin`, and all types from `types.ts`
+- [X] T005 [US1] Add re-export of launcher module from `packages/orchestrator/src/index.ts`
 
 ## Phase 3: Core Implementation — SubprocessAgency Migration
 
-- [ ] T006 [US1] Define internal `ProcessHandle` interface in `packages/generacy/src/agency/subprocess.ts` covering `stdin`, `stdout`, `stderr`, `kill()` — not exported
-- [ ] T007 [US1] Add second optional constructor parameter `agentLauncher?: AgentLauncher` to `SubprocessAgency` (NOT in `SubprocessAgencyOptions`)
-- [ ] T008 [US1] Change `private process` field from `ChildProcess | null` to `ProcessHandle | null`
-- [ ] T009 [US1] Implement launcher path in `connect()` — call `agentLauncher.launch()` with `{ kind: 'generic-subprocess', command, args, stdioProfile: 'interactive' }`, `cwd`, `env: this.env`; wire stdout/stderr data handlers, exitPromise for exit logging and spawn error rejection
-- [ ] T010 [US1] Preserve direct-spawn fallback path in `connect()` when `agentLauncher` is undefined — existing code unchanged
-- [ ] T011 [US1] Verify `disconnect()` and `sendMessage()` work with both `ChildProcess` and `ChildProcessHandle` via `ProcessHandle` interface
+- [X] T006 [US1] Define internal `ProcessHandle` interface in `packages/generacy/src/agency/subprocess.ts` covering `stdin`, `stdout`, `stderr`, `kill()` — not exported
+- [X] T007 [US1] Add second optional constructor parameter `agentLauncher?: AgentLauncher` to `SubprocessAgency` (NOT in `SubprocessAgencyOptions`)
+- [X] T008 [US1] Change `private process` field from `ChildProcess | null` to `ProcessHandle | null`
+- [X] T009 [US1] Implement launcher path in `connect()` — call `agentLauncher.launch()` with `{ kind: 'generic-subprocess', command, args, stdioProfile: 'interactive' }`, `cwd`, `env: this.env`; wire stdout/stderr data handlers, exitPromise for exit logging and spawn error rejection
+- [X] T010 [US1] Preserve direct-spawn fallback path in `connect()` when `agentLauncher` is undefined — existing code unchanged
+- [X] T011 [US1] Verify `disconnect()` and `sendMessage()` work with both `ChildProcess` and `ChildProcessHandle` via `ProcessHandle` interface
 
 ## Phase 4: Tests
 

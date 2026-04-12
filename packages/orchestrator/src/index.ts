@@ -231,6 +231,20 @@ export {
   closeAllSSEConnections,
 } from './routes/events.js';
 
+// Launcher
+export {
+  AgentLauncher,
+  GenericSubprocessPlugin,
+  type GenericSubprocessIntent,
+  type ShellIntent,
+  type LaunchIntent,
+  type LaunchRequest,
+  type LaunchSpec,
+  type AgentLaunchPlugin,
+  type OutputParser,
+  type LaunchHandle,
+} from './launcher/index.js';
+
 // Utils
 export {
   setupGracefulShutdown,

@@ -8,6 +8,8 @@ export interface GenericSubprocessIntent {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  /** Stdio profile selecting which ProcessFactory to use. Default: 'default' */
+  stdioProfile?: 'default' | 'interactive';
 }
 
 /**
