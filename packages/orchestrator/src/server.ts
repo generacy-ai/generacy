@@ -37,6 +37,8 @@ import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
 import { ConversationManager } from './conversation/conversation-manager.js';
 import { ConversationSpawner } from './conversation/conversation-spawner.js';
 import { conversationProcessFactory } from './conversation/process-factory.js';
+import { createAgentLauncher } from './launcher/launcher-setup.js';
+import { defaultProcessFactory } from './worker/claude-cli-worker.js';
 import { setupConversationRoutes } from './routes/conversations.js';
 import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
@@ -341,8 +343,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize ConversationManager (full mode only, when workspaces are configured)
   let conversationManager: ConversationManager | null = null;
   if (!isWorkerMode && Object.keys(config.conversations.workspaces).length > 0) {
+    const agentLauncher = createAgentLauncher({
+      default: defaultProcessFactory,
+      interactive: conversationProcessFactory,
+    });
     const conversationSpawner = new ConversationSpawner(
-      conversationProcessFactory,
+      agentLauncher,
       config.conversations.shutdownGracePeriodMs,
     );
     conversationManager = new ConversationManager(

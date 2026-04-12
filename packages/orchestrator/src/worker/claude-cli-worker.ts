@@ -19,9 +19,8 @@ import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
-import { AgentLauncher } from '../launcher/agent-launcher.js';
-import { GenericSubprocessPlugin } from '../launcher/generic-subprocess-plugin.js';
-import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
+import { createAgentLauncher } from '../launcher/launcher-setup.js';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
 
 /**
@@ -106,15 +105,11 @@ export class ClaudeCliWorker {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
-    // AgentLauncher: plugin-based process dispatch (Phase 1 — unused by existing code paths)
-    this.agentLauncher = new AgentLauncher(
-      new Map([
-        ['default', this.processFactory],
-        ['interactive', conversationProcessFactory],
-      ]),
-    );
-    this.agentLauncher.registerPlugin(new GenericSubprocessPlugin());
-    this.agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+    // AgentLauncher: plugin-based process dispatch
+    this.agentLauncher = createAgentLauncher({
+      default: this.processFactory,
+      interactive: conversationProcessFactory,
+    });
 
     // Wire workflow-engine's process launcher to route through AgentLauncher
     clearProcessLauncher();

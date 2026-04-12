@@ -91,6 +91,7 @@ export {
 
 // Launch plugin (Phase 2 — AgentLauncher integration)
 export { ClaudeCodeLaunchPlugin } from './launch/claude-code-launch-plugin.js';
+export { PTY_WRAPPER } from './launch/constants.js';
 export type {
   PhaseIntent,
   PrFeedbackIntent,
