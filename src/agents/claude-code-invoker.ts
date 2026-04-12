@@ -1,10 +1,11 @@
 /**
  * Claude Code agent invoker implementation.
  *
- * Provides the built-in implementation for invoking Claude Code CLI.
+ * Thin adapter over AgentLauncher — delegates all spawning through
+ * the launcher and its registered plugins. No direct child_process usage.
  */
 
-import { spawn, type ChildProcess } from 'child_process';
+import type { AgentLauncher, LaunchHandle } from '@generacy-ai/orchestrator';
 import {
   AgentFeature,
   type AgentInvoker,
@@ -17,8 +18,10 @@ import { AgentInitializationError, InvocationErrorCodes } from './errors.js';
 /**
  * Claude Code CLI invoker.
  *
- * Implements the AgentInvoker interface for the Claude Code CLI.
- * This is the built-in implementation for invoking Claude Code.
+ * Implements the AgentInvoker interface by delegating to AgentLauncher.
+ * The launcher's ClaudeCodeLaunchPlugin handles argv construction for the
+ * 'invoke' intent kind; this adapter owns stream collection, timeout
+ * handling, and InvocationResult construction.
  */
 export class ClaudeCodeInvoker implements AgentInvoker {
   /** Agent name */
@@ -30,6 +33,8 @@ export class ClaudeCodeInvoker implements AgentInvoker {
     AgentFeature.McpTools,
   ]);
 
+  constructor(private readonly agentLauncher: AgentLauncher) {}
+
   /**
    * Check if this agent supports a specific feature.
    */
@@ -39,21 +44,19 @@ export class ClaudeCodeInvoker implements AgentInvoker {
 
   /**
    * Check if the Claude CLI is available.
+   * Routes through AgentLauncher with a generic-subprocess intent.
    */
   async isAvailable(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const child = spawn('claude', ['--version'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
+    try {
+      const handle = this.agentLauncher.launch({
+        intent: { kind: 'generic-subprocess', command: 'claude', args: ['--version'] },
+        cwd: process.cwd(),
       });
-
-      child.on('error', () => {
-        resolve(false);
-      });
-
-      child.on('close', (code) => {
-        resolve(code === 0);
-      });
-    });
+      const code = await handle.process.exitPromise;
+      return code === 0;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -71,24 +74,40 @@ export class ClaudeCodeInvoker implements AgentInvoker {
 
   /**
    * Invoke Claude Code with the given configuration.
+   * Builds a LaunchRequest with 'invoke' intent and delegates to AgentLauncher.
    */
   async invoke(config: InvocationConfig): Promise<InvocationResult> {
     const startTime = Date.now();
 
-    return new Promise((resolve) => {
-      // Build command arguments
-      const args = this.buildArgs(config);
+    // Build caller env overrides
+    const env: Record<string, string> = {
+      ...config.context.environment,
+      ...(config.context.mode ? { CLAUDE_MODE: config.context.mode } : {}),
+    };
 
-      // Build environment
-      const env = this.buildEnvironment(config);
-
-      // Spawn the process
-      const child = spawn('claude', args, {
+    let handle: LaunchHandle;
+    try {
+      handle = this.agentLauncher.launch({
+        intent: { kind: 'invoke', command: config.command },
         cwd: config.context.workingDirectory,
         env,
-        stdio: ['pipe', 'pipe', 'pipe'],
       });
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        duration,
+        error: {
+          code: InvocationErrorCodes.AGENT_ERROR,
+          message: error instanceof Error ? error.message : String(error),
+          details: error,
+        },
+        toolCalls: [],
+      };
+    }
 
+    return new Promise((resolve) => {
       let stdout = '';
       let stderr = '';
       let killed = false;
@@ -98,42 +117,26 @@ export class ClaudeCodeInvoker implements AgentInvoker {
       if (config.timeout) {
         timeoutId = setTimeout(() => {
           killed = true;
-          child.kill('SIGTERM');
+          handle.process.kill('SIGTERM');
         }, config.timeout);
       }
 
-      // Capture stdout
-      child.stdout.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-
-      // Capture stderr
-      child.stderr.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-
-      // Handle process error
-      child.on('error', (error: Error) => {
-        if (timeoutId) {
-          clearTimeout(timeoutId);
-        }
-
-        const duration = Date.now() - startTime;
-        resolve({
-          success: false,
-          output: error.message,
-          duration,
-          error: {
-            code: InvocationErrorCodes.AGENT_ERROR,
-            message: error.message,
-            details: error,
-          },
-          toolCalls: [],
+      // Collect stdout
+      if (handle.process.stdout) {
+        handle.process.stdout.on('data', (data: Buffer | string) => {
+          stdout += String(data);
         });
-      });
+      }
 
-      // Handle process close
-      child.on('close', (code: number | null, signal: string | null) => {
+      // Collect stderr
+      if (handle.process.stderr) {
+        handle.process.stderr.on('data', (data: Buffer | string) => {
+          stderr += String(data);
+        });
+      }
+
+      // Wait for process exit
+      handle.process.exitPromise.then((code: number | null) => {
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -143,7 +146,7 @@ export class ClaudeCodeInvoker implements AgentInvoker {
         const toolCalls = this.parseToolCalls(output);
 
         // Check for timeout
-        if (killed || signal === 'SIGTERM') {
+        if (killed) {
           resolve({
             success: false,
             output,
@@ -195,29 +198,13 @@ export class ClaudeCodeInvoker implements AgentInvoker {
   }
 
   /**
-   * Build command line arguments for the Claude CLI.
+   * Build environment variables for the LaunchRequest.
    */
-  private buildArgs(config: InvocationConfig): string[] {
-    const args: string[] = [];
-
-    // Add the command as prompt
-    args.push('--print');
-    args.push('--dangerously-skip-permissions');
-    args.push(config.command);
-
-    return args;
-  }
-
-  /**
-   * Build environment variables for the process.
-   */
-  private buildEnvironment(config: InvocationConfig): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = {
-      ...process.env,
+  private buildEnvironment(config: InvocationConfig): Record<string, string> {
+    const env: Record<string, string> = {
       ...config.context.environment,
     };
 
-    // Pass mode via environment variable
     if (config.context.mode) {
       env.CLAUDE_MODE = config.context.mode;
     }

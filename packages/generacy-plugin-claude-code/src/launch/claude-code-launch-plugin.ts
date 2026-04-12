@@ -1,4 +1,4 @@
-import type { ClaudeCodeIntent, PhaseIntent, PrFeedbackIntent, ConversationTurnIntent } from './types.js';
+import type { ClaudeCodeIntent, PhaseIntent, PrFeedbackIntent, ConversationTurnIntent, InvokeIntent } from './types.js';
 import { PHASE_TO_COMMAND, PTY_WRAPPER } from './constants.js';
 
 /**
@@ -34,7 +34,7 @@ interface OutputParser {
  */
 export class ClaudeCodeLaunchPlugin {
   readonly pluginId = 'claude-code';
-  readonly supportedKinds = ['phase', 'pr-feedback', 'conversation-turn'] as const;
+  readonly supportedKinds = ['phase', 'pr-feedback', 'conversation-turn', 'invoke'] as const;
 
   buildLaunch(intent: ClaudeCodeIntent): LaunchSpec {
     switch (intent.kind) {
@@ -44,6 +44,8 @@ export class ClaudeCodeLaunchPlugin {
         return this.buildPrFeedbackLaunch(intent);
       case 'conversation-turn':
         return this.buildConversationTurnLaunch(intent);
+      case 'invoke':
+        return this.buildInvokeLaunch(intent);
       default:
         throw new Error(`Unsupported intent kind: ${(intent as any).kind}`);
     }
@@ -96,6 +98,14 @@ export class ClaudeCodeLaunchPlugin {
     return {
       command: 'claude',
       args,
+      stdioProfile: 'default',
+    };
+  }
+
+  private buildInvokeLaunch(intent: InvokeIntent): LaunchSpec {
+    return {
+      command: 'claude',
+      args: ['--print', '--dangerously-skip-permissions', intent.command],
       stdioProfile: 'default',
     };
   }

@@ -96,5 +96,6 @@ export type {
   PhaseIntent,
   PrFeedbackIntent,
   ConversationTurnIntent,
+  InvokeIntent,
   ClaudeCodeIntent,
 } from './launch/types.js';

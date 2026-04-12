@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ClaudeCodeLaunchPlugin } from '../../src/launch/claude-code-launch-plugin.js';
-import type { PhaseIntent, PrFeedbackIntent, ConversationTurnIntent } from '../../src/launch/types.js';
+import type { PhaseIntent, PrFeedbackIntent, ConversationTurnIntent, InvokeIntent } from '../../src/launch/types.js';
 
 describe('ClaudeCodeLaunchPlugin', () => {
   const plugin = new ClaudeCodeLaunchPlugin();
@@ -12,8 +12,40 @@ describe('ClaudeCodeLaunchPlugin', () => {
       expect(plugin.pluginId).toBe('claude-code');
     });
 
-    it('supports phase, pr-feedback, and conversation-turn kinds', () => {
-      expect(plugin.supportedKinds).toEqual(['phase', 'pr-feedback', 'conversation-turn']);
+    it('supports phase, pr-feedback, conversation-turn, and invoke kinds', () => {
+      expect(plugin.supportedKinds).toEqual(['phase', 'pr-feedback', 'conversation-turn', 'invoke']);
+    });
+  });
+
+  describe('invoke intent', () => {
+    it('produces correct argv for invoke intent', () => {
+      const intent: InvokeIntent = { kind: 'invoke', command: '/speckit:specify https://github.com/org/repo/issues/1' };
+      const spec = plugin.buildLaunch(intent);
+      expect(spec.command).toBe('claude');
+      expect(spec.args).toEqual(['--print', '--dangerously-skip-permissions', '/speckit:specify https://github.com/org/repo/issues/1']);
+    });
+
+    it('uses default stdioProfile for invoke intent', () => {
+      const intent: InvokeIntent = { kind: 'invoke', command: 'test command' };
+      const spec = plugin.buildLaunch(intent);
+      expect(spec.stdioProfile).toBe('default');
+    });
+
+    it('returns no-op output parser for invoke intent', () => {
+      const intent: InvokeIntent = { kind: 'invoke', command: 'test' };
+      const parser = plugin.createOutputParser(intent);
+      expect(typeof parser.processChunk).toBe('function');
+      expect(typeof parser.flush).toBe('function');
+      // Should not throw
+      parser.processChunk('stdout', 'data');
+      parser.processChunk('stderr', 'err');
+      parser.flush();
+    });
+
+    it('does not include env in launch spec', () => {
+      const intent: InvokeIntent = { kind: 'invoke', command: 'test' };
+      const spec = plugin.buildLaunch(intent);
+      expect(spec.env).toBeUndefined();
     });
   });
 
@@ -88,6 +120,25 @@ describe('ClaudeCodeLaunchPlugin', () => {
           kind: 'pr-feedback',
           prNumber: 42,
           prompt: 'Please address the review feedback on PR #42.',
+        };
+        expect(plugin.buildLaunch(intent)).toMatchSnapshot();
+      });
+    });
+
+    describe('invoke intent', () => {
+      it('snapshot for invoke', () => {
+        const intent: InvokeIntent = {
+          kind: 'invoke',
+          command: '/speckit:specify https://github.com/org/repo/issues/42',
+        };
+        expect(plugin.buildLaunch(intent)).toMatchSnapshot();
+      });
+
+      it('snapshot for invoke with streaming', () => {
+        const intent: InvokeIntent = {
+          kind: 'invoke',
+          command: '/speckit:plan https://github.com/org/repo/issues/42',
+          streaming: true,
         };
         expect(plugin.buildLaunch(intent)).toMatchSnapshot();
       });
