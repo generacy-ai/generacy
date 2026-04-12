@@ -8,6 +8,7 @@ export interface GenericSubprocessIntent {
   command: string;
   args: string[];
   env?: Record<string, string>;
+  detached?: boolean;
 }
 
 /**
@@ -17,6 +18,7 @@ export interface ShellIntent {
   kind: 'shell';
   command: string;
   env?: Record<string, string>;
+  detached?: boolean;
 }
 
 /**
@@ -38,6 +40,8 @@ export interface LaunchRequest {
   env?: Record<string, string>;
   /** Optional abort signal for cancellation */
   signal?: AbortSignal;
+  /** Whether to create a process group (enables group-kill) */
+  detached?: boolean;
 }
 
 /**
@@ -56,6 +60,8 @@ export interface LaunchSpec {
    * "interactive" selects the conversation factory (all stdio piped)
    */
   stdioProfile?: string;
+  /** Whether to create a process group (forwarded from intent) */
+  detached?: boolean;
 }
 
 /**

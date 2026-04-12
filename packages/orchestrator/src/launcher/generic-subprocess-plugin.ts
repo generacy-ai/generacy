@@ -23,6 +23,7 @@ export class GenericSubprocessPlugin implements AgentLaunchPlugin {
           args: intent.args,
           env: intent.env,
           stdioProfile: 'default',
+          detached: intent.detached,
         };
       case 'shell':
         return {
@@ -30,6 +31,7 @@ export class GenericSubprocessPlugin implements AgentLaunchPlugin {
           args: ['-c', intent.command],
           env: intent.env,
           stdioProfile: 'default',
+          detached: intent.detached,
         };
       default:
         throw new Error(`Unsupported intent kind: ${(intent as LaunchIntent).kind}`);

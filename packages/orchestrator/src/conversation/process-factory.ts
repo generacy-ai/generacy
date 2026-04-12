@@ -11,7 +11,7 @@ export const conversationProcessFactory: ProcessFactory = {
   spawn(
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number },
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number; detached?: boolean },
   ): ChildProcessHandle {
     const child: ChildProcess = spawn(command, args, {
       cwd: options.cwd,
@@ -19,6 +19,7 @@ export const conversationProcessFactory: ProcessFactory = {
       stdio: ['pipe', 'pipe', 'pipe'],
       ...(options.uid !== undefined && { uid: options.uid }),
       ...(options.gid !== undefined && { gid: options.gid }),
+      ...(options.detached !== undefined && { detached: options.detached }),
     });
 
     const exitPromise = new Promise<number | null>((resolve) => {

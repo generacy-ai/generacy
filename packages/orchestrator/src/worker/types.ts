@@ -270,7 +270,7 @@ export interface ProcessFactory {
   spawn(
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number },
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number; detached?: boolean },
   ): ChildProcessHandle;
 }
 

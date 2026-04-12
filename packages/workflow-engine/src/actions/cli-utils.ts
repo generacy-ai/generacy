@@ -5,6 +5,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
+import { getProcessLauncher } from './process-launcher.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -118,14 +119,49 @@ export async function executeCommand(
     return { exitCode: 130, stdout: '', stderr: 'Aborted before start' };
   }
 
-  return new Promise((resolve, reject) => {
+  // Spawn via registered launcher or direct child_process.spawn
+  const launcher = getProcessLauncher();
+  let procStdout: NodeJS.ReadableStream | null;
+  let procStderr: NodeJS.ReadableStream | null;
+  let procPid: number | undefined;
+  let procKill: (sig?: NodeJS.Signals) => boolean;
+  let procExitPromise: Promise<number | null>;
+  let procOnError: ((handler: (err: Error) => void) => void) | undefined;
+
+  if (launcher) {
+    const handle = launcher({
+      kind: 'generic-subprocess',
+      command,
+      args,
+      cwd: cwd ?? process.cwd(),
+      env,
+      signal,
+      detached: true,
+    });
+    procStdout = handle.stdout;
+    procStderr = handle.stderr;
+    procPid = handle.pid;
+    procKill = (sig) => handle.kill(sig);
+    procExitPromise = handle.exitPromise;
+  } else {
+    // Wave 5 lint allow-list: direct spawn fallback for external consumers
     const proc = spawn(command, args, {
       cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true, // create process group so we can kill the entire tree
     });
+    procStdout = proc.stdout;
+    procStderr = proc.stderr;
+    procPid = proc.pid;
+    procKill = (sig) => proc.kill(sig);
+    procExitPromise = new Promise<number | null>((resolve) => {
+      proc.on('close', (code) => resolve(code));
+    });
+    procOnError = (handler) => proc.on('error', handler);
+  }
 
+  return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
     let killed = false;
@@ -138,15 +174,15 @@ export async function executeCommand(
     const killProcessGroup = () => {
       if (killed) return;
       killed = true;
-      if (proc.pid) {
+      if (procPid) {
         try {
-          process.kill(-proc.pid, 'SIGTERM');
+          process.kill(-procPid, 'SIGTERM');
         } catch {
           // Process may already be dead
-          proc.kill('SIGTERM');
+          procKill('SIGTERM');
         }
       } else {
-        proc.kill('SIGTERM');
+        procKill('SIGTERM');
       }
     };
 
@@ -158,24 +194,24 @@ export async function executeCommand(
       }, timeout);
     }
 
-    proc.stdout.on('data', (data: Buffer) => {
+    procStdout?.on('data', (data: Buffer) => {
       const decoded = stdoutDecoder.write(data);
       stdout += decoded;
       onStdout?.(decoded);
     });
 
-    proc.stderr.on('data', (data: Buffer) => {
+    procStderr?.on('data', (data: Buffer) => {
       const decoded = stderrDecoder.write(data);
       stderr += decoded;
       onStderr?.(decoded);
     });
 
-    proc.on('error', (error) => {
+    procOnError?.((error) => {
       if (timeoutId) clearTimeout(timeoutId);
       reject(error);
     });
 
-    proc.on('close', (code) => {
+    procExitPromise.then((code) => {
       if (timeoutId) clearTimeout(timeoutId);
 
       // Flush remaining bytes from decoders
@@ -232,7 +268,32 @@ export async function executeShellCommand(
     return { exitCode: 130, stdout: '', stderr: 'Aborted before start' };
   }
 
-  return new Promise((resolve, reject) => {
+  // Spawn via registered launcher or direct child_process.spawn
+  const launcher = getProcessLauncher();
+  let procStdout: NodeJS.ReadableStream | null;
+  let procStderr: NodeJS.ReadableStream | null;
+  let procPid: number | undefined;
+  let procKill: (sig?: NodeJS.Signals) => boolean;
+  let procExitPromise: Promise<number | null>;
+  let procOnError: ((handler: (err: Error) => void) => void) | undefined;
+
+  if (launcher) {
+    const handle = launcher({
+      kind: 'shell',
+      command,
+      args: [],
+      cwd: cwd ?? process.cwd(),
+      env,
+      signal,
+      detached: true,
+    });
+    procStdout = handle.stdout;
+    procStderr = handle.stderr;
+    procPid = handle.pid;
+    procKill = (sig) => handle.kill(sig);
+    procExitPromise = handle.exitPromise;
+  } else {
+    // Wave 5 lint allow-list: direct spawn fallback for external consumers
     const proc = spawn(command, [], {
       cwd,
       env: { ...process.env, ...env },
@@ -240,7 +301,17 @@ export async function executeShellCommand(
       shell: true,
       detached: true, // create process group so we can kill the entire tree
     });
+    procStdout = proc.stdout;
+    procStderr = proc.stderr;
+    procPid = proc.pid;
+    procKill = (sig) => proc.kill(sig);
+    procExitPromise = new Promise<number | null>((resolve) => {
+      proc.on('close', (code) => resolve(code));
+    });
+    procOnError = (handler) => proc.on('error', handler);
+  }
 
+  return new Promise((resolve, reject) => {
     let stdout = '';
     let stderr = '';
     let killed = false;
@@ -249,14 +320,14 @@ export async function executeShellCommand(
     const killProcessGroup = () => {
       if (killed) return;
       killed = true;
-      if (proc.pid) {
+      if (procPid) {
         try {
-          process.kill(-proc.pid, 'SIGTERM');
+          process.kill(-procPid, 'SIGTERM');
         } catch {
-          proc.kill('SIGTERM');
+          procKill('SIGTERM');
         }
       } else {
-        proc.kill('SIGTERM');
+        procKill('SIGTERM');
       }
     };
 
@@ -268,20 +339,20 @@ export async function executeShellCommand(
       }, timeout);
     }
 
-    proc.stdout.on('data', (data: Buffer) => {
+    procStdout?.on('data', (data: Buffer) => {
       stdout += data.toString();
     });
 
-    proc.stderr.on('data', (data: Buffer) => {
+    procStderr?.on('data', (data: Buffer) => {
       stderr += data.toString();
     });
 
-    proc.on('error', (error) => {
+    procOnError?.((error) => {
       if (timeoutId) clearTimeout(timeoutId);
       reject(error);
     });
 
-    proc.on('close', (code) => {
+    procExitPromise.then((code) => {
       if (timeoutId) clearTimeout(timeoutId);
 
       if (killed) {

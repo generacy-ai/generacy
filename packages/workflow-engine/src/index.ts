@@ -62,6 +62,12 @@ export {
   type CommandOptions,
   type CommandResult,
   type CLIStatus,
+  registerProcessLauncher,
+  getProcessLauncher,
+  clearProcessLauncher,
+  type LaunchFunction,
+  type LaunchFunctionRequest,
+  type LaunchFunctionHandle,
 } from './actions/index.js';
 
 // Workflow registry
