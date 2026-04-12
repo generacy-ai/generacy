@@ -16,30 +16,30 @@
 
 ## Phase 1: Setup & Plugin Extension
 
-- [ ] T001 [US2] Add `InvokeIntent` interface and extend `ClaudeCodeIntent` union in `packages/generacy-plugin-claude-code/src/launch/types.ts`
-- [ ] T002 [US2] Add `'invoke'` to `supportedKinds` and implement `buildInvokeLaunch()` in `packages/generacy-plugin-claude-code/src/launch/claude-code-launch-plugin.ts`
-- [ ] T003 [P] [US1] Add `"@generacy-ai/orchestrator": "workspace:*"` to root `package.json` dependencies and run `pnpm install`
-- [ ] T004 [US2] Add invoke intent tests to `packages/generacy-plugin-claude-code/src/launch/__tests__/claude-code-launch-plugin.test.ts` — verify argv `['--print', '--dangerously-skip-permissions', '<command>']`, `stdioProfile: 'default'`, and no-op output parser
+- [X] T001 [US2] Add `InvokeIntent` interface and extend `ClaudeCodeIntent` union in `packages/generacy-plugin-claude-code/src/launch/types.ts`
+- [X] T002 [US2] Add `'invoke'` to `supportedKinds` and implement `buildInvokeLaunch()` in `packages/generacy-plugin-claude-code/src/launch/claude-code-launch-plugin.ts`
+- [X] T003 [P] [US1] Add `"@generacy-ai/orchestrator": "workspace:*"` to root `package.json` dependencies and run `pnpm install`
+- [X] T004 [US2] Add invoke intent tests to `packages/generacy-plugin-claude-code/src/launch/__tests__/claude-code-launch-plugin.test.ts` — verify argv `['--print', '--dangerously-skip-permissions', '<command>']`, `stdioProfile: 'default'`, and no-op output parser
 
 ## Phase 2: Adapter Rewrite
 
-- [ ] T005 [US1] Rewrite `ClaudeCodeInvoker` constructor to accept `AgentLauncher`, remove `child_process` import — `src/agents/claude-code-invoker.ts`
-- [ ] T006 [US1] Implement `isAvailable()` via `generic-subprocess` intent (`{ kind: 'generic-subprocess', command: 'claude', args: ['--version'] }`) through `AgentLauncher` — `src/agents/claude-code-invoker.ts`
-- [ ] T007 [US1] Implement `invoke()`: build `LaunchRequest` with `invoke` intent, collect stdout/stderr from `LaunchHandle.process`, set up `setTimeout` + `kill('SIGTERM')` timeout, call `parseToolCalls()` and `combineOutput()`, return `InvocationResult` — `src/agents/claude-code-invoker.ts`
-- [ ] T008 [US1] Remove `buildArgs()` method; keep `parseToolCalls()`, `combineOutput()`, `buildEnvironment()` (adapted for `LaunchRequest.env`), and error code mapping — `src/agents/claude-code-invoker.ts`
+- [X] T005 [US1] Rewrite `ClaudeCodeInvoker` constructor to accept `AgentLauncher`, remove `child_process` import — `src/agents/claude-code-invoker.ts`
+- [X] T006 [US1] Implement `isAvailable()` via `generic-subprocess` intent (`{ kind: 'generic-subprocess', command: 'claude', args: ['--version'] }`) through `AgentLauncher` — `src/agents/claude-code-invoker.ts`
+- [X] T007 [US1] Implement `invoke()`: build `LaunchRequest` with `invoke` intent, collect stdout/stderr from `LaunchHandle.process`, set up `setTimeout` + `kill('SIGTERM')` timeout, call `parseToolCalls()` and `combineOutput()`, return `InvocationResult` — `src/agents/claude-code-invoker.ts`
+- [X] T008 [US1] Remove `buildArgs()` method; keep `parseToolCalls()`, `combineOutput()`, `buildEnvironment()` (adapted for `LaunchRequest.env`), and error code mapping — `src/agents/claude-code-invoker.ts`
 
 ## Phase 3: Worker Integration
 
-- [ ] T009 [US3] Update `src/worker/main.ts`: import `createAgentLauncher` and process factories from `@generacy-ai/orchestrator`, create launcher instance, pass to `new ClaudeCodeInvoker(agentLauncher)`
+- [X] T009 [US3] Update `src/worker/main.ts`: import `createAgentLauncher` and process factories from `@generacy-ai/orchestrator`, create launcher instance, pass to `new ClaudeCodeInvoker(agentLauncher)`
 
 ## Phase 4: Tests
 
-- [ ] T010 [P] [US4] Rewrite `tests/agents/claude-code-invoker.test.ts` as adapter-level tests — mock `AgentLauncher.launch()`, verify `InvocationConfig` → `LaunchRequest` translation, env merge, timeout handling, `parseToolCalls()` integration, `isAvailable()` via `generic-subprocess`, error propagation
-- [ ] T011 [P] [US4] Update `tests/worker/handlers/agent-handler.test.ts` — mock `AgentLauncher` in integration tests, verify end-to-end path: job payload → registry → invoker.invoke() → LaunchRequest
+- [X] T010 [P] [US4] Rewrite `tests/agents/claude-code-invoker.test.ts` as adapter-level tests — mock `AgentLauncher.launch()`, verify `InvocationConfig` → `LaunchRequest` translation, env merge, timeout handling, `parseToolCalls()` integration, `isAvailable()` via `generic-subprocess`, error propagation
+- [X] T011 [P] [US4] Update `tests/worker/handlers/agent-handler.test.ts` — mock `AgentLauncher` in integration tests, verify end-to-end path: job payload → registry → invoker.invoke() → LaunchRequest
 
 ## Phase 5: Verification
 
-- [ ] T012 [US1] Verify `grep -n "child_process" src/agents/` returns nothing, `AgentInvoker` interface unchanged, and all tests pass
+- [X] T012 [US1] Verify `grep -n "child_process" src/agents/` returns nothing, `AgentInvoker` interface unchanged, and all tests pass
 
 ## Dependencies & Execution Order
 
