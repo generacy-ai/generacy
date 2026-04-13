@@ -1,12 +1,16 @@
-# Feature Specification: Credhelper Daemon — Session Lifecycle & Unix Socket API
+# Feature Specification: ## Credentials Architecture — Phase 2 (parallel with #460 and #462)
+
+**Context:** Part of the [credentials architecture plan](https://github
 
 **Branch**: `461-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft
 
 ## Summary
 
-Implement the credhelper daemon (Phase 2 of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md)). This is the core runtime — a long-lived Node.js process inside `packages/credhelper/` that runs under uid `credhelper` (1002) in each worker container, managing credential sessions for workflow runs via Unix domain sockets.
+## Credentials Architecture — Phase 2 (parallel with #460 and #462)
 
-**Depends on:** Phase 1 (#458 credhelper skeleton) | **Parallel with:** #460 (plugins), #462 (config loader)
+**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). This is the core runtime of the credhelper.
+
+**Depends on:** Phase 1 (#458 credhelper skeleton)
 
 ## What needs to be done
 
@@ -98,100 +102,35 @@ Implement the credhelper daemon inside `packages/credhelper/`. This is a long-li
 
 ## User Stories
 
-### US1: Worker starts a credential session for a workflow run
+### US1: [Primary User Story]
 
-**As a** worker process,
-**I want** to request a credential session from the credhelper via the control socket,
-**So that** the workflow run gets a session directory with properly scoped credentials (env files, git helpers, GCP configs) ready to use.
-
-**Acceptance Criteria**:
-- [ ] `POST /sessions` with a valid role and session_id returns a session directory path and expiration time
-- [ ] Session directory is created at `/run/generacy-credhelper/sessions/<id>/` with mode 0750, owned `credhelper:node`
-- [ ] All exposure files (env, git config, gcp external-account.json, data.sock) are rendered correctly
-- [ ] Only connections from the worker uid (1000) are accepted (SO_PEERCRED enforcement)
-
-### US2: Workflow retrieves credentials on demand via data socket
-
-**As a** workflow process (uid 1001),
-**I want** to fetch fresh credentials from the per-session data socket,
-**So that** git credential helpers and gcloud external-account can transparently obtain tokens without credentials being baked into the environment.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `GET /credential/<credential-id>` on `data.sock` returns the current token value
-- [ ] Data socket is mode 0660, group-readable by `node` group
-- [ ] Background refresher keeps tokens fresh at 75% of TTL
-- [ ] Expired or failed credentials return an error, not stale data
-
-### US3: Worker ends a credential session after workflow completes
-
-**As a** worker process,
-**I want** to delete a credential session via `DELETE /sessions/<id>`,
-**So that** all secrets are wiped from memory and disk, and per-session sockets are closed.
-
-**Acceptance Criteria**:
-- [ ] Session directory is fully removed
-- [ ] In-memory credential values for the session are cleared
-- [ ] Per-session data socket is closed
-- [ ] Any per-session proxy state is torn down
-
-### US4: Credhelper fails closed on invalid state
-
-**As a** platform operator,
-**I want** the credhelper to exit or reject requests when configuration is invalid, plugins are missing, or the backend is unreachable,
-**So that** workflows never silently run with missing or stale credentials.
-
-**Acceptance Criteria**:
-- [ ] Backend unreachable at boot → exit non-zero
-- [ ] Invalid/missing role or plugin → exit non-zero
-- [ ] Unsupported exposure for a credential type → session start fails with clear error
-- [ ] Backend unreachable mid-run → cached values served until expiry, then requests fail
-- [ ] Plugin mint failure mid-run → credential unavailable, logged, credhelper stays up
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Bind control socket at `/run/generacy-credhelper/control.sock` with mode 0600 | P1 | Owned by worker uid (1000) |
-| FR-002 | SO_PEERCRED verification on every control socket connection | P1 | Reject non-worker uid |
-| FR-003 | JSON-over-Unix-socket request/response protocol on control socket | P1 | |
-| FR-004 | `POST /sessions` endpoint — validate role, mint/resolve credentials, render exposure files | P1 | Depends on #460 plugins, #462 config |
-| FR-005 | `DELETE /sessions/<id>` endpoint — wipe session dir, clear memory, close sockets | P1 | |
-| FR-006 | Per-session data socket at `sessions/<id>/data.sock` (mode 0660, group `node`) | P1 | |
-| FR-007 | HTTP-over-Unix-socket `GET /credential/<id>` on data socket | P1 | |
-| FR-008 | Background token refresh at 75% of mint TTL | P1 | `env` exposure does NOT refresh |
-| FR-009 | In-memory credential store (`Map<credentialId, {value, expiresAt}>`) — never written to disk | P1 | Security requirement |
-| FR-010 | Graceful shutdown on SIGTERM — end all sessions, clean dirs, close sockets | P1 | |
-| FR-011 | All failure modes fail closed per specification | P1 | See failure modes section |
-| FR-012 | Startup: load config, load plugins, bind control socket, enter ready state | P1 | |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Control socket SO_PEERCRED enforcement | 100% rejection of non-worker uids | Unit test with mock peer credentials |
-| SC-002 | Session lifecycle correctness | Begin + end works end-to-end with mock plugin | Integration test |
-| SC-003 | Session directory permissions | 0750, owned credhelper:node | Automated permission check in tests |
-| SC-004 | Data socket credential serving | Fresh tokens returned for valid credential IDs | Integration test with real Unix socket |
-| SC-005 | Token refresh timing | Fires at 75% of TTL | Unit test with mock timers |
-| SC-006 | Session cleanup completeness | No residual files, memory, or sockets after DELETE | Unit test asserting clean state |
-| SC-007 | Fail-closed behavior | All 6 failure modes behave as specified | Dedicated test per failure mode |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Phase 1 (#458) credhelper skeleton package exists and provides the project structure
-- Plugin system (#460) exposes `mint()` and `resolve()` methods with a standard interface
-- Config loader (#462) provides role validation and credential-to-plugin mapping
-- Worker containers run on Linux with Unix domain socket and SO_PEERCRED support
-- Session directories are on tmpfs (not persistent storage)
-- UIDs are fixed: node=1000, workflow=1001, credhelper=1002
+- [Assumption 1]
 
 ## Out of Scope
 
-- Docker socket proxy (Phase 3)
-- Plugin implementation (covered by #460)
-- Config/role file format and loading (covered by #462)
-- Container entrypoint script changes
-- Backend API for credential minting (consumed, not implemented here)
+- [Exclusion 1]
 
 ---
 
