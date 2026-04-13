@@ -149,10 +149,10 @@ describe('ConversationSpawner integration', () => {
     expect(ptyScript).toContain('os.environ["COLUMNS"] = "50000"');
   });
 
-  it('returns a process handle with expected properties', () => {
+  it('returns a process handle with expected properties', async () => {
     const { spawner } = createStack();
 
-    const handle = spawner.spawnTurn({
+    const handle = await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'test',
       skipPermissions: true,
