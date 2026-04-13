@@ -233,8 +233,6 @@ export {
 
 // Launcher
 export {
-  AgentLauncher,
-  GenericSubprocessPlugin,
   createAgentLauncher,
   type GenericSubprocessIntent,
   type ShellIntent,

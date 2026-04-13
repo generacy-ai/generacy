@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`PrFeedbackHandler > Snapshot test: spawn-arg parity (T008) > launcher path produces identical spawn records to direct path 1`] = `
+exports[`PrFeedbackHandler > Snapshot test: spawn-arg composition (T008) > launcher path produces correct spawn records 1`] = `
 [
   {
     "args": [

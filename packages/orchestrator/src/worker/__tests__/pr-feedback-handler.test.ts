@@ -12,7 +12,6 @@ import type { WorkerConfig } from '../config.js';
 import { AgentLauncher } from '../../launcher/agent-launcher.js';
 import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
 import { RecordingProcessFactory } from '../../test-utils/recording-process-factory.js';
-import { normalizeSpawnRecords } from '../../test-utils/spawn-snapshot.js';
 
 // ---------------------------------------------------------------------------
 // Mock Logger
@@ -149,10 +148,12 @@ describe('PrFeedbackHandler', () => {
     vi.clearAllMocks();
     spawnFn = vi.fn();
     processFactory = { spawn: spawnFn } as unknown as ProcessFactory;
+    const agentLauncher = new AgentLauncher(new Map([['default', processFactory]]));
+    agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
     handler = new PrFeedbackHandler(
       defaultConfig,
       mockLogger,
-      processFactory,
+      agentLauncher,
     );
 
     // Default mock implementations
@@ -761,8 +762,6 @@ describe('PrFeedbackHandler', () => {
       const launcherHandler = new PrFeedbackHandler(
         defaultConfig,
         mockLogger,
-        processFactory,
-        undefined,
         agentLauncher,
       );
 
@@ -802,54 +801,23 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
-  describe('Snapshot test: spawn-arg parity (T008)', () => {
-    it('launcher path produces identical spawn records to direct path', async () => {
-      // --- Direct path ---
-      const directFactory = new RecordingProcessFactory(0);
-      const directSpawn = vi.fn((...args: Parameters<ProcessFactory['spawn']>) =>
-        directFactory.spawn(...args),
-      );
-      const directProcessFactory = { spawn: directSpawn } as unknown as ProcessFactory;
-
-      const directHandler = new PrFeedbackHandler(
-        defaultConfig,
-        mockLogger,
-        directProcessFactory,
-      );
-
-      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
-      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
-
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
-        createMockComment(1, false),
-      ]);
-
-      mockGitHub.getStatus = vi.fn().mockResolvedValue({
-        has_changes: false,
-        staged: [],
-        unstaged: [],
-        untracked: [],
-      });
-
-      await directHandler.handle(item, checkoutPath);
-
-      // --- Launcher path ---
+  describe('Snapshot test: spawn-arg composition (T008)', () => {
+    it('launcher path produces correct spawn records', async () => {
       const launcherFactory = new RecordingProcessFactory(0);
       const agentLauncher = new AgentLauncher(
         new Map([['default', launcherFactory]]),
       );
       agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
 
-      const launcherProcessFactory = { spawn: vi.fn() } as unknown as ProcessFactory;
       const launcherHandler = new PrFeedbackHandler(
         defaultConfig,
         mockLogger,
-        launcherProcessFactory,
-        undefined,
         agentLauncher,
       );
 
-      // Reset mocks for second run
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
       mockGitHub.getPRComments = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
@@ -862,17 +830,7 @@ describe('PrFeedbackHandler', () => {
 
       await launcherHandler.handle(item, checkoutPath);
 
-      // Both paths should have recorded exactly one spawn call
-      expect(directFactory.calls).toHaveLength(1);
       expect(launcherFactory.calls).toHaveLength(1);
-
-      // Normalize and compare command + args (env differs due to 3-layer merge)
-      const directRecord = directFactory.calls[0];
-      const launcherRecord = launcherFactory.calls[0];
-
-      expect(launcherRecord.command).toBe(directRecord.command);
-      expect(launcherRecord.args).toEqual(directRecord.args);
-      expect(launcherRecord.cwd).toBe(directRecord.cwd);
 
       // Snapshot command/args/cwd for regression detection (env excluded —
       // AgentLauncher's 3-layer merge includes process.env which varies between runs)

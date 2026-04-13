@@ -3,11 +3,11 @@ import type {
   ChildProcessHandle,
   Logger,
   PhaseResult,
-  ProcessFactory,
   WorkflowPhase,
 } from './types.js';
 import type { OutputCapture } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import type { ShellIntent } from '../launcher/types.js';
 
 /** Default timeout for the validate phase (10 minutes). */
 const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
@@ -23,7 +23,6 @@ const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
 export class CliSpawner {
   constructor(
     private readonly agentLauncher: AgentLauncher,
-    private readonly processFactory: ProcessFactory,
     private readonly logger: Logger,
     private readonly shutdownGracePeriodMs: number = 5000,
   ) {}
@@ -86,12 +85,14 @@ export class CliSpawner {
       'Spawning validation command',
     );
 
-    const child = this.processFactory.spawn('sh', ['-c', validateCommand], {
+    const intent: ShellIntent = { kind: 'shell', command: validateCommand };
+    const handle = this.agentLauncher.launch({
+      intent,
       cwd: checkoutPath,
-      env: {} as Record<string, string>,
+      env: {},
     });
 
-    return this.manageProcess(child, phase, timeoutMs, signal, undefined);
+    return this.manageProcess(handle.process, phase, timeoutMs, signal, undefined);
   }
 
   /**
@@ -113,12 +114,14 @@ export class CliSpawner {
       'Spawning pre-validate install command',
     );
 
-    const child = this.processFactory.spawn('sh', ['-c', installCommand], {
+    const intent: ShellIntent = { kind: 'shell', command: installCommand };
+    const handle = this.agentLauncher.launch({
+      intent,
       cwd: checkoutPath,
-      env: {} as Record<string, string>,
+      env: {},
     });
 
-    return this.manageProcess(child, phase, timeoutMs, signal, undefined);
+    return this.manageProcess(handle.process, phase, timeoutMs, signal, undefined);
   }
 
   // ---------------------------------------------------------------------------
