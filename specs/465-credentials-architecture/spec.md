@@ -1,14 +1,12 @@
-# Feature Specification: ## Credentials Architecture — Phase 3 (parallel with #463 and #464)
-
-**Context:** Part of the [credentials architecture plan](https://github
+# Feature Specification: AgentLauncher Credentials Interceptor (Phase 3)
 
 **Branch**: `465-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft
 
 ## Summary
 
-## Credentials Architecture — Phase 3 (parallel with #463 and #464)
+Wire the credhelper daemon into the orchestrator's spawn path by adding a `credentials` field to `LaunchRequest` and implementing a credentials interceptor in `AgentLauncher`. When credentials are configured, the interceptor manages credhelper sessions around each workflow subprocess — beginning a session before spawn, merging session environment variables, setting uid/gid, and ending the session on exit. When credentials are absent, behavior is unchanged.
 
-**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). This wires the credhelper into the orchestrator's spawn path.
+**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). Phase 3 of the credentials architecture, parallel with #463 and #464.
 
 **Depends on:** Phase 2 (#461 daemon — provides session API)
 **Also depends on:** The spawn refactor (complete — generacy-ai/generacy#423) which established the `AgentLauncher` and `LaunchRequest` types
@@ -97,78 +95,77 @@ This ensures env-exposed credentials are loaded before the agent binary starts.
 
 ## User Stories
 
-### US1: Orchestrator wires credentials into agent subprocess
+### US1: Orchestrator Spawns Agents with Scoped Credentials
 
 **As a** platform operator,
-**I want** the orchestrator to automatically provision credhelper sessions when launching agent subprocesses,
-**So that** each workflow run gets scoped, short-lived credentials without manual configuration.
+**I want** the orchestrator to automatically provision credhelper sessions for spawned agent subprocesses,
+**So that** each workflow step runs with scoped, short-lived credentials instead of ambient host credentials.
 
 **Acceptance Criteria**:
-- [ ] `LaunchRequest.credentials` optional field is available on launch requests
-- [ ] When credentials are set, a credhelper session is begun before spawn and ended on process exit
-- [ ] Session env vars (`GENERACY_SESSION_DIR`, `GIT_CONFIG_GLOBAL`, `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST`) are merged into spawn env
-- [ ] uid/gid from the credentials config are applied to the spawned process
-- [ ] Entrypoint wrapper sources `$GENERACY_SESSION_DIR/env` before exec-ing the real command
+- [ ] `LaunchRequest` accepts an optional `credentials` field with `role`, `uid`, and `gid`
+- [ ] When credentials are set, a credhelper session is begun before spawn and ended on exit
+- [ ] Session environment variables (`GENERACY_SESSION_DIR`, `GIT_CONFIG_GLOBAL`, `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST`) are merged into the spawn env
+- [ ] The subprocess runs under the specified uid/gid
 
-### US2: Backwards-compatible no-op when credentials are absent
+### US2: Backwards-Compatible Launches Without Credentials
 
-**As a** developer running workflows without credential roles configured,
-**I want** the launcher to behave exactly as it does today when `credentials` is undefined,
-**So that** existing workflows are unaffected by the credentials interceptor.
+**As a** developer running workflows locally or in environments without credhelper,
+**I want** the launcher to work exactly as before when no credentials are configured,
+**So that** existing workflows are unaffected by the credentials feature.
 
 **Acceptance Criteria**:
-- [ ] When `request.credentials` is absent, the interceptor is a complete no-op
-- [ ] No credhelper socket connection is attempted
+- [ ] When `request.credentials` is absent, the interceptor is a no-op
+- [ ] No credhelper connection is attempted
 - [ ] Spawn env, command, and uid/gid are unchanged
 
-### US3: Graceful error handling for credhelper failures
+### US3: Clear Errors When Credhelper Is Unavailable
 
-**As a** platform operator,
-**I want** clear error messages when the credhelper daemon is unavailable or sessions fail,
-**So that** I can diagnose credential issues without digging through logs.
+**As an** operator debugging a failed workflow,
+**I want** clear error messages when the credhelper daemon is unreachable or session creation fails,
+**So that** I can quickly diagnose and resolve credential issues.
 
 **Acceptance Criteria**:
-- [ ] Timeout when credhelper socket is not running produces a clear error
-- [ ] Session begin failure is surfaced with actionable context
-- [ ] Session end failure on process exit is logged but does not crash the orchestrator
+- [ ] Timeout when credhelper socket is not available produces a descriptive error
+- [ ] `beginSession` failure includes the role and session ID in the error message
+- [ ] `endSession` failure is logged but does not crash the orchestrator
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add optional `credentials` field (`{ role, uid, gid }`) to `LaunchRequest` | P1 | In `packages/orchestrator/src/launcher/types.ts` |
-| FR-002 | Implement credentials interceptor in `AgentLauncher.launch()` between plugin compose and `ProcessFactory.spawn()` | P1 | Core interceptor logic |
-| FR-003 | Implement control socket client (`beginSession`, `endSession`) over Unix socket | P1 | Connect to `/run/generacy-credhelper/control.sock` |
-| FR-004 | Merge session env vars into spawn env when credentials are present | P1 | `GENERACY_SESSION_DIR`, `GIT_CONFIG_GLOBAL`, `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST` |
-| FR-005 | Create entrypoint wrapper script that sources `$GENERACY_SESSION_DIR/env` before exec | P1 | Shell script or inline |
-| FR-006 | Set uid/gid on `ProcessFactory.spawn()` call from `credentials.uid`/`credentials.gid` | P1 | Uses options from spawn refactor Phase 6 |
-| FR-007 | Call `endSession` on subprocess exit via LaunchHandle process event | P1 | Cleanup on both normal and abnormal exit |
-| FR-008 | Read `defaults.role` from `.generacy/config.yaml` to populate `LaunchRequest.credentials` | P2 | Config integration from #459 |
-| FR-009 | Handle credhelper timeout, begin failure, and end failure gracefully | P1 | Clear error messages |
+| FR-001 | Add optional `credentials` field to `LaunchRequest` type | P1 | `{ role: string; uid: number; gid: number }` |
+| FR-002 | Implement credentials interceptor in `AgentLauncher.launch()` | P1 | Runs after plugin composes command, before `ProcessFactory.spawn()` |
+| FR-003 | Implement control socket client (`beginSession`, `endSession`) | P1 | Connects to `/run/generacy-credhelper/control.sock` |
+| FR-004 | Merge session env vars into spawn environment | P1 | 4 env vars from session directory |
+| FR-005 | Create entrypoint wrapper that sources `$GENERACY_SESSION_DIR/env` | P1 | Shell script or inline `-c` wrapper |
+| FR-006 | Set uid/gid on spawn options from `request.credentials` | P1 | Uses spawn refactor Phase 6 options |
+| FR-007 | End session on subprocess exit via LaunchHandle process event | P1 | Cleanup even on non-zero exit |
+| FR-008 | Read `defaults.role` from `.generacy/config.yaml` to populate credentials | P2 | When role is configured, credentials field is set |
+| FR-009 | Handle control socket timeout (credhelper not running) | P1 | Clear error message |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Interceptor no-op correctness | Zero behavior change when credentials absent | Unit tests comparing spawn args with/without credentials |
-| SC-002 | Session lifecycle completeness | Every beginSession has a matching endSession | Integration test with real credhelper daemon |
-| SC-003 | Error handling coverage | All 3 failure modes (timeout, begin fail, end fail) handled | Unit tests with mock socket |
-| SC-004 | Env var injection correctness | All 4 required env vars present in spawn env | Unit test asserting env contents |
+| SC-001 | Backwards compatibility | Zero behavior change when credentials absent | Unit test: launch without credentials matches current behavior |
+| SC-002 | Session lifecycle | Sessions begun and ended for every credentialed launch | Unit test with mock credhelper socket |
+| SC-003 | Error clarity | Credhelper unavailability produces actionable error | Test: connect to non-existent socket, verify error message |
+| SC-004 | Integration | Full spawn with credhelper daemon works end-to-end | Integration test with real credhelper from #461 |
 
 ## Assumptions
 
-- Phase 2 credhelper daemon (#461) is complete and provides the Unix socket session API
-- The spawn refactor (#423) is complete, providing `AgentLauncher`, `LaunchRequest`, `ProcessFactory`, and `LaunchHandle` types
-- Config schema from #459 includes `defaults.role` field
-- `/run/generacy-credhelper/control.sock` is the agreed-upon socket path
-- The credhelper daemon uses JSON-over-Unix-socket request/response protocol
+- The credhelper daemon from #461 is available and exposes HTTP-over-Unix-socket at `/run/generacy-credhelper/control.sock`
+- The spawn refactor (#423) is complete and `AgentLauncher`, `LaunchRequest`, `ProcessFactory`, and `LaunchHandle` types are stable
+- The credhelper daemon handles session expiry for orphaned sessions (orchestrator crash scenario)
+- The workflow uid (1001) and gid are known at the time `LaunchRequest` is constructed
 
 ## Out of Scope
 
-- Per-step role overrides (schema supports it, but no caller sets it yet — future work)
+- Per-step role overrides (schema supports it, no caller sets it yet — future work)
+- Orchestrator-side cleanup sweep for orphaned sessions on startup
 - Credential rotation during a running session (handled by credhelper daemon internally)
-- Multi-role sessions (one role per subprocess spawn)
-- Cluster rebuild after Phase 3 (separate operational step)
+- UI for credential/role management
+- Multi-credhelper-daemon topologies
 
 ---
 
