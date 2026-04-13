@@ -41,6 +41,8 @@ export interface DaemonConfig {
   sweepIntervalMs: number;
   /** @default true */
   enablePeerCred: boolean;
+  /** Detected upstream Docker socket. Set at boot by Daemon.start(). */
+  upstreamDockerSocket?: UpstreamDockerSocket;
 }
 
 /** Adapter interface for loading configuration objects (for #462). */

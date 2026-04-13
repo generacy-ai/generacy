@@ -40,21 +40,21 @@
 
 ## Phase 7: Integration with Session Lifecycle
 
-- [ ] T060 [US1] Replace `renderDockerSocketProxy()` stub in `packages/credhelper-daemon/src/exposure-renderer.ts` — new implementation creates and starts `DockerProxy`, returns it for session state tracking
-- [ ] T061 [US1] Modify `beginSession()` in `packages/credhelper-daemon/src/session-manager.ts` to pass `roleConfig.docker.allow` rules to the proxy when exposure is `docker-socket-proxy`, store returned `DockerProxy` in session state, add `DOCKER_HOST` env var to session env
-- [ ] T062 [US1] Modify `endSession()` in `packages/credhelper-daemon/src/session-manager.ts` to call `dockerProxy.stop()` for cleanup on session end
+- [X] T060 [US1] Replace `renderDockerSocketProxy()` stub in `packages/credhelper-daemon/src/exposure-renderer.ts` — new implementation creates and starts `DockerProxy`, returns it for session state tracking
+- [X] T061 [US1] Modify `beginSession()` in `packages/credhelper-daemon/src/session-manager.ts` to pass `roleConfig.docker.allow` rules to the proxy when exposure is `docker-socket-proxy`, store returned `DockerProxy` in session state, add `DOCKER_HOST` env var to session env
+- [X] T062 [US1] Modify `endSession()` in `packages/credhelper-daemon/src/session-manager.ts` to call `dockerProxy.stop()` for cleanup on session end
 
 ## Phase 8: Boot-Time Validation
 
-- [ ] T070 [US2] Add upstream socket detection at daemon startup in `packages/credhelper-daemon/src/daemon.ts` — call `detectUpstreamSocket()` during `Daemon.start()`, store result, log security warning if upstream is host socket and roles allow `POST /containers/create`
+- [X] T070 [US2] Add upstream socket detection at daemon startup in `packages/credhelper-daemon/src/daemon.ts` — call `detectUpstreamSocket()` during `Daemon.start()`, store result, log security warning if upstream is host socket and roles allow `POST /containers/create`
 
 ## Phase 9: Integration Tests
 
-- [ ] T080 [US1][US2][US3] Write integration test in `packages/credhelper-daemon/__tests__/integration/docker-proxy.test.ts` — full lifecycle: start proxy → send allowed request → verify forwarded → send denied request → verify 403 → container name filtering → stop proxy → verify cleanup. Skip if no Docker socket available.
+- [X] T080 [US1][US2][US3] Write integration test in `packages/credhelper-daemon/__tests__/integration/docker-proxy.test.ts` — full lifecycle: start proxy → send allowed request → verify forwarded → send denied request → verify 403 → container name filtering → stop proxy → verify cleanup. Skip if no Docker socket available.
 
 ## Phase 10: Exports & Wiring
 
-- [ ] T090 Export new public APIs from `packages/credhelper-daemon/src/index.ts` — `DockerProxy`, `DockerAllowlistMatcher`, `detectUpstreamSocket`, `ContainerNameResolver`
+- [X] T090 Export new public APIs from `packages/credhelper-daemon/src/index.ts` — `DockerProxy`, `DockerAllowlistMatcher`, `detectUpstreamSocket`, `ContainerNameResolver`
 
 ## Dependencies & Execution Order
 

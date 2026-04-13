@@ -4,3 +4,7 @@ export type { ConfigLoader, PluginRegistry } from './types.js';
 export type { SessionState, CredentialCacheEntry, PeerCredentials } from './types.js';
 export { CredhelperError, sendError } from './errors.js';
 export type { ErrorCode, CredhelperErrorResponse } from './errors.js';
+export { DockerProxy } from './docker-proxy.js';
+export { DockerAllowlistMatcher } from './docker-allowlist.js';
+export { detectUpstreamSocket } from './docker-upstream.js';
+export { ContainerNameResolver } from './docker-name-resolver.js';
