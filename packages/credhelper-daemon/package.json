@@ -1,0 +1,46 @@
+{
+  "name": "@generacy-ai/credhelper-daemon",
+  "version": "0.1.0",
+  "description": "Credhelper daemon for credential session management",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "credhelper-daemon": "./dist/bin/credhelper-daemon.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "clean": "rm -rf dist"
+  },
+  "author": "Generacy AI",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@generacy-ai/credhelper": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/credhelper-daemon"
+  }
+}

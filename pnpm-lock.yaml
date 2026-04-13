@@ -115,6 +115,22 @@ importers:
         specifier: ^2.4.0
         version: 2.8.2
 
+  packages/credhelper-daemon:
+    dependencies:
+      '@generacy-ai/credhelper':
+        specifier: workspace:*
+        version: link:../credhelper
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.35
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+
   packages/devcontainer-feature: {}
 
   packages/generacy:
