@@ -1,16 +1,22 @@
-# Feature Specification: Scoped Docker Socket Proxy
+# Feature Specification: Scoped Docker Socket Proxy (#464)
 
-**Branch**: `464-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft | **Issue**: [#464](https://github.com/generacy-ai/generacy/issues/464)
+**Branch**: `464-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft
 
 ## Summary
 
-Implement a scoped docker socket proxy inside `packages/credhelper/` that mediates all Docker API access from workflow processes. The proxy enforces per-role method+path allowlists with default deny, providing fine-grained Docker API access control as part of the credentials architecture (Phase 3).
+Implement a scoped docker socket proxy inside `packages/credhelper/` that mediates all Docker API access from workflow processes, enforcing per-role method+path allowlists with default deny. The proxy creates per-session Unix sockets, auto-detects the upstream Docker daemon (DinD or DooD), and provides container-name-based filtering via glob patterns.
+
+## Credentials Architecture — Phase 3 (parallel with #463 and #465)
 
 **Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). See decisions #13 and #16, and the "Scoped docker socket proxy" section.
 
 **Depends on:** Phase 2 (#461 daemon — provides session lifecycle, #462 config loading — provides role docker blocks)
 
-## Architecture
+## What needs to be done
+
+Implement a scoped docker socket proxy inside `packages/credhelper/`. The proxy mediates all docker API access from workflow processes, enforcing per-role method+path allowlists with default deny.
+
+### Architecture
 
 - The credhelper creates a per-session proxy socket at `/run/generacy-credhelper/sessions/<id>/docker.sock`
 - Workflow processes see `DOCKER_HOST=unix:///run/generacy-credhelper/sessions/<id>/docker.sock`
@@ -66,81 +72,100 @@ Follow the pattern from [Tecnativa/docker-socket-proxy](https://github.com/Tecna
 - Request parsing to extract method + path
 - Allowlist matching with glob support for container names
 
+## Acceptance criteria
+
+- Proxy socket is created per session and cleaned up on session end
+- Allowed requests are forwarded correctly and responses returned
+- Denied requests return HTTP 403 with clear error message naming the denied method+path
+- Container name-based filtering works (resolve ID → name → glob match)
+- Upstream auto-detection works for both DinD (`/var/run/docker.sock`) and DooD (`/var/run/docker-host.sock`)
+- Fails closed when no upstream socket is available
+- Unit tests: allowlist matching, glob patterns, deny by default
+- Integration test with a real docker socket (can use DinD in tetrad-development)
+
+## Phase grouping
+
+- **Phase 3** — parallel with #463 and #465
+- **Rebuild cluster after Phase 3 completes**
+
 ## User Stories
 
-### US1: Workflow process Docker access
-
-**As a** workflow process running under a credhelper session,
-**I want** Docker API access scoped to only the operations my role permits,
-**So that** I can manage containers needed for my workflow without gaining unrestricted Docker API access.
-
-**Acceptance Criteria**:
-- [ ] Workflow sees `DOCKER_HOST` pointing to the per-session proxy socket
-- [ ] Allowed Docker API calls (e.g., list containers, start/stop named containers) succeed
-- [ ] Disallowed Docker API calls are rejected with HTTP 403
-
-### US2: Platform operator security enforcement
-
-**As a** platform operator defining roles,
-**I want** Docker API access controlled via declarative allowlists in role configuration,
-**So that** I can grant least-privilege Docker access per role without custom proxy configuration.
-
-**Acceptance Criteria**:
-- [ ] Role config `docker.allow` entries control which API calls are permitted
-- [ ] Container name glob patterns restrict container-scoped operations to matching names
-- [ ] Default deny ensures no Docker access without explicit allowlist entries
-
-### US3: Cluster-agnostic deployment
+### US1: Workflow process isolation via Docker API scoping
 
 **As a** platform operator,
-**I want** the Docker socket proxy to work identically across DinD and DooD cluster variants,
-**So that** I can use the same role definitions regardless of cluster topology.
+**I want** workflow processes to only access Docker API operations explicitly allowed by their role,
+**So that** a compromised or misconfigured workflow cannot escalate privileges, manipulate unrelated containers, or access the host filesystem via Docker.
 
 **Acceptance Criteria**:
-- [ ] Proxy auto-detects upstream socket (DinD vs DooD)
-- [ ] Same allowlist rules apply regardless of upstream
-- [ ] Security warnings are logged when host socket access + container create is allowed
+- [ ] Each session gets its own proxy socket at `/run/generacy-credhelper/sessions/<id>/docker.sock`
+- [ ] Requests matching the role's allowlist are forwarded and responses returned correctly
+- [ ] Requests not in the allowlist are rejected with HTTP 403 and a clear error message
+- [ ] Proxy socket is cleaned up when the session ends
+
+### US2: Uniform proxy behavior across cluster variants
+
+**As a** platform developer,
+**I want** the proxy to work identically on DinD and DooD clusters with only the upstream socket differing,
+**So that** I don't need to maintain separate proxy implementations or configurations per cluster type.
+
+**Acceptance Criteria**:
+- [ ] Proxy auto-detects upstream socket (DinD via `ENABLE_DIND` + `/var/run/docker.sock`, or DooD via `/var/run/docker-host.sock`)
+- [ ] Fails closed with clear error when no upstream is available
+- [ ] Allowlist enforcement is identical regardless of upstream
+
+### US3: Container-name-scoped access control
+
+**As a** role author,
+**I want** to restrict Docker operations to containers matching a name glob pattern (e.g., `firebase-*`),
+**So that** workflows can manage their own containers without being able to affect others.
+
+**Acceptance Criteria**:
+- [ ] Container IDs are resolved to names for rules with `name` glob patterns
+- [ ] Glob matching works correctly (e.g., `firebase-*` matches `firebase-emulator` but not `redis`)
+- [ ] Rules without a `name` field allow any container for that method+path
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Per-session proxy socket creation at `/run/generacy-credhelper/sessions/<id>/docker.sock` | P1 | Created on session begin, removed on session end |
-| FR-002 | HTTP request parsing to extract method + path from Docker API calls | P1 | Standard HTTP/1.1 over Unix socket |
-| FR-003 | Allowlist matching: method + path against role's `docker.allow` entries | P1 | Default deny for unmatched requests |
-| FR-004 | Container name resolution: resolve container ID to name for `{id}` paths | P1 | Cache container name lookups |
-| FR-005 | Glob pattern matching on container names (e.g., `firebase-*`) | P1 | Use minimatch or equivalent |
-| FR-006 | HTTP 403 response with descriptive error for denied requests | P1 | Include denied method+path in message |
-| FR-007 | Upstream socket auto-detection (DinD → DooD → fail closed) | P1 | Check `ENABLE_DIND` env + socket reachability |
-| FR-008 | Full request/response proxying for allowed requests | P1 | Stream bodies, preserve headers |
-| FR-009 | Security warning log when role allows `POST /containers/create` on host socket | P2 | DooD-specific risk |
-| FR-010 | Proxy runs in-process within the credhelper daemon (uid 1002) | P1 | No separate process |
+| FR-001 | Per-session proxy socket creation at `/run/generacy-credhelper/sessions/<id>/docker.sock` | P1 | Socket created on session begin, removed on session end |
+| FR-002 | HTTP request parsing to extract method + path from incoming Docker API requests | P1 | Must handle Docker API version prefixes (e.g., `/v1.41/...`) |
+| FR-003 | Allowlist matching: method + path checked against role's `docker.allow` rules | P1 | Default deny — anything not listed is rejected with 403 |
+| FR-004 | Container name resolution: resolve container ID → name for `{id}` path patterns with `name` globs | P1 | Cache name lookups to reduce upstream calls |
+| FR-005 | Upstream socket auto-detection (DinD → `/var/run/docker.sock`, DooD → `/var/run/docker-host.sock`) | P1 | Fail closed if neither is available |
+| FR-006 | HTTP 403 response for denied requests with clear error naming the denied method+path | P1 | |
+| FR-007 | Request forwarding to upstream socket and response relay back to client | P1 | Must handle chunked transfer encoding |
+| FR-008 | Security warning log at boot when role allows `POST /containers/create` on host socket upstream | P2 | DooD bind-mount risk |
+| FR-009 | Proxy runs in-process with credhelper daemon (same uid 1002), not as separate process | P1 | |
+| FR-010 | Session cleanup tears down proxy socket and all proxy state | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Allowlist enforcement accuracy | 100% deny for unlisted operations | Unit tests with comprehensive method+path combinations |
-| SC-002 | Proxy latency overhead | < 5ms per request | Benchmark allowed requests vs direct socket |
-| SC-003 | Session cleanup reliability | 0 leaked proxy sockets after session end | Integration test: create session, end session, verify socket removed |
-| SC-004 | Container name resolution | Correct glob matching for all test patterns | Unit tests with various name patterns and glob expressions |
-| SC-005 | Cross-cluster compatibility | Works on both DinD and DooD | Integration tests in both cluster configurations |
+| SC-001 | Allowed requests forwarded correctly | 100% | Integration test against real Docker socket |
+| SC-002 | Denied requests return 403 | 100% | Unit tests for allowlist matching with default deny |
+| SC-003 | Container name glob matching | Correct for all patterns | Unit tests with various glob patterns |
+| SC-004 | Upstream auto-detection | Works for DinD and DooD | Integration test in tetrad-development |
+| SC-005 | Session cleanup | No leaked sockets or state | Verify socket removed and connections closed on session end |
+| SC-006 | Fail-closed on missing upstream | Credhelper refuses to boot | Test with no Docker socket available |
 
 ## Assumptions
 
-- Phase 2 packages (#461, #462) are complete and provide session lifecycle hooks and role docker configuration
-- The credhelper daemon has sufficient permissions (uid 1002) to create Unix sockets under `/run/generacy-credhelper/`
-- Docker API follows standard HTTP/1.1 protocol over Unix sockets
-- Container name lookups via `GET /containers/{id}/json` are available on the upstream socket
-- Role configuration schema from #462 includes the `docker` block with `default` and `allow` fields
+- Phase 2 (#461 daemon, #462 config loading) is complete and provides session lifecycle hooks and role docker block schemas
+- The `DockerRule` Zod schema from `packages/credhelper` defines the allowlist structure
+- The credhelper daemon already manages per-session directories under `/run/generacy-credhelper/sessions/<id>/`
+- Container name resolution uses the upstream Docker API (`GET /containers/{id}/json`)
+- Glob matching uses a standard library (e.g., `minimatch` or `picomatch`)
 
 ## Out of Scope
 
-- Docker API streaming endpoints (attach, exec stream) — may be added in a future phase if needed
+- Docker API streaming endpoints (attach, exec stream) — only standard request-response proxying
+- Request body inspection for dangerous patterns (e.g., bind mount validation) — Phase 3 logs warnings only
+- Multi-upstream routing (only one upstream per credhelper instance)
+- Docker Compose or BuildKit API proxying
 - Rate limiting or quota enforcement on Docker API calls
-- Audit logging of allowed/denied requests (beyond the security warning for host socket + container create)
-- Multi-tenant isolation beyond per-session proxy sockets
-- Docker Compose or higher-level orchestration proxying
+- TLS/mTLS between proxy and upstream (Unix sockets only)
 
 ---
 
