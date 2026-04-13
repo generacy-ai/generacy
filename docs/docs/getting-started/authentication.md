@@ -11,7 +11,8 @@ Generacy requires credentials for GitHub and Anthropic to function. This page wa
 | Credential | Purpose | Required For | Where to Get It |
 |------------|---------|-------------|-----------------|
 | **GitHub PAT** | Repository access, creating PRs, managing issues | All levels | [github.com/settings/tokens](https://github.com/settings/tokens/new) |
-| **Anthropic API Key** | AI agent capabilities (Claude) | All levels | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| **Anthropic API Key** | AI agent capabilities via Anthropic API | All levels (API plan) | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| **Claude OAuth Token** | AI agent capabilities via Claude Max/Pro subscription | All levels (subscription) | Extracted from macOS Keychain — see [Claude Subscription Auth](./claude-subscription-auth.md) |
 | **OAuth sign-in** | Web dashboard access at generacy.ai | Level 2+ | [generacy.ai](https://generacy.ai) |
 
 ## GitHub Personal Access Token (PAT)
@@ -58,19 +59,40 @@ Generacy checks for credentials in this order:
 
 For production use, an explicit `GITHUB_TOKEN` in your env file is recommended.
 
-## Anthropic API Key
+## Anthropic / Claude Credentials
 
-Generacy uses the Anthropic API to power AI agent capabilities.
+Generacy supports two ways to authenticate Claude agents. Use whichever matches your plan.
+
+### Option A — Anthropic API Key (recommended for teams)
+
+Use an API key if you have an [Anthropic API account](https://console.anthropic.com) with a billing plan.
 
 1. Go to [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
 2. Sign in or create an Anthropic account
 3. Click **Create Key**
 4. Give the key a name (e.g., `generacy-dev`)
 5. Copy the key immediately — it won't be shown again
+6. Set it in your `.env.local`:
+   ```env
+   ANTHROPIC_API_KEY=sk-ant-api03-...
+   ```
 
 :::tip
 Make sure your Anthropic account has available credits or an active billing plan. API calls will fail if your account has no credit balance.
 :::
+
+### Option B — Claude Max / Pro Subscription (local cluster only)
+
+If you have a Claude Max or Pro subscription you can use your OAuth bearer token instead — no separate API credits required.
+
+Set `ANTHROPIC_AUTH_TOKEN` (leave `ANTHROPIC_API_KEY` empty):
+
+```env title=".devcontainer/generacy/.env.local"
+ANTHROPIC_API_KEY=
+ANTHROPIC_AUTH_TOKEN=sk-ant-oat01-...
+```
+
+OAuth tokens are short-lived and stored in the macOS Keychain, so there is an extra extraction step. See the full walk-through in [Using Claude Subscription Credits](./claude-subscription-auth.md).
 
 ## OAuth Sign-In (Level 2+)
 
@@ -100,8 +122,13 @@ Open `.generacy/generacy.env` and set your tokens:
 # Minimum scopes: repo, workflow
 GITHUB_TOKEN=ghp_your_token_here
 
-# Anthropic API key for Claude Code agent
+# Anthropic API key for Claude Code agent (Option A — API plan)
+# Leave blank if using ANTHROPIC_AUTH_TOKEN below
 ANTHROPIC_API_KEY=sk-ant-your_key_here
+
+# OAuth bearer token for Claude Max/Pro subscription (Option B — subscription)
+# See: getting-started/claude-subscription-auth
+ANTHROPIC_AUTH_TOKEN=
 ```
 
 :::danger Never commit credentials
@@ -121,3 +148,5 @@ The doctor command checks that your `GITHUB_TOKEN` is valid and has the required
 ## Next Steps
 
 With your credentials configured, proceed to [Project Setup](./project-setup.md) to initialize Generacy in your project.
+
+If you are using a Claude Max or Pro subscription rather than an API key, continue to [Using Claude Subscription Credits](./claude-subscription-auth.md).
