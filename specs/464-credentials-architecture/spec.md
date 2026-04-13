@@ -48,10 +48,13 @@ docker:
 ### Enforcement
 
 - Parse each incoming HTTP request on the proxy socket
-- Match `method` + `path` against the role's allowlist
-- For container-scoped operations (paths with `{id}`): resolve the container ID to its name, match against the `name` glob pattern if specified
+- **Strip Docker API version prefix** before matching: incoming paths like `/v1.41/containers/json` are normalized to `/containers/json` using `requestPath.replace(/^\/v\d+\.\d+/, '')`. Role configs always use unversioned paths.
+- Match `method` + normalized `path` against the role's allowlist
+- For container-scoped operations (paths with `{id}`): resolve the container ID to its name, match against the `name` glob pattern if specified. If `name` is omitted from the rule, any container is allowed for that method+path.
+- **Container name resolution failure**: if a name lookup fails for a rule with a `name` glob, deny the request (fail closed) with HTTP 403 message: "container name resolution failed for ID {id} — request denied by name-based policy"
 - **Default deny** — anything not explicitly in the allowlist is rejected with HTTP 403
-- Dangerous paths (`POST /containers/create` with arbitrary bind mounts, `POST /exec`, etc.) should only be allowed if explicitly listed AND constrained
+- **Streaming restriction**: `GET /containers/{id}/logs` with `follow=true` query parameter is rejected with HTTP 403 (unbounded streaming is out of scope). Logs without `follow=true` work normally via chunked transfer encoding.
+- Dangerous paths (`POST /containers/create` with arbitrary bind mounts, `POST /exec`, etc.) should only be allowed if explicitly listed. The allowlist entry itself is the constraint — the proxy logs a security warning when forwarding to known-dangerous paths but does not perform request body inspection (deferred to Phase 4).
 
 ### Security note for non-DinD clusters (cluster-base)
 
@@ -129,12 +132,12 @@ Follow the pattern from [Tecnativa/docker-socket-proxy](https://github.com/Tecna
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Per-session proxy socket creation at `/run/generacy-credhelper/sessions/<id>/docker.sock` | P1 | Socket created on session begin, removed on session end |
-| FR-002 | HTTP request parsing to extract method + path from incoming Docker API requests | P1 | Must handle Docker API version prefixes (e.g., `/v1.41/...`) |
+| FR-002 | HTTP request parsing to extract method + path from incoming Docker API requests, stripping version prefix (`/v\d+\.\d+`) before matching | P1 | Role configs use unversioned paths; proxy normalizes |
 | FR-003 | Allowlist matching: method + path checked against role's `docker.allow` rules | P1 | Default deny — anything not listed is rejected with 403 |
-| FR-004 | Container name resolution: resolve container ID → name for `{id}` path patterns with `name` globs | P1 | Cache name lookups to reduce upstream calls |
+| FR-004 | Container name resolution: resolve container ID → name for `{id}` path patterns with `name` globs. Fail closed (HTTP 403) if resolution fails. Skip resolution when `name` is omitted. | P1 | Cache name lookups to reduce upstream calls |
 | FR-005 | Upstream socket auto-detection (DinD → `/var/run/docker.sock`, DooD → `/var/run/docker-host.sock`) | P1 | Fail closed if neither is available |
 | FR-006 | HTTP 403 response for denied requests with clear error naming the denied method+path | P1 | |
-| FR-007 | Request forwarding to upstream socket and response relay back to client | P1 | Must handle chunked transfer encoding |
+| FR-007 | Request forwarding to upstream socket and response relay back to client | P1 | Must handle chunked transfer encoding. Reject `follow=true` query param on logs endpoint (unbounded streaming out of scope). |
 | FR-008 | Security warning log at boot when role allows `POST /containers/create` on host socket upstream | P2 | DooD bind-mount risk |
 | FR-009 | Proxy runs in-process with credhelper daemon (same uid 1002), not as separate process | P1 | |
 | FR-010 | Session cleanup tears down proxy socket and all proxy state | P1 | |
@@ -160,8 +163,8 @@ Follow the pattern from [Tecnativa/docker-socket-proxy](https://github.com/Tecna
 
 ## Out of Scope
 
-- Docker API streaming endpoints (attach, exec stream) — only standard request-response proxying
-- Request body inspection for dangerous patterns (e.g., bind mount validation) — Phase 3 logs warnings only
+- Docker API streaming endpoints (attach, exec stream, logs with `follow=true`) — only standard request-response proxying with chunked transfer encoding support
+- Request body inspection for dangerous patterns (e.g., bind mount validation) — Phase 3 logs warnings only; body inspection deferred to Phase 4
 - Multi-upstream routing (only one upstream per credhelper instance)
 - Docker Compose or BuildKit API proxying
 - Rate limiting or quota enforcement on Docker API calls

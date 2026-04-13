@@ -10,7 +10,7 @@
 - B: Require version prefix in allowlist entries (role configs must include `/v1.41/...`)
 - C: Support both — match with or without version prefix
 
-**Answer**: *Pending*
+**Answer**: A — Strip the version prefix before matching. Role configs use unversioned paths (`/containers/json`). The proxy normalizes incoming requests by stripping the `/v\d+\.\d+` prefix before matching. Implementation: `const normalizedPath = requestPath.replace(/^\/v\d+\.\d+/, '');`. Keeps role configs readable, forward-compatible, and consistent with existing docker-socket-proxy implementations.
 
 ### Q2: Streaming response support (logs endpoint)
 **Context**: The example allowlist includes `GET /containers/{id}/logs`, but the spec lists "Docker API streaming endpoints (attach, exec stream)" as out of scope. Docker logs with `follow=true` is a long-lived streaming response using chunked transfer encoding. Many non-streaming Docker API responses also use chunked encoding. This distinction affects the proxy's response handling implementation.
@@ -20,7 +20,7 @@
 - B: Support chunked responses but not long-lived streams (logs without `follow` works, `follow=true` is rejected or times out)
 - C: Only non-streaming request-response proxying (logs may partially work but is not guaranteed)
 
-**Answer**: *Pending*
+**Answer**: B — Support chunked responses but not long-lived streams. Docker API responses commonly use chunked transfer encoding even for non-streaming calls, so the proxy must handle it. However, `follow=true` on logs creates an unbounded stream (same category as attach/exec, out of scope). Reject `follow=true` as a query parameter on `GET /containers/{id}/logs` with HTTP 403 message "streaming logs (follow=true) is not supported through the scoped proxy". Logs without `follow=true` work normally via chunked transfer.
 
 ### Q3: Request body inspection for dangerous paths
 **Context**: The spec states dangerous paths like `POST /containers/create` with arbitrary bind mounts "should only be allowed if explicitly listed AND constrained." The word "constrained" is ambiguous — it could mean the allowlist entry itself is the constraint (i.e., the admin consciously listed it), or it could mean the proxy should inspect the request body to enforce additional constraints (e.g., reject bind mounts to sensitive host paths).
@@ -29,7 +29,7 @@
 - A: Allowlist entry is the constraint — proxy logs security warning but forwards if method+path matches (body inspection is out of scope for Phase 3)
 - B: Proxy should inspect request body for known dangerous patterns (e.g., bind mounts to `/`, `/etc`, `/var/run/docker.sock`) and deny even if method+path is allowed
 
-**Answer**: *Pending*
+**Answer**: A — Allowlist entry is the constraint; no body inspection in Phase 3. Body inspection is complex and would be a significant subsystem. For Phase 3, if an admin explicitly allows `POST /containers/create`, that's a conscious decision. The proxy logs a security warning when forwarding to known-dangerous paths. Role validation in #462 already surfaces warnings for `POST /containers/create` with host-socket upstream. Body inspection can be added as a Phase 4 refinement.
 
 ### Q4: Container name resolution failure handling
 **Context**: FR-004 requires resolving container IDs to names for glob matching, with caching. But the spec doesn't specify behavior when name resolution fails — e.g., the container was deleted between the request arriving and the name lookup, the upstream API returns an error, or the container ID is invalid.
@@ -39,10 +39,10 @@
 - B: Return HTTP 502 (upstream error) to distinguish from 403 (policy deny)
 - C: Skip name check and allow if method+path matches (fail open for name resolution only)
 
-**Answer**: *Pending*
+**Answer**: A — Deny the request (fail closed). Consistent with the "all fail closed" principle. Return HTTP 403 with message: "container name resolution failed for ID {id} — request denied by name-based policy (could not verify name against pattern '{glob}')". Resolution failure is suspicious and the workflow should handle 403 explicitly rather than silently proceeding.
 
 ### Q5: Omitted `name` field semantics for container-scoped paths
 **Context**: The `DockerRule` schema makes `name` optional. The allowlist example shows some container-scoped paths (with `{id}`) that have a `name` glob and some that don't (e.g., `GET /containers/{id}/json` has no `name`, while `POST /containers/{id}/start` has `name: "firebase-*"`). This is likely intentional, but the spec doesn't explicitly state the behavior.
 **Question**: When a `name` field is omitted from an allowlist entry for a container-scoped path, does that mean any container is allowed for that method+path combination (i.e., no name filtering)?
 
-**Answer**: *Pending*
+**Answer**: Yes — omitted `name` means "any container" for that method+path combination. Name filtering is opt-in per allowlist entry. Role authors get granularity: allow inspecting any container for debugging, but restrict start/stop/restart to containers matching a specific pattern. Implementation: if `rule.name` is undefined, skip name resolution + glob match entirely for that rule.
