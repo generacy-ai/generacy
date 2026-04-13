@@ -1,177 +1,162 @@
-# Feature Specification: Core Credential Type Plugins
+# Feature Specification: Core Credential Type Plugins (7 plugins)
 
 **Branch**: `463-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft
 
-**Context:** Credentials Architecture — Phase 3, part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). See decision #2 and the "Core plugin initial set" section.
+**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). See decision #2 and the "Core plugin initial set" section.
 
 **Depends on:** Phase 2 (#460 plugin loader, #461 daemon, #462 config loading)
 
-**Parallel with:** #464 and #465
-
 ## Summary
 
-Implement 7 core credential type plugins in `packages/credhelper/src/plugins/`. Each plugin implements the `CredentialTypePlugin` interface (defined in #458 at `packages/credhelper/src/types/plugin.ts`) and registers with the plugin loader from #460. These plugins cover the essential credential types needed by the platform: GitHub tokens (app and PAT), cloud provider credentials (GCP, AWS), payment API keys (Stripe), generic API keys, and legacy env-var passthrough.
+Implement the 7 core credential type plugins inside `packages/credhelper/src/plugins/`. Each plugin implements the `CredentialTypePlugin` interface from `packages/credhelper/src/types/plugin.ts`, providing Zod schemas for validation, either a `mint()` or `resolve()` method for credential acquisition, and `renderExposure()` for each supported exposure kind. These plugins cover the initial set of credential types: GitHub (App + PAT), cloud providers (GCP, AWS), payment (Stripe), generic API keys, and legacy env-var passthrough.
 
 ## Plugins to Implement
 
 ### 1. `github-app` — Short-lived GitHub App installation tokens
-
 - **Method**: `mint()` — calls GitHub API to create installation access token scoped to role's repositories + permissions
-- **Supported exposures**: `['env', 'git-credential-helper']`
-- **Scope schema**: validates `repositories: string[]` and `permissions: Record<string, string>` (contents, pull_requests, issues, workflows, etc.)
-- **Credential schema**: validates `appId`, `installationId`, `privateKey` (backend ref)
+- **Exposures**: `['env', 'git-credential-helper']`
+- **Scope schema**: validates `repositories[]` and `permissions{}` (contents, pull_requests, issues, workflows, etc.)
 
 ### 2. `github-pat` — Static GitHub Personal Access Token
+- **Method**: `resolve()` — reads token from backend
+- **Exposures**: `['env', 'git-credential-helper']`
+- **Scope schema**: none (PATs are pre-scoped by user)
 
-- **Method**: `resolve()` — reads token from backend (env var or cloud secret store)
-- **Supported exposures**: `['env', 'git-credential-helper']`
-- **Scope schema**: none (PATs are pre-scoped by the user)
-- **Credential schema**: validates `backendKey`
-
-### 3. `gcp-service-account` — Impersonation-based service account tokens
-
-- **Method**: `mint()` — uses GCP IAM API to generate short-lived access token via service account impersonation
-- **Supported exposures**: `['env', 'gcloud-external-account']`
-- **Scope schema**: validates `scopes: string[]` (e.g. `cloud-platform`, `cloud-platform.read-only`)
-- **Credential schema**: validates `serviceAccountEmail`, `lifetime?`
+### 3. `gcp-service-account` — Impersonation-based access tokens
+- **Method**: `mint()` — uses GCP IAM API for short-lived access token via service account impersonation
+- **Exposures**: `['env', 'gcloud-external-account']`
+- **Scope schema**: validates `scopes[]` (e.g. `cloud-platform`, `cloud-platform.read-only`)
 
 ### 4. `aws-sts` — AssumeRole with session policy
-
-- **Method**: `mint()` — calls AWS STS AssumeRole with the role's session policy
-- **Supported exposures**: `['env']` (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
-- **Scope schema**: validates `roleArn: string`, `sessionPolicy?: object`
-- **Credential schema**: validates `roleArn`, `externalId?`, `region?`
+- **Method**: `mint()` — calls AWS STS AssumeRole with role's session policy
+- **Exposures**: `['env']` (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN)
+- **Scope schema**: validates `roleArn`, `sessionPolicy?`
 
 ### 5. `stripe-restricted-key` — Static Stripe restricted API key
-
 - **Method**: `resolve()` — reads key from backend
-- **Supported exposures**: `['env']`
+- **Exposures**: `['env']`
 - **Scope schema**: none (Stripe restricted keys are pre-scoped)
-- **Credential schema**: validates `backendKey`
 
 ### 6. `api-key` — Generic static API key
-
 - **Method**: `resolve()` — reads key from backend
-- **Supported exposures**: `['env', 'localhost-proxy']`
-- **Credential schema**: validates `backendKey`, `envName?`
+- **Exposures**: `['env', 'localhost-proxy']`
+- **Scope schema**: none
 
-### 7. `env-passthrough` — Process env passthrough (legacy compatibility)
-
+### 7. `env-passthrough` — Legacy env var passthrough
 - **Method**: `resolve()` — reads `process.env[backendKey]`
-- **Supported exposures**: `['env']`
+- **Exposures**: `['env']`
 - **Scope schema**: none — zero abuse-prevention path for existing env var setups
-- **Credential schema**: validates `envVar: string`
 
-## Plugin Interface Contract
+### Plugin Interface Contract
 
 Each plugin must provide (per `CredentialTypePlugin` in `types/plugin.ts`):
-
-- `type: string` — unique identifier matching the credential type name
-- `credentialSchema: ZodSchema` — validates the credential declaration from `credentials.yaml`
-- `scopeSchema?: ZodSchema` — validates the role's `scope:` block (optional)
-- `supportedExposures: ExposureKind[]` — which exposure kinds this plugin supports
+- `type: string` — unique identifier matching naming convention
+- `credentialSchema: ZodSchema` — validates credential declaration from `credentials.yaml`
+- `scopeSchema?: ZodSchema` — validates role's `scope:` block (optional)
+- `supportedExposures: ExposureKind[]` — declared exposure kinds
 - Either `mint(ctx: MintContext)` or `resolve(ctx: ResolveContext)` (not both)
 - `renderExposure(kind, secret, cfg): ExposureOutput` — for each supported exposure kind
 
-## Exposure Rendering
+### Exposure Rendering
 
-Each plugin's `renderExposure()` must handle its declared exposure kinds:
-
-| Exposure Kind | Return Type | Description |
-|---|---|---|
-| `env` | `{ kind: 'env', entries: Array<{ key, value }> }` | Key-value pairs for session env file |
-| `git-credential-helper` | `{ kind: 'git-credential-helper', script: string }` | Shell script that calls the data socket |
-| `gcloud-external-account` | `{ kind: 'gcloud-external-account', json: object }` | External account JSON with `credential_source.url` pointing at data socket |
-| `localhost-proxy` | `{ kind: 'localhost-proxy', proxyConfig: { port, upstream, headers } }` | Proxy configuration for localhost forwarding |
+- **`env`**: return `{ key: string, value: string }` pairs for session env file
+- **`git-credential-helper`**: return shell script calling the data socket
+- **`gcloud-external-account`**: return external account JSON with `credential_source.url` pointing at data socket
+- **`localhost-proxy`**: return proxy config `{ port, upstream, headers }`
 
 ## User Stories
 
-### US1: Platform operator provisions cloud credentials for AI agents
+### US1: Platform Operator Configures GitHub App Credentials
 
 **As a** platform operator,
-**I want** to configure credential plugins for GitHub, GCP, and AWS so that AI agent sessions receive scoped, short-lived tokens,
-**So that** agents have least-privilege access and tokens auto-expire, reducing blast radius if compromised.
+**I want** to declare a `github-app` credential in `credentials.yaml` and have the daemon mint scoped installation tokens automatically,
+**So that** CI agents and development environments receive least-privilege GitHub tokens without manual PAT management.
 
 **Acceptance Criteria**:
-- [ ] `github-app` plugin mints installation tokens with only the repositories and permissions specified in the role
-- [ ] `gcp-service-account` plugin mints impersonation tokens with the specified OAuth scopes
-- [ ] `aws-sts` plugin assumes a role with the specified session policy
-- [ ] All minted tokens include an expiry time
+- [ ] `github-app` plugin validates `appId`, `installationId`, `privateKey` via `credentialSchema`
+- [ ] `mint()` requests installation token scoped to the role's repositories and permissions
+- [ ] Token is exposed via `env` and `git-credential-helper` exposure kinds
+- [ ] Minted tokens have correct TTL and expire as configured
 
-### US2: Developer uses existing env vars without migration
+### US2: Developer Uses Existing Env Vars Without Migration
 
-**As a** developer with an existing `.env`-based workflow,
-**I want** the `env-passthrough` plugin to read my environment variables unchanged,
-**So that** I can adopt the credential helper without rewriting my local setup.
-
-**Acceptance Criteria**:
-- [ ] `env-passthrough` reads from `process.env` using the configured key
-- [ ] Existing `.env` files continue to work with no changes
-- [ ] The `env` exposure renders the same key-value pairs the developer expects
-
-### US3: Application uses third-party API keys securely
-
-**As a** platform operator configuring third-party integrations,
-**I want** static API keys (Stripe, generic) resolved from a secret backend and exposed via env or localhost proxy,
-**So that** raw secrets are fetched on-demand rather than stored in plaintext config.
+**As a** developer with existing `.env`-based credential workflows,
+**I want** to use `env-passthrough` credentials as a drop-in replacement,
+**So that** I can adopt the credentials architecture incrementally without changing my existing setup.
 
 **Acceptance Criteria**:
-- [ ] `stripe-restricted-key` resolves keys from the configured backend
-- [ ] `api-key` supports both `env` and `localhost-proxy` exposure kinds
-- [ ] `localhost-proxy` exposure returns proper proxy config with upstream and auth headers
+- [ ] `env-passthrough` reads the correct environment variable via `process.env[backendKey]`
+- [ ] Works without any backend client calls
+- [ ] Exposed via `env` exposure kind with the original variable name
 
-### US4: Git operations use credential helper for seamless auth
+### US3: Cloud Engineer Configures Cross-Account AWS Access
 
-**As a** developer or AI agent performing git operations,
-**I want** GitHub credentials exposed via `git-credential-helper`,
-**So that** `git clone`, `git push`, and `git fetch` authenticate transparently without manual token management.
+**As a** cloud engineer,
+**I want** to declare `aws-sts` credentials with per-role session policies,
+**So that** each role gets time-limited AWS credentials scoped to only the permissions it needs.
 
 **Acceptance Criteria**:
-- [ ] `github-app` and `github-pat` plugins support `git-credential-helper` exposure
-- [ ] `renderExposure` for `git-credential-helper` produces a valid shell script
-- [ ] The shell script calls the daemon's data socket to fetch the token
+- [ ] `aws-sts` plugin validates `roleArn` and optional `sessionPolicy` via scope schema
+- [ ] `mint()` calls STS AssumeRole and returns temporary credentials
+- [ ] Credentials are exposed as `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`
+
+### US4: Platform Operator Proxies Sensitive API Keys
+
+**As a** platform operator,
+**I want** to expose generic API keys via `localhost-proxy` instead of raw environment variables,
+**So that** sensitive keys are never written to disk or visible in the process environment.
+
+**Acceptance Criteria**:
+- [ ] `api-key` plugin supports both `env` and `localhost-proxy` exposure kinds
+- [ ] `renderExposure('localhost-proxy', ...)` returns valid proxy config with upstream and auth headers
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Each plugin exports a default object implementing `CredentialTypePlugin` | P1 | Must pass loader validation in `validate.ts` |
-| FR-002 | Each plugin declares a `credentialSchema` (Zod) matching expected YAML structure | P1 | Validated against credential entries in `credentials.yaml` |
-| FR-003 | Minting plugins (`github-app`, `gcp-service-account`, `aws-sts`) return `{ value: Secret, expiresAt: Date }` | P1 | TTL-aware; daemon uses `expiresAt` for refresh scheduling |
-| FR-004 | Resolving plugins (`github-pat`, `stripe-restricted-key`, `api-key`, `env-passthrough`) return `Secret` | P1 | Stateless fetch from backend |
-| FR-005 | `renderExposure()` produces correct `ExposureOutput` discriminated union for each supported kind | P1 | Must match types in `types/exposure.ts` |
-| FR-006 | `scopeSchema` (where present) validates role-level scope blocks from `roles.yaml` | P1 | `github-app`, `gcp-service-account`, `aws-sts` |
-| FR-007 | All plugins register with the plugin loader from #460 | P1 | Discovered via package naming convention or core plugin paths |
-| FR-008 | `env-passthrough` reads directly from `process.env` without a backend client call | P2 | Special case — no `BackendClient` needed |
-| FR-009 | `github-app` constructs the correct GitHub API request for installation token creation | P1 | Must include JWT auth from app private key |
-| FR-010 | `aws-sts` passes session policy document when provided in scope | P1 | Policy restricts the assumed role's permissions |
+| FR-001 | Each plugin exports a valid `CredentialTypePlugin` object | P1 | Must pass runtime validation in `loader/validate.ts` |
+| FR-002 | `credentialSchema` for each plugin validates against example YAML from architecture plan | P1 | Zod `.parse()` must succeed for valid configs, throw for invalid |
+| FR-003 | `scopeSchema` for plugins with scoping validates role scope blocks | P1 | `github-app`, `gcp-service-account`, `aws-sts` |
+| FR-004 | `mint()` plugins call correct external API with proper scoping | P1 | Mock APIs in tests |
+| FR-005 | `resolve()` plugins fetch secrets via `BackendClient.fetchSecret()` | P1 | Except `env-passthrough` which reads `process.env` |
+| FR-006 | `renderExposure()` produces correct output for each declared exposure kind | P1 | Output must match `ExposureOutput` discriminated union |
+| FR-007 | All plugins register with the plugin loader from #460 | P1 | Discovered via core plugin path scanning |
+| FR-008 | `env-passthrough` works as drop-in for existing `.env` workflows | P1 | No backend client dependency |
+| FR-009 | `github-app` mint scopes installation tokens to role's repo + permission set | P1 | Matches GitHub Apps API |
+| FR-010 | `gcp-service-account` mint uses IAM impersonation API | P1 | Short-lived access tokens |
+| FR-011 | `aws-sts` mint calls AssumeRole with session policy | P1 | Returns triple: access key, secret, session token |
+| FR-012 | `git-credential-helper` exposure produces valid shell script | P2 | Script calls data socket |
+| FR-013 | `gcloud-external-account` exposure produces valid external account JSON | P2 | `credential_source.url` points at data socket |
+| FR-014 | `localhost-proxy` exposure produces valid proxy config | P2 | `{ port, upstream, headers }` |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Plugin count | 7/7 plugins implemented | All plugins pass loader validation |
-| SC-002 | Schema validation coverage | 100% of credential + scope schemas | Unit tests with valid and invalid inputs |
-| SC-003 | Exposure rendering coverage | All declared exposure kinds per plugin | Unit tests for each plugin × exposure combination |
-| SC-004 | Mint/resolve correctness | All plugins return correct Secret format | Unit tests with mocked backends and APIs |
-| SC-005 | Loader registration | All 7 plugins discovered and loaded | Integration test with plugin loader from #460 |
+| SC-001 | Plugin count | 7/7 implemented | All plugins load and register correctly |
+| SC-002 | Schema validation coverage | 100% | Unit tests for valid + invalid configs for each plugin |
+| SC-003 | Mint/resolve test coverage | 100% of plugins | Each plugin tested with mocked backends/APIs |
+| SC-004 | Exposure rendering coverage | All declared kinds per plugin | Unit test for each (plugin, exposure) pair |
+| SC-005 | Loader integration | All 7 discovered | Plugins found via core path discovery and registered in plugin map |
 
 ## Assumptions
 
-- Phase 2 deliverables are complete: plugin loader (#460), daemon (#461), and config loading (#462)
-- The `CredentialTypePlugin` interface in `types/plugin.ts` is stable and will not change during this phase
-- `BackendClient.fetchSecret()` is implemented and available for resolve-type plugins
-- GitHub API, GCP IAM API, and AWS STS API calls will be mocked in tests (no live API calls in CI)
-- Core plugins are discovered by path (not by npm package naming convention) — they live inside `packages/credhelper/src/plugins/`
+- Phase 2 artifacts are complete: plugin loader (#460), daemon (#461), config loading (#462)
+- `CredentialTypePlugin` interface, `ExposureKind`, `MintContext`, `ResolveContext`, `Secret`, and `ExposureOutput` types are stable as defined in `packages/credhelper/src/types/`
+- External API calls (GitHub, GCP IAM, AWS STS) will be mocked in tests; no real credentials needed
+- Core plugins are trusted by path and skip verification (per `loader/verify.ts`)
 
 ## Out of Scope
 
-- Community/third-party plugin distribution and verification (handled by plugin loader #460)
-- Credential rotation scheduling (handled by daemon #461)
-- `docker-socket-proxy` exposure kind (not required by any of the 7 core plugins)
-- Live API integration tests against GitHub, GCP, or AWS (mocks only in this phase)
-- UI for credential management
-- Plugin hot-reloading
+- Community/third-party plugin development and distribution
+- Credential rotation policies (handled by daemon session manager)
+- UI for credential configuration
+- Backend implementations (env, cloud secret managers) — already handled by #462
+- Docker socket proxy exposure kind (listed in `ExposureKind` type but not assigned to any core plugin)
+
+## Open Questions
+
+See `clarifications.md` for 5 pending clarification questions (Q1–Q5) that affect implementation details around config access, exposure rendering responsibility, file structure, AWS roleArn placement, and env-passthrough backendKey mapping.
 
 ---
 
