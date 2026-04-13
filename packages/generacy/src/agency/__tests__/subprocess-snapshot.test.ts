@@ -20,7 +20,7 @@ function createMockLogger() {
 }
 
 describe('SubprocessAgency snapshot parity', () => {
-  it('launcher path produces byte-identical spawn args to direct path', () => {
+  it('launcher path produces byte-identical spawn args to direct path', async () => {
     const factory = new RecordingProcessFactory();
     const factories = new Map([['interactive', factory]]);
     const launcher = new AgentLauncher(factories);
@@ -41,6 +41,9 @@ describe('SubprocessAgency snapshot parity', () => {
     // connect() will call launcher.launch() → factory.spawn()
     // We don't await because the dummy handle won't respond to init
     const connectPromise = agency.connect().catch(() => { /* timeout expected */ });
+
+    // launch() is async — flush microtasks so factory.spawn() has been called
+    await Promise.resolve();
 
     // Verify spawn was called through the launcher
     expect(factory.calls).toHaveLength(1);
