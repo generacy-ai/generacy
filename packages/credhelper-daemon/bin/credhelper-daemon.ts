@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { Daemon } from '../src/daemon.js';
-import type { DaemonConfig } from '../src/types.js';
+import type { CredentialTypePlugin, DaemonConfig } from '../src/types.js';
+import { CORE_PLUGINS } from '../src/plugins/core/index.js';
 
 const controlSocketPath =
   process.env['CREDHELPER_CONTROL_SOCKET'] ??
@@ -21,8 +22,13 @@ const workerGid = parseInt(
   10,
 );
 
-// Config loader and plugin registry will be provided by #462 and #460
-// For now, create stub implementations that fail clearly
+// Build plugin registry from core plugins + future community plugins (#460)
+const pluginMap = new Map<string, CredentialTypePlugin>();
+for (const plugin of CORE_PLUGINS) {
+  pluginMap.set(plugin.type, plugin);
+}
+
+// Config loader will be provided by #462
 const config: DaemonConfig = {
   controlSocketPath,
   sessionsDir,
@@ -41,8 +47,12 @@ const config: DaemonConfig = {
     },
   },
   pluginRegistry: {
-    getPlugin() {
-      throw new Error('Plugin registry not yet integrated (#460)');
+    getPlugin(credentialType: string) {
+      const plugin = pluginMap.get(credentialType);
+      if (!plugin) {
+        throw new Error(`No plugin registered for credential type: ${credentialType}`);
+      }
+      return plugin;
     },
   },
   sweepIntervalMs: 30000,

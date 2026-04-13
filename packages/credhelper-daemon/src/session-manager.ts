@@ -170,7 +170,8 @@ export class SessionManager {
         latestExpiry = expiresAt;
       }
 
-      // Render exposures
+      // Render exposures — call plugin.renderExposure() for credential-specific data,
+      // then renderer.renderPluginExposure() to wrap with session infrastructure.
       for (const expose of credRef.expose) {
         if (!plugin.supportedExposures.includes(expose.as)) {
           throw new CredhelperError(
@@ -180,37 +181,18 @@ export class SessionManager {
           );
         }
 
-        switch (expose.as) {
-          case 'env': {
-            const output = plugin.renderExposure(expose.as, credValue, {
-              kind: 'env',
-              name: expose.name ?? credRef.ref.toUpperCase().replace(/-/g, '_'),
-            });
-            if (output.kind === 'env') {
-              await this.renderer.renderEnv(sessionDir, output.entries);
-            }
-            break;
-          }
-          case 'git-credential-helper':
-            await this.renderer.renderGitCredentialHelper(
-              sessionDir,
-              dataSocketPath,
-            );
-            break;
-          case 'gcloud-external-account':
-            await this.renderer.renderGcloudExternalAccount(
-              sessionDir,
-              dataSocketPath,
-              credRef.ref,
-            );
-            break;
-          case 'localhost-proxy':
-            this.renderer.renderLocalhostProxy();
-            break;
-          case 'docker-socket-proxy':
-            this.renderer.renderDockerSocketProxy();
-            break;
-        }
+        // Build ExposureConfig for this kind
+        const exposureCfg = expose.as === 'env'
+          ? { kind: 'env' as const, name: expose.name ?? credRef.ref.toUpperCase().replace(/-/g, '_') }
+          : expose.as === 'localhost-proxy'
+            ? { kind: 'localhost-proxy' as const, port: expose.port ?? 0 }
+            : { kind: expose.as } as import('@generacy-ai/credhelper').ExposureConfig;
+
+        // Plugin renders credential-specific data
+        const exposureData = plugin.renderExposure(expose.as, credValue, exposureCfg);
+
+        // Renderer wraps with session infrastructure (socket paths, file layout)
+        await this.renderer.renderPluginExposure(sessionDir, dataSocketPath, credRef.ref, exposureData);
       }
     }
 

@@ -45,7 +45,7 @@ export class ExposureRenderer {
         await this.renderGcloudExternalAccount(sessionDir, dataSocketPath, credentialId, data);
         break;
       case 'localhost-proxy':
-        this.renderLocalhostProxy();
+        await this.renderLocalhostProxy(sessionDir, data);
         break;
     }
   }
@@ -115,11 +115,27 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
     );
   }
 
-  /** Phase 3 stub — localhost proxy is not yet implemented. */
-  renderLocalhostProxy(): never {
-    throw new CredhelperError(
-      'NOT_IMPLEMENTED',
-      'localhost-proxy exposure is not yet implemented (Phase 3)',
+  /**
+   * Write localhost proxy config to session directory.
+   * The daemon's proxy lifecycle manager reads this config to start
+   * a reverse proxy that injects auth headers into upstream requests.
+   */
+  async renderLocalhostProxy(
+    sessionDir: string,
+    data: { upstream: string; headers: Record<string, string> },
+  ): Promise<void> {
+    const proxyDir = path.join(sessionDir, 'proxy');
+    await mkdirSafe(proxyDir, 0o750);
+
+    const proxyConfig = {
+      upstream: data.upstream,
+      headers: data.headers,
+    };
+
+    await writeFileSafe(
+      path.join(proxyDir, 'config.json'),
+      JSON.stringify(proxyConfig, null, 2) + '\n',
+      0o640,
     );
   }
 

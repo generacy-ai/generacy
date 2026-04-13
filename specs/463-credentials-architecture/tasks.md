@@ -44,12 +44,12 @@ Each plugin is independent. All plugins follow the pattern in `research.md` Patt
 
 Depends on all Phase 1 and Phase 2 tasks being complete.
 
-- [ ] T030 [US1,US2,US3,US4] Create core plugin index in `packages/credhelper-daemon/src/plugins/core/index.ts` — static `CORE_PLUGINS` array importing all 7 plugins, exported for daemon registration
-- [ ] T031 Write registration test in `packages/credhelper-daemon/__tests__/plugins/core-index.test.ts` — verify all 7 plugins in `CORE_PLUGINS`, each has unique `type`, valid interface shape
-- [ ] T032 [US1,US2,US3,US4] Update `session-manager.ts` to pass `config` field when building `MintContext`/`ResolveContext` — strip common fields (`id`, `type`, `backend`, `backendKey`, `mint`) from credential entry, pass remainder as `config`
-- [ ] T033 [US1,US2,US3,US4] Update `exposure-renderer.ts` to accept `PluginExposureData` from plugins — for env: use plugin entries, for git-credential-helper: take `{host, protocol, username, password}` and generate shell script with data.sock, for gcloud-external-account: take plugin fields and generate JSON with data.sock URL, for localhost-proxy: take `{upstream, headers}` and configure proxy
-- [ ] T034 [US1,US2,US3,US4] Update daemon plugin registration to register `CORE_PLUGINS` — ensure core plugins are registered directly alongside community plugins from #460 loader
-- [ ] T035 Write integration tests in `packages/credhelper-daemon/__tests__/integration/core-plugins.test.ts` — all 7 core plugins register, end-to-end session creation with mock plugin, exposure rendering pipeline: plugin → daemon renderer → session dir files
+- [X] T030 [US1,US2,US3,US4] Create core plugin index in `packages/credhelper-daemon/src/plugins/core/index.ts` — static `CORE_PLUGINS` array importing all 7 plugins, exported for daemon registration
+- [X] T031 Write registration test in `packages/credhelper-daemon/__tests__/plugins/core-index.test.ts` — verify all 7 plugins in `CORE_PLUGINS`, each has unique `type`, valid interface shape
+- [X] T032 [US1,US2,US3,US4] Update `session-manager.ts` to pass `config` field when building `MintContext`/`ResolveContext` — strip common fields (`id`, `type`, `backend`, `backendKey`, `mint`) from credential entry, pass remainder as `config`
+- [X] T033 [US1,US2,US3,US4] Update `exposure-renderer.ts` to accept `PluginExposureData` from plugins — for env: use plugin entries, for git-credential-helper: take `{host, protocol, username, password}` and generate shell script with data.sock, for gcloud-external-account: take plugin fields and generate JSON with data.sock URL, for localhost-proxy: take `{upstream, headers}` and configure proxy
+- [X] T034 [US1,US2,US3,US4] Update daemon plugin registration to register `CORE_PLUGINS` — ensure core plugins are registered directly alongside community plugins from #460 loader
+- [X] T035 Write integration tests in `packages/credhelper-daemon/__tests__/integration/core-plugins.test.ts` — all 7 core plugins register, end-to-end session creation with mock plugin, exposure rendering pipeline: plugin → daemon renderer → session dir files
 
 ## Phase 4: Validation & Cleanup
 

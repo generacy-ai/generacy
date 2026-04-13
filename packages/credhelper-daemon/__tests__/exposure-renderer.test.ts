@@ -127,14 +127,23 @@ describe('ExposureRenderer', () => {
   });
 
   describe('renderLocalhostProxy()', () => {
-    it('throws CredhelperError with code NOT_IMPLEMENTED', () => {
-      expect(() => renderer.renderLocalhostProxy()).toThrow(CredhelperError);
-      try {
-        renderer.renderLocalhostProxy();
-      } catch (err) {
-        expect(err).toBeInstanceOf(CredhelperError);
-        expect((err as CredhelperError).code).toBe('NOT_IMPLEMENTED');
-      }
+    it('writes proxy config JSON with upstream and headers', async () => {
+      const proxySessionDir = path.join(tmpDir, 'session-proxy');
+      await renderer.renderSessionDir(proxySessionDir);
+
+      const data = {
+        upstream: 'https://api.example.com',
+        headers: { Authorization: 'Bearer sk-test-123' },
+      };
+      await renderer.renderLocalhostProxy(proxySessionDir, data);
+
+      const raw = await fs.readFile(
+        path.join(proxySessionDir, 'proxy', 'config.json'),
+        'utf-8',
+      );
+      const config = JSON.parse(raw);
+      expect(config.upstream).toBe('https://api.example.com');
+      expect(config.headers.Authorization).toBe('Bearer sk-test-123');
     });
   });
 
