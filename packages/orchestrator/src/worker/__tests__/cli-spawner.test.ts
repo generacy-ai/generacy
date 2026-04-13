@@ -423,7 +423,7 @@ describe('CliSpawner', () => {
 describe('WorkerConfigSchema - preValidateCommand', () => {
   it('defaults to pnpm install && pnpm -r --filter ./packages/* build', () => {
     const config = WorkerConfigSchema.parse({});
-    expect(config.preValidateCommand).toBe('pnpm install && pnpm -r --filter ./packages/* build');
+    expect(config.preValidateCommand).toBe("pnpm install && pnpm -r --filter './packages/*' build");
   });
 
   it('accepts empty string', () => {

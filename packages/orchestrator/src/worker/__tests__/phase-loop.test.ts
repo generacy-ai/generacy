@@ -95,7 +95,7 @@ function createConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
     workspaceDir: '/tmp',
     shutdownGracePeriodMs: 5000,
     validateCommand: 'pnpm test && pnpm build',
-    preValidateCommand: 'pnpm install && pnpm -r --filter ./packages/* build',
+    preValidateCommand: "pnpm install && pnpm -r --filter './packages/*' build",
     gates: {},
     maxImplementRetries: 2,
     ...overrides,
