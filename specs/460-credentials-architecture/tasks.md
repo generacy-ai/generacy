@@ -12,30 +12,30 @@
 
 ## Phase 1: Types & Fixtures Setup
 
-- [ ] T001 Define loader types in `packages/credhelper/src/types/loader.ts` — `LoaderConfig`, `DiscoveredPlugin`, `PluginManifest` interfaces as specified in data-model.md
-- [ ] T002 [P] Create mock plugin fixture `packages/credhelper/src/__tests__/fixtures/plugins/generacy-credhelper-plugin-mock/` — valid plugin with `package.json` (containing `credhelperPlugin` field) and `index.js` implementing `CredentialTypePlugin`
-- [ ] T003 [P] Create bad-schema plugin fixture `packages/credhelper/src/__tests__/fixtures/plugins/generacy-credhelper-plugin-bad-schema/` — plugin with invalid `credentialSchema` (missing `.parse` method)
-- [ ] T004 [P] Create duplicate-type plugin fixture `packages/credhelper/src/__tests__/fixtures/plugins/generacy-credhelper-plugin-duplicate/` — valid plugin but with same `type` as mock plugin
+- [X] T001 Define loader types in `packages/credhelper/src/types/loader.ts` — `LoaderConfig`, `DiscoveredPlugin`, `PluginManifest` interfaces as specified in data-model.md
+- [X] T002 [P] Create mock plugin fixture `packages/credhelper/src/__tests__/fixtures/plugins/generacy-credhelper-plugin-mock/` — valid plugin with `package.json` (containing `credhelperPlugin` field) and `index.js` implementing `CredentialTypePlugin`
+- [X] T003 [P] Create bad-schema plugin fixture `packages/credhelper/src/__tests__/fixtures/plugins/generacy-credhelper-plugin-bad-schema/` — plugin with invalid `credentialSchema` (missing `.parse` method)
+- [X] T004 [P] Create duplicate-type plugin fixture `packages/credhelper/src/__tests__/fixtures/plugins/generacy-credhelper-plugin-duplicate/` — valid plugin but with same `type` as mock plugin
 
 ## Phase 2: Core Implementation
 
-- [ ] T005 Implement standalone plugin discovery in `packages/credhelper/src/loader/discover.ts` — `discoverPlugins(corePaths, communityPaths): Promise<DiscoveredPlugin[]>` scanning directories matching `@generacy/credhelper-plugin-*` and `generacy-credhelper-plugin-*` patterns, reading `credhelperPlugin` manifest from `package.json`, tagging `isCore` based on source path
-- [ ] T006 [P] Implement SHA256 pin verification in `packages/credhelper/src/loader/verify.ts` — `verifyPluginPins(plugins, trustedPins): DiscoveredPlugin[]` using `crypto.createHash('sha256')` on entry point file, skipping core plugins, throwing descriptive errors for unpinned/mismatched community plugins
-- [ ] T007 [P] Implement plugin validation in `packages/credhelper/src/loader/validate.ts` — `validatePlugin(mod: unknown): CredentialTypePlugin` runtime duck-type checking for `type` (string), `credentialSchema` (has `.parse`), `supportedExposures` (non-empty ExposureKind array), `renderExposure` (function), optional `scopeSchema`
-- [ ] T008 Implement main loader function in `packages/credhelper/src/loader/load-credential-plugins.ts` — `loadCredentialPlugins(config: LoaderConfig): Promise<Map<string, CredentialTypePlugin>>` orchestrating discover → verify → `await import()` → validate → register, detecting duplicate types
-- [ ] T009 Create barrel export in `packages/credhelper/src/loader/index.ts` — re-export `loadCredentialPlugins`, `LoaderConfig`, `DiscoveredPlugin`
+- [X] T005 Implement standalone plugin discovery in `packages/credhelper/src/loader/discover.ts` — `discoverPlugins(corePaths, communityPaths): Promise<DiscoveredPlugin[]>` scanning directories matching `@generacy/credhelper-plugin-*` and `generacy-credhelper-plugin-*` patterns, reading `credhelperPlugin` manifest from `package.json`, tagging `isCore` based on source path
+- [X] T006 [P] Implement SHA256 pin verification in `packages/credhelper/src/loader/verify.ts` — `verifyPluginPins(plugins, trustedPins): DiscoveredPlugin[]` using `crypto.createHash('sha256')` on entry point file, skipping core plugins, throwing descriptive errors for unpinned/mismatched community plugins
+- [X] T007 [P] Implement plugin validation in `packages/credhelper/src/loader/validate.ts` — `validatePlugin(mod: unknown): CredentialTypePlugin` runtime duck-type checking for `type` (string), `credentialSchema` (has `.parse`), `supportedExposures` (non-empty ExposureKind array), `renderExposure` (function), optional `scopeSchema`
+- [X] T008 Implement main loader function in `packages/credhelper/src/loader/load-credential-plugins.ts` — `loadCredentialPlugins(config: LoaderConfig): Promise<Map<string, CredentialTypePlugin>>` orchestrating discover → verify → `await import()` → validate → register, detecting duplicate types
+- [X] T009 Create barrel export in `packages/credhelper/src/loader/index.ts` — re-export `loadCredentialPlugins`, `LoaderConfig`, `DiscoveredPlugin`
 
 ## Phase 3: Tests
 
-- [ ] T010 Write unit tests for discovery in `packages/credhelper/src/__tests__/loader/discover.test.ts` — discovery from fixture paths, naming pattern filtering, `isCore` flag, missing `credhelperPlugin` field handling
-- [ ] T011 [P] Write unit tests for SHA256 verification in `packages/credhelper/src/__tests__/loader/verify.test.ts` — happy path pin match, missing pin → throw, wrong pin → throw, core plugin bypass
-- [ ] T012 [P] Write unit tests for validation in `packages/credhelper/src/__tests__/loader/validate.test.ts` — valid plugin passes, missing `type` → throw, invalid `credentialSchema` → throw, missing `renderExposure` → throw, invalid `supportedExposures` → throw
-- [ ] T013 Write integration test in `packages/credhelper/src/__tests__/loader/load-credential-plugins.test.ts` — full flow with mock plugins on disk: happy path with core+community, all error modes (missing pin, wrong pin, duplicate type, invalid schema)
+- [X] T010 Write unit tests for discovery in `packages/credhelper/src/__tests__/loader/discover.test.ts` — discovery from fixture paths, naming pattern filtering, `isCore` flag, missing `credhelperPlugin` field handling
+- [X] T011 [P] Write unit tests for SHA256 verification in `packages/credhelper/src/__tests__/loader/verify.test.ts` — happy path pin match, missing pin → throw, wrong pin → throw, core plugin bypass
+- [X] T012 [P] Write unit tests for validation in `packages/credhelper/src/__tests__/loader/validate.test.ts` — valid plugin passes, missing `type` → throw, invalid `credentialSchema` → throw, missing `renderExposure` → throw, invalid `supportedExposures` → throw
+- [X] T013 Write integration test in `packages/credhelper/src/__tests__/loader/load-credential-plugins.test.ts` — full flow with mock plugins on disk: happy path with core+community, all error modes (missing pin, wrong pin, duplicate type, invalid schema)
 
 ## Phase 4: Exports & Build Verification
 
-- [ ] T014 Update `packages/credhelper/src/index.ts` — add exports for `loadCredentialPlugins`, `LoaderConfig`, `DiscoveredPlugin` from `./loader/index.js`
-- [ ] T015 Verify build and tests pass — run `pnpm build` and `pnpm test` in the credhelper package
+- [X] T014 Update `packages/credhelper/src/index.ts` — add exports for `loadCredentialPlugins`, `LoaderConfig`, `DiscoveredPlugin` from `./loader/index.js`
+- [X] T015 Verify build and tests pass — run `pnpm build` and `pnpm test` in the credhelper package
 
 ## Dependencies & Execution Order
 

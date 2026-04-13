@@ -73,3 +73,10 @@ export {
   type ExposureConfigParsed,
   type ExposureOutputParsed,
 } from './schemas/exposure.js';
+
+// Loader
+export { loadCredentialPlugins } from './loader/index.js';
+export {
+  type LoaderConfig,
+  type DiscoveredPlugin,
+} from './loader/index.js';
