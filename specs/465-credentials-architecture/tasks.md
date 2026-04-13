@@ -10,25 +10,25 @@
 
 ## Phase 1: Setup & Types
 
-- [ ] T001 [P] [US1] Add `@generacy-ai/credhelper` dependency to `packages/orchestrator/package.json` and run `pnpm install`
-- [ ] T002 [P] [US1] Add `credentials?: LaunchRequestCredentials` field to `LaunchRequest` in `packages/orchestrator/src/launcher/types.ts` — import from `@generacy-ai/credhelper`
-- [ ] T003 [P] [US1] Define error types (`CredhelperUnavailableError`, `CredhelperSessionError`) in `packages/orchestrator/src/launcher/credhelper-errors.ts` per contracts
-- [ ] T004 [P] [US1] Export new types and modules from `packages/orchestrator/src/launcher/index.ts`
+- [X] T001 [P] [US1] Add `@generacy-ai/credhelper` dependency to `packages/orchestrator/package.json` and run `pnpm install`
+- [X] T002 [P] [US1] Add `credentials?: LaunchRequestCredentials` field to `LaunchRequest` in `packages/orchestrator/src/launcher/types.ts` — import from `@generacy-ai/credhelper`
+- [X] T003 [P] [US1] Define error types (`CredhelperUnavailableError`, `CredhelperSessionError`) in `packages/orchestrator/src/launcher/credhelper-errors.ts` per contracts
+- [X] T004 [P] [US1] Export new types and modules from `packages/orchestrator/src/launcher/index.ts`
 
 ## Phase 2: Core Implementation
 
-- [ ] T010 [US1] Implement `CredhelperClient` in `packages/orchestrator/src/launcher/credhelper-client.ts` — HTTP-over-Unix-socket client using `node:http` with `beginSession()` and `endSession()` methods, configurable `socketPath`, `connectTimeout` (5s), and `requestTimeout` (30s)
-- [ ] T011 [P] [US1] Implement `generateSessionId()` in `packages/orchestrator/src/launcher/credentials-interceptor.ts` — composite key format `{agentId}-{workflowId}-{timestamp}-{random4}` using env vars `AGENT_ID`/`HOSTNAME`/`WORKFLOW_ID`
-- [ ] T012 [US1] Implement `buildSessionEnv()` and `wrapCommand()` helpers in `packages/orchestrator/src/launcher/credentials-interceptor.ts` — env merge (4 vars: `GENERACY_SESSION_DIR`, `GIT_CONFIG_GLOBAL`, `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST`) and `sh -c` positional parameter wrapping
-- [ ] T013 [US1] Implement `applyCredentials()` interceptor function in `packages/orchestrator/src/launcher/credentials-interceptor.ts` — orchestrates beginSession → env merge → command wrap → returns transformed spawn params with uid/gid and sessionId
+- [X] T010 [US1] Implement `CredhelperClient` in `packages/orchestrator/src/launcher/credhelper-client.ts` — HTTP-over-Unix-socket client using `node:http` with `beginSession()` and `endSession()` methods, configurable `socketPath`, `connectTimeout` (5s), and `requestTimeout` (30s)
+- [X] T011 [P] [US1] Implement `generateSessionId()` in `packages/orchestrator/src/launcher/credentials-interceptor.ts` — composite key format `{agentId}-{workflowId}-{timestamp}-{random4}` using env vars `AGENT_ID`/`HOSTNAME`/`WORKFLOW_ID`
+- [X] T012 [US1] Implement `buildSessionEnv()` and `wrapCommand()` helpers in `packages/orchestrator/src/launcher/credentials-interceptor.ts` — env merge (4 vars: `GENERACY_SESSION_DIR`, `GIT_CONFIG_GLOBAL`, `GOOGLE_APPLICATION_CREDENTIALS`, `DOCKER_HOST`) and `sh -c` positional parameter wrapping
+- [X] T013 [US1] Implement `applyCredentials()` interceptor function in `packages/orchestrator/src/launcher/credentials-interceptor.ts` — orchestrates beginSession → env merge → command wrap → returns transformed spawn params with uid/gid and sessionId
 
 ## Phase 3: Async Migration & Wiring
 
-- [ ] T020 [US1] Convert `AgentLauncher.launch()` from sync to `async` in `packages/orchestrator/src/launcher/agent-launcher.ts` — accept optional `CredhelperClient` in constructor, call interceptor when `request.credentials` is present, register `endSession()` cleanup on `exitPromise`
-- [ ] T021 [P] [US2] Update caller: `packages/orchestrator/src/worker/claude-cli-worker.ts` (line ~117) — `await` the now-async `launch()` call, update `registerProcessLauncher` callback to handle async
-- [ ] T022 [P] [US2] Update caller: `packages/orchestrator/src/conversation/conversation-spawner.ts` (line ~53) — `await` the now-async `launch()` call
-- [ ] T023 [P] [US2] Update caller: `packages/orchestrator/src/worker/cli-spawner.ts` (lines ~54, ~89, ~118) — `await` all three `launch()` calls
-- [ ] T024 [P] [US2] Update caller: `packages/orchestrator/src/worker/pr-feedback-handler.ts` (line ~301) — `await` the now-async `launch()` call
+- [X] T020 [US1] Convert `AgentLauncher.launch()` from sync to `async` in `packages/orchestrator/src/launcher/agent-launcher.ts` — accept optional `CredhelperClient` in constructor, call interceptor when `request.credentials` is present, register `endSession()` cleanup on `exitPromise`
+- [X] T021 [P] [US2] Update caller: `packages/orchestrator/src/worker/claude-cli-worker.ts` (line ~117) — `await` the now-async `launch()` call, update `registerProcessLauncher` callback to handle async
+- [X] T022 [P] [US2] Update caller: `packages/orchestrator/src/conversation/conversation-spawner.ts` (line ~53) — `await` the now-async `launch()` call
+- [X] T023 [P] [US2] Update caller: `packages/orchestrator/src/worker/cli-spawner.ts` (lines ~54, ~89, ~118) — `await` all three `launch()` calls
+- [X] T024 [P] [US2] Update caller: `packages/orchestrator/src/worker/pr-feedback-handler.ts` (line ~301) — `await` the now-async `launch()` call
 
 ## Phase 4: Unit Tests
 

@@ -30,10 +30,10 @@ describe('ConversationSpawner integration', () => {
     return { spawner, defaultFactory, interactiveFactory };
   }
 
-  it('routes conversation turn through ClaudeCodeLaunchPlugin to interactive factory', () => {
+  it('routes conversation turn through ClaudeCodeLaunchPlugin to interactive factory', async () => {
     const { spawner, defaultFactory, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'Hello, Claude!',
       skipPermissions: true,
@@ -44,10 +44,10 @@ describe('ConversationSpawner integration', () => {
     expect(interactiveFactory.calls).toHaveLength(1);
   });
 
-  it('produces python3 PTY wrapper command with correct args', () => {
+  it('produces python3 PTY wrapper command with correct args', async () => {
     const { spawner, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'Hello, Claude!',
       skipPermissions: true,
@@ -69,10 +69,10 @@ describe('ConversationSpawner integration', () => {
     expect(call.cwd).toBe('/workspace');
   });
 
-  it('includes --resume when sessionId is provided', () => {
+  it('includes --resume when sessionId is provided', async () => {
     const { spawner, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'Follow up',
       sessionId: 'ses-abc',
@@ -84,10 +84,10 @@ describe('ConversationSpawner integration', () => {
     expect(args[args.indexOf('--resume') + 1]).toBe('ses-abc');
   });
 
-  it('includes --model when model is provided', () => {
+  it('includes --model when model is provided', async () => {
     const { spawner, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'Hello',
       skipPermissions: true,
@@ -99,10 +99,10 @@ describe('ConversationSpawner integration', () => {
     expect(args[args.indexOf('--model') + 1]).toBe('claude-opus-4-6');
   });
 
-  it('omits --dangerously-skip-permissions when skipPermissions is false', () => {
+  it('omits --dangerously-skip-permissions when skipPermissions is false', async () => {
     const { spawner, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'Hello',
       skipPermissions: false,
@@ -112,10 +112,10 @@ describe('ConversationSpawner integration', () => {
     expect(args).not.toContain('--dangerously-skip-permissions');
   });
 
-  it('snapshot: full spawn args match pre-refactor baseline', () => {
+  it('snapshot: full spawn args match pre-refactor baseline', async () => {
     const { spawner, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace/project',
       message: 'Explain this code',
       sessionId: 'ses-xyz',
@@ -132,10 +132,10 @@ describe('ConversationSpawner integration', () => {
     }).toMatchSnapshot();
   });
 
-  it('PTY wrapper content matches plugin constant', () => {
+  it('PTY wrapper content matches plugin constant', async () => {
     const { spawner, interactiveFactory } = createStack();
 
-    spawner.spawnTurn({
+    await spawner.spawnTurn({
       cwd: '/workspace',
       message: 'test',
       skipPermissions: true,

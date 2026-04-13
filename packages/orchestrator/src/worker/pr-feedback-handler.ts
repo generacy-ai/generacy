@@ -298,7 +298,7 @@ Please proceed with addressing the feedback.`;
 
     let child;
     try {
-      const handle = this.agentLauncher.launch({
+      const handle = await this.agentLauncher.launch({
         intent: {
           kind: 'pr-feedback',
           prNumber,

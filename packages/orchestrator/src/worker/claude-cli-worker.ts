@@ -113,8 +113,8 @@ export class ClaudeCliWorker {
 
     // Wire workflow-engine's process launcher to route through AgentLauncher
     clearProcessLauncher();
-    registerProcessLauncher((request: LaunchFunctionRequest): LaunchFunctionHandle => {
-      const launchHandle = this.agentLauncher.launch({
+    registerProcessLauncher(async (request: LaunchFunctionRequest): Promise<LaunchFunctionHandle> => {
+      const launchHandle = await this.agentLauncher.launch({
         intent: {
           kind: request.kind,
           command: request.command,

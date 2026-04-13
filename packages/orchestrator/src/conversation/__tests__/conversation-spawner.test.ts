@@ -37,7 +37,7 @@ function createMockProcess() {
 }
 
 function createMockLauncher(handle: ChildProcessHandle) {
-  const launchFn = vi.fn().mockReturnValue({
+  const launchFn = vi.fn().mockResolvedValue({
     process: handle,
     outputParser: noopParser,
     metadata: { pluginId: 'claude-code', intentKind: 'conversation-turn' },
@@ -47,12 +47,12 @@ function createMockLauncher(handle: ChildProcessHandle) {
 
 describe('ConversationSpawner', () => {
   describe('spawnTurn', () => {
-    it('launches via agentLauncher with conversation-turn intent', () => {
+    it('launches via agentLauncher with conversation-turn intent', async () => {
       const { handle } = createMockProcess();
       const launcher = createMockLauncher(handle);
       const spawner = new ConversationSpawner(launcher);
 
-      spawner.spawnTurn({
+      await spawner.spawnTurn({
         cwd: '/workspace',
         message: 'hello',
         skipPermissions: true,
@@ -71,12 +71,12 @@ describe('ConversationSpawner', () => {
       );
     });
 
-    it('passes sessionId in intent when provided', () => {
+    it('passes sessionId in intent when provided', async () => {
       const { handle } = createMockProcess();
       const launcher = createMockLauncher(handle);
       const spawner = new ConversationSpawner(launcher);
 
-      spawner.spawnTurn({
+      await spawner.spawnTurn({
         cwd: '/workspace',
         message: 'hello',
         sessionId: 'ses-123',
@@ -93,12 +93,12 @@ describe('ConversationSpawner', () => {
       );
     });
 
-    it('passes model in intent when provided', () => {
+    it('passes model in intent when provided', async () => {
       const { handle } = createMockProcess();
       const launcher = createMockLauncher(handle);
       const spawner = new ConversationSpawner(launcher);
 
-      spawner.spawnTurn({
+      await spawner.spawnTurn({
         cwd: '/workspace',
         message: 'hello',
         skipPermissions: true,
@@ -114,12 +114,12 @@ describe('ConversationSpawner', () => {
       );
     });
 
-    it('sets skipPermissions to false when disabled', () => {
+    it('sets skipPermissions to false when disabled', async () => {
       const { handle } = createMockProcess();
       const launcher = createMockLauncher(handle);
       const spawner = new ConversationSpawner(launcher);
 
-      spawner.spawnTurn({
+      await spawner.spawnTurn({
         cwd: '/workspace',
         message: 'hello',
         skipPermissions: false,
@@ -134,12 +134,12 @@ describe('ConversationSpawner', () => {
       );
     });
 
-    it('returns the process handle from LaunchHandle', () => {
+    it('returns the process handle from LaunchHandle', async () => {
       const { handle } = createMockProcess();
       const launcher = createMockLauncher(handle);
       const spawner = new ConversationSpawner(launcher);
 
-      const result = spawner.spawnTurn({
+      const result = await spawner.spawnTurn({
         cwd: '/workspace',
         message: 'hello',
         skipPermissions: true,
@@ -151,12 +151,12 @@ describe('ConversationSpawner', () => {
   });
 
   describe('spawnTurn — LaunchRequest snapshot', () => {
-    it('captures full LaunchRequest for a conversation turn', () => {
+    it('captures full LaunchRequest for a conversation turn', async () => {
       const { handle } = createMockProcess();
       const launcher = createMockLauncher(handle);
       const spawner = new ConversationSpawner(launcher);
 
-      spawner.spawnTurn({
+      await spawner.spawnTurn({
         cwd: '/workspace',
         message: 'Tell me about TypeScript',
         sessionId: 'ses-abc',

@@ -34,7 +34,7 @@ export interface LaunchFunctionHandle {
 }
 
 /** Function type for the module-level process launcher registration */
-export type LaunchFunction = (request: LaunchFunctionRequest) => LaunchFunctionHandle;
+export type LaunchFunction = (request: LaunchFunctionRequest) => LaunchFunctionHandle | Promise<LaunchFunctionHandle>;
 
 let _registeredLauncher: LaunchFunction | undefined;
 
