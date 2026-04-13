@@ -21,7 +21,7 @@ const mockGithub = {
   addIssueComment: vi.fn().mockResolvedValue({ id: 1, body: '' }),
   updateComment: vi.fn().mockResolvedValue(undefined),
   // Git operations used by PrManager
-  getStatus: vi.fn().mockResolvedValue({ branch: 'feature/42', has_changes: false, staged: [], unstaged: [], untracked: [] }),
+  getStatus: vi.fn().mockResolvedValue({ branch: 'feature/42', has_changes: true, staged: [], unstaged: [], untracked: [] }),
   stageAll: vi.fn().mockResolvedValue(undefined),
   commit: vi.fn().mockResolvedValue({ sha: 'abc123', files_committed: [] }),
   push: vi.fn().mockResolvedValue({ success: true, ref: 'refs/heads/feature/42', remote: 'origin' }),
@@ -31,6 +31,8 @@ const mockGithub = {
   createPullRequest: vi.fn().mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' }),
   markPRReady: vi.fn().mockResolvedValue(undefined),
   listBranches: vi.fn().mockResolvedValue([]),
+  branchExists: vi.fn().mockResolvedValue(true),
+  getCommitsBetween: vi.fn().mockResolvedValue([]),
   // PR operations for PrFeedbackHandler
   getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
   getPRComments: vi.fn().mockResolvedValue([]),
@@ -200,6 +202,8 @@ describe('ClaudeCliWorker (integration)', () => {
     mockGithub.createPullRequest.mockResolvedValue({ number: 1, state: 'open', title: 'test', html_url: '' });
     mockGithub.markPRReady = vi.fn().mockResolvedValue(undefined);
     mockGithub.listBranches.mockResolvedValue([]);
+    mockGithub.branchExists.mockResolvedValue(true);
+    mockGithub.getCommitsBetween.mockResolvedValue([]);
 
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
@@ -342,9 +346,9 @@ describe('ClaudeCliWorker (integration)', () => {
       // Should have spawned 2 processes (specify success, clarify fail)
       expect(spawnFn).toHaveBeenCalledTimes(2);
 
-      // agent:error label should be added
+      // agent:error label should be added (batched with failed:<phase>)
       expect(mockGithub.addLabels).toHaveBeenCalledWith(
-        'test-owner', 'test-repo', 42, ['agent:error'],
+        'test-owner', 'test-repo', 42, ['failed:clarify', 'agent:error'],
       );
 
       // SSE events should include workflow:failed
@@ -412,9 +416,9 @@ describe('ClaudeCliWorker (integration)', () => {
 
       await worker.handle(createQueueItem({ workflowName: 'no-gates' }));
 
-      // agent:error should be added for validate failure
+      // agent:error should be added for validate failure (batched with failed:<phase>)
       expect(mockGithub.addLabels).toHaveBeenCalledWith(
-        'test-owner', 'test-repo', 42, ['agent:error'],
+        'test-owner', 'test-repo', 42, ['failed:validate', 'agent:error'],
       );
 
       // workflow:failed SSE event
@@ -528,9 +532,9 @@ describe('ClaudeCliWorker (integration)', () => {
       // Should NOT have called markPRReady (workflow failed, not completed)
       expect(mockGithub.markPRReady).not.toHaveBeenCalled();
 
-      // Verify error handling
+      // Verify error handling (batched with failed:<phase>)
       expect(mockGithub.addLabels).toHaveBeenCalledWith(
-        'test-owner', 'test-repo', 42, ['agent:error'],
+        'test-owner', 'test-repo', 42, ['failed:clarify', 'agent:error'],
       );
     });
 

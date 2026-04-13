@@ -10,13 +10,13 @@
 
 ## Phase 1: Fix Mock Default
 
-- [ ] T001 [US1][US2] Update `has_changes` mock default from `false` to `true` on line 24 of `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts`
+- [X] T001 [US1][US2] Update `has_changes` mock default from `false` to `true` on line 24 of `packages/orchestrator/src/worker/__tests__/claude-cli-worker.test.ts`
 
 ## Phase 2: Verification
 
-- [ ] T002 [US1] Run `pnpm test` in orchestrator package — confirm 61/61 tests pass with 0 skips
-- [ ] T003 [P] [US2] Audit `packages/orchestrator/src/worker/__tests__/pr-feedback-handler.test.ts` for same `has_changes: false` default issue — confirm no fix needed (doesn't test implement phase)
-- [ ] T004 [P] [US2] Grep all other orchestrator test files for `has_changes` references — confirm no other files affected
+- [X] T002 [US1] Run `pnpm test` in orchestrator package — confirm 61/61 tests pass with 0 skips
+- [X] T003 [P] [US2] Audit `packages/orchestrator/src/worker/__tests__/pr-feedback-handler.test.ts` for same `has_changes: false` default issue — confirm no fix needed (doesn't test implement phase)
+- [X] T004 [P] [US2] Grep all other orchestrator test files for `has_changes` references — confirm no other files affected
 
 ## Dependencies & Execution Order
 
