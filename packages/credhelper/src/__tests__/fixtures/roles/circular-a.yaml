@@ -1,0 +1,10 @@
+schemaVersion: "1"
+id: circular-a
+description: Circular extends test — A extends B.
+extends: circular-b
+
+credentials:
+  - ref: github-main-org
+    expose:
+      - as: env
+        name: GITHUB_TOKEN

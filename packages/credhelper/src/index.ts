@@ -74,6 +74,15 @@ export {
   type ExposureOutputParsed,
 } from './schemas/exposure.js';
 
+// Config loader
+export {
+  loadConfig,
+  ConfigValidationError,
+  type ConfigError,
+  type ConfigResult,
+  type LoadConfigOptions,
+} from './config/index.js';
+
 // Loader
 export { loadCredentialPlugins } from './loader/index.js';
 export {

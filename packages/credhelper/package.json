@@ -21,13 +21,13 @@
   "author": "Generacy AI",
   "license": "Apache-2.0",
   "dependencies": {
+    "yaml": "^2.4.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.4.5",
-    "vitest": "^4.0.18",
-    "yaml": "^2.4.0"
+    "vitest": "^4.0.18"
   },
   "engines": {
     "node": ">=20.0.0"
