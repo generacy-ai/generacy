@@ -29,3 +29,8 @@ source /workspaces/tetrad-development/scripts/stack-env.sh
 ```
 
 See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md)
+
+## Credhelper Packages
+
+- `packages/credhelper` — Shared TypeScript types and Zod schemas for the credentials architecture (Phase 1, #458). Types-only, Zod-only dependency.
+- `packages/credhelper-daemon` — Runtime daemon for credential session management (#461). HTTP-over-Unix-socket servers, session lifecycle, token refresh. Uses Node.js built-in `http` module, no Express.
