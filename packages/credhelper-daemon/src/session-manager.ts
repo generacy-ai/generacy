@@ -68,6 +68,9 @@ export class SessionManager {
       const plugin = this.pluginRegistry.getPlugin(credEntry.type);
       credentialIds.push(credRef.ref);
 
+      // Extract plugin-specific config by stripping common structural fields
+      const { id: _id, type: _type, backend: _backend, backendKey: _backendKey, mint: _mint, ...credConfig } = credEntry;
+
       let credValue;
       let expiresAt: Date;
 
@@ -83,6 +86,7 @@ export class SessionManager {
             backend: { fetchSecret: async () => '' }, // Stub — real backend client from #462
             scope: credRef.scope ?? credEntry.mint.scopeTemplate ?? {},
             ttl: ttlMs,
+            config: credConfig,
           });
           credValue = result.value;
           expiresAt = result.expiresAt;
@@ -106,6 +110,7 @@ export class SessionManager {
             backend: { fetchSecret: async () => '' },
             scope: credRef.scope ?? {},
             ttl: ttlMs,
+            config: credConfig,
           },
         };
         this.store.set(sessionId, credRef.ref, entry);
@@ -122,6 +127,7 @@ export class SessionManager {
               backend: { fetchSecret: async () => '' },
               scope: credRef.scope ?? {},
               ttl: ttlMs,
+              config: credConfig,
             });
             return result;
           },
@@ -133,6 +139,7 @@ export class SessionManager {
             credentialId: credRef.ref,
             backendKey: credEntry.backendKey,
             backend: { fetchSecret: async () => '' },
+            config: credConfig,
           });
         } catch (err) {
           throw new CredhelperError(

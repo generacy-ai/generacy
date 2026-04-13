@@ -14,6 +14,13 @@ export {
 } from './types/context.js';
 export { type CredentialTypePlugin } from './types/plugin.js';
 export {
+  type PluginExposureData,
+  type PluginEnvExposure,
+  type PluginGitCredentialHelperExposure,
+  type PluginGcloudExternalAccountExposure,
+  type PluginLocalhostProxyExposure,
+} from './types/plugin-exposure.js';
+export {
   type BeginSessionRequest,
   type BeginSessionResponse,
   type EndSessionRequest,

@@ -14,31 +14,31 @@
 
 All type changes must land before plugin implementation begins.
 
-- [ ] T001 [US1,US2,US3,US4] Add `config` field to `MintContext` and `ResolveContext` in `packages/credhelper/src/types/context.ts`
-- [ ] T002 [P] [US1,US2,US3,US4] Create `PluginExposureData` discriminated union type in `packages/credhelper/src/types/plugin-exposure.ts` — variants: `PluginEnvExposure`, `PluginGitCredentialHelperExposure`, `PluginGcloudExternalAccountExposure`, `PluginLocalhostProxyExposure`
-- [ ] T003 [US1,US2,US3,US4] Update `CredentialTypePlugin.renderExposure()` return type from `ExposureOutput` to `PluginExposureData` in `packages/credhelper/src/types/plugin.ts`
-- [ ] T004 [P] [US1,US2,US3,US4] Export `PluginExposureData` and related types from `packages/credhelper/src/index.ts`
-- [ ] T005 [US1,US2,US3,US4] Update plugin validator in `packages/credhelper/src/loader/validate.ts` to work with new `PluginExposureData` return type
-- [ ] T006 Run `pnpm -F @generacy-ai/credhelper tsc --noEmit` to verify type changes compile
+- [X] T001 [US1,US2,US3,US4] Add `config` field to `MintContext` and `ResolveContext` in `packages/credhelper/src/types/context.ts`
+- [X] T002 [P] [US1,US2,US3,US4] Create `PluginExposureData` discriminated union type in `packages/credhelper/src/types/plugin-exposure.ts` — variants: `PluginEnvExposure`, `PluginGitCredentialHelperExposure`, `PluginGcloudExternalAccountExposure`, `PluginLocalhostProxyExposure`
+- [X] T003 [US1,US2,US3,US4] Update `CredentialTypePlugin.renderExposure()` return type from `ExposureOutput` to `PluginExposureData` in `packages/credhelper/src/types/plugin.ts`
+- [X] T004 [P] [US1,US2,US3,US4] Export `PluginExposureData` and related types from `packages/credhelper/src/index.ts`
+- [X] T005 [US1,US2,US3,US4] Update plugin validator in `packages/credhelper/src/loader/validate.ts` to work with new `PluginExposureData` return type
+- [X] T006 Run `pnpm -F @generacy-ai/credhelper tsc --noEmit` to verify type changes compile
 
 ## Phase 2: Core Plugins (main implementation, parallelizable)
 
 Each plugin is independent. All plugins follow the pattern in `research.md` Pattern 1.
 
-- [ ] T010 [P] [US1] Implement `github-app` plugin in `packages/credhelper-daemon/src/plugins/core/github-app.ts` — mint-based, `credentialSchema` validates `appId`/`installationId`, `scopeSchema` validates `repositories`/`permissions`, mint calls GitHub Apps API with JWT auth, exposures: env + git-credential-helper
-- [ ] T011 [P] [US1] Write tests for `github-app` plugin in `packages/credhelper-daemon/__tests__/plugins/github-app.test.ts` — schema validation (valid+invalid), mint with mocked fetch, exposure rendering for both env and git-credential-helper
-- [ ] T012 [P] [US2] Implement `github-pat` plugin in `packages/credhelper-daemon/src/plugins/core/github-pat.ts` — resolve-based, minimal `credentialSchema`, no `scopeSchema`, exposures: env + git-credential-helper
-- [ ] T013 [P] [US2] Write tests for `github-pat` plugin in `packages/credhelper-daemon/__tests__/plugins/github-pat.test.ts` — schema validation, resolve with mock backend, exposure rendering
-- [ ] T014 [P] [US3] Implement `gcp-service-account` plugin in `packages/credhelper-daemon/src/plugins/core/gcp-service-account.ts` — mint-based, `credentialSchema` validates `serviceAccountEmail`/`projectId`, `scopeSchema` validates `scopes[]`, mint calls GCP IAM `generateAccessToken`, exposures: env + gcloud-external-account
-- [ ] T015 [P] [US3] Write tests for `gcp-service-account` plugin in `packages/credhelper-daemon/__tests__/plugins/gcp-service-account.test.ts` — schema validation, mint with mocked GCP API, exposure rendering
-- [ ] T016 [P] [US3] Implement `aws-sts` plugin in `packages/credhelper-daemon/src/plugins/core/aws-sts.ts` — mint-based, `credentialSchema` validates `roleArn`/`externalId`/`region`, `scopeSchema` validates `sessionPolicy`/`durationSeconds`, mint calls STS AssumeRole, exposure: env (AWS triple)
-- [ ] T017 [P] [US3] Write tests for `aws-sts` plugin in `packages/credhelper-daemon/__tests__/plugins/aws-sts.test.ts` — schema validation (including roleArn regex), mint with mocked STS, exposure rendering
-- [ ] T018 [P] [US4] Implement `stripe-restricted-key` plugin in `packages/credhelper-daemon/src/plugins/core/stripe-restricted-key.ts` — resolve-based, minimal `credentialSchema`, no `scopeSchema`, exposure: env
-- [ ] T019 [P] [US4] Write tests for `stripe-restricted-key` plugin in `packages/credhelper-daemon/__tests__/plugins/stripe-restricted-key.test.ts` — schema validation, resolve with mock backend, exposure rendering
-- [ ] T020 [P] [US4] Implement `api-key` plugin in `packages/credhelper-daemon/src/plugins/core/api-key.ts` — resolve-based, `credentialSchema` with optional `upstream` URL, no `scopeSchema`, exposures: env + localhost-proxy
-- [ ] T021 [P] [US4] Write tests for `api-key` plugin in `packages/credhelper-daemon/__tests__/plugins/api-key.test.ts` — schema validation, resolve with mock backend, exposure rendering for both env and localhost-proxy
-- [ ] T022 [P] [US2] Implement `env-passthrough` plugin in `packages/credhelper-daemon/src/plugins/core/env-passthrough.ts` — resolve-based, minimal `credentialSchema`, no `scopeSchema`, `backendKey` IS the env var name, exposure: env
-- [ ] T023 [P] [US2] Write tests for `env-passthrough` plugin in `packages/credhelper-daemon/__tests__/plugins/env-passthrough.test.ts` — schema validation, resolve with mock env backend, exposure rendering
+- [X] T010 [P] [US1] Implement `github-app` plugin in `packages/credhelper-daemon/src/plugins/core/github-app.ts` — mint-based, `credentialSchema` validates `appId`/`installationId`, `scopeSchema` validates `repositories`/`permissions`, mint calls GitHub Apps API with JWT auth, exposures: env + git-credential-helper
+- [X] T011 [P] [US1] Write tests for `github-app` plugin in `packages/credhelper-daemon/__tests__/plugins/github-app.test.ts` — schema validation (valid+invalid), mint with mocked fetch, exposure rendering for both env and git-credential-helper
+- [X] T012 [P] [US2] Implement `github-pat` plugin in `packages/credhelper-daemon/src/plugins/core/github-pat.ts` — resolve-based, minimal `credentialSchema`, no `scopeSchema`, exposures: env + git-credential-helper
+- [X] T013 [P] [US2] Write tests for `github-pat` plugin in `packages/credhelper-daemon/__tests__/plugins/github-pat.test.ts` — schema validation, resolve with mock backend, exposure rendering
+- [X] T014 [P] [US3] Implement `gcp-service-account` plugin in `packages/credhelper-daemon/src/plugins/core/gcp-service-account.ts` — mint-based, `credentialSchema` validates `serviceAccountEmail`/`projectId`, `scopeSchema` validates `scopes[]`, mint calls GCP IAM `generateAccessToken`, exposures: env + gcloud-external-account
+- [X] T015 [P] [US3] Write tests for `gcp-service-account` plugin in `packages/credhelper-daemon/__tests__/plugins/gcp-service-account.test.ts` — schema validation, mint with mocked GCP API, exposure rendering
+- [X] T016 [P] [US3] Implement `aws-sts` plugin in `packages/credhelper-daemon/src/plugins/core/aws-sts.ts` — mint-based, `credentialSchema` validates `roleArn`/`externalId`/`region`, `scopeSchema` validates `sessionPolicy`/`durationSeconds`, mint calls STS AssumeRole, exposure: env (AWS triple)
+- [X] T017 [P] [US3] Write tests for `aws-sts` plugin in `packages/credhelper-daemon/__tests__/plugins/aws-sts.test.ts` — schema validation (including roleArn regex), mint with mocked STS, exposure rendering
+- [X] T018 [P] [US4] Implement `stripe-restricted-key` plugin in `packages/credhelper-daemon/src/plugins/core/stripe-restricted-key.ts` — resolve-based, minimal `credentialSchema`, no `scopeSchema`, exposure: env
+- [X] T019 [P] [US4] Write tests for `stripe-restricted-key` plugin in `packages/credhelper-daemon/__tests__/plugins/stripe-restricted-key.test.ts` — schema validation, resolve with mock backend, exposure rendering
+- [X] T020 [P] [US4] Implement `api-key` plugin in `packages/credhelper-daemon/src/plugins/core/api-key.ts` — resolve-based, `credentialSchema` with optional `upstream` URL, no `scopeSchema`, exposures: env + localhost-proxy
+- [X] T021 [P] [US4] Write tests for `api-key` plugin in `packages/credhelper-daemon/__tests__/plugins/api-key.test.ts` — schema validation, resolve with mock backend, exposure rendering for both env and localhost-proxy
+- [X] T022 [P] [US2] Implement `env-passthrough` plugin in `packages/credhelper-daemon/src/plugins/core/env-passthrough.ts` — resolve-based, minimal `credentialSchema`, no `scopeSchema`, `backendKey` IS the env var name, exposure: env
+- [X] T023 [P] [US2] Write tests for `env-passthrough` plugin in `packages/credhelper-daemon/__tests__/plugins/env-passthrough.test.ts` — schema validation, resolve with mock env backend, exposure rendering
 
 ## Phase 3: Integration
 

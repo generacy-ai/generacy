@@ -14,6 +14,7 @@ import type {
   RoleConfig,
   CredentialEntry,
   BackendEntry,
+  PluginExposureData,
 } from '@generacy-ai/credhelper';
 
 /** Main configuration for the daemon. */
@@ -91,4 +92,5 @@ export type {
   RoleConfig,
   CredentialEntry,
   BackendEntry,
+  PluginExposureData,
 };

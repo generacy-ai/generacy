@@ -8,10 +8,12 @@ export interface MintContext {
   backend: BackendClient;
   scope: Record<string, unknown>;
   ttl: number;
+  config: Record<string, unknown>;
 }
 
 export interface ResolveContext {
   credentialId: string;
   backendKey: string;
   backend: BackendClient;
+  config: Record<string, unknown>;
 }
