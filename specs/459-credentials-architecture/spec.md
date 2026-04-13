@@ -1,22 +1,28 @@
-# Feature Specification: Add optional role field to DefaultsConfigSchema
+# Feature Specification: ## Credentials Architecture — Phase 1 (parallel with #458 and tetrad-development Dockerfile issue)
+
+**Context:** Part of the [credentials architecture plan](https://github
 
 **Branch**: `459-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft
 
-**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md).
-
-**Depends on:** Phase 0 (#457) | **Parallel with:** #458, tetrad-development Dockerfile issue
-
 ## Summary
 
-Add an optional `role` field to the `DefaultsConfigSchema` in `packages/generacy/src/config/schema.ts`. This is Phase 1 of the credentials architecture — a minimal, backwards-compatible schema change that allows `.generacy/config.yaml` to specify a default credential role for workflow runs. The field is not consumed yet; that comes in Phase 3 when the AgentLauncher credentials interceptor is wired up.
+## Credentials Architecture — Phase 1 (parallel with #458 and tetrad-development Dockerfile issue)
 
-### Schema Change
+**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md).
+
+**Depends on:** Phase 0 (#457)
+
+## What needs to be done
+
+Add an optional `role` field to the `DefaultsConfigSchema` in `packages/generacy/src/config/schema.ts` (lines 76-97).
+
+This is a one-line Zod change:
 
 ```typescript
 role: z.string().optional(),  // credential role for workflow runs
 ```
 
-### Config Example
+This allows `.generacy/config.yaml` to specify a default role:
 
 ```yaml
 defaults:
@@ -24,62 +30,53 @@ defaults:
   role: developer    # new — default role, bound at spawn, immutable per run
 ```
 
-### Backwards Compatibility
+### Why this is backwards compatible
 
-Zod treats missing optional fields as `undefined`. Existing `.generacy/config.yaml` files without a `role` field will continue to parse correctly. No callers consume the field yet.
+Zod treats missing optional fields as `undefined`. Existing `.generacy/config.yaml` files that don't have a `role` field will continue to parse correctly. No callers consume the field yet — that comes in Phase 3 when the AgentLauncher credentials interceptor is wired up.
+
+## Acceptance criteria
+
+- `role: z.string().optional()` added to `DefaultsConfigSchema`
+- Existing tests in `packages/generacy/src/config/__tests__/schema.test.ts` still pass
+- New test cases added: config with `role` set parses correctly; config without `role` parses correctly (undefined)
+- Existing fixture at `packages/generacy/src/config/__tests__/fixtures/` updated or new fixture added with `role`
+
+## Phase grouping
+
+- **Phase 1** — parallel with #458 and the tetrad-development Dockerfile issue
+- **Rebuild cluster after Phase 1**
 
 ## User Stories
 
-### US1: Workflow author configures a default credential role
+### US1: [Primary User Story]
 
-**As a** workflow author,
-**I want** to specify a default `role` in `.generacy/config.yaml`,
-**So that** workflow runs can be bound to a credential role at spawn time (consumed in Phase 3).
-
-**Acceptance Criteria**:
-- [ ] `role: z.string().optional()` added to `DefaultsConfigSchema`
-- [ ] Config with `role` set parses correctly
-- [ ] Config without `role` parses correctly (field is `undefined`)
-
-### US2: Existing users are unaffected
-
-**As an** existing user with a `.generacy/config.yaml` that has no `role` field,
-**I want** the config to continue parsing without errors,
-**So that** this change is fully backwards compatible.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] All existing schema tests continue to pass
-- [ ] Existing config fixtures parse without modification
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `role: z.string().optional()` to `DefaultsConfigSchema` | P1 | One-line Zod change in `packages/generacy/src/config/schema.ts` |
-| FR-002 | Add test case: config with `role` set parses correctly | P1 | In `schema.test.ts` |
-| FR-003 | Add test case: config without `role` parses correctly (undefined) | P1 | In `schema.test.ts` |
-| FR-004 | Update or add fixture with `role` field | P2 | In `packages/generacy/src/config/__tests__/fixtures/` |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Existing tests pass | 100% pass rate | `pnpm test` in config package |
-| SC-002 | New role field tests pass | 2 new test cases pass | `pnpm test` in config package |
-| SC-003 | Backwards compatibility | Configs without `role` parse as `undefined` | Zod parse validation |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Phase 0 (#457) has been merged and `DefaultsConfigSchema` exists in its current form
-- No callers consume the `role` field until Phase 3
-- The `role` value is a free-form string (no enum validation at this phase)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Role validation or enum constraints (future phase)
-- AgentLauncher credentials interceptor wiring (Phase 3)
-- Runtime consumption of the `role` field
-- Role-based access control logic
+- [Exclusion 1]
 
 ---
 
