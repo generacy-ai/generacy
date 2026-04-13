@@ -82,3 +82,10 @@ export {
   type ConfigResult,
   type LoadConfigOptions,
 } from './config/index.js';
+
+// Loader
+export { loadCredentialPlugins } from './loader/index.js';
+export {
+  type LoaderConfig,
+  type DiscoveredPlugin,
+} from './loader/index.js';
