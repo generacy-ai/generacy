@@ -303,6 +303,32 @@ describe('DefaultsConfigSchema', () => {
     const result = DefaultsConfigSchema.parse(config);
     expect(result.baseBranch).toEqual('feature/new-feature');
   });
+
+  it('should parse config with role set correctly', () => {
+    const config = {
+      role: 'developer',
+    };
+    const result = DefaultsConfigSchema.parse(config);
+    expect(result.role).toEqual('developer');
+  });
+
+  it('should parse config without role as undefined', () => {
+    const config = {};
+    const result = DefaultsConfigSchema.parse(config);
+    expect(result.role).toBeUndefined();
+  });
+
+  it('should parse config with role and other defaults fields', () => {
+    const config = {
+      agent: 'claude-code',
+      baseBranch: 'main',
+      role: 'developer',
+    };
+    const result = DefaultsConfigSchema.parse(config);
+    expect(result.agent).toEqual('claude-code');
+    expect(result.baseBranch).toEqual('main');
+    expect(result.role).toEqual('developer');
+  });
 });
 
 describe('OrchestratorSettingsSchema', () => {

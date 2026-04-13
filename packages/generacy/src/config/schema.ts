@@ -92,6 +92,12 @@ export const DefaultsConfigSchema = z.object({
   baseBranch: z.string()
     .min(1, 'Base branch cannot be empty')
     .optional(),
+
+  /**
+   * Default credential role for workflow runs
+   * Free-form string, no validation at this phase
+   */
+  role: z.string().optional(),
 });
 
 export type DefaultsConfig = z.infer<typeof DefaultsConfigSchema>;

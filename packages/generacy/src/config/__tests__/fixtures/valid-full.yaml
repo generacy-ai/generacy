@@ -19,6 +19,7 @@ repos:
 defaults:
   agent: claude-code
   baseBranch: main
+  role: developer
 
 orchestrator:
   pollIntervalMs: 5000
