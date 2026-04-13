@@ -10,16 +10,16 @@
 
 ## Phase 1: Core Fix
 
-- [ ] T001 [US1] Update `preValidateCommand` default in `packages/orchestrator/src/worker/config.ts` — change line 29 from `'pnpm install'` to `'pnpm install && pnpm -r --filter ./packages/* build'`
+- [X] T001 [US1] Update `preValidateCommand` default in `packages/orchestrator/src/worker/config.ts` — change line 29 from `'pnpm install'` to `'pnpm install && pnpm -r --filter ./packages/* build'`
 
 ## Phase 2: Test Updates
 
-- [ ] T002 [P] [US1] Update default assertion in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — change line 422-424 test description and `toBe()` expectation to match new default value
-- [ ] T003 [P] [US1] Update `preValidateCommand` value in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` — update the `createConfig` helper (line 98) to use the new default value
+- [X] T002 [P] [US1] Update default assertion in `packages/orchestrator/src/worker/__tests__/cli-spawner.test.ts` — change line 422-424 test description and `toBe()` expectation to match new default value
+- [X] T003 [P] [US1] Update `preValidateCommand` value in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` — update the `createConfig` helper (line 98) to use the new default value
 
 ## Phase 3: Verification
 
-- [ ] T004 Run `pnpm test` in `packages/orchestrator` to confirm all tests pass with updated default
+- [X] T004 Run `pnpm test` in `packages/orchestrator` to confirm all tests pass with updated default
 
 ## Dependencies & Execution Order
 
