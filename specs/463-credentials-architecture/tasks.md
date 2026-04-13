@@ -53,9 +53,9 @@ Depends on all Phase 1 and Phase 2 tasks being complete.
 
 ## Phase 4: Validation & Cleanup
 
-- [ ] T040 Run full test suite: `pnpm -F @generacy-ai/credhelper test` and `pnpm -F @generacy-ai/credhelper-daemon test`
-- [ ] T041 [P] Run type checking: `pnpm -F @generacy-ai/credhelper tsc --noEmit` and `pnpm -F @generacy-ai/credhelper-daemon tsc --noEmit`
-- [ ] T042 Verify all success criteria: SC-001 (7/7 plugins load), SC-002 (schema validation coverage), SC-003 (mint/resolve tests), SC-004 (exposure rendering tests), SC-005 (all 7 discovered via core registration)
+- [X] T040 Run full test suite: `pnpm -F @generacy-ai/credhelper test` and `pnpm -F @generacy-ai/credhelper-daemon test`
+- [X] T041 [P] Run type checking: `pnpm -F @generacy-ai/credhelper tsc --noEmit` and `pnpm -F @generacy-ai/credhelper-daemon tsc --noEmit`
+- [X] T042 Verify all success criteria: SC-001 (7/7 plugins load), SC-002 (schema validation coverage), SC-003 (mint/resolve tests), SC-004 (exposure rendering tests), SC-005 (all 7 discovered via core registration)
 
 ## Dependencies & Execution Order
 
