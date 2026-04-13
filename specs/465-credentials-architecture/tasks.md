@@ -32,15 +32,15 @@
 
 ## Phase 4: Unit Tests
 
-- [ ] T030 [P] [US3] Write unit tests for `CredhelperClient` in `packages/orchestrator/src/launcher/__tests__/credhelper-client.test.ts` — mock Unix socket HTTP server, test beginSession success/failure, endSession success/failure, connection timeout → `CredhelperUnavailableError`, response timeout, error code propagation
-- [ ] T031 [P] [US1] Write unit tests for credentials interceptor in `packages/orchestrator/src/launcher/__tests__/credentials-interceptor.test.ts` — test `generateSessionId()` format, `buildSessionEnv()` output, `wrapCommand()` positional params, `applyCredentials()` full transform
-- [ ] T032 [US1][US2] Extend existing `packages/orchestrator/src/launcher/__tests__/agent-launcher.test.ts` — add tests for: launch with credentials (mock client, verify session lifecycle), launch without credentials (no-op, no client call), credentials set but client unavailable throws, async return type
-- [ ] T033 [US2] Update existing tests in `packages/orchestrator/src/launcher/__tests__/spawn-e2e.test.ts` and `claude-code-launch-plugin-integration.test.ts` — update all `launcher.launch()` calls to `await launcher.launch()` for async compatibility
+- [X] T030 [P] [US3] Write unit tests for `CredhelperClient` in `packages/orchestrator/src/launcher/__tests__/credhelper-client.test.ts` — mock Unix socket HTTP server, test beginSession success/failure, endSession success/failure, connection timeout → `CredhelperUnavailableError`, response timeout, error code propagation
+- [X] T031 [P] [US1] Write unit tests for credentials interceptor in `packages/orchestrator/src/launcher/__tests__/credentials-interceptor.test.ts` — test `generateSessionId()` format, `buildSessionEnv()` output, `wrapCommand()` positional params, `applyCredentials()` full transform
+- [X] T032 [US1][US2] Extend existing `packages/orchestrator/src/launcher/__tests__/agent-launcher.test.ts` — add tests for: launch with credentials (mock client, verify session lifecycle), launch without credentials (no-op, no client call), credentials set but client unavailable throws, async return type
+- [X] T033 [US2] Update existing tests in `packages/orchestrator/src/launcher/__tests__/spawn-e2e.test.ts` and `claude-code-launch-plugin-integration.test.ts` — update all `launcher.launch()` calls to `await launcher.launch()` for async compatibility
 
 ## Phase 5: Integration
 
-- [ ] T040 [US1] Write integration test: full lifecycle with mock credhelper daemon — begin session → spawn subprocess → verify session env in child → exit → end session called
-- [ ] T041 [US3] Write integration test: credentials requested but no daemon running → verify `CredhelperUnavailableError` with descriptive message including socket path
+- [X] T040 [US1] Write integration test: full lifecycle with mock credhelper daemon — begin session → spawn subprocess → verify session env in child → exit → end session called
+- [X] T041 [US3] Write integration test: credentials requested but no daemon running → verify `CredhelperUnavailableError` with descriptive message including socket path
 
 ## Dependencies & Execution Order
 
