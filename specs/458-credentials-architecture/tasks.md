@@ -12,45 +12,45 @@
 
 ## Phase 1: Package Scaffold
 
-- [ ] T001 Create `packages/credhelper/package.json` following `@generacy-ai/config` pattern — name `@generacy-ai/credhelper`, deps: `zod ^3.23.0`, devDeps: `yaml ^2.4.0`, `vitest`
-- [ ] T002 Create `packages/credhelper/tsconfig.json` extending monorepo root config (ES2022, NodeNext, strict)
-- [ ] T003 Create empty barrel `packages/credhelper/src/index.ts`
-- [ ] T004 Verify `pnpm install` resolves the new workspace package and `tsc` compiles
+- [X] T001 Create `packages/credhelper/package.json` following `@generacy-ai/config` pattern — name `@generacy-ai/credhelper`, deps: `zod ^3.23.0`, devDeps: `yaml ^2.4.0`, `vitest`
+- [X] T002 Create `packages/credhelper/tsconfig.json` extending monorepo root config (ES2022, NodeNext, strict)
+- [X] T003 Create empty barrel `packages/credhelper/src/index.ts`
+- [X] T004 Verify `pnpm install` resolves the new workspace package and `tsc` compiles
 
 ## Phase 2: Core Type Definitions
 
-- [ ] T005 [P] Create `packages/credhelper/src/types/secret.ts` — `Secret` interface with `value: string` and `format?: 'token' | 'json' | 'key' | 'opaque'`
-- [ ] T006 [P] Create `packages/credhelper/src/types/exposure.ts` — `ExposureKind` type union, `ExposureConfig` discriminated union (5 variants by `kind`), `ExposureOutput` discriminated union (5 variants by `kind`)
-- [ ] T007 [P] Create `packages/credhelper/src/types/context.ts` — `BackendClient` interface with `fetchSecret(key): Promise<string>`, `MintContext` with `credentialId`, `backendKey`, `backend`, `scope`, `ttl`, `ResolveContext` with `credentialId`, `backendKey`, `backend`
-- [ ] T008 [P] Create `packages/credhelper/src/types/plugin.ts` — `CredentialTypePlugin` interface with `type`, `credentialSchema`, `scopeSchema?`, `supportedExposures`, `mint?`, `resolve?`, `renderExposure`
-- [ ] T009 [P] Create `packages/credhelper/src/types/session.ts` — `BeginSessionRequest`, `BeginSessionResponse`, `EndSessionRequest`
-- [ ] T010 [P] Create `packages/credhelper/src/types/launch.ts` — `LaunchRequestCredentials` with `role`, `uid`, `gid`
+- [X] T005 [P] Create `packages/credhelper/src/types/secret.ts` — `Secret` interface with `value: string` and `format?: 'token' | 'json' | 'key' | 'opaque'`
+- [X] T006 [P] Create `packages/credhelper/src/types/exposure.ts` — `ExposureKind` type union, `ExposureConfig` discriminated union (5 variants by `kind`), `ExposureOutput` discriminated union (5 variants by `kind`)
+- [X] T007 [P] Create `packages/credhelper/src/types/context.ts` — `BackendClient` interface with `fetchSecret(key): Promise<string>`, `MintContext` with `credentialId`, `backendKey`, `backend`, `scope`, `ttl`, `ResolveContext` with `credentialId`, `backendKey`, `backend`
+- [X] T008 [P] Create `packages/credhelper/src/types/plugin.ts` — `CredentialTypePlugin` interface with `type`, `credentialSchema`, `scopeSchema?`, `supportedExposures`, `mint?`, `resolve?`, `renderExposure`
+- [X] T009 [P] Create `packages/credhelper/src/types/session.ts` — `BeginSessionRequest`, `BeginSessionResponse`, `EndSessionRequest`
+- [X] T010 [P] Create `packages/credhelper/src/types/launch.ts` — `LaunchRequestCredentials` with `role`, `uid`, `gid`
 
 ## Phase 3: Zod Schemas
 
-- [ ] T011 [P] Create `packages/credhelper/src/schemas/backends.ts` — `BackendAuthSchema` (passthrough with `mode`), `BackendEntrySchema`, `BackendsConfigSchema`, inferred types
-- [ ] T012 [P] Create `packages/credhelper/src/schemas/credentials.ts` — `MintConfigSchema`, `CredentialEntrySchema`, `CredentialsConfigSchema`, inferred types
-- [ ] T013 [P] Create `packages/credhelper/src/schemas/roles.ts` — `RoleExposeSchema`, `RoleCredentialRefSchema`, `ProxyRuleSchema`, `ProxyConfigSchema`, `DockerRuleSchema`, `DockerConfigSchema`, `RoleConfigSchema`, inferred types
-- [ ] T014 [P] Create `packages/credhelper/src/schemas/trusted-plugins.ts` — `PluginPinSchema`, `TrustedPluginsSchema`, inferred types
-- [ ] T015 [P] Create `packages/credhelper/src/schemas/exposure.ts` — Zod schemas for `ExposureConfig` and `ExposureOutput` discriminated unions using `z.discriminatedUnion('kind', [...])`
+- [X] T011 [P] Create `packages/credhelper/src/schemas/backends.ts` — `BackendAuthSchema` (passthrough with `mode`), `BackendEntrySchema`, `BackendsConfigSchema`, inferred types
+- [X] T012 [P] Create `packages/credhelper/src/schemas/credentials.ts` — `MintConfigSchema`, `CredentialEntrySchema`, `CredentialsConfigSchema`, inferred types
+- [X] T013 [P] Create `packages/credhelper/src/schemas/roles.ts` — `RoleExposeSchema`, `RoleCredentialRefSchema`, `ProxyRuleSchema`, `ProxyConfigSchema`, `DockerRuleSchema`, `DockerConfigSchema`, `RoleConfigSchema`, inferred types
+- [X] T014 [P] Create `packages/credhelper/src/schemas/trusted-plugins.ts` — `PluginPinSchema`, `TrustedPluginsSchema`, inferred types
+- [X] T015 [P] Create `packages/credhelper/src/schemas/exposure.ts` — Zod schemas for `ExposureConfig` and `ExposureOutput` discriminated unions using `z.discriminatedUnion('kind', [...])`
 
 ## Phase 4: Barrel Exports
 
-- [ ] T016 Wire all types and schemas through `packages/credhelper/src/index.ts` — re-export all interfaces, types, enums from `src/types/*.ts` and all schemas + inferred types from `src/schemas/*.ts`
+- [X] T016 Wire all types and schemas through `packages/credhelper/src/index.ts` — re-export all interfaces, types, enums from `src/types/*.ts` and all schemas + inferred types from `src/schemas/*.ts`
 
 ## Phase 5: Test Fixtures & Schema Tests
 
-- [ ] T017 Create YAML fixture files in `packages/credhelper/src/__tests__/fixtures/` — `backends.yaml`, `credentials.yaml`, `credentials-local.yaml`, `roles/reviewer.yaml`, `roles/developer.yaml`, `roles/devops.yaml`, `trusted-plugins.yaml` matching architecture plan examples
-- [ ] T018 [P] Create `packages/credhelper/src/__tests__/backends-schema.test.ts` — parse backends fixture, validate against `BackendsConfigSchema`, test invalid entries rejected
-- [ ] T019 [P] Create `packages/credhelper/src/__tests__/credentials-schema.test.ts` — parse credentials fixture, validate against `CredentialsConfigSchema`, test overlay parsing, test missing required fields rejected
-- [ ] T020 [P] Create `packages/credhelper/src/__tests__/roles-schema.test.ts` — parse each role fixture, validate against `RoleConfigSchema`, test `extends`, test exposure validation, test proxy/docker blocks
-- [ ] T021 [P] Create `packages/credhelper/src/__tests__/trusted-plugins-schema.test.ts` — parse fixture, validate against `TrustedPluginsSchema`, test invalid entries
+- [X] T017 Create YAML fixture files in `packages/credhelper/src/__tests__/fixtures/` — `backends.yaml`, `credentials.yaml`, `credentials-local.yaml`, `roles/reviewer.yaml`, `roles/developer.yaml`, `roles/devops.yaml`, `trusted-plugins.yaml` matching architecture plan examples
+- [X] T018 [P] Create `packages/credhelper/src/__tests__/backends-schema.test.ts` — parse backends fixture, validate against `BackendsConfigSchema`, test invalid entries rejected
+- [X] T019 [P] Create `packages/credhelper/src/__tests__/credentials-schema.test.ts` — parse credentials fixture, validate against `CredentialsConfigSchema`, test overlay parsing, test missing required fields rejected
+- [X] T020 [P] Create `packages/credhelper/src/__tests__/roles-schema.test.ts` — parse each role fixture, validate against `RoleConfigSchema`, test `extends`, test exposure validation, test proxy/docker blocks
+- [X] T021 [P] Create `packages/credhelper/src/__tests__/trusted-plugins-schema.test.ts` — parse fixture, validate against `TrustedPluginsSchema`, test invalid entries
 
 ## Phase 6: Build Verification
 
-- [ ] T022 Run `pnpm run build` in `packages/credhelper/` — must compile cleanly with no errors
-- [ ] T023 Run `pnpm run test` in `packages/credhelper/` — all schema tests pass
-- [ ] T024 Verify all types and schemas are accessible from barrel export; run full monorepo build to check for regressions
+- [X] T022 Run `pnpm run build` in `packages/credhelper/` — must compile cleanly with no errors
+- [X] T023 Run `pnpm run test` in `packages/credhelper/` — all schema tests pass
+- [X] T024 Verify all types and schemas are accessible from barrel export; run full monorepo build to check for regressions
 
 ## Dependencies & Execution Order
 

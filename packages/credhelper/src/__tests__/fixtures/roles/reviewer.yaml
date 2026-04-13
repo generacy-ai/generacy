@@ -1,0 +1,26 @@
+schemaVersion: "1"
+id: reviewer
+description: Read-only code reviewer; comments on PRs, cannot push.
+
+credentials:
+  - ref: github-main-org
+    scope:
+      repositories:
+        - tetrad-development
+        - generacy
+        - agency
+      permissions:
+        contents: read
+        pull_requests: write
+        issues: write
+    expose:
+      - as: git-credential-helper
+      - as: env
+        name: GITHUB_TOKEN
+
+  - ref: gcp-dev-project
+    scope:
+      scopes:
+        - cloud-platform.read-only
+    expose:
+      - as: gcloud-external-account
