@@ -10,33 +10,33 @@
 
 ## Phase 1: Error Infrastructure & Config Types
 
-- [ ] T001 [AC5] Create `ConfigError` interface and `ConfigValidationError` class — `packages/credhelper/src/config/errors.ts`
+- [X] T001 [AC5] Create `ConfigError` interface and `ConfigValidationError` class — `packages/credhelper/src/config/errors.ts`
   - `ConfigError`: `{ file, field?, message, source? }` interface
   - `ConfigValidationError` extending `Error` with `errors: ConfigError[]`
   - Human-readable `message` formatting listing all errors with file/field context
 
-- [ ] T002 [P] [AC1] Create `LoadConfigOptions` and `ConfigResult` types — `packages/credhelper/src/config/types.ts`
+- [X] T002 [P] [AC1] Create `LoadConfigOptions` and `ConfigResult` types — `packages/credhelper/src/config/types.ts`
   - `LoadConfigOptions`: `{ agencyDir, pluginRegistry?, logger? }`
   - `ConfigResult`: `{ backends, credentials, trustedPlugins, roles, overlayIds }`
   - Re-export `ConfigError` from types for convenience
 
 ## Phase 2: File Reading Layer
 
-- [ ] T003 [AC1] Implement YAML file reader utilities — `packages/credhelper/src/config/file-reader.ts`
+- [X] T003 [AC1] Implement YAML file reader utilities — `packages/credhelper/src/config/file-reader.ts`
   - `readRequiredYaml(filePath, schema, errors)` — reads file, validates with Zod, pushes errors if missing/invalid
   - `readOptionalYaml(filePath, schema, errors)` — returns `null` if file doesn't exist
   - `readRoleDirectory(rolesDir, errors)` — globs `*.yaml`, reads each, validates against `RoleConfigSchema`
   - All functions accumulate errors into shared `ConfigError[]` array
   - Use `yaml ^2.4.0` `parse()` for YAML parsing
 
-- [ ] T004 [P] [AC5] Implement Zod/YAML error mapping — `packages/credhelper/src/config/file-reader.ts`
+- [X] T004 [P] [AC5] Implement Zod/YAML error mapping — `packages/credhelper/src/config/file-reader.ts`
   - Map `ZodError` issues to `ConfigError` format with `file`, `field` (from Zod path), `message`
   - Handle YAML parse errors (syntax) with file path context
   - Overlay-related errors include `source: 'committed' | 'overlay'`
 
 ## Phase 3: Overlay Merge
 
-- [ ] T005 [AC2] Implement credential overlay merge — `packages/credhelper/src/config/overlay.ts`
+- [X] T005 [AC2] Implement credential overlay merge — `packages/credhelper/src/config/overlay.ts`
   - `mergeCredentialOverlay(committed, overlay)` → merged entries + overlay id list
   - Merge by `id`: overlay fully replaces committed entry with same id
   - Overlay can add new ids not in committed file
@@ -44,60 +44,60 @@
 
 ## Phase 4: Role Resolution
 
-- [ ] T006 [AC3] Implement role extends resolver — `packages/credhelper/src/config/role-resolver.ts`
+- [X] T006 [AC3] Implement role extends resolver — `packages/credhelper/src/config/role-resolver.ts`
   - `resolveRoleExtends(roles, errors)` → `Map<string, RoleConfig>` with inheritance applied
   - For each role with `extends`, load parent and merge credentials by `ref`
   - Multi-level extends: resolve full chain (grandparent → parent → child)
 
-- [ ] T007 [P] [AC3] Implement circular extends detection — `packages/credhelper/src/config/role-resolver.ts`
+- [X] T007 [P] [AC3] Implement circular extends detection — `packages/credhelper/src/config/role-resolver.ts`
   - Track visited set during resolution
   - Detect cycles: "Circular extends chain detected: roleA → roleB → roleA"
   - Push error and skip role (fail closed)
 
 ## Phase 5: Cross-Reference Validation
 
-- [ ] T008 [AC4] Implement credential→backend validation — `packages/credhelper/src/config/validator.ts`
+- [X] T008 [AC4] Implement credential→backend validation — `packages/credhelper/src/config/validator.ts`
   - For each credential, verify `credential.backend` matches a `backend.id`
   - Push error with credential file path and specific credential id on mismatch
 
-- [ ] T009 [P] [AC4] Implement role→credential validation — `packages/credhelper/src/config/validator.ts`
+- [X] T009 [P] [AC4] Implement role→credential validation — `packages/credhelper/src/config/validator.ts`
   - For each role, for each `ref` in `credentials[]`, verify it matches a declared credential id
   - Push error with role file path, role id, and specific ref on mismatch
 
-- [ ] T010 [P] [AC4] Implement exposure→plugin validation (optional registry) — `packages/credhelper/src/config/validator.ts`
+- [X] T010 [P] [AC4] Implement exposure→plugin validation (optional registry) — `packages/credhelper/src/config/validator.ts`
   - Only when `pluginRegistry` is provided in options (per C1)
   - Look up credential `type` in registry, check each `expose[].as` is supported
   - When registry absent: skip entirely
 
 ## Phase 6: Main Loader & Exports
 
-- [ ] T011 [AC1][AC5] Implement `loadConfig()` entry point — `packages/credhelper/src/config/loader.ts`
+- [X] T011 [AC1][AC5] Implement `loadConfig()` entry point — `packages/credhelper/src/config/loader.ts`
   - Orchestrate: read backends → credentials → overlay merge → trusted-plugins → roles → resolve extends → validate cross-refs → log overlay → throw or return
   - Accumulate all errors across all stages
   - Throw `ConfigValidationError` if any errors; return `ConfigResult` on success
 
-- [ ] T012 [P] [AC1] Create barrel exports and update package — `packages/credhelper/src/config/index.ts`, `packages/credhelper/src/index.ts`, `packages/credhelper/package.json`
+- [X] T012 [P] [AC1] Create barrel exports and update package — `packages/credhelper/src/config/index.ts`, `packages/credhelper/src/index.ts`, `packages/credhelper/package.json`
   - Create `src/config/index.ts` barrel exporting `loadConfig`, `ConfigResult`, `LoadConfigOptions`, `ConfigValidationError`, `ConfigError`
   - Update `src/index.ts` to re-export from `./config/index.js`
   - Promote `yaml` from devDependency to dependency in `package.json`
 
 ## Phase 7: Test Fixtures
 
-- [ ] T013 [P] [AC3] Create additional test fixtures for extends and error cases — `packages/credhelper/src/__tests__/fixtures/`
+- [X] T013 [P] [AC3] Create additional test fixtures for extends and error cases — `packages/credhelper/src/__tests__/fixtures/`
   - `roles/senior-developer.yaml` extending `developer` (multi-level extends)
   - `roles/circular-a.yaml` and `roles/circular-b.yaml` (circular extends)
   - Fixture for invalid cross-references (missing backend, missing credential ref)
 
 ## Phase 8: Unit Tests
 
-- [ ] T014 [P] [AC2] Overlay merge tests — `packages/credhelper/src/__tests__/overlay.test.ts`
+- [X] T014 [P] [AC2] Overlay merge tests — `packages/credhelper/src/__tests__/overlay.test.ts`
   - Override by id (full replacement)
   - Add new ids from overlay
   - No overlay file (passthrough)
   - Empty overlay (no changes)
   - Overlay ids tracking
 
-- [ ] T015 [P] [AC3] Role resolver tests — `packages/credhelper/src/__tests__/role-resolver.test.ts`
+- [X] T015 [P] [AC3] Role resolver tests — `packages/credhelper/src/__tests__/role-resolver.test.ts`
   - Single-level extends
   - Multi-level extends (chain)
   - Credential merge by ref (child overrides parent)
@@ -105,7 +105,7 @@
   - Missing parent role
   - Role without extends (passthrough)
 
-- [ ] T016 [P] [AC4] Cross-reference validator tests — `packages/credhelper/src/__tests__/validator.test.ts`
+- [X] T016 [P] [AC4] Cross-reference validator tests — `packages/credhelper/src/__tests__/validator.test.ts`
   - Valid config passes
   - Missing backend reference caught
   - Missing credential ref in role caught
@@ -115,7 +115,7 @@
 
 ## Phase 9: Integration Tests
 
-- [ ] T017 [AC1][AC2][AC3][AC4][AC5] Config loader integration tests — `packages/credhelper/src/__tests__/config-loader.test.ts`
+- [X] T017 [AC1][AC2][AC3][AC4][AC5] Config loader integration tests — `packages/credhelper/src/__tests__/config-loader.test.ts`
   - Full valid config directory loads successfully
   - Missing required file (backends.yaml) fails
   - Missing required file (credentials.yaml) fails
@@ -128,7 +128,7 @@
 
 ## Phase 10: Build Verification
 
-- [ ] T018 [AC1] Build and test verification
+- [X] T018 [AC1] Build and test verification
   - `pnpm run build` in `packages/credhelper/` — must compile cleanly
   - `pnpm run test` — all tests pass (Phase 1 + Phase 2)
   - Verify new exports accessible from barrel
