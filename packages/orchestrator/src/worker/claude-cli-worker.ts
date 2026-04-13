@@ -34,7 +34,7 @@ export const defaultProcessFactory: ProcessFactory = {
   ): ChildProcessHandle {
     const child: ChildProcess = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: options.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       ...(options.uid !== undefined && { uid: options.uid }),
       ...(options.gid !== undefined && { gid: options.gid }),
@@ -208,9 +208,8 @@ export class ClaudeCliWorker {
         const prFeedbackHandler = new PrFeedbackHandler(
           this.config,
           workerLogger,
-          this.processFactory,
-          this.sseEmitter,
           this.agentLauncher,
+          this.sseEmitter,
         );
 
         await prFeedbackHandler.handle(item, checkoutPath);
@@ -333,7 +332,6 @@ export class ClaudeCliWorker {
 
       const cliSpawner = new CliSpawner(
         this.agentLauncher,
-        this.processFactory,
         workerLogger,
         this.config.shutdownGracePeriodMs,
       );

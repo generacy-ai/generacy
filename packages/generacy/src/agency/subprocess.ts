@@ -115,10 +115,10 @@ export class SubprocessAgency implements AgencyConnection {
 
         this.process = handle.process;
 
-        handle.process.exitPromise.then((code) => {
+        handle.process.exitPromise.then((code: number | null) => {
           this.connected = false;
           this.logger.info(`Agency process exited with code ${code}`);
-        }, (error) => {
+        }, (error: unknown) => {
           clearTimeout(timeoutId);
           this.logger.error(`Agency process error: ${error instanceof Error ? error.message : String(error)}`);
           reject(error instanceof Error ? error : new Error(String(error)));
@@ -145,11 +145,11 @@ export class SubprocessAgency implements AgencyConnection {
         });
       }
 
-      this.process.stdout?.on('data', (data: Buffer) => {
+      this.process!.stdout?.on('data', (data: Buffer) => {
         this.handleData(data.toString());
       });
 
-      this.process.stderr?.on('data', (data: Buffer) => {
+      this.process!.stderr?.on('data', (data: Buffer) => {
         this.logger.warn(`Agency stderr: ${data.toString()}`);
       });
 

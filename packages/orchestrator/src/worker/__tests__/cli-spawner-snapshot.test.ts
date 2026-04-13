@@ -34,7 +34,7 @@ describe('CliSpawner.spawnPhase — spawn snapshots', () => {
     const factory = new RecordingProcessFactory();
     const launcher = new AgentLauncher(new Map([['default', factory]]));
     launcher.registerPlugin(new ClaudeCodeLaunchPlugin());
-    const spawner = new CliSpawner(launcher, factory, noopLogger);
+    const spawner = new CliSpawner(launcher, noopLogger);
 
     const options: CliSpawnOptions = {
       prompt: 'https://github.com/org/repo/issues/42',
@@ -53,7 +53,7 @@ describe('CliSpawner.spawnPhase — spawn snapshots', () => {
     const factory = new RecordingProcessFactory();
     const launcher = new AgentLauncher(new Map([['default', factory]]));
     launcher.registerPlugin(new ClaudeCodeLaunchPlugin());
-    const spawner = new CliSpawner(launcher, factory, noopLogger);
+    const spawner = new CliSpawner(launcher, noopLogger);
 
     const options: CliSpawnOptions = {
       prompt: 'https://github.com/org/repo/issues/42',

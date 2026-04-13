@@ -7,7 +7,7 @@
  * import { RecordingProcessFactory, normalizeSpawnRecords } from '../test-utils/index.js';
  *
  * const factory = new RecordingProcessFactory();
- * const spawner = new CliSpawner(factory, logger);
+ * const spawner = new CliSpawner(launcher, logger);
  *
  * await spawner.spawnPhase('implement', options, capture);
  *
