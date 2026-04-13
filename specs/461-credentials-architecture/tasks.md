@@ -61,7 +61,7 @@
 
 ## Phase 8: Tests — Session Manager
 
-- [ ] T018 Create `__tests__/session-manager.test.ts` — test begin session (role validation, credential resolution, directory creation, data socket binding), end session (cleanup verified), duplicate session ID rejection, invalid role error, unsupported exposure error, expiry sweeper auto-cleanup
+- [X] T018 Create `__tests__/session-manager.test.ts` — test begin session (role validation, credential resolution, directory creation, data socket binding), end session (cleanup verified), duplicate session ID rejection, invalid role error, unsupported exposure error, expiry sweeper auto-cleanup
 
 ## Phase 9: HTTP Servers
 
@@ -82,8 +82,8 @@
 
 ## Phase 10: Tests — HTTP Servers
 
-- [ ] T021 [P] Create `__tests__/control-server.test.ts` — test POST /sessions routing, DELETE /sessions/:id routing, JSON parsing, error responses (400, 404), SO_PEERCRED rejection, unknown routes return 404
-- [ ] T022 [P] Create `__tests__/data-server.test.ts` — test GET /credential/:id returns value, 404 for unknown credential, 410 for expired credential, unknown routes return 404
+- [X] T021 [P] Create `__tests__/control-server.test.ts` — test POST /sessions routing, DELETE /sessions/:id routing, JSON parsing, error responses (400, 404), SO_PEERCRED rejection, unknown routes return 404
+- [X] T022 [P] Create `__tests__/data-server.test.ts` — test GET /credential/:id returns value, 404 for unknown credential, 410 for expired credential, unknown routes return 404
 
 ## Phase 11: Daemon Orchestration & CLI
 
@@ -99,7 +99,7 @@
 
 ## Phase 12: Integration Test
 
-- [ ] T026 Create `__tests__/integration/session-lifecycle.test.ts` — end-to-end with real Unix sockets:
+- [X] T026 Create `__tests__/integration/session-lifecycle.test.ts` — end-to-end with real Unix sockets:
   1. Start daemon with mock config loader + mock plugin
   2. POST /sessions via HTTP client over Unix socket → verify session directory created with correct structure
   3. GET /credential/:id via data socket → verify credential returned
