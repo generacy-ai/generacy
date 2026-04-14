@@ -100,9 +100,50 @@ export class SubprocessAgency implements AgencyConnection {
         this.disconnect();
       }, this.timeout);
 
+      const setupIO = () => {
+        this.process!.stdout?.on('data', (data: Buffer) => {
+          this.handleData(data.toString());
+        });
+
+        this.process!.stderr?.on('data', (data: Buffer) => {
+          this.logger.warn(`Agency stderr: ${data.toString()}`);
+        });
+
+        // Send initialize message
+        this.sendMessage({
+          jsonrpc: '2.0',
+          id: this.messageId++,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: {
+              name: 'generacy',
+              version: '0.0.1',
+            },
+          },
+        });
+
+        // Wait for initialization response
+        const initHandler = (result: unknown) => {
+          clearTimeout(timeoutId);
+          this.connected = true;
+          this.logger.info('Agency connected');
+          resolve();
+        };
+
+        this.pendingRequests.set(0, {
+          resolve: initHandler,
+          reject: (error) => {
+            clearTimeout(timeoutId);
+            reject(error);
+          },
+        });
+      };
+
       if (this.agentLauncher) {
-        // Launcher path
-        const handle = this.agentLauncher.launch({
+        // Launcher path (async — launch() returns a Promise)
+        this.agentLauncher.launch({
           intent: {
             kind: 'generic-subprocess',
             command: this.command,
@@ -111,16 +152,21 @@ export class SubprocessAgency implements AgencyConnection {
           },
           cwd: this.cwd ?? process.cwd(),
           env: this.env,
-        });
+        }).then((handle) => {
+          this.process = handle.process;
 
-        this.process = handle.process;
+          handle.process.exitPromise.then((code: number | null) => {
+            this.connected = false;
+            this.logger.info(`Agency process exited with code ${code}`);
+          }, (error: unknown) => {
+            clearTimeout(timeoutId);
+            this.logger.error(`Agency process error: ${error instanceof Error ? error.message : String(error)}`);
+            reject(error instanceof Error ? error : new Error(String(error)));
+          });
 
-        handle.process.exitPromise.then((code: number | null) => {
-          this.connected = false;
-          this.logger.info(`Agency process exited with code ${code}`);
+          setupIO();
         }, (error: unknown) => {
           clearTimeout(timeoutId);
-          this.logger.error(`Agency process error: ${error instanceof Error ? error.message : String(error)}`);
           reject(error instanceof Error ? error : new Error(String(error)));
         });
       } else {
@@ -143,46 +189,9 @@ export class SubprocessAgency implements AgencyConnection {
           this.connected = false;
           this.logger.info(`Agency process exited with code ${code}, signal ${signal}`);
         });
+
+        setupIO();
       }
-
-      this.process!.stdout?.on('data', (data: Buffer) => {
-        this.handleData(data.toString());
-      });
-
-      this.process!.stderr?.on('data', (data: Buffer) => {
-        this.logger.warn(`Agency stderr: ${data.toString()}`);
-      });
-
-      // Send initialize message
-      this.sendMessage({
-        jsonrpc: '2.0',
-        id: this.messageId++,
-        method: 'initialize',
-        params: {
-          protocolVersion: '2024-11-05',
-          capabilities: {},
-          clientInfo: {
-            name: 'generacy',
-            version: '0.0.1',
-          },
-        },
-      });
-
-      // Wait for initialization response
-      const initHandler = (result: unknown) => {
-        clearTimeout(timeoutId);
-        this.connected = true;
-        this.logger.info('Agency connected');
-        resolve();
-      };
-
-      this.pendingRequests.set(0, {
-        resolve: initHandler,
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        },
-      });
     });
   }
 

@@ -6,7 +6,7 @@ import { RecordingProcessFactory } from '../../test-utils/index.js';
 import type { LaunchRequest } from '../types.js';
 
 describe('ClaudeCodeLaunchPlugin integration', () => {
-  it('routes phase intent to ClaudeCodeLaunchPlugin via AgentLauncher', () => {
+  it('routes phase intent to ClaudeCodeLaunchPlugin via AgentLauncher', async () => {
     const defaultFactory = new RecordingProcessFactory();
     const interactiveFactory = new RecordingProcessFactory();
 
@@ -28,7 +28,7 @@ describe('ClaudeCodeLaunchPlugin integration', () => {
       cwd: '/tmp/test-repo',
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
 
     expect(handle.metadata.pluginId).toBe('claude-code');
     expect(handle.metadata.intentKind).toBe('phase');
@@ -46,7 +46,7 @@ describe('ClaudeCodeLaunchPlugin integration', () => {
     expect(call.cwd).toBe('/tmp/test-repo');
   });
 
-  it('routes conversation-turn intent to interactive factory', () => {
+  it('routes conversation-turn intent to interactive factory', async () => {
     const defaultFactory = new RecordingProcessFactory();
     const interactiveFactory = new RecordingProcessFactory();
 
@@ -68,7 +68,7 @@ describe('ClaudeCodeLaunchPlugin integration', () => {
       cwd: '/tmp/test-repo',
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
 
     expect(handle.metadata.pluginId).toBe('claude-code');
     expect(handle.metadata.intentKind).toBe('conversation-turn');

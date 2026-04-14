@@ -94,7 +94,7 @@ export class ConversationManager {
 
     // Run initial command as the first turn
     if (options.initialCommand) {
-      this.runTurn(options.conversationId, options.initialCommand);
+      void this.runTurn(options.conversationId, options.initialCommand);
     }
 
     return this.toInfo(handle);
@@ -119,17 +119,17 @@ export class ConversationManager {
       throw error;
     }
 
-    this.runTurn(conversationId, message);
+    void this.runTurn(conversationId, message);
   }
 
   /**
    * Run a single conversation turn by spawning Claude CLI with -p and --resume.
    */
-  private runTurn(conversationId: string, message: string): void {
+  private async runTurn(conversationId: string, message: string): Promise<void> {
     const handle = this.conversations.get(conversationId);
     if (!handle) return;
 
-    const processHandle = this.spawner.spawnTurn({
+    const processHandle = await this.spawner.spawnTurn({
       cwd: handle.workingDirectory,
       message,
       sessionId: handle.sessionId,

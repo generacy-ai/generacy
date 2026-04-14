@@ -56,7 +56,7 @@ function createMockLauncher(handle: ReturnType<typeof createMockHandle>['handle'
     metadata: { pluginId: 'generic-subprocess', intentKind: 'generic-subprocess' },
   };
   return {
-    launch: vi.fn(() => launchHandle),
+    launch: vi.fn(() => Promise.resolve(launchHandle)),
     registerPlugin: vi.fn(),
   } as unknown as AgentLauncher;
 }
@@ -72,7 +72,7 @@ const baseOptions: SubprocessAgencyOptions = {
 
 describe('SubprocessAgency', () => {
   describe('launcher path', () => {
-    it('calls agentLauncher.launch() with correct intent', () => {
+    it('calls agentLauncher.launch() with correct intent', async () => {
       const mock = createMockHandle();
       const launcher = createMockLauncher(mock.handle);
       const agency = new SubprocessAgency(baseOptions, launcher);
@@ -90,6 +90,9 @@ describe('SubprocessAgency', () => {
         cwd: '/tmp',
         env: { MY_VAR: 'val' },
       });
+
+      // launch() is async — flush microtasks so the .then() attaches stream handlers
+      await Promise.resolve();
 
       // Respond to init message so connect resolves
       const initResponse = JSON.stringify({
@@ -110,6 +113,9 @@ describe('SubprocessAgency', () => {
 
       const connectPromise = agency.connect();
 
+      // launch() is async — flush microtasks so the .then() attaches stream handlers
+      await Promise.resolve();
+
       // Respond to init
       const initResponse = JSON.stringify({ jsonrpc: '2.0', id: 0, result: {} });
       mock.stdout.emit('data', Buffer.from(initResponse + '\n'));
@@ -125,6 +131,9 @@ describe('SubprocessAgency', () => {
       const agency = new SubprocessAgency({ ...baseOptions, logger }, launcher);
 
       const connectPromise = agency.connect();
+
+      // launch() is async — flush microtasks so the .then() attaches stream handlers
+      await Promise.resolve();
 
       // Emit stderr data
       mock.stderr.emit('data', Buffer.from('some warning'));
@@ -143,6 +152,9 @@ describe('SubprocessAgency', () => {
       const agency = new SubprocessAgency(baseOptions, launcher);
 
       const connectPromise = agency.connect();
+
+      // launch() is async — flush microtasks so the .then() calls sendMessage
+      await Promise.resolve();
 
       // Init message should have been written to stdin
       expect(mock.handle.stdin.write).toHaveBeenCalled();
@@ -190,6 +202,8 @@ describe('SubprocessAgency', () => {
       const agency = new SubprocessAgency(baseOptions, launcher);
 
       const connectPromise = agency.connect();
+      // launch() is async — flush microtasks so the .then() attaches stream handlers
+      await Promise.resolve();
       mock.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 0, result: {} }) + '\n'));
       await connectPromise;
 

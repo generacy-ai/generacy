@@ -1,12 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AgentLauncher } from '../agent-launcher.js';
+import { CredhelperUnavailableError } from '../credhelper-errors.js';
+import type { CredhelperClient, BeginSessionResult } from '../credhelper-client.js';
 import type {
   AgentLaunchPlugin,
   LaunchRequest,
   LaunchSpec,
   OutputParser,
 } from '../types.js';
-import type { ProcessFactory, ChildProcessHandle } from '../../worker/types.js';
+import type { ProcessFactory } from '../../worker/types.js';
 
 function createMockPlugin(overrides: Partial<AgentLaunchPlugin> = {}): AgentLaunchPlugin {
   return {
@@ -39,9 +41,20 @@ function createMockFactory(): ProcessFactory {
   };
 }
 
+function createMockCredhelperClient(overrides: Partial<CredhelperClient> = {}): CredhelperClient {
+  return {
+    beginSession: vi.fn<CredhelperClient['beginSession']>().mockResolvedValue({
+      sessionDir: '/run/generacy-credhelper/sessions/test-session',
+      expiresAt: new Date('2026-04-13T15:30:00.000Z'),
+    }),
+    endSession: vi.fn<CredhelperClient['endSession']>().mockResolvedValue(undefined),
+    ...overrides,
+  };
+}
+
 describe('AgentLauncher', () => {
   describe('registerPlugin', () => {
-    it('registers a plugin for its supported kinds', () => {
+    it('registers a plugin for its supported kinds', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
       const plugin = createMockPlugin();
@@ -49,7 +62,7 @@ describe('AgentLauncher', () => {
       launcher.registerPlugin(plugin);
 
       // Should be able to launch with the registered kind
-      const handle = launcher.launch({
+      const handle = await launcher.launch({
         intent: { kind: 'test-kind', command: 'echo', args: ['hi'] } as any,
         cwd: '/tmp',
       });
@@ -72,7 +85,7 @@ describe('AgentLauncher', () => {
   });
 
   describe('launch', () => {
-    it('throws descriptive error for unknown intent kind', () => {
+    it('throws descriptive error for unknown intent kind', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
 
@@ -84,12 +97,12 @@ describe('AgentLauncher', () => {
         cwd: '/tmp',
       };
 
-      expect(() => launcher.launch(request)).toThrow(
+      await expect(launcher.launch(request)).rejects.toThrow(
         'Unknown intent kind "unknown". Available kinds: known-a, known-b',
       );
     });
 
-    it('throws descriptive error for unknown stdio profile', () => {
+    it('throws descriptive error for unknown stdio profile', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
 
@@ -107,12 +120,12 @@ describe('AgentLauncher', () => {
         cwd: '/tmp',
       };
 
-      expect(() => launcher.launch(request)).toThrow(
+      await expect(launcher.launch(request)).rejects.toThrow(
         'Unknown stdio profile "nonexistent". Available profiles: default',
       );
     });
 
-    it('merges env with correct precedence: caller > plugin > process.env', () => {
+    it('merges env with correct precedence: caller > plugin > process.env', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
 
@@ -132,7 +145,7 @@ describe('AgentLauncher', () => {
         env: { SHARED: 'caller', CALLER_ONLY: 'from-caller' },
       };
 
-      launcher.launch(request);
+      await launcher.launch(request);
 
       const spawnCall = (factory.spawn as ReturnType<typeof vi.fn>).mock.calls[0];
       const passedEnv = spawnCall[2].env as Record<string, string>;
@@ -147,7 +160,7 @@ describe('AgentLauncher', () => {
       expect(passedEnv['PATH']).toBeDefined();
     });
 
-    it('selects correct ProcessFactory by stdioProfile', () => {
+    it('selects correct ProcessFactory by stdioProfile', async () => {
       const defaultFactory = createMockFactory();
       const interactiveFactory = createMockFactory();
       const launcher = new AgentLauncher(
@@ -166,7 +179,7 @@ describe('AgentLauncher', () => {
       });
       launcher.registerPlugin(plugin);
 
-      launcher.launch({
+      await launcher.launch({
         intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
         cwd: '/tmp',
       });
@@ -175,7 +188,7 @@ describe('AgentLauncher', () => {
       expect(interactiveFactory.spawn).toHaveBeenCalledOnce();
     });
 
-    it('defaults to "default" stdio profile when not specified', () => {
+    it('defaults to "default" stdio profile when not specified', async () => {
       const defaultFactory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', defaultFactory]]));
 
@@ -188,7 +201,7 @@ describe('AgentLauncher', () => {
       });
       launcher.registerPlugin(plugin);
 
-      launcher.launch({
+      await launcher.launch({
         intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
         cwd: '/tmp',
       });
@@ -196,14 +209,14 @@ describe('AgentLauncher', () => {
       expect(defaultFactory.spawn).toHaveBeenCalledOnce();
     });
 
-    it('propagates AbortSignal to ProcessFactory.spawn()', () => {
+    it('propagates AbortSignal to ProcessFactory.spawn()', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
       const plugin = createMockPlugin();
       launcher.registerPlugin(plugin);
 
       const abortController = new AbortController();
-      launcher.launch({
+      await launcher.launch({
         intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
         cwd: '/tmp',
         signal: abortController.signal,
@@ -213,7 +226,7 @@ describe('AgentLauncher', () => {
       expect(spawnCall[2].signal).toBe(abortController.signal);
     });
 
-    it('returns LaunchHandle with process, outputParser, and metadata', () => {
+    it('returns LaunchHandle with process, outputParser, and metadata', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
 
@@ -225,7 +238,7 @@ describe('AgentLauncher', () => {
       });
       launcher.registerPlugin(plugin);
 
-      const handle = launcher.launch({
+      const handle = await launcher.launch({
         intent: { kind: 'my-kind', command: 'echo', args: [] } as any,
         cwd: '/tmp',
       });
@@ -237,6 +250,115 @@ describe('AgentLauncher', () => {
         pluginId: 'my-plugin',
         intentKind: 'my-kind',
       });
+    });
+  });
+
+  describe('launch with credentials', () => {
+    it('applies credentials interceptor when request.credentials is set', async () => {
+      const factory = createMockFactory();
+      const client = createMockCredhelperClient();
+      const launcher = new AgentLauncher(new Map([['default', factory]]), client);
+      const plugin = createMockPlugin();
+      launcher.registerPlugin(plugin);
+
+      await launcher.launch({
+        intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
+        cwd: '/tmp',
+        credentials: { role: 'developer', uid: 1001, gid: 1001 },
+      });
+
+      // beginSession was called
+      expect(client.beginSession).toHaveBeenCalledOnce();
+      const [role] = (client.beginSession as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(role).toBe('developer');
+
+      // spawn was called with wrapped command and uid/gid
+      const spawnCall = (factory.spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(spawnCall[0]).toBe('sh'); // wrapped command
+      expect(spawnCall[1][0]).toBe('-c'); // sh -c
+      expect(spawnCall[2].uid).toBe(1001);
+      expect(spawnCall[2].gid).toBe(1001);
+
+      // session env vars are merged
+      const passedEnv = spawnCall[2].env as Record<string, string>;
+      expect(passedEnv['GENERACY_SESSION_DIR']).toBe('/run/generacy-credhelper/sessions/test-session');
+      expect(passedEnv['GIT_CONFIG_GLOBAL']).toBe('/run/generacy-credhelper/sessions/test-session/git/config');
+      expect(passedEnv['GOOGLE_APPLICATION_CREDENTIALS']).toBe('/run/generacy-credhelper/sessions/test-session/gcp/external-account.json');
+      expect(passedEnv['DOCKER_HOST']).toBe('unix:///run/generacy-credhelper/sessions/test-session/docker.sock');
+    });
+
+    it('does not call credhelper when credentials are absent', async () => {
+      const factory = createMockFactory();
+      const client = createMockCredhelperClient();
+      const launcher = new AgentLauncher(new Map([['default', factory]]), client);
+      const plugin = createMockPlugin();
+      launcher.registerPlugin(plugin);
+
+      await launcher.launch({
+        intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
+        cwd: '/tmp',
+        // no credentials
+      });
+
+      expect(client.beginSession).not.toHaveBeenCalled();
+      expect(client.endSession).not.toHaveBeenCalled();
+
+      // spawn was called with original command (not wrapped)
+      const spawnCall = (factory.spawn as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(spawnCall[0]).toBe('echo');
+    });
+
+    it('throws CredhelperUnavailableError when credentials set but no client provided', async () => {
+      const factory = createMockFactory();
+      // No credhelperClient passed to constructor
+      const launcher = new AgentLauncher(new Map([['default', factory]]));
+      const plugin = createMockPlugin();
+      launcher.registerPlugin(plugin);
+
+      await expect(
+        launcher.launch({
+          intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
+          cwd: '/tmp',
+          credentials: { role: 'developer', uid: 1001, gid: 1001 },
+        }),
+      ).rejects.toThrow(CredhelperUnavailableError);
+    });
+
+    it('registers endSession cleanup on exitPromise', async () => {
+      const factory = createMockFactory();
+      const client = createMockCredhelperClient();
+      const launcher = new AgentLauncher(new Map([['default', factory]]), client);
+      const plugin = createMockPlugin();
+      launcher.registerPlugin(plugin);
+
+      await launcher.launch({
+        intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
+        cwd: '/tmp',
+        credentials: { role: 'developer', uid: 1001, gid: 1001 },
+      });
+
+      // exitPromise resolves with 0 (from mock factory) — wait for microtask
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // endSession should have been called after process exit
+      expect(client.endSession).toHaveBeenCalledOnce();
+    });
+
+    it('returns async LaunchHandle (Promise)', async () => {
+      const factory = createMockFactory();
+      const launcher = new AgentLauncher(new Map([['default', factory]]));
+      const plugin = createMockPlugin();
+      launcher.registerPlugin(plugin);
+
+      const result = launcher.launch({
+        intent: { kind: 'test-kind', command: 'echo', args: [] } as any,
+        cwd: '/tmp',
+      });
+
+      // launch() returns a Promise
+      expect(result).toBeInstanceOf(Promise);
+      const handle = await result;
+      expect(handle.process).toBeDefined();
     });
   });
 });
