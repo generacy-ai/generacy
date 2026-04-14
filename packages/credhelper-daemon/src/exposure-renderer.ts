@@ -2,6 +2,8 @@ import path from 'node:path';
 
 import { CredhelperError } from './errors.js';
 import { mkdirSafe, writeFileSafe } from './util/fs.js';
+import { DockerProxy } from './docker-proxy.js';
+import type { DockerRule, DockerProxyHandle } from './types.js';
 
 /**
  * Renders credential exposure files into a session directory.
@@ -95,11 +97,25 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
     );
   }
 
-  /** Phase 3 stub — Docker socket proxy is not yet implemented. */
-  renderDockerSocketProxy(): never {
-    throw new CredhelperError(
-      'NOT_IMPLEMENTED',
-      'docker-socket-proxy exposure is not yet implemented (Phase 3)',
-    );
+  /**
+   * Create and start a per-session Docker socket proxy.
+   * Returns the DockerProxy instance for session state tracking.
+   */
+  async renderDockerSocketProxy(
+    sessionDir: string,
+    rules: DockerRule[],
+    upstreamSocket: string,
+    upstreamIsHost: boolean,
+    sessionId: string,
+  ): Promise<{ proxy: DockerProxyHandle; socketPath: string }> {
+    const proxy = new DockerProxy({
+      sessionId,
+      sessionDir,
+      rules,
+      upstreamSocket,
+      upstreamIsHost,
+    });
+    const socketPath = await proxy.start();
+    return { proxy, socketPath };
   }
 }

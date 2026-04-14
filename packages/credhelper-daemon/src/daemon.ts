@@ -1,9 +1,10 @@
-import type { DaemonConfig } from './types.js';
+import type { DaemonConfig, UpstreamDockerSocket } from './types.js';
 import { CredentialStore } from './credential-store.js';
 import { TokenRefresher } from './token-refresher.js';
 import { ExposureRenderer } from './exposure-renderer.js';
 import { SessionManager } from './session-manager.js';
 import { ControlServer } from './control-server.js';
+import { detectUpstreamSocket } from './docker-upstream.js';
 
 /**
  * Top-level daemon orchestrator. Wires together all components and manages
@@ -18,6 +19,25 @@ export class Daemon {
 
   async start(): Promise<void> {
     try {
+      // Detect upstream Docker socket (fail-closed if unavailable)
+      let upstreamDockerSocket: UpstreamDockerSocket | undefined;
+      try {
+        upstreamDockerSocket = await detectUpstreamSocket();
+        console.log(
+          `[credhelper] Docker upstream: ${upstreamDockerSocket.socketPath}` +
+            (upstreamDockerSocket.isHost ? ' (host socket)' : ' (DinD)'),
+        );
+        if (upstreamDockerSocket.isHost) {
+          console.warn(
+            '[credhelper] SECURITY: upstream is host Docker socket — ' +
+              'roles allowing POST /containers/create grant host filesystem access',
+          );
+        }
+      } catch {
+        // No Docker socket available — docker-socket-proxy exposures will fail at session time
+        console.log('[credhelper] No Docker socket detected — docker proxy disabled');
+      }
+
       // Create core components
       const store = new CredentialStore();
       this.refresher = new TokenRefresher(store);
@@ -33,6 +53,7 @@ export class Daemon {
           sessionsDir: this.config.sessionsDir,
           workerUid: this.config.workerUid,
           workerGid: this.config.workerGid,
+          upstreamDockerSocket,
         },
       );
 

@@ -1,3 +1,4 @@
+import http from 'node:http';
 import { ExposureRenderer } from '../src/exposure-renderer.js';
 import { CredhelperError } from '../src/errors.js';
 import fs from 'node:fs/promises';
@@ -139,13 +140,47 @@ describe('ExposureRenderer', () => {
   });
 
   describe('renderDockerSocketProxy()', () => {
-    it('throws CredhelperError with code NOT_IMPLEMENTED', () => {
-      expect(() => renderer.renderDockerSocketProxy()).toThrow(CredhelperError);
+    it('creates a DockerProxy and returns proxy handle + socket path', async () => {
+      const sessionDir = path.join(tmpDir, 'session-docker');
+      await renderer.renderSessionDir(sessionDir);
+
+      // Create a fake upstream socket to satisfy the proxy
+      const upstreamSocketPath = path.join(
+        os.tmpdir(),
+        `upstream-test-${Date.now()}.sock`,
+      );
+      const upstream = http.createServer((_req, res) => {
+        res.writeHead(200);
+        res.end('ok');
+      });
+      await new Promise<void>((resolve, reject) => {
+        upstream.on('error', reject);
+        upstream.listen(upstreamSocketPath, () => resolve());
+      });
+
       try {
-        renderer.renderDockerSocketProxy();
-      } catch (err) {
-        expect(err).toBeInstanceOf(CredhelperError);
-        expect((err as CredhelperError).code).toBe('NOT_IMPLEMENTED');
+        const result = await renderer.renderDockerSocketProxy(
+          sessionDir,
+          [{ method: 'GET', path: '/containers/json' }],
+          upstreamSocketPath,
+          false,
+          'test-session-docker',
+        );
+
+        expect(result.proxy).toBeDefined();
+        expect(result.socketPath).toBe(path.join(sessionDir, 'docker.sock'));
+
+        // Verify socket file was created
+        const stat = await fs.stat(result.socketPath);
+        expect(stat.isSocket()).toBe(true);
+
+        // Clean up
+        await result.proxy.stop();
+      } finally {
+        await new Promise<void>((resolve) => {
+          upstream.close(() => resolve());
+        });
+        await fs.unlink(upstreamSocketPath).catch(() => {});
       }
     });
   });
