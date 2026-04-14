@@ -4,7 +4,7 @@ import type {
   Secret,
   ExposureKind,
   ExposureConfig,
-  ExposureOutput,
+  PluginExposureData,
   MintContext,
   ResolveContext,
 } from '@generacy-ai/credhelper';
@@ -56,7 +56,7 @@ export function createMockPlugin(
       kind: ExposureKind,
       secret: Secret,
       cfg: ExposureConfig,
-    ): ExposureOutput {
+    ): PluginExposureData {
       if (kind === 'env') {
         const name = cfg.kind === 'env' ? cfg.name : 'MOCK_SECRET';
         return { kind: 'env', entries: [{ key: name, value: secret.value }] };
@@ -64,13 +64,18 @@ export function createMockPlugin(
       if (kind === 'git-credential-helper') {
         return {
           kind: 'git-credential-helper',
-          script: '#!/bin/sh\necho mock',
+          host: 'github.com',
+          protocol: 'https',
+          username: 'x-access-token',
+          password: secret.value,
         };
       }
       if (kind === 'gcloud-external-account') {
         return {
           kind: 'gcloud-external-account',
-          json: { type: 'external_account' },
+          audience: '//iam.googleapis.com/projects/0/locations/global/workloadIdentityPools/pool/providers/provider',
+          subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+          tokenUrl: 'https://sts.googleapis.com/v1/token',
         };
       }
       throw new Error(`Unsupported exposure: ${kind}`);

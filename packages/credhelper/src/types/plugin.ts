@@ -1,7 +1,8 @@
 import type { ZodSchema } from 'zod';
 import type { Secret } from './secret.js';
-import type { ExposureKind, ExposureConfig, ExposureOutput } from './exposure.js';
+import type { ExposureKind, ExposureConfig } from './exposure.js';
 import type { MintContext, ResolveContext } from './context.js';
+import type { PluginExposureData } from './plugin-exposure.js';
 
 export interface CredentialTypePlugin {
   type: string;
@@ -14,5 +15,5 @@ export interface CredentialTypePlugin {
     kind: ExposureKind,
     secret: Secret,
     cfg: ExposureConfig,
-  ): ExposureOutput;
+  ): PluginExposureData;
 }

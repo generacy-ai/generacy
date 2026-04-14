@@ -73,6 +73,9 @@ export class SessionManager {
       const plugin = this.pluginRegistry.getPlugin(credEntry.type);
       credentialIds.push(credRef.ref);
 
+      // Extract plugin-specific config by stripping common structural fields
+      const { id: _id, type: _type, backend: _backend, backendKey: _backendKey, mint: _mint, ...credConfig } = credEntry;
+
       let credValue;
       let expiresAt: Date;
 
@@ -88,6 +91,7 @@ export class SessionManager {
             backend: { fetchSecret: async () => '' }, // Stub — real backend client from #462
             scope: credRef.scope ?? credEntry.mint.scopeTemplate ?? {},
             ttl: ttlMs,
+            config: credConfig,
           });
           credValue = result.value;
           expiresAt = result.expiresAt;
@@ -111,6 +115,7 @@ export class SessionManager {
             backend: { fetchSecret: async () => '' },
             scope: credRef.scope ?? {},
             ttl: ttlMs,
+            config: credConfig,
           },
         };
         this.store.set(sessionId, credRef.ref, entry);
@@ -127,6 +132,7 @@ export class SessionManager {
               backend: { fetchSecret: async () => '' },
               scope: credRef.scope ?? {},
               ttl: ttlMs,
+              config: credConfig,
             });
             return result;
           },
@@ -138,6 +144,7 @@ export class SessionManager {
             credentialId: credRef.ref,
             backendKey: credEntry.backendKey,
             backend: { fetchSecret: async () => '' },
+            config: credConfig,
           });
         } catch (err) {
           throw new CredhelperError(
@@ -168,7 +175,8 @@ export class SessionManager {
         latestExpiry = expiresAt;
       }
 
-      // Render exposures
+      // Render exposures — call plugin.renderExposure() for credential-specific data,
+      // then renderer.renderPluginExposure() to wrap with session infrastructure.
       for (const expose of credRef.expose) {
         if (!plugin.supportedExposures.includes(expose.as)) {
           throw new CredhelperError(
@@ -178,60 +186,47 @@ export class SessionManager {
           );
         }
 
-        switch (expose.as) {
-          case 'env': {
-            const output = plugin.renderExposure(expose.as, credValue, {
-              kind: 'env',
-              name: expose.name ?? credRef.ref.toUpperCase().replace(/-/g, '_'),
-            });
-            if (output.kind === 'env') {
-              await this.renderer.renderEnv(sessionDir, output.entries);
-            }
-            break;
-          }
-          case 'git-credential-helper':
-            await this.renderer.renderGitCredentialHelper(
-              sessionDir,
-              dataSocketPath,
+        // docker-socket-proxy is not plugin-rendered: it's infrastructure
+        // owned by the daemon and shared across credentials in a session.
+        if (expose.as === 'docker-socket-proxy') {
+          if (!this.config.upstreamDockerSocket) {
+            throw new CredhelperError(
+              'DOCKER_UPSTREAM_NOT_FOUND',
+              'docker-socket-proxy exposure requires a Docker socket, but none was detected at boot',
             );
-            break;
-          case 'gcloud-external-account':
-            await this.renderer.renderGcloudExternalAccount(
-              sessionDir,
-              dataSocketPath,
-              credRef.ref,
-            );
-            break;
-          case 'localhost-proxy':
-            this.renderer.renderLocalhostProxy();
-            break;
-          case 'docker-socket-proxy': {
-            if (!this.config.upstreamDockerSocket) {
-              throw new CredhelperError(
-                'DOCKER_UPSTREAM_NOT_FOUND',
-                'docker-socket-proxy exposure requires a Docker socket, but none was detected at boot',
-              );
-            }
-            if (!roleConfig.docker?.allow) {
-              throw new CredhelperError(
-                'INVALID_ROLE',
-                `Role ${role} uses docker-socket-proxy exposure but has no docker.allow rules`,
-                { roleId: role },
-              );
-            }
-            if (!dockerProxy) {
-              const result = await this.renderer.renderDockerSocketProxy(
-                sessionDir,
-                roleConfig.docker.allow,
-                this.config.upstreamDockerSocket.socketPath,
-                this.config.upstreamDockerSocket.isHost,
-                sessionId,
-              );
-              dockerProxy = result.proxy;
-            }
-            break;
           }
+          if (!roleConfig.docker?.allow) {
+            throw new CredhelperError(
+              'INVALID_ROLE',
+              `Role ${role} uses docker-socket-proxy exposure but has no docker.allow rules`,
+              { roleId: role },
+            );
+          }
+          if (!dockerProxy) {
+            const result = await this.renderer.renderDockerSocketProxy(
+              sessionDir,
+              roleConfig.docker.allow,
+              this.config.upstreamDockerSocket.socketPath,
+              this.config.upstreamDockerSocket.isHost,
+              sessionId,
+            );
+            dockerProxy = result.proxy;
+          }
+          continue;
         }
+
+        // Build ExposureConfig for this kind
+        const exposureCfg = expose.as === 'env'
+          ? { kind: 'env' as const, name: expose.name ?? credRef.ref.toUpperCase().replace(/-/g, '_') }
+          : expose.as === 'localhost-proxy'
+            ? { kind: 'localhost-proxy' as const, port: expose.port ?? 0 }
+            : { kind: expose.as } as import('@generacy-ai/credhelper').ExposureConfig;
+
+        // Plugin renders credential-specific data
+        const exposureData = plugin.renderExposure(expose.as, credValue, exposureCfg);
+
+        // Renderer wraps with session infrastructure (socket paths, file layout)
+        await this.renderer.renderPluginExposure(sessionDir, dataSocketPath, credRef.ref, exposureData);
       }
     }
 

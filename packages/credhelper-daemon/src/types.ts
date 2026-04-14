@@ -14,6 +14,7 @@ import type {
   RoleConfig,
   CredentialEntry,
   BackendEntry,
+  PluginExposureData,
   DockerRule,
 } from '@generacy-ai/credhelper';
 
@@ -142,5 +143,6 @@ export type {
   RoleConfig,
   CredentialEntry,
   BackendEntry,
+  PluginExposureData,
   DockerRule,
 };
