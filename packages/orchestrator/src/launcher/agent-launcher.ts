@@ -4,20 +4,28 @@ import type {
   LaunchHandle,
   LaunchRequest,
 } from './types.js';
+import type { CredhelperClient } from './credhelper-client.js';
+import { applyCredentials } from './credentials-interceptor.js';
+import { CredhelperUnavailableError } from './credhelper-errors.js';
 
 /**
  * Plugin-based process launcher with registry dispatch.
  *
  * Resolves a LaunchRequest's intent to a registered plugin, delegates
  * command/args/env construction to the plugin, performs 3-layer env merge,
- * selects a ProcessFactory by stdio profile, and returns a LaunchHandle.
+ * optionally applies credentials interceptor, selects a ProcessFactory
+ * by stdio profile, and returns a LaunchHandle.
  */
 export class AgentLauncher {
   private readonly kindToPlugin = new Map<string, AgentLaunchPlugin>();
+  private readonly credhelperClient?: CredhelperClient;
 
   constructor(
     private readonly factories: Map<string, ProcessFactory>,
-  ) {}
+    credhelperClient?: CredhelperClient,
+  ) {
+    this.credhelperClient = credhelperClient;
+  }
 
   /**
    * Register a plugin for the intent kinds it supports.
@@ -41,10 +49,12 @@ export class AgentLauncher {
    * 1. Resolve plugin from registry by intent kind
    * 2. Call plugin.buildLaunch() to get LaunchSpec
    * 3. Merge env: process.env ← plugin env ← caller env
-   * 4. Select ProcessFactory by LaunchSpec.stdioProfile
-   * 5. Spawn process and return LaunchHandle
+   * 4. If credentials: apply credentials interceptor (begin session, merge env, wrap command)
+   * 5. Select ProcessFactory by LaunchSpec.stdioProfile
+   * 6. Spawn process and return LaunchHandle
+   * 7. If credentials: register exit cleanup (end session)
    */
-  launch(request: LaunchRequest): LaunchHandle {
+  async launch(request: LaunchRequest): Promise<LaunchHandle> {
     const { intent } = request;
 
     // 1. Resolve plugin
@@ -60,7 +70,7 @@ export class AgentLauncher {
     const launchSpec = plugin.buildLaunch(intent);
 
     // 3. Merge env: process.env ← plugin env ← caller env
-    const mergedEnv: Record<string, string> = {
+    let mergedEnv: Record<string, string> = {
       ...Object.fromEntries(
         Object.entries(process.env).filter(
           (entry): entry is [string, string] => entry[1] !== undefined,
@@ -70,7 +80,38 @@ export class AgentLauncher {
       ...request.env,
     };
 
-    // 4. Select factory by stdio profile
+    let spawnCommand = launchSpec.command;
+    let spawnArgs = launchSpec.args;
+    let spawnUid: number | undefined;
+    let spawnGid: number | undefined;
+    let sessionId: string | undefined;
+
+    // 4. Credentials interceptor
+    if (request.credentials) {
+      if (!this.credhelperClient) {
+        throw new CredhelperUnavailableError(
+          '/run/generacy-credhelper/control.sock',
+          new Error('No CredhelperClient provided to AgentLauncher'),
+        );
+      }
+
+      const result = await applyCredentials(
+        this.credhelperClient,
+        request.credentials,
+        spawnCommand,
+        spawnArgs,
+        mergedEnv,
+      );
+
+      spawnCommand = result.command;
+      spawnArgs = result.args;
+      mergedEnv = result.env;
+      spawnUid = result.uid;
+      spawnGid = result.gid;
+      sessionId = result.sessionId;
+    }
+
+    // 5. Select factory by stdio profile
     const stdioProfile = launchSpec.stdioProfile ?? 'default';
     const factory = this.factories.get(stdioProfile);
     if (!factory) {
@@ -80,14 +121,28 @@ export class AgentLauncher {
       );
     }
 
-    // 5. Spawn and return handle
+    // 6. Spawn and return handle
     const detached = request.detached ?? launchSpec.detached;
-    const childProcess = factory.spawn(launchSpec.command, launchSpec.args, {
+    const childProcess = factory.spawn(spawnCommand, spawnArgs, {
       cwd: request.cwd,
       env: mergedEnv,
       signal: request.signal,
+      ...(spawnUid !== undefined && { uid: spawnUid }),
+      ...(spawnGid !== undefined && { gid: spawnGid }),
       ...(detached !== undefined && { detached }),
     });
+
+    // 7. Register exit cleanup for credhelper session
+    if (sessionId && this.credhelperClient) {
+      const client = this.credhelperClient;
+      const sid = sessionId;
+      void childProcess.exitPromise.then(() => {
+        client.endSession(sid).catch(() => {
+          // endSession failures are logged but do not throw —
+          // the daemon's sweeper handles cleanup for orphaned sessions
+        });
+      });
+    }
 
     const outputParser = plugin.createOutputParser(intent);
 

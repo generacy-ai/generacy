@@ -24,10 +24,12 @@
   "author": "Generacy AI",
   "license": "Apache-2.0",
   "dependencies": {
-    "@generacy-ai/credhelper": "workspace:*"
+    "@generacy-ai/credhelper": "workspace:*",
+    "picomatch": "^4.0.4"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
+    "@types/picomatch": "^4.0.3",
     "typescript": "^5.4.5",
     "vitest": "^4.0.18",
     "zod": "^3.23.0"

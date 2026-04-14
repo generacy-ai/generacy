@@ -51,7 +51,7 @@ export class CliSpawner {
         : 'Spawning new Claude CLI session for phase (via AgentLauncher)',
     );
 
-    const handle = this.agentLauncher.launch({
+    const handle = await this.agentLauncher.launch({
       intent: {
         kind: 'phase',
         phase,
@@ -86,7 +86,7 @@ export class CliSpawner {
     );
 
     const intent: ShellIntent = { kind: 'shell', command: validateCommand };
-    const handle = this.agentLauncher.launch({
+    const handle = await this.agentLauncher.launch({
       intent,
       cwd: checkoutPath,
       env: {},
@@ -115,7 +115,7 @@ export class CliSpawner {
     );
 
     const intent: ShellIntent = { kind: 'shell', command: installCommand };
-    const handle = this.agentLauncher.launch({
+    const handle = await this.agentLauncher.launch({
       intent,
       cwd: checkoutPath,
       env: {},

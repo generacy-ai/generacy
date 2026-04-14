@@ -48,7 +48,7 @@ export class ClaudeCodeInvoker implements AgentInvoker {
    */
   async isAvailable(): Promise<boolean> {
     try {
-      const handle = this.agentLauncher.launch({
+      const handle = await this.agentLauncher.launch({
         intent: { kind: 'generic-subprocess', command: 'claude', args: ['--version'] },
         cwd: process.cwd(),
       });
@@ -87,7 +87,7 @@ export class ClaudeCodeInvoker implements AgentInvoker {
 
     let handle: LaunchHandle;
     try {
-      handle = this.agentLauncher.launch({
+      handle = await this.agentLauncher.launch({
         intent: { kind: 'invoke', command: config.command },
         cwd: config.context.workingDirectory,
         env,

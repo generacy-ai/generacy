@@ -6,6 +6,8 @@ import type {
   SessionState,
   CredentialCacheEntry,
   DaemonConfig,
+  DockerProxyHandle,
+  UpstreamDockerSocket,
 } from './types.js';
 import { CredhelperError } from './errors.js';
 import { CredentialStore } from './credential-store.js';
@@ -25,7 +27,9 @@ export class SessionManager {
     private readonly store: CredentialStore,
     private readonly refresher: TokenRefresher,
     private readonly renderer: ExposureRenderer,
-    private readonly config: Pick<DaemonConfig, 'sessionsDir' | 'workerUid' | 'workerGid'>,
+    private readonly config: Pick<DaemonConfig, 'sessionsDir' | 'workerUid' | 'workerGid'> & {
+      upstreamDockerSocket?: UpstreamDockerSocket;
+    },
   ) {}
 
   async beginSession(request: {
@@ -56,6 +60,7 @@ export class SessionManager {
     const sessionDir = path.join(this.config.sessionsDir, sessionId);
     const dataSocketPath = path.join(sessionDir, 'data.sock');
     const credentialIds: string[] = [];
+    let dockerProxy: DockerProxyHandle | undefined;
 
     // Create session directory
     await this.renderer.renderSessionDir(sessionDir);
@@ -181,6 +186,35 @@ export class SessionManager {
           );
         }
 
+        // docker-socket-proxy is not plugin-rendered: it's infrastructure
+        // owned by the daemon and shared across credentials in a session.
+        if (expose.as === 'docker-socket-proxy') {
+          if (!this.config.upstreamDockerSocket) {
+            throw new CredhelperError(
+              'DOCKER_UPSTREAM_NOT_FOUND',
+              'docker-socket-proxy exposure requires a Docker socket, but none was detected at boot',
+            );
+          }
+          if (!roleConfig.docker?.allow) {
+            throw new CredhelperError(
+              'INVALID_ROLE',
+              `Role ${role} uses docker-socket-proxy exposure but has no docker.allow rules`,
+              { roleId: role },
+            );
+          }
+          if (!dockerProxy) {
+            const result = await this.renderer.renderDockerSocketProxy(
+              sessionDir,
+              roleConfig.docker.allow,
+              this.config.upstreamDockerSocket.socketPath,
+              this.config.upstreamDockerSocket.isHost,
+              sessionId,
+            );
+            dockerProxy = result.proxy;
+          }
+          continue;
+        }
+
         // Build ExposureConfig for this kind
         const exposureCfg = expose.as === 'env'
           ? { kind: 'env' as const, name: expose.name ?? credRef.ref.toUpperCase().replace(/-/g, '_') }
@@ -194,6 +228,14 @@ export class SessionManager {
         // Renderer wraps with session infrastructure (socket paths, file layout)
         await this.renderer.renderPluginExposure(sessionDir, dataSocketPath, credRef.ref, exposureData);
       }
+    }
+
+    // Add DOCKER_HOST env var if docker proxy was started
+    if (dockerProxy) {
+      const dockerSocketPath = path.join(sessionDir, 'docker.sock');
+      await this.renderer.renderEnv(sessionDir, [
+        { key: 'DOCKER_HOST', value: `unix://${dockerSocketPath}` },
+      ]);
     }
 
     // Start data server for this session
@@ -213,6 +255,7 @@ export class SessionManager {
       dataServer,
       dataSocketPath,
       credentialIds,
+      dockerProxy,
     };
     this.sessions.set(sessionId, session);
 
@@ -227,6 +270,11 @@ export class SessionManager {
         `Session not found: ${sessionId}`,
         { sessionId },
       );
+    }
+
+    // Stop docker proxy if active
+    if (session.dockerProxy) {
+      await session.dockerProxy.stop();
     }
 
     // Cancel refresh timers

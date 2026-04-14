@@ -1,5 +1,6 @@
 import type { ChildProcessHandle } from '../worker/types.js';
 import type { ClaudeCodeIntent } from '@generacy-ai/generacy-plugin-claude-code';
+import type { LaunchRequestCredentials } from '@generacy-ai/credhelper';
 
 /**
  * Intent for launching a generic subprocess with explicit command/args.
@@ -45,6 +46,8 @@ export interface LaunchRequest {
   signal?: AbortSignal;
   /** Whether to create a process group (enables group-kill) */
   detached?: boolean;
+  /** Optional credential scoping — when set, a credhelper session is managed around the subprocess */
+  credentials?: LaunchRequestCredentials;
 }
 
 /**

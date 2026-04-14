@@ -49,8 +49,8 @@ export class ConversationSpawner {
    * Uses Python pty.spawn wrapper for unbuffered stdout streaming,
    * with `-p` for the message and `--resume` for session continuity.
    */
-  spawnTurn(options: ConversationTurnOptions): ConversationProcessHandle {
-    const launchHandle = this.agentLauncher.launch({
+  async spawnTurn(options: ConversationTurnOptions): Promise<ConversationProcessHandle> {
+    const launchHandle = await this.agentLauncher.launch({
       intent: {
         kind: 'conversation-turn',
         message: options.message,

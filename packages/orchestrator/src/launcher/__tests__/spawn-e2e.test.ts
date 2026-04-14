@@ -154,7 +154,7 @@ describe('spawn-e2e', () => {
       env: buildEnv(),
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     // defaultProcessFactory → stdin is null
     expect(handle.process.stdin).toBeNull();
 
@@ -192,7 +192,7 @@ describe('spawn-e2e', () => {
       env: buildEnv(),
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     await handle.process.exitPromise;
 
     const capture = parseCaptureFile(captureFile);
@@ -215,7 +215,7 @@ describe('spawn-e2e', () => {
       env: buildEnv(),
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     await handle.process.exitPromise;
 
     const capture = parseCaptureFile(captureFile);
@@ -241,7 +241,7 @@ describe('spawn-e2e', () => {
         env: buildEnv(),
       };
 
-      const handle = launcher.launch(request);
+      const handle = await launcher.launch(request);
       // conversationProcessFactory → stdin is piped (not null)
       expect(handle.process.stdin).not.toBeNull();
 
@@ -277,7 +277,7 @@ describe('spawn-e2e', () => {
       cwd: tmpDir,
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     const [stdout, exitCode] = await Promise.all([
       collectStdout(handle),
       handle.process.exitPromise,
@@ -297,7 +297,7 @@ describe('spawn-e2e', () => {
       cwd: tmpDir,
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     const [stdout, exitCode] = await Promise.all([
       collectStdout(handle),
       handle.process.exitPromise,
@@ -321,7 +321,7 @@ describe('spawn-e2e', () => {
       env: buildEnv({ TEST_CUSTOM_KEY: 'test-value' }),
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     await handle.process.exitPromise;
 
     const capture = parseCaptureFile(captureFile);
@@ -349,7 +349,7 @@ describe('spawn-e2e', () => {
       env: buildEnv({ MOCK_CLAUDE_RESPONSE_FILE: responseFile }),
     };
 
-    const handle = launcher.launch(request);
+    const handle = await launcher.launch(request);
     const [stdout, exitCode] = await Promise.all([
       collectStdout(handle),
       handle.process.exitPromise,

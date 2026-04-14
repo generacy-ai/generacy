@@ -129,7 +129,7 @@ export async function executeCommand(
   let procOnError: ((handler: (err: Error) => void) => void) | undefined;
 
   if (launcher) {
-    const handle = launcher({
+    const handle = await launcher({
       kind: 'generic-subprocess',
       command,
       args,
@@ -278,7 +278,7 @@ export async function executeShellCommand(
   let procOnError: ((handler: (err: Error) => void) => void) | undefined;
 
   if (launcher) {
-    const handle = launcher({
+    const handle = await launcher({
       kind: 'shell',
       command,
       args: [],
