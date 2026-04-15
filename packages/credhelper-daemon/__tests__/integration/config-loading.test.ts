@@ -12,6 +12,8 @@ import { CredhelperError } from '../../src/errors.js';
 import { Daemon } from '../../src/daemon.js';
 import { CORE_PLUGINS } from '../../src/plugins/core/index.js';
 import { DefaultBackendClientFactory } from '../../src/backends/factory.js';
+import { JwtParser } from '../../src/auth/jwt-parser.js';
+import { SessionTokenStore } from '../../src/auth/session-token-store.js';
 import type { CredentialTypePlugin, DaemonConfig } from '../../src/types.js';
 
 /** Make an HTTP request over a Unix socket. */
@@ -100,6 +102,7 @@ function buildDaemonConfig(
   agencyDir: string,
   controlSocketPath: string,
   sessionsDir: string,
+  tokenFilePath: string,
 ): DaemonConfig {
   const appConfig = loadConfig({ agencyDir });
 
@@ -108,6 +111,8 @@ function buildDaemonConfig(
     pluginMap.set(plugin.type, plugin);
   }
 
+  const sessionTokenStore = new SessionTokenStore(tokenFilePath, new JwtParser());
+
   return {
     controlSocketPath,
     sessionsDir,
@@ -115,6 +120,7 @@ function buildDaemonConfig(
     workerGid: 1000,
     daemonUid: 1002,
     backendFactory: new DefaultBackendClientFactory(),
+    sessionTokenStore,
     configLoader: {
       async loadRole(roleId: string) {
         const role = appConfig.roles.get(roleId);
@@ -169,7 +175,8 @@ describe('Integration: Config Loading (Happy Path)', () => {
     const sessionsDir = path.join(tmpDir, 'sessions');
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    const config = buildDaemonConfig(agencyDir, controlSocketPath, sessionsDir);
+    const tokenFilePath = path.join(tmpDir, 'session-token');
+    const config = buildDaemonConfig(agencyDir, controlSocketPath, sessionsDir, tokenFilePath);
     daemon = new Daemon(config);
     await daemon.start();
 
@@ -201,7 +208,8 @@ describe('Integration: Config Loading (Happy Path)', () => {
     const sessionsDir = path.join(tmpDir, 'sessions');
     await fs.mkdir(sessionsDir, { recursive: true });
 
-    const config = buildDaemonConfig(agencyDir, controlSocketPath, sessionsDir);
+    const tokenFilePath = path.join(tmpDir, 'session-token');
+    const config = buildDaemonConfig(agencyDir, controlSocketPath, sessionsDir, tokenFilePath);
     daemon = new Daemon(config);
     await daemon.start();
 

@@ -19,6 +19,8 @@ import type {
 } from '@generacy-ai/credhelper';
 import type { BackendClientFactory } from './backends/types.js';
 
+import type { SessionTokenStore } from './auth/session-token-store.js';
+
 /** Upstream Docker socket info, detected at boot time. */
 export interface UpstreamDockerSocket {
   socketPath: string;
@@ -46,6 +48,10 @@ export interface DaemonConfig {
   enablePeerCred: boolean;
   /** Detected upstream Docker socket. Set at boot by Daemon.start(). */
   upstreamDockerSocket?: UpstreamDockerSocket;
+  /** Shared session token store for auth endpoints and cloud backend. */
+  sessionTokenStore: SessionTokenStore;
+  /** Generacy cloud API URL (from GENERACY_CLOUD_API_URL env var). */
+  generacyCloudApiUrl?: string;
 }
 
 /** Adapter interface for loading configuration objects (for #462). */

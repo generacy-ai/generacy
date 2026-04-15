@@ -2,10 +2,18 @@ import { DefaultBackendClientFactory } from '../../src/backends/factory.js';
 import { EnvBackend } from '../../src/backends/env-backend.js';
 import { GeneracyCloudBackend } from '../../src/backends/generacy-cloud-backend.js';
 import { CredhelperError } from '../../src/errors.js';
+import type { SessionTokenStore } from '../../src/auth/session-token-store.js';
 import type { BackendEntry } from '@generacy-ai/credhelper';
 
+const stubTokenStore = {
+  getToken: async () => null,
+} as unknown as SessionTokenStore;
+
 describe('DefaultBackendClientFactory', () => {
-  const factory = new DefaultBackendClientFactory();
+  const factory = new DefaultBackendClientFactory(
+    'https://api.generacy.test',
+    stubTokenStore,
+  );
 
   it('creates an EnvBackend for type "env"', () => {
     const backend: BackendEntry = { id: 'env-local', type: 'env' };
