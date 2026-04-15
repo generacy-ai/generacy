@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
-import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadDefaultsRole, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -215,6 +215,16 @@ function loadFromEnv(): Record<string, unknown> {
       config.worker = {};
     }
     (config.worker as Record<string, unknown>).workspaceDir = workerWorkspaceDir;
+  }
+
+  // Credential role: env var overrides config file
+  const credentialRole = process.env['GENERACY_CREDENTIAL_ROLE']
+    ?? (configPath ? tryLoadDefaultsRole(configPath) : null);
+  if (credentialRole) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).credentialRole = credentialRole;
   }
 
   // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)

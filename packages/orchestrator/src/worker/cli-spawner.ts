@@ -8,6 +8,7 @@ import type {
 import type { OutputCapture } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { ShellIntent } from '../launcher/types.js';
+import { buildLaunchCredentials } from './credentials-helper.js';
 
 /** Default timeout for the validate phase (10 minutes). */
 const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
@@ -25,6 +26,7 @@ export class CliSpawner {
     private readonly agentLauncher: AgentLauncher,
     private readonly logger: Logger,
     private readonly shutdownGracePeriodMs: number = 5000,
+    private readonly credentialRole?: string,
   ) {}
 
   /**
@@ -60,6 +62,7 @@ export class CliSpawner {
       },
       cwd: options.cwd,
       env: options.env,
+      credentials: buildLaunchCredentials(this.credentialRole),
     });
     const child = handle.process;
 
@@ -90,6 +93,7 @@ export class CliSpawner {
       intent,
       cwd: checkoutPath,
       env: {},
+      credentials: buildLaunchCredentials(this.credentialRole),
     });
 
     return this.manageProcess(handle.process, phase, timeoutMs, signal, undefined);
@@ -119,6 +123,7 @@ export class CliSpawner {
       intent,
       cwd: checkoutPath,
       env: {},
+      credentials: buildLaunchCredentials(this.credentialRole),
     });
 
     return this.manageProcess(handle.process, phase, timeoutMs, signal, undefined);

@@ -34,10 +34,12 @@ import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { resolveClusterIdentity } from './services/identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
+import { existsSync } from 'node:fs';
 import { ConversationManager } from './conversation/conversation-manager.js';
 import { ConversationSpawner } from './conversation/conversation-spawner.js';
 import { conversationProcessFactory } from './conversation/process-factory.js';
 import { createAgentLauncher } from './launcher/launcher-setup.js';
+import { CredhelperHttpClient } from './launcher/credhelper-client.js';
 import { defaultProcessFactory } from './worker/claude-cli-worker.js';
 import { setupConversationRoutes } from './routes/conversations.js';
 import { setupSessionDetailRoutes } from './routes/sessions.js';
@@ -343,13 +345,20 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize ConversationManager (full mode only, when workspaces are configured)
   let conversationManager: ConversationManager | null = null;
   if (!isWorkerMode && Object.keys(config.conversations.workspaces).length > 0) {
+    // Wire CredhelperHttpClient for the conversation launcher when daemon is available
+    const convSocketPath = process.env['GENERACY_CREDHELPER_SOCKET'] ?? '/run/generacy-credhelper/control.sock';
+    const convCredhelperClient = existsSync(convSocketPath)
+      ? new CredhelperHttpClient({ socketPath: convSocketPath })
+      : undefined;
+
     const agentLauncher = createAgentLauncher({
       default: defaultProcessFactory,
       interactive: conversationProcessFactory,
-    });
+    }, convCredhelperClient);
     const conversationSpawner = new ConversationSpawner(
       agentLauncher,
       config.conversations.shutdownGracePeriodMs,
+      config.worker.credentialRole,
     );
     conversationManager = new ConversationManager(
       config.conversations,

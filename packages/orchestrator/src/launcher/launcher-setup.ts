@@ -1,4 +1,5 @@
 import type { ProcessFactory } from '../worker/types.js';
+import type { CredhelperClient } from './credhelper-client.js';
 import { AgentLauncher } from './agent-launcher.js';
 import { GenericSubprocessPlugin } from './generic-subprocess-plugin.js';
 import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
@@ -12,12 +13,13 @@ import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code
 export function createAgentLauncher(factories: {
   default: ProcessFactory;
   interactive: ProcessFactory;
-}): AgentLauncher {
+}, credhelperClient?: CredhelperClient): AgentLauncher {
   const launcher = new AgentLauncher(
     new Map([
       ['default', factories.default],
       ['interactive', factories.interactive],
     ]),
+    credhelperClient,
   );
   launcher.registerPlugin(new GenericSubprocessPlugin());
   launcher.registerPlugin(new ClaudeCodeLaunchPlugin());

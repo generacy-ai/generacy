@@ -95,6 +95,27 @@ export function findWorkspaceConfigPath(
  * Scan immediate subdirectories of `parentDir` for a workspace config file.
  * Returns all found config paths (caller decides how to handle multiples).
  */
+/**
+ * Attempt to load `defaults.role` from a `.generacy/config.yaml` file.
+ * Returns `null` if the file does not exist, has no `defaults` key, or
+ * `defaults.role` is not a string.
+ */
+export function tryLoadDefaultsRole(configPath: string): string | null {
+  if (!existsSync(configPath)) return null;
+  try {
+    const raw = readFileSync(configPath, 'utf-8');
+    const parsed: unknown = parseYaml(raw);
+    if (parsed == null || typeof parsed !== 'object') return null;
+    const doc = parsed as Record<string, unknown>;
+    const defaults = doc['defaults'];
+    if (defaults == null || typeof defaults !== 'object') return null;
+    const role = (defaults as Record<string, unknown>)['role'];
+    return typeof role === 'string' ? role : null;
+  } catch {
+    return null;
+  }
+}
+
 export function scanForWorkspaceConfig(
   parentDir: string,
   configDirName = '.generacy',

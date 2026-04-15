@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
@@ -21,6 +22,8 @@ import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { createAgentLauncher } from '../launcher/launcher-setup.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
+import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
 
 /**
@@ -105,11 +108,24 @@ export class ClaudeCliWorker {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
+    // Credential role fail-fast check: if role is configured, the daemon must be reachable
+    const socketPath = process.env['GENERACY_CREDHELPER_SOCKET'] ?? '/run/generacy-credhelper/control.sock';
+    let credhelperClient: CredhelperHttpClient | undefined;
+    if (config.credentialRole) {
+      if (!existsSync(socketPath)) {
+        throw new CredhelperUnavailableError(socketPath);
+      }
+      credhelperClient = new CredhelperHttpClient({ socketPath });
+    } else if (existsSync(socketPath)) {
+      // Daemon is available but no role configured — wire client for opportunistic use
+      credhelperClient = new CredhelperHttpClient({ socketPath });
+    }
+
     // AgentLauncher: plugin-based process dispatch
     this.agentLauncher = createAgentLauncher({
       default: this.processFactory,
       interactive: conversationProcessFactory,
-    });
+    }, credhelperClient);
 
     // Wire workflow-engine's process launcher to route through AgentLauncher
     clearProcessLauncher();
@@ -334,6 +350,7 @@ export class ClaudeCliWorker {
         this.agentLauncher,
         workerLogger,
         this.config.shutdownGracePeriodMs,
+        this.config.credentialRole,
       );
 
       const conversationLogger = featureResult.feature_dir
