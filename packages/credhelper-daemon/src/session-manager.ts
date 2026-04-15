@@ -9,6 +9,7 @@ import type {
   DockerProxyHandle,
   UpstreamDockerSocket,
 } from './types.js';
+import type { BackendClientFactory } from './backends/types.js';
 import { CredhelperError } from './errors.js';
 import { CredentialStore } from './credential-store.js';
 import { TokenRefresher } from './token-refresher.js';
@@ -24,6 +25,7 @@ export class SessionManager {
   constructor(
     private readonly configLoader: ConfigLoader,
     private readonly pluginRegistry: PluginRegistry,
+    private readonly backendFactory: BackendClientFactory,
     private readonly store: CredentialStore,
     private readonly refresher: TokenRefresher,
     private readonly renderer: ExposureRenderer,
@@ -79,16 +81,19 @@ export class SessionManager {
       let credValue;
       let expiresAt: Date;
 
+      // Load backend config and create client (shared by mint and resolve paths)
+      const backendEntry = await this.configLoader.loadBackend(credEntry.backend);
+      const backendClient = this.backendFactory.create(backendEntry);
+
       if (credEntry.mint && plugin.mint) {
         // Mint-based credential
         const ttlMs = parseTtl(credEntry.mint.ttl);
-        const backend = await this.configLoader.loadBackend(credEntry.backend);
 
         try {
           const result = await plugin.mint({
             credentialId: credRef.ref,
             backendKey: credEntry.backendKey,
-            backend: { fetchSecret: async () => '' }, // Stub — real backend client from #462
+            backend: backendClient,
             scope: credRef.scope ?? credEntry.mint.scopeTemplate ?? {},
             ttl: ttlMs,
             config: credConfig,
@@ -112,7 +117,7 @@ export class SessionManager {
           mintContext: {
             credentialId: credRef.ref,
             backendKey: credEntry.backendKey,
-            backend: { fetchSecret: async () => '' },
+            backend: backendClient,
             scope: credRef.scope ?? {},
             ttl: ttlMs,
             config: credConfig,
@@ -129,7 +134,7 @@ export class SessionManager {
             const result = await plugin.mint!({
               credentialId: credRef.ref,
               backendKey: credEntry.backendKey,
-              backend: { fetchSecret: async () => '' },
+              backend: backendClient,
               scope: credRef.scope ?? {},
               ttl: ttlMs,
               config: credConfig,
@@ -143,7 +148,7 @@ export class SessionManager {
           credValue = await plugin.resolve({
             credentialId: credRef.ref,
             backendKey: credEntry.backendKey,
-            backend: { fetchSecret: async () => '' },
+            backend: backendClient,
             config: credConfig,
           });
         } catch (err) {

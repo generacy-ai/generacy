@@ -10,10 +10,12 @@ import { CredhelperError } from '../src/errors.js';
 import {
   createMockConfigLoader,
   createMockPluginRegistry,
+  createMockBackendFactory,
   MOCK_ROLE,
   MOCK_CREDENTIAL,
   MOCK_BACKEND,
 } from './mocks/mock-config-loader.js';
+import type { BackendClientFactory } from '../src/backends/types.js';
 import { createMockPlugin } from './mocks/mock-plugin.js';
 import type { ConfigLoader, PluginRegistry } from '../src/types.js';
 import type { RoleConfig } from '@generacy-ai/credhelper';
@@ -24,11 +26,13 @@ let refresher: TokenRefresher;
 let renderer: ExposureRenderer;
 let configLoader: ConfigLoader;
 let pluginRegistry: PluginRegistry;
+let backendFactory: BackendClientFactory;
 
 function createSessionManager(
   overrides?: Partial<{
     configLoader: ConfigLoader;
     pluginRegistry: PluginRegistry;
+    backendFactory: BackendClientFactory;
     store: CredentialStore;
     refresher: TokenRefresher;
     renderer: ExposureRenderer;
@@ -37,6 +41,7 @@ function createSessionManager(
   return new SessionManager(
     overrides?.configLoader ?? configLoader,
     overrides?.pluginRegistry ?? pluginRegistry,
+    overrides?.backendFactory ?? backendFactory,
     overrides?.store ?? store,
     overrides?.refresher ?? refresher,
     overrides?.renderer ?? renderer,
@@ -56,6 +61,7 @@ describe('SessionManager', () => {
     });
     configLoader = createMockConfigLoader();
     pluginRegistry = createMockPluginRegistry({ mock: mockPlugin });
+    backendFactory = createMockBackendFactory();
   });
 
   afterEach(async () => {

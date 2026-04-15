@@ -11,6 +11,7 @@ import { loadConfig } from '@generacy-ai/credhelper';
 import { CredhelperError } from '../../src/errors.js';
 import { Daemon } from '../../src/daemon.js';
 import { CORE_PLUGINS } from '../../src/plugins/core/index.js';
+import { DefaultBackendClientFactory } from '../../src/backends/factory.js';
 import type { CredentialTypePlugin, DaemonConfig } from '../../src/types.js';
 
 /** Make an HTTP request over a Unix socket. */
@@ -113,6 +114,7 @@ function buildDaemonConfig(
     workerUid: 1000,
     workerGid: 1000,
     daemonUid: 1002,
+    backendFactory: new DefaultBackendClientFactory(),
     configLoader: {
       async loadRole(roleId: string) {
         const role = appConfig.roles.get(roleId);
@@ -148,6 +150,7 @@ describe('Integration: Config Loading (Happy Path)', () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'credhelper-cfg-'));
+    process.env.TEST_SECRET_VAR = 'test-secret-value';
   });
 
   afterEach(async () => {
@@ -155,6 +158,7 @@ describe('Integration: Config Loading (Happy Path)', () => {
       await daemon.stop().catch(() => {});
     }
     await fs.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    delete process.env.TEST_SECRET_VAR;
   });
 
   it('daemon starts with valid .agency/ config and resolves roles via POST /sessions', async () => {

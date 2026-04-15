@@ -6,6 +6,7 @@ import { Daemon } from '../src/daemon.js';
 import { CredhelperError } from '../src/errors.js';
 import type { CredentialTypePlugin, DaemonConfig } from '../src/types.js';
 import { CORE_PLUGINS } from '../src/plugins/core/index.js';
+import { DefaultBackendClientFactory } from '../src/backends/factory.js';
 
 const controlSocketPath =
   process.env['CREDHELPER_CONTROL_SOCKET'] ??
@@ -57,6 +58,7 @@ const config: DaemonConfig = {
   workerUid,
   workerGid,
   daemonUid: 1002,
+  backendFactory: new DefaultBackendClientFactory(),
   configLoader: {
     async loadRole(roleId: string) {
       const role = appConfig.roles.get(roleId);

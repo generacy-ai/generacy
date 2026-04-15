@@ -10,6 +10,8 @@ import { CredentialStore } from '../../src/credential-store.js';
 import { TokenRefresher } from '../../src/token-refresher.js';
 import { ExposureRenderer } from '../../src/exposure-renderer.js';
 import { SessionManager } from '../../src/session-manager.js';
+import { DefaultBackendClientFactory } from '../../src/backends/factory.js';
+import { createMockBackendFactory } from '../mocks/mock-config-loader.js';
 import type { ConfigLoader, PluginRegistry } from '../../src/types.js';
 
 function createCorePluginRegistry(): PluginRegistry {
@@ -103,10 +105,13 @@ describe('Integration: Core Plugins', () => {
         async loadBackend() { return backend; },
       };
 
+      // Set env var so the real EnvBackend can resolve it
+      process.env['MY_SECRET_VAR'] = 'test-env-secret';
+
       const renderer = new ExposureRenderer();
       const registry = createCorePluginRegistry();
       sessionManager = new SessionManager(
-        configLoader, registry, store, refresher, renderer,
+        configLoader, registry, new DefaultBackendClientFactory(), store, refresher, renderer,
         { sessionsDir, workerUid: 1000, workerGid: 1000 },
       );
 
@@ -129,6 +134,7 @@ describe('Integration: Core Plugins', () => {
       expect(entry!.credentialType).toBe('env-passthrough');
 
       // Cleanup
+      delete process.env['MY_SECRET_VAR'];
       await sessionManager.endSession('env-pass-session');
       const statAfter = await fs.stat(sessionDir).catch(() => null);
       expect(statAfter).toBeNull();
@@ -173,7 +179,7 @@ describe('Integration: Core Plugins', () => {
       const renderer = new ExposureRenderer();
       const registry = createCorePluginRegistry();
       sessionManager = new SessionManager(
-        configLoader, registry, store, refresher, renderer,
+        configLoader, registry, createMockBackendFactory('ghp_test123'), store, refresher, renderer,
         { sessionsDir, workerUid: 1000, workerGid: 1000 },
       );
 

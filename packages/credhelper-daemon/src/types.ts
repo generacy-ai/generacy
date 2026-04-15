@@ -17,6 +17,7 @@ import type {
   PluginExposureData,
   DockerRule,
 } from '@generacy-ai/credhelper';
+import type { BackendClientFactory } from './backends/types.js';
 
 /** Upstream Docker socket info, detected at boot time. */
 export interface UpstreamDockerSocket {
@@ -38,6 +39,7 @@ export interface DaemonConfig {
   daemonUid: number;
   configLoader: ConfigLoader;
   pluginRegistry: PluginRegistry;
+  backendFactory: BackendClientFactory;
   /** @default 30000 */
   sweepIntervalMs: number;
   /** @default true */

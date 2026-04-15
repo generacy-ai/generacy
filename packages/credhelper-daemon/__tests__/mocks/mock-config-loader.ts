@@ -1,5 +1,6 @@
 import type { ConfigLoader, PluginRegistry } from '../../src/types.js';
 import type { RoleConfig, CredentialEntry, BackendEntry, CredentialTypePlugin } from '@generacy-ai/credhelper';
+import type { BackendClientFactory } from '../../src/backends/types.js';
 
 // Fixture data
 export const MOCK_BACKEND: BackendEntry = {
@@ -53,6 +54,18 @@ export function createMockConfigLoader(overrides?: {
       const backend = backends[backendId];
       if (!backend) throw new Error(`Backend not found: ${backendId}`);
       return backend;
+    },
+  };
+}
+
+export function createMockBackendFactory(mockSecret = 'mock-secret-value'): BackendClientFactory {
+  return {
+    create() {
+      return {
+        async fetchSecret() {
+          return mockSecret;
+        },
+      };
     },
   };
 }
