@@ -17,6 +17,7 @@ import type {
   PluginExposureData,
   DockerRule,
 } from '@generacy-ai/credhelper';
+import type { BackendClientFactory } from './backends/types.js';
 
 import type { SessionTokenStore } from './auth/session-token-store.js';
 
@@ -40,6 +41,7 @@ export interface DaemonConfig {
   daemonUid: number;
   configLoader: ConfigLoader;
   pluginRegistry: PluginRegistry;
+  backendFactory: BackendClientFactory;
   /** @default 30000 */
   sweepIntervalMs: number;
   /** @default true */

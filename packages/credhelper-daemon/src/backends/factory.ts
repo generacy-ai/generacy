@@ -1,33 +1,13 @@
 import type { BackendClient, BackendEntry } from '@generacy-ai/credhelper';
-
-import { CredhelperError } from '../errors.js';
+import type { BackendClientFactory } from './types.js';
+import { EnvBackend } from './env-backend.js';
 import { GeneracyCloudBackend } from './generacy-cloud-backend.js';
+import { CredhelperError } from '../errors.js';
 import type { SessionTokenStore } from '../auth/session-token-store.js';
 
-/**
- * Simple env-var backend: reads secrets from process.env.
- */
-class EnvBackend implements BackendClient {
-  async fetchSecret(key: string): Promise<string> {
-    const value = process.env[key];
-    if (value === undefined) {
-      throw new CredhelperError(
-        'CREDENTIAL_NOT_FOUND',
-        `Environment variable '${key}' not set`,
-      );
-    }
-    return value;
-  }
-}
+const SUPPORTED_TYPES = ['env', 'generacy-cloud'] as const;
 
-/**
- * Factory that creates BackendClient instances based on BackendEntry.type.
- *
- * Dispatches:
- *   - "env" → EnvBackend (reads process.env)
- *   - "generacy-cloud" �� GeneracyCloudBackend (fetches from cloud API with Bearer auth)
- */
-export class BackendClientFactory {
+export class DefaultBackendClientFactory implements BackendClientFactory {
   constructor(
     private readonly apiUrl?: string,
     private readonly sessionTokenStore?: SessionTokenStore,
@@ -37,7 +17,6 @@ export class BackendClientFactory {
     switch (backend.type) {
       case 'env':
         return new EnvBackend();
-
       case 'generacy-cloud':
         if (!this.apiUrl) {
           throw new CredhelperError(
@@ -52,11 +31,11 @@ export class BackendClientFactory {
           );
         }
         return new GeneracyCloudBackend(this.apiUrl, this.sessionTokenStore);
-
       default:
         throw new CredhelperError(
-          'NOT_IMPLEMENTED',
-          `Backend type '${backend.type}' is not implemented`,
+          'BACKEND_UNREACHABLE',
+          `Unknown backend type '${backend.type}'. Supported types: ${SUPPORTED_TYPES.join(', ')}`,
+          { backendType: backend.type, supportedTypes: [...SUPPORTED_TYPES] },
         );
     }
   }

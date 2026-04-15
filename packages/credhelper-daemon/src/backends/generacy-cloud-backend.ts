@@ -1,5 +1,4 @@
 import type { BackendClient } from '@generacy-ai/credhelper';
-
 import { CredhelperError } from '../errors.js';
 import type { SessionTokenProvider } from '../auth/session-token-store.js';
 

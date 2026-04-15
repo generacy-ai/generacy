@@ -8,6 +8,7 @@ import type { CredentialTypePlugin, DaemonConfig } from '../src/types.js';
 import { CORE_PLUGINS } from '../src/plugins/core/index.js';
 import { JwtParser } from '../src/auth/jwt-parser.js';
 import { SessionTokenStore } from '../src/auth/session-token-store.js';
+import { DefaultBackendClientFactory } from '../src/backends/factory.js';
 
 const controlSocketPath =
   process.env['CREDHELPER_CONTROL_SOCKET'] ??
@@ -67,6 +68,7 @@ const config: DaemonConfig = {
   workerUid,
   workerGid,
   daemonUid: 1002,
+  backendFactory: new DefaultBackendClientFactory(generacyCloudApiUrl, sessionTokenStore),
   configLoader: {
     async loadRole(roleId: string) {
       const role = appConfig.roles.get(roleId);

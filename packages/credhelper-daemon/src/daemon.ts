@@ -49,6 +49,7 @@ export class Daemon {
       this.sessionManager = new SessionManager(
         this.config.configLoader,
         this.config.pluginRegistry,
+        this.config.backendFactory,
         store,
         this.refresher,
         renderer,
