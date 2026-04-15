@@ -1,5 +1,6 @@
 import type { ChildProcessHandle } from '../worker/types.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import { buildLaunchCredentials } from '../worker/credentials-helper.js';
 
 /**
  * Options for running a single conversation turn.
@@ -41,6 +42,7 @@ export class ConversationSpawner {
   constructor(
     private readonly agentLauncher: AgentLauncher,
     private readonly shutdownGracePeriodMs: number = 5000,
+    private readonly credentialRole?: string,
   ) {}
 
   /**
@@ -60,6 +62,7 @@ export class ConversationSpawner {
       },
       cwd: options.cwd,
       env: {},
+      credentials: buildLaunchCredentials(this.credentialRole),
     });
 
     return launchHandle.process as ConversationProcessHandle;

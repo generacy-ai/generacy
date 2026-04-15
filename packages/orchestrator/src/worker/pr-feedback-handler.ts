@@ -8,6 +8,7 @@ import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
+import { buildLaunchCredentials } from './credentials-helper.js';
 
 /**
  * Handles the `address-pr-feedback` command.
@@ -306,6 +307,7 @@ Please proceed with addressing the feedback.`;
         } as PrFeedbackIntent,
         cwd: checkoutPath,
         env: {},
+        credentials: buildLaunchCredentials(this.config.credentialRole),
       });
       child = handle.process;
     } catch (error) {
