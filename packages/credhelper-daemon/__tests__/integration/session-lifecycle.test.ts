@@ -12,6 +12,7 @@ import { createMockPlugin } from '../mocks/mock-plugin.js';
 import {
   createMockConfigLoader,
   createMockPluginRegistry,
+  createMockBackendFactory,
 } from '../mocks/mock-config-loader.js';
 
 /** Make an HTTP request over a Unix socket. */
@@ -99,6 +100,7 @@ describe('Integration: Session Lifecycle', () => {
     sessionManager = new SessionManager(
       configLoader,
       pluginRegistry,
+      createMockBackendFactory(),
       store,
       refresher,
       renderer,
