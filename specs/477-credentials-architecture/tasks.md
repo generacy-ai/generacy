@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1][US3] Wire real `loadConfig()` into daemon binary
+- [X] T001 [US1][US3] Wire real `loadConfig()` into daemon binary
   - File: `packages/credhelper-daemon/bin/credhelper-daemon.ts`
   - Import `loadConfig`, `ConfigValidationError` from `@generacy-ai/credhelper`
   - Import `resolve` from `node:path`
@@ -22,7 +22,7 @@
     - `loadBackend(id)` → `config.backends.backends.find(b => b.id === id)` with `CredhelperError('BACKEND_UNREACHABLE')` on miss
   - Import `CredhelperError` from `../src/errors.js`
 
-- [ ] T002 [US2] Add fail-closed startup error handling
+- [X] T002 [US2] Add fail-closed startup error handling
   - File: `packages/credhelper-daemon/bin/credhelper-daemon.ts`
   - Wrap `loadConfig()` call in try/catch
   - On `ConfigValidationError`: log each error with file path and field location, then `process.exit(1)`
@@ -32,7 +32,7 @@
 ## Phase 2: Integration Tests
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 -->
 
-- [ ] T003 [P] [US1] Add happy-path integration test for config loading
+- [X] T003 [P] [US1] Add happy-path integration test for config loading
   - File: `packages/credhelper-daemon/__tests__/integration/config-loading.test.ts`
   - Create temp dir with minimal valid `.agency/` structure:
     - `secrets/backends.yaml` — one backend entry
@@ -44,7 +44,7 @@
   - Tear down (stop daemon, remove temp dir)
   - Follow patterns from `session-lifecycle.test.ts` (Unix socket HTTP requests, mock plugin setup)
 
-- [ ] T004 [P] [US2] Add negative integration test for invalid config
+- [X] T004 [P] [US2] Add negative integration test for invalid config
   - File: `packages/credhelper-daemon/__tests__/integration/config-loading.test.ts`
   - Create temp dir with invalid `.agency/` structure (role referencing nonexistent credential)
   - Spawn daemon as child process (since `process.exit()` can't be tested in-process)
@@ -54,7 +54,7 @@
 ## Phase 3: Verification
 <!-- Phase boundary: Complete Phase 2 before starting Phase 3 -->
 
-- [ ] T005 Verify no remaining stub references
+- [X] T005 Verify no remaining stub references
   - Run `grep -r 'not yet integrated' packages/` and confirm zero matches
   - Run full test suite: `pnpm --filter @generacy-ai/credhelper-daemon test`
   - Verify daemon starts against a valid `.agency/` directory (manual or via integration test)
