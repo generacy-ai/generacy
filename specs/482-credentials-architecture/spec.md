@@ -1,10 +1,10 @@
-# Feature Specification: Session-Token Endpoints & Generacy-Cloud Backend (Phase 7b)
+# Feature Specification: ## Credentials Architecture — Critical Integration Gap (Phase 7b)
+
+**Context:** Part of the [credentials architecture plan](https://github
 
 **Branch**: `482-credentials-architecture` | **Date**: 2026-04-15 | **Status**: Draft
 
 ## Summary
-
-Add session-token authentication endpoints to the credhelper daemon control server and implement the `GeneracyCloudBackend` to replace the #481 stub. This unblocks `stack secrets login` and all generacy-cloud-backed credential flows. Part of Phase 7b of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md).
 
 ## Credentials Architecture — Critical Integration Gap (Phase 7b)
 
@@ -35,38 +35,40 @@ Missing endpoints:
 
 ## What needs to be done
 
-### 1. JWT verification infrastructure
+### 1. JWT structural parsing (no signature verification)
 
-Add a JWT library as a daemon dependency — recommend `jose` (modern, supports JWKS, widely used). `jsonwebtoken` is also acceptable but has a larger API surface.
+**Clarified**: Device tokens from generacy-cloud are signed with HS256 (symmetric), not an asymmetric algorithm (see [generacy-cloud device-tokens.ts:52](https://github.com/generacy-ai/generacy-cloud/blob/develop/packages/auth/src/device-tokens.ts#L52)). JWKS is inapplicable for symmetric keys. The daemon skips local signature verification and relies on the cloud to validate tokens on every `fetchSecret()` call.
+
+**Trade-off**: The daemon trusts the token it's given (with structural sanity checks) and relies on the cloud to reject invalid tokens on actual use. This is consistent with the "cloud owns the policy layer" decision (architecture plan decision #1). Worst case (bogus token stored): the next fetch gets 401, daemon surfaces `BackendAuthExpiredError`.
+
+Add `jose` as a dependency for JWT *parsing* only (`decodeJwt()`), not full verification:
 
 ```
 pnpm add jose --filter @generacy-ai/credhelper-daemon
 ```
 
-Add a verifier module:
+Add a parser module:
 ```typescript
-// packages/credhelper-daemon/src/auth/jwt-verifier.ts
-export interface JwtVerifier {
-  verify(token: string): Promise<SessionTokenClaims>;
-}
-
+// packages/credhelper-daemon/src/auth/jwt-parser.ts
 export interface SessionTokenClaims {
   sub: string;           // user_id
   org_id: string;
   scope: string;         // must be "credhelper"
   iat: number;
   exp: number;
-  iss: string;           // must match expected issuer
 }
 
-export class JoseJwtVerifier implements JwtVerifier {
-  // Fetches JWKS from ${GENERACY_CLOUD_API_URL}/.well-known/jwks.json
-  // Caches public keys with periodic refresh
-  // Verifies signature, expiry, issuer, and scope claim
+export class JwtParser {
+  /**
+   * Parse JWT structurally (no signature check) and validate claim shape.
+   * Rejects tokens with wrong scope, missing required claims, or past expiry.
+   * Signature validation is deferred to the cloud on actual use.
+   */
+  parse(token: string): SessionTokenClaims;
 }
 ```
 
-The issuer and JWKS URL are derived from `GENERACY_CLOUD_API_URL` env var or a dedicated `GENERACY_CLOUD_ISSUER` / `GENERACY_CLOUD_JWKS_URL` (pick whichever matches what generacy-cloud actually exposes — coordinate with generacy-ai/generacy-cloud#413 author).
+**Env vars**: Only `GENERACY_CLOUD_API_URL` is needed (where to make resolve calls). No JWKS URL, no issuer URL, no symmetric secret.
 
 ### 2. Control server endpoints
 
@@ -74,16 +76,16 @@ Add to [packages/credhelper-daemon/src/control-server.ts](packages/credhelper-da
 
 **`PUT /auth/session-token`**
 - Body: `{ token: string }` (JSON)
-- SO_PEERCRED still restricted to worker uid (existing)
-- Validate JWT: signature, expiry, `scope: "credhelper"` claim
+- SO_PEERCRED restricted to worker uid (existing). `stack secrets login` runs inside the worker container via `docker compose exec worker ...` as the `node` user (uid 1000), matching the expected worker uid.
+- Parse JWT structurally (no signature check) via `jose.decodeJwt()`
+- Validate claim shape: has `sub`, `org_id`, `scope === "credhelper"`, `exp` not in the past
 - On success:
-  - Atomically write token to `/run/generacy-credhelper/session-token` (mode 0600, owner credhelper:credhelper)
+  - Atomically write token to `/run/generacy-credhelper/session-token` (mode 0600). Daemon runs as `credhelper` user (uid 1002, primary group `node` per tetrad-development#59), so ownership follows process uid — no `chown` needed.
   - Atomic write = write to `.tmp` + `rename()`
   - Update in-memory cached claims
 - Responses:
   - `204 No Content` on success (no body — don't echo the token)
-  - `400 { error, code: "INVALID_JWT" | "EXPIRED_JWT" | "INVALID_SCOPE" | "MALFORMED_REQUEST" }`
-  - `502 { error, code: "JWKS_UNREACHABLE" }` if public keys can't be fetched
+  - `400 { error, code: "INVALID_TOKEN" | "EXPIRED_TOKEN" | "INVALID_SCOPE" | "MALFORMED_REQUEST" }`
 
 **`DELETE /auth/session-token`**
 - No body
@@ -137,9 +139,11 @@ The `SessionTokenProvider` reads the token file on demand (or uses in-memory cac
 
 ### 4. `backendKey` semantics for generacy-cloud
 
-The cloud API uses credential IDs (from Firestore) to identify credentials. The `backendKey` in `credentials.yaml` should be the credential ID as stored in generacy-cloud. Confirm with the UI flow from generacy-ai/generacy-cloud#414 — when a user creates a credential via the UI, they pick a human-readable name; that name (or the generated ID) becomes the `backendKey`.
+**Clarified**: `backendKey` in `credentials.yaml` is the **user-chosen human-readable name** (e.g., `my-stripe-key`, `github-main-org`). Humans edit `credentials.yaml` and review role changes in PRs — opaque Firestore IDs are unacceptable for this workflow.
 
-Document this clearly in the architecture plan: for `backend: generacy-cloud`, `backendKey` is the credential ID / name as it appears in the org's credential list in generacy-cloud.
+**Prerequisite**: The cloud resolve endpoint (`POST /api/organizations/:orgId/credentials/:id/resolve`) must accept human-readable names, not just Firestore doc IDs. **Action required**: verify the cloud resolve endpoint accepts names. If it currently only accepts Firestore IDs, file a sub-issue in generacy-cloud to extend the endpoint to accept name-based lookup. If the cloud endpoint cannot be changed quickly, fall back to Firestore doc IDs for v1.5 and revisit.
+
+Document this clearly in the architecture plan: for `backend: generacy-cloud`, `backendKey` is the human-readable credential name as it appears in the org's credential list in generacy-cloud.
 
 ### 5. Error message clarity
 
@@ -150,24 +154,25 @@ All auth-related errors should be actionable:
 
 ### 6. Tests
 
-- Unit tests for `JoseJwtVerifier`: valid token, expired, wrong scope, wrong issuer, JWKS fetch failure (stubbed network)
+- Unit tests for `JwtParser`: valid token, expired, wrong scope, missing required claims, malformed JWT
 - Unit tests for the three new control server endpoints: happy path + each error case
 - Unit tests for `GeneracyCloudBackend`: 200, 401, 404, 500, auth-required (no token), auth-expired (401 from API)
-- Integration test: start daemon → PUT session token (JWT signed with test key pair) → GET status → session begin uses cloud backend → verify HTTP call to mock generacy-cloud with correct Bearer auth → DELETE session token → GET status shows unauthenticated
+- Integration test: start daemon → PUT session token (valid JWT structure with correct claims) → GET status → session begin uses cloud backend → verify HTTP call to mock generacy-cloud with correct Bearer auth → DELETE session token → GET status shows unauthenticated
 
 ### 7. Coordination with generacy-cloud
 
 This issue depends on:
 - The JWT format/claims from generacy-ai/generacy-cloud#413 (should already be `scope: "credhelper"`, `org_id`, standard RFC 7519 claims)
-- The JWKS endpoint (`/.well-known/jwks.json` or similar) being served by the cloud API — **verify this exists**; if not, file a sub-issue in generacy-cloud
+- ~~The JWKS endpoint — **no longer needed**; daemon uses structural JWT parsing, not signature verification~~
 - The resolve endpoint from generacy-ai/generacy-cloud#412 (`POST /api/organizations/:orgId/credentials/:id/resolve`) accepting the device-flow-issued JWT
+- **The resolve endpoint accepting human-readable credential names** (not just Firestore doc IDs) — verify and file sub-issue in generacy-cloud if needed
 
 If any of the above aren't in place, file sub-issues in generacy-cloud before this can complete.
 
 ## Acceptance criteria
 
-- Three new control server endpoints work end-to-end with proper JWT verification
-- Session token file is written/deleted with correct permissions (0600, credhelper:credhelper)
+- Three new control server endpoints work end-to-end with structural JWT validation (no signature verification)
+- Session token file is written/deleted with correct permissions (mode 0600, owner follows daemon process uid — credhelper:node)
 - Status endpoint never returns the token itself
 - `GeneracyCloudBackend` successfully fetches secrets from generacy-cloud when authenticated
 - Clear error messages for auth-required / auth-expired / not-found cases
@@ -187,80 +192,51 @@ If any of the above aren't in place, file sub-issues in generacy-cloud before th
 
 ## User Stories
 
-### US1: Developer authenticates with generacy-cloud from a worker container
+### US1: Cloud-backed credential resolution
 
-**As a** developer running a worker container,
-**I want** to run `stack secrets login` and have the JWT delivered to the credhelper daemon,
-**So that** cloud-backed credentials are available to my agent processes without manual env-var setup.
-
-**Acceptance Criteria**:
-- [ ] `PUT /auth/session-token` accepts a valid JWT and persists it atomically
-- [ ] Invalid/expired JWTs are rejected with clear error codes
-- [ ] `GET /auth/session-token/status` returns auth state without leaking the token
-- [ ] `DELETE /auth/session-token` clears the session (idempotent)
-
-### US2: Agent process resolves cloud-backed credentials
-
-**As an** agent process spawned by the orchestrator,
-**I want** credentials with `backend: generacy-cloud` to be resolved automatically during session begin,
-**So that** I can access org-level secrets (API keys, tokens) without knowing the storage mechanism.
+**As a** developer using generacy workers,
+**I want** to authenticate via `stack secrets login` and have cloud-backed credentials automatically resolved,
+**So that** my worker containers can access secrets stored in generacy-cloud without manual configuration.
 
 **Acceptance Criteria**:
-- [ ] `GeneracyCloudBackend.fetchSecret()` calls the generacy-cloud resolve endpoint with Bearer auth
-- [ ] Clear error when not authenticated: "run `stack secrets login`"
-- [ ] Clear error when session expired: "run `stack secrets login` again"
-- [ ] Clear error when credential not found: includes credential name and org
-
-### US3: Developer logs out and session is cleaned up
-
-**As a** developer,
-**I want** to log out via `stack secrets logout` or have the daemon clean up on token deletion,
-**So that** stale credentials don't persist on disk after I'm done working.
-
-**Acceptance Criteria**:
-- [ ] `DELETE /auth/session-token` removes the token file from `/run/generacy-credhelper/`
-- [ ] Subsequent `GeneracyCloudBackend` calls return `BackendAuthRequiredError`
-- [ ] Status endpoint returns `{ authenticated: false }`
+- [ ] `stack secrets login` delivers JWT to daemon via `PUT /auth/session-token`
+- [ ] `GET /auth/session-token/status` shows authenticated state without leaking the token
+- [ ] `GeneracyCloudBackend.fetchSecret()` resolves credentials using the stored JWT
+- [ ] `DELETE /auth/session-token` clears authentication state
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `PUT /auth/session-token` validates JWT (signature, expiry, issuer, `scope: "credhelper"`) using JWKS | P1 | Uses `jose` library |
-| FR-002 | Token persisted atomically to `/run/generacy-credhelper/session-token` (mode 0600) | P1 | Write `.tmp` then `rename()` |
-| FR-003 | `DELETE /auth/session-token` unlinks token file, clears in-memory cache (idempotent) | P1 | Ignore ENOENT |
-| FR-004 | `GET /auth/session-token/status` returns `{ authenticated, user, org, expiresAt }` from cache | P1 | Never returns the token value |
-| FR-005 | `GeneracyCloudBackend` calls `POST /api/organizations/:orgId/credentials/:id/resolve` with Bearer auth | P1 | Replaces #481 stub |
-| FR-006 | `SessionTokenProvider` shared between control server (writer) and backend (reader) | P1 | In-memory cache + file fallback |
-| FR-007 | JWKS keys fetched from `${GENERACY_CLOUD_API_URL}/.well-known/jwks.json` with caching | P1 | `GENERACY_CLOUD_JWKS_URL` override supported |
-| FR-008 | All auth errors are actionable with specific remediation instructions | P2 | See §5 Error message clarity |
-| FR-009 | `backendKey` for `generacy-cloud` backend maps to credential ID/name in the org's cloud credential list | P2 | Document in architecture plan |
+| FR-001 | `PUT /auth/session-token` accepts and structurally validates JWT | P1 | No signature verification — deferred to cloud |
+| FR-002 | `DELETE /auth/session-token` clears token file and in-memory state | P1 | Idempotent (ignores ENOENT) |
+| FR-003 | `GET /auth/session-token/status` returns auth state without token | P1 | Reads from in-memory cache |
+| FR-004 | `GeneracyCloudBackend` fetches secrets from cloud API with Bearer auth | P1 | Depends on #481 backend factory |
+| FR-005 | Actionable error messages for auth-required / expired / not-found | P1 | |
+| FR-006 | Token file written atomically with mode 0600 | P1 | tmp + rename pattern |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `stack secrets login` end-to-end | Token delivered and persisted successfully | Manual test with running daemon |
-| SC-002 | Cloud credential resolution | `fetchSecret()` returns decrypted value from generacy-cloud | Integration test with mock cloud API |
-| SC-003 | JWT validation coverage | All rejection cases tested (expired, wrong scope, wrong issuer, bad signature, JWKS unavailable) | Unit test suite |
-| SC-004 | Full login→fetch→logout cycle | Integration test passes | Automated test: PUT token → GET status → session begin → fetch secret → DELETE token → GET status |
-| SC-005 | Token never leaked | Status endpoint and error messages never include the raw JWT | Code review + test assertions |
+| SC-001 | End-to-end flow | login → fetch → logout works | Integration test |
+| SC-002 | Error UX | All auth errors include actionable guidance | Unit test assertions |
 
 ## Assumptions
 
-- #481 (Phase 7a — backend factory + env backend) has landed and provides `BackendClient` interface and backend registry
-- generacy-cloud exposes a JWKS endpoint at `/.well-known/jwks.json` (generacy-ai/generacy-cloud#413)
-- generacy-cloud's resolve endpoint (`POST /api/organizations/:orgId/credentials/:id/resolve`) accepts the device-flow JWT (generacy-ai/generacy-cloud#412)
-- The JWT includes `sub`, `org_id`, `scope: "credhelper"`, `iat`, `exp`, `iss` claims per RFC 7519
-- `SO_PEERCRED` uid restriction on the control socket is already implemented and applies to new endpoints
+- #481 (Phase 7a) merges first, providing `BackendClient` factory and `GeneracyCloudBackend` stub
+- Daemon runs as `credhelper` user (uid 1002, group `node`) per tetrad-development#59
+- `stack secrets login` runs inside worker container via `docker compose exec worker ...` as uid 1000
+- Device tokens use HS256 signing — no JWKS/asymmetric verification possible
+- Cloud resolve endpoint will accept human-readable credential names (verify/file sub-issue)
 
 ## Out of Scope
 
-- Token refresh / rotation — the device-flow JWT has a fixed TTL; user re-runs `stack secrets login` when it expires
-- Multiple concurrent sessions / multi-org support — single session token at a time
-- Credential caching in the daemon — each `fetchSecret()` call hits generacy-cloud (caching may be added later)
-- Changes to `stack secrets login` client (already implemented in tetrad-development#65)
-- Generic launcher paths (`cli-utils.ts`, `subprocess.ts`) — deferred to follow-up
+- Local JWT signature verification (HS256 symmetric — cloud validates on use)
+- JWKS endpoint integration (not applicable for HS256)
+- SO_PEERCRED fix (separate bug — file sibling issue if found broken)
+- Generic launcher credential paths (`cli-utils.ts`, `subprocess.ts`) — deferred to follow-up
+- Migration to RS256 + JWKS (future improvement, not v1.5)
 
 ---
 
