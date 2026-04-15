@@ -1,10 +1,10 @@
-# Feature Specification: BackendClient Factory — Credentials Phase 7a
+# Feature Specification: ## Credentials Architecture — Critical Integration Gap (Phase 7a)
 
-**Branch**: `481-credentials-architecture` | **Date**: 2026-04-15 | **Status**: Draft | **Issue**: [#481](https://github.com/generacy-ai/generacy/issues/481)
+**Context:** Part of the [credentials architecture plan](https://github
+
+**Branch**: `481-credentials-architecture` | **Date**: 2026-04-15 | **Status**: Draft
 
 ## Summary
-
-Replace four stubbed `BackendClient` instantiations in `session-manager.ts` with a real `BackendClientFactory`. Implement the `env` backend (reads `process.env`), stub the `generacy-cloud` backend with a clear `NotImplementedError`, and wire the factory via constructor DI. This unblocks ALL credential resolution end-to-end.
 
 ## Credentials Architecture — Critical Integration Gap (Phase 7a)
 
@@ -136,74 +136,35 @@ The stub comment at line 91 blames #462, but #462's spec was limited to YAML fil
 
 ## User Stories
 
-### US1: Credential resolution via env backend
+### US1: [Primary User Story]
 
-**As a** developer running workflows locally,
-**I want** credentials configured with `backend: env` to resolve to actual environment variable values,
-**So that** my workflows authenticate successfully against external services (GitHub, GCP, AWS, Stripe, etc.).
-
-**Acceptance Criteria**:
-- [ ] A credential with `backend: env, backendKey: FOO` returns the value of `process.env.FOO`
-- [ ] If `FOO` is not set, session begin fails with a clear error naming the missing key
-- [ ] If `FOO` is set to empty string, it is returned as-is (intentional empty is valid)
-
-### US2: Clear error for unimplemented cloud backend
-
-**As a** developer who configures `backend: generacy-cloud`,
-**I want** a clear `NotImplementedError` at session begin,
-**So that** I know to switch to `backend: env` instead of debugging silent empty-string failures.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `generacy-cloud` backend throws with a message naming the backend type and suggesting `env` as alternative
-- [ ] The error surfaces in the session begin response, not swallowed silently
-
-### US3: Unknown backend type rejected at config time
-
-**As a** developer who typos a backend type in config,
-**I want** the daemon to fail fast with a clear error,
-**So that** I can fix the config before wasting time debugging empty credentials.
-
-**Acceptance Criteria**:
-- [ ] Unknown backend type in config causes a clear error at factory dispatch
-- [ ] Error message names the invalid type and lists valid options
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `BackendClientFactory` interface and concrete implementation with type dispatch (`env`, `generacy-cloud`) | P0 | Simple switch, not a plugin system |
-| FR-002 | `EnvBackend` reads `process.env[key]`, throws `BackendSecretNotFoundError` if undefined | P0 | Never log secret values |
-| FR-003 | `GeneracyCloudBackend` stub throws `NotImplementedError` on any `fetchSecret` call | P0 | Placeholder until Phase 7b |
-| FR-004 | Replace all 4 stubbed `BackendClient` in `session-manager.ts` with factory calls | P0 | Lines ~91, 115, 131, 145 |
-| FR-005 | Inject `BackendClientFactory` into `SessionManager` via constructor DI | P1 | Wired in `credhelper-daemon.ts` at startup |
-| FR-006 | `BackendSecretNotFoundError` surfaces as session begin failure with contextual message | P1 | Include credential name, backend type, and key |
-| FR-007 | Unit tests for `EnvBackend`, `GeneracyCloudBackend`, and `BackendClientFactory` | P1 | |
-| FR-008 | Integration test: full session lifecycle with env-backed credentials | P1 | Real `process.env`, real factory, mock plugin |
-| FR-009 | At least one integration test per core plugin exercising real `EnvBackend` | P2 | Existing mock-based tests remain |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Stub removal | 4/4 stubs replaced | Grep for `fetchSecret: async () => ''` returns 0 matches in session-manager.ts |
-| SC-002 | Env backend e2e | Credential resolves to real env var value | Integration test with `process.env` setup passes |
-| SC-003 | Cloud backend error clarity | Error message includes backend type + suggestion | Unit test assertion on error message content |
-| SC-004 | No secret leakage | Zero secret values in logs | Code review + grep for value logging |
-| SC-005 | Existing tests green | All plugin unit tests pass | CI pipeline |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The `BackendConfig` type and `ConfigLoader.loadBackend()` method already exist from #462 (YAML config loading)
-- The `BackendClient` interface (`fetchSecret(key: string): Promise<string>`) is already defined in the credhelper package
-- Only two backend types needed for v1.5: `env` and `generacy-cloud`
-- Plugin tests currently use inline mocks and will continue to for unit-level isolation
+- [Assumption 1]
 
 ## Out of Scope
 
-- `generacy-cloud` backend real implementation (Phase 7b — depends on session-token work)
-- Backend plugin system for community-contributed backends
-- Secret caching or rotation logic
-- Changes to the credhelper shared types package
+- [Exclusion 1]
 
 ---
 
