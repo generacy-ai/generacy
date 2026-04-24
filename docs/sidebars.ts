@@ -51,6 +51,7 @@ const sidebars: SidebarsConfig = {
           label: 'Generacy',
           items: [
             'guides/generacy/overview',
+            'guides/generacy/requirements',
             'guides/generacy/configuration',
           ],
         },
