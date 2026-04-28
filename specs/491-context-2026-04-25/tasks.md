@@ -10,38 +10,38 @@
 
 ## Phase 1: Interface & Types
 
-- [ ] T001 [US1] Add `WritableBackendClient` interface to `packages/credhelper/src/types/context.ts` extending `BackendClient` with `setSecret(key: string, value: string): Promise<void>` and `deleteSecret(key: string): Promise<void>`
-- [ ] T002 [US1] Export `WritableBackendClient` from `packages/credhelper/src/index.ts`
-- [ ] T003 [US1] Re-export `WritableBackendClient` in `packages/credhelper-daemon/src/backends/types.ts`
-- [ ] T004 [US3] Add error codes `CREDENTIAL_STORE_CORRUPT` and `CREDENTIAL_STORE_MIGRATION_NEEDED` to `packages/credhelper-daemon/src/errors.ts` with HTTP status mappings (both 500)
+- [X] T001 [US1] Add `WritableBackendClient` interface to `packages/credhelper/src/types/context.ts` extending `BackendClient` with `setSecret(key: string, value: string): Promise<void>` and `deleteSecret(key: string): Promise<void>`
+- [X] T002 [US1] Export `WritableBackendClient` from `packages/credhelper/src/index.ts`
+- [X] T003 [US1] Re-export `WritableBackendClient` in `packages/credhelper-daemon/src/backends/types.ts`
+- [X] T004 [US3] Add error codes `CREDENTIAL_STORE_CORRUPT` and `CREDENTIAL_STORE_MIGRATION_NEEDED` to `packages/credhelper-daemon/src/errors.ts` with HTTP status mappings (both 500)
 
 ## Phase 2: Crypto Module
 
-- [ ] T010 [P] [US1] Create `packages/credhelper-daemon/src/backends/crypto.ts` with `EncryptedEntry` interface, Zod schema, `encrypt(plaintext, masterKey)`, `decrypt(entry, masterKey)`, and `generateMasterKey()` functions using `node:crypto` AES-256-GCM (12-byte random IV, 16-byte auth tag, base64-encoded output)
-- [ ] T011 [P] [US1] Create `packages/credhelper-daemon/__tests__/backends/crypto.test.ts` with tests: encrypt/decrypt roundtrip, wrong key fails, tampered ciphertext fails, tampered auth tag fails, different plaintexts produce different ciphertexts (random IV)
+- [X] T010 [P] [US1] Create `packages/credhelper-daemon/src/backends/crypto.ts` with `EncryptedEntry` interface, Zod schema, `encrypt(plaintext, masterKey)`, `decrypt(entry, masterKey)`, and `generateMasterKey()` functions using `node:crypto` AES-256-GCM (12-byte random IV, 16-byte auth tag, base64-encoded output)
+- [X] T011 [P] [US1] Create `packages/credhelper-daemon/__tests__/backends/crypto.test.ts` with tests: encrypt/decrypt roundtrip, wrong key fails, tampered ciphertext fails, tampered auth tag fails, different plaintexts produce different ciphertexts (random IV)
 
 ## Phase 3: File Store Module
 
-- [ ] T020 [US1] Create `packages/credhelper-daemon/src/backends/file-store.ts` with `CredentialFileStore` class: `CredentialFileEnvelope` interface and Zod schema, `ensureMasterKey()` (create mode 0600 if absent, read if present), `load()` (parse JSON envelope, validate version, fail closed on corrupt/unknown version), `save(entries)` (atomic temp+fsync+rename under fd-based advisory lock)
-- [ ] T021 [US1] Create `packages/credhelper-daemon/__tests__/backends/file-store.test.ts` with tests: master key created once and reused, master key file permissions 0600, load returns empty map when file missing, load fails on corrupt JSON (`CREDENTIAL_STORE_CORRUPT`), load fails on unknown version (`CREDENTIAL_STORE_MIGRATION_NEEDED`), atomic write produces valid file, crash simulation (partial write does not corrupt existing file), advisory lock acquire/release
+- [X] T020 [US1] Create `packages/credhelper-daemon/src/backends/file-store.ts` with `CredentialFileStore` class: `CredentialFileEnvelope` interface and Zod schema, `ensureMasterKey()` (create mode 0600 if absent, read if present), `load()` (parse JSON envelope, validate version, fail closed on corrupt/unknown version), `save(entries)` (atomic temp+fsync+rename under fd-based advisory lock)
+- [X] T021 [US1] Create `packages/credhelper-daemon/__tests__/backends/file-store.test.ts` with tests: master key created once and reused, master key file permissions 0600, load returns empty map when file missing, load fails on corrupt JSON (`CREDENTIAL_STORE_CORRUPT`), load fails on unknown version (`CREDENTIAL_STORE_MIGRATION_NEEDED`), atomic write produces valid file, crash simulation (partial write does not corrupt existing file), advisory lock acquire/release
 
 ## Phase 4: Backend Implementation
 
-- [ ] T030 [US1] [US2] Create `packages/credhelper-daemon/src/backends/cluster-local-backend.ts` with `ClusterLocalBackend` class implementing `WritableBackendClient`: constructor with `ClusterLocalBackendOptions` (dataPath, keyPath), `init()` to load master key and validate credential file, `fetchSecret(key)` to decrypt from in-memory cache, `setSecret(key, value)` to encrypt and persist under lock, `deleteSecret(key)` to remove and persist under lock
-- [ ] T031 [US1] [US2] Create `packages/credhelper-daemon/__tests__/backends/cluster-local-backend.test.ts` with tests: full CRUD roundtrip (set/get/delete), fetchSecret for missing key throws `BACKEND_SECRET_NOT_FOUND`, volume-snapshot scenario (copy credentials.dat without master.key, decrypt fails), overwrite existing credential, delete non-existent key throws, init with empty store succeeds, init with corrupt file fails closed
+- [X] T030 [US1] [US2] Create `packages/credhelper-daemon/src/backends/cluster-local-backend.ts` with `ClusterLocalBackend` class implementing `WritableBackendClient`: constructor with `ClusterLocalBackendOptions` (dataPath, keyPath), `init()` to load master key and validate credential file, `fetchSecret(key)` to decrypt from in-memory cache, `setSecret(key, value)` to encrypt and persist under lock, `deleteSecret(key)` to remove and persist under lock
+- [X] T031 [US1] [US2] Create `packages/credhelper-daemon/__tests__/backends/cluster-local-backend.test.ts` with tests: full CRUD roundtrip (set/get/delete), fetchSecret for missing key throws `BACKEND_SECRET_NOT_FOUND`, volume-snapshot scenario (copy credentials.dat without master.key, decrypt fails), overwrite existing credential, delete non-existent key throws, init with empty store succeeds, init with corrupt file fails closed
 
 ## Phase 5: Factory & Config Wiring
 
-- [ ] T040 [US1] Add `'cluster-local'` case to `DefaultBackendClientFactory.create()` in `packages/credhelper-daemon/src/backends/factory.ts` constructing `ClusterLocalBackend` with default paths
-- [ ] T041 [P] [US1] Export `ClusterLocalBackend` from `packages/credhelper-daemon/src/backends/index.ts`
-- [ ] T042 [P] [US1] Update config loader in `packages/credhelper-daemon/src/config.ts` to default `type: 'cluster-local'` when backend config omits explicit type
-- [ ] T043 [US1] Add test for `'cluster-local'` type dispatching in `packages/credhelper-daemon/__tests__/backends/factory.test.ts`
+- [X] T040 [US1] Add `'cluster-local'` case to `DefaultBackendClientFactory.create()` in `packages/credhelper-daemon/src/backends/factory.ts` constructing `ClusterLocalBackend` with default paths
+- [X] T041 [P] [US1] Export `ClusterLocalBackend` from `packages/credhelper-daemon/src/backends/index.ts`
+- [X] T042 [P] [US1] Update config loader in `packages/credhelper-daemon/src/config.ts` to default `type: 'cluster-local'` when backend config omits explicit type
+- [X] T043 [US1] Add test for `'cluster-local'` type dispatching in `packages/credhelper-daemon/__tests__/backends/factory.test.ts`
 
 ## Phase 6: Documentation & Verification
 
-- [ ] T050 [P] Update `packages/credhelper-daemon/README.md` with cluster-local backend section and security note (master key management, recovery model, file permissions)
-- [ ] T051 Run full test suite (`pnpm test` in credhelper-daemon) and verify all tests pass
-- [ ] T052 Verify no plaintext secrets appear in test output or log statements
+- [X] T050 [P] Update `packages/credhelper-daemon/README.md` with cluster-local backend section and security note (master key management, recovery model, file permissions)
+- [X] T051 Run full test suite (`pnpm test` in credhelper-daemon) and verify all tests pass
+- [X] T052 Verify no plaintext secrets appear in test output or log statements
 
 ## Dependencies & Execution Order
 

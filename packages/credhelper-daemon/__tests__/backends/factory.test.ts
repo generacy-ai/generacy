@@ -1,5 +1,6 @@
 import { DefaultBackendClientFactory } from '../../src/backends/factory.js';
 import { EnvBackend } from '../../src/backends/env-backend.js';
+import { ClusterLocalBackend } from '../../src/backends/cluster-local-backend.js';
 import { CredhelperError } from '../../src/errors.js';
 import type { BackendEntry } from '@generacy-ai/credhelper';
 
@@ -10,6 +11,12 @@ describe('DefaultBackendClientFactory', () => {
     const backend: BackendEntry = { id: 'env-local', type: 'env' };
     const client = factory.create(backend);
     expect(client).toBeInstanceOf(EnvBackend);
+  });
+
+  it('creates a ClusterLocalBackend for type "cluster-local"', () => {
+    const backend: BackendEntry = { id: 'local-store', type: 'cluster-local' };
+    const client = factory.create(backend);
+    expect(client).toBeInstanceOf(ClusterLocalBackend);
   });
 
   it('throws BACKEND_UNREACHABLE for unknown type with supported types list', () => {
