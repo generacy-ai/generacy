@@ -1,0 +1,187 @@
+openapi: 3.0.3
+info:
+  title: Generacy Cloud Device-Code Activation API
+  description: |
+    HTTP endpoints consumed by the cluster-side activation client.
+    These endpoints are hosted by the Generacy cloud service.
+    Follows RFC 8628 (OAuth 2.0 Device Authorization Grant) semantics.
+  version: 1.0.0
+
+servers:
+  - url: https://api.generacy.ai
+    description: Production cloud
+  - url: https://api-staging.generacy.ai
+    description: Staging cloud
+
+paths:
+  /api/clusters/device-code:
+    post:
+      summary: Request a device code for cluster activation
+      operationId: requestDeviceCode
+      description: |
+        Initiates the device-flow activation. Returns a device_code (for polling)
+        and a user_code (for the operator to enter in the web UI).
+      responses:
+        '200':
+          description: Device code issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceCodeResponse'
+        '429':
+          description: Rate limited
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Service unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/clusters/device-code/poll:
+    post:
+      summary: Poll for device code approval status
+      operationId: pollDeviceCode
+      description: |
+        Called at `interval`-second cadence. Returns the current status
+        of the device code. On `approved`, includes the cluster API key
+        and metadata.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PollRequest'
+      responses:
+        '200':
+          description: Poll status response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PollResponse'
+        '400':
+          description: Invalid device_code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    DeviceCodeResponse:
+      type: object
+      required:
+        - device_code
+        - user_code
+        - verification_uri
+        - interval
+        - expires_in
+      properties:
+        device_code:
+          type: string
+          description: Opaque code for polling
+          example: "dc_abc123def456"
+        user_code:
+          type: string
+          description: Human-readable code for the operator
+          example: "ABCD-1234"
+        verification_uri:
+          type: string
+          format: uri
+          description: URL where the operator enters the user_code
+          example: "https://generacy.ai/cluster-activate"
+        interval:
+          type: integer
+          minimum: 1
+          description: Minimum polling interval in seconds
+          example: 5
+        expires_in:
+          type: integer
+          minimum: 1
+          description: Seconds until the device_code expires
+          example: 900
+
+    PollRequest:
+      type: object
+      required:
+        - device_code
+      properties:
+        device_code:
+          type: string
+          description: The device_code from the initial request
+
+    PollResponse:
+      oneOf:
+        - $ref: '#/components/schemas/PollPending'
+        - $ref: '#/components/schemas/PollSlowDown'
+        - $ref: '#/components/schemas/PollExpired'
+        - $ref: '#/components/schemas/PollApproved'
+      discriminator:
+        propertyName: status
+
+    PollPending:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [authorization_pending]
+
+    PollSlowDown:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [slow_down]
+
+    PollExpired:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [expired]
+
+    PollApproved:
+      type: object
+      required:
+        - status
+        - cluster_api_key
+        - cluster_api_key_id
+        - cluster_id
+        - project_id
+        - org_id
+      properties:
+        status:
+          type: string
+          enum: [approved]
+        cluster_api_key:
+          type: string
+          description: Long-lived cluster API key (secret)
+        cluster_api_key_id:
+          type: string
+          description: Key ID prefix for diagnostics (non-secret)
+        cluster_id:
+          type: string
+          description: Assigned cluster identifier
+        project_id:
+          type: string
+          description: Project the cluster belongs to
+        org_id:
+          type: string
+          description: Organization the cluster belongs to
+
+    ErrorResponse:
+      type: object
+      required: [error, code]
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
