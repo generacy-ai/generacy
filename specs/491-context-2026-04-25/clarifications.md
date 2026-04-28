@@ -10,7 +10,7 @@
 - B: Keep `BackendClient` read-only; add a separate `WritableBackendClient` interface that `ClusterLocalBackend` implements
 - C: Internal methods on `ClusterLocalBackend` only, not exposed via any shared interface
 
-**Answer**: *Pending*
+**Answer**: B — Separate `WritableBackendClient` interface. Some backends are inherently read-only (e.g., env passthrough). Splitting into `BackendClient` (read) and `WritableBackendClient extends BackendClient` (read+write) lets the type system enforce capability at call sites. `ClusterLocalBackend` implements `WritableBackendClient`; the env passthrough remains read-only and the factory rejects it as a target for credential write operations.
 
 ### Q2: Default Backend Wiring
 **Context**: The factory receives a `BackendEntry` object with a `type` field. FR-008 says "Make cluster-local the default when config omits an explicit backend type." But the current `BackendEntry` schema requires a `type: z.string()` field. It's unclear where the defaulting happens.
@@ -19,7 +19,7 @@
 - A: Config loader fills in `type: 'cluster-local'` as a default before passing to factory
 - B: Factory treats missing/empty type as `cluster-local`
 
-**Answer**: *Pending*
+**Answer**: A — Config loader fills in `type: 'cluster-local'` as default. Config normalization belongs in the loader; the factory then consumes a fully-specified, typed config. Cleaner separation of concerns and easier to test.
 
 ### Q3: Set/Delete Callers
 **Context**: The spec mentions set/delete operations but doesn't specify which component calls them. The control-plane has stub routes `GET/PUT /credentials/:id` (#490). The session manager currently only calls `fetchSecret`.
@@ -29,7 +29,7 @@
 - B: Session manager manages lifecycle (set on session begin, delete on session end)
 - C: Both (control-plane for initial storage, session manager for lifecycle)
 
-**Answer**: *Pending*
+**Answer**: A — Control-plane routes only. In v1.5 the only writer is the bootstrap UI via the control-plane `PUT /credentials/:id` endpoint (#490). The session manager is read-only — it calls `fetchSecret` to mint exposures at session begin. Lifecycle deletion of credentials is a user action through the bootstrap UI, not an automatic per-session thing.
 
 ### Q4: Corrupt File Recovery
 **Context**: The spec defines atomic writes via temp-file-and-rename to prevent corruption, but doesn't address what happens if `credentials.dat` already exists and contains invalid JSON or an unrecognized version number.
@@ -39,7 +39,7 @@
 - B: Log a warning and start fresh with an empty store (existing credentials are lost)
 - C: Fail closed for corrupt JSON; for unknown version, throw a specific "migration needed" error
 
-**Answer**: *Pending*
+**Answer**: C — Fail closed for corrupt JSON; for unknown version, throw a specific "migration needed" error. Silently starting fresh is dangerous (loses real user credentials). Generic fail-closed doesn't distinguish recoverable scenarios. Distinct error codes: catastrophic corruption surfaces loudly; unknown version surfaces a distinct error code for forward-compat.
 
 ### Q5: File Locking Strategy
 **Context**: The spec mentions "single-process write lock via file mutex (e.g., proper-lockfile or fd-based advisory lock)" but doesn't mandate which approach. `proper-lockfile` is a third-party npm package; fd-based advisory lock uses OS `flock()` via Node.js `fs` handles.
@@ -48,4 +48,4 @@
 - A: Use `proper-lockfile` npm package (battle-tested, handles stale locks)
 - B: Implement fd-based advisory lock with Node.js built-in `fs` (no new dependency, matches daemon pattern)
 
-**Answer**: *Pending*
+**Answer**: B — fd-based advisory lock via Node.js built-in `fs`. The credhelper-daemon prefers minimal external deps and the credentials.dat file is only ever written by a single process. Built-in advisory locking is sufficient; `proper-lockfile`'s extra features aren't load-bearing here.
