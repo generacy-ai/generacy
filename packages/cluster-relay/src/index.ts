@@ -12,6 +12,10 @@ export {
   type ErrorMessage,
   type ClusterMetadata,
   type GitRemote,
+  type Actor,
+  type Activation,
+  ActorSchema,
+  ActivationSchema,
   RelayMessageSchema,
   ClusterMetadataSchema,
   GitRemoteSchema,
@@ -20,9 +24,19 @@ export {
 
 export {
   type RelayConfig,
+  type RouteEntry,
+  RouteEntrySchema,
   RelayConfigSchema,
   loadConfig,
 } from './config.js';
+
+export {
+  type RouteMatch,
+  sortRoutes,
+  resolveRoute,
+  isUnixSocket,
+  parseUnixTarget,
+} from './dispatcher.js';
 
 export { createEventMessage, type SSESubscriptionOptions } from './events.js';
 export type { Logger } from './relay.js';

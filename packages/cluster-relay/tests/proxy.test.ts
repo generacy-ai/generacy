@@ -14,6 +14,7 @@ const baseConfig: RelayConfig = {
   heartbeatIntervalMs: 30000,
   baseReconnectDelayMs: 5000,
   maxReconnectDelayMs: 300000,
+  routes: [],
 };
 
 const baseRequest: ApiRequestMessage = {
@@ -189,5 +190,80 @@ describe('handleApiRequest', () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toBe('plain text response');
+  });
+
+  it('routes to matched HTTP target with prefix stripping', async () => {
+    const configWithRoutes: RelayConfig = {
+      ...baseConfig,
+      routes: [{ prefix: '/monitoring', target: 'http://localhost:9090' }],
+    };
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+
+    await handleApiRequest(
+      { ...baseRequest, path: '/monitoring/metrics' },
+      configWithRoutes,
+    );
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const callArgs = mockFetch.mock.calls[0];
+    expect(callArgs[0]).toBe('http://localhost:9090/metrics');
+  });
+
+  it('falls back to orchestratorUrl when no route matches', async () => {
+    const configWithRoutes: RelayConfig = {
+      ...baseConfig,
+      routes: [{ prefix: '/monitoring', target: 'http://localhost:9090' }],
+    };
+    mockFetch.mockResolvedValue(createMockResponse(200, { ok: true }));
+
+    await handleApiRequest(
+      { ...baseRequest, path: '/workflows' },
+      configWithRoutes,
+    );
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const callArgs = mockFetch.mock.calls[0];
+    expect(callArgs[0]).toBe('http://localhost:3000/workflows');
+  });
+
+  it('sets actor headers when actor is present', async () => {
+    const requestWithActor: ApiRequestMessage = {
+      ...baseRequest,
+      actor: { userId: 'user-1', sessionId: 'sess-1' },
+    };
+    mockFetch.mockResolvedValue(createMockResponse(200, {}));
+
+    await handleApiRequest(requestWithActor, baseConfig);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const callArgs = mockFetch.mock.calls[0];
+    expect(callArgs[1].headers['x-generacy-actor-user-id']).toBe('user-1');
+    expect(callArgs[1].headers['x-generacy-actor-session-id']).toBe('sess-1');
+  });
+
+  it('omits actor headers when actor is absent', async () => {
+    mockFetch.mockResolvedValue(createMockResponse(200, {}));
+
+    await handleApiRequest(baseRequest, baseConfig);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const callArgs = mockFetch.mock.calls[0];
+    expect(callArgs[1].headers).not.toHaveProperty('x-generacy-actor-user-id');
+    expect(callArgs[1].headers).not.toHaveProperty('x-generacy-actor-session-id');
+  });
+
+  it('sets actor user-id header without session-id when sessionId is absent', async () => {
+    const requestWithPartialActor: ApiRequestMessage = {
+      ...baseRequest,
+      actor: { userId: 'user-1' },
+    };
+    mockFetch.mockResolvedValue(createMockResponse(200, {}));
+
+    await handleApiRequest(requestWithPartialActor, baseConfig);
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const callArgs = mockFetch.mock.calls[0];
+    expect(callArgs[1].headers['x-generacy-actor-user-id']).toBe('user-1');
+    expect(callArgs[1].headers).not.toHaveProperty('x-generacy-actor-session-id');
   });
 });

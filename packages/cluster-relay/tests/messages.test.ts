@@ -171,4 +171,107 @@ describe('messages', () => {
       expect(RelayMessageSchema.options).toHaveLength(7);
     });
   });
+
+  describe('actor and activation fields', () => {
+    const validMetadata = {
+      workerCount: 2,
+      activeWorkflows: 1,
+      channel: 'stable',
+      orchestratorVersion: '0.1.0',
+      gitRemotes: [{ name: 'origin', url: 'git@github.com:org/repo.git' }],
+      uptime: 3600,
+    };
+
+    it('parses api_request with actor', () => {
+      const msg = {
+        type: 'api_request',
+        correlationId: 'req-1',
+        method: 'GET',
+        path: '/workflows',
+        actor: { userId: 'user-1', sessionId: 'sess-1' },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+      expect((result as any).actor).toEqual({ userId: 'user-1', sessionId: 'sess-1' });
+    });
+
+    it('parses api_request with actor without sessionId', () => {
+      const msg = {
+        type: 'api_request',
+        correlationId: 'req-1',
+        method: 'GET',
+        path: '/workflows',
+        actor: { userId: 'user-1' },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+      expect((result as any).actor).toEqual({ userId: 'user-1' });
+    });
+
+    it('parses api_request without actor (backward compat)', () => {
+      const msg = {
+        type: 'api_request',
+        correlationId: 'req-1',
+        method: 'GET',
+        path: '/workflows',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+      expect((result as any).actor).toBeUndefined();
+    });
+
+    it('rejects api_request with invalid actor shape', () => {
+      const msg = {
+        type: 'api_request',
+        correlationId: 'req-1',
+        method: 'GET',
+        path: '/workflows',
+        actor: { invalid: true },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toBeNull();
+    });
+
+    it('parses handshake with activation', () => {
+      const msg = {
+        type: 'handshake',
+        metadata: validMetadata,
+        activation: { code: 'abc123', clusterApiKeyId: 'key-1' },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+      expect((result as any).activation).toEqual({ code: 'abc123', clusterApiKeyId: 'key-1' });
+    });
+
+    it('parses handshake with activation without clusterApiKeyId', () => {
+      const msg = {
+        type: 'handshake',
+        metadata: validMetadata,
+        activation: { code: 'abc123' },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+      expect((result as any).activation).toEqual({ code: 'abc123' });
+    });
+
+    it('parses handshake without activation (backward compat)', () => {
+      const msg = {
+        type: 'handshake',
+        metadata: validMetadata,
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+      expect((result as any).activation).toBeUndefined();
+    });
+
+    it('rejects handshake with invalid activation shape', () => {
+      const msg = {
+        type: 'handshake',
+        metadata: validMetadata,
+        activation: { invalid: true },
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toBeNull();
+    });
+  });
 });
