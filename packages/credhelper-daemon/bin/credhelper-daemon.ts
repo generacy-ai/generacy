@@ -1,13 +1,11 @@
 #!/usr/bin/env node
 
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import { loadConfig, ConfigValidationError } from '@generacy-ai/credhelper';
 import { Daemon } from '../src/daemon.js';
 import { CredhelperError } from '../src/errors.js';
 import type { CredentialTypePlugin, DaemonConfig } from '../src/types.js';
 import { CORE_PLUGINS } from '../src/plugins/core/index.js';
-import { JwtParser } from '../src/auth/jwt-parser.js';
-import { SessionTokenStore } from '../src/auth/session-token-store.js';
 import { DefaultBackendClientFactory } from '../src/backends/factory.js';
 
 const controlSocketPath =
@@ -27,14 +25,6 @@ const workerGid = parseInt(
   process.env['CREDHELPER_WORKER_GID'] ?? '1000',
   10,
 );
-
-const generacyCloudApiUrl = process.env['GENERACY_CLOUD_API_URL'];
-
-// Session token store — token file lives alongside control socket
-const controlSocketDir = dirname(controlSocketPath);
-const tokenFilePath = `${controlSocketDir}/session-token`;
-const jwtParser = new JwtParser();
-const sessionTokenStore = new SessionTokenStore(tokenFilePath, jwtParser);
 
 // Build plugin registry from core plugins + future community plugins (#460)
 const pluginMap = new Map<string, CredentialTypePlugin>();
@@ -68,7 +58,7 @@ const config: DaemonConfig = {
   workerUid,
   workerGid,
   daemonUid: 1002,
-  backendFactory: new DefaultBackendClientFactory(generacyCloudApiUrl, sessionTokenStore),
+  backendFactory: new DefaultBackendClientFactory(),
   configLoader: {
     async loadRole(roleId: string) {
       const role = appConfig.roles.get(roleId);
@@ -97,8 +87,6 @@ const config: DaemonConfig = {
   },
   sweepIntervalMs: 30000,
   enablePeerCred: true,
-  sessionTokenStore,
-  generacyCloudApiUrl,
 };
 
 const daemon = new Daemon(config);
