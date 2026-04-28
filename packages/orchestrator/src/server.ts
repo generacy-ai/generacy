@@ -44,6 +44,7 @@ import { defaultProcessFactory } from './worker/claude-cli-worker.js';
 import { setupConversationRoutes } from './routes/conversations.js';
 import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
+import { activate } from './activation/index.js';
 
 /**
  * Server creation options
@@ -296,6 +297,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         config.prMonitor,
         config.repositories,
         clusterGithubUsername,
+      );
+    }
+  }
+
+  // Run cluster activation (full mode only, when no API key is already configured)
+  if (!isWorkerMode && !config.relay.apiKey) {
+    try {
+      const activationResult = await activate({
+        cloudUrl: config.activation.cloudUrl,
+        keyFilePath: config.activation.keyFilePath,
+        clusterJsonPath: config.activation.clusterJsonPath,
+        logger: server.log as unknown as import('pino').Logger,
+      });
+      config.relay.apiKey = activationResult.apiKey;
+      config.relay.clusterApiKeyId = activationResult.clusterApiKeyId;
+      server.log.info('Cluster activation complete');
+    } catch (error) {
+      // Activation failure must not block orchestrator boot
+      server.log.warn(
+        `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

@@ -242,6 +242,22 @@ function loadFromEnv(): Record<string, unknown> {
     config.labelMonitor = labelMonitorEnabled === 'true';
   }
 
+  // Activation config (GENERACY_CLOUD_URL for device-code flow)
+  const activationCloudUrl = process.env['GENERACY_CLOUD_URL'];
+  if (activationCloudUrl) {
+    if (!config.activation) {
+      config.activation = {};
+    }
+    (config.activation as Record<string, unknown>).cloudUrl = activationCloudUrl;
+  }
+  const activationKeyFile = process.env['GENERACY_KEY_FILE_PATH'];
+  if (activationKeyFile) {
+    if (!config.activation) {
+      config.activation = {};
+    }
+    (config.activation as Record<string, unknown>).keyFilePath = activationKeyFile;
+  }
+
   // Relay config (GENERACY_API_KEY for cloud connectivity)
   const relayApiKey = process.env['GENERACY_API_KEY'];
   let relayCloudUrl = process.env['GENERACY_CLOUD_URL'];
