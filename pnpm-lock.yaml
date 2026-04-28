@@ -120,9 +120,6 @@ importers:
       '@generacy-ai/credhelper':
         specifier: workspace:*
         version: link:../credhelper
-      jose:
-        specifier: ^6.2.2
-        version: 6.2.2
       picomatch:
         specifier: ^4.0.4
         version: 4.0.4
@@ -2763,9 +2760,6 @@ packages:
 
   joi@17.13.3:
     resolution: {integrity: sha512-otDA4ldcIx+ZXsKHWmp0YizCweVRZG96J10b0FevjfuncLO1oX59THoAmHkNubYJ+9gWsYsp5k8v4ib6oDv1fA==}
-
-  jose@6.2.2:
-    resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
 
   joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
@@ -6469,8 +6463,6 @@ snapshots:
       '@sideway/address': 4.1.5
       '@sideway/formula': 3.0.1
       '@sideway/pinpoint': 2.0.0
-
-  jose@6.2.2: {}
 
   joycon@3.1.1: {}
 

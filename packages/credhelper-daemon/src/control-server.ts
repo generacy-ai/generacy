@@ -4,7 +4,6 @@ import net from 'node:net';
 import { SessionManager } from './session-manager.js';
 import { CredhelperError, sendError } from './errors.js';
 import { verifyPeer } from './peer-cred.js';
-import type { SessionTokenStore } from './auth/session-token-store.js';
 
 /**
  * HTTP server bound to the control socket. Handles session begin/end.
@@ -20,7 +19,6 @@ export class ControlServer {
     private readonly sessionManager: SessionManager,
     private readonly workerUid: number,
     private readonly enablePeerCred: boolean,
-    private readonly sessionTokenStore?: SessionTokenStore,
   ) {
     this.server = http.createServer((req, res) => {
       this.handleRequest(req, res).catch((err) => {
@@ -97,50 +95,6 @@ export class ControlServer {
       res.setHeader('Content-Type', 'application/json');
       res.writeHead(200);
       res.end(JSON.stringify({ ok: true }));
-      return;
-    }
-
-    // PUT /auth/session-token
-    if (method === 'PUT' && url === '/auth/session-token') {
-      if (!this.sessionTokenStore) {
-        throw new CredhelperError('INTERNAL_ERROR', 'Session token store not configured');
-      }
-      const body = await readBody(req);
-      let parsed: { token?: string };
-      try {
-        parsed = JSON.parse(body);
-      } catch {
-        throw new CredhelperError('MALFORMED_REQUEST', 'Invalid JSON body');
-      }
-      if (!parsed.token || typeof parsed.token !== 'string') {
-        throw new CredhelperError('MALFORMED_REQUEST', 'Missing required field: token');
-      }
-      await this.sessionTokenStore.setToken(parsed.token);
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    // DELETE /auth/session-token
-    if (method === 'DELETE' && url === '/auth/session-token') {
-      if (!this.sessionTokenStore) {
-        throw new CredhelperError('INTERNAL_ERROR', 'Session token store not configured');
-      }
-      await this.sessionTokenStore.clearToken();
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    // GET /auth/session-token/status
-    if (method === 'GET' && url === '/auth/session-token/status') {
-      if (!this.sessionTokenStore) {
-        throw new CredhelperError('INTERNAL_ERROR', 'Session token store not configured');
-      }
-      const status = this.sessionTokenStore.getStatus();
-      res.setHeader('Content-Type', 'application/json');
-      res.writeHead(200);
-      res.end(JSON.stringify(status));
       return;
     }
 

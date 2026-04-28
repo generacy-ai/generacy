@@ -19,9 +19,6 @@ export class Daemon {
 
   async start(): Promise<void> {
     try {
-      // Load persisted session token from disk (if any)
-      await this.config.sessionTokenStore.loadFromDisk();
-
       // Detect upstream Docker socket (fail-closed if unavailable)
       let upstreamDockerSocket: UpstreamDockerSocket | undefined;
       try {
@@ -69,7 +66,6 @@ export class Daemon {
         this.sessionManager,
         this.config.workerUid,
         this.config.enablePeerCred,
-        this.config.sessionTokenStore,
       );
       await this.controlServer.start(this.config.controlSocketPath);
 
