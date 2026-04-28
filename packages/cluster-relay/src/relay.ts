@@ -1,10 +1,11 @@
 import WebSocket from 'ws';
 import type { RelayConfig } from './config.js';
 import { RelayConfigSchema } from './config.js';
-import type { RelayMessage, ClusterMetadata } from './messages.js';
+import type { RelayMessage, ClusterMetadata, Activation } from './messages.js';
 import { parseRelayMessage } from './messages.js';
 import { collectMetadata } from './metadata.js';
 import { handleApiRequest } from './proxy.js';
+import { sortRoutes } from './dispatcher.js';
 
 export type RelayState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'disconnecting';
 
@@ -73,7 +74,10 @@ export class ClusterRelay {
    */
   constructor(config: RelayConfig | ClusterRelayClientOptions, logger?: Logger) {
     if ('relayUrl' in config) {
-      this.config = config as RelayConfig;
+      this.config = {
+        ...config,
+        routes: sortRoutes(config.routes ?? []),
+      } as RelayConfig;
     } else {
       const opts = config as ClusterRelayClientOptions;
       this.config = RelayConfigSchema.parse({
@@ -356,7 +360,13 @@ export class ClusterRelay {
     try {
       const collected = await collectMetadata(this.config);
       const metadata: ClusterMetadata = { ...collected, ...this.metadataOverride };
-      const handshake: RelayMessage = { type: 'handshake', metadata };
+      const handshake: RelayMessage & { activation?: Activation } = { type: 'handshake', metadata };
+      if (this.config.activationCode) {
+        handshake.activation = {
+          code: this.config.activationCode,
+          ...(this.config.clusterApiKeyId ? { clusterApiKeyId: this.config.clusterApiKeyId } : {}),
+        };
+      }
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify(handshake));
       }

@@ -21,6 +21,7 @@ function createConfig(port: number, overrides?: Partial<RelayConfig>): RelayConf
     heartbeatIntervalMs: 500,
     baseReconnectDelayMs: 50,
     maxReconnectDelayMs: 200,
+    routes: [],
     ...overrides,
   };
 }
@@ -564,6 +565,86 @@ describe('ClusterRelay', () => {
 
     await relay.disconnect();
     await connectPromise;
+  });
+
+  it('handshake includes activation when configured', async () => {
+    const serverReceived: unknown[] = [];
+
+    wss.on('connection', (ws) => {
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        serverReceived.push(msg);
+        if (msg.type === 'handshake') {
+          ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }
+      });
+    });
+
+    relay = new ClusterRelay(
+      createConfig(port, { activationCode: 'claim-abc', clusterApiKeyId: 'key-1' }),
+      silentLogger,
+    );
+    const connectPromise = relay.connect();
+
+    await waitFor(() => relay.state === 'connected');
+
+    const handshakeMsg = serverReceived.find(
+      (m: any) => m.type === 'handshake',
+    ) as any;
+    expect(handshakeMsg).toBeDefined();
+    expect(handshakeMsg.activation).toEqual({
+      code: 'claim-abc',
+      clusterApiKeyId: 'key-1',
+    });
+
+    await relay.disconnect();
+    await connectPromise;
+  });
+
+  it('handshake omits activation when not configured', async () => {
+    const serverReceived: unknown[] = [];
+
+    wss.on('connection', (ws) => {
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        serverReceived.push(msg);
+        if (msg.type === 'handshake') {
+          ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }
+      });
+    });
+
+    relay = new ClusterRelay(createConfig(port), silentLogger);
+    const connectPromise = relay.connect();
+
+    await waitFor(() => relay.state === 'connected');
+
+    const handshakeMsg = serverReceived.find(
+      (m: any) => m.type === 'handshake',
+    ) as any;
+    expect(handshakeMsg).toBeDefined();
+    expect(handshakeMsg.activation).toBeUndefined();
+
+    await relay.disconnect();
+    await connectPromise;
+  });
+
+  it('routes are pre-sorted in constructor', () => {
+    relay = new ClusterRelay(
+      createConfig(port, {
+        routes: [
+          { prefix: '/a', target: 'http://a' },
+          { prefix: '/abc', target: 'http://abc' },
+        ],
+      }),
+      silentLogger,
+    );
+
+    const routes = relay['config'].routes;
+    expect(routes).toEqual([
+      { prefix: '/abc', target: 'http://abc' },
+      { prefix: '/a', target: 'http://a' },
+    ]);
   });
 
   it('ignores invalid relay messages from the server', async () => {

@@ -9,6 +9,7 @@ export interface ApiRequestMessage {
   path: string;
   headers?: Record<string, string>;
   body?: unknown;
+  actor?: Actor;
 }
 
 export interface ApiResponseMessage {
@@ -53,6 +54,7 @@ export interface HeartbeatMessage {
 export interface HandshakeMessage {
   type: 'handshake';
   metadata: ClusterMetadata;
+  activation?: Activation;
 }
 
 export interface ErrorMessage {
@@ -86,6 +88,19 @@ export interface ClusterMetadata {
 
 // --- Zod Schemas ---
 
+export const ActorSchema = z.object({
+  userId: z.string(),
+  sessionId: z.string().optional(),
+});
+
+export const ActivationSchema = z.object({
+  code: z.string(),
+  clusterApiKeyId: z.string().optional(),
+});
+
+export type Actor = z.infer<typeof ActorSchema>;
+export type Activation = z.infer<typeof ActivationSchema>;
+
 const GitRemoteSchema = z.object({
   name: z.string(),
   url: z.string(),
@@ -108,6 +123,7 @@ const ApiRequestMessageSchema = z.object({
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),
   timestamp: z.string().optional(),
+  actor: ActorSchema.optional(),
 });
 
 const ApiResponseMessageSchema = z.object({
@@ -149,6 +165,7 @@ const HeartbeatMessageSchema = z.object({
 const HandshakeMessageSchema = z.object({
   type: z.literal('handshake'),
   metadata: ClusterMetadataSchema,
+  activation: ActivationSchema.optional(),
 });
 
 const ErrorMessageSchema = z.object({
