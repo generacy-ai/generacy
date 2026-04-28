@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { loadConfig, RelayConfigSchema } from '../src/config.js';
+import { loadConfig, RelayConfigSchema, RouteEntrySchema } from '../src/config.js';
 
 const ENV_KEYS = [
   'GENERACY_API_KEY',
@@ -44,6 +44,7 @@ describe('config', () => {
         heartbeatIntervalMs: 30000,
         baseReconnectDelayMs: 5000,
         maxReconnectDelayMs: 300000,
+        routes: [],
       });
     });
   });
@@ -197,6 +198,43 @@ describe('config', () => {
       const config = loadConfig({ apiKey: 'key' });
       expect(config.orchestratorApiKey).toBeUndefined();
     });
+
+    it('routes defaults to empty array', () => {
+      const config = loadConfig({ apiKey: 'key' });
+      expect(config.routes).toEqual([]);
+    });
+
+    it('activationCode is undefined by default', () => {
+      const config = loadConfig({ apiKey: 'key' });
+      expect(config.activationCode).toBeUndefined();
+    });
+
+    it('clusterApiKeyId is undefined by default', () => {
+      const config = loadConfig({ apiKey: 'key' });
+      expect(config.clusterApiKeyId).toBeUndefined();
+    });
+  });
+
+  describe('route and activation config', () => {
+    it('accepts valid route entries via overrides', () => {
+      const config = loadConfig({ apiKey: 'key', routes: [{ prefix: '/control-plane', target: 'unix:///run/sock' }] });
+      expect(config.routes).toHaveLength(1);
+      expect(config.routes[0]).toEqual({ prefix: '/control-plane', target: 'unix:///run/sock' });
+    });
+
+    it('rejects route with prefix not starting with /', () => {
+      expect(() => loadConfig({ apiKey: 'key', routes: [{ prefix: 'no-slash', target: 'http://localhost' }] })).toThrow();
+    });
+
+    it('accepts activationCode via overrides', () => {
+      const config = loadConfig({ apiKey: 'key', activationCode: 'abc123' });
+      expect(config.activationCode).toBe('abc123');
+    });
+
+    it('accepts clusterApiKeyId via overrides', () => {
+      const config = loadConfig({ apiKey: 'key', clusterApiKeyId: 'key-1' });
+      expect(config.clusterApiKeyId).toBe('key-1');
+    });
   });
 
   describe('RelayConfigSchema', () => {
@@ -208,6 +246,11 @@ describe('config', () => {
     it('rejects invalid data', () => {
       const result = RelayConfigSchema.safeParse({});
       expect(result.success).toBe(false);
+    });
+
+    it('validates RouteEntrySchema', () => {
+      const result = RouteEntrySchema.safeParse({ prefix: '/api', target: 'http://localhost' });
+      expect(result.success).toBe(true);
     });
   });
 });

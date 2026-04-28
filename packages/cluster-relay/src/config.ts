@@ -1,5 +1,10 @@
 import { z } from 'zod';
 
+export interface RouteEntry {
+  prefix: string;
+  target: string;
+}
+
 export interface RelayConfig {
   apiKey: string;
   relayUrl: string;
@@ -9,7 +14,15 @@ export interface RelayConfig {
   heartbeatIntervalMs: number;
   baseReconnectDelayMs: number;
   maxReconnectDelayMs: number;
+  routes: RouteEntry[];
+  activationCode?: string;
+  clusterApiKeyId?: string;
 }
+
+export const RouteEntrySchema = z.object({
+  prefix: z.string().startsWith('/'),
+  target: z.string(),
+});
 
 export const RelayConfigSchema = z.object({
   apiKey: z.string().min(1, 'GENERACY_API_KEY is required'),
@@ -20,6 +33,9 @@ export const RelayConfigSchema = z.object({
   heartbeatIntervalMs: z.number().positive().default(30000),
   baseReconnectDelayMs: z.number().positive().default(5000),
   maxReconnectDelayMs: z.number().positive().default(300000),
+  routes: z.array(RouteEntrySchema).optional().default([]),
+  activationCode: z.string().optional(),
+  clusterApiKeyId: z.string().optional(),
 });
 
 /**
