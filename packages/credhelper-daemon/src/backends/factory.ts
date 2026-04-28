@@ -1,6 +1,7 @@
 import type { BackendClient, BackendEntry } from '@generacy-ai/credhelper';
 import type { BackendClientFactory } from './types.js';
 import { EnvBackend } from './env-backend.js';
+import { ClusterLocalBackend } from './cluster-local-backend.js';
 import { CredhelperError } from '../errors.js';
 
 export class DefaultBackendClientFactory implements BackendClientFactory {
@@ -8,6 +9,8 @@ export class DefaultBackendClientFactory implements BackendClientFactory {
     switch (backend.type) {
       case 'env':
         return new EnvBackend();
+      case 'cluster-local':
+        return new ClusterLocalBackend();
       default:
         throw new CredhelperError(
           'BACKEND_UNREACHABLE',

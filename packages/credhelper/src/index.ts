@@ -9,6 +9,7 @@ export {
 } from './types/exposure.js';
 export {
   type BackendClient,
+  type WritableBackendClient,
   type MintContext,
   type ResolveContext,
 } from './types/context.js';
