@@ -7,6 +7,7 @@ import { CredhelperError } from '../src/errors.js';
 import type { CredentialTypePlugin, DaemonConfig } from '../src/types.js';
 import { CORE_PLUGINS } from '../src/plugins/core/index.js';
 import { DefaultBackendClientFactory } from '../src/backends/factory.js';
+import { AuditLog } from '../src/audit/index.js';
 
 const controlSocketPath =
   process.env['CREDHELPER_CONTROL_SOCKET'] ??
@@ -87,6 +88,8 @@ const config: DaemonConfig = {
   },
   sweepIntervalMs: 30000,
   enablePeerCred: true,
+  clusterId: process.env['GENERACY_CLUSTER_ID'],
+  workerId: process.env['GENERACY_WORKER_ID'] ?? process.env['HOSTNAME'],
 };
 
 const daemon = new Daemon(config);

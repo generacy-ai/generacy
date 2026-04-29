@@ -35,6 +35,10 @@ export const DockerConfigSchema = z.object({
   allow: z.array(DockerRuleSchema),
 });
 
+export const RoleAuditConfigSchema = z.object({
+  recordAllProxy: z.boolean().optional(),
+});
+
 export const RoleConfigSchema = z.object({
   schemaVersion: z.literal('1'),
   id: z.string(),
@@ -43,6 +47,7 @@ export const RoleConfigSchema = z.object({
   credentials: z.array(RoleCredentialRefSchema),
   proxy: z.record(ProxyConfigSchema).optional(),
   docker: DockerConfigSchema.optional(),
+  audit: RoleAuditConfigSchema.optional(),
 });
 
 export type RoleConfig = z.infer<typeof RoleConfigSchema>;
@@ -51,4 +56,5 @@ export type RoleExpose = z.infer<typeof RoleExposeSchema>;
 export type ProxyConfig = z.infer<typeof ProxyConfigSchema>;
 export type ProxyRule = z.infer<typeof ProxyRuleSchema>;
 export type DockerConfig = z.infer<typeof DockerConfigSchema>;
+export type RoleAuditConfig = z.infer<typeof RoleAuditConfigSchema>;
 export type DockerRule = z.infer<typeof DockerRuleSchema>;

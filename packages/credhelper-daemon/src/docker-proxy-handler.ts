@@ -5,6 +5,8 @@ import { DockerAllowlistMatcher } from './docker-allowlist.js';
 import { ContainerNameResolver } from './docker-name-resolver.js';
 import { validateBindMounts, bufferRequestBody } from './docker-bind-mount-guard.js';
 import type { DockerRule } from './types.js';
+import type { AuditLog } from './audit/index.js';
+import { AuditSampler } from './audit/sampler.js';
 
 /** Known-dangerous Docker API operations when forwarding to a host socket. */
 const DANGEROUS_PATTERNS = [
@@ -61,6 +63,8 @@ export interface DockerProxyHandlerOptions {
   upstreamSocket: string;
   upstreamIsHost: boolean;
   nameResolver: ContainerNameResolver;
+  auditLog?: AuditLog;
+  recordAllProxy?: boolean;
   /** Per-session scratch dir for bind-mount validation (host-socket mode only) */
   scratchDir?: string;
 }
@@ -72,11 +76,12 @@ export interface DockerProxyHandlerOptions {
 export function createDockerProxyHandler(
   options: DockerProxyHandlerOptions,
 ): http.RequestListener {
-  const { upstreamSocket, upstreamIsHost, nameResolver, scratchDir } = options;
+  const { upstreamSocket, upstreamIsHost, nameResolver, auditLog, recordAllProxy, scratchDir } = options;
   const matcher = new DockerAllowlistMatcher(options.rules);
+  const sampler = new AuditSampler();
 
   return (clientReq: http.IncomingMessage, clientRes: http.ServerResponse) => {
-    void handleRequest(clientReq, clientRes, matcher, nameResolver, upstreamSocket, upstreamIsHost, scratchDir);
+    void handleRequest(clientReq, clientRes, matcher, nameResolver, upstreamSocket, upstreamIsHost, auditLog, sampler, recordAllProxy, scratchDir);
   };
 }
 
@@ -87,6 +92,9 @@ async function handleRequest(
   nameResolver: ContainerNameResolver,
   upstreamSocket: string,
   upstreamIsHost: boolean,
+  auditLog?: AuditLog,
+  sampler?: AuditSampler,
+  recordAllProxy?: boolean,
   scratchDir?: string,
 ): Promise<void> {
   const method = (clientReq.method ?? 'GET').toUpperCase();
@@ -105,6 +113,13 @@ async function handleRequest(
   const result = matcher.match(method, normalizedPath);
 
   if (!result.allowed) {
+    if (auditLog && sampler?.shouldRecord(recordAllProxy)) {
+      auditLog.record({
+        action: 'proxy.docker',
+        success: true,
+        proxy: { method, path: normalizedPath, decision: 'deny' },
+      });
+    }
     sendDeny(clientRes, method, normalizedPath, result.reason);
     return;
   }
@@ -115,6 +130,13 @@ async function handleRequest(
     const nameResult = matcher.matchWithName(method, normalizedPath, containerName);
 
     if (!nameResult.allowed) {
+      if (auditLog && sampler?.shouldRecord(recordAllProxy)) {
+        auditLog.record({
+          action: 'proxy.docker',
+          success: true,
+          proxy: { method, path: normalizedPath, decision: 'deny' },
+        });
+      }
       sendDeny(clientRes, method, normalizedPath, nameResult.reason, {
         containerId: result.containerId,
         containerName,
@@ -129,6 +151,14 @@ async function handleRequest(
     if (DANGEROUS_PATTERNS.some((d) => key.startsWith(d))) {
       console.warn(`[credhelper] SECURITY: forwarding ${key} to host Docker socket`);
     }
+  }
+
+  if (auditLog && sampler?.shouldRecord(recordAllProxy)) {
+    auditLog.record({
+      action: 'proxy.docker',
+      success: true,
+      proxy: { method, path: normalizedPath, decision: 'allow' },
+    });
   }
 
   // Bind-mount guard: buffer POST /containers/create on host-socket and validate

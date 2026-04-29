@@ -44,6 +44,10 @@ export interface DaemonConfig {
   sweepIntervalMs: number;
   /** @default true */
   enablePeerCred: boolean;
+  /** Cluster ID from GENERACY_CLUSTER_ID env var (for audit logging) */
+  clusterId?: string;
+  /** Worker ID from GENERACY_WORKER_ID env var (for audit logging) */
+  workerId?: string;
   /** Detected upstream Docker socket. Set at boot by Daemon.start(). */
   upstreamDockerSocket?: UpstreamDockerSocket;
   /** @default '/var/lib/generacy/scratch' */

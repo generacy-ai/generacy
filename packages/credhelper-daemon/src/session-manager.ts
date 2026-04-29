@@ -18,6 +18,7 @@ import { ExposureRenderer } from './exposure-renderer.js';
 import { createDataServer } from './data-server.js';
 import { rmSafe } from './util/fs.js';
 import { parseTtl } from './util/parse-ttl.js';
+import type { AuditLog } from './audit/index.js';
 import { createScratchDir, removeScratchDir, DEFAULT_SCRATCH_BASE } from './scratch-directory.js';
 
 export class SessionManager {
@@ -35,6 +36,7 @@ export class SessionManager {
       upstreamDockerSocket?: UpstreamDockerSocket;
       scratchBaseDir?: string;
     },
+    private readonly auditLog?: AuditLog,
   ) {}
 
   async beginSession(request: {
@@ -77,6 +79,13 @@ export class SessionManager {
         }
       }
     }
+
+    this.auditLog?.record({
+      action: 'session.begin',
+      sessionId,
+      role,
+      success: true,
+    });
 
     const sessionDir = path.join(this.config.sessionsDir, sessionId);
     const dataSocketPath = path.join(sessionDir, 'data.sock');
@@ -130,7 +139,24 @@ export class SessionManager {
           });
           credValue = result.value;
           expiresAt = result.expiresAt;
+          this.auditLog?.record({
+            action: 'credential.mint',
+            sessionId,
+            credentialId: credRef.ref,
+            role,
+            pluginId: credEntry.type,
+            success: true,
+          });
         } catch (err) {
+          this.auditLog?.record({
+            action: 'credential.mint',
+            sessionId,
+            credentialId: credRef.ref,
+            role,
+            pluginId: credEntry.type,
+            success: false,
+            errorCode: err instanceof CredhelperError ? err.code : 'UNKNOWN',
+          });
           throw new CredhelperError(
             'PLUGIN_MINT_FAILED',
             `Mint failed for credential ${credRef.ref}: ${err instanceof Error ? err.message : String(err)}`,
@@ -181,7 +207,24 @@ export class SessionManager {
             backend: backendClient,
             config: credConfig,
           });
+          this.auditLog?.record({
+            action: 'credential.resolve',
+            sessionId,
+            credentialId: credRef.ref,
+            role,
+            pluginId: credEntry.type,
+            success: true,
+          });
         } catch (err) {
+          this.auditLog?.record({
+            action: 'credential.resolve',
+            sessionId,
+            credentialId: credRef.ref,
+            role,
+            pluginId: credEntry.type,
+            success: false,
+            errorCode: err instanceof CredhelperError ? err.code : 'UNKNOWN',
+          });
           throw new CredhelperError(
             'PLUGIN_RESOLVE_FAILED',
             `Resolve failed for credential ${credRef.ref}: ${err instanceof Error ? err.message : String(err)}`,
@@ -292,6 +335,16 @@ export class SessionManager {
 
         // Renderer wraps with session infrastructure (socket paths, file layout)
         await this.renderer.renderPluginExposure(sessionDir, dataSocketPath, credRef.ref, exposureData);
+
+        this.auditLog?.record({
+          action: 'exposure.render',
+          sessionId,
+          credentialId: credRef.ref,
+          role,
+          pluginId: credEntry.type,
+          exposureKind: expose.as,
+          success: true,
+        });
       }
     }
 
@@ -378,6 +431,13 @@ export class SessionManager {
 
     // Remove from active sessions
     this.sessions.delete(sessionId);
+
+    this.auditLog?.record({
+      action: 'session.end',
+      sessionId,
+      role: session.roleId,
+      success: true,
+    });
   }
 
   async endAll(): Promise<void> {
