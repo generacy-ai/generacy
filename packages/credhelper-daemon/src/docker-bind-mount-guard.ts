@@ -97,10 +97,12 @@ export function bufferRequestBody(
     const chunks: Buffer[] = [];
     let totalSize = 0;
 
+    let rejected = false;
     req.on('data', (chunk: Buffer) => {
+      if (rejected) return;
       totalSize += chunk.length;
       if (totalSize > maxBytes) {
-        req.destroy();
+        rejected = true;
         reject(new Error(`Request body exceeds maximum size of ${maxBytes} bytes`));
         return;
       }

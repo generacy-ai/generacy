@@ -32,8 +32,8 @@ describe('createScratchDir', () => {
       const result = await createScratchDir('test-session-123');
       expect(result).toBe('/var/lib/generacy/scratch/test-session-123');
     } catch (err: unknown) {
-      // Expected in environments where /var/lib/generacy doesn't exist
-      expect((err as NodeJS.ErrnoException).code).toBe('ENOENT');
+      // Expected in environments where /var/lib/generacy doesn't exist or isn't writable
+      expect(['ENOENT', 'EACCES']).toContain((err as NodeJS.ErrnoException).code);
     }
   });
 

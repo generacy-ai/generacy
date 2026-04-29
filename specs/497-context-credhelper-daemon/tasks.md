@@ -10,9 +10,9 @@
 
 ## Phase 1: Types & Scratch Directory Lifecycle
 
-- [ ] T001 Add `scratchDir?: string` to `SessionState` in `packages/credhelper-daemon/src/types.ts`; add `scratchDir?: string` to `DockerProxyConfig`
-- [ ] T002 [P] Create `packages/credhelper-daemon/src/scratch-directory.ts` — implement `createScratchDir(sessionId, uid?, gid?)` and `removeScratchDir(scratchDir)` per contract (base path `/var/lib/generacy/scratch/`, mode 0700, uid 1001, recursive cleanup)
-- [ ] T003 [P] Create `packages/credhelper-daemon/__tests__/scratch-directory.test.ts` — unit tests for create (happy path, parent creation, collision error) and remove (success, missing dir no-op, best-effort on failure)
+- [X] T001 Add `scratchDir?: string` to `SessionState` in `packages/credhelper-daemon/src/types.ts`; add `scratchDir?: string` to `DockerProxyConfig`
+- [X] T002 [P] Create `packages/credhelper-daemon/src/scratch-directory.ts` — implement `createScratchDir(sessionId, uid?, gid?)` and `removeScratchDir(scratchDir)` per contract (base path `/var/lib/generacy/scratch/`, mode 0700, uid 1001, recursive cleanup)
+- [X] T003 [P] Create `packages/credhelper-daemon/__tests__/scratch-directory.test.ts` — unit tests for create (happy path, parent creation, collision error) and remove (success, missing dir no-op, best-effort on failure)
 
 ## Phase 2: Bind-Mount Guard
 
