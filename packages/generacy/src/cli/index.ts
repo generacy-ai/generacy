@@ -11,6 +11,8 @@ import { setupCommand } from './commands/setup.js';
 import { validateCommand } from './commands/validate.js';
 import { doctorCommand } from './commands/doctor.js';
 import { initCommand } from './commands/init/index.js';
+import { claudeLoginCommand } from './commands/claude-login/index.js';
+import { openCommand } from './commands/open/index.js';
 import { launchCommand } from './commands/launch/index.js';
 import { upCommand } from './commands/up/index.js';
 import { stopCommand } from './commands/stop/index.js';
@@ -57,6 +59,8 @@ export function createProgram(): Command {
   program.addCommand(validateCommand());
   program.addCommand(doctorCommand());
   program.addCommand(initCommand());
+  program.addCommand(claudeLoginCommand());
+  program.addCommand(openCommand());
   program.addCommand(launchCommand());
   program.addCommand(upCommand());
   program.addCommand(stopCommand());

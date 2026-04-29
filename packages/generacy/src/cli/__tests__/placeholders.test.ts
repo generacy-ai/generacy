@@ -12,17 +12,15 @@ describe('placeholderCommands', () => {
     vi.restoreAllMocks();
   });
 
-  it('should return 4 commands', () => {
+  it('should return 2 commands', () => {
     const commands = placeholderCommands();
-    expect(commands).toHaveLength(4);
+    expect(commands).toHaveLength(2);
   });
 
   it('should have correct names for all commands', () => {
     const commands = placeholderCommands();
     const names = commands.map((cmd) => cmd.name());
     expect(names).toEqual([
-      'open',
-      'claude-login',
       'deploy',
       'rebuild',
     ]);
@@ -37,24 +35,24 @@ describe('placeholderCommands', () => {
     );
   });
 
-  it('should print the correct message for "open" (phase 6)', async () => {
+  it('should print the correct message for "rebuild" (phase 7)', async () => {
     const commands = placeholderCommands();
-    const open = commands.find((cmd) => cmd.name() === 'open')!;
-    await open.parseAsync(['node', 'test']);
+    const rebuild = commands.find((cmd) => cmd.name() === 'rebuild')!;
+    await rebuild.parseAsync(['node', 'test']);
     expect(logSpy).toHaveBeenCalledWith(
-      '"open" is not yet implemented in this preview — landing in a future v1.5 phase 6 issue.',
+      '"rebuild" is not yet implemented in this preview — landing in a future v1.5 phase 7 issue.',
     );
   });
 
   it('should allow unknown options without erroring', async () => {
     const commands = placeholderCommands();
-    const open = commands.find((cmd) => cmd.name() === 'open')!;
+    const rebuild = commands.find((cmd) => cmd.name() === 'rebuild')!;
     // Parsing with an unknown flag should not throw
     await expect(
-      open.parseAsync(['node', 'test', '--some-unknown-flag', '--another']),
+      rebuild.parseAsync(['node', 'test', '--some-unknown-flag', '--another']),
     ).resolves.not.toThrow();
     expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining('"open" is not yet implemented'),
+      expect.stringContaining('"rebuild" is not yet implemented'),
     );
   });
 });
