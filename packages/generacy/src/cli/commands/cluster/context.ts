@@ -43,7 +43,7 @@ export function getClusterContext(cwd?: string): ClusterContext {
   let dir = path.resolve(startDir);
 
   // Walk upward to find .generacy/cluster.yaml
-  while (true) {
+  for (;;) {
     const clusterYamlPath = path.join(dir, '.generacy', 'cluster.yaml');
     if (fs.existsSync(clusterYamlPath)) {
       const generacyDir = path.join(dir, '.generacy');

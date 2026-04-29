@@ -19,6 +19,8 @@ import { statusCommand } from './commands/status/index.js';
 import { updateCommand } from './commands/update/index.js';
 import { createLogger, setLogger } from './utils/logger.js';
 import type { LogLevel } from './utils/logger.js';
+import { setupErrorHandlers } from './utils/error-handler.js';
+import { placeholderCommands } from './commands/placeholders.js';
 
 // Package version - will be replaced at build time
 const VERSION = '0.0.1';
@@ -35,10 +37,11 @@ export function createProgram(): Command {
     .version(VERSION)
     .option('-l, --log-level <level>', 'Log level (trace, debug, info, warn, error, fatal, silent)', 'info')
     .option('--no-pretty', 'Disable pretty logging (use JSON)')
+    .option('-q, --quiet', 'Suppress all log output')
     .hook('preAction', (thisCommand) => {
       const opts = thisCommand.opts();
       const logger = createLogger({
-        level: opts['logLevel'] as LogLevel,
+        level: opts['quiet'] ? 'silent' as LogLevel : opts['logLevel'] as LogLevel,
         pretty: opts['pretty'] !== false,
       });
       setLogger(logger);
@@ -60,6 +63,11 @@ export function createProgram(): Command {
   program.addCommand(statusCommand());
   program.addCommand(updateCommand());
 
+  // Register v1.5 placeholder subcommands
+  for (const cmd of placeholderCommands()) {
+    program.addCommand(cmd);
+  }
+
   return program;
 }
 
@@ -67,6 +75,7 @@ export function createProgram(): Command {
  * Run the CLI with given arguments
  */
 export async function run(args: string[] = process.argv): Promise<void> {
+  setupErrorHandlers();
   const program = createProgram();
 
   try {
