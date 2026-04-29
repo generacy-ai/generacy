@@ -122,3 +122,11 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/orchestrator/src/launcher/` — Plugin-based process launcher (`AgentLauncher`). Resolves intents to plugins, merges env (3-layer), selects `ProcessFactory` by stdio profile, spawns processes.
 - Credentials interceptor (#465, Phase 3): When `LaunchRequest.credentials` is set, begins a credhelper session, merges session env, wraps command in entrypoint, sets uid/gid, ends session on exit. Uses HTTP-over-Unix-socket client (`node:http`) to communicate with credhelper daemon.
 - Credentials integration (#478, Phase 6): `createAgentLauncher()` wires `CredhelperHttpClient` when the control socket exists. `WorkerConfig.credentialRole` (from `.generacy/config.yaml` `defaults.role`) flows to all spawn sites (`CliSpawner`, `PrFeedbackHandler`, `ConversationSpawner`), which populate `LaunchRequest.credentials`. Fail-fast at startup if role is configured but daemon is unavailable. Generic launcher paths (`cli-utils.ts`, `subprocess.ts`) deferred to follow-up.
+
+## Scoped Docker Socket Proxy (#497, v1.5 phase 9)
+
+- `packages/credhelper-daemon/src/docker-bind-mount-guard.ts` — NEW in #497: Validates `POST /containers/create` bind mounts are under `GENERACY_SCRATCH_DIR`. Inspects both `HostConfig.Binds` (string format) and `HostConfig.Mounts` (object format, `Type: "bind"` only). Uses `path.resolve()` for canonicalization. Only active when `upstreamIsHost=true` (host-socket mode); DinD mode skips validation.
+- `packages/credhelper-daemon/src/docker-proxy-handler.ts` — MODIFIED in #497: Buffers `POST /containers/create` body on host-socket to run bind-mount guard before forwarding. 10MB body size limit.
+- Per-session scratch directory at `/var/lib/generacy/scratch/<session-id>/` (mode 0700, uid 1001). Created at session begin, cleaned at session end. Exposed as `GENERACY_SCRATCH_DIR` env var.
+- Upstream selection: `ENABLE_DIND=true` → `/var/run/docker.sock` (DinD, no bind-mount guard) → `/var/run/docker-host.sock` (host, with bind-mount guard) → warn at boot, fail per-session.
+- `buildSessionEnv()` in orchestrator already sets `DOCKER_HOST=unix://<sessionDir>/docker.sock`.
