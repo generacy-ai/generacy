@@ -151,6 +151,7 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
     upstreamSocket: string,
     upstreamIsHost: boolean,
     sessionId: string,
+    scratchDir?: string,
   ): Promise<{ proxy: DockerProxyHandle; socketPath: string }> {
     const proxy = new DockerProxy({
       sessionId,
@@ -158,6 +159,7 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
       rules,
       upstreamSocket,
       upstreamIsHost,
+      scratchDir,
     });
     const socketPath = await proxy.start();
     return { proxy, socketPath };

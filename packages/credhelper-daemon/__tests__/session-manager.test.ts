@@ -45,7 +45,7 @@ function createSessionManager(
     overrides?.store ?? store,
     overrides?.refresher ?? refresher,
     overrides?.renderer ?? renderer,
-    { sessionsDir: tmpDir, workerUid: 1000, workerGid: 1000 },
+    { sessionsDir: tmpDir, workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
   );
 }
 

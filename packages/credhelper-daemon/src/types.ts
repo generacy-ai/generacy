@@ -46,6 +46,8 @@ export interface DaemonConfig {
   enablePeerCred: boolean;
   /** Detected upstream Docker socket. Set at boot by Daemon.start(). */
   upstreamDockerSocket?: UpstreamDockerSocket;
+  /** @default '/var/lib/generacy/scratch' */
+  scratchBaseDir?: string;
 }
 
 /** Adapter interface for loading configuration objects (for #462). */
@@ -93,6 +95,8 @@ export interface DockerProxyConfig {
   upstreamSocket: string;
   /** Whether the upstream is the host Docker socket (DooD, not DinD) */
   upstreamIsHost: boolean;
+  /** Per-session scratch directory for bind-mount validation (host-socket mode) */
+  scratchDir?: string;
 }
 
 /** Interface for the DockerProxy lifecycle object stored in session state. */
@@ -112,6 +116,8 @@ export interface SessionState {
   credentialIds: string[];
   /** Docker socket proxy, if the role uses docker-socket-proxy exposure */
   dockerProxy?: DockerProxyHandle;
+  /** Per-session scratch directory for bind-mount isolation */
+  scratchDir?: string;
 }
 
 /** In-memory credential storage entry. */
