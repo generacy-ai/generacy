@@ -10,35 +10,35 @@
 
 ## Phase 1: Setup & Utilities
 
-- [ ] T001 Add `"engines": {"node": ">=22"}` to `packages/generacy/package.json`
-- [ ] T002 [P] Create `src/cli/utils/node-version.ts` — `checkNodeVersion(minimum)` that parses `process.versions.node`, compares major >= minimum, prints error with install link and exits 1 on failure
-- [ ] T003 [P] Create `src/cli/utils/error-handler.ts` — `setupErrorHandlers()` registering `uncaughtException` and `unhandledRejection` handlers; user-friendly messages, stack traces only when `DEBUG=1`
-- [ ] T004 Update `bin/generacy.js` — call `checkNodeVersion(22)` before importing `run()` from `src/cli/index.ts`
+- [X] T001 Add `"engines": {"node": ">=22"}` to `packages/generacy/package.json`
+- [X] T002 [P] Create `src/cli/utils/node-version.ts` — `checkNodeVersion(minimum)` that parses `process.versions.node`, compares major >= minimum, prints error with install link and exits 1 on failure
+- [X] T003 [P] Create `src/cli/utils/error-handler.ts` — `setupErrorHandlers()` registering `uncaughtException` and `unhandledRejection` handlers; user-friendly messages, stack traces only when `DEBUG=1`
+- [X] T004 Update `bin/generacy.js` — call `checkNodeVersion(22)` before importing `run()` from `src/cli/index.ts`
 
 ## Phase 2: Registry Module
 
-- [ ] T005 Create `src/registry/schema.ts` — Zod schemas (`ClusterEntrySchema`, `ClusterRegistrySchema`) and inferred types (`ClusterEntry`, `ClusterRegistry`)
-- [ ] T006 Create `src/registry/registry.ts` — `loadRegistry()`, `saveRegistry()` (atomic tmp+rename), `addCluster()`, `removeCluster()`; depends on schema.ts
-- [ ] T007 Create `src/registry/find-cluster.ts` — `findClusterByCwd(cwd?)` using `resolve()` + longest-prefix-match against `ClusterEntry.path`
-- [ ] T008 Create `src/registry/index.ts` — public re-exports from schema, registry, find-cluster
+- [X] T005 Create `src/registry/schema.ts` — Zod schemas (`ClusterEntrySchema`, `ClusterRegistrySchema`) and inferred types (`ClusterEntry`, `ClusterRegistry`)
+- [X] T006 Create `src/registry/registry.ts` — `loadRegistry()`, `saveRegistry()` (atomic tmp+rename), `addCluster()`, `removeCluster()`; depends on schema.ts
+- [X] T007 Create `src/registry/find-cluster.ts` — `findClusterByCwd(cwd?)` using `resolve()` + longest-prefix-match against `ClusterEntry.path`
+- [X] T008 Create `src/registry/index.ts` — public re-exports from schema, registry, find-cluster
 
 ## Phase 3: Placeholder Commands & CLI Wiring
 
-- [ ] T009 Create `src/cli/commands/placeholders.ts` — data-driven array of 11 `PlaceholderDef` entries (`launch`, `up`, `stop`, `down`, `destroy`, `status`, `update`, `open`, `claude-login`, `deploy`, `rebuild`); `placeholderCommands()` factory returns `Command[]`
-- [ ] T010 Modify `src/cli/index.ts` — import and register placeholder commands, import and call `setupErrorHandlers()`, add `--quiet` flag support for logger
+- [X] T009 Create `src/cli/commands/placeholders.ts` — data-driven array of 11 `PlaceholderDef` entries (`launch`, `up`, `stop`, `down`, `destroy`, `status`, `update`, `open`, `claude-login`, `deploy`, `rebuild`); `placeholderCommands()` factory returns `Command[]`
+- [X] T010 Modify `src/cli/index.ts` — import and register placeholder commands, import and call `setupErrorHandlers()`, add `--quiet` flag support for logger
 
 ## Phase 4: Tests
 
-- [ ] T011 [P] Create `src/cli/utils/__tests__/node-version.test.ts` — mock `process.versions.node`; verify exit on Node 20, pass on Node 22+
-- [ ] T012 [P] Create `src/cli/utils/__tests__/error-handler.test.ts` — verify handler registration, user-friendly output, DEBUG stack trace behavior
-- [ ] T013 [P] Create `src/cli/__tests__/placeholders.test.ts` — verify each placeholder prints correct phase message and exits 0
-- [ ] T014 [P] Create `src/registry/__tests__/registry.test.ts` — round-trip (save then load), add/remove cluster, atomic write (tmp left behind doesn't corrupt), schema validation rejects invalid JSON
-- [ ] T015 [P] Create `src/registry/__tests__/find-cluster.test.ts` — exact match, subdirectory match, deepest-wins with nested paths, no match returns undefined
+- [X] T011 [P] Create `src/cli/utils/__tests__/node-version.test.ts` — mock `process.versions.node`; verify exit on Node 20, pass on Node 22+
+- [X] T012 [P] Create `src/cli/utils/__tests__/error-handler.test.ts` — verify handler registration, user-friendly output, DEBUG stack trace behavior
+- [X] T013 [P] Create `src/cli/__tests__/placeholders.test.ts` — verify each placeholder prints correct phase message and exits 0
+- [X] T014 [P] Create `src/registry/__tests__/registry.test.ts` — round-trip (save then load), add/remove cluster, atomic write (tmp left behind doesn't corrupt), schema validation rejects invalid JSON
+- [X] T015 [P] Create `src/registry/__tests__/find-cluster.test.ts` — exact match, subdirectory match, deepest-wins with nested paths, no match returns undefined
 
 ## Phase 5: Integration Verification
 
-- [ ] T016 Run `pnpm build` in `packages/generacy` and fix any TypeScript errors
-- [ ] T017 Run `pnpm test` in `packages/generacy` and fix any test failures
+- [X] T016 Run `pnpm build` in `packages/generacy` and fix any TypeScript errors
+- [X] T017 Run `pnpm test` in `packages/generacy` and fix any test failures
 
 ## Dependencies & Execution Order
 
