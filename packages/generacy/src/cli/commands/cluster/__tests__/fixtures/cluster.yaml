@@ -1,0 +1,3 @@
+channel: stable
+workers: 1
+variant: standard

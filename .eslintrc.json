@@ -43,6 +43,8 @@
         "packages/workflow-engine/src/actions/epic/create-pr.ts",
         "packages/generacy/src/cli/commands/setup/services.ts",
         "packages/generacy/src/cli/commands/claude-login/index.ts",
+        "packages/generacy/src/cli/commands/launch/browser.ts",
+        "packages/generacy/src/cli/commands/launch/compose.ts",
         "packages/generacy/src/cli/utils/browser.ts",
         "packages/generacy/src/cli/utils/exec.ts",
         "packages/generacy/src/agency/subprocess.ts",
