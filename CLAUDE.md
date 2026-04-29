@@ -40,12 +40,13 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `src/backends/cluster-local-backend.ts` — NEW in #491: `ClusterLocalBackend` implements `WritableBackendClient` (extends `BackendClient` with `setSecret`/`deleteSecret`). AES-256-GCM encryption with per-credential random IV, master key at `/var/lib/generacy/master.key` (mode 0600, uid 1002). Credential store at `/var/lib/generacy/credentials.dat` (JSON envelope with version field). Atomic writes via temp+fsync+rename. fd-based advisory locking (no external deps). Fails closed on corrupt JSON or unknown version.
   - `src/backends/crypto.ts` — NEW in #491: AES-256-GCM encrypt/decrypt helpers using `node:crypto`. Per-credential random 12-byte IV, 16-byte auth tag.
   - `src/backends/file-store.ts` — NEW in #491: `CredentialFileStore` for atomic file I/O with advisory locking. Master key auto-generation on first boot.
+  - `src/audit/` — NEW in #499 (v1.5 phase 9): Structured audit logging for credential operations. `AuditLog` class with bounded ring buffer (capacity 5000), `record()` API for all credential lifecycle events. Flushes batches to control-plane via `POST /internal/audit-batch` (max 50 entries or 1s interval). `droppedSinceLastBatch` field on every batch payload. Actor identity from `GENERACY_CLUSTER_ID` and `GENERACY_WORKER_ID` env vars. Dev-mode assertion: no field > 256 chars (defense against secret leakage). Docker/localhost proxy hooks sampled at 1/100 unless `RoleConfig.audit.recordAllProxy` overrides to 100%.
 
 ## Control-Plane Package
 
 - `packages/control-plane` — In-cluster HTTP service over Unix socket for the cloud-hosted bootstrap UI (#490, v1.5 phase 1). Terminates control-plane requests forwarded by the cluster-relay dispatcher.
   - Socket at `/run/generacy-control-plane/control.sock` (configurable via `CONTROL_PLANE_SOCKET_PATH`).
-  - Routes (stubs in phase 1, real wiring in later phases): `GET /state`, `GET/PUT /credentials/:id`, `GET/PUT /roles/:id`, `POST /lifecycle/:action`.
+  - Routes (stubs in phase 1, real wiring in later phases): `GET /state`, `GET/PUT /credentials/:id`, `GET/PUT /roles/:id`, `POST /lifecycle/:action`, `POST /internal/audit-batch` (#499, v1.5 phase 9 — receives audit batches from credhelper-daemon, emits entries on relay `cluster.audit` channel).
   - Uses native `node:http` (same pattern as credhelper-daemon). Re-exports credential/role Zod schemas from `@generacy-ai/credhelper`.
   - Reads actor identity from relay-injected headers (`x-generacy-actor-user-id`, `x-generacy-actor-session-id`).
   - Error shape: `{ error, code, details? }` — matches credhelper-daemon's `CredhelperErrorResponse`.
