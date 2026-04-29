@@ -71,6 +71,19 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Retry budget: 5 retries, exponential backoff (2s-32s, ~62s total) for initial cloud requests.
   - Integration: `server.ts` calls `activate()` before relay construction; sets `config.relay.apiKey` and `config.relay.clusterApiKeyId` from result.
 
+## CLI Launch Command
+
+- `packages/generacy/src/cli/commands/launch/` — First-run CLI command for cloud-flow onboarding (#495, v1.5 phase 5). `npx generacy launch --claim=<code>` bootstraps a new cluster from a cloud-issued claim code.
+  - `index.ts` — Command registration (Commander.js) + main orchestration flow: validate Node/Docker, fetch launch-config, scaffold, compose up, stream logs, open browser, register cluster.
+  - `cloud-client.ts` — `fetchLaunchConfig(cloudUrl, claimCode)`: `GET /api/clusters/launch-config?claim=<code>`. Returns `LaunchConfig` (projectId, projectName, variant, cloudUrl, clusterId, imageTag, repos). Uses `node:https`. Stub mode via `GENERACY_LAUNCH_STUB=1`.
+  - `scaffolder.ts` — Writes `.generacy/cluster.yaml`, `.generacy/cluster.json`, `.generacy/docker-compose.yml` from `LaunchConfig`.
+  - `compose.ts` — `docker compose pull` + `up -d` + log streaming. Matches `"Go to:"` pattern to extract `verification_uri` and `user_code`.
+  - `browser.ts` — Cross-platform browser open: `open` (macOS), `start` (Windows), print URL (Linux).
+  - `registry.ts` — Appends cluster entry to `~/.generacy/clusters.json` (schema from #494): `{clusterId, name, path, composePath, variant, channel, cloudUrl, lastSeen, createdAt}`.
+  - `prompts.ts` — Interactive prompts via `@clack/prompts` for claim code input and directory confirmation.
+  - CLI flags: `--claim <code>`, `--dir <path>`. Default project dir: `~/Generacy/<projectName>`.
+  - Standalone from `init` command — writes only cloud-flow config files. Convergence deferred.
+
 ## Orchestrator Launcher
 
 - `packages/orchestrator/src/launcher/` — Plugin-based process launcher (`AgentLauncher`). Resolves intents to plugins, merges env (3-layer), selects `ProcessFactory` by stdio profile, spawns processes.
