@@ -18,6 +18,7 @@ import { ExposureRenderer } from './exposure-renderer.js';
 import { createDataServer } from './data-server.js';
 import { rmSafe } from './util/fs.js';
 import { parseTtl } from './util/parse-ttl.js';
+import { createScratchDir, removeScratchDir, DEFAULT_SCRATCH_BASE } from './scratch-directory.js';
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionState>();
@@ -32,6 +33,7 @@ export class SessionManager {
     private readonly renderer: ExposureRenderer,
     private readonly config: Pick<DaemonConfig, 'sessionsDir' | 'workerUid' | 'workerGid'> & {
       upstreamDockerSocket?: UpstreamDockerSocket;
+      scratchBaseDir?: string;
     },
   ) {}
 
@@ -82,9 +84,18 @@ export class SessionManager {
     let dockerProxy: DockerProxyHandle | undefined;
     const localhostProxies: LocalhostProxyHandle[] = [];
     const envEntries: Array<{ key: string; value: string }> = [];
+    let scratchDir: string | undefined;
 
     // Create session directory
     await this.renderer.renderSessionDir(sessionDir);
+
+    // Create per-session scratch directory
+    scratchDir = await createScratchDir(
+      sessionId,
+      this.config.workerUid,
+      this.config.workerGid,
+      this.config.scratchBaseDir ?? DEFAULT_SCRATCH_BASE,
+    );
 
     // Resolve/mint each credential and render exposures
     let latestExpiry = new Date(Date.now() + 3600000); // default 1h
@@ -263,6 +274,7 @@ export class SessionManager {
               this.config.upstreamDockerSocket.socketPath,
               this.config.upstreamDockerSocket.isHost,
               sessionId,
+              scratchDir,
             );
             dockerProxy = result.proxy;
           }
@@ -283,7 +295,10 @@ export class SessionManager {
       }
     }
 
-    // Add DOCKER_HOST env var if docker proxy was started
+    // Add session env vars
+    if (scratchDir) {
+      envEntries.push({ key: 'GENERACY_SCRATCH_DIR', value: scratchDir });
+    }
     if (dockerProxy) {
       const dockerSocketPath = path.join(sessionDir, 'docker.sock');
       envEntries.push({ key: 'DOCKER_HOST', value: `unix://${dockerSocketPath}` });
@@ -313,6 +328,7 @@ export class SessionManager {
       credentialIds,
       dockerProxy,
       localhostProxies: localhostProxies.length > 0 ? localhostProxies : undefined,
+      scratchDir,
     };
     this.sessions.set(sessionId, session);
 
@@ -339,6 +355,11 @@ export class SessionManager {
     // Stop docker proxy if active
     if (session.dockerProxy) {
       await session.dockerProxy.stop();
+    }
+
+    // Clean scratch directory
+    if (session.scratchDir) {
+      await removeScratchDir(session.scratchDir);
     }
 
     // Cancel refresh timers

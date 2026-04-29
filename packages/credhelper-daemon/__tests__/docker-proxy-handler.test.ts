@@ -63,10 +63,16 @@ function makeRequest(
   socketPath: string,
   method: string,
   path: string,
+  body?: string,
 ): Promise<{ statusCode: number; body: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
+    const headers: Record<string, string> = {};
+    if (body) {
+      headers['content-type'] = 'application/json';
+      headers['content-length'] = String(Buffer.byteLength(body));
+    }
     const req = http.request(
-      { socketPath, method, path },
+      { socketPath, method, path, headers },
       (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
@@ -80,6 +86,9 @@ function makeRequest(
       },
     );
     req.on('error', reject);
+    if (body) {
+      req.write(body);
+    }
     req.end();
   });
 }
@@ -328,6 +337,168 @@ describe('createDockerProxyHandler', () => {
         expect(warnSpy).not.toHaveBeenCalled();
       } finally {
         warnSpy.mockRestore();
+        await proxy.stop();
+        await upstream.stop();
+      }
+    });
+  });
+
+  describe('bind-mount guard (host-socket mode)', () => {
+    const scratchDir = '/var/lib/generacy/scratch/session-test';
+
+    it('blocks POST /containers/create with bind mounts outside scratch dir', async () => {
+      const upstream = createFakeUpstream((_req, res) => {
+        res.writeHead(201);
+        res.end(JSON.stringify({ Id: 'bad' }));
+      });
+      await upstream.start();
+
+      const handler = createDockerProxyHandler({
+        rules: [{ method: 'POST', path: '/containers/create' }],
+        upstreamSocket: upstream.socketPath,
+        upstreamIsHost: true,
+        nameResolver: new ContainerNameResolver(upstream.socketPath),
+        scratchDir,
+      });
+      const proxy = createProxyServer(handler);
+      await proxy.start();
+
+      try {
+        const body = JSON.stringify({
+          Image: 'node:20',
+          HostConfig: {
+            Binds: ['/etc/passwd:/etc/passwd:ro'],
+          },
+        });
+        const res = await makeRequest(proxy.socketPath, 'POST', '/containers/create', body);
+        expect(res.statusCode).toBe(403);
+        const parsed = JSON.parse(res.body);
+        expect(parsed.code).toBe('DOCKER_ACCESS_DENIED');
+        expect(parsed.details.rejectedPaths).toContain('/etc/passwd');
+      } finally {
+        await proxy.stop();
+        await upstream.stop();
+      }
+    });
+
+    it('allows POST /containers/create with bind mounts under scratch dir', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const upstream = createFakeUpstream((_req, res) => {
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ Id: 'good123' }));
+      });
+      await upstream.start();
+
+      const handler = createDockerProxyHandler({
+        rules: [{ method: 'POST', path: '/containers/create' }],
+        upstreamSocket: upstream.socketPath,
+        upstreamIsHost: true,
+        nameResolver: new ContainerNameResolver(upstream.socketPath),
+        scratchDir,
+      });
+      const proxy = createProxyServer(handler);
+      await proxy.start();
+
+      try {
+        const body = JSON.stringify({
+          Image: 'node:20',
+          HostConfig: {
+            Binds: [`${scratchDir}/workspace:/app`],
+          },
+        });
+        const res = await makeRequest(proxy.socketPath, 'POST', '/containers/create', body);
+        expect(res.statusCode).toBe(201);
+        const parsed = JSON.parse(res.body);
+        expect(parsed.Id).toBe('good123');
+      } finally {
+        warnSpy.mockRestore();
+        await proxy.stop();
+        await upstream.stop();
+      }
+    });
+
+    it('skips bind-mount guard in DinD mode (upstreamIsHost=false)', async () => {
+      const upstream = createFakeUpstream((_req, res) => {
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ Id: 'dind123' }));
+      });
+      await upstream.start();
+
+      const handler = createDockerProxyHandler({
+        rules: [{ method: 'POST', path: '/containers/create' }],
+        upstreamSocket: upstream.socketPath,
+        upstreamIsHost: false, // DinD
+        nameResolver: new ContainerNameResolver(upstream.socketPath),
+        scratchDir,
+      });
+      const proxy = createProxyServer(handler);
+      await proxy.start();
+
+      try {
+        const body = JSON.stringify({
+          Image: 'node:20',
+          HostConfig: {
+            Binds: ['/etc/passwd:/etc/passwd'],
+          },
+        });
+        const res = await makeRequest(proxy.socketPath, 'POST', '/containers/create', body);
+        expect(res.statusCode).toBe(201);
+      } finally {
+        await proxy.stop();
+        await upstream.stop();
+      }
+    });
+
+    it('allows non-create requests through without body inspection', async () => {
+      const upstream = createFakeUpstream((_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('[]');
+      });
+      await upstream.start();
+
+      const handler = createDockerProxyHandler({
+        rules: [{ method: 'GET', path: '/containers/json' }],
+        upstreamSocket: upstream.socketPath,
+        upstreamIsHost: true,
+        nameResolver: new ContainerNameResolver(upstream.socketPath),
+        scratchDir,
+      });
+      const proxy = createProxyServer(handler);
+      await proxy.start();
+
+      try {
+        const res = await makeRequest(proxy.socketPath, 'GET', '/containers/json');
+        expect(res.statusCode).toBe(200);
+      } finally {
+        await proxy.stop();
+        await upstream.stop();
+      }
+    });
+
+    it('rejects body exceeding size limit', async () => {
+      const upstream = createFakeUpstream((_req, res) => {
+        res.writeHead(201);
+        res.end('{}');
+      });
+      await upstream.start();
+
+      const handler = createDockerProxyHandler({
+        rules: [{ method: 'POST', path: '/containers/create' }],
+        upstreamSocket: upstream.socketPath,
+        upstreamIsHost: true,
+        nameResolver: new ContainerNameResolver(upstream.socketPath),
+        scratchDir,
+      });
+      const proxy = createProxyServer(handler);
+      await proxy.start();
+
+      try {
+        // Send a very large body — the default limit is 10MB, so we use a moderate
+        // oversized payload that triggers the stream-based limit
+        const body = 'x'.repeat(11 * 1024 * 1024);
+        const res = await makeRequest(proxy.socketPath, 'POST', '/containers/create', body);
+        expect(res.statusCode).toBe(403);
+      } finally {
         await proxy.stop();
         await upstream.stop();
       }

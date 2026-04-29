@@ -3,6 +3,7 @@ import { URL } from 'node:url';
 
 import { DockerAllowlistMatcher } from './docker-allowlist.js';
 import { ContainerNameResolver } from './docker-name-resolver.js';
+import { validateBindMounts, bufferRequestBody } from './docker-bind-mount-guard.js';
 import type { DockerRule } from './types.js';
 
 /** Known-dangerous Docker API operations when forwarding to a host socket. */
@@ -60,6 +61,8 @@ export interface DockerProxyHandlerOptions {
   upstreamSocket: string;
   upstreamIsHost: boolean;
   nameResolver: ContainerNameResolver;
+  /** Per-session scratch dir for bind-mount validation (host-socket mode only) */
+  scratchDir?: string;
 }
 
 /**
@@ -69,11 +72,11 @@ export interface DockerProxyHandlerOptions {
 export function createDockerProxyHandler(
   options: DockerProxyHandlerOptions,
 ): http.RequestListener {
-  const { upstreamSocket, upstreamIsHost, nameResolver } = options;
+  const { upstreamSocket, upstreamIsHost, nameResolver, scratchDir } = options;
   const matcher = new DockerAllowlistMatcher(options.rules);
 
   return (clientReq: http.IncomingMessage, clientRes: http.ServerResponse) => {
-    void handleRequest(clientReq, clientRes, matcher, nameResolver, upstreamSocket, upstreamIsHost);
+    void handleRequest(clientReq, clientRes, matcher, nameResolver, upstreamSocket, upstreamIsHost, scratchDir);
   };
 }
 
@@ -84,6 +87,7 @@ async function handleRequest(
   nameResolver: ContainerNameResolver,
   upstreamSocket: string,
   upstreamIsHost: boolean,
+  scratchDir?: string,
 ): Promise<void> {
   const method = (clientReq.method ?? 'GET').toUpperCase();
   const rawUrl = clientReq.url ?? '/';
@@ -127,8 +131,79 @@ async function handleRequest(
     }
   }
 
+  // Bind-mount guard: buffer POST /containers/create on host-socket and validate
+  if (upstreamIsHost && scratchDir && method === 'POST' && normalizedPath === '/containers/create') {
+    let bodyStr: string;
+    try {
+      bodyStr = await bufferRequestBody(clientReq);
+    } catch (err) {
+      sendDeny(clientRes, method, normalizedPath, (err as Error).message);
+      return;
+    }
+
+    try {
+      const body = JSON.parse(bodyStr);
+      const validation = validateBindMounts(body, scratchDir);
+      if (!validation.valid) {
+        const rejectedPaths = validation.violations.map((v) => v.source);
+        sendDeny(clientRes, method, normalizedPath, 'Bind mount outside scratch directory', {
+          rejectedPaths,
+          scratchDir,
+        });
+        return;
+      }
+    } catch {
+      // If body isn't valid JSON, let Docker handle the error
+    }
+
+    // Forward the buffered body
+    forwardBufferedToUpstream(bodyStr, clientReq, clientRes, upstreamSocket, method, rawUrl);
+    return;
+  }
+
   // Forward the request to upstream
   forwardToUpstream(clientReq, clientRes, upstreamSocket, method, rawUrl);
+}
+
+function forwardBufferedToUpstream(
+  body: string,
+  clientReq: http.IncomingMessage,
+  clientRes: http.ServerResponse,
+  upstreamSocket: string,
+  method: string,
+  rawUrl: string,
+): void {
+  const headers = { ...clientReq.headers };
+  headers['content-length'] = String(Buffer.byteLength(body));
+
+  const upstreamReq = http.request(
+    {
+      socketPath: upstreamSocket,
+      method,
+      path: rawUrl,
+      headers,
+    },
+    (upstreamRes) => {
+      clientRes.writeHead(upstreamRes.statusCode ?? 200, upstreamRes.headers);
+      upstreamRes.pipe(clientRes);
+    },
+  );
+
+  upstreamReq.on('error', (err) => {
+    if (!clientRes.headersSent) {
+      const errBody = JSON.stringify({
+        error: `Docker upstream error: ${err.message}`,
+        code: 'DOCKER_ACCESS_DENIED',
+      });
+      clientRes.writeHead(502, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(errBody),
+      });
+      clientRes.end(errBody);
+    }
+  });
+
+  upstreamReq.end(body);
 }
 
 function forwardToUpstream(
