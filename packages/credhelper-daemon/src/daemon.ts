@@ -5,6 +5,7 @@ import { ExposureRenderer } from './exposure-renderer.js';
 import { SessionManager } from './session-manager.js';
 import { ControlServer } from './control-server.js';
 import { detectUpstreamSocket } from './docker-upstream.js';
+import { AuditLog } from './audit/index.js';
 
 /**
  * Top-level daemon orchestrator. Wires together all components and manages
@@ -14,6 +15,7 @@ export class Daemon {
   private controlServer: ControlServer | null = null;
   private sessionManager: SessionManager | null = null;
   private refresher: TokenRefresher | null = null;
+  private auditLog: AuditLog | null = null;
 
   constructor(private readonly config: DaemonConfig) {}
 
@@ -38,6 +40,20 @@ export class Daemon {
         console.log('[credhelper] No Docker socket detected — docker proxy disabled');
       }
 
+      // Create audit log (if cluster/worker identity is available)
+      if (this.config.clusterId && this.config.workerId) {
+        this.auditLog = new AuditLog({
+          capacity: 5000,
+          flushIntervalMs: 1000,
+          maxBatchSize: 50,
+          controlPlaneSocketPath: '/run/generacy-control-plane/control.sock',
+          clusterId: this.config.clusterId,
+          workerId: this.config.workerId,
+        });
+        this.auditLog.start();
+        console.log('[credhelper] Audit log enabled');
+      }
+
       // Create core components
       const store = new CredentialStore();
       this.refresher = new TokenRefresher(store);
@@ -56,6 +72,7 @@ export class Daemon {
           workerGid: this.config.workerGid,
           upstreamDockerSocket,
         },
+        this.auditLog ?? undefined,
       );
 
       // Start expiry sweeper
@@ -95,6 +112,11 @@ export class Daemon {
     // Cancel all refresh timers
     if (this.refresher) {
       this.refresher.cancelAll();
+    }
+
+    // Flush remaining audit entries
+    if (this.auditLog) {
+      await this.auditLog.stop();
     }
 
     console.log('[credhelper] Shutdown complete');

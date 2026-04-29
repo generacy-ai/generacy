@@ -61,6 +61,47 @@ export const CredentialStubResponseSchema = z.object({
 });
 export type CredentialStubResponse = z.infer<typeof CredentialStubResponseSchema>;
 
+// Audit schemas (mirrored from credhelper-daemon for validation)
+export const AuditActionSchema = z.enum([
+  'session.begin',
+  'session.end',
+  'credential.mint',
+  'credential.resolve',
+  'credential.refresh',
+  'exposure.render',
+  'proxy.docker',
+  'proxy.localhost',
+]);
+
+export const AuditEntrySchema = z.object({
+  timestamp: z.string(),
+  action: AuditActionSchema,
+  actor: z.object({
+    workerId: z.string(),
+    sessionId: z.string().optional(),
+  }),
+  clusterId: z.string(),
+  credentialId: z.string().optional(),
+  role: z.string().optional(),
+  pluginId: z.string().optional(),
+  success: z.boolean(),
+  errorCode: z.string().optional(),
+  exposureKind: z.string().optional(),
+  proxy: z.object({
+    method: z.string(),
+    path: z.string(),
+    decision: z.enum(['allow', 'deny']),
+  }).optional(),
+});
+
+export const AuditBatchSchema = z.object({
+  entries: z.array(AuditEntrySchema).max(50),
+  droppedSinceLastBatch: z.number().int().min(0),
+});
+
+export type AuditEntry = z.infer<typeof AuditEntrySchema>;
+export type AuditBatch = z.infer<typeof AuditBatchSchema>;
+
 // Error response
 export const ErrorResponseSchema = z.object({
   error: z.string(),
