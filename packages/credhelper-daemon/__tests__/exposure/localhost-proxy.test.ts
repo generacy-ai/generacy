@@ -125,7 +125,7 @@ describe('LocalhostProxy handler', () => {
   ): Promise<{ statusCode: number; body: string }> {
     return new Promise((resolve, reject) => {
       const req = http.request(
-        { hostname: '127.0.0.1', port: proxyPort, method, path: reqPath },
+        { hostname: '127.0.0.1', port: proxyPort, method, path: reqPath, agent: false },
         (res) => {
           const chunks: Buffer[] = [];
           res.on('data', (chunk: Buffer) => chunks.push(chunk));

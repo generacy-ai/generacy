@@ -28,17 +28,17 @@
 
 ## Phase 4: Unit Tests
 
-- [ ] T030 [P] [US1] Unit tests for `matchAllowlist` in `packages/credhelper-daemon/__tests__/exposure/localhost-proxy.test.ts` — literal paths, `{param}` placeholders, trailing slash significance, query string stripping, case sensitivity, method matching
-- [ ] T031 [P] [US1] Unit tests for proxy handler in `packages/credhelper-daemon/__tests__/exposure/localhost-proxy.test.ts` — allowed request forwards correctly with auth headers, denied request returns 403 JSON, upstream error pass-through
-- [ ] T032 [P] [US2] Unit tests for port collision in `packages/credhelper-daemon/__tests__/exposure/localhost-proxy.test.ts` — EADDRINUSE surfaces `PROXY_PORT_COLLISION` error; verify secret not logged
+- [X] T030 [P] [US1] Unit tests for `matchAllowlist` in `packages/credhelper-daemon/__tests__/exposure/localhost-proxy.test.ts` — literal paths, `{param}` placeholders, trailing slash significance, query string stripping, case sensitivity, method matching
+- [X] T031 [P] [US1] Unit tests for proxy handler in `packages/credhelper-daemon/__tests__/exposure/localhost-proxy.test.ts` — allowed request forwards correctly with auth headers, denied request returns 403 JSON, upstream error pass-through
+- [X] T032 [P] [US2] Unit tests for port collision in `packages/credhelper-daemon/__tests__/exposure/localhost-proxy.test.ts` — EADDRINUSE surfaces `PROXY_PORT_COLLISION` error; verify secret not logged
 
 ## Phase 5: Integration Tests
 
-- [ ] T040 [US1] Integration test: happy path in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — start session with SendGrid-style role, POST to proxy, verify upstream receives auth header, verify response forwarded
-- [ ] T041 [US1] Integration test: default deny in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — GET to POST-only path returns 403; arbitrary path returns 403
-- [ ] T042 [US2] Integration test: teardown in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — end session, verify port released (can rebind)
-- [ ] T043 [US1] Integration test: validation in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — missing `proxy:` entry fails session creation with `PROXY_CONFIG_MISSING`
-- [ ] T044 [US1] Integration test: env var in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — verify session env file contains proxy URL with correct `envName`
+- [X] T040 [US1] Integration test: happy path in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — start session with SendGrid-style role, POST to proxy, verify upstream receives auth header, verify response forwarded
+- [X] T041 [US1] Integration test: default deny in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — GET to POST-only path returns 403; arbitrary path returns 403
+- [X] T042 [US2] Integration test: teardown in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — end session, verify port released (can rebind)
+- [X] T043 [US1] Integration test: validation in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — missing `proxy:` entry fails session creation with `PROXY_CONFIG_MISSING`
+- [X] T044 [US1] Integration test: env var in `packages/credhelper-daemon/__tests__/integration/localhost-proxy.test.ts` — verify session env file contains proxy URL with correct `envName`
 
 ## Dependencies & Execution Order
 
