@@ -1,7 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePostLifecycle } from '../../src/routes/lifecycle.js';
 import { ControlPlaneError } from '../../src/errors.js';
+import {
+  setCodeServerManager,
+  type CodeServerManager,
+} from '../../src/services/code-server-manager.js';
 
 function createMockResponse() {
   const headers: Record<string, string> = {};
@@ -18,7 +22,6 @@ function createMockResponse() {
     end: vi.fn((data?: string) => {
       if (data) body = data;
     }),
-    // Expose captured values for assertions
     get _headers() {
       return headers;
     },
@@ -37,7 +40,22 @@ function createMockResponse() {
   return res;
 }
 
+function createFakeManager(overrides: Partial<CodeServerManager> = {}): CodeServerManager {
+  return {
+    start: vi.fn(async () => ({ status: 'starting' as const, socket_path: '/tmp/cs.sock' })),
+    stop: vi.fn(async () => {}),
+    touch: vi.fn(),
+    getStatus: vi.fn(() => 'stopped' as const),
+    shutdown: vi.fn(async () => {}),
+    ...overrides,
+  };
+}
+
 describe('handlePostLifecycle', () => {
+  afterEach(() => {
+    setCodeServerManager(null);
+  });
+
   it('returns 200 with accepted: true for clone-peer-repos', async () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
@@ -49,23 +67,46 @@ describe('handlePostLifecycle', () => {
     expect(body).toEqual({ accepted: true, action: 'clone-peer-repos' });
   });
 
-  it('returns 200 with accepted: true for code-server-start', async () => {
+  it('starts code-server and returns its status + socket_path', async () => {
+    const manager = createFakeManager({
+      start: vi.fn(async () => ({ status: 'starting', socket_path: '/run/code-server.sock' })),
+    });
+    setCodeServerManager(manager);
+
     const req = {} as IncomingMessage;
     const res = createMockResponse();
-
     await handlePostLifecycle(req, res, {}, { action: 'code-server-start' });
 
+    expect(manager.start).toHaveBeenCalledOnce();
     expect(res.writeHead).toHaveBeenCalledWith(200);
     const body = JSON.parse(res._body);
-    expect(body).toEqual({ accepted: true, action: 'code-server-start' });
+    expect(body).toEqual({ status: 'starting', socket_path: '/run/code-server.sock' });
   });
 
-  it('returns 200 with accepted: true for code-server-stop', async () => {
+  it('surfaces SERVICE_UNAVAILABLE if code-server fails to start', async () => {
+    const manager = createFakeManager({
+      start: vi.fn(async () => {
+        throw new Error('binary not found');
+      }),
+    });
+    setCodeServerManager(manager);
+
+    await expect(
+      handlePostLifecycle({} as IncomingMessage, createMockResponse(), {}, {
+        action: 'code-server-start',
+      }),
+    ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: 'binary not found' });
+  });
+
+  it('stops code-server and returns accepted: true', async () => {
+    const manager = createFakeManager();
+    setCodeServerManager(manager);
+
     const req = {} as IncomingMessage;
     const res = createMockResponse();
-
     await handlePostLifecycle(req, res, {}, { action: 'code-server-stop' });
 
+    expect(manager.stop).toHaveBeenCalledOnce();
     expect(res.writeHead).toHaveBeenCalledWith(200);
     const body = JSON.parse(res._body);
     expect(body).toEqual({ accepted: true, action: 'code-server-stop' });

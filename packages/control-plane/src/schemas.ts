@@ -42,6 +42,14 @@ export const LifecycleResponseSchema = z.object({
 });
 export type LifecycleResponse = z.infer<typeof LifecycleResponseSchema>;
 
+// code-server-start returns its own runtime status + socket path so the caller
+// (typically the cloud UI proxying through the relay) can connect immediately.
+export const CodeServerStartResponseSchema = z.object({
+  status: z.enum(['starting', 'running']),
+  socket_path: z.string(),
+});
+export type CodeServerStartResponse = z.infer<typeof CodeServerStartResponseSchema>;
+
 // Credential stub response (wraps entry with runtime status)
 export const CredentialStubResponseSchema = z.object({
   id: z.string(),

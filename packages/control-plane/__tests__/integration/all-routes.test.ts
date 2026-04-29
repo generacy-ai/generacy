@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import { ControlPlaneServer } from '../../src/server.js';
+import {
+  setCodeServerManager,
+  type CodeServerManager,
+} from '../../src/services/code-server-manager.js';
 
 let server: ControlPlaneServer;
 let socketPath: string;
@@ -55,7 +59,16 @@ function request(
 }
 
 describe('integration: all routes', () => {
+  const fakeCodeServer: CodeServerManager = {
+    start: vi.fn(async () => ({ status: 'starting' as const, socket_path: '/run/code-server.sock' })),
+    stop: vi.fn(async () => {}),
+    touch: vi.fn(),
+    getStatus: vi.fn(() => 'stopped' as const),
+    shutdown: vi.fn(async () => {}),
+  };
+
   beforeAll(async () => {
+    setCodeServerManager(fakeCodeServer);
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cp-test-'));
     socketPath = path.join(tmpDir, 'control.sock');
     server = new ControlPlaneServer();
@@ -64,6 +77,7 @@ describe('integration: all routes', () => {
 
   afterAll(async () => {
     await server.close();
+    setCodeServerManager(null);
   });
 
   // GET /state
@@ -123,10 +137,18 @@ describe('integration: all routes', () => {
     expect(res.body).toEqual({ accepted: true, action: 'clone-peer-repos' });
   });
 
-  it('POST /lifecycle/code-server-start returns accepted', async () => {
+  it('POST /lifecycle/code-server-start returns runtime status + socket_path', async () => {
     const res = await request('POST', '/lifecycle/code-server-start');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ accepted: true, action: 'code-server-start' });
+    expect(fakeCodeServer.start).toHaveBeenCalled();
+    expect(res.body).toEqual({ status: 'starting', socket_path: '/run/code-server.sock' });
+  });
+
+  it('POST /lifecycle/code-server-stop calls manager.stop and returns accepted', async () => {
+    const res = await request('POST', '/lifecycle/code-server-stop');
+    expect(res.status).toBe(200);
+    expect(fakeCodeServer.stop).toHaveBeenCalled();
+    expect(res.body).toEqual({ accepted: true, action: 'code-server-stop' });
   });
 
   // POST /lifecycle/:action (invalid)
