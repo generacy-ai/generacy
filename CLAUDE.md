@@ -71,6 +71,20 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Retry budget: 5 retries, exponential backoff (2s-32s, ~62s total) for initial cloud requests.
   - Integration: `server.ts` calls `activate()` before relay construction; sets `config.relay.apiKey` and `config.relay.clusterApiKeyId` from result.
 
+## CLI Cluster Lifecycle Commands
+
+- `packages/generacy/src/cli/commands/` — Six cluster lifecycle commands (#494, v1.5 phase 5): `up`, `stop`, `down`, `destroy`, `status`, `update`. Each wraps `docker compose` against `.generacy/docker-compose.yml`.
+  - `commands/cluster/` — Shared helpers: `context.ts` (resolve `.generacy/` upward, parse `cluster.yaml` + `cluster.json`), `compose.ts` (build `--project-name`/`--file` args, run compose), `registry.ts` (read/write `~/.generacy/clusters.json`), `docker.ts` (availability check).
+  - `commands/up/index.ts` — `docker compose up -d`, auto-registers in registry, updates `lastSeen`.
+  - `commands/stop/index.ts` — `docker compose stop`. Containers preserved.
+  - `commands/down/index.ts` — `docker compose down`. `--volumes` flag to also remove named volumes.
+  - `commands/destroy/index.ts` — `docker compose down -v`, removes `.generacy/` dir and registry entry. `--yes` skips confirmation prompt (`@clack/prompts` `p.confirm()`).
+  - `commands/status/index.ts` — Lists all clusters from `~/.generacy/clusters.json` with live Docker state via `docker compose ps --format json`. `--json` for machine-readable output.
+  - `commands/update/index.ts` — `docker compose pull` + `docker compose up -d` (recreates only changed containers).
+  - Cluster identity: `.generacy/cluster.yaml` (project config: channel, workers, variant), `.generacy/cluster.json` (runtime: clusterId, orgId, projectId from activation), `.generacy/docker-compose.yml` (compose file).
+  - Registry at `~/.generacy/clusters.json`: array of `{clusterId, name, path, composePath, variant, channel, cloudUrl, lastSeen, createdAt}`. Atomic writes via temp+rename.
+  - Pre-activation fallback: if `cluster.json` missing, uses directory basename as compose project name with warning.
+
 ## Orchestrator Launcher
 
 - `packages/orchestrator/src/launcher/` — Plugin-based process launcher (`AgentLauncher`). Resolves intents to plugins, merges env (3-layer), selects `ProcessFactory` by stdio profile, spawns processes.
