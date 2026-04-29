@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import { extractActorContext } from './context.js';
 import { ControlPlaneError, sendError } from './errors.js';
 import { dispatch } from './router.js';
+import { getCodeServerManager } from './services/code-server-manager.js';
 
 export class ControlPlaneServer {
   private server: http.Server;
@@ -61,6 +62,11 @@ export class ControlPlaneServer {
   close(): Promise<void> {
     return new Promise((resolve) => {
       this.server.close(async () => {
+        try {
+          await getCodeServerManager().shutdown();
+        } catch {
+          // Best-effort: don't block server shutdown on a wedged code-server child
+        }
         if (this.socketPath) {
           try {
             await fs.unlink(this.socketPath);

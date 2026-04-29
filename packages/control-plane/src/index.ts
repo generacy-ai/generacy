@@ -10,6 +10,7 @@ export {
   ClusterStateSchema,
   LifecycleActionSchema,
   LifecycleResponseSchema,
+  CodeServerStartResponseSchema,
   CredentialStubResponseSchema,
   ErrorResponseSchema,
   CredentialEntrySchema,
@@ -21,12 +22,28 @@ export {
   type ClusterState,
   type LifecycleAction,
   type LifecycleResponse,
+  type CodeServerStartResponse,
   type CredentialStubResponse,
   type ErrorResponse,
   type CredentialEntry,
   type RoleConfig,
   type RoleCredentialRef,
 } from './schemas.js';
+
+// Services
+export {
+  CodeServerProcessManager,
+  getCodeServerManager,
+  setCodeServerManager,
+  loadOptionsFromEnv,
+  DEFAULT_CODE_SERVER_BIN,
+  DEFAULT_CODE_SERVER_SOCKET,
+  DEFAULT_IDLE_TIMEOUT_MS,
+  type CodeServerManager,
+  type CodeServerManagerOptions,
+  type CodeServerStartResult,
+  type CodeServerStatus,
+} from './services/code-server-manager.js';
 
 // Errors
 export {
