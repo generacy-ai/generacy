@@ -165,7 +165,7 @@ describe('Integration: localhost-proxy', () => {
       store,
       refresher,
       new ExposureRenderer(),
-      { sessionsDir, workerUid: 1000, workerGid: 1000 },
+      { sessionsDir, workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
     );
   });
 
@@ -284,7 +284,7 @@ describe('Integration: localhost-proxy', () => {
       store,
       refresher,
       new ExposureRenderer(),
-      { sessionsDir: path.join(tmpDir, 'sessions'), workerUid: 1000, workerGid: 1000 },
+      { sessionsDir: path.join(tmpDir, 'sessions'), workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
     );
 
     try {
@@ -345,7 +345,7 @@ describe('Integration: localhost-proxy', () => {
       store,
       refresher,
       new ExposureRenderer(),
-      { sessionsDir: path.join(tmpDir, 'sessions'), workerUid: 1000, workerGid: 1000 },
+      { sessionsDir: path.join(tmpDir, 'sessions'), workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
     );
 
     const result = await sm.beginSession({
