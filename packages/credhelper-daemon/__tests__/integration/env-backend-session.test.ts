@@ -102,7 +102,7 @@ describe('Integration: EnvBackend Session', () => {
       store,
       refresher,
       renderer,
-      { sessionsDir, workerUid: 1000, workerGid: 1000 },
+      { sessionsDir, workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
     );
   });
 

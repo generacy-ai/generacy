@@ -28,6 +28,7 @@ export class DockerProxy implements DockerProxyHandle {
       upstreamSocket: this.config.upstreamSocket,
       upstreamIsHost: this.config.upstreamIsHost,
       nameResolver: this.nameResolver,
+      scratchDir: this.config.scratchDir,
     });
 
     this.server = http.createServer(handler);

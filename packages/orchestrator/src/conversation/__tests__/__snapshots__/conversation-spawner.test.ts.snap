@@ -2,6 +2,7 @@
 
 exports[`ConversationSpawner > spawnTurn — LaunchRequest snapshot > captures full LaunchRequest for a conversation turn 1`] = `
 {
+  "credentials": undefined,
   "cwd": "/workspace",
   "env": {},
   "intent": {

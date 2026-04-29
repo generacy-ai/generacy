@@ -112,7 +112,7 @@ describe('Integration: Core Plugins', () => {
       const registry = createCorePluginRegistry();
       sessionManager = new SessionManager(
         configLoader, registry, new DefaultBackendClientFactory(), store, refresher, renderer,
-        { sessionsDir, workerUid: 1000, workerGid: 1000 },
+        { sessionsDir, workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
       );
 
       const { sessionDir } = await sessionManager.beginSession({
@@ -180,7 +180,7 @@ describe('Integration: Core Plugins', () => {
       const registry = createCorePluginRegistry();
       sessionManager = new SessionManager(
         configLoader, registry, createMockBackendFactory('ghp_test123'), store, refresher, renderer,
-        { sessionsDir, workerUid: 1000, workerGid: 1000 },
+        { sessionsDir, workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
       );
 
       const { sessionDir } = await sessionManager.beginSession({

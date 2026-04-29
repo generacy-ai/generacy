@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { appendFile, chmod } from 'node:fs/promises';
 
 import type { PluginExposureData } from '@generacy-ai/credhelper';
 import { CredhelperError } from './errors.js';
@@ -17,13 +18,15 @@ export class ExposureRenderer {
     await mkdirSafe(sessionDir, 0o750);
   }
 
-  /** Write a sourceable env file with KEY=VALUE lines, mode 0640. */
+  /** Append KEY=VALUE lines to the session env file, mode 0640. */
   async renderEnv(
     sessionDir: string,
     entries: Array<{ key: string; value: string }>,
   ): Promise<void> {
     const content = entries.map((e) => `${e.key}=${e.value}\n`).join('');
-    await writeFileSafe(path.join(sessionDir, 'env'), content, 0o640);
+    const envPath = path.join(sessionDir, 'env');
+    await appendFile(envPath, content, { mode: 0o640 });
+    await chmod(envPath, 0o640);
   }
 
   /**
@@ -151,6 +154,7 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
     upstreamSocket: string,
     upstreamIsHost: boolean,
     sessionId: string,
+    scratchDir?: string,
   ): Promise<{ proxy: DockerProxyHandle; socketPath: string }> {
     const proxy = new DockerProxy({
       sessionId,
@@ -158,6 +162,7 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
       rules,
       upstreamSocket,
       upstreamIsHost,
+      scratchDir,
     });
     const socketPath = await proxy.start();
     return { proxy, socketPath };
