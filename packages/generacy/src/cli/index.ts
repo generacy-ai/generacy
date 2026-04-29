@@ -11,6 +11,7 @@ import { setupCommand } from './commands/setup.js';
 import { validateCommand } from './commands/validate.js';
 import { doctorCommand } from './commands/doctor.js';
 import { initCommand } from './commands/init/index.js';
+import { launchCommand } from './commands/launch/index.js';
 import { createLogger, setLogger } from './utils/logger.js';
 import type { LogLevel } from './utils/logger.js';
 
@@ -47,6 +48,7 @@ export function createProgram(): Command {
   program.addCommand(validateCommand());
   program.addCommand(doctorCommand());
   program.addCommand(initCommand());
+  program.addCommand(launchCommand());
 
   return program;
 }
