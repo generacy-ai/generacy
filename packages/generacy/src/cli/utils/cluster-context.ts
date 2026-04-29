@@ -54,9 +54,8 @@ export interface ClusterContext {
 
 function findGeneracyDir(startDir: string): string | null {
   let dir = resolve(startDir);
-  const root = dirname(dir) === dir ? dir : undefined;
 
-  while (true) {
+  for (;;) {
     const candidate = join(dir, '.generacy', 'cluster.json');
     try {
       readFileSync(candidate);
