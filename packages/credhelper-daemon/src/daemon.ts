@@ -71,6 +71,7 @@ export class Daemon {
           workerUid: this.config.workerUid,
           workerGid: this.config.workerGid,
           upstreamDockerSocket,
+          scratchBaseDir: this.config.scratchBaseDir,
         },
         this.auditLog ?? undefined,
       );

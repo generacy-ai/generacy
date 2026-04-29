@@ -50,6 +50,8 @@ export interface DaemonConfig {
   workerId?: string;
   /** Detected upstream Docker socket. Set at boot by Daemon.start(). */
   upstreamDockerSocket?: UpstreamDockerSocket;
+  /** @default '/var/lib/generacy/scratch' */
+  scratchBaseDir?: string;
 }
 
 /** Adapter interface for loading configuration objects (for #462). */
@@ -97,10 +99,17 @@ export interface DockerProxyConfig {
   upstreamSocket: string;
   /** Whether the upstream is the host Docker socket (DooD, not DinD) */
   upstreamIsHost: boolean;
+  /** Per-session scratch directory for bind-mount validation (host-socket mode) */
+  scratchDir?: string;
 }
 
 /** Interface for the DockerProxy lifecycle object stored in session state. */
 export interface DockerProxyHandle {
+  stop(): Promise<void>;
+}
+
+/** Interface for the LocalhostProxy lifecycle object stored in session state. */
+export interface LocalhostProxyHandle {
   stop(): Promise<void>;
 }
 
@@ -116,6 +125,10 @@ export interface SessionState {
   credentialIds: string[];
   /** Docker socket proxy, if the role uses docker-socket-proxy exposure */
   dockerProxy?: DockerProxyHandle;
+  /** Localhost proxy handles, if the role uses localhost-proxy exposure */
+  localhostProxies?: LocalhostProxyHandle[];
+  /** Per-session scratch directory for bind-mount isolation */
+  scratchDir?: string;
 }
 
 /** In-memory credential storage entry. */

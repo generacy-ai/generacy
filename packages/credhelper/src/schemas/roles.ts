@@ -4,6 +4,7 @@ export const RoleExposeSchema = z.object({
   as: z.enum(['env', 'git-credential-helper', 'gcloud-external-account', 'localhost-proxy', 'docker-socket-proxy']),
   name: z.string().optional(),
   port: z.number().optional(),
+  envName: z.string().optional(),
 });
 
 export const RoleCredentialRefSchema = z.object({

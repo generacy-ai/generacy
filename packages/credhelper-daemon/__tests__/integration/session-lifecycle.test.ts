@@ -104,7 +104,7 @@ describe('Integration: Session Lifecycle', () => {
       store,
       refresher,
       renderer,
-      { sessionsDir, workerUid: 1000, workerGid: 1000 },
+      { sessionsDir, workerUid: 1000, workerGid: 1000, scratchBaseDir: path.join(tmpDir, 'scratch') },
     );
 
     controlServer = new ControlServer(sessionManager, 1000, false);

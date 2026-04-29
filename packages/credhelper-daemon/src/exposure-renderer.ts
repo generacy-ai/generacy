@@ -1,15 +1,16 @@
 import path from 'node:path';
+import { appendFile, chmod } from 'node:fs/promises';
 
-import type { PluginExposureData } from '@generacy-ai/credhelper';
+import type { PluginExposureData, ProxyRule } from '@generacy-ai/credhelper';
 import { CredhelperError } from './errors.js';
 import { mkdirSafe, writeFileSafe } from './util/fs.js';
 import { DockerProxy } from './docker-proxy.js';
-import type { DockerRule, DockerProxyHandle } from './types.js';
+import { LocalhostProxy } from './exposure/localhost-proxy.js';
+import type { DockerRule, DockerProxyHandle, LocalhostProxyHandle } from './types.js';
 
 /**
  * Renders credential exposure files into a session directory.
  * Accepts PluginExposureData from plugins and wraps with session infrastructure.
- * Phase 3 exposure types (localhost-proxy, docker-socket-proxy) throw NOT_IMPLEMENTED.
  */
 export class ExposureRenderer {
   /** Create the session directory tree with correct modes. */
@@ -17,13 +18,15 @@ export class ExposureRenderer {
     await mkdirSafe(sessionDir, 0o750);
   }
 
-  /** Write a sourceable env file with KEY=VALUE lines, mode 0640. */
+  /** Append KEY=VALUE lines to the session env file, mode 0640. */
   async renderEnv(
     sessionDir: string,
     entries: Array<{ key: string; value: string }>,
   ): Promise<void> {
     const content = entries.map((e) => `${e.key}=${e.value}\n`).join('');
-    await writeFileSafe(path.join(sessionDir, 'env'), content, 0o640);
+    const envPath = path.join(sessionDir, 'env');
+    await appendFile(envPath, content, { mode: 0o640 });
+    await chmod(envPath, 0o640);
   }
 
   /**
@@ -47,7 +50,8 @@ export class ExposureRenderer {
         await this.renderGcloudExternalAccount(sessionDir, dataSocketPath, credentialId, data);
         break;
       case 'localhost-proxy':
-        await this.renderLocalhostProxy(sessionDir, data);
+        // localhost-proxy is handled directly by SessionManager, which
+        // calls renderLocalhostProxy with the role's proxy config.
         break;
     }
   }
@@ -118,20 +122,24 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
   }
 
   /**
-   * Write localhost proxy config to session directory.
-   * The daemon's proxy lifecycle manager reads this config to start
-   * a reverse proxy that injects auth headers into upstream requests.
+   * Create and start a localhost reverse proxy for a credential.
+   * Writes proxy config JSON for debugging/introspection, then starts the proxy.
+   * Returns the proxy handle for session state tracking.
    */
   async renderLocalhostProxy(
     sessionDir: string,
     data: { upstream: string; headers: Record<string, string> },
-  ): Promise<void> {
+    allowlist: ProxyRule[],
+    port: number,
+  ): Promise<LocalhostProxyHandle> {
     const proxyDir = path.join(sessionDir, 'proxy');
     await mkdirSafe(proxyDir, 0o750);
 
+    // Write config for debugging/introspection (no secrets in allowlist)
     const proxyConfig = {
       upstream: data.upstream,
-      headers: data.headers,
+      port,
+      allowlist,
     };
 
     await writeFileSafe(
@@ -139,6 +147,15 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
       JSON.stringify(proxyConfig, null, 2) + '\n',
       0o640,
     );
+
+    const proxy = new LocalhostProxy({
+      port,
+      upstream: data.upstream,
+      headers: data.headers,
+      allowlist,
+    });
+    await proxy.start();
+    return proxy;
   }
 
   /**
@@ -151,6 +168,7 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
     upstreamSocket: string,
     upstreamIsHost: boolean,
     sessionId: string,
+    scratchDir?: string,
   ): Promise<{ proxy: DockerProxyHandle; socketPath: string }> {
     const proxy = new DockerProxy({
       sessionId,
@@ -158,6 +176,7 @@ exec curl --silent --fail --unix-socket "${dataSocketPath}" "http://localhost/cr
       rules,
       upstreamSocket,
       upstreamIsHost,
+      scratchDir,
     });
     const socketPath = await proxy.start();
     return { proxy, socketPath };

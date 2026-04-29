@@ -141,6 +141,7 @@ function buildDaemonConfig(
     },
     sweepIntervalMs: 30000,
     enablePeerCred: false,
+    scratchBaseDir: path.join(sessionsDir, '..', 'scratch'),
   };
 }
 
