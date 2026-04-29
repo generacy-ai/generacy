@@ -1,68 +1,72 @@
-# Feature Specification: CLI Cluster Lifecycle Commands
+# Feature Specification: ## Context
 
-Implement the cluster-lifecycle subcommands of the `generacy` CLI
+Implement the cluster-lifecycle subcommands of the new `generacy` CLI
 
 **Branch**: `494-context-implement-cluster` | **Date**: 2026-04-29 | **Status**: Draft
 
 ## Summary
 
-Add cluster lifecycle management commands (`up`, `stop`, `down`, `destroy`, `status`, `update`) to the existing `generacy` CLI in `packages/generacy/src/cli/`. These commands operate in cwd-mode against an existing `.generacy/` directory containing `cluster.yaml`, `cluster.json`, and `docker-compose.yml`.
-
 ## Context
 
-Implement the cluster-lifecycle subcommands of the `generacy` CLI. These run in cwd-mode against an existing `.generacy/cluster.yaml`. Architecture: [docs/dev-cluster-architecture.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/dev-cluster-architecture.md) — "CLI design".
+Implement the cluster-lifecycle subcommands of the new `generacy` CLI. These run in cwd-mode against an existing `.generacy/cluster.yaml`. Architecture: [docs/dev-cluster-architecture.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/dev-cluster-architecture.md) — "CLI design".
 
 ## Scope
 
-Implement in `packages/generacy/src/cli/commands/` (existing CLI package, matching the `init/` directory pattern):
+Implement in `packages/cli/src/commands/`:
 
-- `up` — `docker compose up -d` against `.generacy/docker-compose.yml`. Project name = cluster ID from `.generacy/cluster.json`. Refresh the registry's `lastSeen`.
+- `up` — `docker compose up -d` against the project's compose file. Project name = cluster ID. Refresh the registry's `lastSeen`.
 - `stop` — `docker compose stop`. Containers preserved.
 - `down` — `docker compose down` (named volumes preserved unless `--volumes`).
-- `destroy` — `docker compose down -v` AND remove the entire `.generacy/` directory after confirmation prompt (skip prompt with `--yes`). Removes the registry entry from `~/.generacy/clusters.json`. User can re-run `launch` to recreate.
-- `status` — list all clusters from `~/.generacy/clusters.json` registry with current Compose state (running/stopped/missing) for each. JSON output via `--json`.
-- `update` — `docker compose pull` + `docker compose up -d` (recreates only containers whose images changed).
+- `destroy` — `docker compose down -v` AND remove the cluster directory after confirmation prompt (skip prompt with `--yes`). Removes the registry entry.
+- `status` — list all clusters from the registry with current Compose state (running/stopped/missing) for each. JSON output via `--json`.
+- `update` — `docker compose pull` + restart.
 
-### Cluster Identity
-
-- **`cluster.yaml`** — project-level config: `channel`, `workers`, `variant`.
-- **`cluster.json`** — runtime/identity metadata written after activation: `{clusterId, cloudUrl, orgId, projectId, createdAt}`.
-- **`docker-compose.yml`** — compose file, sibling to the above in `.generacy/`.
-- The `--project-name` for compose comes from `cluster.json.clusterId`. If `cluster.json` doesn't exist yet (pre-activation), fall back to directory basename and warn.
-
-### Cluster Registry
-
-Located at `~/.generacy/clusters.json`. Each entry: `{clusterId, name, path, composePath, variant, channel, cloudUrl, lastSeen, createdAt}`. The registry is the index; per-project files are the source of truth. `launch` registers initially; `up` also auto-registers if the cluster is missing from the registry (defensive).
-
-### Shared helpers
-
-- `getClusterContext(cwd)` — locates `.generacy/cluster.yaml` upward, reads `cluster.json` for identity, returns parsed config or throws "no cluster here".
+Shared helpers:
+- `getClusterContext(cwd)` — locates `.generacy/cluster.yaml` upward, returns parsed config or throws "no cluster here".
 - `dockerComposeArgs(context)` — builds `--project-name=<id>` and `--file=<path>` consistently.
 
 Error messages must be user-friendly: missing Docker, missing compose file, etc.
 
 ## Acceptance criteria
 
-- Each command works against a fixture `.generacy/` directory (with `cluster.yaml`, `cluster.json`, `docker-compose.yml`) against a local Docker daemon.
+- Each command works against a fixture `.generacy/cluster.yaml` against a local Docker daemon.
 - `status` lists registered clusters and reports state correctly when at least one is running and one is stopped.
 - `destroy --yes` skips the prompt; `destroy` without it prompts and cancels on `n`.
 - JSON output for `status` validates against a documented schema.
 - All commands fail fast and clearly when Docker is not running.
 - Unit tests for arg-construction helpers; integration tests for the full lifecycle on a CI-friendly compose fixture.
 
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
 ## Assumptions
 
-- Docker and Docker Compose v2 are installed on the host.
-- `.generacy/` directory with `cluster.yaml` and `docker-compose.yml` already exists (created by `launch` command, #495).
-- `cluster.json` may not exist until activation completes; commands degrade gracefully.
-- The `~/.generacy/clusters.json` registry file is created/managed by lifecycle commands.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Cluster creation/launch (handled by #495).
-- Compose file generation/templating.
-- Cloud-side cluster management.
-- `--full-recreate` flag for `update` (future enhancement).
+- [Exclusion 1]
 
 ---
 
