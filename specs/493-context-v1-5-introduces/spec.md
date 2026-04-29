@@ -12,28 +12,28 @@ v1.5 introduces a public npx CLI that drives local cluster lifecycle (`npx gener
 
 ## Scope
 
-CLI commands live in the existing `packages/generacy/src/cli/` directory (not a new `packages/cli/` package). This is a cross-cutting decision across all Phase 5 CLI issues (#493–#496).
+New package at `packages/cli/`. Per the maintainer's confirmation, the CLI lives in this repo (not its own).
 
+- `package.json` with bin entry `generacy` → `dist/index.js`. Name: `@generacy-ai/cli`. Public publish.
 - Commander.js entry that dispatches subcommands (registered as empty placeholders for `launch`, `up`, `stop`, `down`, `destroy`, `status`, `update`, `open`, `claude-login`, `deploy`, `rebuild`).
-- Placeholder subcommands print a friendly "Not yet implemented in this preview — landing in a future v1.5 phase issue" message and exit 0. Each placeholder mentions which v1.5 phase it lands in (e.g., `launch` → phase 5, `deploy` → phase 10).
 - Node version check: refuse to run on Node < 22 with a clear install link.
 - `~/.generacy/clusters.json` registry helper module: `loadRegistry()`, `saveRegistry()`, `addCluster()`, `removeCluster()`, `findClusterByCwd()`. Atomic write. Schema is `{version, clusters: [{id, name, path, cloudUrl, lastSeen}]}`.
-- `findClusterByCwd()` uses longest-prefix-match (standard convention, like git's `.git` discovery). If multiple registered clusters match, returns the deepest (most specific) match.
 - Pino logger with sane defaults; quiet mode flag.
 - Global error handler that prints user-friendly errors (no stack traces unless `DEBUG=1`).
 
 Publishing:
-- Uses the existing changeset-based pipeline (`publish-preview.yml` / `pnpm changeset version --snapshot`). No separate `cli-v*` tag-triggered workflow needed; CLI versioning aligns with the rest of the generacy packages.
+- GitHub Actions workflow at `.github/workflows/publish-cli.yml` triggered by tags matching `cli-v*` (or however the repo's existing publish workflows are named — match prevailing convention).
+- Publishes to npm as `@generacy-ai/cli`.
+- Initial preview tag from this issue: `cli-v0.1.0-preview.1`.
 
 ## Acceptance criteria
 
-- `generacy --version` prints the version.
-- `generacy --help` lists all subcommands as placeholders.
-- Each placeholder subcommand prints a "not yet implemented" message with phase info and exits 0.
+- `npx @generacy-ai/cli@<preview-tag> --version` prints the version.
+- `npx @generacy-ai/cli@<preview-tag> --help` lists all subcommands as placeholders.
 - Node-version check fails fast on Node 20.
 - `~/.generacy/clusters.json` round-trips through the registry helper without data loss.
-- `findClusterByCwd()` resolves from subdirectories via longest-prefix-match.
 - Atomic-write test: simulated mid-write crash leaves the previous file intact.
+- Publish workflow runs successfully on a preview tag and the package is pullable from npm.
 
 ## User Stories
 
