@@ -19,9 +19,7 @@ In `packages/credhelper-daemon/src/exposure-renderer.ts`:
 - Choose upstream per credentials plan decision #16:
   - If `ENABLE_DIND=true` and `/var/run/docker.sock` is reachable, forward there.
   - Else if `/var/run/docker-host.sock` is mounted, forward there.
-  - Else fail closed **per-session** (not at daemon boot) with a clear error.
-  - When `ENABLE_DIND` is unset, treat as `false` — skip DinD socket, try only `/var/run/docker-host.sock`.
-  - At daemon boot, log a warning if no Docker socket is detected (non-Docker roles unaffected).
+  - Else fail closed at credhelper boot with a clear error.
 - Set `DOCKER_HOST=unix://$GENERACY_SESSION_DIR/docker.sock` on the session env.
 - On session end, tear down the proxy instance cleanly.
 
@@ -31,19 +29,9 @@ In `packages/credhelper-daemon/src/session-manager.ts`:
 In the `applyCredentials` interceptor on the orchestrator side (`packages/orchestrator/src/launcher/credentials-interceptor.ts`):
 - Confirm `DOCKER_HOST` is propagated from the credhelper response into the spawned process env (already partially wired per #465 — verify and add a test).
 
-Scratch volume:
-- Per-session scratch directory at `/var/lib/generacy/scratch/<session-id>/` (real disk path, mode 0700 owned by workflow uid 1001).
-- Created at session begin; cleaned at session end.
-- Exposed to the workflow as `GENERACY_SCRATCH_DIR` env var.
-
 Default allowlists:
-- For DinD upstreams, default-deny everything except role-declared verbs (no bind-mount restrictions — in-container daemon is already isolated).
-- For host-socket upstreams, additionally deny `POST /containers/create` with bind mounts pointing outside `GENERACY_SCRATCH_DIR`; inspect both `HostConfig.Binds` and `HostConfig.Mounts` fields. Document this explicitly in the role-validation error message.
-
-Deliverables (all three):
-1. Upstream selection with fallback (`ENABLE_DIND` → `/var/run/docker.sock` → `/var/run/docker-host.sock` → fail per-session).
-2. Bind-mount restrictions on the host-socket path specifically.
-3. Integration tests against fake daemons covering both upstream paths.
+- For DinD upstreams, default-deny everything except role-declared verbs.
+- For host-socket upstreams, additionally deny `POST /containers/create` with bind mounts pointing outside a designated scratch volume; document this explicitly in the role-validation error message.
 
 ## Acceptance criteria
 
