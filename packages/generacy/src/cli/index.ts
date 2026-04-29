@@ -11,6 +11,7 @@ import { setupCommand } from './commands/setup.js';
 import { validateCommand } from './commands/validate.js';
 import { doctorCommand } from './commands/doctor.js';
 import { initCommand } from './commands/init/index.js';
+import { launchCommand } from './commands/launch/index.js';
 import { upCommand } from './commands/up/index.js';
 import { stopCommand } from './commands/stop/index.js';
 import { downCommand } from './commands/down/index.js';
@@ -56,6 +57,7 @@ export function createProgram(): Command {
   program.addCommand(validateCommand());
   program.addCommand(doctorCommand());
   program.addCommand(initCommand());
+  program.addCommand(launchCommand());
   program.addCommand(upCommand());
   program.addCommand(stopCommand());
   program.addCommand(downCommand());

@@ -7,7 +7,6 @@ interface PlaceholderDef {
 }
 
 const PLACEHOLDERS: PlaceholderDef[] = [
-  { name: 'launch',       description: 'Launch a new cluster',               phase: 'phase 5' },
   { name: 'open',         description: 'Open cluster dashboard in browser',  phase: 'phase 6' },
   { name: 'claude-login', description: 'Authenticate with Claude',           phase: 'phase 6' },
   { name: 'deploy',       description: 'Deploy to production',               phase: 'phase 10' },
