@@ -10,7 +10,7 @@
 - B: Integrate into existing changeset pipeline (match prevailing convention)
 - C: Both — changeset for preview, tag-triggered for stable releases
 
-**Answer**: *Pending*
+**Answer**: B — Integrate into the existing changeset-based pipeline. Cross-cutting decision: all four Phase 5 CLI issues should add commands to the existing CLI at `packages/generacy/src/cli/` rather than create a new `packages/cli/` package. The publish flow uses whatever already publishes that package — changesets via `publish-preview.yml`. No `cli-v*` tag-triggered workflow is needed; CLI versioning aligns with the rest of the generacy packages. The issue's FR-008 `cli-v*` tag requirement should be dropped.
 
 ### Q2: Placeholder subcommand behavior
 **Context**: FR-002 says Commander.js dispatches 11 "placeholder" subcommands, but doesn't specify what happens at runtime when a user invokes one (e.g., `generacy launch`). This affects UX and whether tests should assert specific output.
@@ -20,7 +20,7 @@
 - B: Print "Not yet implemented" and exit 1 (non-zero signals failure)
 - C: Print nothing, exit 0 (truly empty)
 
-**Answer**: *Pending*
+**Answer**: A — Print a friendly "Not yet implemented in this preview — landing in a future v1.5 phase issue" message and exit 0. Better interactive UX than silent or erroring. The placeholder is intentional, not a bug; exit 0 reflects that. Each placeholder can mention which v1.5 phase it lands in (e.g., `launch` → phase 5, `deploy` → phase 10).
 
 ### Q3: findClusterByCwd() matching strategy
 **Context**: The spec requires `findClusterByCwd()` to "resolve the correct cluster for a given path" but doesn't specify the matching algorithm. When a cluster is registered with `path: "/home/user/project"`, should running a command from `/home/user/project/src/` also match? What if multiple cluster paths are prefixes of the cwd?
@@ -30,4 +30,4 @@
 - B: Exact match only
 - C: Longest-prefix-match with a warning if multiple clusters share a prefix
 
-**Answer**: *Pending*
+**Answer**: A — Longest-prefix-match. Standard convention (matches git's `.git` discovery). Running `generacy stop` from any subdirectory of a registered cluster's path resolves to that cluster. If multiple registered clusters could match, return the deepest (most specific) match.
