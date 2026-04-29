@@ -280,13 +280,9 @@ describe('Integration: Core Plugins', () => {
         expect(exposureData.headers.Authorization).toContain('Bearer sk-test-key-123');
       }
 
+      // renderPluginExposure for localhost-proxy is a no-op — the real proxy
+      // is wired by SessionManager. Verify plugin exposure data is correct.
       await renderer.renderPluginExposure(sessionDir, dataSocketPath, 'api-key', exposureData);
-
-      const proxyConfig = JSON.parse(
-        await fs.readFile(path.join(sessionDir, 'proxy', 'config.json'), 'utf-8'),
-      );
-      expect(proxyConfig.upstream).toBe('https://api.example.com');
-      expect(proxyConfig.headers.Authorization).toContain('Bearer sk-test-key-123');
     });
   });
 });

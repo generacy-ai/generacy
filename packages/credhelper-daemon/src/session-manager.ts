@@ -7,6 +7,7 @@ import type {
   CredentialCacheEntry,
   DaemonConfig,
   DockerProxyHandle,
+  LocalhostProxyHandle,
   UpstreamDockerSocket,
 } from './types.js';
 import type { BackendClientFactory } from './backends/types.js';
@@ -59,10 +60,28 @@ export class SessionManager {
       });
     }
 
+    // Validate proxy config: any credential with localhost-proxy exposure
+    // must have a matching proxy:<ref> entry in the role config.
+    for (const credRef of roleConfig.credentials) {
+      for (const expose of credRef.expose) {
+        if (expose.as === 'localhost-proxy') {
+          if (!roleConfig.proxy?.[credRef.ref]) {
+            throw new CredhelperError(
+              'PROXY_CONFIG_MISSING',
+              `Role ${role} uses localhost-proxy exposure for credential ${credRef.ref} but has no proxy.${credRef.ref} config`,
+              { roleId: role, credentialRef: credRef.ref },
+            );
+          }
+        }
+      }
+    }
+
     const sessionDir = path.join(this.config.sessionsDir, sessionId);
     const dataSocketPath = path.join(sessionDir, 'data.sock');
     const credentialIds: string[] = [];
     let dockerProxy: DockerProxyHandle | undefined;
+    const localhostProxies: LocalhostProxyHandle[] = [];
+    const envEntries: Array<{ key: string; value: string }> = [];
 
     // Create session directory
     await this.renderer.renderSessionDir(sessionDir);
@@ -191,6 +210,36 @@ export class SessionManager {
           );
         }
 
+        // localhost-proxy: create a real reverse proxy with allowlist enforcement
+        if (expose.as === 'localhost-proxy') {
+          const proxyConfig = roleConfig.proxy![credRef.ref]!;
+          const port = expose.port ?? 0;
+
+          // Get plugin's exposure data for auth headers
+          const exposureCfg = { kind: 'localhost-proxy' as const, port };
+          const exposureData = plugin.renderExposure(expose.as, credValue, exposureCfg);
+
+          if (exposureData.kind !== 'localhost-proxy') {
+            throw new CredhelperError(
+              'INTERNAL_ERROR',
+              `Plugin returned unexpected exposure kind: ${exposureData.kind}`,
+            );
+          }
+
+          const handle = await this.renderer.renderLocalhostProxy(
+            sessionDir,
+            { upstream: exposureData.upstream, headers: exposureData.headers },
+            proxyConfig.allow,
+            port,
+          );
+          localhostProxies.push(handle);
+
+          // Write env var for proxy URL
+          const envName = (expose as { envName?: string }).envName ?? `${credRef.ref.toUpperCase().replace(/-/g, '_')}_PROXY_URL`;
+          envEntries.push({ key: envName, value: `http://127.0.0.1:${port}` });
+          continue;
+        }
+
         // docker-socket-proxy is not plugin-rendered: it's infrastructure
         // owned by the daemon and shared across credentials in a session.
         if (expose.as === 'docker-socket-proxy') {
@@ -220,12 +269,11 @@ export class SessionManager {
           continue;
         }
 
-        // Build ExposureConfig for this kind
+        // Build ExposureConfig for this kind (localhost-proxy and docker-socket-proxy
+        // are handled above with continue, so only env/git/gcloud reach here)
         const exposureCfg = expose.as === 'env'
           ? { kind: 'env' as const, name: expose.name ?? credRef.ref.toUpperCase().replace(/-/g, '_') }
-          : expose.as === 'localhost-proxy'
-            ? { kind: 'localhost-proxy' as const, port: expose.port ?? 0 }
-            : { kind: expose.as } as import('@generacy-ai/credhelper').ExposureConfig;
+          : { kind: expose.as } as import('@generacy-ai/credhelper').ExposureConfig;
 
         // Plugin renders credential-specific data
         const exposureData = plugin.renderExposure(expose.as, credValue, exposureCfg);
@@ -238,9 +286,12 @@ export class SessionManager {
     // Add DOCKER_HOST env var if docker proxy was started
     if (dockerProxy) {
       const dockerSocketPath = path.join(sessionDir, 'docker.sock');
-      await this.renderer.renderEnv(sessionDir, [
-        { key: 'DOCKER_HOST', value: `unix://${dockerSocketPath}` },
-      ]);
+      envEntries.push({ key: 'DOCKER_HOST', value: `unix://${dockerSocketPath}` });
+    }
+
+    // Write all collected env vars
+    if (envEntries.length > 0) {
+      await this.renderer.renderEnv(sessionDir, envEntries);
     }
 
     // Start data server for this session
@@ -261,6 +312,7 @@ export class SessionManager {
       dataSocketPath,
       credentialIds,
       dockerProxy,
+      localhostProxies: localhostProxies.length > 0 ? localhostProxies : undefined,
     };
     this.sessions.set(sessionId, session);
 
@@ -275,6 +327,13 @@ export class SessionManager {
         `Session not found: ${sessionId}`,
         { sessionId },
       );
+    }
+
+    // Stop localhost proxies if active
+    if (session.localhostProxies) {
+      for (const proxy of session.localhostProxies) {
+        await proxy.stop();
+      }
     }
 
     // Stop docker proxy if active

@@ -128,7 +128,7 @@ describe('ExposureRenderer', () => {
   });
 
   describe('renderLocalhostProxy()', () => {
-    it('writes proxy config JSON with upstream and headers', async () => {
+    it('writes proxy config JSON and starts proxy on specified port', async () => {
       const proxySessionDir = path.join(tmpDir, 'session-proxy');
       await renderer.renderSessionDir(proxySessionDir);
 
@@ -136,15 +136,22 @@ describe('ExposureRenderer', () => {
         upstream: 'https://api.example.com',
         headers: { Authorization: 'Bearer sk-test-123' },
       };
-      await renderer.renderLocalhostProxy(proxySessionDir, data);
+      const allowlist = [{ method: 'POST', path: '/v3/mail/send' }];
+      const port = 19876;
 
-      const raw = await fs.readFile(
-        path.join(proxySessionDir, 'proxy', 'config.json'),
-        'utf-8',
-      );
-      const config = JSON.parse(raw);
-      expect(config.upstream).toBe('https://api.example.com');
-      expect(config.headers.Authorization).toBe('Bearer sk-test-123');
+      const handle = await renderer.renderLocalhostProxy(proxySessionDir, data, allowlist, port);
+      try {
+        const raw = await fs.readFile(
+          path.join(proxySessionDir, 'proxy', 'config.json'),
+          'utf-8',
+        );
+        const config = JSON.parse(raw);
+        expect(config.upstream).toBe('https://api.example.com');
+        expect(config.port).toBe(port);
+        expect(config.allowlist).toEqual(allowlist);
+      } finally {
+        await handle.stop();
+      }
     });
   });
 

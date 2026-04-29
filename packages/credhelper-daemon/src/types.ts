@@ -100,6 +100,11 @@ export interface DockerProxyHandle {
   stop(): Promise<void>;
 }
 
+/** Interface for the LocalhostProxy lifecycle object stored in session state. */
+export interface LocalhostProxyHandle {
+  stop(): Promise<void>;
+}
+
 /** Tracks an active credential session. */
 export interface SessionState {
   sessionId: string;
@@ -112,6 +117,8 @@ export interface SessionState {
   credentialIds: string[];
   /** Docker socket proxy, if the role uses docker-socket-proxy exposure */
   dockerProxy?: DockerProxyHandle;
+  /** Localhost proxy handles, if the role uses localhost-proxy exposure */
+  localhostProxies?: LocalhostProxyHandle[];
 }
 
 /** In-memory credential storage entry. */

@@ -10,21 +10,21 @@
 
 ## Phase 1: Types, Schemas & Error Codes
 
-- [ ] T001 [P] [US1] Add `PROXY_PORT_COLLISION`, `PROXY_CONFIG_MISSING`, `PROXY_ACCESS_DENIED` error codes and HTTP status mappings in `packages/credhelper-daemon/src/errors.ts`
-- [ ] T002 [P] [US2] Add `LocalhostProxyHandle` interface and `localhostProxies?: LocalhostProxyHandle[]` to `SessionState` in `packages/credhelper-daemon/src/types.ts`
-- [ ] T003 [P] [US1] Add `envName: z.string().optional()` to `RoleExposeSchema` in `packages/credhelper/src/schemas/roles.ts`
+- [X] T001 [P] [US1] Add `PROXY_PORT_COLLISION`, `PROXY_CONFIG_MISSING`, `PROXY_ACCESS_DENIED` error codes and HTTP status mappings in `packages/credhelper-daemon/src/errors.ts`
+- [X] T002 [P] [US2] Add `LocalhostProxyHandle` interface and `localhostProxies?: LocalhostProxyHandle[]` to `SessionState` in `packages/credhelper-daemon/src/types.ts`
+- [X] T003 [P] [US1] Add `envName: z.string().optional()` to `RoleExposeSchema` in `packages/credhelper/src/schemas/roles.ts`
 
 ## Phase 2: Core Proxy Implementation
 
-- [ ] T010 [US1] Create `LocalhostProxy` class in `packages/credhelper-daemon/src/exposure/localhost-proxy.ts` — constructor accepts `LocalhostProxyConfig`, `start()` binds `127.0.0.1:<port>` (fail on EADDRINUSE with `PROXY_PORT_COLLISION`), `stop()` closes server
-- [ ] T011 [US1] Implement `matchAllowlist(method, path, rules)` pure function in `packages/credhelper-daemon/src/exposure/localhost-proxy.ts` — method exact-match (case-insensitive uppercase), segment-based path matching with `{param}` placeholders, query string stripping, trailing slash significance, case-sensitive paths
-- [ ] T012 [US1] Implement request handler in `LocalhostProxy` — on match: forward to upstream with auth headers injected via `node:http`/`node:https`, pipe request body and response; on no-match: 403 JSON `{ error, code: 'PROXY_ACCESS_DENIED', details: { method, path } }`
+- [X] T010 [US1] Create `LocalhostProxy` class in `packages/credhelper-daemon/src/exposure/localhost-proxy.ts` — constructor accepts `LocalhostProxyConfig`, `start()` binds `127.0.0.1:<port>` (fail on EADDRINUSE with `PROXY_PORT_COLLISION`), `stop()` closes server
+- [X] T011 [US1] Implement `matchAllowlist(method, path, rules)` pure function in `packages/credhelper-daemon/src/exposure/localhost-proxy.ts` — method exact-match (case-insensitive uppercase), segment-based path matching with `{param}` placeholders, query string stripping, trailing slash significance, case-sensitive paths
+- [X] T012 [US1] Implement request handler in `LocalhostProxy` — on match: forward to upstream with auth headers injected via `node:http`/`node:https`, pipe request body and response; on no-match: 403 JSON `{ error, code: 'PROXY_ACCESS_DENIED', details: { method, path } }`
 
 ## Phase 3: Wiring (ExposureRenderer + SessionManager)
 
-- [ ] T020 [US1] Modify `renderLocalhostProxy` in `packages/credhelper-daemon/src/exposure-renderer.ts` — accept proxy config (allowlist rules, port, upstream, auth headers), create `LocalhostProxy` instance, call `.start()`, return `LocalhostProxyHandle`; write env var for proxy URL
-- [ ] T021 [US2] Modify `beginSession()` in `packages/credhelper-daemon/src/session-manager.ts` — validate `proxy:<credRef.ref>` exists for each `localhost-proxy` exposure (fail with `PROXY_CONFIG_MISSING` naming missing key); pass proxy config to renderer; collect `LocalhostProxyHandle` into `SessionState.localhostProxies`; write session env var (`envName` or `<REF_UPPER>_PROXY_URL` fallback)
-- [ ] T022 [US2] Modify `endSession()` in `packages/credhelper-daemon/src/session-manager.ts` — stop all localhost proxy handles before data server close
+- [X] T020 [US1] Modify `renderLocalhostProxy` in `packages/credhelper-daemon/src/exposure-renderer.ts` — accept proxy config (allowlist rules, port, upstream, auth headers), create `LocalhostProxy` instance, call `.start()`, return `LocalhostProxyHandle`; write env var for proxy URL
+- [X] T021 [US2] Modify `beginSession()` in `packages/credhelper-daemon/src/session-manager.ts` — validate `proxy:<credRef.ref>` exists for each `localhost-proxy` exposure (fail with `PROXY_CONFIG_MISSING` naming missing key); pass proxy config to renderer; collect `LocalhostProxyHandle` into `SessionState.localhostProxies`; write session env var (`envName` or `<REF_UPPER>_PROXY_URL` fallback)
+- [X] T022 [US2] Modify `endSession()` in `packages/credhelper-daemon/src/session-manager.ts` — stop all localhost proxy handles before data server close
 
 ## Phase 4: Unit Tests
 
