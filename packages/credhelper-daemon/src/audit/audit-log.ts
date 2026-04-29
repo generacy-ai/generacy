@@ -90,7 +90,11 @@ export class AuditLog {
   async flush(): Promise<void> {
     // Prevent concurrent flushes
     if (this.pendingFlush) {
-      await this.pendingFlush;
+      try {
+        await this.pendingFlush;
+      } catch {
+        // Already handled by the original caller
+      }
       return;
     }
 

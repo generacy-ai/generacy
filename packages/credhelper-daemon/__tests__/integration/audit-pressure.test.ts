@@ -17,7 +17,7 @@ describe('Audit pressure test', () => {
     const config: AuditConfig = {
       capacity,
       flushIntervalMs: 60000, // no timer-based flush
-      maxBatchSize: 50,
+      maxBatchSize: capacity + 1, // larger than capacity so early flush never triggers
       controlPlaneSocketPath: '/tmp/nonexistent.sock',
       clusterId: 'pressure-test-cluster',
       workerId: 'pressure-test-worker',
@@ -26,7 +26,7 @@ describe('Audit pressure test', () => {
     const log = new AuditLog(config);
     const totalRecords = 10000;
 
-    // Record 10000 entries rapidly
+    // Record 10000 entries rapidly — no early flush since maxBatchSize > capacity
     for (let i = 0; i < totalRecords; i++) {
       log.record({
         action: 'credential.mint',
@@ -40,30 +40,22 @@ describe('Audit pressure test', () => {
 
     // Buffer should be bounded by capacity
     expect(log.size).toBeLessThanOrEqual(capacity);
-
-    // Early flushes should have been triggered (10000/50 = 200 potential flushes)
-    // Due to async flush behavior, at least some should have fired
-    expect(mockFlush.mock.calls.length).toBeGreaterThan(0);
+    expect(log.size).toBe(capacity);
 
     // Drain remaining
     await log.flush();
 
-    // Verify that dropped entries were reported in at least one batch
-    const allBatches = mockFlush.mock.calls.map((c) => c[0]!);
-    const totalDropped = allBatches.reduce(
-      (sum, b) => sum + b.droppedSinceLastBatch,
-      0,
-    );
+    expect(mockFlush).toHaveBeenCalledTimes(1);
 
-    // With 10000 records into capacity 5000, we must have drops
-    expect(totalDropped).toBeGreaterThan(0);
+    // Verify that dropped entries were reported
+    const batch = mockFlush.mock.calls[0]![0]!;
+    const totalDropped = batch.droppedSinceLastBatch;
 
-    // Total entries flushed + dropped should account for all records
-    const totalFlushed = allBatches.reduce(
-      (sum, b) => sum + b.entries.length,
-      0,
-    );
-    expect(totalFlushed + totalDropped).toBeLessThanOrEqual(totalRecords);
+    // With 10000 records into capacity 5000, we must have 5000 drops
+    expect(totalDropped).toBe(totalRecords - capacity);
+
+    // Flushed entries + dropped = total records
+    expect(batch.entries.length + totalDropped).toBe(totalRecords);
 
     await log.stop();
   });
