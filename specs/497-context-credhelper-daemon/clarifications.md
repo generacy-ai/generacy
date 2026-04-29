@@ -11,7 +11,7 @@
 - C: Daemon-level env var (e.g., `GENERACY_SCRATCH_VOLUME`)
 - D: Derived from session directory (e.g., `$GENERACY_SESSION_DIR/scratch`)
 
-**Answer**: *Pending*
+**Answer**: D-modified — Per-session scratch directory at `/var/lib/generacy/scratch/<session-id>/` (real disk path, mode 0700 owned by workflow uid 1001). Created at session begin; cleaned at session end. Bind mounts in `POST /containers/create` must point under this path or are rejected. Exposed to the workflow as `GENERACY_SCRATCH_DIR` env var so commands like `docker run -v $GENERACY_SCRATCH_DIR:/data ...` work naturally. Real disk (not tmpfs) so containers can persist across in-session restarts; per-session isolation by default.
 
 ### Q2: Fail-Closed Scope
 **Context**: FR-004 says "fail closed if no upstream socket is available" with "clear error at credhelper boot." However, many roles don't use Docker at all. If the daemon refuses to start when no Docker socket is present, it would block all credential operations even for non-Docker roles.
@@ -21,7 +21,7 @@
 - B: Fail per-session — daemon starts normally, but `beginSession()` fails for roles with `docker:` blocks when no upstream socket is available
 - C: Warn at boot, fail per-session — log a warning at startup if no socket found, then fail closed only when Docker is actually requested
 
-**Answer**: *Pending*
+**Answer**: C — Warn at boot, fail per-session. At daemon boot, log a clear warning if no Docker socket is detected. At `beginSession()`, if the role has a `docker:` block, verify upstream socket reachability and fail closed with a clear error if absent. Non-Docker roles continue to work unaffected.
 
 ### Q3: Existing Code Delta
 **Context**: The codebase already contains `ExposureRenderer.renderDockerSocketProxy()`, SessionManager handling of `docker-socket-proxy` exposures, and `DOCKER_HOST` in the credentials interceptor's `buildSessionEnv()`. The spec describes functionality that appears largely implemented.
@@ -32,7 +32,7 @@
 - C: Primarily a test/verification ticket — confirm existing wiring works end-to-end
 - D: Refactor to move upstream selection out of SessionManager into ExposureRenderer
 
-**Answer**: *Pending*
+**Answer**: A — Upstream selection fallback + bind-mount restrictions + tests (all three). The DockerProxy class exists but the integration into `ExposureRenderer.renderDockerSocketProxy()` is partial. This issue completes (1) upstream selection with fallback (`ENABLE_DIND` → `/var/run/docker.sock` → `/var/run/docker-host.sock` → fail per-session); (2) bind-mount restrictions on the host-socket path specifically (DinD doesn't need them — the in-container daemon is already isolated); (3) integration tests against fake daemons covering both upstream paths.
 
 ### Q4: Bind Mount Inspection Depth
 **Context**: FR-008 targets `POST /containers/create` for bind-mount validation. However, the Docker API also accepts host config in `POST /containers/{id}/start` (deprecated but functional) and bind mounts can appear in multiple JSON fields (`HostConfig.Binds`, `HostConfig.Mounts`, `Volumes`).
@@ -42,7 +42,7 @@
 - B: Both `/containers/create` and `/containers/{id}/start`, inspecting `Binds` and `Mounts`
 - C: Only `POST /containers/create`, inspecting `HostConfig.Binds` only (simpler, covers primary path)
 
-**Answer**: *Pending*
+**Answer**: A — Only `POST /containers/create`, inspecting both `HostConfig.Binds` and `HostConfig.Mounts`. Modern Docker clients use `POST /containers/create` for mounts. The deprecated `/containers/{id}/start` host config path is rarely seen in contemporary tooling. Both `Binds` and `Mounts` fields are inspected since clients use whichever based on API version.
 
 ### Q5: ENABLE_DIND Default Behavior
 **Context**: The upstream selection logic checks `ENABLE_DIND=true` first. If `ENABLE_DIND` is unset or empty, it's unclear whether the daemon should skip DinD detection entirely (treating unset as `false`) or try both sockets in order.
@@ -52,4 +52,4 @@
 - B: Probe both sockets in order regardless of `ENABLE_DIND` — env var only controls preference priority
 - C: Unset = error — require `ENABLE_DIND` to be explicitly set when a role uses Docker
 
-**Answer**: *Pending*
+**Answer**: A — Unset = `false`; skip DinD, try only `/var/run/docker-host.sock`. Matches the cluster-base variant's default (non-DinD). When `ENABLE_DIND=true`, prefer the in-container DinD socket; otherwise go straight to the host socket.
