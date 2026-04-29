@@ -11,6 +11,12 @@ import { setupCommand } from './commands/setup.js';
 import { validateCommand } from './commands/validate.js';
 import { doctorCommand } from './commands/doctor.js';
 import { initCommand } from './commands/init/index.js';
+import { upCommand } from './commands/up/index.js';
+import { stopCommand } from './commands/stop/index.js';
+import { downCommand } from './commands/down/index.js';
+import { destroyCommand } from './commands/destroy/index.js';
+import { statusCommand } from './commands/status/index.js';
+import { updateCommand } from './commands/update/index.js';
 import { createLogger, setLogger } from './utils/logger.js';
 import type { LogLevel } from './utils/logger.js';
 import { setupErrorHandlers } from './utils/error-handler.js';
@@ -50,6 +56,12 @@ export function createProgram(): Command {
   program.addCommand(validateCommand());
   program.addCommand(doctorCommand());
   program.addCommand(initCommand());
+  program.addCommand(upCommand());
+  program.addCommand(stopCommand());
+  program.addCommand(downCommand());
+  program.addCommand(destroyCommand());
+  program.addCommand(statusCommand());
+  program.addCommand(updateCommand());
 
   // Register v1.5 placeholder subcommands
   for (const cmd of placeholderCommands()) {

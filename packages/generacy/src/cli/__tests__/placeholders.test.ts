@@ -12,22 +12,16 @@ describe('placeholderCommands', () => {
     vi.restoreAllMocks();
   });
 
-  it('should return 11 commands', () => {
+  it('should return 5 commands', () => {
     const commands = placeholderCommands();
-    expect(commands).toHaveLength(11);
+    expect(commands).toHaveLength(5);
   });
 
-  it('should have correct names for all 11 commands', () => {
+  it('should have correct names for all commands', () => {
     const commands = placeholderCommands();
     const names = commands.map((cmd) => cmd.name());
     expect(names).toEqual([
       'launch',
-      'up',
-      'stop',
-      'down',
-      'destroy',
-      'status',
-      'update',
       'open',
       'claude-login',
       'deploy',

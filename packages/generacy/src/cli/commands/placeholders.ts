@@ -8,12 +8,6 @@ interface PlaceholderDef {
 
 const PLACEHOLDERS: PlaceholderDef[] = [
   { name: 'launch',       description: 'Launch a new cluster',               phase: 'phase 5' },
-  { name: 'up',           description: 'Start a stopped cluster',            phase: 'phase 5' },
-  { name: 'stop',         description: 'Stop a running cluster',             phase: 'phase 5' },
-  { name: 'down',         description: 'Stop and remove cluster containers', phase: 'phase 5' },
-  { name: 'destroy',      description: 'Permanently destroy a cluster',      phase: 'phase 5' },
-  { name: 'status',       description: 'Show cluster status',                phase: 'phase 5' },
-  { name: 'update',       description: 'Update cluster to latest version',   phase: 'phase 7' },
   { name: 'open',         description: 'Open cluster dashboard in browser',  phase: 'phase 6' },
   { name: 'claude-login', description: 'Authenticate with Claude',           phase: 'phase 6' },
   { name: 'deploy',       description: 'Deploy to production',               phase: 'phase 10' },
