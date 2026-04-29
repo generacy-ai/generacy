@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { LaunchConfig } from '../types.js';
@@ -29,7 +29,6 @@ describe('resolveProjectDir', () => {
     const original = process.env.HOME;
     // Mock os.homedir() indirectly by checking the result shape.
     const result = resolveProjectDir('my-project');
-    const { homedir } = require('node:os');
     expect(result).toBe(join(homedir(), 'Generacy', 'my-project'));
     process.env.HOME = original;
   });
