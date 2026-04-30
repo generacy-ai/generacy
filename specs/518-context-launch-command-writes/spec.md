@@ -1,0 +1,84 @@
+# Feature Specification: Reconcile launch CLI schemas with lifecycle commands
+
+**Branch**: `518-context-launch-command-writes` | **Date**: 2026-04-30 | **Status**: Draft
+
+## Summary
+
+The `launch` command writes `cluster.json` and `~/.generacy/clusters.json` using schemas that are incompatible with the lifecycle commands (`up`, `stop`, `down`, etc.). The launch command uses camelCase keys and omits required fields; lifecycle commands expect snake_case keys with `org_id` and `activated_at`. This makes `generacy up` fail immediately after `npx generacy launch` with a Zod validation error ("Cluster configuration is corrupted"), completely breaking the local onboarding flow. Additionally, the Node version check in launch allows Node 20, contradicting the Node >= 22 requirement in `package.json`.
+
+## Affected Files
+
+- `packages/generacy/src/cli/commands/launch/scaffolder.ts:72-86` — writes camelCase fields; missing `org_id`, `activated_at`.
+- `packages/generacy/src/cli/commands/cluster/context.ts:17-23` — reads snake_case fields; expects `cluster_id`, `project_id`, `org_id`, `cloud_url`, `activated_at`.
+- `packages/generacy/src/cli/commands/launch/types.ts:18-30` — `LaunchConfigSchema` lacks `orgId`.
+- `packages/generacy/src/cli/commands/launch/registry.ts` — writes unvalidated plain object.
+- `packages/generacy/src/cli/commands/cluster/registry.ts` — reads via Zod with strict enums.
+- `packages/generacy/src/cli/commands/launch/index.ts:48` — Node version check says `>= 20`.
+
+## User Stories
+
+### US1: Developer launches and manages a cluster without errors
+
+**As a** developer using Generacy for the first time,
+**I want** `npx generacy launch --claim=<code>` followed by `generacy up` to work without errors,
+**So that** I can onboard smoothly without debugging schema mismatches.
+
+**Acceptance Criteria**:
+- [ ] `cluster.json` written by launch uses snake_case keys matching the lifecycle reader schema
+- [ ] `generacy up` succeeds immediately after `generacy launch` completes
+- [ ] `generacy status` lists the newly launched cluster
+
+### US2: Developer gets clear Node version enforcement
+
+**As a** developer running Node 20,
+**I want** `generacy launch` to refuse with a clear error saying Node 22+ is required,
+**So that** I don't get cryptic runtime failures from unsupported Node features.
+
+**Acceptance Criteria**:
+- [ ] Launch exits with a user-friendly error on Node < 22
+- [ ] Error message includes a link to Node 22+ install instructions
+
+### US3: Registry stays consistent across entry points
+
+**As a** developer who has launched multiple clusters,
+**I want** the `~/.generacy/clusters.json` registry to be consistent whether written by `launch` or `init`,
+**So that** `generacy status` always shows accurate information.
+
+**Acceptance Criteria**:
+- [ ] Registry entries written by launch validate against the shared registry schema
+- [ ] `variant` and `channel` use strict enum values
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Standardize `cluster.json` on snake_case (`cluster_id`, `project_id`, `org_id`, `cloud_url`, `activated_at`) | P0 | Matches orchestrator's `/var/lib/generacy/cluster.json` |
+| FR-002 | Add `orgId` to `LaunchConfigSchema` (Zod); verify cloud endpoint returns it | P0 | Cross-ref companion cloud issue |
+| FR-003 | Update `launch/scaffolder.ts` to write snake_case keys with all required fields | P0 | Remove unused `projectName`, `imageTag` from persisted file |
+| FR-004 | Define registry schema once in `cluster/registry.ts`; import in `launch/registry.ts` | P1 | Strict enums for `variant` and `channel` |
+| FR-005 | Fix Node version check in `launch/index.ts` from `>= 20` to `>= 22` | P1 | Match `package.json` engines field |
+| FR-006 | Add integration test for launch -> up -> stop flow | P2 | Fixture-based, no real Docker required |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Launch-to-up flow succeeds | 100% (no Zod errors) | Manual and integration test |
+| SC-002 | Schema consistency | Single source of truth for cluster.json and registry schemas | Code review: no duplicate schema definitions |
+| SC-003 | Node gate correctness | Rejects Node 20, accepts Node 22+ | Unit test with mocked version |
+
+## Assumptions
+
+- The cloud-side `/api/clusters/launch-config` endpoint will be updated to return `orgId` (companion cloud issue).
+- The orchestrator's `/var/lib/generacy/cluster.json` is the canonical snake_case schema to align with.
+- No other consumers of the launch-written `cluster.json` depend on the current camelCase format.
+
+## Out of Scope
+
+- Convergence of `launch` and `init` commands into a single flow (deferred per #495).
+- Changes to the cloud API endpoint itself (separate cloud-side issue).
+- Migration tooling for existing `cluster.json` files written in camelCase.
+
+---
+
+*Generated by speckit*
