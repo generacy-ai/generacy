@@ -42,6 +42,7 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
       clusterId: metadata?.cluster_id ?? 'unknown',
       projectId: metadata?.project_id ?? 'unknown',
       orgId: metadata?.org_id ?? 'unknown',
+      cloudUrl: metadata?.cloud_url,
     };
   }
 
@@ -80,7 +81,7 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
         cluster_id: pollResult.cluster_id,
         project_id: pollResult.project_id,
         org_id: pollResult.org_id,
-        cloud_url: cloudUrl,
+        cloud_url: pollResult.cloud_url,
         activated_at: new Date().toISOString(),
       });
 
@@ -92,6 +93,7 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
         clusterId: pollResult.cluster_id,
         projectId: pollResult.project_id,
         orgId: pollResult.org_id,
+        cloudUrl: pollResult.cloud_url,
       };
     }
 

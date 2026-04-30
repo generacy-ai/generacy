@@ -22,6 +22,7 @@ export const PollResponseSchema = z.discriminatedUnion('status', [
     cluster_id: z.string().min(1),
     project_id: z.string().min(1),
     org_id: z.string().min(1),
+    cloud_url: z.string().url(),
   }),
 ]);
 export type PollResponse = z.infer<typeof PollResponseSchema>;
@@ -34,6 +35,7 @@ export interface ActivationResult {
   clusterId: string;
   projectId: string;
   orgId: string;
+  cloudUrl?: string;
 }
 
 // --- Configuration ---

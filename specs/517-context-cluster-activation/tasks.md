@@ -10,26 +10,26 @@
 
 ## Phase 1: Schema & Type Fix (activation-client)
 
-- [ ] T001 [P] [US1] Add `cloud_url: z.string().url()` to `PollResponseSchema` approved variant in `packages/activation-client/src/types.ts`
-- [ ] T002 [P] [US1] Add optional `cloudUrl?: string` to `ActivationResult` interface in `packages/activation-client/src/types.ts`
-- [ ] T003 [P] [US1] Add unit test: `PollResponseSchema` accepts approved response with `cloud_url` in `packages/activation-client/test/types.test.ts`
+- [X] T001 [P] [US1] Add `cloud_url: z.string().url()` to `PollResponseSchema` approved variant in `packages/activation-client/src/types.ts`
+- [X] T002 [P] [US1] Add optional `cloudUrl?: string` to `ActivationResult` interface in `packages/activation-client/src/types.ts`
+- [X] T003 [P] [US1] Add unit test: `PollResponseSchema` accepts approved response with `cloud_url` in `packages/activation-client/test/types.test.ts`
 
 ## Phase 2: Persistence & Propagation (orchestrator activation)
 
-- [ ] T004 [US1] Update `activate()` device-flow path to persist `pollResult.cloud_url` (not input config) to `cluster.json` and return `cloudUrl` in result — `packages/orchestrator/src/activation/index.ts`
-- [ ] T005 [US1] Update `activate()` existing-key path to return `cloudUrl` from `metadata.cloud_url` — `packages/orchestrator/src/activation/index.ts`
-- [ ] T006 [P] [US1] Add unit test: `activate()` returns `cloudUrl` from device-flow path — `packages/orchestrator/test/activation/index.test.ts`
-- [ ] T007 [P] [US1] Add unit test: `activate()` returns `cloudUrl` from existing-key path — `packages/orchestrator/test/activation/index.test.ts`
+- [X] T004 [US1] Update `activate()` device-flow path to persist `pollResult.cloud_url` (not input config) to `cluster.json` and return `cloudUrl` in result — `packages/orchestrator/src/activation/index.ts`
+- [X] T005 [US1] Update `activate()` existing-key path to return `cloudUrl` from `metadata.cloud_url` — `packages/orchestrator/src/activation/index.ts`
+- [X] T006 [P] [US1] Add unit test: `activate()` returns `cloudUrl` from device-flow path — `packages/orchestrator/test/activation/index.test.ts`
+- [X] T007 [P] [US1] Add unit test: `activate()` returns `cloudUrl` from existing-key path — `packages/orchestrator/test/activation/index.test.ts`
 
 ## Phase 3: Boot-Time Override (orchestrator server.ts)
 
-- [ ] T008 [US1] Update `server.ts` boot sequence to read `cloudUrl` from activation result and override `config.activation.cloudUrl` (HTTPS) and `config.relay.cloudUrl` (derived WSS) — `packages/orchestrator/src/server.ts:307-315`
-- [ ] T009 [US1] Add integration test: boot sequence correctly overrides relay URL from activation result — `packages/orchestrator/test/server.test.ts`
+- [X] T008 [US1] Update `server.ts` boot sequence to read `cloudUrl` from activation result and override `config.activation.cloudUrl` (HTTPS) and `config.relay.cloudUrl` (derived WSS) — `packages/orchestrator/src/server.ts:307-315`
+- [X] T009 [US1] Add integration test: boot sequence correctly overrides relay URL from activation result — `packages/orchestrator/test/server.test.ts`
 
 ## Phase 4: Verification
 
-- [ ] T010 Build `activation-client` and `orchestrator` packages, verify no type errors
-- [ ] T011 Run full test suite for both packages
+- [X] T010 Build `activation-client` and `orchestrator` packages, verify no type errors
+- [X] T011 Run full test suite for both packages
 
 ## Dependencies & Execution Order
 

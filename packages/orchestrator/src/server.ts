@@ -312,6 +312,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       });
       config.relay.apiKey = activationResult.apiKey;
       config.relay.clusterApiKeyId = activationResult.clusterApiKeyId;
+      if (activationResult.cloudUrl) {
+        config.activation.cloudUrl = activationResult.cloudUrl;
+        const relayUrl = activationResult.cloudUrl
+          .replace(/^https:/, 'wss:')
+          .replace(/^http:/, 'ws:')
+          .replace(/\/$/, '') + '/relay';
+        config.relay.cloudUrl = relayUrl;
+      }
       server.log.info('Cluster activation complete');
     } catch (error) {
       // Activation failure must not block orchestrator boot

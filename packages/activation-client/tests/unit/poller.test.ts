@@ -30,6 +30,7 @@ describe('pollForApproval', () => {
       cluster_id: 'cl-1',
       project_id: 'pj-1',
       org_id: 'org-1',
+      cloud_url: 'https://api.generacy.ai',
     };
     const client = mockHttpClientWithResponses([approved]);
 
@@ -57,6 +58,7 @@ describe('pollForApproval', () => {
         cluster_id: 'cl-2',
         project_id: 'pj-2',
         org_id: 'org-2',
+        cloud_url: 'https://api.generacy.ai',
       },
     ];
     const client = mockHttpClientWithResponses(responses);
