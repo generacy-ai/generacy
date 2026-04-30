@@ -15,6 +15,7 @@ export const RegistryEntrySchema = z.object({
   cloudUrl: z.string().nullable(),
   lastSeen: z.string().datetime(),
   createdAt: z.string().datetime(),
+  managementEndpoint: z.string().optional(),
 });
 
 export type RegistryEntry = z.infer<typeof RegistryEntrySchema>;

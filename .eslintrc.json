@@ -47,6 +47,7 @@
         "packages/generacy/src/cli/commands/launch/compose.ts",
         "packages/generacy/src/cli/utils/browser.ts",
         "packages/generacy/src/cli/utils/exec.ts",
+        "packages/generacy/src/cli/commands/deploy/ssh-client.ts",
         "packages/generacy/src/agency/subprocess.ts",
         "packages/generacy-extension/src/views/local/runner/actions/cli-utils.ts",
         "packages/generacy-extension/src/commands/env.ts",

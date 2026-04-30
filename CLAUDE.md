@@ -125,6 +125,29 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Credentials integration (#478, Phase 6): `createAgentLauncher()` wires `CredhelperHttpClient` when the control socket exists. `WorkerConfig.credentialRole` (from `.generacy/config.yaml` `defaults.role`) flows to all spawn sites (`CliSpawner`, `PrFeedbackHandler`, `ConversationSpawner`), which populate `LaunchRequest.credentials`. Fail-fast at startup if role is configured but daemon is unavailable. Generic launcher paths (`cli-utils.ts`, `subprocess.ts`) deferred to follow-up.
   - `src/exposure/localhost-proxy.ts` — NEW in #498 (v1.5 phase 9): `LocalhostProxy` class implementing `LocalhostProxyHandle`. HTTP reverse proxy on `127.0.0.1:<port>` with method+path allowlist from role's `proxy:` block. Injects auth headers from plugin `renderExposure` output. 403 JSON response for denied requests (`{ error, code: 'PROXY_ACCESS_DENIED', details }`). Follows `DockerProxy` lifecycle pattern (start/stop). Pure-function `matchAllowlist()` for path matching: literal segments + `{param}` placeholders, query strings stripped, trailing slashes significant, case-sensitive. Session env var written with proxy URL (`envName` field or `<REF_UPPER>_PROXY_URL` fallback). Session creation fails closed (`PROXY_CONFIG_MISSING`) if `proxy:<credRef.ref>` entry missing. Port collision detected at bind time (`PROXY_PORT_COLLISION`). Handles stored in `SessionState.localhostProxies: LocalhostProxyHandle[]`, cleaned up in `endSession()`.
 
+## Activation Client Package
+
+- `packages/activation-client/` — NEW in #500 (v1.5 phase 10): Shared device-flow activation client (`@generacy-ai/activation-client`). Extracted ~200 LOC from `packages/orchestrator/src/activation/`. Protocol-level only: `initDeviceFlow()`, `pollForApproval()`, status decoding. Zero deps beyond `node:http`/`node:https` and `zod`.
+  - `src/client.ts` — HTTP client for `POST /api/clusters/device-code` and `POST /api/clusters/device-code/poll`.
+  - `src/poller.ts` — Poll loop with `slow_down` (+5s) and `expired` (auto-retry up to 3 cycles) handling.
+  - `src/types.ts` — `DeviceCodeResponse`, `PollResponse` (discriminated union), `ActivationResult`, `ActivationClientOptions`.
+  - `src/errors.ts` — `ActivationError` with codes: `CLOUD_UNREACHABLE`, `DEVICE_CODE_EXPIRED`, `INVALID_RESPONSE`.
+  - Consumed by orchestrator (wraps with file-based key persistence) and CLI deploy (wraps with browser-open behavior).
+
+## CLI Deploy Command (#500, v1.5 phase 10)
+
+- `packages/generacy/src/cli/commands/deploy/` — NEW in #500: `generacy deploy ssh://[user@]host[:port][/path]` provisions a Generacy cluster on a BYO VM via SSH.
+  - `index.ts` — Command registration + main orchestration: verify SSH+Docker, activate device-flow, fetch LaunchConfig, SCP bootstrap bundle, SSH `docker compose up -d`, poll cloud status, register cluster.
+  - `ssh-target.ts` — Parse `ssh://` URL into `SshTarget` (user, host, port, remotePath). Defaults: current OS user, port 22, `~/generacy-clusters/<project-id>`.
+  - `ssh-client.ts` — SSH/SCP helpers via `node:child_process`. `BatchMode=yes`, `StrictHostKeyChecking=accept-new`.
+  - `activation.ts` — Device-flow wrapper: calls `@generacy-ai/activation-client`, opens browser with `verification_uri`.
+  - `cloud-client.ts` — Reuses `fetchLaunchConfig()` from launch command.
+  - `scaffolder.ts` — Generate bootstrap bundle in temp dir (cluster.yaml, cluster.json, docker-compose.yml).
+  - `remote-compose.ts` — SCP bundle + SSH `docker compose pull && up -d`.
+  - `status-poller.ts` — Poll cloud cluster status until `connected` or timeout (default 5 min, `--timeout` flag).
+  - Registry entry includes `managementEndpoint: "ssh://user@host:port/path"`.
+  - Lifecycle commands (`stop`, `up`, `down`, etc.) transparently forward `docker compose` over SSH when `managementEndpoint` starts with `ssh://`. Extended in `commands/cluster/compose.ts`.
+
 ## Scoped Docker Socket Proxy (#497, v1.5 phase 9)
 
 - `packages/credhelper-daemon/src/docker-bind-mount-guard.ts` — NEW in #497: Validates `POST /containers/create` bind mounts are under `GENERACY_SCRATCH_DIR`. Inspects both `HostConfig.Binds` (string format) and `HostConfig.Mounts` (object format, `Type: "bind"` only). Uses `path.resolve()` for canonicalization. Only active when `upstreamIsHost=true` (host-socket mode); DinD mode skips validation.

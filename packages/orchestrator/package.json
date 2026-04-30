@@ -30,6 +30,7 @@
     "@fastify/jwt": "^9.0.0",
     "@fastify/oauth2": "^8.0.0",
     "@fastify/rate-limit": "^10.0.0",
+    "@generacy-ai/activation-client": "workspace:^",
     "@generacy-ai/config": "workspace:^",
     "@generacy-ai/credhelper": "workspace:^",
     "@generacy-ai/generacy-plugin-claude-code": "workspace:^",
