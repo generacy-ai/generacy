@@ -10,7 +10,7 @@
 - B: Make `activated_at` optional in the lifecycle schema and omit it until real activation completes
 - C: Write a sentinel value (e.g. empty string) and update post-activation
 
-**Answer**: *Pending*
+**Answer**: B — Make `activated_at` optional in the lifecycle schema; launch omits it. The field semantically means "when device-flow activation completed," and at launch-scaffold time activation hasn't happened yet. Lifecycle commands shouldn't depend on it for anything critical; the registry's `createdAt` covers "when was this cluster set up." Activation time gets populated cluster-side (`/var/lib/generacy/cluster.json` per #492's activation flow) and is purely informational for host-side commands.
 
 ### Q2: `orgId` availability from cloud API
 **Context**: FR-002 requires adding `orgId` to `LaunchConfigSchema`, and the spec assumes the cloud endpoint will be updated to return it (companion cloud issue). If the cloud change isn't deployed yet, launch will fail Zod validation on every API call.
@@ -20,7 +20,7 @@
 - B: Make `orgId` optional — write `org_id: ""` or omit it, and make lifecycle schema's `org_id` optional too (Recommended)
 - C: Make `orgId` optional in LaunchConfig but required in cluster.json with a placeholder like `"unknown"`
 
-**Answer**: *Pending*
+**Answer**: A — Make `orgId` required in `LaunchConfigSchema`. Both #518 and #474 (companion cloud issue) are `v1.5/blocker` and must ship together. Strict typing forces deploy ordering and surfaces a clean error if the cloud is stale. Loose typing lets broken state propagate silently into `cluster.json`.
 
 ### Q3: `cluster.yaml` schema mismatch
 **Context**: The spec focuses on `cluster.json`, but `cluster.yaml` is also broken. Launch writes `{variant, imageTag, cloudUrl, ports}` while the lifecycle reader (`ClusterYamlSchema`) expects `{channel, workers, variant}`. Zod will strip the extra fields and apply defaults for missing ones, so `up` won't crash, but the written config loses `imageTag`/`cloudUrl`/`ports` on round-trip.
@@ -30,7 +30,7 @@
 - B: Separate issue — `cluster.yaml` round-trip loss is non-blocking since Zod applies defaults
 - C: Fix in this PR by removing extra fields from launch's cluster.yaml and relying on docker-compose.yml for those values
 
-**Answer**: *Pending*
+**Answer**: C — Fix in this PR by removing extra fields from launch's `cluster.yaml`; rely on `docker-compose.yml` for image/port concerns. `imageTag` → `docker-compose.yml` service `image:` field. `cloudUrl` → `cluster.json` (runtime identity). `ports` → `docker-compose.yml` ports stanza. `cluster.yaml` stays as project-level config (`channel, workers, variant`).
 
 ### Q4: Registry `variant`/`channel` enum validation
 **Context**: The lifecycle `RegistryEntrySchema` uses strict enums (`variant: z.enum(['standard', 'microservices'])`, `channel: z.enum(['stable', 'preview'])`). Launch passes `config.variant` from the cloud API as a free string and hardcodes `channel: 'stable'`. If the cloud returns a variant not in the enum (e.g. `'custom'`), registry writes will fail Zod validation.
@@ -40,7 +40,7 @@
 - B: Use `z.string().default('standard')` — accept anything, lose validation
 - C: Use `z.enum([...]).or(z.string())` — accept known values with type safety, allow unknown as fallback
 
-**Answer**: *Pending*
+**Answer**: A — Keep strict enums; cloud must return valid values; fail-fast on mismatch. **Important naming update**: rename variant enum values from `'standard' | 'microservices'` to `'cluster-base' | 'cluster-microservices'` to match architecture doc and GHCR image repo names. Update both lifecycle's existing schema and launch. Cloud-side launch-config (#474) should also use this enum.
 
 ### Q5: Registry `clusterId` nullability
 **Context**: The lifecycle `RegistryEntrySchema` has `clusterId: z.string().nullable()` (supporting pre-activation clusters with no ID). Launch always has a `clusterId` from the cloud config and uses `clusterId: string` (non-nullable). FR-004 says to define the registry schema once and import it everywhere.
@@ -48,5 +48,16 @@
 **Options**:
 - A: Keep nullable — supports both pre-activation (`init`) and post-activation (`launch`) paths (Recommended)
 - B: Make required — pre-activation clusters use a generated placeholder ID
+
+**Answer**: A — Keep `clusterId` nullable. Supports both pre-activation `init` path (no clusterId until activation) and post-activation `launch` path (clusterId from cloud's launch-config). Lifecycle commands treat `null` as "pre-activation, cluster identity not yet established" and skip cluster-scoped operations gracefully.
+
+## Batch 2 — 2026-04-30
+
+### Q6: Deploy command has identical bugs
+**Context**: The `deploy` command scaffolder (`packages/generacy/src/cli/commands/deploy/scaffolder.ts`) has identical issues — camelCase `cluster.json`, excess fields in `cluster.yaml`. The spec only mentions `launch/scaffolder.ts`. Since both commands share the same bug pattern, fixing one without the other leaves `generacy deploy` broken.
+**Question**: Should this PR also fix `deploy/scaffolder.ts`, or is that a separate issue?
+**Options**:
+- A: Fix in this PR — deploy has the same bugs and should use the same unified schemas
+- B: Separate issue — deploy is a different command and out of scope for this fix
 
 **Answer**: *Pending*
