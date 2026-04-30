@@ -10,7 +10,7 @@ export const RegistryEntrySchema = z.object({
   name: z.string(),
   path: z.string(),
   composePath: z.string(),
-  variant: z.enum(['standard', 'microservices']).default('standard'),
+  variant: z.enum(['cluster-base', 'cluster-microservices']).default('cluster-base'),
   channel: z.enum(['stable', 'preview']).default('stable'),
   cloudUrl: z.string().nullable(),
   lastSeen: z.string().datetime(),

@@ -9,7 +9,7 @@ import { getLogger } from '../../utils/logger.js';
 export const ClusterYamlSchema = z.object({
   channel: z.enum(['stable', 'preview']).default('stable'),
   workers: z.number().int().positive().default(1),
-  variant: z.enum(['standard', 'microservices']).default('standard'),
+  variant: z.enum(['cluster-base', 'cluster-microservices']).default('cluster-base'),
 });
 
 export type ClusterYaml = z.infer<typeof ClusterYamlSchema>;
@@ -19,7 +19,7 @@ export const ClusterJsonSchema = z.object({
   project_id: z.string().min(1),
   org_id: z.string().min(1),
   cloud_url: z.string().url(),
-  activated_at: z.string().datetime(),
+  activated_at: z.string().datetime().optional(),
 });
 
 export type ClusterJson = z.infer<typeof ClusterJsonSchema>;

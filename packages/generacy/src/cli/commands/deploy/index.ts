@@ -8,7 +8,7 @@ import { fetchLaunchConfig } from './cloud-client.js';
 import { scaffoldBundle } from './scaffolder.js';
 import { deployToRemote } from './remote-compose.js';
 import { pollClusterStatus } from './status-poller.js';
-import { readRegistry, writeRegistry, type RegistryEntry } from '../cluster/registry.js';
+import { RegistryEntrySchema, readRegistry, writeRegistry, type RegistryEntry } from '../cluster/registry.js';
 import type { DeployOptions, DeployResult } from './types.js';
 import { DeployError } from './types.js';
 
@@ -81,13 +81,14 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
     name: launchConfig.projectName,
     path: remotePath,
     composePath: `${remotePath}/docker-compose.yml`,
-    variant: launchConfig.variant as 'standard' | 'microservices',
+    variant: launchConfig.variant as 'cluster-base' | 'cluster-microservices',
     channel: 'stable',
     cloudUrl,
     lastSeen: now,
     createdAt: now,
     managementEndpoint,
   };
+  RegistryEntrySchema.parse(entry);
   registry.push(entry);
   writeRegistry(registry);
 

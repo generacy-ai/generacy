@@ -62,7 +62,7 @@ function makeEntry(overrides: Partial<ReturnType<typeof RegistryEntrySchema.pars
     name: 'my-app',
     path: '/projects/my-app',
     composePath: '/projects/my-app/.generacy/docker-compose.yml',
-    variant: 'standard' as const,
+    variant: 'cluster-base' as const,
     channel: 'stable' as const,
     cloudUrl: 'https://api.generacy.ai',
     lastSeen: '2026-01-15T00:00:00.000Z',
@@ -76,7 +76,7 @@ function makeMockCtx(overrides: Partial<ClusterContext> = {}): ClusterContext {
     projectRoot: '/projects/my-app',
     generacyDir: '/projects/my-app/.generacy',
     composePath: '/projects/my-app/.generacy/docker-compose.yml',
-    clusterConfig: { channel: 'stable' as const, workers: 1, variant: 'standard' as const },
+    clusterConfig: { channel: 'stable' as const, workers: 1, variant: 'cluster-base' as const },
     clusterIdentity: {
       cluster_id: 'clst_123',
       project_id: 'proj_456',
@@ -164,7 +164,7 @@ describe('upsertRegistryEntry', () => {
     expect(registry[0].name).toBe('my-app');
     expect(registry[0].path).toBe('/projects/my-app');
     expect(registry[0].composePath).toBe('/projects/my-app/.generacy/docker-compose.yml');
-    expect(registry[0].variant).toBe('standard');
+    expect(registry[0].variant).toBe('cluster-base');
     expect(registry[0].channel).toBe('stable');
     expect(registry[0].cloudUrl).toBe('https://api.generacy.ai');
   });

@@ -64,10 +64,11 @@ const mockedHomedir = vi.mocked(homedir);
 const VALID_CONFIG: LaunchConfig = {
   projectId: 'proj_test001',
   projectName: 'test-project',
-  variant: 'standard',
+  variant: 'cluster-base',
   cloudUrl: 'http://localhost:3000',
   clusterId: 'cluster_test001',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+  orgId: 'org_test001',
   repos: { primary: 'generacy-ai/example-project' },
 };
 
@@ -143,10 +144,12 @@ describe('launch integration', () => {
       expect(existsSync(join(generacyDir, 'cluster.json'))).toBe(true);
       expect(existsSync(join(generacyDir, 'docker-compose.yml'))).toBe(true);
 
-      // Verify cluster.json content
+      // Verify cluster.json content (snake_case)
       const metadata = JSON.parse(readFileSync(join(generacyDir, 'cluster.json'), 'utf-8'));
-      expect(metadata.clusterId).toBe('cluster_test001');
-      expect(metadata.projectId).toBe('proj_test001');
+      expect(metadata.cluster_id).toBe('cluster_test001');
+      expect(metadata.project_id).toBe('proj_test001');
+      expect(metadata.org_id).toBe('org_test001');
+      expect(metadata.cloud_url).toBe('http://localhost:3000');
     });
   });
 
@@ -219,7 +222,7 @@ describe('launch integration', () => {
         name: 'test-project',
         path: join(tempDir, 'test-project'),
         composePath: join(tempDir, 'test-project', '.generacy', 'docker-compose.yml'),
-        variant: 'standard',
+        variant: 'cluster-base',
         channel: 'stable',
         cloudUrl: 'http://localhost:3000',
         lastSeen: '2026-04-29T12:00:00.000Z',
