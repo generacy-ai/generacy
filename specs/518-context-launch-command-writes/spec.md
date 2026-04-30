@@ -13,6 +13,7 @@ The `launch` command writes data using one schema (camelCase, missing fields); t
 ## Files
 
 - `packages/generacy/src/cli/commands/launch/scaffolder.ts:72-86` — writes camelCase fields including `clusterId`, `cloudUrl`, `projectName`, `imageTag`; missing `org_id`, `activated_at`.
+- `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — identical bugs to launch scaffolder (camelCase `cluster.json`, excess fields in `cluster.yaml`).
 - `packages/generacy/src/cli/commands/cluster/context.ts:17-23` — reads snake_case fields; expects `cluster_id`, `project_id`, `org_id`, `cloud_url`, `activated_at`.
 - `packages/generacy/src/cli/commands/launch/types.ts:18-30` — `LaunchConfigSchema` doesn't include `orgId` (needed for cluster.json).
 - `packages/generacy/src/cli/commands/launch/registry.ts` — writes plain object; `cluster/registry.ts` reads via Zod with stricter enums.
@@ -20,10 +21,12 @@ The `launch` command writes data using one schema (camelCase, missing fields); t
 
 ## Fix
 
-1. **cluster.json schema**: standardize on snake_case (matches the orchestrator's `/var/lib/generacy/cluster.json` schema). Update `launch/scaffolder.ts` to write `cluster_id`, `project_id`, `org_id`, `cloud_url`, `activated_at`. Remove unused `projectName`, `imageTag` from the persisted file.
-2. **LaunchConfigSchema**: add `orgId: z.string().min(1)`. Verify the cloud-side `/api/clusters/launch-config` endpoint returns it (cross-ref companion cloud issue).
-3. **Registry schema**: define schema once in `cluster/registry.ts`; export `RegistryEntry`; import in `launch/registry.ts` and validate before writing. Strict enums for `variant` and `channel`.
-4. **Node version check**: `>= 22` in `launch/index.ts:48`; update error message.
+1. **cluster.json schema**: standardize on snake_case (matches the orchestrator's `/var/lib/generacy/cluster.json` schema). Update both `launch/scaffolder.ts` and `deploy/scaffolder.ts` to write `cluster_id`, `project_id`, `org_id`, `cloud_url`. Omit `activated_at` (optional, populated post-activation). Remove unused `projectName`, `imageTag` from the persisted file.
+2. **LaunchConfigSchema**: add `orgId: z.string().min(1)` (required — forces deploy ordering with companion cloud issue #474).
+3. **cluster.yaml schema**: remove excess fields (`imageTag`, `cloudUrl`, `ports`) from both launch and deploy scaffolders. `cluster.yaml` contains only `{channel, workers, variant}`. `imageTag`/`ports` go to `docker-compose.yml`; `cloudUrl` goes to `cluster.json`.
+4. **Registry schema**: define schema once in `cluster/registry.ts`; export `RegistryEntry`; import in `launch/registry.ts` and validate before writing. Strict enums for `variant` (`cluster-base` | `cluster-microservices`) and `channel` (`stable` | `preview`). `clusterId` remains nullable.
+5. **Deploy scaffolder**: apply all fixes identically to `deploy/scaffolder.ts`. Extract shared scaffolder helper for both commands.
+6. **Node version check**: `>= 22` in `launch/index.ts:48`; update error message.
 
 ## Background
 
@@ -92,7 +95,7 @@ Originals: #494, #495. Per clarifications, the cluster.json schema mirrors the c
 ## Out of Scope
 
 - Convergence of `launch` and `init` commands (deferred per #495 spec).
-- Changes to `cluster.yaml` schema (not affected by this bug).
+- ~~Changes to `cluster.yaml` schema~~ — now in scope per Q3: remove excess fields from launch/deploy scaffolders.
 - Cloud-side endpoint changes (tracked in companion issue).
 - Migration tooling for existing `cluster.json` files (none exist in production yet).
 

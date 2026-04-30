@@ -60,4 +60,4 @@
 - A: Fix in this PR — deploy has the same bugs and should use the same unified schemas
 - B: Separate issue — deploy is a different command and out of scope for this fix
 
-**Answer**: *Pending*
+**Answer**: A — Fix `deploy/scaffolder.ts` in this PR. Same bug pattern, same root cause, same fixes. Apply every Batch 1 decision identically to `deploy/scaffolder.ts`: snake_case `cluster.json` schema, `activated_at` omitted at scaffold time, required `orgId` from cloud (note: deploy flow gets `orgId` from the activation response, not launch-config), `cluster.yaml` minimized to `{channel, workers, variant}`, shared registry schema with strict enums and nullable `clusterId`. Extract scaffolder logic into a shared helper (`packages/generacy/src/cli/commands/cluster/scaffolder.ts` or similar) that both `launch` and `deploy` consume — duplication is small enough that the shared-helper move is worth doing now.
