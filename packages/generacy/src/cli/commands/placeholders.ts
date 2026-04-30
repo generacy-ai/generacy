@@ -7,7 +7,6 @@ interface PlaceholderDef {
 }
 
 const PLACEHOLDERS: PlaceholderDef[] = [
-  { name: 'deploy',       description: 'Deploy to production',               phase: 'phase 10' },
   { name: 'rebuild',      description: 'Rebuild cluster from scratch',       phase: 'phase 7' },
 ];
 
