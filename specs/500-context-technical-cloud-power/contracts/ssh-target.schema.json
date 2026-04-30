@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "ssh-target",
+  "title": "SSH Target",
+  "description": "Parsed SSH deployment target from ssh://[user@]host[:port][/path] URL",
+  "type": "object",
+  "properties": {
+    "user": {
+      "type": "string",
+      "minLength": 1,
+      "description": "SSH username. Defaults to current OS user."
+    },
+    "host": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Hostname or IP address of the target VM."
+    },
+    "port": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 65535,
+      "default": 22,
+      "description": "SSH port."
+    },
+    "remotePath": {
+      "type": ["string", "null"],
+      "description": "Remote project directory. Null means use default ~/generacy-clusters/<project-id>."
+    }
+  },
+  "required": ["user", "host", "port"],
+  "additionalProperties": false
+}
