@@ -79,6 +79,7 @@ describe('pollDeviceCode', () => {
       cluster_id: 'cl-123',
       project_id: 'pj-123',
       org_id: 'org-123',
+      cloud_url: 'https://api.generacy.ai',
     };
     const client = mockHttpClient([{ status: 200, data: approved }]);
     const result = await pollDeviceCode('https://api.generacy.ai', 'dc-123', client);
