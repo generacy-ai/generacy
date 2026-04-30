@@ -1,9 +1,10 @@
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { dispatch } from '../src/router.js';
 import { ControlPlaneError } from '../src/errors.js';
 import type { ActorContext } from '../src/context.js';
+import { initClusterState } from '../src/state.js';
 
 function createMockReq(method: string, url: string, headers?: Record<string, string>) {
   return { method, url, headers: headers ?? {} } as unknown as http.IncomingMessage;
@@ -49,6 +50,10 @@ function createMockRes() {
 const actor: ActorContext = { userId: 'test-user', sessionId: 'test-session' };
 
 describe('dispatch', () => {
+  beforeEach(() => {
+    initClusterState({ deploymentMode: 'local', variant: 'cluster-base' });
+  });
+
   it('GET /state dispatches to state handler and returns 200', async () => {
     const req = createMockReq('GET', '/state');
     const res = createMockRes();
@@ -57,7 +62,7 @@ describe('dispatch', () => {
 
     expect((res as any).statusCode).toBe(200);
     const body = JSON.parse((res as any).body);
-    expect(body).toHaveProperty('status', 'ready');
+    expect(body).toHaveProperty('status', 'bootstrapping');
     expect(body).toHaveProperty('deploymentMode', 'local');
     expect(body).toHaveProperty('variant', 'cluster-base');
   });

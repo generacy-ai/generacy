@@ -8,6 +8,7 @@ import {
   setCodeServerManager,
   type CodeServerManager,
 } from '../../src/services/code-server-manager.js';
+import { initClusterState } from '../../src/state.js';
 
 let server: ControlPlaneServer;
 let socketPath: string;
@@ -69,6 +70,7 @@ describe('integration: all routes', () => {
 
   beforeAll(async () => {
     setCodeServerManager(fakeCodeServer);
+    initClusterState({ deploymentMode: 'local', variant: 'cluster-base' });
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cp-test-'));
     socketPath = path.join(tmpDir, 'control.sock');
     server = new ControlPlaneServer();
@@ -85,7 +87,7 @@ describe('integration: all routes', () => {
     const res = await request('GET', '/state');
     expect(res.status).toBe(200);
     const body = res.body as Record<string, unknown>;
-    expect(body).toHaveProperty('status', 'ready');
+    expect(body).toHaveProperty('status');
     expect(body).toHaveProperty('deploymentMode', 'local');
     expect(body).toHaveProperty('variant', 'cluster-base');
     expect(body).toHaveProperty('lastSeen');
@@ -158,6 +160,28 @@ describe('integration: all routes', () => {
     const body = res.body as Record<string, unknown>;
     expect(body).toHaveProperty('code', 'UNKNOWN_ACTION');
     expect(body).toHaveProperty('error');
+  });
+
+  // POST /internal/status
+  it('POST /internal/status accepts valid status update', async () => {
+    const res = await request('POST', '/internal/status', { status: 'ready' });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('POST /internal/status round-trip: status reflected in GET /state', async () => {
+    await request('POST', '/internal/status', { status: 'degraded', statusReason: 'Relay lost' });
+    const res = await request('GET', '/state');
+    const body = res.body as Record<string, unknown>;
+    expect(body).toHaveProperty('status', 'degraded');
+    expect(body).toHaveProperty('statusReason', 'Relay lost');
+  });
+
+  it('POST /internal/status rejects invalid status', async () => {
+    const res = await request('POST', '/internal/status', { status: 'nope' });
+    expect(res.status).toBe(400);
+    const body = res.body as Record<string, unknown>;
+    expect(body).toHaveProperty('code', 'INVALID_REQUEST');
   });
 
   // 404 for unknown route

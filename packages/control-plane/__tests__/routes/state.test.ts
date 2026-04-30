@@ -1,6 +1,7 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handleGetState } from '../../src/routes/state.js';
+import { initClusterState, updateClusterStatus } from '../../src/state.js';
 
 function createMockResponse() {
   const headers: Record<string, string> = {};
@@ -37,6 +38,10 @@ function createMockResponse() {
 }
 
 describe('handleGetState', () => {
+  beforeEach(() => {
+    initClusterState({ deploymentMode: 'local', variant: 'cluster-base' });
+  });
+
   it('returns 200 status code', async () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
@@ -47,17 +52,17 @@ describe('handleGetState', () => {
     expect(res._statusCode).toBe(200);
   });
 
-  it('response body has status "ready"', async () => {
+  it('default status is bootstrapping', async () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
 
     await handleGetState(req, res, {}, {});
 
     const body = JSON.parse(res._body);
-    expect(body.status).toBe('ready');
+    expect(body.status).toBe('bootstrapping');
   });
 
-  it('response body has deploymentMode "local"', async () => {
+  it('returns default deploymentMode "local"', async () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
 
@@ -67,7 +72,7 @@ describe('handleGetState', () => {
     expect(body.deploymentMode).toBe('local');
   });
 
-  it('response body has variant "cluster-base"', async () => {
+  it('returns default variant "cluster-base"', async () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
 
@@ -75,6 +80,57 @@ describe('handleGetState', () => {
 
     const body = JSON.parse(res._body);
     expect(body.variant).toBe('cluster-base');
+  });
+
+  it('reflects custom DEPLOYMENT_MODE=cloud', async () => {
+    initClusterState({ deploymentMode: 'cloud', variant: 'cluster-base' });
+
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+
+    await handleGetState(req, res, {}, {});
+
+    const body = JSON.parse(res._body);
+    expect(body.deploymentMode).toBe('cloud');
+  });
+
+  it('reflects custom CLUSTER_VARIANT=cluster-microservices', async () => {
+    initClusterState({ deploymentMode: 'local', variant: 'cluster-microservices' });
+
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+
+    await handleGetState(req, res, {}, {});
+
+    const body = JSON.parse(res._body);
+    expect(body.variant).toBe('cluster-microservices');
+  });
+
+  it('includes statusReason when set', async () => {
+    updateClusterStatus('ready');
+    updateClusterStatus('degraded', 'Relay disconnected');
+
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+
+    await handleGetState(req, res, {}, {});
+
+    const body = JSON.parse(res._body);
+    expect(body.status).toBe('degraded');
+    expect(body.statusReason).toBe('Relay disconnected');
+  });
+
+  it('omits statusReason when absent', async () => {
+    updateClusterStatus('ready');
+
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+
+    await handleGetState(req, res, {}, {});
+
+    const body = JSON.parse(res._body);
+    expect(body.status).toBe('ready');
+    expect(body.statusReason).toBeUndefined();
   });
 
   it('response body has a valid ISO datetime lastSeen', async () => {
@@ -87,10 +143,8 @@ describe('handleGetState', () => {
 
     const body = JSON.parse(res._body);
     expect(body.lastSeen).toBeDefined();
-    // Verify it parses as a valid date
     const parsed = new Date(body.lastSeen);
     expect(parsed.toISOString()).toBe(body.lastSeen);
-    // Verify it falls within the test execution window
     expect(body.lastSeen >= before).toBe(true);
     expect(body.lastSeen <= after).toBe(true);
   });

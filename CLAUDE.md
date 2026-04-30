@@ -46,7 +46,9 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 
 - `packages/control-plane` — In-cluster HTTP service over Unix socket for the cloud-hosted bootstrap UI (#490, v1.5 phase 1). Terminates control-plane requests forwarded by the cluster-relay dispatcher.
   - Socket at `/run/generacy-control-plane/control.sock` (configurable via `CONTROL_PLANE_SOCKET_PATH`).
-  - Routes (stubs in phase 1, real wiring in later phases): `GET /state`, `GET/PUT /credentials/:id`, `GET/PUT /roles/:id`, `POST /lifecycle/:action`, `POST /internal/audit-batch` (#499, v1.5 phase 9 — receives audit batches from credhelper-daemon, emits entries on relay `cluster.audit` channel).
+  - Routes (stubs in phase 1, real wiring in later phases): `GET /state`, `GET/PUT /credentials/:id`, `GET/PUT /roles/:id`, `POST /lifecycle/:action`, `POST /internal/audit-batch` (#499, v1.5 phase 9 — receives audit batches from credhelper-daemon, emits entries on relay `cluster.audit` channel), `POST /internal/status` (#516 — receives lifecycle status updates from orchestrator).
+  - `GET /state` (#516): Returns dynamic `ClusterState` — `status` (bootstrapping|ready|degraded|error), `deploymentMode` (from `DEPLOYMENT_MODE` env, default 'local'), `variant` (from `CLUSTER_VARIANT` env, default 'cluster-base'), `lastSeen`, optional `statusReason`. Always starts `bootstrapping`; orchestrator pushes transitions via `POST /internal/status`.
+  - `POST /internal/status` (#516): Receives `{ status, statusReason? }` from orchestrator. Module-level state store pattern (same as `setRelayPushEvent`). State machine: bootstrapping→ready↔degraded→error (terminal).
   - Uses native `node:http` (same pattern as credhelper-daemon). Re-exports credential/role Zod schemas from `@generacy-ai/credhelper`.
   - Reads actor identity from relay-injected headers (`x-generacy-actor-user-id`, `x-generacy-actor-session-id`).
   - Error shape: `{ error, code, details? }` — matches credhelper-daemon's `CredhelperErrorResponse`.

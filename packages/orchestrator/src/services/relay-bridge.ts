@@ -28,6 +28,7 @@ import type { ConversationManager } from '../conversation/conversation-manager.j
 import { ConversationRelayInputSchema } from '../conversation/types.js';
 import type { ConversationOutputEvent } from '../conversation/types.js';
 import type { LeaseManager } from './lease-manager.js';
+import type { StatusReporter } from './status-reporter.js';
 
 export class RelayBridge {
   private readonly client: ClusterRelayClient;
@@ -37,6 +38,7 @@ export class RelayBridge {
   private readonly config: RelayBridgeOptions['config'];
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;
+  private statusReporter: StatusReporter | null = null;
 
   private running = false;
   private metadataTimer: NodeJS.Timeout | null = null;
@@ -158,6 +160,11 @@ export class RelayBridge {
 
     // Start periodic metadata timer
     this.startMetadataTimer();
+
+    // Push ready status to control-plane
+    if (this.statusReporter) {
+      this.statusReporter.pushStatus('ready').catch(() => {});
+    }
   }
 
   private handleDisconnected(reason: string): void {
@@ -168,6 +175,11 @@ export class RelayBridge {
 
     // Clear metadata timer
     this.clearMetadataTimer();
+
+    // Push degraded status to control-plane
+    if (this.statusReporter) {
+      this.statusReporter.pushStatus('degraded', `Relay disconnected: ${reason}`).catch(() => {});
+    }
   }
 
   private handleError(error: Error): void {
@@ -196,6 +208,13 @@ export class RelayBridge {
    */
   setLeaseManager(manager: LeaseManager): void {
     this.leaseManager = manager;
+  }
+
+  /**
+   * Wire a StatusReporter to push lifecycle state to the control-plane.
+   */
+  setStatusReporter(reporter: StatusReporter): void {
+    this.statusReporter = reporter;
   }
 
   private handleMessage(msg: RelayMessage): void {
