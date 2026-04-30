@@ -10,14 +10,14 @@
 
 ## Phase 1: Activation Client Package
 
-- [ ] T001 Create `packages/activation-client/` package structure — `package.json` (name `@generacy-ai/activation-client`, ESM, zero runtime deps beyond zod), `tsconfig.json`
-- [ ] T002 [P] Create `packages/activation-client/src/types.ts` — `DeviceCodeResponseSchema`, `PollResponseSchema`, `ActivationClientOptions`, `ActivationResult` (from data-model.md)
-- [ ] T003 [P] Create `packages/activation-client/src/errors.ts` — `ActivationError` class with codes `CLOUD_UNREACHABLE`, `DEVICE_CODE_EXPIRED`, `INVALID_RESPONSE`
-- [ ] T004 Create `packages/activation-client/src/client.ts` — HTTP client: `initDeviceFlow()` → `POST /api/clusters/device-code`, `pollDeviceCode()` → `POST /api/clusters/device-code/poll`. Uses `node:http`/`node:https`
-- [ ] T005 Create `packages/activation-client/src/poller.ts` — `pollForApproval()` with `slow_down` (+5s) and `expired` (auto-retry up to 3 cycles) handling
-- [ ] T006 Create `packages/activation-client/src/index.ts` — Public API re-exports: `initDeviceFlow`, `pollForApproval`, all types/errors
-- [ ] T007 [P] Write unit tests `packages/activation-client/tests/unit/client.test.ts` and `poller.test.ts`
-- [ ] T008 Update `packages/orchestrator/src/activation/index.ts` to delegate to `@generacy-ai/activation-client` — remove inlined `client.ts`/`poller.ts`, keep `persistence.ts` wrapper. Update `packages/orchestrator/package.json` to add workspace dep
+- [X] T001 Create `packages/activation-client/` package structure — `package.json` (name `@generacy-ai/activation-client`, ESM, zero runtime deps beyond zod), `tsconfig.json`
+- [X] T002 [P] Create `packages/activation-client/src/types.ts` — `DeviceCodeResponseSchema`, `PollResponseSchema`, `ActivationClientOptions`, `ActivationResult` (from data-model.md)
+- [X] T003 [P] Create `packages/activation-client/src/errors.ts` — `ActivationError` class with codes `CLOUD_UNREACHABLE`, `DEVICE_CODE_EXPIRED`, `INVALID_RESPONSE`
+- [X] T004 Create `packages/activation-client/src/client.ts` — HTTP client: `initDeviceFlow()` → `POST /api/clusters/device-code`, `pollDeviceCode()` → `POST /api/clusters/device-code/poll`. Uses `node:http`/`node:https`
+- [X] T005 Create `packages/activation-client/src/poller.ts` — `pollForApproval()` with `slow_down` (+5s) and `expired` (auto-retry up to 3 cycles) handling
+- [X] T006 Create `packages/activation-client/src/index.ts` — Public API re-exports: `initDeviceFlow`, `pollForApproval`, all types/errors
+- [X] T007 [P] Write unit tests `packages/activation-client/tests/unit/client.test.ts` and `poller.test.ts`
+- [X] T008 Update `packages/orchestrator/src/activation/index.ts` to delegate to `@generacy-ai/activation-client` — remove inlined `client.ts`/`poller.ts`, keep `persistence.ts` wrapper. Update `packages/orchestrator/package.json` to add workspace dep
 
 ## Phase 2: Deploy Command Core
 

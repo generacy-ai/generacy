@@ -1,15 +1,2 @@
-export type ActivationErrorCode =
-  | 'CLOUD_UNREACHABLE'
-  | 'DEVICE_CODE_EXPIRED'
-  | 'KEY_WRITE_FAILED'
-  | 'INVALID_RESPONSE';
-
-export class ActivationError extends Error {
-  constructor(
-    message: string,
-    public readonly code: ActivationErrorCode,
-  ) {
-    super(message);
-    this.name = 'ActivationError';
-  }
-}
+export { ActivationError } from '@generacy-ai/activation-client';
+export type { ActivationErrorCode } from '@generacy-ai/activation-client';

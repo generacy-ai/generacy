@@ -1,7 +1,6 @@
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { ClusterJsonSchema, type ClusterJson } from './types.js';
-import { ActivationError } from './errors.js';
 
 /**
  * Read the API key from the key file. Returns null if missing or corrupt.
@@ -30,9 +29,8 @@ export async function writeKeyFile(keyFilePath: string, apiKey: string): Promise
     await writeFile(tmpPath, apiKey, { mode: 0o600 });
     await rename(tmpPath, keyFilePath);
   } catch (error) {
-    throw new ActivationError(
+    throw new Error(
       `Cannot write key file ${keyFilePath}: ${error instanceof Error ? error.message : String(error)}`,
-      'KEY_WRITE_FAILED',
     );
   }
 }
@@ -64,9 +62,8 @@ export async function writeClusterJson(
     await writeFile(tmpPath, JSON.stringify(data, null, 2), { mode: 0o644 });
     await rename(tmpPath, clusterJsonPath);
   } catch (error) {
-    throw new ActivationError(
+    throw new Error(
       `Cannot write cluster.json ${clusterJsonPath}: ${error instanceof Error ? error.message : String(error)}`,
-      'KEY_WRITE_FAILED',
     );
   }
 }
