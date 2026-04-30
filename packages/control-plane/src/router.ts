@@ -7,6 +7,7 @@ import { handleGetCredential, handlePutCredential } from './routes/credentials.j
 import { handleGetRole, handlePutRole } from './routes/roles.js';
 import { handlePostLifecycle } from './routes/lifecycle.js';
 import { handlePostAuditBatch } from './routes/audit.js';
+import { handlePostStatus } from './routes/status.js';
 
 interface Route {
   method: string;
@@ -57,6 +58,12 @@ const routes: Route[] = [
     pattern: /^\/internal\/audit-batch$/,
     paramNames: [],
     handler: handlePostAuditBatch,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/internal\/status$/,
+    paramNames: [],
+    handler: handlePostStatus,
   },
 ];
 

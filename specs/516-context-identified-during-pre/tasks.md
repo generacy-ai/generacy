@@ -10,29 +10,29 @@
 
 ## Phase 1: Schema & State Store
 
-- [ ] T001 Update `packages/control-plane/src/schemas.ts` — add `statusReason` field to `ClusterStateSchema`, create `StatusUpdateSchema` with `status` + optional `statusReason`
-- [ ] T002 Update `packages/control-plane/src/types.ts` — add `ClusterStateStore` interface with `getState()` and `updateStatus()` signatures
-- [ ] T003 Create state store module — module-level `let state: ClusterState` initialized to `{ status: 'bootstrapping', deploymentMode: 'local', variant: 'cluster-base', lastSeen: now }`. Export `initClusterState(config)`, `updateClusterStatus(status, statusReason?)`, `getClusterState()`. Enforce state machine transitions (reject invalid from→to; `error` is terminal). Location: `packages/control-plane/src/state.ts` or inline in `server.ts` following existing `setRelayPushEvent()` pattern
+- [X] T001 Update `packages/control-plane/src/schemas.ts` — add `statusReason` field to `ClusterStateSchema`, create `StatusUpdateSchema` with `status` + optional `statusReason`
+- [X] T002 Update `packages/control-plane/src/types.ts` — add `ClusterStateStore` interface with `getState()` and `updateStatus()` signatures
+- [X] T003 Create state store module — module-level `let state: ClusterState` initialized to `{ status: 'bootstrapping', deploymentMode: 'local', variant: 'cluster-base', lastSeen: now }`. Export `initClusterState(config)`, `updateClusterStatus(status, statusReason?)`, `getClusterState()`. Enforce state machine transitions (reject invalid from→to; `error` is terminal). Location: `packages/control-plane/src/state.ts` or inline in `server.ts` following existing `setRelayPushEvent()` pattern
 
 ## Phase 2: Control-Plane Endpoints
 
-- [ ] T004 Modify `packages/control-plane/src/routes/state.ts` — replace hardcoded response with call to `getClusterState()`; include `statusReason` only when present; update `lastSeen` to current time on each request
-- [ ] T005 Create `packages/control-plane/src/routes/status.ts` — `POST /internal/status` handler: parse+validate body with `StatusUpdateSchema`, call `updateClusterStatus()`, return `{ ok: true }` on success, return 400 with `{ error, code: 'INVALID_REQUEST', details }` on validation failure
-- [ ] T006 Update `packages/control-plane/src/router.ts` — register `POST /internal/status` route pointing to new handler
-- [ ] T007 Update `packages/control-plane/src/server.ts` or `bin/control-plane.ts` — read `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars at startup, call `initClusterState({ deploymentMode, variant })` with defaults (`'local'`, `'cluster-base'`)
-- [ ] T008 Update `packages/control-plane/src/index.ts` — re-export `StatusUpdateSchema`, `StatusUpdate` type, and state store functions as needed
+- [X] T004 Modify `packages/control-plane/src/routes/state.ts` — replace hardcoded response with call to `getClusterState()`; include `statusReason` only when present; update `lastSeen` to current time on each request
+- [X] T005 Create `packages/control-plane/src/routes/status.ts` — `POST /internal/status` handler: parse+validate body with `StatusUpdateSchema`, call `updateClusterStatus()`, return `{ ok: true }` on success, return 400 with `{ error, code: 'INVALID_REQUEST', details }` on validation failure
+- [X] T006 Update `packages/control-plane/src/router.ts` — register `POST /internal/status` route pointing to new handler
+- [X] T007 Update `packages/control-plane/src/server.ts` or `bin/control-plane.ts` — read `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars at startup, call `initClusterState({ deploymentMode, variant })` with defaults (`'local'`, `'cluster-base'`)
+- [X] T008 Update `packages/control-plane/src/index.ts` — re-export `StatusUpdateSchema`, `StatusUpdate` type, and state store functions as needed
 
 ## Phase 3: Orchestrator Status Reporter
 
-- [ ] T009 Create `packages/orchestrator/src/services/status-reporter.ts` — HTTP-over-Unix-socket client class `StatusReporter` with `pushStatus(status, statusReason?)` method. Fire-and-forget with error logging. Socket path from `CONTROL_PLANE_SOCKET_PATH` env or default `/run/generacy-control-plane/control.sock`
-- [ ] T010 Modify `packages/orchestrator/src/server.ts` — instantiate `StatusReporter` at startup; push `ready` after successful relay handshake / activation
-- [ ] T011 Modify `packages/orchestrator/src/services/relay-bridge.ts` — push `degraded` with reason on relay disconnect; push `ready` on reconnect
+- [X] T009 Create `packages/orchestrator/src/services/status-reporter.ts` — HTTP-over-Unix-socket client class `StatusReporter` with `pushStatus(status, statusReason?)` method. Fire-and-forget with error logging. Socket path from `CONTROL_PLANE_SOCKET_PATH` env or default `/run/generacy-control-plane/control.sock`
+- [X] T010 Modify `packages/orchestrator/src/server.ts` — instantiate `StatusReporter` at startup; push `ready` after successful relay handshake / activation
+- [X] T011 Modify `packages/orchestrator/src/services/relay-bridge.ts` — push `degraded` with reason on relay disconnect; push `ready` on reconnect
 
 ## Phase 4: Tests
 
-- [ ] T012 [P] Update `packages/control-plane/__tests__/routes/state.test.ts` — test `GET /state` returns dynamic values: default env vars, custom `DEPLOYMENT_MODE=cloud`, custom `CLUSTER_VARIANT=cluster-microservices`, `statusReason` included when set, `statusReason` omitted when absent
-- [ ] T013 [P] Create `packages/control-plane/__tests__/routes/status.test.ts` — test `POST /internal/status`: valid transition bootstrapping→ready, valid transition ready→degraded, degraded→ready recovery, reject invalid status value (400), reject transition from terminal `error` state, `statusReason` stored and reflected in subsequent `GET /state`
-- [ ] T014 Update `packages/control-plane/__tests__/integration/all-routes.test.ts` — add `POST /internal/status` to the integration suite, verify round-trip: POST status then GET state reflects update
+- [X] T012 [P] Update `packages/control-plane/__tests__/routes/state.test.ts` — test `GET /state` returns dynamic values: default env vars, custom `DEPLOYMENT_MODE=cloud`, custom `CLUSTER_VARIANT=cluster-microservices`, `statusReason` included when set, `statusReason` omitted when absent
+- [X] T013 [P] Create `packages/control-plane/__tests__/routes/status.test.ts` — test `POST /internal/status`: valid transition bootstrapping→ready, valid transition ready→degraded, degraded→ready recovery, reject invalid status value (400), reject transition from terminal `error` state, `statusReason` stored and reflected in subsequent `GET /state`
+- [X] T014 Update `packages/control-plane/__tests__/integration/all-routes.test.ts` — add `POST /internal/status` to the integration suite, verify round-trip: POST status then GET state reflects update
 
 ## Dependencies & Execution Order
 

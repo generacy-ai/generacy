@@ -25,8 +25,15 @@ export const ClusterStateSchema = z.object({
   deploymentMode: DeploymentModeSchema,
   variant: ClusterVariantSchema,
   lastSeen: z.string().datetime(),
+  statusReason: z.string().max(200).optional(),
 });
 export type ClusterState = z.infer<typeof ClusterStateSchema>;
+
+export const StatusUpdateSchema = z.object({
+  status: ClusterStatusSchema,
+  statusReason: z.string().max(200).optional(),
+});
+export type StatusUpdate = z.infer<typeof StatusUpdateSchema>;
 
 // Lifecycle
 export const LifecycleActionSchema = z.enum([

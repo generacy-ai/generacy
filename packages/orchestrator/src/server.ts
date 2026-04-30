@@ -45,6 +45,7 @@ import { setupConversationRoutes } from './routes/conversations.js';
 import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
+import { StatusReporter } from './services/status-reporter.js';
 
 /**
  * Server creation options
@@ -361,6 +362,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+  }
+
+  // Create StatusReporter for pushing lifecycle state to the control-plane (full mode only)
+  const controlPlaneSocket = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? '/run/generacy-control-plane/control.sock';
+  const statusReporter = new StatusReporter({ socketPath: controlPlaneSocket });
+
+  if (relayBridge) {
+    relayBridge.setStatusReporter(statusReporter);
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)

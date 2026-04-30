@@ -1,6 +1,6 @@
 // Types
 export type { ActorContext } from './context.js';
-export type { ServerConfig, RouteHandler } from './types.js';
+export type { ServerConfig, RouteHandler, ClusterStateStore } from './types.js';
 
 // Schemas
 export {
@@ -8,6 +8,7 @@ export {
   DeploymentModeSchema,
   ClusterVariantSchema,
   ClusterStateSchema,
+  StatusUpdateSchema,
   LifecycleActionSchema,
   LifecycleResponseSchema,
   CodeServerStartResponseSchema,
@@ -20,6 +21,7 @@ export {
   type DeploymentMode,
   type ClusterVariant,
   type ClusterState,
+  type StatusUpdate,
   type LifecycleAction,
   type LifecycleResponse,
   type CodeServerStartResponse,
@@ -29,6 +31,13 @@ export {
   type RoleConfig,
   type RoleCredentialRef,
 } from './schemas.js';
+
+// State
+export {
+  initClusterState,
+  updateClusterStatus,
+  getClusterState,
+} from './state.js';
 
 // Services
 export {
