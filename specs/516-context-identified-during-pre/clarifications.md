@@ -10,7 +10,7 @@
 - B: Mutable shared state object — orchestrator passes a reference to the constructor and mutates it directly (simpler but couples packages)
 - C: Status file — orchestrator writes state to a well-known file, control-plane reads on each request
 
-**Answer**: *Pending*
+**Answer**: A — New `POST /internal/status` endpoint, consistent with the existing `POST /internal/audit-batch` pattern from #499.** Body shape: `{ status: 'bootstrapping' | 'ready' | 'degraded' | 'error', statusReason?: string }`. Unix-socket-only (mode 0660, accessible to orchestrator uid 1000 via the `node` group, same as the audit-batch endpoint). The orchestrator pushes status transitions at activation completion, on relay connect/disconnect, and on fatal errors. The control-plane stores the latest in-memory state and serves it from `GET /state`. Mutable shared state via the constructor (option B) couples the packages and creates ordering hazards; status file (option C) adds a filesystem dependency for state that's purely runtime.
 
 ### Q2: Error State Recoverability
 **Context**: The spec describes the state machine as `bootstrapping → ready ↔ degraded → error`. The arrow notation suggests `error` may be terminal (no arrow out), but in practice a relay reconnect after an extended outage might recover the cluster.
@@ -20,7 +20,7 @@
 - B: Recoverable — `error` can transition back to `degraded` or `ready` if the issue resolves
 - C: Configurable — allow both behaviors based on the error type
 
-**Answer**: *Pending*
+**Answer**: A — `error` is terminal; only a restart can leave it.** Reserve `error` for truly unrecoverable conditions: fatal config error, master key file unreadable, schema migration needed. Recoverable conditions (relay disconnect, transient cloud unreachable) should set `degraded`, which can transition back to `ready` when the issue resolves. This keeps the state-machine semantics clear: `degraded` = recoverable / self-healing, `error` = needs operator intervention. Configurable-per-error-type (option C) is over-engineering for v1.5; the categorization is unambiguous in practice.
 
 ### Q3: Degradation/Error Reason Field
 **Context**: When `status` is `degraded` or `error`, the cloud UI may need to display a reason to the user (e.g., "relay disconnected", "activation failed"). The current `ClusterState` schema only has `status`, `deploymentMode`, `variant`, and `lastSeen`.
@@ -29,7 +29,7 @@
 - A: Yes — add optional `statusReason: string` to `ClusterState` schema
 - B: No — status enum alone is sufficient; reasons are logged server-side only
 
-**Answer**: *Pending*
+**Answer**: A — Add optional `statusReason: string` to `ClusterState`.** Used by the cloud UI to display context (e.g., "Relay disconnected — retrying", "Master key file missing", "Activation pending"). Server-side logs continue to capture full detail; this field is the user-facing one-line summary. Keep it terse (recommend 200 char max). Always present when `status` is `degraded` or `error`; absent or empty for `bootstrapping`/`ready`.
 
 ### Q4: Initial Status on Startup
 **Context**: The spec says status should be `bootstrapping` before activation completes and `ready` after relay handshake. The control-plane server starts independently of the orchestrator's activation flow.
@@ -38,4 +38,4 @@
 - A: Always start `bootstrapping` — orchestrator explicitly transitions to `ready` after confirming relay is connected
 - B: Start `ready` if key file exists — only use `bootstrapping` on first boot (before activation)
 
-**Answer**: *Pending*
+**Answer**: A — Always start `bootstrapping`.** The orchestrator is the source of truth for status; the control-plane should reflect orchestrator state, not infer from filesystem state. Brief "bootstrapping" window (typically a few seconds at startup) is fine; users won't notice. Inferring from key file presence (option B) creates a footgun where filesystem state and orchestrator state can disagree (e.g., key file exists but relay handshake hasn't completed yet — should be `bootstrapping`, not `ready`). The orchestrator pushes `ready` via the new `/internal/status` endpoint after relay handshake confirms.
