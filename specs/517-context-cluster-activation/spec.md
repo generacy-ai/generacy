@@ -13,15 +13,12 @@ Cluster activation cannot complete: the activation client's poll response Zod sc
 ## Files
 
 - `packages/activation-client/src/types.ts:14-26` — `PollResponseSchema` for the `approved` status is missing `cloud_url`.
-- `packages/activation-client/src/types.ts` — `ActivationResult` type needs optional `cloudUrl` field.
 - `packages/orchestrator/src/activation/index.ts:83` — does not persist `pollResult.cloud_url` to `cluster.json`.
-- `packages/orchestrator/src/server.ts:307-315` — boot sequence must read `cloudUrl` from activation result and override both relay and activation config.
 
 ## Fix
 
 1. Add `cloud_url: z.string().url()` to `PollResponseSchema`'s approved variant in `packages/activation-client/src/types.ts`.
-2. Add optional `cloudUrl?: string` to `ActivationResult` type in `packages/activation-client/src/types.ts`.
-3. Update the activation module to persist `cloud_url` to `cluster.json` and return it in `ActivationResult`:
+2. Update the activation module to persist `cloud_url` to `cluster.json`:
 ```typescript
 await writeClusterJson(clusterJsonPath, {
   cluster_id: pollResult.cluster_id,
@@ -31,7 +28,6 @@ await writeClusterJson(clusterJsonPath, {
   activated_at: new Date().toISOString(),
 });
 ```
-4. Update `server.ts` boot sequence to read `cloudUrl` from the activation result and override both `config.activation.cloudUrl` (HTTPS) and `config.relay.cloudUrl` (WSS, derived as `https://X` → `wss://X/relay`, `http://X` → `ws://X/relay`).
 
 ## Acceptance criteria
 
@@ -46,45 +42,35 @@ Originals: #491, #492. Per #492 clarification, the orchestrator should fully per
 
 ## User Stories
 
-### US1: Self-Hosted Cloud URL Persistence
+### US1: [Primary User Story]
 
-**As a** self-hosted Generacy operator,
-**I want** my custom cloud URL to survive cluster restarts,
-**So that** I don't have to reconfigure the cluster after every reboot.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Activation client schema accepts `cloud_url` from the cloud's approved response
-- [ ] `cloud_url` is persisted to `cluster.json` after activation
-- [ ] On boot, orchestrator reads `cloud_url` from `cluster.json` and configures both activation and relay URLs
-- [ ] Default `https://api.generacy.ai` is used when `cloud_url` is absent
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `cloud_url: z.string().url()` to `PollResponseSchema` approved variant | P1 | Schema fix — unblocks activation |
-| FR-002 | Persist `cloud_url` to `cluster.json` in activation module | P1 | Durability across restarts |
-| FR-003 | Add optional `cloudUrl` to `ActivationResult` type in `activation-client` | P1 | Clean shared API contract |
-| FR-004 | Boot sequence reads `cloudUrl` from activation result, overrides both `config.activation.cloudUrl` and `config.relay.cloudUrl` (derived WSS) | P1 | `https://X` → `wss://X/relay` derivation |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Activation completes with custom cloud URL | 100% | Integration test with fake cloud server |
-| SC-002 | `cloud_url` persisted in cluster.json | Present after activation | File inspection |
-| SC-003 | Relay uses derived WSS URL after restart | Correct URL | Boot log / config assertion |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The cloud always returns `cloud_url` in approved poll responses
-- WSS relay URL can always be derived from HTTPS cloud URL via scheme swap + `/relay` suffix
-- No deployments currently need independent relay vs activation URLs (single-URL model)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Split relay/activation URL configurations (future override field if needed)
-- Migration of existing `cluster.json` files missing `cloud_url` (graceful fallback to default is sufficient)
+- [Exclusion 1]
 
 ---
 
