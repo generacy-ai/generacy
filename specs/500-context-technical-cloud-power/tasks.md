@@ -39,14 +39,14 @@
 
 ## Phase 4: Tests
 
-- [ ] T021 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/ssh-target.test.ts` — Parse valid URLs, defaults, IPv6, invalid schemes, edge cases
-- [ ] T022 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/ssh-client.test.ts` — Mock child_process, verify SSH flag construction, error handling
-- [ ] T023 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/activation.test.ts` — Mock activation-client, verify browser-open call
-- [ ] T024 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/scaffolder.test.ts` — Verify bundle file generation from LaunchConfig
-- [ ] T025 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/status-poller.test.ts` — Verify backoff, timeout, connected detection
-- [ ] T026 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/remote-compose.test.ts` — Mock SSH client, verify SCP + compose sequence
-- [ ] T027 [US2] Unit test `packages/generacy/tests/unit/cluster/compose-ssh.test.ts` — Verify SSH forwarding branch in compose helper
-- [ ] T028 [US1] Integration test `packages/generacy/tests/integration/deploy-dind.test.ts` — DinD container as SSH target, end-to-end deploy flow
+- [X] T021 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/ssh-target.test.ts` — Parse valid URLs, defaults, IPv6, invalid schemes, edge cases
+- [X] T022 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/ssh-client.test.ts` — Mock child_process, verify SSH flag construction, error handling
+- [X] T023 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/activation.test.ts` — Mock activation-client, verify browser-open call
+- [X] T024 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/scaffolder.test.ts` — Verify bundle file generation from LaunchConfig
+- [X] T025 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/status-poller.test.ts` — Verify backoff, timeout, connected detection
+- [X] T026 [P] [US1] Unit test `packages/generacy/tests/unit/deploy/remote-compose.test.ts` — Mock SSH client, verify SCP + compose sequence
+- [X] T027 [US2] Unit test `packages/generacy/tests/unit/cluster/compose-ssh.test.ts` — Verify SSH forwarding branch in compose helper
+- [X] T028 [US1] Integration test `packages/generacy/tests/integration/deploy-dind.test.ts` — DinD container as SSH target, end-to-end deploy flow
 
 ## Dependencies & Execution Order
 
