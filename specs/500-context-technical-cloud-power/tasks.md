@@ -21,21 +21,21 @@
 
 ## Phase 2: Deploy Command Core
 
-- [ ] T009 Create `packages/generacy/src/cli/commands/deploy/types.ts` — `SshTarget`, `DeployOptions`, `DeployResult`, `DeployError` class with error codes (from data-model.md)
-- [ ] T010 [P] [US1] Implement `packages/generacy/src/cli/commands/deploy/ssh-target.ts` — `parseSshTarget(target: string): SshTarget` using `URL` constructor with defaults (user → `os.userInfo().username`, port → 22, path → null). Validate scheme is `ssh://`
-- [ ] T011 [P] [US1] Implement `packages/generacy/src/cli/commands/deploy/ssh-client.ts` — `verifySshConnectivity(target)`, `verifyDockerPresence(target)`, `scpDirectory(target, localDir, remotePath)`, `sshExec(target, command)`. Uses `node:child_process`, `BatchMode=yes`, `StrictHostKeyChecking=accept-new`
-- [ ] T012 [US1] Implement `packages/generacy/src/cli/commands/deploy/activation.ts` — Device-flow wrapper: calls `@generacy-ai/activation-client`, opens browser with `verification_uri` via `openUrl()` from `src/cli/utils/browser.ts`
-- [ ] T013 [P] [US1] Implement `packages/generacy/src/cli/commands/deploy/cloud-client.ts` — `fetchLaunchConfig(cloudUrl, claimCode)` reused from `launch/cloud-client.ts` (import or extract shared helper)
-- [ ] T014 [US1] Implement `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — Generate bootstrap bundle in temp dir: `cluster.yaml`, `cluster.json`, `docker-compose.yml` from `LaunchConfig` + `ActivationResult`
-- [ ] T015 [US1] Implement `packages/generacy/src/cli/commands/deploy/remote-compose.ts` — SCP bundle via `scpDirectory()`, then SSH `docker compose pull && docker compose up -d`
-- [ ] T016 [US1] Implement `packages/generacy/src/cli/commands/deploy/status-poller.ts` — Poll cloud cluster status until `status === 'connected'`. Exponential backoff (3s initial, 1.5x, 15s max). Default 5-min timeout, configurable via `--timeout`
+- [X] T009 Create `packages/generacy/src/cli/commands/deploy/types.ts` — `SshTarget`, `DeployOptions`, `DeployResult`, `DeployError` class with error codes (from data-model.md)
+- [X] T010 [P] [US1] Implement `packages/generacy/src/cli/commands/deploy/ssh-target.ts` — `parseSshTarget(target: string): SshTarget` using `URL` constructor with defaults (user → `os.userInfo().username`, port → 22, path → null). Validate scheme is `ssh://`
+- [X] T011 [P] [US1] Implement `packages/generacy/src/cli/commands/deploy/ssh-client.ts` — `verifySshConnectivity(target)`, `verifyDockerPresence(target)`, `scpDirectory(target, localDir, remotePath)`, `sshExec(target, command)`. Uses `node:child_process`, `BatchMode=yes`, `StrictHostKeyChecking=accept-new`
+- [X] T012 [US1] Implement `packages/generacy/src/cli/commands/deploy/activation.ts` — Device-flow wrapper: calls `@generacy-ai/activation-client`, opens browser with `verification_uri` via `openUrl()` from `src/cli/utils/browser.ts`
+- [X] T013 [P] [US1] Implement `packages/generacy/src/cli/commands/deploy/cloud-client.ts` — `fetchLaunchConfig(cloudUrl, claimCode)` reused from `launch/cloud-client.ts` (import or extract shared helper)
+- [X] T014 [US1] Implement `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — Generate bootstrap bundle in temp dir: `cluster.yaml`, `cluster.json`, `docker-compose.yml` from `LaunchConfig` + `ActivationResult`
+- [X] T015 [US1] Implement `packages/generacy/src/cli/commands/deploy/remote-compose.ts` — SCP bundle via `scpDirectory()`, then SSH `docker compose pull && docker compose up -d`
+- [X] T016 [US1] Implement `packages/generacy/src/cli/commands/deploy/status-poller.ts` — Poll cloud cluster status until `status === 'connected'`. Exponential backoff (3s initial, 1.5x, 15s max). Default 5-min timeout, configurable via `--timeout`
 
 ## Phase 3: Integration & Wiring
 
-- [ ] T017 [US2] Extend `packages/generacy/src/cli/commands/cluster/registry.ts` — Add optional `managementEndpoint` field to `RegistryEntrySchema`
-- [ ] T018 [US1] Implement `packages/generacy/src/cli/commands/deploy/index.ts` — Main orchestration: parse target, verify SSH+Docker, activate device-flow, fetch LaunchConfig, scaffold, SCP, compose up, stream logs + poll status, register cluster. Commander.js command with `--timeout` flag
-- [ ] T019 [US1] Register deploy command in `packages/generacy/src/cli/index.ts`
-- [ ] T020 [US2] Extend `packages/generacy/src/cli/commands/cluster/compose.ts` — Add SSH-forwarding branch: when `managementEndpoint` starts with `ssh://`, parse target and run `docker compose` over SSH instead of locally. Add `packages/generacy/package.json` workspace dep on `@generacy-ai/activation-client`
+- [X] T017 [US2] Extend `packages/generacy/src/cli/commands/cluster/registry.ts` — Add optional `managementEndpoint` field to `RegistryEntrySchema`
+- [X] T018 [US1] Implement `packages/generacy/src/cli/commands/deploy/index.ts` — Main orchestration: parse target, verify SSH+Docker, activate device-flow, fetch LaunchConfig, scaffold, SCP, compose up, stream logs + poll status, register cluster. Commander.js command with `--timeout` flag
+- [X] T019 [US1] Register deploy command in `packages/generacy/src/cli/index.ts`
+- [X] T020 [US2] Extend `packages/generacy/src/cli/commands/cluster/compose.ts` — Add SSH-forwarding branch: when `managementEndpoint` starts with `ssh://`, parse target and run `docker compose` over SSH instead of locally. Add `packages/generacy/package.json` workspace dep on `@generacy-ai/activation-client`
 
 ## Phase 4: Tests
 
