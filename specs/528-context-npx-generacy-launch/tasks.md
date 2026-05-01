@@ -10,18 +10,18 @@
 
 ## Phase 1: Schema Fix
 
-- [ ] T001 [US1] Fix `repos.dev` and `repos.clone` in `LaunchConfigSchema` — change from `z.string().optional()` to `z.array(z.string()).optional()` in `packages/generacy/src/cli/commands/launch/types.ts:28-29`
+- [X] T001 [US1] Fix `repos.dev` and `repos.clone` in `LaunchConfigSchema` — change from `z.string().optional()` to `z.array(z.string()).optional()` in `packages/generacy/src/cli/commands/launch/types.ts:28-29`
 
 ## Phase 2: Test Fixture Updates
 
-- [ ] T002 [P] [US1] Update `cloud-client.test.ts` — add `dev` and `clone` array fields to `VALID_LAUNCH_CONFIG` fixture; add test case for multi-repo response validation in `packages/generacy/src/cli/commands/launch/__tests__/cloud-client.test.ts`
-- [ ] T003 [P] [US2] Update `integration.test.ts` — add array-format `dev`/`clone` fields to `VALID_CONFIG` fixture in `packages/generacy/src/cli/commands/launch/__tests__/integration.test.ts`
-- [ ] T004 [P] [US2] Update `scaffolder.test.ts` — add array-format `dev`/`clone` fields to `mockConfig` fixture in `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts`
+- [X] T002 [P] [US1] Update `cloud-client.test.ts` — add `dev` and `clone` array fields to `VALID_LAUNCH_CONFIG` fixture; add test case for multi-repo response validation in `packages/generacy/src/cli/commands/launch/__tests__/cloud-client.test.ts`
+- [X] T003 [P] [US2] Update `integration.test.ts` — add array-format `dev`/`clone` fields to `VALID_CONFIG` fixture in `packages/generacy/src/cli/commands/launch/__tests__/integration.test.ts`
+- [X] T004 [P] [US2] Update `scaffolder.test.ts` — add array-format `dev`/`clone` fields to `mockConfig` fixture in `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts`
 
 ## Phase 3: Verification
 
-- [ ] T005 [US1] Run type-check — `pnpm -C packages/generacy tsc --noEmit` must pass with zero errors
-- [ ] T006 [US1] Run test suite — `pnpm -C packages/generacy vitest run` must pass with zero failures
+- [X] T005 [US1] Run type-check — `pnpm -C packages/generacy tsc --noEmit` must pass with zero errors
+- [X] T006 [US1] Run test suite — `pnpm -C packages/generacy vitest run` must pass with zero failures
 
 ## Dependencies & Execution Order
 

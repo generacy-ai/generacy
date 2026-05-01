@@ -33,7 +33,11 @@ const VALID_LAUNCH_CONFIG = {
   clusterId: 'cluster_abc123',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
   orgId: 'org_abc123',
-  repos: { primary: 'generacy-ai/example-project' },
+  repos: {
+    primary: 'generacy-ai/example-project',
+    dev: ['generacy-ai/dev-tools', 'generacy-ai/dev-config'],
+    clone: ['generacy-ai/shared-lib'],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -179,6 +183,33 @@ describe('fetchLaunchConfig — HTTP', () => {
     await expect(fetchLaunchConfig(serverUrl, 'some-claim')).rejects.toThrow(
       'Invalid response from cloud',
     );
+  });
+
+  it('validates multi-repo response with dev and clone arrays', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(VALID_LAUNCH_CONFIG));
+    };
+
+    const config = await fetchLaunchConfig(serverUrl, 'multi-repo-claim');
+
+    expect(config.repos.dev).toEqual(['generacy-ai/dev-tools', 'generacy-ai/dev-config']);
+    expect(config.repos.clone).toEqual(['generacy-ai/shared-lib']);
+  });
+
+  it('validates response with empty dev and clone arrays', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        ...VALID_LAUNCH_CONFIG,
+        repos: { primary: 'generacy-ai/example-project', dev: [], clone: [] },
+      }));
+    };
+
+    const config = await fetchLaunchConfig(serverUrl, 'empty-repos-claim');
+
+    expect(config.repos.dev).toEqual([]);
+    expect(config.repos.clone).toEqual([]);
   });
 
   it('throws "Invalid response from cloud" when cloudUrl is not a valid URL', async () => {

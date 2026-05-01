@@ -19,7 +19,11 @@ const mockConfig: LaunchConfig = {
   clusterId: 'cluster_abc123',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
   orgId: 'org_xyz789',
-  repos: { primary: 'generacy-ai/example-project' },
+  repos: {
+    primary: 'generacy-ai/example-project',
+    dev: ['generacy-ai/dev-tools'],
+    clone: ['generacy-ai/shared-lib'],
+  },
 };
 
 // ---------------------------------------------------------------------------
