@@ -54,6 +54,11 @@ export {
   type CodeServerStatus,
 } from './services/code-server-manager.js';
 
+export {
+  TunnelHandler,
+  type RelayMessageSender,
+} from './services/tunnel-handler.js';
+
 // Errors
 export {
   ControlPlaneError,

@@ -500,6 +500,9 @@ importers:
       '@generacy-ai/config':
         specifier: workspace:^
         version: link:../config
+      '@generacy-ai/control-plane':
+        specifier: workspace:^
+        version: link:../control-plane
       '@generacy-ai/credhelper':
         specifier: workspace:^
         version: link:../credhelper

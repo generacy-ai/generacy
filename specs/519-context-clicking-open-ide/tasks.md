@@ -10,37 +10,37 @@
 
 ## Phase 1: Message Types & Schema
 
-- [ ] T001 [P] [US1] Add four tunnel message Zod schemas to `packages/cluster-relay/src/messages.ts` — `TunnelOpenMessageSchema`, `TunnelOpenAckMessageSchema`, `TunnelDataMessageSchema`, `TunnelCloseMessageSchema`
-- [ ] T002 [P] [US1] Add four tunnel message TypeScript interfaces and include in `RelayMessage` type union in `packages/cluster-relay/src/messages.ts`
-- [ ] T003 [US1] Update `RelayMessageSchema` discriminated union to include the four new tunnel schemas in `packages/cluster-relay/src/messages.ts`
+- [X] T001 [P] [US1] Add four tunnel message Zod schemas to `packages/cluster-relay/src/messages.ts` — `TunnelOpenMessageSchema`, `TunnelOpenAckMessageSchema`, `TunnelDataMessageSchema`, `TunnelCloseMessageSchema`
+- [X] T002 [P] [US1] Add four tunnel message TypeScript interfaces and include in `RelayMessage` type union in `packages/cluster-relay/src/messages.ts`
+- [X] T003 [US1] Update `RelayMessageSchema` discriminated union to include the four new tunnel schemas in `packages/cluster-relay/src/messages.ts`
 
 ## Phase 2: Orchestrator Relay Types
 
-- [ ] T004 [P] [US1] Add `RelayTunnelOpen`, `RelayTunnelOpenAck`, `RelayTunnelData`, `RelayTunnelClose` interfaces and extend `RelayMessage` union in `packages/orchestrator/src/types/relay.ts`
-- [ ] T005 [P] [US1] Add `setTunnelHandler()` setter and tunnel message dispatch branches (`tunnel_open`, `tunnel_data`, `tunnel_close`) to `packages/orchestrator/src/services/relay-bridge.ts`
+- [X] T004 [P] [US1] Add `RelayTunnelOpen`, `RelayTunnelOpenAck`, `RelayTunnelData`, `RelayTunnelClose` interfaces and extend `RelayMessage` union in `packages/orchestrator/src/types/relay.ts`
+- [X] T005 [P] [US1] Add `setTunnelHandler()` setter and tunnel message dispatch branches (`tunnel_open`, `tunnel_data`, `tunnel_close`) to `packages/orchestrator/src/services/relay-bridge.ts`
 
 ## Phase 3: TunnelHandler Service
 
-- [ ] T006 [US1] Create `packages/control-plane/src/services/tunnel-handler.ts` — `TunnelHandler` class with `RelayMessageSender` DI, `tunnels: Map<string, net.Socket>`, constructor accepting `relaySend`, `codeServerManager`, `allowedTarget`
-- [ ] T007 [US1] Implement `handleOpen()` — target validation (FR-004), auto-start code-server with 10s timeout (FR-005), connect Unix socket, send `tunnel_open_ack`, wire socket `data` event for relay-bound base64 encoding, wire socket `close`/`error` for cleanup (FR-007)
-- [ ] T008 [US2] Implement `handleData()` — base64 decode, socket write, call `codeServerManager.touch()` (FR-006)
-- [ ] T009 [US3] Implement `handleClose()` — destroy socket, remove from map
-- [ ] T010 [US2] Implement `cleanup()` — destroy all sockets, clear map (FR-008, stateless across reconnects)
+- [X] T006 [US1] Create `packages/control-plane/src/services/tunnel-handler.ts` — `TunnelHandler` class with `RelayMessageSender` DI, `tunnels: Map<string, net.Socket>`, constructor accepting `relaySend`, `codeServerManager`, `allowedTarget`
+- [X] T007 [US1] Implement `handleOpen()` — target validation (FR-004), auto-start code-server with 10s timeout (FR-005), connect Unix socket, send `tunnel_open_ack`, wire socket `data` event for relay-bound base64 encoding, wire socket `close`/`error` for cleanup (FR-007)
+- [X] T008 [US2] Implement `handleData()` — base64 decode, socket write, call `codeServerManager.touch()` (FR-006)
+- [X] T009 [US3] Implement `handleClose()` — destroy socket, remove from map
+- [X] T010 [US2] Implement `cleanup()` — destroy all sockets, clear map (FR-008, stateless across reconnects)
 
 ## Phase 4: Wiring & Exports
 
-- [ ] T011 [P] [US1] Export `TunnelHandler` and `RelayMessageSender` from `packages/control-plane/src/index.ts`
-- [ ] T012 [US1] Wire `TunnelHandler` in `packages/orchestrator/src/server.ts` — construct with relay send callback + `getCodeServerManager()`, call `relayBridge.setTunnelHandler()`, register relay disconnect handler for `cleanup()`, add to shutdown hook
+- [X] T011 [P] [US1] Export `TunnelHandler` and `RelayMessageSender` from `packages/control-plane/src/index.ts`
+- [X] T012 [US1] Wire `TunnelHandler` in `packages/orchestrator/src/server.ts` — construct with relay send callback + `getCodeServerManager()`, call `relayBridge.setTunnelHandler()`, register relay disconnect handler for `cleanup()`, add to shutdown hook
 
 ## Phase 5: Tests
 
-- [ ] T013 [P] [US1] Unit tests for tunnel message Zod schemas — valid parse and reject cases for all 4 types in `packages/cluster-relay/src/__tests__/messages.test.ts`
-- [ ] T014 [P] [US1] Unit tests for `TunnelHandler.handleOpen()` — target validation rejects invalid path, auto-start called, timeout error ack, success ack, socket data→relay base64 flow
-- [ ] T015 [P] [US2] Unit tests for `TunnelHandler.handleData()` — base64 decode + socket write, `touch()` called, missing tunnelId silently dropped
-- [ ] T016 [P] [US3] Unit tests for `TunnelHandler.handleClose()` — socket destroyed, removed from map, missing tunnelId no-op
-- [ ] T017 [P] [US2] Unit tests for `TunnelHandler.cleanup()` — all sockets destroyed, map cleared
-- [ ] T018 [US1] Unit tests for `RelayBridge` tunnel dispatch — tunnel messages routed to handler, null handler silently skips
-- [ ] T019 [US1] Integration test: full tunnel lifecycle — open → data (both directions) → close with mock socket and relay sender
+- [X] T013 [P] [US1] Unit tests for tunnel message Zod schemas — valid parse and reject cases for all 4 types in `packages/cluster-relay/src/__tests__/messages.test.ts`
+- [X] T014 [P] [US1] Unit tests for `TunnelHandler.handleOpen()` — target validation rejects invalid path, auto-start called, timeout error ack, success ack, socket data→relay base64 flow
+- [X] T015 [P] [US2] Unit tests for `TunnelHandler.handleData()` — base64 decode + socket write, `touch()` called, missing tunnelId silently dropped
+- [X] T016 [P] [US3] Unit tests for `TunnelHandler.handleClose()` — socket destroyed, removed from map, missing tunnelId no-op
+- [X] T017 [P] [US2] Unit tests for `TunnelHandler.cleanup()` — all sockets destroyed, map cleared
+- [X] T018 [US1] Unit tests for `RelayBridge` tunnel dispatch — tunnel messages routed to handler, null handler silently skips
+- [X] T019 [US1] Integration test: full tunnel lifecycle — open → data (both directions) → close with mock socket and relay sender
 
 ## Dependencies & Execution Order
 

@@ -32,6 +32,7 @@
     "@fastify/rate-limit": "^10.0.0",
     "@generacy-ai/activation-client": "workspace:^",
     "@generacy-ai/config": "workspace:^",
+    "@generacy-ai/control-plane": "workspace:^",
     "@generacy-ai/credhelper": "workspace:^",
     "@generacy-ai/generacy-plugin-claude-code": "workspace:^",
     "@generacy-ai/workflow-engine": "workspace:^",

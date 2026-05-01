@@ -126,6 +126,31 @@ export interface RelayJobEvent {
 /**
  * Discriminated union of all relay message types.
  */
+export interface RelayTunnelOpen {
+  type: 'tunnel_open';
+  tunnelId: string;
+  target: string;
+}
+
+export interface RelayTunnelOpenAck {
+  type: 'tunnel_open_ack';
+  tunnelId: string;
+  status: 'ok' | 'error';
+  error?: string;
+}
+
+export interface RelayTunnelData {
+  type: 'tunnel_data';
+  tunnelId: string;
+  data: string;
+}
+
+export interface RelayTunnelClose {
+  type: 'tunnel_close';
+  tunnelId: string;
+  reason?: string;
+}
+
 export type RelayMessage =
   | RelayApiRequest
   | RelayApiResponse
@@ -141,7 +166,11 @@ export type RelayMessage =
   | RelayLeaseHeartbeat
   | RelaySlotAvailable
   | RelayTierInfo
-  | RelayClusterRejected;
+  | RelayClusterRejected
+  | RelayTunnelOpen
+  | RelayTunnelOpenAck
+  | RelayTunnelData
+  | RelayTunnelClose;
 
 // Re-export lease protocol types
 export type {

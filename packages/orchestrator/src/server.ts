@@ -46,6 +46,7 @@ import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
+import { TunnelHandler, getCodeServerManager } from '@generacy-ai/control-plane';
 
 /**
  * Server creation options
@@ -362,6 +363,16 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       // Wire lease manager into relay bridge (full mode)
       const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
       relayBridge.setLeaseManager(fullModeLeaseManager);
+
+      // Wire TunnelHandler for IDE tunnel support (#519)
+      const codeServerManager = getCodeServerManager();
+      if (codeServerManager) {
+        const tunnelHandler = new TunnelHandler(
+          { send: (msg: unknown) => relayClient.send(msg as import('./types/relay.js').RelayMessage) },
+          codeServerManager,
+        );
+        relayBridge.setTunnelHandler(tunnelHandler);
+      }
 
       server.log.info('Relay bridge configured');
     } catch (error) {

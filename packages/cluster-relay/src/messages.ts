@@ -63,6 +63,31 @@ export interface ErrorMessage {
   message: string;
 }
 
+export interface TunnelOpenMessage {
+  type: 'tunnel_open';
+  tunnelId: string;
+  target: string;
+}
+
+export interface TunnelOpenAckMessage {
+  type: 'tunnel_open_ack';
+  tunnelId: string;
+  status: 'ok' | 'error';
+  error?: string;
+}
+
+export interface TunnelDataMessage {
+  type: 'tunnel_data';
+  tunnelId: string;
+  data: string;
+}
+
+export interface TunnelCloseMessage {
+  type: 'tunnel_close';
+  tunnelId: string;
+  reason?: string;
+}
+
 export type RelayMessage =
   | ApiRequestMessage
   | ApiResponseMessage
@@ -70,7 +95,11 @@ export type RelayMessage =
   | ConversationMessage
   | HeartbeatMessage
   | HandshakeMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | TunnelOpenMessage
+  | TunnelOpenAckMessage
+  | TunnelDataMessage
+  | TunnelCloseMessage;
 
 export interface GitRemote {
   name: string;
@@ -174,6 +203,31 @@ const ErrorMessageSchema = z.object({
   message: z.string(),
 });
 
+const TunnelOpenMessageSchema = z.object({
+  type: z.literal('tunnel_open'),
+  tunnelId: z.string().min(1),
+  target: z.string().min(1),
+});
+
+const TunnelOpenAckMessageSchema = z.object({
+  type: z.literal('tunnel_open_ack'),
+  tunnelId: z.string().min(1),
+  status: z.enum(['ok', 'error']),
+  error: z.string().optional(),
+});
+
+const TunnelDataMessageSchema = z.object({
+  type: z.literal('tunnel_data'),
+  tunnelId: z.string().min(1),
+  data: z.string().min(1),
+});
+
+const TunnelCloseMessageSchema = z.object({
+  type: z.literal('tunnel_close'),
+  tunnelId: z.string().min(1),
+  reason: z.string().optional(),
+});
+
 export const RelayMessageSchema = z.discriminatedUnion('type', [
   ApiRequestMessageSchema,
   ApiResponseMessageSchema,
@@ -182,6 +236,10 @@ export const RelayMessageSchema = z.discriminatedUnion('type', [
   HeartbeatMessageSchema,
   HandshakeMessageSchema,
   ErrorMessageSchema,
+  TunnelOpenMessageSchema,
+  TunnelOpenAckMessageSchema,
+  TunnelDataMessageSchema,
+  TunnelCloseMessageSchema,
 ]);
 
 export { ClusterMetadataSchema, GitRemoteSchema };
