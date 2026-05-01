@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { openSync, closeSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { z } from 'zod';
 import { EncryptedEntrySchema, generateMasterKey } from './crypto.js';
 import type { EncryptedEntry } from './crypto.js';
@@ -17,12 +19,14 @@ export interface CredentialFileEnvelope {
 }
 
 export class CredentialFileStore {
-  private lockPromise: Promise<void> = Promise.resolve();
+  private readonly lockPath: string;
 
   constructor(
     private readonly dataPath: string,
     private readonly keyPath: string,
-  ) {}
+  ) {
+    this.lockPath = `${dataPath}.lock`;
+  }
 
   async ensureMasterKey(): Promise<Buffer> {
     try {
@@ -101,14 +105,21 @@ export class CredentialFileStore {
   }
 
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
-    let release: () => void;
-    const prev = this.lockPromise;
-    this.lockPromise = new Promise<void>(resolve => { release = resolve; });
-    await prev;
+    const fd = openSync(this.lockPath, 'w');
     try {
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn('flock', ['--exclusive', '3'], {
+          stdio: ['ignore', 'ignore', 'ignore', fd],
+        });
+        child.on('close', (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`flock exited with code ${code}`));
+        });
+        child.on('error', reject);
+      });
       return await fn();
     } finally {
-      release!();
+      closeSync(fd);
     }
   }
 }

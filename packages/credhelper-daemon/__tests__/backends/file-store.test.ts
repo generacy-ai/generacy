@@ -123,5 +123,33 @@ describe('CredentialFileStore', () => {
       expect(loaded.has('b')).toBe(true);
       expect(loaded.has('a')).toBe(false);
     });
+
+    it('creates lock file at ${dataPath}.lock after first save', async () => {
+      const lockPath = `${dataPath}.lock`;
+
+      // Lock file should not exist before any save
+      await expect(fs.stat(lockPath)).rejects.toThrow();
+
+      await store.save(new Map([['x', dummyEntry]]));
+
+      // Lock file should exist after save
+      const stat = await fs.stat(lockPath);
+      expect(stat.isFile()).toBe(true);
+    });
+
+    it('concurrent save() calls produce no data corruption', async () => {
+      const saves = Array.from({ length: 10 }, (_, i) =>
+        store.save(new Map([[`key-${i}`, dummyEntry]])),
+      );
+      await Promise.all(saves);
+
+      // The file must be valid JSON with exactly one entry (last writer wins)
+      const loaded = await store.load();
+      expect(loaded.size).toBe(1);
+
+      // The single remaining key must be one of the keys we wrote
+      const [key] = loaded.keys();
+      expect(key).toMatch(/^key-\d$/);
+    });
   });
 });
