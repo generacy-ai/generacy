@@ -165,10 +165,10 @@ describe('messages', () => {
   });
 
   describe('RelayMessageSchema', () => {
-    it('validates all 7 message types', () => {
-      const types = ['api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error'];
+    it('validates all 11 message types', () => {
+      const types = ['api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error', 'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close'];
       // Confirm schema accepts these types by checking discriminator key
-      expect(RelayMessageSchema.options).toHaveLength(7);
+      expect(RelayMessageSchema.options).toHaveLength(11);
     });
   });
 
@@ -271,6 +271,104 @@ describe('messages', () => {
         activation: { invalid: true },
       };
       const result = parseRelayMessage(msg);
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('tunnel message types', () => {
+    it('parses a valid tunnel_open message', () => {
+      const msg = {
+        type: 'tunnel_open',
+        tunnelId: 'tun-1',
+        target: '/run/code-server.sock',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid tunnel_open_ack message with ok status', () => {
+      const msg = {
+        type: 'tunnel_open_ack',
+        tunnelId: 'tun-1',
+        status: 'ok',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid tunnel_open_ack message with error status', () => {
+      const msg = {
+        type: 'tunnel_open_ack',
+        tunnelId: 'tun-1',
+        status: 'error',
+        error: 'invalid target',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid tunnel_data message', () => {
+      const msg = {
+        type: 'tunnel_data',
+        tunnelId: 'tun-1',
+        data: 'aGVsbG8=',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a valid tunnel_close message', () => {
+      const msg = {
+        type: 'tunnel_close',
+        tunnelId: 'tun-1',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses tunnel_close with reason', () => {
+      const msg = {
+        type: 'tunnel_close',
+        tunnelId: 'tun-1',
+        reason: 'user closed',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('returns null for tunnel_open with empty tunnelId', () => {
+      const result = parseRelayMessage({
+        type: 'tunnel_open',
+        tunnelId: '',
+        target: '/run/code-server.sock',
+      });
+      expect(result).toBeNull();
+    });
+
+    it('returns null for tunnel_open with empty target', () => {
+      const result = parseRelayMessage({
+        type: 'tunnel_open',
+        tunnelId: 'tun-1',
+        target: '',
+      });
+      expect(result).toBeNull();
+    });
+
+    it('returns null for tunnel_data with empty data', () => {
+      const result = parseRelayMessage({
+        type: 'tunnel_data',
+        tunnelId: 'tun-1',
+        data: '',
+      });
+      expect(result).toBeNull();
+    });
+
+    it('returns null for tunnel_open_ack with invalid status', () => {
+      const result = parseRelayMessage({
+        type: 'tunnel_open_ack',
+        tunnelId: 'tun-1',
+        status: 'pending',
+      });
       expect(result).toBeNull();
     });
   });

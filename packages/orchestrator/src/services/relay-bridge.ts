@@ -30,6 +30,13 @@ import type { ConversationOutputEvent } from '../conversation/types.js';
 import type { LeaseManager } from './lease-manager.js';
 import type { StatusReporter } from './status-reporter.js';
 
+export interface TunnelHandlerLike {
+  handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
+  handleData(msg: { tunnelId: string; data: string }): void;
+  handleClose(msg: { tunnelId: string; reason?: string }): void;
+  cleanup(): void;
+}
+
 export class RelayBridge {
   private readonly client: ClusterRelayClient;
   private readonly server: FastifyInstance;
@@ -39,6 +46,7 @@ export class RelayBridge {
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;
   private statusReporter: StatusReporter | null = null;
+  private tunnelHandler: TunnelHandlerLike | null = null;
 
   private running = false;
   private metadataTimer: NodeJS.Timeout | null = null;
@@ -176,6 +184,11 @@ export class RelayBridge {
     // Clear metadata timer
     this.clearMetadataTimer();
 
+    // Clean up tunnel connections (stateless across reconnects)
+    if (this.tunnelHandler) {
+      this.tunnelHandler.cleanup();
+    }
+
     // Push degraded status to control-plane
     if (this.statusReporter) {
       this.statusReporter.pushStatus('degraded', `Relay disconnected: ${reason}`).catch(() => {});
@@ -217,6 +230,13 @@ export class RelayBridge {
     this.statusReporter = reporter;
   }
 
+  /**
+   * Wire a TunnelHandler to receive tunnel messages from the relay.
+   */
+  setTunnelHandler(handler: TunnelHandlerLike): void {
+    this.tunnelHandler = handler;
+  }
+
   private handleMessage(msg: RelayMessage): void {
     try {
       if (msg.type === 'api_request') {
@@ -250,6 +270,23 @@ export class RelayBridge {
           },
           timestamp: new Date().toISOString(),
         } as SSEEvent);
+      } else if (msg.type === 'tunnel_open') {
+        if (this.tunnelHandler) {
+          this.tunnelHandler.handleOpen(msg).catch((error) => {
+            this.logger.error(
+              { err: error instanceof Error ? error.message : String(error), tunnelId: msg.tunnelId },
+              'Error handling tunnel open',
+            );
+          });
+        }
+      } else if (msg.type === 'tunnel_data') {
+        if (this.tunnelHandler) {
+          this.tunnelHandler.handleData(msg);
+        }
+      } else if (msg.type === 'tunnel_close') {
+        if (this.tunnelHandler) {
+          this.tunnelHandler.handleClose(msg);
+        }
       }
     } catch (error) {
       this.logger.error(
