@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Replace `withLock()` in `packages/credhelper-daemon/src/backends/file-store.ts`
+- [X] T001 [US1] Replace `withLock()` in `packages/credhelper-daemon/src/backends/file-store.ts`
   - Remove `private lockPromise: Promise<void> = Promise.resolve();` property (line 20)
   - Add `private readonly lockPath: string;` property
   - Set `this.lockPath = \`${dataPath}.lock\`;` in constructor
@@ -29,14 +29,14 @@
 
 ## Phase 2: Tests
 
-- [ ] T002 [US1] Update advisory lock tests in `packages/credhelper-daemon/__tests__/backends/file-store.test.ts`
+- [X] T002 [US1] Update advisory lock tests in `packages/credhelper-daemon/__tests__/backends/file-store.test.ts`
   - Add test: lock file is created at `${dataPath}.lock` after first `save()`
   - Add test: concurrent `save()` calls (parallel `Promise.all`) produce no data corruption — final file is valid JSON with correct entries
   - Existing tests (ensureMasterKey, load, save, sequential advisory lock) should pass unchanged
 
 ## Phase 3: Verification
 
-- [ ] T003 [US2] Verify zero dependency changes
+- [X] T003 [US2] Verify zero dependency changes
   - Run `vitest run` in `packages/credhelper-daemon` — all tests pass
   - Confirm `package.json` has no diff (no new dependencies added)
 
