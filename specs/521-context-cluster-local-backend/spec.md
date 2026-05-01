@@ -1,88 +1,64 @@
-# Feature Specification: fd-based advisory lock for cluster-local backend
+# Feature Specification: ## Context
+
+The cluster-local backend uses an in-memory Promise-based lock for `credentials
 
 **Branch**: `521-context-cluster-local-backend` | **Date**: 2026-05-01 | **Status**: Draft
 
 ## Summary
 
-Replace the in-memory Promise-based lock in `CredentialFileStore` with an fd-based advisory lock (`flock(LOCK_EX)`) using Node.js built-in `fs`. The current lock only serializes writes within a single process; concurrent processes (e.g., orchestrator + worker booting simultaneously) can corrupt `credentials.dat`. This fix ensures kernel-level serialization of all writes.
-
 ## Context
 
-The cluster-local backend (`packages/credhelper-daemon/src/backends/file-store.ts`) stores encrypted credentials in `/var/lib/generacy/credentials.dat`. Writes use an atomic temp-file + fsync + rename pattern, but the mutual exclusion is provided by an in-memory `Promise` chain (`this.lockPromise`). This protects against in-process concurrent writes but not against multi-process races, which can occur during initial cluster activation when the orchestrator and workers boot concurrently.
-
-Per #491-Q5 clarification, an fd-based advisory lock was chosen over the `proper-lockfile` npm package. The implementation must use only Node.js built-in `node:fs` APIs.
+The cluster-local backend uses an in-memory Promise-based lock for `credentials.dat` writes. Per #491-Q5 clarification, an fd-based advisory lock (`flock` via Node.js built-in `fs`) was decided. The current implementation only protects against in-process races; multiple processes (e.g., orchestrator + worker booting concurrently) could corrupt the file during initial activation.
 
 ## Files
 
-- `packages/credhelper-daemon/src/backends/file-store.ts:103-113` — current in-memory `withLock()` implementation to replace.
+- `packages/credhelper-daemon/src/backends/file-store.ts:103-113` — uses `this.lockPromise`, not OS-level locking.
+
+## Fix
+
+Replace the in-memory Promise lock with `fs.open()` + `fcntl(F_SETLK)` advisory locking (or equivalent via `flock(LOCK_EX)`). Implementation per #491-Q5: built-in Node.js `fs`, no `proper-lockfile` dependency.
+
+## Acceptance criteria
+
+- Concurrent multi-process writes to `credentials.dat` are serialized by the kernel.
+- Test: spawn two processes that race on a write; verify the file is consistent (no torn writes, no lost data).
+- Cleanup: lock released on process exit even if the process crashes mid-write.
+
+## Background
+
+Original: #491. Per #491-Q5 clarification, fd-based advisory lock chosen over the `proper-lockfile` npm package.
 
 ## User Stories
 
-### US1: Multi-process credential write safety
+### US1: [Primary User Story]
 
-**As a** cluster operator,
-**I want** concurrent credhelper-daemon processes to safely serialize writes to the credential store,
-**So that** credentials are never lost or corrupted during concurrent boot or activation scenarios.
-
-**Acceptance Criteria**:
-- [ ] Concurrent multi-process writes to `credentials.dat` are serialized by the kernel
-- [ ] No torn writes or lost data when two processes race on a write
-- [ ] Lock is released on process exit even if the process crashes mid-write
-
-### US2: Zero new dependencies
-
-**As a** platform maintainer,
-**I want** the locking mechanism to use only Node.js built-in `fs` APIs,
-**So that** no additional npm dependencies are introduced.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] No new runtime dependencies added to `credhelper-daemon`
-- [ ] Implementation uses `node:fs` only (no `proper-lockfile`, no native addons)
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Replace `withLock()` Promise chain with fd-based `flock(LOCK_EX)` advisory lock | P1 | Use a dedicated lock file (e.g., `credentials.dat.lock`) |
-| FR-002 | Lock file opened with `fs.open()`, locked with exclusive flock, released by closing fd | P1 | Node.js `fh.lock(true)` (exclusive) available in Node >=22 |
-| FR-003 | Lock must be automatically released on process crash (kernel closes fd) | P1 | Inherent property of fd-based advisory locks |
-| FR-004 | Atomic write pattern (temp + fsync + rename) preserved inside the locked section | P1 | Existing pattern is correct, just needs outer lock change |
-| FR-005 | Lock acquisition should block (not spin) waiting for the lock to become available | P2 | `fh.lock()` blocks by default |
-
-## Technical Approach
-
-1. **Lock file**: Use a separate lock file path (e.g., `${dataPath}.lock`) rather than locking the data file itself. This avoids issues with the rename-based atomic write pattern.
-
-2. **Lock lifecycle**:
-   - `fs.open(lockPath, 'w')` — open/create lock file
-   - `fh.lock(true)` — acquire exclusive advisory lock (blocks until available; Node >=22 `FileHandle.lock()`)
-   - Execute the write operation (temp file + fsync + rename)
-   - `fh.close()` — releases the lock
-
-3. **Crash safety**: If the process dies, the OS closes all open file descriptors, which automatically releases advisory locks. No stale lock file cleanup needed (unlike `proper-lockfile` which uses lockfile existence).
-
-4. **Backwards compatibility**: The in-memory `lockPromise` can be removed entirely. The fd-based lock provides both in-process and cross-process serialization.
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Multi-process write consistency | Zero torn writes in concurrent test | Spawn 2+ processes racing on write, verify file integrity |
-| SC-002 | No new dependencies | 0 new packages | Check `package.json` diff |
-| SC-003 | Crash recovery | Lock released after SIGKILL | Kill process mid-write, verify subsequent writes succeed |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Node.js >=22 is available (provides `FileHandle.lock()` / `FileHandle.unlock()` API)
-- The credhelper-daemon runs on Linux where `flock(2)` advisory locks are supported
-- Only one credential store file exists per cluster (no sharding)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Migration to a database-backed credential store
-- Distributed locking across multiple hosts
-- Read-side locking (reads are already safe due to atomic rename writes)
-- Changes to the encryption or envelope format
+- [Exclusion 1]
 
 ---
 
