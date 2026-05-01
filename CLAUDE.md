@@ -53,11 +53,12 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Reads actor identity from relay-injected headers (`x-generacy-actor-user-id`, `x-generacy-actor-session-id`).
   - Error shape: `{ error, code, details? }` — matches credhelper-daemon's `CredhelperErrorResponse`.
   - Crash-tolerant: failures must not block orchestrator boot; relay returns 503 from socket prefix.
+  - `src/services/tunnel-handler.ts` — NEW in #519: `TunnelHandler` class for bidirectional byte-streaming between relay WebSocket and code-server's Unix socket. Constructor DI: `RelayMessageSender` (just `send(message): void`), `CodeServerManager`, optional `allowedTarget` (default `/run/code-server.sock`). Methods: `handleOpen()` (target validation, auto-start code-server, connect socket, send `tunnel_open_ack`), `handleData()` (base64 decode, socket write, `touch()` idle reset), `handleClose()` (destroy socket), `cleanup()` (destroy all, stateless across reconnects). Tunnel state stored in `Map<tunnelId, net.Socket>`. Security: rejects any target other than `/run/code-server.sock` with `tunnel_open_ack { status: 'error', error: 'invalid target' }`.
 
 ## Cluster Relay
 
 - `packages/cluster-relay/` — WebSocket relay client connecting in-cluster orchestrator to Generacy cloud (`@generacy-ai/cluster-relay`). ESM, Node >=20, deps: `ws`, `zod`.
-  - `src/messages.ts` — Zod-validated message types: `ApiRequestMessage`, `ApiResponseMessage`, `HandshakeMessage`, `HeartbeatMessage`, `EventMessage`, `ErrorMessage`, `ConversationMessage`. Discriminated union on `type` field via `RelayMessageSchema`.
+  - `src/messages.ts` — Zod-validated message types: `ApiRequestMessage`, `ApiResponseMessage`, `HandshakeMessage`, `HeartbeatMessage`, `EventMessage`, `ErrorMessage`, `ConversationMessage`, `TunnelOpenMessage`, `TunnelOpenAckMessage`, `TunnelDataMessage`, `TunnelCloseMessage` (#519). Discriminated union on `type` field via `RelayMessageSchema`.
   - `src/proxy.ts` — Forwards relayed `api_request` messages to orchestrator HTTP. v1.5 #489 extends with path-prefix dispatcher: `routes` array of `{ prefix, target }` (HTTP URL or `unix://` socket), longest-prefix-match, prefix stripping, `orchestratorUrl` as implicit fallback. Actor identity propagated as `x-generacy-actor-user-id`/`x-generacy-actor-session-id` headers.
   - `src/config.ts` — `RelayConfig` loaded from env vars + overrides. v1.5 #489 adds `routes: RouteEntry[]`, `activationCode?`, `clusterApiKeyId?`.
   - `src/relay.ts` — `ClusterRelay` class: WebSocket lifecycle, state machine (disconnected→connecting→authenticating→connected), auto-reconnect with exponential backoff, heartbeat, message dispatch. v1.5 #489 adds `activation` field to handshake.
