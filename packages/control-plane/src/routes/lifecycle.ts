@@ -1,5 +1,5 @@
 import type http from 'node:http';
-import type { ActorContext } from '../context.js';
+import { type ActorContext, requireActor } from '../context.js';
 import { LifecycleActionSchema } from '../schemas.js';
 import { ControlPlaneError } from '../errors.js';
 import { getCodeServerManager } from '../services/code-server-manager.js';
@@ -7,9 +7,10 @@ import { getCodeServerManager } from '../services/code-server-manager.js';
 export async function handlePostLifecycle(
   _req: http.IncomingMessage,
   res: http.ServerResponse,
-  _actor: ActorContext,
+  actor: ActorContext,
   params: Record<string, string>,
 ): Promise<void> {
+  requireActor(actor);
   const action = params['action'] ?? '';
   const parsed = LifecycleActionSchema.safeParse(action);
 

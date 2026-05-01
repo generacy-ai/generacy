@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePostLifecycle } from '../../src/routes/lifecycle.js';
 import { ControlPlaneError } from '../../src/errors.js';
+import type { ActorContext } from '../../src/context.js';
 import {
   setCodeServerManager,
   type CodeServerManager,
@@ -60,7 +61,7 @@ describe('handlePostLifecycle', () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
 
-    await handlePostLifecycle(req, res, {}, { action: 'clone-peer-repos' });
+    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'clone-peer-repos' });
 
     expect(res.writeHead).toHaveBeenCalledWith(200);
     const body = JSON.parse(res._body);
@@ -75,7 +76,7 @@ describe('handlePostLifecycle', () => {
 
     const req = {} as IncomingMessage;
     const res = createMockResponse();
-    await handlePostLifecycle(req, res, {}, { action: 'code-server-start' });
+    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'code-server-start' });
 
     expect(manager.start).toHaveBeenCalledOnce();
     expect(res.writeHead).toHaveBeenCalledWith(200);
@@ -92,7 +93,7 @@ describe('handlePostLifecycle', () => {
     setCodeServerManager(manager);
 
     await expect(
-      handlePostLifecycle({} as IncomingMessage, createMockResponse(), {}, {
+      handlePostLifecycle({} as IncomingMessage, createMockResponse(), { userId: 'u-test' }, {
         action: 'code-server-start',
       }),
     ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE', message: 'binary not found' });
@@ -104,7 +105,7 @@ describe('handlePostLifecycle', () => {
 
     const req = {} as IncomingMessage;
     const res = createMockResponse();
-    await handlePostLifecycle(req, res, {}, { action: 'code-server-stop' });
+    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'code-server-stop' });
 
     expect(manager.stop).toHaveBeenCalledOnce();
     expect(res.writeHead).toHaveBeenCalledWith(200);
@@ -117,11 +118,11 @@ describe('handlePostLifecycle', () => {
     const res = createMockResponse();
 
     await expect(
-      handlePostLifecycle(req, res, {}, { action: 'invalid-action' }),
+      handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'invalid-action' }),
     ).rejects.toThrow(ControlPlaneError);
 
     try {
-      await handlePostLifecycle(req, res, {}, { action: 'invalid-action' });
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'invalid-action' });
     } catch (err) {
       expect(err).toBeInstanceOf(ControlPlaneError);
       expect((err as ControlPlaneError).code).toBe('UNKNOWN_ACTION');
@@ -132,9 +133,26 @@ describe('handlePostLifecycle', () => {
     const req = {} as IncomingMessage;
     const res = createMockResponse();
 
-    await handlePostLifecycle(req, res, {}, { action: 'clone-peer-repos' });
+    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'clone-peer-repos' });
 
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/json');
     expect(res._headers['Content-Type']).toBe('application/json');
+  });
+
+  it('throws UNAUTHORIZED when actor userId is missing', async () => {
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+    const noActor: ActorContext = {};
+
+    await expect(
+      handlePostLifecycle(req, res, noActor, { action: 'clone-peer-repos' }),
+    ).rejects.toThrow(ControlPlaneError);
+
+    try {
+      await handlePostLifecycle(req, res, noActor, { action: 'clone-peer-repos' });
+    } catch (err) {
+      expect((err as ControlPlaneError).code).toBe('UNAUTHORIZED');
+      expect((err as ControlPlaneError).message).toBe('Missing actor identity');
+    }
   });
 });

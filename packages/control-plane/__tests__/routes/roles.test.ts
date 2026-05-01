@@ -4,6 +4,7 @@ import type http from 'node:http';
 import type { IncomingMessage } from 'node:http';
 import { handleGetRole, handlePutRole } from '../../src/routes/roles.js';
 import type { ActorContext } from '../../src/context.js';
+import { ControlPlaneError } from '../../src/errors.js';
 
 function createMockResponse() {
   return {
@@ -79,5 +80,23 @@ describe('handlePutRole', () => {
     await handlePutRole(req, res as any, stubActor, { id: 'role-1' });
 
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/json');
+  });
+
+  it('throws UNAUTHORIZED when actor userId is missing', async () => {
+    const req = createBodyReq({ description: 'Updated role' });
+    const res = createMockResponse();
+    const noActor: ActorContext = {};
+
+    await expect(
+      handlePutRole(req, res as any, noActor, { id: 'role-1' }),
+    ).rejects.toThrow(ControlPlaneError);
+
+    try {
+      const req2 = createBodyReq({ description: 'Updated role' });
+      await handlePutRole(req2, res as any, noActor, { id: 'role-1' });
+    } catch (err) {
+      expect((err as ControlPlaneError).code).toBe('UNAUTHORIZED');
+      expect((err as ControlPlaneError).message).toBe('Missing actor identity');
+    }
   });
 });

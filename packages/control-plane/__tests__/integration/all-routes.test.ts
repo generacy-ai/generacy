@@ -108,10 +108,20 @@ describe('integration: all routes', () => {
   });
 
   // PUT /credentials/:id
-  it('PUT /credentials/:id accepts body', async () => {
-    const res = await request('PUT', '/credentials/my-cred', { type: 'api-key' });
+  it('PUT /credentials/:id accepts body with actor header', async () => {
+    const res = await request('PUT', '/credentials/my-cred', { type: 'api-key' }, {
+      'x-generacy-actor-user-id': 'user-123',
+    });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
+  });
+
+  it('PUT /credentials/:id without actor header returns 401', async () => {
+    const res = await request('PUT', '/credentials/my-cred', { type: 'api-key' });
+    expect(res.status).toBe(401);
+    const body = res.body as Record<string, unknown>;
+    expect(body).toHaveProperty('code', 'UNAUTHORIZED');
+    expect(body).toHaveProperty('error', 'Missing actor identity');
   });
 
   // GET /roles/:id
@@ -126,28 +136,40 @@ describe('integration: all routes', () => {
   });
 
   // PUT /roles/:id
-  it('PUT /roles/:id accepts body', async () => {
-    const res = await request('PUT', '/roles/my-role', { description: 'updated' });
+  it('PUT /roles/:id accepts body with actor header', async () => {
+    const res = await request('PUT', '/roles/my-role', { description: 'updated' }, {
+      'x-generacy-actor-user-id': 'user-123',
+    });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
   });
 
+  it('PUT /roles/:id without actor header returns 401', async () => {
+    const res = await request('PUT', '/roles/my-role', { description: 'updated' });
+    expect(res.status).toBe(401);
+    const body = res.body as Record<string, unknown>;
+    expect(body).toHaveProperty('code', 'UNAUTHORIZED');
+    expect(body).toHaveProperty('error', 'Missing actor identity');
+  });
+
   // POST /lifecycle/:action (valid)
+  const actorHeaders = { 'x-generacy-actor-user-id': 'user-123' };
+
   it('POST /lifecycle/clone-peer-repos returns accepted', async () => {
-    const res = await request('POST', '/lifecycle/clone-peer-repos');
+    const res = await request('POST', '/lifecycle/clone-peer-repos', undefined, actorHeaders);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ accepted: true, action: 'clone-peer-repos' });
   });
 
   it('POST /lifecycle/code-server-start returns runtime status + socket_path', async () => {
-    const res = await request('POST', '/lifecycle/code-server-start');
+    const res = await request('POST', '/lifecycle/code-server-start', undefined, actorHeaders);
     expect(res.status).toBe(200);
     expect(fakeCodeServer.start).toHaveBeenCalled();
     expect(res.body).toEqual({ status: 'starting', socket_path: '/run/code-server.sock' });
   });
 
   it('POST /lifecycle/code-server-stop calls manager.stop and returns accepted', async () => {
-    const res = await request('POST', '/lifecycle/code-server-stop');
+    const res = await request('POST', '/lifecycle/code-server-stop', undefined, actorHeaders);
     expect(res.status).toBe(200);
     expect(fakeCodeServer.stop).toHaveBeenCalled();
     expect(res.body).toEqual({ accepted: true, action: 'code-server-stop' });
@@ -155,11 +177,19 @@ describe('integration: all routes', () => {
 
   // POST /lifecycle/:action (invalid)
   it('POST /lifecycle/invalid returns 400 UNKNOWN_ACTION', async () => {
-    const res = await request('POST', '/lifecycle/invalid');
+    const res = await request('POST', '/lifecycle/invalid', undefined, actorHeaders);
     expect(res.status).toBe(400);
     const body = res.body as Record<string, unknown>;
     expect(body).toHaveProperty('code', 'UNKNOWN_ACTION');
     expect(body).toHaveProperty('error');
+  });
+
+  it('POST /lifecycle/:action without actor header returns 401', async () => {
+    const res = await request('POST', '/lifecycle/clone-peer-repos');
+    expect(res.status).toBe(401);
+    const body = res.body as Record<string, unknown>;
+    expect(body).toHaveProperty('code', 'UNAUTHORIZED');
+    expect(body).toHaveProperty('error', 'Missing actor identity');
   });
 
   // POST /internal/status
