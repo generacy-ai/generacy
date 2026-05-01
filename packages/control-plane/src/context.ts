@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import { ControlPlaneError } from './errors.js';
 
 export interface ActorContext {
   userId?: string;
@@ -18,4 +19,10 @@ export function extractActorContext(req: http.IncomingMessage): ActorContext {
     userId: getHeader(req, 'x-generacy-actor-user-id'),
     sessionId: getHeader(req, 'x-generacy-actor-session-id'),
   };
+}
+
+export function requireActor(actor: ActorContext): void {
+  if (!actor.userId) {
+    throw new ControlPlaneError('UNAUTHORIZED', 'Missing actor identity');
+  }
 }

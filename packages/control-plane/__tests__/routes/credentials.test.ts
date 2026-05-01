@@ -6,6 +6,7 @@ import {
   handleGetCredential,
   handlePutCredential,
 } from '../../src/routes/credentials.js';
+import { ControlPlaneError } from '../../src/errors.js';
 
 function createMockResponse() {
   return {
@@ -96,5 +97,23 @@ describe('handlePutCredential', () => {
     await handlePutCredential(req, res as any, stubActor, { id: 'cred-42' });
 
     expect(res.setHeader).toHaveBeenCalledWith('Content-Type', 'application/json');
+  });
+
+  it('throws UNAUTHORIZED when actor userId is missing', async () => {
+    const req = createBodyReq({ type: 'api-key' });
+    const res = createMockResponse();
+    const noActor: ActorContext = {};
+
+    await expect(
+      handlePutCredential(req, res as any, noActor, { id: 'cred-42' }),
+    ).rejects.toThrow(ControlPlaneError);
+
+    try {
+      const req2 = createBodyReq({ type: 'api-key' });
+      await handlePutCredential(req2, res as any, noActor, { id: 'cred-42' });
+    } catch (err) {
+      expect((err as ControlPlaneError).code).toBe('UNAUTHORIZED');
+      expect((err as ControlPlaneError).message).toBe('Missing actor identity');
+    }
   });
 });

@@ -1,6 +1,7 @@
 import http from 'node:http';
 
 export type ControlPlaneErrorCode =
+  | 'UNAUTHORIZED'
   | 'INVALID_REQUEST'
   | 'NOT_FOUND'
   | 'UNKNOWN_ACTION'
@@ -14,6 +15,7 @@ export interface ControlPlaneErrorResponse {
 }
 
 const HTTP_STATUS_MAP: Record<ControlPlaneErrorCode, number> = {
+  UNAUTHORIZED: 401,
   INVALID_REQUEST: 400,
   NOT_FOUND: 404,
   UNKNOWN_ACTION: 400,

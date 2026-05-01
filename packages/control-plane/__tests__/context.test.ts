@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { IncomingMessage } from 'node:http';
-import { extractActorContext } from '../src/context.js';
+import { extractActorContext, requireActor } from '../src/context.js';
+import { ControlPlaneError } from '../src/errors.js';
 
 function fakeReq(headers: Record<string, string | undefined>): IncomingMessage {
   const clean: Record<string, string> = {};
@@ -59,5 +60,26 @@ describe('extractActorContext', () => {
       userId: undefined,
       sessionId: undefined,
     });
+  });
+});
+
+describe('requireActor', () => {
+  it('does not throw when userId is present', () => {
+    expect(() => requireActor({ userId: 'u-123' })).not.toThrow();
+  });
+
+  it('throws UNAUTHORIZED when userId is undefined', () => {
+    expect(() => requireActor({})).toThrow(ControlPlaneError);
+    try {
+      requireActor({});
+    } catch (err) {
+      expect(err).toBeInstanceOf(ControlPlaneError);
+      expect((err as ControlPlaneError).code).toBe('UNAUTHORIZED');
+      expect((err as ControlPlaneError).message).toBe('Missing actor identity');
+    }
+  });
+
+  it('throws UNAUTHORIZED when userId is empty string', () => {
+    expect(() => requireActor({ userId: '' })).toThrow(ControlPlaneError);
   });
 });
