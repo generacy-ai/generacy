@@ -22,6 +22,7 @@ export const LaunchConfigSchema = z.object({
   cloudUrl: z.string().url(),
   clusterId: z.string().min(1),
   imageTag: z.string().min(1),
+  orgId: z.string().min(1),
   repos: z.object({
     primary: z.string().min(1),
     dev: z.string().optional(),
@@ -34,49 +35,3 @@ export const LaunchConfigSchema = z.object({
  */
 export type LaunchConfig = z.infer<typeof LaunchConfigSchema>;
 
-/**
- * Entry in ~/.generacy/clusters.json. Schema defined by #494.
- */
-export interface ClusterRegistryEntry {
-  clusterId: string;
-  name: string;
-  path: string;
-  composePath: string;
-  variant: string;
-  channel: string;
-  cloudUrl: string;
-  lastSeen: string;
-  createdAt: string;
-}
-
-/**
- * Full registry file at ~/.generacy/clusters.json.
- */
-export type ClusterRegistry = ClusterRegistryEntry[];
-
-/**
- * Runtime cluster config written to .generacy/cluster.yaml.
- */
-export interface ClusterYaml {
-  variant: string;
-  imageTag: string;
-  cloudUrl: string;
-  ports: {
-    orchestrator: number;
-    relay: number;
-    controlPlane: number;
-  };
-}
-
-/**
- * Machine-readable metadata written to .generacy/cluster.json.
- */
-export interface ClusterMetadata {
-  clusterId: string;
-  projectId: string;
-  projectName: string;
-  variant: string;
-  cloudUrl: string;
-  imageTag: string;
-  createdAt: string;
-}

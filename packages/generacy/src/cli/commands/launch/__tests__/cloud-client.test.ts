@@ -28,10 +28,11 @@ afterAll(() => {
 const VALID_LAUNCH_CONFIG = {
   projectId: 'proj_abc123',
   projectName: 'my-project',
-  variant: 'standard',
+  variant: 'cluster-base',
   cloudUrl: 'https://api.generacy.ai',
   clusterId: 'cluster_abc123',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+  orgId: 'org_abc123',
   repos: { primary: 'generacy-ai/example-project' },
 };
 

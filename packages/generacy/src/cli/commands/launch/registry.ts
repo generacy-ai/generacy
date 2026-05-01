@@ -1,39 +1,17 @@
 /**
- * Cluster registry — persists cluster entries to ~/.generacy/clusters.json.
+ * Cluster registry — validates and persists entries via the shared registry.
  */
-import { readFileSync, writeFileSync, renameSync, mkdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
-import { homedir } from 'node:os';
-
-import type { ClusterRegistryEntry } from './types.js';
-
-const REGISTRY_DIR = join(homedir(), '.generacy');
-const REGISTRY_FILE = join(REGISTRY_DIR, 'clusters.json');
-const REGISTRY_TMP = join(REGISTRY_DIR, 'clusters.json.tmp');
+import { RegistryEntrySchema, readRegistry, writeRegistry, type RegistryEntry } from '../cluster/registry.js';
 
 /**
- * Appends a cluster entry to `~/.generacy/clusters.json`.
- *
- * Creates the directory and file if they do not already exist.
- * Uses atomic write (temp file + rename) to avoid partial writes.
- *
- * @param entry - The cluster registry entry to append. `createdAt` and
- *   `lastSeen` are expected to be set by the caller.
+ * Validates an entry against the shared RegistryEntrySchema and appends it
+ * to `~/.generacy/clusters.json`.
  */
-export function registerCluster(entry: ClusterRegistryEntry): void {
-  if (!existsSync(REGISTRY_DIR)) {
-    mkdirSync(REGISTRY_DIR, { recursive: true });
-  }
+export function registerCluster(entry: RegistryEntry): void {
+  // Validate against the shared schema (throws on invalid data)
+  RegistryEntrySchema.parse(entry);
 
-  let entries: ClusterRegistryEntry[] = [];
-
-  if (existsSync(REGISTRY_FILE)) {
-    const raw = readFileSync(REGISTRY_FILE, 'utf-8');
-    entries = JSON.parse(raw) as ClusterRegistryEntry[];
-  }
-
-  entries.push(entry);
-
-  writeFileSync(REGISTRY_TMP, JSON.stringify(entries, null, 2), 'utf-8');
-  renameSync(REGISTRY_TMP, REGISTRY_FILE);
+  const registry = readRegistry();
+  registry.push(entry);
+  writeRegistry(registry);
 }

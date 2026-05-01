@@ -15,6 +15,7 @@ import { Command } from 'commander';
 import * as p from '@clack/prompts';
 import { getLogger } from '../../utils/logger.js';
 import { execSafe } from '../../utils/exec.js';
+import { checkNodeVersion } from '../../utils/node-version.js';
 import type { LaunchOptions } from './types.js';
 import { promptClaimCode, confirmDirectory } from './prompts.js';
 import { fetchLaunchConfig } from './cloud-client.js';
@@ -41,13 +42,6 @@ export function launchCommand(): Command {
   return command;
 }
 
-/**
- * Validate Node.js version is >=20.
- */
-function validateNodeVersion(): boolean {
-  const major = parseInt(process.versions.node.split('.')[0]!, 10);
-  return major >= 20;
-}
 
 /**
  * Validate Docker daemon is reachable.
@@ -86,10 +80,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   p.intro('generacy launch');
 
   // ── 1. Validate Node version ────────────────────────────────────────
-  if (!validateNodeVersion()) {
-    p.log.error('Node.js 20+ is required. Install via nvm: `nvm install 20`');
-    process.exit(1);
-  }
+  checkNodeVersion(22);
 
   // ── 2. Validate Docker ──────────────────────────────────────────────
   const dockerStatus = validateDocker();
@@ -190,16 +181,17 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   // ── 11. Register cluster ────────────────────────────────────────────
   try {
     const composePath = resolve(projectDir, '.generacy', 'docker-compose.yml');
+    const now = new Date().toISOString();
     registerCluster({
       clusterId: config.clusterId,
       name: config.projectName,
       path: projectDir,
       composePath,
-      variant: config.variant,
+      variant: (config.variant as 'cluster-base' | 'cluster-microservices') ?? 'cluster-base',
       channel: 'stable',
       cloudUrl: config.cloudUrl,
-      lastSeen: new Date().toISOString(),
-      createdAt: new Date().toISOString(),
+      lastSeen: now,
+      createdAt: now,
     });
     logger.debug('Cluster registered in ~/.generacy/clusters.json');
   } catch (error) {

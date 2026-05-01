@@ -25,7 +25,7 @@ import { getClusterContext } from '../context.js';
 // Fixture content
 // ---------------------------------------------------------------------------
 
-const CLUSTER_YAML = `channel: stable\nworkers: 1\nvariant: standard\n`;
+const CLUSTER_YAML = `channel: stable\nworkers: 1\nvariant: cluster-base\n`;
 
 const CLUSTER_JSON = JSON.stringify({
   cluster_id: 'clst_123',
@@ -106,7 +106,7 @@ describe('getClusterContext', () => {
     expect(ctx.clusterConfig).toEqual({
       channel: 'stable',
       workers: 1,
-      variant: 'standard',
+      variant: 'cluster-base',
     });
     expect(ctx.clusterIdentity).not.toBeNull();
     expect(ctx.projectName).toBe('clst_123');
@@ -197,7 +197,7 @@ describe('getClusterContext', () => {
     expect(ctx.clusterConfig).toEqual({
       channel: 'stable',
       workers: 1,
-      variant: 'standard',
+      variant: 'cluster-base',
     });
   });
 });

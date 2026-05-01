@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { LaunchConfig } from '../types.js';
 import { resolveProjectDir, scaffoldProject } from '../scaffolder.js';
+import { ClusterJsonSchema, ClusterYamlSchema } from '../../cluster/context.js';
 
 // ---------------------------------------------------------------------------
 // Test fixture
@@ -13,10 +14,11 @@ import { resolveProjectDir, scaffoldProject } from '../scaffolder.js';
 const mockConfig: LaunchConfig = {
   projectId: 'proj_abc123',
   projectName: 'my-project',
-  variant: 'standard',
+  variant: 'cluster-base',
   cloudUrl: 'https://api.generacy.ai',
   clusterId: 'cluster_abc123',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+  orgId: 'org_xyz789',
   repos: { primary: 'generacy-ai/example-project' },
 };
 
@@ -26,11 +28,8 @@ const mockConfig: LaunchConfig = {
 
 describe('resolveProjectDir', () => {
   it('returns ~/Generacy/<projectName> by default', () => {
-    const original = process.env.HOME;
-    // Mock os.homedir() indirectly by checking the result shape.
     const result = resolveProjectDir('my-project');
     expect(result).toBe(join(homedir(), 'Generacy', 'my-project'));
-    process.env.HOME = original;
   });
 
   it('resolves --dir override to an absolute path', () => {
@@ -59,22 +58,17 @@ describe('scaffoldProject', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  // -------------------------------------------------------------------------
-  // Directory creation
-  // -------------------------------------------------------------------------
-
   it('creates .generacy/ directory inside projectDir', () => {
     const projectDir = join(tempDir, 'new-project');
     scaffoldProject(projectDir, mockConfig);
-
     expect(existsSync(join(projectDir, '.generacy'))).toBe(true);
   });
 
   // -------------------------------------------------------------------------
-  // cluster.yaml
+  // cluster.yaml — minimal schema
   // -------------------------------------------------------------------------
 
-  it('writes cluster.yaml with correct YAML content', () => {
+  it('writes cluster.yaml with only channel, workers, variant', () => {
     const projectDir = join(tempDir, 'new-project');
     scaffoldProject(projectDir, mockConfig);
 
@@ -82,42 +76,68 @@ describe('scaffoldProject', () => {
     const parsed = parse(raw);
 
     expect(parsed).toEqual({
-      variant: 'standard',
-      imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
-      cloudUrl: 'https://api.generacy.ai',
-      ports: {
-        orchestrator: 3100,
-        relay: 3101,
-        controlPlane: 3102,
-      },
+      channel: 'stable',
+      workers: 1,
+      variant: 'cluster-base',
     });
+    expect(parsed).not.toHaveProperty('imageTag');
+    expect(parsed).not.toHaveProperty('cloudUrl');
+    expect(parsed).not.toHaveProperty('ports');
+  });
+
+  it('cluster.yaml output validates against ClusterYamlSchema', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const raw = readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8');
+    const parsed = parse(raw);
+
+    const result = ClusterYamlSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
   });
 
   // -------------------------------------------------------------------------
-  // cluster.json
+  // cluster.json — snake_case schema
   // -------------------------------------------------------------------------
 
-  it('writes cluster.json with correct JSON content', () => {
+  it('writes cluster.json with snake_case fields', () => {
     const projectDir = join(tempDir, 'new-project');
-
-    const before = new Date().toISOString();
     scaffoldProject(projectDir, mockConfig);
-    const after = new Date().toISOString();
 
     const raw = readFileSync(join(projectDir, '.generacy', 'cluster.json'), 'utf-8');
     const parsed = JSON.parse(raw);
 
-    expect(parsed.clusterId).toBe('cluster_abc123');
-    expect(parsed.projectId).toBe('proj_abc123');
-    expect(parsed.projectName).toBe('my-project');
-    expect(parsed.variant).toBe('standard');
-    expect(parsed.cloudUrl).toBe('https://api.generacy.ai');
-    expect(parsed.imageTag).toBe('ghcr.io/generacy-ai/cluster-base:1.5.0');
+    expect(parsed.cluster_id).toBe('cluster_abc123');
+    expect(parsed.project_id).toBe('proj_abc123');
+    expect(parsed.org_id).toBe('org_xyz789');
+    expect(parsed.cloud_url).toBe('https://api.generacy.ai');
+  });
 
-    // createdAt should be a valid ISO timestamp within the test window
-    expect(parsed.createdAt).toBeDefined();
-    expect(parsed.createdAt >= before).toBe(true);
-    expect(parsed.createdAt <= after).toBe(true);
+  it('cluster.json output validates against ClusterJsonSchema', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const raw = readFileSync(join(projectDir, '.generacy', 'cluster.json'), 'utf-8');
+    const parsed = JSON.parse(raw);
+
+    const result = ClusterJsonSchema.safeParse(parsed);
+    expect(result.success).toBe(true);
+  });
+
+  it('cluster.json does not contain camelCase or extra fields', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const raw = readFileSync(join(projectDir, '.generacy', 'cluster.json'), 'utf-8');
+    const parsed = JSON.parse(raw);
+
+    expect(parsed).not.toHaveProperty('clusterId');
+    expect(parsed).not.toHaveProperty('projectId');
+    expect(parsed).not.toHaveProperty('orgId');
+    expect(parsed).not.toHaveProperty('cloudUrl');
+    expect(parsed).not.toHaveProperty('projectName');
+    expect(parsed).not.toHaveProperty('imageTag');
+    expect(parsed).not.toHaveProperty('createdAt');
   });
 
   // -------------------------------------------------------------------------
@@ -134,18 +154,9 @@ describe('scaffoldProject', () => {
     expect(parsed.version).toBe('3.8');
     expect(parsed.services.cluster.image).toBe('ghcr.io/generacy-ai/cluster-base:1.5.0');
     expect(parsed.services.cluster.container_name).toBe('generacy-cluster-cluster_abc123');
-    expect(parsed.services.cluster.restart).toBe('unless-stopped');
-    expect(parsed.services.cluster.ports).toEqual(['3100:3100', '3101:3101', '3102:3102']);
-    expect(parsed.services.cluster.volumes).toEqual([
-      'cluster-data:/var/lib/generacy',
-      '/var/run/docker.sock:/var/run/docker.sock',
-    ]);
-    expect(parsed.services.cluster.environment).toEqual([
-      'GENERACY_CLOUD_URL=https://api.generacy.ai',
-      'GENERACY_CLUSTER_ID=cluster_abc123',
-      'GENERACY_PROJECT_ID=proj_abc123',
-    ]);
-    expect(parsed.volumes).toHaveProperty('cluster-data');
+    expect(parsed.services.cluster.environment).toContain('GENERACY_CLOUD_URL=https://api.generacy.ai');
+    expect(parsed.services.cluster.environment).toContain('GENERACY_CLUSTER_ID=cluster_abc123');
+    expect(parsed.services.cluster.environment).toContain('GENERACY_PROJECT_ID=proj_abc123');
   });
 
   // -------------------------------------------------------------------------

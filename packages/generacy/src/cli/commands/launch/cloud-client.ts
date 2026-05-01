@@ -15,10 +15,11 @@ import { LaunchConfigSchema, type LaunchConfig } from './types.js';
 const STUB_LAUNCH_CONFIG: LaunchConfig = {
   projectId: 'proj_stub001',
   projectName: 'stub-project',
-  variant: 'standard',
+  variant: 'cluster-base',
   cloudUrl: 'http://localhost:3000',
   clusterId: 'cluster_stub001',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:dev',
+  orgId: 'org_stub001',
   repos: { primary: 'generacy-ai/example-project' },
 };
 
