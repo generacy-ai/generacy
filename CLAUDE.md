@@ -107,7 +107,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `index.ts` — Command registration (Commander.js) + main orchestration flow: validate Node/Docker, fetch launch-config, scaffold, compose up, stream logs, open browser, register cluster. #518 fix: Node version gate `>=22` (was `>=20`), uses shared scaffolder and validated registry writes.
   - `cloud-client.ts` — `fetchLaunchConfig(cloudUrl, claimCode)`: `GET /api/clusters/launch-config?claim=<code>`. Returns `LaunchConfig` (projectId, projectName, variant, cloudUrl, clusterId, imageTag, orgId, repos). Uses `node:https`. Stub mode via `GENERACY_LAUNCH_STUB=1`.
   - `scaffolder.ts` — Delegates to shared `cluster/scaffolder.ts` for writing `.generacy/` config files. #518 fix: writes snake_case `cluster.json` (`cluster_id`, `project_id`, `org_id`, `cloud_url`), minimal `cluster.yaml` (`channel`, `workers`, `variant` only).
-  - `types.ts` — `LaunchConfigSchema` with required `orgId` field (#518). Local `ClusterMetadata`/`ClusterYaml`/`ClusterRegistryEntry` types removed in favor of shared schemas.
+  - `types.ts` — `LaunchConfigSchema` with required `orgId` field (#518). `repos.dev` and `repos.clone` are `z.array(z.string()).optional()` (#528 — cloud returns arrays, not strings). Local `ClusterMetadata`/`ClusterYaml`/`ClusterRegistryEntry` types removed in favor of shared schemas.
   - `compose.ts` — `docker compose pull` + `up -d` + log streaming. Matches `"Go to:"` pattern to extract `verification_uri` and `user_code`.
   - `browser.ts` — Cross-platform browser open: `open` (macOS), `start` (Windows), print URL (Linux).
   - `registry.ts` — Validates entries against shared `RegistryEntrySchema` from `cluster/registry.ts` before writing (#518).
