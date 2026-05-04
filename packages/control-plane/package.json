@@ -25,6 +25,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@generacy-ai/credhelper": "workspace:*",
+    "yaml": "^2.7.0",
     "zod": "^3.23.0"
   },
   "devDependencies": {

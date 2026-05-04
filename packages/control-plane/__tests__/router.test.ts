@@ -116,7 +116,7 @@ describe('dispatch', () => {
   });
 
   it('POST /lifecycle/clone-peer-repos dispatches to lifecycle handler and returns 200', async () => {
-    const req = createMockReq('POST', '/lifecycle/clone-peer-repos');
+    const req = createMockReqWithBody('POST', '/lifecycle/clone-peer-repos', JSON.stringify({ repos: [] }));
     const res = createMockRes();
 
     await dispatch(req, res, actor);
