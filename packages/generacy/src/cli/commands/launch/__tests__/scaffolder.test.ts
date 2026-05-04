@@ -161,6 +161,8 @@ describe('scaffoldProject', () => {
     expect(parsed.services.cluster.environment).toContain('GENERACY_CLOUD_URL=https://api.generacy.ai');
     expect(parsed.services.cluster.environment).toContain('GENERACY_CLUSTER_ID=cluster_abc123');
     expect(parsed.services.cluster.environment).toContain('GENERACY_PROJECT_ID=proj_abc123');
+    expect(parsed.services.cluster.environment).toContain('DEPLOYMENT_MODE=local');
+    expect(parsed.services.cluster.environment).toContain('CLUSTER_VARIANT=cluster-base');
   });
 
   // -------------------------------------------------------------------------

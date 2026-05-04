@@ -10,23 +10,23 @@
 
 ## Phase 1: Core Fix
 
-- [ ] T001 [US1][US2] Extend `ScaffoldComposeInput` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — add `variant: 'cluster-base' | 'cluster-microservices'` (required) and `deploymentMode?: 'local' | 'cloud'` (optional, defaults to `'local'`)
-- [ ] T002 [US1][US2] Add `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars to the `environment` array in `scaffoldDockerCompose()` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
+- [X] T001 [US1][US2] Extend `ScaffoldComposeInput` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — add `variant: 'cluster-base' | 'cluster-microservices'` (required) and `deploymentMode?: 'local' | 'cloud'` (optional, defaults to `'local'`)
+- [X] T002 [US1][US2] Add `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars to the `environment` array in `scaffoldDockerCompose()` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
 
 ## Phase 2: Caller Updates
 
-- [ ] T003 [P] [US1] Update `packages/generacy/src/cli/commands/launch/scaffolder.ts` — pass `variant: config.variant` to `scaffoldDockerCompose()` call (deploymentMode omitted, defaults to `'local'`)
-- [ ] T004 [P] [US2] Update `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — pass `variant: config.variant` and `deploymentMode: 'cloud'` to `scaffoldDockerCompose()` call
+- [X] T003 [P] [US1] Update `packages/generacy/src/cli/commands/launch/scaffolder.ts` — pass `variant: config.variant` to `scaffoldDockerCompose()` call (deploymentMode omitted, defaults to `'local'`)
+- [X] T004 [P] [US2] Update `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — pass `variant: config.variant` and `deploymentMode: 'cloud'` to `scaffoldDockerCompose()` call
 
 ## Phase 3: Test Updates
 
-- [ ] T005 [P] [US1][US2] Update `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — add `variant` to test inputs, assert `DEPLOYMENT_MODE=local` and `CLUSTER_VARIANT=cluster-base` in compose output
-- [ ] T006 [P] [US1] Update `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts` — assert `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars present in scaffolded compose output
-- [ ] T007 [P] [US2] Update `packages/generacy/tests/unit/deploy/scaffolder.test.ts` — assert `DEPLOYMENT_MODE=cloud` and correct `CLUSTER_VARIANT` in compose output
+- [X] T005 [P] [US1][US2] Update `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — add `variant` to test inputs, assert `DEPLOYMENT_MODE=local` and `CLUSTER_VARIANT=cluster-base` in compose output
+- [X] T006 [P] [US1] Update `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts` — assert `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars present in scaffolded compose output
+- [X] T007 [P] [US2] Update `packages/generacy/tests/unit/deploy/scaffolder.test.ts` — assert `DEPLOYMENT_MODE=cloud` and correct `CLUSTER_VARIANT` in compose output
 
 ## Phase 4: Verification
 
-- [ ] T008 Run `pnpm test` in `packages/generacy/` to verify all tests pass
+- [X] T008 Run `pnpm test` in `packages/generacy/` to verify all tests pass
 
 ## Dependencies & Execution Order
 

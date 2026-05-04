@@ -145,6 +145,8 @@ describe('scaffoldBundle', () => {
         `GENERACY_CLOUD_URL=${testCloudUrl}`,
         'GENERACY_CLUSTER_ID=cluster-abc',
         'GENERACY_PROJECT_ID=proj-123',
+        'DEPLOYMENT_MODE=cloud',
+        'CLUSTER_VARIANT=standard',
       ]);
     });
   });
