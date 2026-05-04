@@ -67,5 +67,6 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     clusterId: config.clusterId,
     projectId: config.projectId,
     cloudUrl: config.cloudUrl,
+    variant: config.variant as 'cluster-base' | 'cluster-microservices',
   });
 }

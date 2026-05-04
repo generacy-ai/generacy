@@ -25,6 +25,8 @@ export interface ScaffoldComposeInput {
   clusterId: string;
   projectId: string;
   cloudUrl: string;
+  variant: 'cluster-base' | 'cluster-microservices';
+  deploymentMode?: 'local' | 'cloud';
 }
 
 /**
@@ -75,6 +77,8 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           `GENERACY_CLOUD_URL=${input.cloudUrl}`,
           `GENERACY_CLUSTER_ID=${input.clusterId}`,
           `GENERACY_PROJECT_ID=${input.projectId}`,
+          `DEPLOYMENT_MODE=${input.deploymentMode ?? 'local'}`,
+          `CLUSTER_VARIANT=${input.variant}`,
         ],
       },
     },

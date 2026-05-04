@@ -128,6 +128,7 @@ describe('scaffoldDockerCompose', () => {
       clusterId: 'clust_abc',
       projectId: 'proj_def',
       cloudUrl: 'https://api.generacy.ai',
+      variant: 'cluster-base',
     });
 
     const raw = readFileSync(join(dir, 'docker-compose.yml'), 'utf-8');
@@ -137,5 +138,7 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.cluster.environment).toContain('GENERACY_CLUSTER_ID=clust_abc');
     expect(parsed.services.cluster.environment).toContain('GENERACY_PROJECT_ID=proj_def');
     expect(parsed.services.cluster.environment).toContain('GENERACY_CLOUD_URL=https://api.generacy.ai');
+    expect(parsed.services.cluster.environment).toContain('DEPLOYMENT_MODE=local');
+    expect(parsed.services.cluster.environment).toContain('CLUSTER_VARIANT=cluster-base');
   });
 });

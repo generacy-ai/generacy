@@ -45,6 +45,8 @@ export function scaffoldBundle(
     clusterId: activation.clusterId,
     projectId: activation.projectId,
     cloudUrl,
+    variant: config.variant as 'cluster-base' | 'cluster-microservices',
+    deploymentMode: 'cloud',
   });
 
   return tmpDir;

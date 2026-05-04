@@ -114,7 +114,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `prompts.ts` — Interactive prompts via `@clack/prompts` for claim code input and directory confirmation.
   - CLI flags: `--claim <code>`, `--dir <path>`. Default project dir: `~/Generacy/<projectName>`.
   - Standalone from `init` command — writes only cloud-flow config files. Convergence deferred.
-  - Shared scaffolder at `commands/cluster/scaffolder.ts` (#518): `scaffoldClusterJson()`, `scaffoldClusterYaml()`, `scaffoldDockerCompose()` — used by both launch and deploy commands. Ensures consistent file formats.
+  - Shared scaffolder at `commands/cluster/scaffolder.ts` (#518): `scaffoldClusterJson()`, `scaffoldClusterYaml()`, `scaffoldDockerCompose()` — used by both launch and deploy commands. Ensures consistent file formats. #531 fix: `ScaffoldComposeInput` gains `variant` (required) and `deploymentMode` (optional, default `'local'`); generated `docker-compose.yml` now includes `DEPLOYMENT_MODE` and `CLUSTER_VARIANT` env vars. Deploy scaffolder passes `deploymentMode: 'cloud'`.
   - Schema conventions (#518): `cluster.json` uses snake_case (matches orchestrator's `/var/lib/generacy/cluster.json`). `activated_at` optional (populated container-side post-activation). `variant` enum: `'cluster-base' | 'cluster-microservices'` (matches GHCR image names).
 
 ## CLI claude-login and open Commands
