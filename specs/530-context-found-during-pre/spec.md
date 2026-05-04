@@ -42,21 +42,23 @@ export const LifecycleActionSchema = z.enum([
 
 ### 2. `clone-peer-repos` handler
 
-Reads peer repos list from request body (cloud forwards `repos: { primary, dev?, clone? }` derived from project metadata, or alternatively the cluster reads from `.generacy/config.yaml` / `cluster.yaml` if it persists those — verify which side has authority post-launch).
+Reads `cloneRepos` list from request body. Cloud forwards `{ repos: string[], token?: string }` — `repos` is the project's `cloneRepos` array (excludes primary, which is already mounted as the workspace). `token` is an optional short-lived GitHub App installation token for private repos (minted server-side via existing GitHub App infrastructure). Public repos omit the token.
 
-For each repo:
-- Spawn `git clone <repo> /workspaces/<name>` (or wherever peer repos belong; check existing convention)
+For each repo in the `repos` array:
+- If `token` is provided, clone via HTTPS with `x-access-token` pattern: `https://x-access-token:<token>@github.com/<owner>/<repo>.git`
+- Spawn `git clone <repo-url> /workspaces/<name>`
 - Emit `cluster.bootstrap` event via the relay: `{ event: 'cluster.bootstrap', data: { repo, status: 'cloning' } }` at start, then `{ status: 'done' | 'failed', message? }` per repo on completion.
+- If `repos` is empty, immediately emit `{ event: 'cluster.bootstrap', data: { status: 'done', message: 'no peer repos' } }` and return success.
 
-**Relay access pattern**: same as `TunnelHandler` (#519) — accept a `relayMessageSender` callback at boot. The orchestrator wires this in `server.ts` similar to how it wires `tunnelHandler`. Without this, the handler can't push events to the relay.
+**Relay access pattern**: use the existing `setRelayPushEvent` module-level function setter (same pattern as audit event wiring in #499). Call `pushEventFn('cluster.bootstrap', data)`. No need for TunnelHandler-style constructor DI since these are channel-events, not tunnel messages.
 
 Idempotent (safe to retry per #440-Q5): existing repos at the target path skip cloning, just re-emit `done`.
 
 ### 3. `set-default-role` handler
 
-Reads `{ role: string }` from request body. Validates the role exists in `.agency/roles/<role>.yaml` (committed by the project, not generated). Writes `defaults.role: <role>` to `.generacy/config.yaml`. Returns `{ accepted: true, action: 'set-default-role' }`.
+Reads `{ role: string }` from request body. Validates the role exists in `.agency/roles/<role>.yaml` (committed by the project, not generated). Writes `defaults.role: <role>` to `.generacy/config.yaml` using the `yaml` npm package for proper round-trip YAML parse/modify/serialize. Atomic write via temp + rename. If `.generacy/config.yaml` doesn't exist yet, create it with `{ defaults: { role } }`. Returns `{ accepted: true, action: 'set-default-role' }`.
 
-Fail closed if role doesn't exist or config.yaml is missing.
+Fail closed if role doesn't exist.
 
 ### 4. `stop` handler
 
@@ -66,7 +68,7 @@ For v1.5, can stay as `{ accepted: true, action: 'stop' }` stub since the button
 
 - `LifecycleActionSchema` accepts all 5 actions matching cloud's enum.
 - `POST /lifecycle/set-default-role { role: 'developer' }` writes to `.generacy/config.yaml` and returns `{ accepted: true, action: 'set-default-role' }`.
-- `POST /lifecycle/clone-peer-repos` clones each repo and emits per-repo `cluster.bootstrap` events on the relay channel; cloud-side SSE consumer (`services/api/src/routes/events/bootstrap.ts`) receives them.
+- `POST /lifecycle/clone-peer-repos { repos: string[], token?: string }` clones each repo (using `x-access-token` HTTPS pattern for private repos) and emits per-repo `cluster.bootstrap` events via `setRelayPushEvent`; cloud-side SSE consumer (`services/api/src/routes/events/bootstrap.ts`) receives them.
 - Role selection step in wizard advances on success.
 - Peer repos step in wizard shows per-repo progress and auto-advances when all `done` (per #440-Q4 1.5s delay).
 - Integration test exercises both handlers against a fake repo set; verifies events emitted in expected order.
@@ -109,7 +111,7 @@ Identified during integration sweep after the previous round of fixes (#516-#521
 |----|-------------|----------|-------|
 | FR-001 | Extend `LifecycleActionSchema` to 5 actions matching cloud enum | P0 | Schema: `clone-peer-repos`, `set-default-role`, `code-server-start`, `code-server-stop`, `stop` |
 | FR-002 | Implement `set-default-role` handler — validate role, write config | P0 | Fail closed if role file missing |
-| FR-003 | Implement `clone-peer-repos` handler — clone repos, emit events | P0 | Relay access via `relayMessageSender` callback (same pattern as TunnelHandler) |
+| FR-003 | Implement `clone-peer-repos` handler — clone repos, emit events | P0 | Body: `{ repos: string[], token?: string }`. Relay via `setRelayPushEvent` (#499 pattern) |
 | FR-004 | `stop` action accepted by schema but stays as stub | P2 | Cloud-only, not on local-launch critical path |
 | FR-005 | Relay event emission for `cluster.bootstrap` channel | P0 | Required for wizard progress tracking |
 | FR-006 | Idempotent clone behavior | P1 | Skip existing repos, re-emit `done` |
@@ -126,15 +128,18 @@ Identified during integration sweep after the previous round of fixes (#516-#521
 ## Assumptions
 
 - `.agency/roles/<role>.yaml` files are committed to the project repo (not generated at runtime)
-- Relay message sender is wirable via the same DI pattern used for `TunnelHandler` in #519
+- Relay event emission uses existing `setRelayPushEvent` pattern (same as audit wiring in #499)
 - Peer repos are cloned to `/workspaces/<repo-name>` (convention from existing workspace layout)
-- Cloud forwards the repos list in the lifecycle request body (not read from local config)
+- Cloud forwards `{ repos: string[], token?: string }` in the lifecycle request body — `repos` is `cloneRepos` only (excludes primary); `token` is a short-lived GitHub App installation token for private repos
+- Primary repo is already mounted as the workspace before bootstrap begins
+- `yaml` npm package added to control-plane for round-trip config editing
+- SSH-style repos and non-GitHub providers are out of v1.5 scope
 
 ## Out of Scope
 
 - Real `stop` handler implementation (graceful orchestrator shutdown) — follow-up issue
 - Cloud-side SSE changes (already implemented in `services/api/src/routes/events/bootstrap.ts`)
-- Git authentication for private repos (handled by credhelper session env already in scope)
+- SSH-style git URLs and non-GitHub providers (v1.5 uses HTTPS with GitHub App installation tokens only)
 - Retry/backoff logic for failed clones (manual retry via wizard is acceptable for v1.5)
 
 ---
