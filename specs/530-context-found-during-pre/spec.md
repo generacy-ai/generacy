@@ -1,75 +1,34 @@
 # Feature Specification: Complete Cluster Control-Plane Lifecycle Handlers
 
-**Issue**: [#530](https://github.com/generacy-ai/generacy/issues/530) | **Branch**: `530-context-found-during-pre` | **Date**: 2026-05-04 | **Status**: Draft
+Fix schema mismatch and implement missing lifecycle handlers that block the bootstrap wizard end-to-end flow.
+
+**Branch**: `530-context-found-during-pre` | **Date**: 2026-05-04 | **Status**: Draft
 
 ## Summary
 
-The cluster control-plane lifecycle is incomplete in two ways that block the bootstrap wizard end-to-end:
+The cluster control-plane lifecycle is incomplete in two ways blocking the bootstrap wizard:
+1. **Schema mismatch**: cloud allows 5 lifecycle actions but cluster-side `LifecycleActionSchema` only allows 3, causing `UNKNOWN_ACTION` errors for `set-default-role` and `stop`.
+2. **Stub handlers**: `clone-peer-repos` returns 200 OK but does no work and emits no events, causing the wizard to hang indefinitely waiting for `cluster.bootstrap` SSE events.
 
-1. **Schema mismatch**: Cloud allows 5 lifecycle actions; cluster-side `LifecycleActionSchema` only allows 3. Wizard step 3 (Role selection) posts `set-default-role` and gets `UNKNOWN_ACTION`.
-2. **Stub handlers**: `clone-peer-repos` returns 200 OK but does no work; the wizard waits for `cluster.bootstrap` SSE events that never arrive and hangs indefinitely.
+## Context
 
-This is one of two remaining blockers for end-to-end local-launch staging testing.
+Found during pre-staging integration sweep after #485 + #528 merged. The cluster control-plane lifecycle is incomplete in two ways that block bootstrap wizard end-to-end:
 
-## User Stories
+1. **Schema mismatch with cloud**: cloud-side `services/api/src/routes/clusters/lifecycle.ts` allows five actions (`clone-peer-repos`, `set-default-role`, `code-server-start`, `code-server-stop`, `stop`); cluster-side `LifecycleActionSchema` only allows three. **Wizard step 3 (Role selection) posts `set-default-role` → cluster returns `UNKNOWN_ACTION` and the wizard fails.**
 
-### US1: Bootstrap wizard role selection
+2. **Stub handlers**: `lifecycle.ts:47-48` falls through to `{ accepted: true, action }` for any non-code-server action, with no actual work. **Wizard step 4 (Peer repos) posts `clone-peer-repos`, gets a 200 OK, then waits for `cluster.bootstrap` SSE events that never arrive — wizard hangs indefinitely.**
 
-**As a** developer using the Generacy bootstrap wizard,
-**I want** the role selection step to persist my chosen default role to cluster config,
-**So that** the wizard advances past step 3 and my subsequent agent sessions use the correct credential role.
-
-**Acceptance Criteria**:
-- [ ] `POST /lifecycle/set-default-role { role: 'developer' }` writes `defaults.role: developer` to `.generacy/config.yaml`
-- [ ] Returns `{ accepted: true, action: 'set-default-role' }`
-- [ ] Fails closed with error if role doesn't exist in `.agency/roles/<role>.yaml`
-- [ ] Wizard step 3 advances on success
-
-### US2: Bootstrap wizard peer repo cloning
-
-**As a** developer using the Generacy bootstrap wizard,
-**I want** the peer repos step to clone all project repos and show per-repo progress,
-**So that** my workspace is fully set up and the wizard auto-advances when all repos are cloned.
-
-**Acceptance Criteria**:
-- [ ] `POST /lifecycle/clone-peer-repos` clones each repo to `/workspaces/<name>`
-- [ ] Emits `cluster.bootstrap` events via relay: `{ repo, status: 'cloning' }` at start, `{ status: 'done' | 'failed' }` on completion
-- [ ] Cloud-side SSE consumer receives events; wizard shows per-repo progress
-- [ ] Wizard auto-advances when all repos report `done` (per #440-Q4 1.5s delay)
-- [ ] Idempotent: re-running on already-cloned repos re-emits `done` without re-cloning
-
-### US3: Schema parity with cloud
-
-**As a** cloud service forwarding lifecycle actions to the cluster,
-**I want** the cluster to accept all 5 lifecycle actions (`clone-peer-repos`, `set-default-role`, `code-server-start`, `code-server-stop`, `stop`),
-**So that** requests don't fail with `UNKNOWN_ACTION`.
-
-**Acceptance Criteria**:
-- [ ] `LifecycleActionSchema` accepts all 5 actions matching cloud's `ALLOWED_LIFECYCLE_ACTIONS`
-- [ ] `stop` action returns stub response `{ accepted: true, action: 'stop' }` (real impl deferred)
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | Update `LifecycleActionSchema` to include all 5 actions | P0 | `schemas.ts` — add `set-default-role` and `stop` |
-| FR-002 | Implement `set-default-role` handler | P0 | Validate role exists in `.agency/roles/`, write to `.generacy/config.yaml` |
-| FR-003 | Implement `clone-peer-repos` handler | P0 | Spawn `git clone` per repo, emit relay events |
-| FR-004 | Wire relay message sender into control-plane | P0 | Same pattern as `TunnelHandler` (#519) — constructor DI of `RelayMessageSender` |
-| FR-005 | Emit `cluster.bootstrap` events per repo | P0 | `{ event: 'cluster.bootstrap', data: { repo, status } }` |
-| FR-006 | Idempotent clone-peer-repos | P1 | Skip cloning if target path exists, re-emit `done` |
-| FR-007 | `stop` stub handler | P2 | Return accepted response, real shutdown deferred |
+Even after fixing the schema, role-selection would silently no-op (no write to `.generacy/config.yaml`).
 
 ## Files
 
-- `packages/control-plane/src/schemas.ts` — add `'set-default-role'` and `'stop'` to `LifecycleActionSchema`
-- `packages/control-plane/src/routes/lifecycle.ts` — replace stub fall-through with real handlers
-- `packages/control-plane/src/services/peer-repo-cloner.ts` — new: git clone logic + relay event emission
-- `packages/control-plane/src/services/default-role-writer.ts` — new: role validation + config.yaml write
+- `packages/control-plane/src/schemas.ts` — add `'set-default-role'` and `'stop'` to `LifecycleActionSchema` enum (currently 3 entries; should be 5 to match cloud's `ALLOWED_LIFECYCLE_ACTIONS`).
+- `packages/control-plane/src/routes/lifecycle.ts` — replace stub fall-through with real handlers for `clone-peer-repos` and `set-default-role`. `stop` can stay a stub for v1.5 (cloud-only, lower priority).
+- `packages/control-plane/src/services/` — likely a new `peer-repo-cloner.ts` and `default-role-writer.ts` (or similar), depending on factoring preference.
 
-## Design Details
+## Fix
 
-### Schema update
+### 1. Schema update
 
 ```typescript
 export const LifecycleActionSchema = z.enum([
@@ -81,51 +40,102 @@ export const LifecycleActionSchema = z.enum([
 ]);
 ```
 
-### Relay access pattern
+### 2. `clone-peer-repos` handler
 
-Same as `TunnelHandler` (#519): accept a `RelayMessageSender` callback via constructor DI. The orchestrator wires this in `server.ts` similar to how it wires `tunnelHandler`.
+Reads peer repos list from request body (cloud forwards `repos: { primary, dev?, clone? }` derived from project metadata, or alternatively the cluster reads from `.generacy/config.yaml` / `cluster.yaml` if it persists those — verify which side has authority post-launch).
 
-### `set-default-role` handler
+For each repo:
+- Spawn `git clone <repo> /workspaces/<name>` (or wherever peer repos belong; check existing convention)
+- Emit `cluster.bootstrap` event via the relay: `{ event: 'cluster.bootstrap', data: { repo, status: 'cloning' } }` at start, then `{ status: 'done' | 'failed', message? }` per repo on completion.
 
-- Reads `{ role: string }` from request body
-- Validates role exists at `.agency/roles/<role>.yaml`
-- Writes `defaults.role: <role>` to `.generacy/config.yaml`
-- Fails closed if role file doesn't exist or config is missing
+**Relay access pattern**: same as `TunnelHandler` (#519) — accept a `relayMessageSender` callback at boot. The orchestrator wires this in `server.ts` similar to how it wires `tunnelHandler`. Without this, the handler can't push events to the relay.
 
-### `clone-peer-repos` handler
+Idempotent (safe to retry per #440-Q5): existing repos at the target path skip cloning, just re-emit `done`.
 
-- Reads repos list from request body (`repos: { primary, dev?, clone? }`)
-- For each repo: spawn `git clone <repo> /workspaces/<name>`
-- Emit start/done/failed events via relay per repo
-- Idempotent: existing repos at target path skip cloning, re-emit `done`
+### 3. `set-default-role` handler
 
-### `stop` handler
+Reads `{ role: string }` from request body. Validates the role exists in `.agency/roles/<role>.yaml` (committed by the project, not generated). Writes `defaults.role: <role>` to `.generacy/config.yaml`. Returns `{ accepted: true, action: 'set-default-role' }`.
 
-- v1.5 stub: returns `{ accepted: true, action: 'stop' }`
-- Real graceful orchestrator shutdown deferred to follow-up
+Fail closed if role doesn't exist or config.yaml is missing.
+
+### 4. `stop` handler
+
+For v1.5, can stay as `{ accepted: true, action: 'stop' }` stub since the button only renders on cloud clusters and cloud-deploy testing isn't on the local-launch critical path. Real implementation (graceful orchestrator shutdown) can be a follow-up.
+
+## Acceptance criteria
+
+- `LifecycleActionSchema` accepts all 5 actions matching cloud's enum.
+- `POST /lifecycle/set-default-role { role: 'developer' }` writes to `.generacy/config.yaml` and returns `{ accepted: true, action: 'set-default-role' }`.
+- `POST /lifecycle/clone-peer-repos` clones each repo and emits per-repo `cluster.bootstrap` events on the relay channel; cloud-side SSE consumer (`services/api/src/routes/events/bootstrap.ts`) receives them.
+- Role selection step in wizard advances on success.
+- Peer repos step in wizard shows per-repo progress and auto-advances when all `done` (per #440-Q4 1.5s delay).
+- Integration test exercises both handlers against a fake repo set; verifies events emitted in expected order.
+- Idempotency: re-running `clone-peer-repos` on already-cloned set re-emits `done` events without re-cloning.
+
+## Background
+
+Identified during integration sweep after the previous round of fixes (#516-#521, #471-#477, plus #485 and #528) merged. This is one of the two remaining blockers for end-to-end local-launch staging testing.
+
+## User Stories
+
+### US1: Bootstrap Wizard Role Selection
+
+**As a** developer setting up a new Generacy cluster,
+**I want** the role selection step in the wizard to persist my chosen default role,
+**So that** subsequent agent sessions use the correct credential profile without manual configuration.
+
+**Acceptance Criteria**:
+- [ ] `POST /lifecycle/set-default-role { role: 'developer' }` writes `defaults.role: developer` to `.generacy/config.yaml`
+- [ ] Returns `{ accepted: true, action: 'set-default-role' }` on success
+- [ ] Returns 400 if the specified role doesn't exist in `.agency/roles/`
+- [ ] Wizard step 3 advances on success response
+
+### US2: Bootstrap Wizard Peer Repo Cloning
+
+**As a** developer setting up a new Generacy cluster,
+**I want** the peer repos step to clone my project's repositories and show real-time progress,
+**So that** my workspace is ready to use immediately after setup completes.
+
+**Acceptance Criteria**:
+- [ ] `POST /lifecycle/clone-peer-repos` clones each repo from the request body
+- [ ] Per-repo `cluster.bootstrap` events emitted on the relay channel (`{ repo, status: 'cloning' }` → `{ repo, status: 'done'|'failed' }`)
+- [ ] Cloud SSE consumer receives events and wizard shows per-repo progress
+- [ ] Wizard auto-advances when all repos report `done` (with 1.5s delay per #440-Q4)
+- [ ] Idempotent: already-cloned repos skip cloning and re-emit `done`
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Extend `LifecycleActionSchema` to 5 actions matching cloud enum | P0 | Schema: `clone-peer-repos`, `set-default-role`, `code-server-start`, `code-server-stop`, `stop` |
+| FR-002 | Implement `set-default-role` handler — validate role, write config | P0 | Fail closed if role file missing |
+| FR-003 | Implement `clone-peer-repos` handler — clone repos, emit events | P0 | Relay access via `relayMessageSender` callback (same pattern as TunnelHandler) |
+| FR-004 | `stop` action accepted by schema but stays as stub | P2 | Cloud-only, not on local-launch critical path |
+| FR-005 | Relay event emission for `cluster.bootstrap` channel | P0 | Required for wizard progress tracking |
+| FR-006 | Idempotent clone behavior | P1 | Skip existing repos, re-emit `done` |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Wizard step 3 (role selection) completes | 100% success | Manual + integration test |
-| SC-002 | Wizard step 4 (peer repos) completes | 100% success | Manual + integration test with fake repo set |
-| SC-003 | No `UNKNOWN_ACTION` errors for any of the 5 lifecycle actions | Zero errors | Integration test covers all 5 actions |
-| SC-004 | Idempotent re-runs don't re-clone | No duplicate clones | Integration test: run twice, verify no re-clone |
+| SC-001 | Wizard role-selection step | Advances without error | Manual E2E test |
+| SC-002 | Wizard peer-repos step | Shows progress, auto-advances | Manual E2E test |
+| SC-003 | Schema parity with cloud | 5/5 actions accepted | Unit test on LifecycleActionSchema |
+| SC-004 | Clone idempotency | No re-clone on retry | Integration test with pre-existing repo dir |
 
 ## Assumptions
 
-- Cloud forwards `repos` in the request body for `clone-peer-repos` (not read from local config)
-- Peer repos are cloned to `/workspaces/<repo-name>` following existing convention
-- `.agency/roles/` directory is present and populated by the project
-- Relay message sender is available at control-plane boot (wired by orchestrator)
+- `.agency/roles/<role>.yaml` files are committed to the project repo (not generated at runtime)
+- Relay message sender is wirable via the same DI pattern used for `TunnelHandler` in #519
+- Peer repos are cloned to `/workspaces/<repo-name>` (convention from existing workspace layout)
+- Cloud forwards the repos list in the lifecycle request body (not read from local config)
 
 ## Out of Scope
 
-- Real `stop` handler (graceful orchestrator shutdown) — deferred to follow-up
-- Cloud-deploy testing of the `stop` action
-- Convergence of `clone-peer-repos` with any existing workspace provisioning logic
-- Retry logic for failed clones beyond idempotent re-run
+- Real `stop` handler implementation (graceful orchestrator shutdown) — follow-up issue
+- Cloud-side SSE changes (already implemented in `services/api/src/routes/events/bootstrap.ts`)
+- Git authentication for private repos (handled by credhelper session env already in scope)
+- Retry/backoff logic for failed clones (manual retry via wizard is acceptable for v1.5)
 
 ---
 
