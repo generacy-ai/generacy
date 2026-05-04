@@ -156,7 +156,7 @@ describe('integration: all routes', () => {
   const actorHeaders = { 'x-generacy-actor-user-id': 'user-123' };
 
   it('POST /lifecycle/clone-peer-repos returns accepted', async () => {
-    const res = await request('POST', '/lifecycle/clone-peer-repos', undefined, actorHeaders);
+    const res = await request('POST', '/lifecycle/clone-peer-repos', { repos: [] }, actorHeaders);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ accepted: true, action: 'clone-peer-repos' });
   });
