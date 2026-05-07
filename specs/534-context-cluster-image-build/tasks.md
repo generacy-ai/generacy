@@ -10,13 +10,13 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1][US2] Create `.github/workflows/publish-cluster-base-image.yml` — `workflow_dispatch` trigger with `ref` choice input (`develop`/`main`), cross-repo checkout of `generacy-ai/cluster-base` via `actions/checkout@v4`, tag mapping step (`develop`->`preview`, `main`->`stable` + `sha-<short>`), GHCR login via `docker/login-action@v3`, build+push via `docker/build-push-action@v6`. Permissions: `contents: read`, `packages: write`.
-- [ ] T002 [P] [US1][US2] Create `.github/workflows/publish-cluster-microservices-image.yml` — identical structure to T001 but targeting `generacy-ai/cluster-microservices` repo and `ghcr.io/generacy-ai/cluster-microservices` image.
+- [X] T001 [US1][US2] Create `.github/workflows/publish-cluster-base-image.yml` — `workflow_dispatch` trigger with `ref` choice input (`develop`/`main`), cross-repo checkout of `generacy-ai/cluster-base` via `actions/checkout@v4`, tag mapping step (`develop`->`preview`, `main`->`stable` + `sha-<short>`), GHCR login via `docker/login-action@v3`, build+push via `docker/build-push-action@v6`. Permissions: `contents: read`, `packages: write`.
+- [X] T002 [P] [US1][US2] Create `.github/workflows/publish-cluster-microservices-image.yml` — identical structure to T001 but targeting `generacy-ai/cluster-microservices` repo and `ghcr.io/generacy-ai/cluster-microservices` image.
 
 ## Phase 2: Validation
 
-- [ ] T003 Verify workflow YAML syntax — run `actionlint` or equivalent linting on both workflow files to catch syntax errors before merge.
-- [ ] T004 Update CLAUDE.md — add entries for the two new workflow files in the project documentation (already partially present from plan phase; verify accuracy).
+- [X] T003 Verify workflow YAML syntax — run `actionlint` or equivalent linting on both workflow files to catch syntax errors before merge.
+- [X] T004 Update CLAUDE.md — add entries for the two new workflow files in the project documentation (already partially present from plan phase; verify accuracy).
 
 ## Dependencies & Execution Order
 
