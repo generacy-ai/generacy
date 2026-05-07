@@ -44,5 +44,8 @@
     "type": "git",
     "url": "git+https://github.com/generacy-ai/generacy.git",
     "directory": "packages/control-plane"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
