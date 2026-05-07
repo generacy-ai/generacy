@@ -1,14 +1,12 @@
-# Feature Specification: Concurrent Local Clusters (Dynamic Ports + Per-Project Namespacing)
+# Feature Specification: Concurrent Local Clusters — Port & Volume Conflicts
 
 **Branch**: `539-problem-v1-5-onboarding` | **Date**: 2026-05-07 | **Status**: Draft
 
 ## Summary
 
-Enable running multiple Generacy clusters concurrently on the same machine by eliminating hardcoded host port bindings in the scaffolded `docker-compose.yml` and updating all CLI commands to discover ports dynamically. This delivers the "Flow C" promise from the v1.5 onboarding doc.
+The v1.5 onboarding doc promises users can run multiple clusters simultaneously, but the scaffolded `docker-compose.yml` makes that impossible due to hardcoded host port bindings and shared volume names. This issue tracks the work to deliver concurrent local clusters.
 
 ## Problem
-
-The v1.5 onboarding doc promises users can run multiple clusters simultaneously ([Flow C, "Run multiple clusters concurrently"](https://github.com/generacy-ai/generacy/blob/develop/docs/onboarding-v1.5.md)), but the scaffolded `docker-compose.yml` makes that impossible.
 
 [`scaffoldDockerCompose` in cluster/scaffolder.ts](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/cluster/scaffolder.ts#L62-L89) currently emits:
 
@@ -18,28 +16,84 @@ The v1.5 onboarding doc promises users can run multiple clusters simultaneously 
 
 A separate small PR addresses #1 (and incidentally #3 — Compose namespaces volumes by project name once the project has a real name). This issue tracks the rest of the work to actually deliver concurrent local clusters.
 
+## Decisions (from clarify phase)
+
+- **Port allocation**: Ephemeral Docker-assigned ports. Drop `HOST:CONTAINER` syntax, let Docker assign random host ports. Simplest scaffolder, zero collision risk. A `--port-base` flag can be layered on later if users request predictable ports.
+- **Port bindings**: Only port 3100 (orchestrator) needs a host binding. Port 3101 (relay) is outbound-only WebSocket, port 3102 (control plane) is Unix-socket-only. Remove 3101 and 3102 host-port mappings from the scaffolder entirely.
+- **`generacy open`**: No change needed — keeps cloud URL behavior (`${cloudUrl}/clusters/${clusterId}`). Port discovery is only relevant for `generacy status` output.
+- **Migration**: Manual migration with a warning. `generacy up` warns when it detects legacy hardcoded port bindings, pointing users to delete `.generacy/docker-compose.yml` and re-run.
+- **Deploy command**: Dynamic ports apply only when `deploymentMode === 'local'`. Deploy (remote SSH) keeps fixed `3100:3100` binding since remote VMs are single-cluster.
+
 ## Scope
 
 ### Code changes
 
-- **Scaffolder** (`packages/generacy/src/cli/commands/cluster/scaffolder.ts`): emit ports in a way that doesn't force a host-port pin. Two viable strategies, to be decided in the clarify phase:
-  - **Ephemeral** — drop `HOST:CONTAINER` syntax, let Docker assign random host ports (`"3100"` instead of `"3100:3100"`).
-  - **Per-project offset** — compute a deterministic offset from the project name or cluster id (`3100 + N*10`) and write fixed bindings.
-- **Registry** (`~/.generacy/clusters.json`): record the actual assigned host ports per cluster, or document that they should be queried live via Docker.
-- **`generacy status`**: surface the real port assignments. Currently the doc says it lists "state, and ports" — that breaks if ports are dynamic.
-- **`generacy open`**: discover the cluster's UI port instead of assuming `3100`.
-- **Cluster control plane**: confirm whether anything inside the container needs to know its own externally-mapped port (e.g. for OAuth callbacks, browser-editor URLs surfaced through the relay) and propagate it if so.
+- **Scaffolder** (`packages/generacy/src/cli/commands/cluster/scaffolder.ts`):
+  - When `deploymentMode === 'local'`: emit only port 3100 as ephemeral (`"3100"` instead of `"3100:3100"`). Remove 3101 and 3102 port mappings entirely.
+  - When `deploymentMode === 'cloud'` (deploy path): keep fixed `"3100:3100"` binding; still remove 3101/3102.
+- **`generacy status`** (`packages/generacy/src/cli/commands/status/index.ts`): query live Docker port mappings via `docker compose ps --format json` and surface the actual assigned host port for 3100.
+- **`generacy up`** (`packages/generacy/src/cli/commands/up/index.ts`): detect legacy hardcoded port format in existing compose files; emit a warning with migration instructions.
+- **Registry** (`~/.generacy/clusters.json`): no schema change needed — ports are queried live from Docker, not cached.
 
 ### Doc changes
 
-- **onboarding-v1.5.md**: update Flow C's "Run multiple clusters concurrently" section to reflect the actual UX, and remove or rewrite the troubleshooting entry "Multiple clusters conflict on ports → edit the compose file" (which would no longer apply).
+- **onboarding-v1.5.md**: update Flow C's "Run multiple clusters concurrently" section to reflect ephemeral ports and single-port binding. Remove or rewrite the troubleshooting entry "Multiple clusters conflict on ports → edit the compose file."
 
-## Open questions for clarify phase
+### Out of scope
 
-- Q1: Ephemeral Docker-assigned ports vs deterministic per-project offsets? Trade-off: ephemeral is simpler in the scaffolder but requires every CLI command to query Docker; offsets are predictable but still risk collisions across many clusters.
-- Q2: Does any in-cluster service need to advertise its own externally-mapped port (e.g. for relay callbacks, IDE-tunnel handshakes)? If yes, the launch/up flow needs to discover the assigned port and inject it into the running cluster.
-- Q3: Where does `generacy status` source port data from — `~/.generacy/clusters.json` (cached, can drift) or `docker compose ps --format json` per call (live, slower)?
-- Q4: Migration story for clusters scaffolded under the current code? They have hardcoded ports + colliding volume names. Do we auto-fix on next `generacy up`, or document a manual migration?
+- `generacy open` changes (keeps cloud URL behavior)
+- Remote/SSH deploy port changes (keeps fixed binding)
+- Auto-migration of existing compose files
+- `--port-base` flag for user-specified port offsets (future enhancement)
+
+## User Stories
+
+### US1: Run Multiple Local Clusters
+
+**As a** developer,
+**I want** to run multiple Generacy clusters simultaneously on my machine,
+**So that** I can work on separate projects without port conflicts or data corruption.
+
+**Acceptance Criteria**:
+- [ ] `generacy launch` scaffolds a compose file with ephemeral port for 3100 only (no 3101/3102 host bindings)
+- [ ] Two clusters started concurrently both come up successfully without port conflicts
+- [ ] `generacy status` shows the actual Docker-assigned host port for each running cluster
+- [ ] `generacy up` on an existing cluster with legacy hardcoded ports emits a warning with migration steps
+
+### US2: Clear Status Display
+
+**As a** developer with multiple running clusters,
+**I want** `generacy status` to show the real port assignments,
+**So that** I know how to reach each cluster's orchestrator locally.
+
+**Acceptance Criteria**:
+- [ ] `generacy status` queries Docker for live port mappings
+- [ ] Output includes the host port mapped to container port 3100 for each cluster
+- [ ] `--json` output includes port information in machine-readable format
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Scaffolder emits ephemeral port for 3100 when `deploymentMode === 'local'` | P1 | Drop `HOST:` prefix |
+| FR-002 | Scaffolder removes 3101 and 3102 host-port mappings | P1 | Dead code — relay is outbound-only, control plane is Unix socket |
+| FR-003 | Scaffolder keeps fixed `3100:3100` when `deploymentMode === 'cloud'` | P1 | Remote VMs need predictable ports |
+| FR-004 | `generacy status` queries live Docker port mappings | P1 | Via `docker compose ps --format json` |
+| FR-005 | `generacy up` warns on legacy hardcoded port format | P2 | Detection + migration instructions |
+| FR-006 | Update onboarding-v1.5.md Flow C section | P2 | Reflect ephemeral ports, single binding |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Concurrent clusters | 2+ clusters run simultaneously without port conflicts | Manual test: launch two clusters, both healthy |
+| SC-002 | Status accuracy | `generacy status` shows correct live port for each cluster | Compare output against `docker compose ps` |
+
+## Assumptions
+
+- Docker Compose v2 is used (supports `--format json` on `ps`)
+- The companion PR for the `name:` field fix has landed (volume namespacing resolved)
+- Only the orchestrator (port 3100) needs host-accessible binding for local workflow
 
 ## Background
 
@@ -50,77 +104,6 @@ Surfaced during v1.5 staging walkthrough. The user landed in `~/Generacy/todo-li
 - Companion PR for the immediate `name:` fix (links once opened)
 - v1.5 onboarding doc: `docs/onboarding-v1.5.md`
 - `scaffoldDockerCompose` and `ScaffoldComposeInput` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
-
-## User Stories
-
-### US1: Developer running multiple projects
-
-**As a** developer working on multiple Generacy projects,
-**I want** to run clusters for each project concurrently on my local machine,
-**So that** I can switch between projects without manually stopping and starting clusters.
-
-**Acceptance Criteria**:
-- [ ] Running `generacy launch` or `generacy up` for a second project succeeds without port conflicts
-- [ ] Each cluster is identifiable by project name in `docker compose ls` and Docker Desktop
-- [ ] Each cluster has isolated data volumes (no cross-project state corruption)
-- [ ] `generacy status` shows correct ports for each running cluster
-
-### US2: Developer accessing cluster UI
-
-**As a** developer with one or more clusters running,
-**I want** `generacy open` and `generacy status` to show me the correct URL/port for each cluster,
-**So that** I can access the right cluster's UI without guessing ports.
-
-**Acceptance Criteria**:
-- [ ] `generacy open` discovers the actual mapped port for the current project's cluster
-- [ ] `generacy status` displays live port mappings for all registered clusters
-- [ ] Port information is accurate even after Docker restarts (no stale cached data)
-
-### US3: Existing user upgrading
-
-**As an** existing Generacy user with clusters scaffolded under the old hardcoded-port scheme,
-**I want** a clear migration path to the new dynamic port model,
-**So that** I can adopt concurrent clusters without manually editing compose files.
-
-**Acceptance Criteria**:
-- [ ] Existing clusters continue to work after CLI upgrade
-- [ ] Migration path is documented or automated (decision pending Q4)
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | Scaffolder emits compose files without hardcoded host port bindings | P1 | Strategy TBD (ephemeral vs offset) |
-| FR-002 | `generacy status` displays live port assignments per cluster | P1 | Query Docker at runtime |
-| FR-003 | `generacy open` discovers the cluster's UI port dynamically | P1 | No hardcoded port assumption |
-| FR-004 | Registry (`~/.generacy/clusters.json`) supports port metadata or defers to live query | P2 | Decision linked to Q1/Q3 |
-| FR-005 | Named volumes are per-project (no cross-cluster data sharing) | P1 | Largely solved by `name:` fix in companion PR |
-| FR-006 | In-cluster services that need their external port receive it via env var or config | P2 | Decision linked to Q2 |
-| FR-007 | `onboarding-v1.5.md` Flow C section reflects actual concurrent-cluster UX | P2 | |
-| FR-008 | Migration path for existing hardcoded-port clusters | P2 | Decision linked to Q4 |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Concurrent clusters | 2+ clusters run simultaneously without port conflicts | Manual test: `generacy launch` two projects |
-| SC-002 | Port discovery accuracy | `generacy status` and `generacy open` show correct ports 100% of the time | Verify against `docker compose ps` output |
-| SC-003 | Data isolation | Zero cross-cluster volume sharing | Inspect Docker volumes after running two clusters |
-| SC-004 | Existing cluster compat | Clusters scaffolded before this change continue to start | Upgrade CLI, run `generacy up` on old project |
-
-## Assumptions
-
-- The companion PR for the `name:` field fix lands first (resolves project naming + volume namespacing)
-- Docker Compose v2 is the minimum supported version (supports `name:` field and `--format json`)
-- Node >= 22 runtime (per existing CLI requirements)
-- `docker compose ps --format json` is reliable for querying live port mappings
-
-## Out of Scope
-
-- Remote/SSH cluster port management (deploy command targets are not local; port conflicts don't apply)
-- Multi-host cluster orchestration
-- Custom user-defined port overrides (can be a follow-up if needed)
-- Container-to-container networking changes (internal service ports are unaffected)
 
 ---
 
