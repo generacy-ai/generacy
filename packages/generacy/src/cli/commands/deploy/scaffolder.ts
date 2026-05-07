@@ -44,6 +44,7 @@ export function scaffoldBundle(
     imageTag: config.imageTag,
     clusterId: activation.clusterId,
     projectId: activation.projectId,
+    projectName: config.projectName,
     cloudUrl,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
     deploymentMode: 'cloud',
