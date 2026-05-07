@@ -39,11 +39,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build (root)
-        run: pnpm build
-
       - name: Build (packages)
         run: pnpm -r run --if-present build
+
+      - name: Build (root)
+        run: pnpm build
 
       - name: Ensure changesets for preview
         run: |
