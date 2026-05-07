@@ -10,12 +10,12 @@
 
 ## Phase 1: Core Scaffolder Change
 
-- [ ] T001 [US1] Update `scaffoldDockerCompose` port logic in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
+- [X] T001 [US1] Update `scaffoldDockerCompose` port logic in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
   - Change line 93: `ports: ['3100:3100', '3101:3101', '3102:3102']` → `ports: input.deploymentMode === 'cloud' ? ['3100:3100'] : ['3100']`
   - Remove 3101 and 3102 host-port mappings entirely for both modes
   - Local mode (default): ephemeral `'3100'`; cloud mode: fixed `'3100:3100'`
 
-- [ ] T002 [P] [US1] Update scaffolder tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`
+- [X] T002 [P] [US1] Update scaffolder tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`
   - Update existing `scaffoldDockerCompose` test to assert ephemeral port format (`['3100']`) instead of hardcoded `['3100:3100', ...]`
   - Add test: local mode (default) emits `['3100']`
   - Add test: cloud mode (`deploymentMode: 'cloud'`) emits `['3100:3100']`
@@ -23,21 +23,21 @@
 
 ## Phase 2: Status Port Display
 
-- [ ] T003 [US2] Add `PortMapping` schema and `hostPort` to `ClusterStatus` in `packages/generacy/src/cli/commands/status/formatter.ts`
+- [X] T003 [US2] Add `PortMapping` schema and `hostPort` to `ClusterStatus` in `packages/generacy/src/cli/commands/status/formatter.ts`
   - Add `PortMappingSchema` (`containerPort`, `hostPort`, `protocol`)
   - Add `ports: z.array(PortMappingSchema).default([])` to `ServiceStatusSchema`
   - Add `hostPort: z.number().nullable()` to `ClusterStatusSchema`
   - Add "Port" column to `formatTable` header and rows (display `hostPort ?? 'N/A'`)
   - Include `hostPort` in JSON output (already handled by schema addition)
 
-- [ ] T004 [US2] Parse `Publishers` from Docker ps output in `packages/generacy/src/cli/commands/status/index.ts`
+- [X] T004 [US2] Parse `Publishers` from Docker ps output in `packages/generacy/src/cli/commands/status/index.ts`
   - In `getClusterServices()`: extract `Publishers` array from parsed JSON
   - Map each publisher to `{ containerPort: TargetPort, hostPort: PublishedPort, protocol: Protocol }`
   - Include `ports` field in returned `ServiceStatus` objects
   - In `statusCommand` action: derive `hostPort` from first service's `ports` where `containerPort === 3100`
   - Pass `hostPort` into `ClusterStatus` objects
 
-- [ ] T005 [P] [US2] Add formatter tests in `packages/generacy/src/cli/commands/status/__tests__/formatter.test.ts`
+- [X] T005 [P] [US2] Add formatter tests in `packages/generacy/src/cli/commands/status/__tests__/formatter.test.ts`
   - Test `deriveState` (existing behavior, confirm unchanged)
   - Test `formatTable` includes "Port" column with host port value
   - Test `formatTable` shows "N/A" when `hostPort` is null
@@ -45,7 +45,7 @@
 
 ## Phase 3: Legacy Port Warning
 
-- [ ] T006 [US1] Add legacy port detection and warning to `packages/generacy/src/cli/commands/up/index.ts`
+- [X] T006 [US1] Add legacy port detection and warning to `packages/generacy/src/cli/commands/up/index.ts`
   - Read compose file from `ctx.composePath` using `readFileSync` + `yaml.parse()`
   - Check if `services.cluster.ports` contains any string with `:` (HOST:CONTAINER pattern)
   - If legacy ports detected, emit warning via `logger.warn()`:
@@ -56,7 +56,7 @@
     ```
   - Do NOT block startup — warning only, then proceed to `runCompose`
 
-- [ ] T007 [P] [US1] Add legacy port warning tests in `packages/generacy/src/cli/commands/up/__tests__/legacy-port-warning.test.ts`
+- [X] T007 [P] [US1] Add legacy port warning tests in `packages/generacy/src/cli/commands/up/__tests__/legacy-port-warning.test.ts`
   - Test: compose file with `'3100:3100'` triggers warning
   - Test: compose file with `'3100'` (ephemeral) does NOT trigger warning
   - Test: compose file with no ports does NOT trigger warning

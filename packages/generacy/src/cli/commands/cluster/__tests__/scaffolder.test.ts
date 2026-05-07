@@ -145,6 +145,68 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.cluster.environment).toContain('CLUSTER_VARIANT=cluster-base');
   });
 
+  it('local mode (default) emits ephemeral port for 3100 only', () => {
+    scaffoldDockerCompose(dir, {
+      imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+      clusterId: 'clust_abc',
+      projectId: 'proj_def',
+      projectName: 'my-app',
+      cloudUrl: 'https://api.generacy.ai',
+      variant: 'cluster-base',
+    });
+
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+    expect(parsed.services.cluster.ports).toEqual(['3100']);
+  });
+
+  it('cloud mode emits fixed 3100:3100', () => {
+    scaffoldDockerCompose(dir, {
+      imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+      clusterId: 'clust_abc',
+      projectId: 'proj_def',
+      projectName: 'my-app',
+      cloudUrl: 'https://api.generacy.ai',
+      variant: 'cluster-base',
+      deploymentMode: 'cloud',
+    });
+
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+    expect(parsed.services.cluster.ports).toEqual(['3100:3100']);
+  });
+
+  it('does not include 3101 or 3102 in any mode', () => {
+    // Local mode
+    scaffoldDockerCompose(dir, {
+      imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+      clusterId: 'clust_abc',
+      projectId: 'proj_def',
+      projectName: 'my-app',
+      cloudUrl: 'https://api.generacy.ai',
+      variant: 'cluster-base',
+    });
+
+    const localParsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+    const localPorts = localParsed.services.cluster.ports as string[];
+    expect(localPorts.join(',')).not.toContain('3101');
+    expect(localPorts.join(',')).not.toContain('3102');
+
+    // Cloud mode
+    scaffoldDockerCompose(dir, {
+      imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+      clusterId: 'clust_abc',
+      projectId: 'proj_def',
+      projectName: 'my-app',
+      cloudUrl: 'https://api.generacy.ai',
+      variant: 'cluster-base',
+      deploymentMode: 'cloud',
+    });
+
+    const cloudParsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+    const cloudPorts = cloudParsed.services.cluster.ports as string[];
+    expect(cloudPorts.join(',')).not.toContain('3101');
+    expect(cloudPorts.join(',')).not.toContain('3102');
+  });
+
   it('sanitizes uppercase, spaces, and other illegal characters in projectName', () => {
     scaffoldDockerCompose(dir, {
       imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',

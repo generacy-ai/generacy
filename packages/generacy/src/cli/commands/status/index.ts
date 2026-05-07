@@ -7,6 +7,7 @@ import {
   formatJson,
   type ClusterStatus,
   type ServiceStatus,
+  type PortMapping,
 } from './formatter.js';
 
 function getClusterServices(composePath: string, projectName: string): ServiceStatus[] {
@@ -22,10 +23,18 @@ function getClusterServices(composePath: string, projectName: string): ServiceSt
     const lines = result.stdout.trim().split('\n');
     return lines.map((line) => {
       const obj = JSON.parse(line);
+      const ports: PortMapping[] = Array.isArray(obj.Publishers)
+        ? obj.Publishers.map((p: { TargetPort?: number; PublishedPort?: number; Protocol?: string }) => ({
+            containerPort: p.TargetPort ?? 0,
+            hostPort: p.PublishedPort ?? 0,
+            protocol: p.Protocol ?? 'tcp',
+          }))
+        : [];
       return {
         name: obj.Name ?? obj.Service ?? '',
         state: (obj.State ?? 'stopped').toLowerCase(),
         status: obj.Status ?? '',
+        ports,
       };
     });
   } catch {
@@ -44,6 +53,9 @@ export function statusCommand(): Command {
           entry.composePath,
           entry.clusterId ?? entry.name,
         );
+        const portEntry = services
+          .flatMap((s) => s.ports)
+          .find((p) => p.containerPort === 3100);
         return {
           clusterId: entry.clusterId,
           name: entry.name,
@@ -52,6 +64,7 @@ export function statusCommand(): Command {
           channel: entry.channel,
           state: deriveState(services),
           services,
+          hostPort: portEntry?.hostPort ?? null,
           lastSeen: entry.lastSeen,
           createdAt: entry.createdAt,
         };

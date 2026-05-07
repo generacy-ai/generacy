@@ -10,10 +10,19 @@ export const ContainerStateSchema = z.enum([
   'created',
 ]);
 
+export const PortMappingSchema = z.object({
+  containerPort: z.number(),
+  hostPort: z.number(),
+  protocol: z.string().default('tcp'),
+});
+
+export type PortMapping = z.infer<typeof PortMappingSchema>;
+
 export const ServiceStatusSchema = z.object({
   name: z.string(),
   state: ContainerStateSchema,
   status: z.string(),
+  ports: z.array(PortMappingSchema).default([]),
 });
 
 export type ServiceStatus = z.infer<typeof ServiceStatusSchema>;
@@ -26,6 +35,7 @@ export const ClusterStatusSchema = z.object({
   channel: z.string(),
   state: z.enum(['running', 'stopped', 'partial', 'missing']),
   services: z.array(ServiceStatusSchema),
+  hostPort: z.number().nullable(),
   lastSeen: z.string().datetime(),
   createdAt: z.string().datetime(),
 });
@@ -46,11 +56,12 @@ export function formatTable(statuses: ClusterStatus[]): string {
     return 'No clusters registered.';
   }
 
-  const header = ['Name', 'Cluster ID', 'State', 'Variant', 'Channel', 'Path'];
+  const header = ['Name', 'Cluster ID', 'State', 'Port', 'Variant', 'Channel', 'Path'];
   const rows = statuses.map((s) => [
     s.name,
     s.clusterId ?? '(pending)',
     s.state,
+    s.hostPort != null ? String(s.hostPort) : 'N/A',
     s.variant,
     s.channel,
     s.path,

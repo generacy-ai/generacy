@@ -61,7 +61,8 @@ describe('formatTable', () => {
         variant: 'standard',
         channel: 'stable',
         state: 'running',
-        services: [{ name: 'web', state: 'running', status: 'Up 5 minutes' }],
+        services: [{ name: 'web', state: 'running', status: 'Up 5 minutes', ports: [] }],
+        hostPort: null,
         lastSeen: '2026-04-29T00:00:00.000Z',
         createdAt: '2026-04-28T00:00:00.000Z',
       },
@@ -74,6 +75,7 @@ describe('formatTable', () => {
     expect(lines[0]).toContain('Name');
     expect(lines[0]).toContain('Cluster ID');
     expect(lines[0]).toContain('State');
+    expect(lines[0]).toContain('Port');
     expect(lines[0]).toContain('Variant');
     expect(lines[0]).toContain('Channel');
     expect(lines[0]).toContain('Path');
@@ -89,6 +91,46 @@ describe('formatTable', () => {
     expect(lines[2]).toContain('stable');
     expect(lines[2]).toContain('/projects/my-app');
   });
+
+  it('includes Port column with host port value', () => {
+    const statuses: ClusterStatus[] = [
+      {
+        clusterId: 'cls-1',
+        name: 'my-app',
+        path: '/projects/my-app',
+        variant: 'standard',
+        channel: 'stable',
+        state: 'running',
+        services: [{ name: 'web', state: 'running', status: 'Up 5 minutes', ports: [{ containerPort: 3100, hostPort: 49201, protocol: 'tcp' }] }],
+        hostPort: 49201,
+        lastSeen: '2026-04-29T00:00:00.000Z',
+        createdAt: '2026-04-28T00:00:00.000Z',
+      },
+    ];
+
+    const result = formatTable(statuses);
+    expect(result).toContain('49201');
+  });
+
+  it('shows "N/A" when hostPort is null', () => {
+    const statuses: ClusterStatus[] = [
+      {
+        clusterId: 'cls-1',
+        name: 'my-app',
+        path: '/projects/my-app',
+        variant: 'standard',
+        channel: 'stable',
+        state: 'stopped',
+        services: [],
+        hostPort: null,
+        lastSeen: '2026-04-29T00:00:00.000Z',
+        createdAt: '2026-04-28T00:00:00.000Z',
+      },
+    ];
+
+    const result = formatTable(statuses);
+    expect(result).toContain('N/A');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -96,7 +138,7 @@ describe('formatTable', () => {
 // ---------------------------------------------------------------------------
 
 describe('formatJson', () => {
-  it('returns valid JSON string', () => {
+  it('returns valid JSON string with hostPort field', () => {
     const statuses: ClusterStatus[] = [
       {
         clusterId: 'cls-1',
@@ -106,6 +148,7 @@ describe('formatJson', () => {
         channel: 'stable',
         state: 'running',
         services: [],
+        hostPort: 49201,
         lastSeen: '2026-04-29T00:00:00.000Z',
         createdAt: '2026-04-28T00:00:00.000Z',
       },
@@ -115,5 +158,6 @@ describe('formatJson', () => {
     const parsed = JSON.parse(result);
 
     expect(parsed).toEqual(statuses);
+    expect(parsed[0].hostPort).toBe(49201);
   });
 });
