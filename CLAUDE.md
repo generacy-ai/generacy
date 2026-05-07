@@ -158,6 +158,12 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Registry entry includes `managementEndpoint: "ssh://user@host:port/path"`.
   - Lifecycle commands (`stop`, `up`, `down`, etc.) transparently forward `docker compose` over SSH when `managementEndpoint` starts with `ssh://`. Extended in `commands/cluster/compose.ts`.
 
+## Cluster Image Build Workflows (#534)
+
+- `.github/workflows/publish-cluster-base-image.yml` — NEW in #534: Manual `workflow_dispatch` workflow to build and push the `cluster-base` Docker image to GHCR. Checks out `generacy-ai/cluster-base` at a specified ref (`develop` or `main`), maps `develop` -> `:preview` and `main` -> `:stable` tags, pushes to `ghcr.io/generacy-ai/cluster-base`. Also pushes `:sha-<short>` immutable tag. Uses `docker/build-push-action@v6`, `docker/login-action@v3`, `docker/setup-buildx-action@v3`. Permissions: `contents: read`, `packages: write`.
+- `.github/workflows/publish-cluster-microservices-image.yml` — NEW in #534: Same shape as cluster-base workflow, targeting `generacy-ai/cluster-microservices` repo and `ghcr.io/generacy-ai/cluster-microservices` image.
+- Motivation: Template repos previously contained workflow files that got copied into user-project repos during creation, causing `403 Resource not accessible by integration` errors (GitHub App lacks `Workflows: write`). Moving builds here eliminates that.
+
 ## Scoped Docker Socket Proxy (#497, v1.5 phase 9)
 
 - `packages/credhelper-daemon/src/docker-bind-mount-guard.ts` — NEW in #497: Validates `POST /containers/create` bind mounts are under `GENERACY_SCRATCH_DIR`. Inspects both `HostConfig.Binds` (string format) and `HostConfig.Mounts` (object format, `Type: "bind"` only). Uses `path.resolve()` for canonicalization. Only active when `upstreamIsHost=true` (host-socket mode); DinD mode skips validation.
