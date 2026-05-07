@@ -66,6 +66,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     imageTag: config.imageTag,
     clusterId: config.clusterId,
     projectId: config.projectId,
+    projectName: config.projectName,
     cloudUrl: config.cloudUrl,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
   });

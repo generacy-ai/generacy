@@ -24,9 +24,30 @@ export interface ScaffoldComposeInput {
   imageTag: string;
   clusterId: string;
   projectId: string;
+  projectName: string;
   cloudUrl: string;
   variant: 'cluster-base' | 'cluster-microservices';
   deploymentMode?: 'local' | 'cloud';
+}
+
+/**
+ * Coerce a project name into a valid Docker Compose project name.
+ *
+ * Compose v2 requires the name to match `^[a-z0-9][a-z0-9_-]*$`. We lowercase,
+ * replace illegal characters with `-`, collapse runs, strip leading
+ * non-alphanumerics, and fall back to `generacy-<clusterId-slice>` when nothing
+ * usable remains.
+ */
+export function sanitizeComposeProjectName(name: string, clusterId: string): string {
+  const cleaned = name
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+/, '')
+    .replace(/[-_]+$/, '')
+    .slice(0, 63);
+  if (cleaned && /^[a-z0-9]/.test(cleaned)) return cleaned;
+  return `generacy-${clusterId.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 12) || 'cluster'}`;
 }
 
 /**
@@ -62,6 +83,7 @@ export function scaffoldClusterYaml(dir: string, input: ScaffoldClusterYamlInput
 export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput): void {
   mkdirSync(dir, { recursive: true });
   const compose = {
+    name: sanitizeComposeProjectName(input.projectName, input.clusterId),
     version: '3.8',
     services: {
       cluster: {
