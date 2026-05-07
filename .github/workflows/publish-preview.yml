@@ -1,16 +1,12 @@
 name: Publish Preview
 
-# Manual dispatch only (was: on push to develop).
-# Changed during spawn-refactor to prevent partial in-progress work
-# from being accidentally published to the "preview" npm channel.
-#
-# To trigger a preview release:
-#   CLI:  gh workflow run publish-preview.yml --ref develop
-#   UI:   Actions tab → Publish Preview → Run workflow → select branch
-#
-# Revert to "on: push: branches: [develop]" once the refactor lands.
+# Publishes a preview release on every push to develop. Also supports
+# manual dispatch via the Actions UI or:
+#   gh workflow run publish-preview.yml --ref <branch>
 
 on:
+  push:
+    branches: [develop]
   workflow_dispatch:
 
 concurrency:
