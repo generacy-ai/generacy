@@ -89,6 +89,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `src/cli/utils/node-version.ts` — NEW in #493: `checkNodeVersion()` — refuses to run on Node <22 with install link.
   - `src/cli/utils/exec.ts` — Shell helpers: `exec()` (sync, throws), `execSafe()` (sync, returns `{ok, stdout, stderr}`), `spawnBackground()` (detached).
   - `src/cli/utils/logger.ts` — Pino logging: `getLogger()`, `setLogger()`, `createLogger()`.
+  - `src/cli/utils/cloud-url.ts` — NEW in #545: `resolveCloudUrl(flagValue?)` — 3-tier cloud URL resolution: CLI `--cloud-url` flag > `GENERACY_CLOUD_URL` env var > `https://api.generacy.ai` default. Validates with `z.string().url()`. Used by both `launch` and `deploy` commands.
   - `src/registry/` — NEW in #493: `~/.generacy/clusters.json` registry helper. `loadRegistry()`, `saveRegistry()` (atomic tmp+rename), `addCluster()`, `removeCluster()`, `findClusterByCwd()` (longest-prefix-match). Zod-validated schema: `{version: 1, clusters: [{id, name, path, cloudUrl, lastSeen}]}`.
 
 ## CLI Cluster Lifecycle Commands
