@@ -19,6 +19,7 @@ export const LaunchConfigSchema = z.object({
   projectId: z.string().min(1),
   projectName: z.string().min(1),
   variant: z.string().min(1),
+  channel: z.enum(['stable', 'preview']).optional(),
   cloudUrl: z.string().url(),
   clusterId: z.string().min(1),
   imageTag: z.string().min(1),

@@ -57,7 +57,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
   });
 
   scaffoldClusterYaml(generacyDir, {
-    channel: 'stable',
+    channel: config.channel ?? 'preview',
     workers: 1,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
   });

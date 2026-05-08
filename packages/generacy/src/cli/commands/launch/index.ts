@@ -188,7 +188,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
       path: projectDir,
       composePath,
       variant: (config.variant as 'cluster-base' | 'cluster-microservices') ?? 'cluster-base',
-      channel: 'stable',
+      channel: config.channel ?? 'preview',
       cloudUrl: config.cloudUrl,
       lastSeen: now,
       createdAt: now,
