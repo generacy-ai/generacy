@@ -93,7 +93,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
 
   // ── 3. Read --claim or prompt for it ────────────────────────────────
   const claimCode = opts.claim ?? await promptClaimCode();
-  logger.debug({ claimCode }, 'Using claim code');
+  logger.debug({ claimCode: '<redacted>' }, 'Using claim code');
 
   // ── 4. Fetch launch-config from cloud API ───────────────────────────
   const cloudUrl = resolveCloudUrl(opts.cloudUrl);
