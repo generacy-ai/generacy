@@ -16,7 +16,7 @@
 - A: Keep separate — cloud sends all three URLs explicitly; readers consume `GENERACY_RELAY_URL` directly (spec recommendation)
 - B: Derive from API URL — only `GENERACY_API_URL` and `GENERACY_APP_URL` are explicit; relay is derived client-side
 
-**Answer**: *Pending*
+**Answer**: **A — Keep separate.** Three reasons derivation (B) is worse: (1) it's not just protocol swap — needs scheme swap, `/relay` path, `?projectId=` — three transformations each with failure modes; (2) custom-domain and migration headroom — relay may move to a different domain for scaling; (3) the "savings" of dropping the var is one schema field + one `.env` line, not worth losing cloud-as-source-of-truth.
 
 ---
 
@@ -31,7 +31,7 @@
 - B: Cloud omits projectId — `cloud.relayUrl` is `wss://api.generacy.ai/relay`, scaffolder or orchestrator appends `?projectId=`
 - C: Cloud sends base relay URL, scaffolder appends projectId when writing `.env` (so the orchestrator gets it pre-appended)
 
-**Answer**: *Pending*
+**Answer**: **A — Cloud includes projectId.** Both current code paths handle this: orchestrator config loader already guards with `if (!relayCloudUrl.includes('projectId='))`, and cloud's worker template generator already pre-appends projectId. Option A consolidates around the existing cloud-side pattern. Cloud is source of truth for both environment (relay base) and cluster (projectId). Bonus: drop the append logic from `loader.ts:280-290` as dead code.
 
 ---
 
@@ -45,7 +45,7 @@
 - A: All in this issue — this PR spans all three repos (or the cloud changes are prerequisite PRs under the same issue)
 - B: Separate issues — this PR covers only the `generacy` repo; cloud/cluster-base changes are follow-ups. The code must tolerate missing `LaunchConfig.cloud`.
 
-**Answer**: *Pending*
+**Answer**: **B — Separate issues per repo.** This issue (#549, generacy repo) covers Phase 2 + Phase 3 changes in this repo — CLI fallback chain, scaffolder writing new `.env` names, schema additions. Must tolerate missing `LaunchConfig.cloud` by falling back to existing `LaunchConfig.cloudUrl`. Follow-up issues: (1) generacy-cloud for Phase 1 (`buildLaunchConfig` adds `cloud` object), (2) generacy-cloud for Phase 3 (worker template + DigitalOcean writers), (3) cluster-base for `.env.template` split, (4) generacy Phase 4 cleanup (remove fallbacks).
 
 ---
 
@@ -60,7 +60,7 @@
 - B: Yes, rename without alias — breaking change, old CLIs fail on new cloud responses
 - C: No rename — keep `cloudUrl` as-is, add `cloud` as a sibling object (avoids breaking old CLIs entirely)
 
-**Answer**: *Pending*
+**Answer**: **A — Rename with deprecated alias.** Critical: `LaunchConfig.cloudUrl` is persisted into `~/.generacy/clusters.json` — breaking rename (B) would bork existing registries. C leaves permanent "which is canonical?" confusion. A is the right balance: new readers prefer `cloud.appUrl`, old readers read deprecated `cloudUrl` for one release, cloud emits both. Phase 4 cleanup removes `cloudUrl`. Short deprecation window is fine given small v1.5 user population.
 
 ---
 
@@ -75,4 +75,4 @@
 - B: The orchestrator or control-plane already needs it — specify which component reads it and for what
 - C: Skip writing it for now — only introduce `GENERACY_API_URL` and `GENERACY_RELAY_URL`; add app URL when there's a consumer
 
-**Answer**: *Pending*
+**Answer**: **C — Skip writing `GENERACY_APP_URL` to `.env`.** No current cluster-side consumer exists. Dead config invites confusion. Migration cost of *adding* a var later is trivial (one `.env` line); cost of *removing* dead config is higher (stale values in every scaffolded cluster). Cloud should still send `cloud.appUrl` in LaunchConfig (per Q4=A) — CLI uses it for registry's `cloudUrl` field. Just don't propagate to cluster runtime until something reads it.
