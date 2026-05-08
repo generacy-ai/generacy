@@ -15,6 +15,7 @@ const mockConfig: LaunchConfig = {
   projectId: 'proj_abc123',
   projectName: 'my-project',
   variant: 'cluster-base',
+  channel: 'stable',
   cloudUrl: 'https://api.generacy.ai',
   clusterId: 'cluster_abc123',
   imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
@@ -87,6 +88,23 @@ describe('scaffoldProject', () => {
     expect(parsed).not.toHaveProperty('imageTag');
     expect(parsed).not.toHaveProperty('cloudUrl');
     expect(parsed).not.toHaveProperty('ports');
+  });
+
+  it('writes channel=preview to cluster.yaml when config.channel is preview', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, { ...mockConfig, channel: 'preview' });
+
+    const parsed = parse(readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8'));
+    expect(parsed.channel).toBe('preview');
+  });
+
+  it('defaults to channel=preview when config.channel is undefined', () => {
+    const projectDir = join(tempDir, 'new-project');
+    const { channel: _omitted, ...configWithoutChannel } = mockConfig;
+    scaffoldProject(projectDir, configWithoutChannel as LaunchConfig);
+
+    const parsed = parse(readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8'));
+    expect(parsed.channel).toBe('preview');
   });
 
   it('cluster.yaml output validates against ClusterYamlSchema', () => {
