@@ -8,6 +8,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { LaunchConfigSchema, type LaunchConfig } from './types.js';
+import { CloudError, redactClaimUrl, sanitizeBody } from './cloud-error.js';
 
 /**
  * Hardcoded fixture returned when `GENERACY_LAUNCH_STUB=1` is set.
@@ -36,7 +37,7 @@ const STUB_LAUNCH_CONFIG: LaunchConfig = {
  * @param claimCode - Claim code issued by the cloud dashboard.
  * @returns The validated launch configuration.
  *
- * @throws {Error} "Claim code is invalid or expired" on 4xx responses.
+ * @throws {CloudError} Status-code-specific message on 4xx responses.
  * @throws {Error} "Could not reach Generacy cloud" on network errors.
  * @throws {Error} "Invalid response from cloud" on malformed JSON or schema validation failure.
  */
@@ -57,7 +58,7 @@ export async function fetchLaunchConfig(
   const transport = isHttps ? https : http;
 
   // ── Send GET request ────────────────────────────────────────────────
-  const raw = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+  const raw = await new Promise<{ status: number; body: string; retryAfter?: string }>((resolve, reject) => {
     const req = transport.request(
       {
         hostname: url.hostname,
@@ -72,9 +73,11 @@ export async function fetchLaunchConfig(
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
+          const retryAfterHeader = res.headers['retry-after'];
           resolve({
             status: res.statusCode ?? 0,
             body: Buffer.concat(chunks).toString('utf-8'),
+            retryAfter: typeof retryAfterHeader === 'string' ? retryAfterHeader : undefined,
           });
         });
       },
@@ -94,7 +97,58 @@ export async function fetchLaunchConfig(
 
   // ── Handle 4xx ──────────────────────────────────────────────────────
   if (raw.status >= 400 && raw.status < 500) {
-    throw new Error('Claim code is invalid or expired');
+    const redactedUrl = redactClaimUrl(url.toString());
+
+    // Best-effort JSON parse for RFC 7807 fields
+    let detail: string | undefined;
+    let problemType: string | undefined;
+    try {
+      const body = JSON.parse(raw.body);
+      if (typeof body.detail === 'string') detail = body.detail;
+      if (typeof body.type === 'string') problemType = body.type;
+    } catch {
+      // Not JSON — fall through to sanitizeBody fallback
+    }
+
+    const detailOrBody = detail ?? (raw.body ? sanitizeBody(raw.body) : undefined);
+
+    let message: string;
+    switch (raw.status) {
+      case 400:
+        message = detail
+          ? `The cloud rejected the claim format (${raw.status}: ${detail} from ${redactedUrl}). Generate a fresh claim from your project page.`
+          : `The cloud rejected the claim format (${raw.status} from ${redactedUrl}). Generate a fresh claim from your project page.`;
+        break;
+      case 401:
+      case 403:
+        message = `The cloud rejected this request as unauthenticated (${raw.status} from ${redactedUrl}). The claim endpoint should be public — this likely means the cloud is misconfigured. Report this with the URL above.`;
+        break;
+      case 404:
+        message = `The claim was not found at ${redactedUrl}. Did you mint the claim in a different environment? Set GENERACY_CLOUD_URL to the cloud where the claim was minted.`;
+        break;
+      case 410:
+        message = 'Claim has been consumed or expired (one-time-use, 10-min TTL). Generate a fresh claim from your project page.';
+        break;
+      case 429:
+        message = raw.retryAfter
+          ? `Rate-limited by the cloud (Retry-After: ${raw.retryAfter}). Wait and retry.`
+          : 'Rate-limited by the cloud. Wait and retry.';
+        break;
+      default:
+        message = detailOrBody
+          ? `Cloud returned ${raw.status} (${detailOrBody} from ${redactedUrl}). Report this if it persists.`
+          : `Cloud returned ${raw.status} from ${redactedUrl}. Report this if it persists.`;
+        break;
+    }
+
+    throw new CloudError({
+      statusCode: raw.status,
+      url: redactedUrl,
+      message,
+      detail,
+      retryAfter: raw.retryAfter,
+      problemType,
+    });
   }
 
   // ── Handle other non-2xx ────────────────────────────────────────────

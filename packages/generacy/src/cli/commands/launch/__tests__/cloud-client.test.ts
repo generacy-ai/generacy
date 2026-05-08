@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { fetchLaunchConfig } from '../cloud-client.js';
+import { CloudError } from '../cloud-error.js';
 
 // ---------------------------------------------------------------------------
 // Test HTTP server — assigns a per-test handler for flexible response control
@@ -122,26 +123,178 @@ describe('fetchLaunchConfig — HTTP', () => {
     expect(capturedUrl).toBe('/api/clusters/launch-config?claim=my-claim-code');
   });
 
-  it('throws "Claim code is invalid or expired" on 4xx response', async () => {
-    handler = (_req, res) => {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'not found' }));
-    };
+  describe('differentiated 4xx errors', () => {
+    it('throws CloudError with statusCode 400 and message containing "rejected the claim format"', async () => {
+      handler = (_req, res) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad request' }));
+      };
 
-    await expect(fetchLaunchConfig(serverUrl, 'bad-claim')).rejects.toThrow(
-      'Claim code is invalid or expired',
-    );
-  });
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(400);
+        expect(ce.message).toContain('rejected the claim format');
+      }
+    });
 
-  it('throws "Claim code is invalid or expired" on 400 response', async () => {
-    handler = (_req, res) => {
-      res.writeHead(400, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'bad request' }));
-    };
+    it('throws CloudError with statusCode 401 and message containing "unauthenticated"', async () => {
+      handler = (_req, res) => {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'unauthorized' }));
+      };
 
-    await expect(fetchLaunchConfig(serverUrl, 'bad-claim')).rejects.toThrow(
-      'Claim code is invalid or expired',
-    );
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(401);
+        expect(ce.message).toContain('unauthenticated');
+      }
+    });
+
+    it('throws CloudError with statusCode 403 and message containing "unauthenticated"', async () => {
+      handler = (_req, res) => {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden' }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(403);
+        expect(ce.message).toContain('unauthenticated');
+      }
+    });
+
+    it('throws CloudError with statusCode 404 and message containing "not found" and "GENERACY_CLOUD_URL"', async () => {
+      handler = (_req, res) => {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(404);
+        expect(ce.message).toContain('not found');
+        expect(ce.message).toContain('GENERACY_CLOUD_URL');
+      }
+    });
+
+    it('throws CloudError with statusCode 410 and message containing "consumed or expired"', async () => {
+      handler = (_req, res) => {
+        res.writeHead(410, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'gone' }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(410);
+        expect(ce.message).toContain('consumed or expired');
+      }
+    });
+
+    it('throws CloudError with retryAfter populated from Retry-After header on 429', async () => {
+      handler = (_req, res) => {
+        res.writeHead(429, { 'Content-Type': 'application/json', 'Retry-After': '30' });
+        res.end(JSON.stringify({ error: 'too many requests' }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(429);
+        expect(ce.retryAfter).toBe('30');
+      }
+    });
+
+    it('throws CloudError with message containing "Cloud returned 418" for other 4xx codes', async () => {
+      handler = (_req, res) => {
+        res.writeHead(418, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "I'm a teapot" }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.statusCode).toBe(418);
+        expect(ce.message).toContain('Cloud returned 418');
+      }
+    });
+
+    it('includes detail field from JSON body in error message', async () => {
+      handler = (_req, res) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ detail: 'claim format invalid' }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.detail).toBe('claim format invalid');
+        expect(ce.message).toContain('claim format invalid');
+      }
+    });
+
+    it('includes sanitized body in error message for non-JSON responses', async () => {
+      handler = (_req, res) => {
+        res.writeHead(422, { 'Content-Type': 'text/html' });
+        res.end('<html>Bad Request</html>');
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, 'bad-claim');
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.message).toContain('<html>Bad Request</html>');
+      }
+    });
+
+    it('does not leak raw claim code in error url or message', async () => {
+      const secretClaim = 'super-secret-claim-code-12345';
+
+      handler = (_req, res) => {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'bad request' }));
+      };
+
+      try {
+        await fetchLaunchConfig(serverUrl, secretClaim);
+        expect.fail('Expected CloudError to be thrown');
+      } catch (error) {
+        expect(error).toBeInstanceOf(CloudError);
+        const ce = error as CloudError;
+        expect(ce.url).not.toContain(secretClaim);
+        expect(ce.message).not.toContain(secretClaim);
+      }
+    });
   });
 
   it('throws "Could not reach Generacy cloud" on network error', async () => {
