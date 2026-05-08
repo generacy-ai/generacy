@@ -12,6 +12,7 @@ import {
   scaffoldClusterJson,
   scaffoldClusterYaml,
   scaffoldDockerCompose,
+  scaffoldEnvFile,
 } from '../cluster/scaffolder.js';
 
 /**
@@ -40,7 +41,7 @@ export function scaffoldBundle(
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
   });
 
-  scaffoldDockerCompose(tmpDir, {
+  scaffoldDockerCompose(generacyDir, {
     imageTag: config.imageTag,
     clusterId: activation.clusterId,
     projectId: activation.projectId,
@@ -48,6 +49,22 @@ export function scaffoldBundle(
     cloudUrl,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
     deploymentMode: 'cloud',
+    orgId: activation.orgId,
+    channel: 'stable',
+    workers: 1,
+    repoUrl: config.repos?.primary,
+    claudeConfigMode: 'volume',
+  });
+
+  scaffoldEnvFile(generacyDir, {
+    clusterId: activation.clusterId,
+    projectId: activation.projectId,
+    orgId: activation.orgId,
+    cloudUrl,
+    projectName: config.projectName,
+    repoUrl: config.repos?.primary,
+    channel: 'stable',
+    workers: 1,
   });
 
   return tmpDir;

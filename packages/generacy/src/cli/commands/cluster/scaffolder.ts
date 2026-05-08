@@ -28,6 +28,24 @@ export interface ScaffoldComposeInput {
   cloudUrl: string;
   variant: 'cluster-base' | 'cluster-microservices';
   deploymentMode?: 'local' | 'cloud';
+  orgId: string;
+  workers?: number;
+  channel?: 'stable' | 'preview';
+  repoUrl?: string;
+  claudeConfigMode?: 'bind' | 'volume';
+}
+
+export interface ScaffoldEnvInput {
+  clusterId: string;
+  projectId: string;
+  orgId: string;
+  cloudUrl: string;
+  projectName: string;
+  repoUrl?: string;
+  repoBranch?: string;
+  channel?: 'stable' | 'preview';
+  workers?: number;
+  orchestratorPort?: number;
 }
 
 /**
@@ -48,6 +66,21 @@ export function sanitizeComposeProjectName(name: string, clusterId: string): str
     .slice(0, 63);
   if (cleaned && /^[a-z0-9]/.test(cleaned)) return cleaned;
   return `generacy-${clusterId.replace(/[^a-z0-9]/gi, '').toLowerCase().slice(0, 12) || 'cluster'}`;
+}
+
+/**
+ * Derive the WebSocket relay URL from an HTTP cloud URL.
+ *
+ * - `https://api.generacy.ai` → `wss://api.generacy.ai/relay?projectId=<id>`
+ * - `http://localhost:3001` → `ws://localhost:3001/relay?projectId=<id>`
+ */
+export function deriveRelayUrl(cloudUrl: string, projectId: string): string {
+  const url = new URL(cloudUrl);
+  url.protocol = url.protocol === 'http:' ? 'ws:' : 'wss:';
+  url.pathname = '/relay';
+  url.search = '';
+  url.searchParams.set('projectId', projectId);
+  return url.toString();
 }
 
 /**
@@ -78,35 +111,181 @@ export function scaffoldClusterYaml(dir: string, input: ScaffoldClusterYamlInput
 }
 
 /**
- * Write docker-compose.yml with image, ports, env, volumes.
+ * Write multi-service docker-compose.yml (orchestrator + worker + redis).
  */
 export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput): void {
   mkdirSync(dir, { recursive: true });
-  const compose = {
+
+  const deploymentMode = input.deploymentMode ?? 'local';
+  const claudeConfigMode = input.claudeConfigMode ?? 'bind';
+  const variant = input.variant;
+
+  // Claude config volume: bind mount for local, named volume for cloud
+  const claudeConfigVolume =
+    claudeConfigMode === 'bind'
+      ? '~/.claude.json:/home/node/.claude.json'
+      : 'claude-config:/home/node/.claude.json';
+
+  // Port binding: ephemeral for local, fixed for cloud
+  const orchestratorPorts =
+    deploymentMode === 'cloud'
+      ? ['${ORCHESTRATOR_PORT:-3100}:3100']
+      : ['${ORCHESTRATOR_PORT:-3100}'];
+
+  // Shared volumes for orchestrator and worker
+  const sharedVolumes = [
+    'workspace:/workspaces',
+    claudeConfigVolume,
+    'shared-packages:/home/node/.local/share/generacy/packages',
+    'npm-cache:/home/node/.npm',
+    'generacy-data:/var/lib/generacy',
+  ];
+
+  // Orchestrator gets docker socket
+  const orchestratorVolumes = [
+    ...sharedVolumes,
+    '/var/run/docker.sock:/var/run/docker-host.sock',
+  ];
+
+  const tmpfsMounts = [
+    '/run/generacy-credhelper:uid=1002',
+    '/run/generacy-control-plane:uid=1000',
+  ];
+
+  const envFile = [
+    { path: '.env' },
+    { path: '.env.local', required: false },
+  ];
+
+  const compose: Record<string, unknown> = {
     name: sanitizeComposeProjectName(input.projectName, input.clusterId),
-    version: '3.8',
     services: {
-      cluster: {
+      orchestrator: {
         image: input.imageTag,
-        container_name: `generacy-cluster-${input.clusterId}`,
+        command: '/usr/local/bin/entrypoint-orchestrator.sh',
         restart: 'unless-stopped',
-        ports: input.deploymentMode === 'cloud' ? ['3100:3100'] : ['3100'],
-        volumes: [
-          'cluster-data:/var/lib/generacy',
-          '/var/run/docker.sock:/var/run/docker.sock',
-        ],
+        ports: orchestratorPorts,
+        volumes: orchestratorVolumes,
+        tmpfs: tmpfsMounts,
         environment: [
-          `GENERACY_CLOUD_URL=${input.cloudUrl}`,
-          `GENERACY_CLUSTER_ID=${input.clusterId}`,
-          `GENERACY_PROJECT_ID=${input.projectId}`,
-          `DEPLOYMENT_MODE=${input.deploymentMode ?? 'local'}`,
-          `CLUSTER_VARIANT=${input.variant}`,
+          'REDIS_URL=redis://redis:6379',
+          'REDIS_HOST=redis',
+          `DEPLOYMENT_MODE=${deploymentMode}`,
+          `CLUSTER_VARIANT=${variant}`,
         ],
+        env_file: envFile,
+        healthcheck: {
+          test: ['CMD-SHELL', 'curl -f http://localhost:3100/health || exit 1'],
+          interval: '10s',
+          timeout: '5s',
+          retries: 5,
+          start_period: '30s',
+        },
+        depends_on: {
+          redis: { condition: 'service_healthy' },
+        },
+        stop_grace_period: '30s',
+        extra_hosts: ['host.docker.internal:host-gateway'],
+        networks: ['cluster-network'],
+      },
+      worker: {
+        image: input.imageTag,
+        command: '/usr/local/bin/entrypoint-worker.sh',
+        restart: 'unless-stopped',
+        deploy: {
+          replicas: '${WORKER_COUNT:-1}',
+        },
+        volumes: sharedVolumes,
+        tmpfs: tmpfsMounts,
+        environment: [
+          'REDIS_URL=redis://redis:6379',
+          'REDIS_HOST=redis',
+          'HEALTH_PORT=9001',
+          `DEPLOYMENT_MODE=${deploymentMode}`,
+          `CLUSTER_VARIANT=${variant}`,
+        ],
+        env_file: envFile,
+        healthcheck: {
+          test: ['CMD-SHELL', 'curl -f http://localhost:9001/health || exit 1'],
+          interval: '10s',
+          timeout: '5s',
+          retries: 5,
+          start_period: '30s',
+        },
+        depends_on: {
+          orchestrator: { condition: 'service_healthy' },
+        },
+        stop_grace_period: '30s',
+        extra_hosts: ['host.docker.internal:host-gateway'],
+        networks: ['cluster-network'],
+      },
+      redis: {
+        image: 'redis:7-alpine',
+        restart: 'unless-stopped',
+        healthcheck: {
+          test: ['CMD', 'redis-cli', 'ping'],
+          interval: '5s',
+          timeout: '3s',
+          retries: 5,
+        },
+        volumes: ['redis-data:/data'],
+        networks: ['cluster-network'],
       },
     },
     volumes: {
-      'cluster-data': null,
+      workspace: null,
+      'shared-packages': null,
+      'npm-cache': null,
+      'generacy-data': null,
+      'redis-data': null,
+      ...(claudeConfigMode === 'volume' ? { 'claude-config': null } : {}),
+    },
+    networks: {
+      'cluster-network': {
+        driver: 'bridge',
+      },
     },
   };
+
   writeFileSync(join(dir, 'docker-compose.yml'), stringify(compose), 'utf-8');
+}
+
+/**
+ * Write .env file with identity vars, project vars, and runtime defaults.
+ */
+export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
+  mkdirSync(dir, { recursive: true });
+
+  const relayUrl = deriveRelayUrl(input.cloudUrl, input.projectId);
+  const projectName = input.projectName;
+  const repoUrl = input.repoUrl ?? '';
+  const repoBranch = input.repoBranch ?? 'main';
+  const channel = input.channel ?? 'preview';
+  const workers = input.workers ?? 1;
+  const port = input.orchestratorPort ?? 3100;
+
+  const lines = [
+    '# Identity (from cloud LaunchConfig — do not edit)',
+    `GENERACY_CLUSTER_ID=${input.clusterId}`,
+    `GENERACY_PROJECT_ID=${input.projectId}`,
+    `GENERACY_ORG_ID=${input.orgId}`,
+    `GENERACY_CLOUD_URL=${relayUrl}`,
+    '',
+    '# Project',
+    `PROJECT_NAME=${projectName}`,
+    `REPO_URL=${repoUrl}`,
+    `REPO_BRANCH=${repoBranch}`,
+    `GENERACY_CHANNEL=${channel}`,
+    `WORKER_COUNT=${workers}`,
+    '',
+    '# Cluster runtime',
+    `ORCHESTRATOR_PORT=${port}`,
+    'LABEL_MONITOR_ENABLED=true',
+    'WEBHOOK_SETUP_ENABLED=true',
+    'SKIP_PACKAGE_UPDATE=false',
+    'SMEE_CHANNEL_URL=',
+    '',
+  ];
+
+  writeFileSync(join(dir, '.env'), lines.join('\n'), 'utf-8');
 }

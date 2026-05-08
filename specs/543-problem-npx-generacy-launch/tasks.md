@@ -10,26 +10,26 @@
 
 ## Phase 1: Shared Scaffolder — Core Functions
 
-- [ ] T001 Extend `ScaffoldComposeInput` interface with new fields (`orgId`, `workers`, `channel`, `repoUrl`, `claudeConfigMode`) in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
-- [ ] T002 Add `ScaffoldEnvInput` interface in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
-- [ ] T003 Implement `deriveRelayUrl(cloudUrl, projectId)` helper in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — converts `https://X` to `wss://X/relay?projectId=<id>`, `http://X` to `ws://X/relay?projectId=<id>`
-- [ ] T004 Rewrite `scaffoldDockerCompose()` to emit multi-service compose (orchestrator + worker + redis) in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — remove single `cluster` service, add three services with correct `command:`, volumes, tmpfs, healthchecks, depends_on, env_file, stop_grace_period, extra_hosts, networks; handle `claudeConfigMode` ('bind' vs 'volume') for claude config volume; handle port binding (ephemeral for local, fixed for cloud)
-- [ ] T005 Implement `scaffoldEnvFile(dir, input)` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — writes `.env` with identity vars (using `deriveRelayUrl()` for `GENERACY_CLOUD_URL`), project vars, and runtime defaults
+- [X] T001 Extend `ScaffoldComposeInput` interface with new fields (`orgId`, `workers`, `channel`, `repoUrl`, `claudeConfigMode`) in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
+- [X] T002 Add `ScaffoldEnvInput` interface in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`
+- [X] T003 Implement `deriveRelayUrl(cloudUrl, projectId)` helper in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — converts `https://X` to `wss://X/relay?projectId=<id>`, `http://X` to `ws://X/relay?projectId=<id>`
+- [X] T004 Rewrite `scaffoldDockerCompose()` to emit multi-service compose (orchestrator + worker + redis) in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — remove single `cluster` service, add three services with correct `command:`, volumes, tmpfs, healthchecks, depends_on, env_file, stop_grace_period, extra_hosts, networks; handle `claudeConfigMode` ('bind' vs 'volume') for claude config volume; handle port binding (ephemeral for local, fixed for cloud)
+- [X] T005 Implement `scaffoldEnvFile(dir, input)` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — writes `.env` with identity vars (using `deriveRelayUrl()` for `GENERACY_CLOUD_URL`), project vars, and runtime defaults
 
 ## Phase 2: Launch & Deploy Callers
 
-- [ ] T006 [P] Add `preCreateClaudeJson()` in `packages/generacy/src/cli/commands/launch/scaffolder.ts` — creates `~/.claude.json` with `{}` if it doesn't exist
-- [ ] T007 [P] Update `scaffoldProject()` in `packages/generacy/src/cli/commands/launch/scaffolder.ts` — pass new fields (`orgId`, `channel`, `workers`, `repoUrl`, `claudeConfigMode: 'bind'`) to `scaffoldDockerCompose()`, call `scaffoldEnvFile()`, call `preCreateClaudeJson()`
-- [ ] T008 [P] Update `scaffoldBundle()` in `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — pass new fields (`orgId`, `channel`, `workers`, `repoUrl`, `claudeConfigMode: 'volume'`, `deploymentMode: 'cloud'`) to `scaffoldDockerCompose()`, call `scaffoldEnvFile()`
-- [ ] T009 Verify `launch/index.ts` — no changes expected (delegates to `scaffoldProject()`), but confirm the flow calls `scaffoldProject()` before `pullImage()`/`startCluster()`
+- [X] T006 [P] Add `preCreateClaudeJson()` in `packages/generacy/src/cli/commands/launch/scaffolder.ts` — creates `~/.claude.json` with `{}` if it doesn't exist
+- [X] T007 [P] Update `scaffoldProject()` in `packages/generacy/src/cli/commands/launch/scaffolder.ts` — pass new fields (`orgId`, `channel`, `workers`, `repoUrl`, `claudeConfigMode: 'bind'`) to `scaffoldDockerCompose()`, call `scaffoldEnvFile()`, call `preCreateClaudeJson()`
+- [X] T008 [P] Update `scaffoldBundle()` in `packages/generacy/src/cli/commands/deploy/scaffolder.ts` — pass new fields (`orgId`, `channel`, `workers`, `repoUrl`, `claudeConfigMode: 'volume'`, `deploymentMode: 'cloud'`) to `scaffoldDockerCompose()`, call `scaffoldEnvFile()`
+- [X] T009 Verify `launch/index.ts` — no changes expected (delegates to `scaffoldProject()`), but confirm the flow calls `scaffoldProject()` before `pullImage()`/`startCluster()`
 
 ## Phase 3: Tests
 
-- [ ] T010 [P] Rewrite `scaffoldDockerCompose` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — verify three services (orchestrator, worker, redis), correct `command:` overrides, volume mounts (including docker socket at `/var/run/docker-host.sock`), tmpfs mounts, healthchecks, depends_on chain, env_file references, networks block, stop_grace_period, extra_hosts; verify bind-mount mode for claude config vs named volume mode; verify port binding modes
-- [ ] T011 [P] Add `scaffoldEnvFile` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — verify complete variable set, relay URL derivation (wss path), default values
-- [ ] T012 [P] Add `deriveRelayUrl` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — https→wss, http→ws, trailing slash handling, localhost case
-- [ ] T013 [P] Update launch `scaffoldProject` tests in `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts` — verify `.env` file is generated alongside compose, verify multi-service compose structure (not single `cluster` service), verify `preCreateClaudeJson()` behavior, update existing assertions that reference `services.cluster` to reference `services.orchestrator`
-- [ ] T014 Run full test suite (`pnpm test`) and fix any regressions
+- [X] T010 [P] Rewrite `scaffoldDockerCompose` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — verify three services (orchestrator, worker, redis), correct `command:` overrides, volume mounts (including docker socket at `/var/run/docker-host.sock`), tmpfs mounts, healthchecks, depends_on chain, env_file references, networks block, stop_grace_period, extra_hosts; verify bind-mount mode for claude config vs named volume mode; verify port binding modes
+- [X] T011 [P] Add `scaffoldEnvFile` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — verify complete variable set, relay URL derivation (wss path), default values
+- [X] T012 [P] Add `deriveRelayUrl` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — https→wss, http→ws, trailing slash handling, localhost case
+- [X] T013 [P] Update launch `scaffoldProject` tests in `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts` — verify `.env` file is generated alongside compose, verify multi-service compose structure (not single `cluster` service), verify `preCreateClaudeJson()` behavior, update existing assertions that reference `services.cluster` to reference `services.orchestrator`
+- [X] T014 Run full test suite (`pnpm test`) and fix any regressions
 
 ## Dependencies & Execution Order
 
