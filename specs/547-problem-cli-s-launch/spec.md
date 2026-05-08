@@ -1,93 +1,102 @@
-# Feature Specification: Differentiated 4xx error messages in `generacy launch`
+# Feature Specification: ## Problem
+
+The CLI's launch-config fetcher at [packages/generacy/src/cli/commands/launch/cloud-client
 
 **Branch**: `547-problem-cli-s-launch` | **Date**: 2026-05-08 | **Status**: Draft
 
 ## Summary
 
-The CLI's `fetchLaunchConfig()` in `packages/generacy/src/cli/commands/launch/cloud-client.ts` collapses all HTTP 4xx responses into a single "Claim code is invalid or expired" message. This makes structurally different failures (auth misconfiguration, format rejection, wrong cloud environment, rate limiting) indistinguishable from the user's perspective. The fix replaces the blanket 4xx handler with status-code-specific error messages that surface the cloud's RFC 7807 `detail` field.
+## Problem
 
-## Background
+The CLI's launch-config fetcher at [packages/generacy/src/cli/commands/launch/cloud-client.ts:96-98](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/cloud-client.ts#L96-L98) maps every HTTP 4xx response to a single user-facing string:
 
-During the v1.5 staging walkthrough (2026-05-07/08), three distinct bugs all surfaced as the same misleading error:
-
-1. **401** — Auth middleware leak on the cloud side (generacy-cloud#515). The claim endpoint should be unauthenticated.
-2. **400** — Claim format regex rejected base64url characters `-` and `_` (generacy-cloud#516). ~40% of fresh claims were silently invalid.
-3. **404** — Claim minted in staging but CLI defaulted to prod. Claim doesn't exist there.
-
-A fourth class (429 rate-limit) would also collapse into the same message, causing users to retry and worsen the rate limit.
-
-The root cause is `cloud-client.ts:96-98`:
 ```ts
 if (raw.status >= 400 && raw.status < 500) {
   throw new Error('Claim code is invalid or expired');
 }
 ```
 
-The cloud already returns RFC 7807 `application/problem+json` bodies with `type`, `title`, `detail`, `instance` — the CLI discards all of it.
+The CLI then surfaces this verbatim in [launch/index.ts:106](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/index.ts#L106) as `Failed to fetch launch configuration: <msg>`. From the user's perspective, every 4xx looks identical — and most 4xx responses are *not* expired claims.
+
+## Why this matters
+
+During the v1.5 staging walkthrough on 2026-05-07/08, **three structurally distinct bugs** all surfaced as identical "Claim code is invalid or expired" messages, making each one disproportionately hard to diagnose:
+
+1. **401 Unauthorized** — [auth middleware in the activate sub-router was leaking onto sibling routes](https://github.com/generacy-ai/generacy-cloud/pull/515). The launch-config endpoint was supposed to be unauthenticated, but a `app.use('*', requireAuth())` in a sibling sub-app caught the request first. Took ~30 minutes to track down with full GCP-side log access; would have been instant if the CLI had said "401 Unauthorized" instead of "expired".
+2. **400 Invalid Claim (regex rejection)** — [the validator regex didn't match the mint alphabet](https://github.com/generacy-ai/generacy-cloud/pull/516). About 40% of fresh claims contained a `-` or `_` (base64url alphabet) and got rejected by `/^[A-Za-z0-9]{16}$/`. Looked identical to "expired" — user would mint a new claim, hit it again, mint another, intermittent until they happened to get one without `-` or `_`. Burned a full debug session before being noticed.
+3. **404 Not Found (claim minted in different cloud)** — when `GENERACY_CLOUD_URL` defaults to prod but the claim was minted in staging. Prod returns 404 because the claim doesn't exist there. Same misleading string. Cost the user multiple "the deploy must have rolled back" hypothesis chases.
+
+There's also a fourth class — 429 rate-limit — that would surface as "expired" today, with even less actionable feedback (the user would just keep retrying and making the rate limit worse).
+
+## Proposed fix
+
+Differentiate by status code in the cloud client. Suggested mapping:
+
+| Status | Message |
+|---|---|
+| 400 | "The cloud rejected the claim format (got `<status>: <body.detail>` from `<url>`). Generate a fresh claim from your project page." |
+| 401 / 403 | "The cloud rejected this request as unauthenticated (`<status>` from `<url>`). The claim endpoint should be public — this likely means the cloud is misconfigured. Report this with the URL above." |
+| 404 | "The claim was not found at `<url>`. Did you mint the claim in a different environment? Set `GENERACY_CLOUD_URL` (or `--cloud-url`, see #545) to the cloud where the claim was minted." |
+| 410 | "Claim has been consumed or expired (one-time-use, 10-min TTL). Generate a fresh claim from your project page." |
+| 429 | "Rate-limited by the cloud (`Retry-After: <header>`). Wait and retry, or stop scripting `launch` calls." |
+| Other 4xx | "Cloud returned `<status>` (`<body.detail>` from `<url>`). Report this if it persists." |
+
+The cloud already returns RFC 7807 `application/problem+json` bodies with `type`, `title`, `detail`, `instance` — the CLI should at minimum surface `body.detail` in the error message rather than discarding it.
+
+## Resolved questions (from clarify phase)
+
+- **Q1 (dispatch key)**: Use HTTP status code as the primary dispatch key (simpler, degrades gracefully). Optionally capture the RFC 7807 `type` URI as a `problemType` field on the error class for future use.
+- **Q2 (URL in errors)**: Yes, show the request URL in error messages for debugging — but **redact the claim code** (e.g. `?claim=<redacted>`) since claims are live bootstrap secrets and users routinely paste errors into chat/issues. Also redact the debug log at `launch/index.ts:94`.
+- **Q3 (audit elsewhere)**: `deploy/cloud-client.ts` is a re-export of `fetchLaunchConfig`, so fixing the source fixes both commands automatically.
+- **Q4 (error class)**: Use a custom `CloudError extends Error` with structured fields (`statusCode`, `url`, `detail?`, `retryAfter?`, `problemType?`). Backward-compatible — `instanceof Error` still holds.
+- **Q5 (non-JSON fallback)**: When the response body isn't JSON or lacks `detail`, show status code + redacted URL + first ~120 chars of raw body (sanitized: strip non-printables, collapse whitespace, append `...` on truncation). Display body on a second line.
+
+## Reproduction (any of three)
+
+- **401**: Hit a launch-config endpoint while [generacy-ai/generacy-cloud#515](https://github.com/generacy-ai/generacy-cloud/pull/515) is unmerged.
+- **400 regex**: With [generacy-ai/generacy-cloud#516](https://github.com/generacy-ai/generacy-cloud/pull/516) unmerged, mint claims until one contains a `-` or `_`.
+- **404 wrong-cloud**: Mint a claim on staging.generacy.ai, run `npx -y @generacy-ai/generacy@preview launch --claim=<code>` without setting `GENERACY_CLOUD_URL`. Hits prod, 404s, surfaces as "expired".
+
+All three say the same thing.
+
+## Related
+
+- generacy-ai/generacy-cloud#515 — auth middleware leak (one of the three)
+- generacy-ai/generacy-cloud#516 — regex/base64url alphabet (two of the three)
+- generacy-ai/generacy-cloud#518 — copy-paste UX (the three are easier to avoid if the cloud emits a complete command)
+- #545 — `--cloud-url` flag (related to the 404 case)
 
 ## User Stories
 
-### US1: Developer diagnosing a failed launch
+### US1: [Primary User Story]
 
-**As a** developer running `generacy launch --claim=<code>`,
-**I want** the CLI to tell me *why* the claim was rejected (wrong format, wrong cloud, auth error, expired, rate-limited),
-**So that** I can fix the problem myself without needing server-side log access.
-
-**Acceptance Criteria**:
-- [ ] A 400 response shows the cloud's `detail` field and suggests generating a fresh claim
-- [ ] A 401/403 response identifies the issue as an auth misconfiguration and suggests reporting it
-- [ ] A 404 response suggests the user may be pointing at the wrong cloud environment
-- [ ] A 410 response indicates the claim was consumed or expired
-- [ ] A 429 response shows the `Retry-After` header value and advises waiting
-- [ ] Any other 4xx shows the status code and `detail` from the response body
-
-### US2: Platform engineer debugging cloud-side issues
-
-**As a** platform engineer supporting users,
-**I want** CLI errors to include the request URL and HTTP status code,
-**So that** I can quickly identify which cloud endpoint is misbehaving.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Error messages include the HTTP status code
-- [ ] Error messages include the target URL (cloud endpoint)
-- [ ] The `detail` field from the RFC 7807 response body is surfaced when present
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Replace blanket 4xx handler in `fetchLaunchConfig()` with per-status-code error messages | P1 | Single site: `cloud-client.ts:96-98` |
-| FR-002 | Parse response body as JSON and extract RFC 7807 `detail` field when present | P1 | Graceful fallback if body isn't JSON or lacks `detail` |
-| FR-003 | Map 400 to format-rejection message including `detail` and URL | P1 | |
-| FR-004 | Map 401/403 to auth-misconfiguration message including status and URL | P1 | |
-| FR-005 | Map 404 to wrong-environment message suggesting `GENERACY_CLOUD_URL` / `--cloud-url` | P1 | References #545 |
-| FR-006 | Map 410 to consumed/expired message | P1 | Only status that should say "expired" |
-| FR-007 | Map 429 to rate-limit message including `Retry-After` header value | P2 | Requires reading response headers |
-| FR-008 | Map other 4xx to generic message with status, `detail`, and URL | P1 | Catch-all |
-| FR-009 | Deploy command inherits fix automatically (re-exports `fetchLaunchConfig`) | P1 | `deploy/cloud-client.ts` re-exports; no separate change needed |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Distinct error messages for each status code class | 6 distinct messages (400, 401/403, 404, 410, 429, other) | Unit tests |
-| SC-002 | RFC 7807 `detail` field surfaced in error message | Present when cloud returns it | Unit tests with mock responses |
-| SC-003 | No regression in happy path | `fetchLaunchConfig` still returns valid `LaunchConfig` on 200 | Existing tests pass |
-| SC-004 | Deploy command coverage | Same improved errors via re-export | Verify re-export unchanged |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The cloud returns RFC 7807 `application/problem+json` bodies on error responses (confirmed in issue)
-- The `detail` field may not always be present; the code must degrade gracefully to just showing the status code
-- Response headers (e.g. `Retry-After`) are accessible from the existing `node:http` response object
-- The `deploy/cloud-client.ts` re-export means fixing `launch/cloud-client.ts` automatically fixes deploy
+- [Assumption 1]
 
 ## Out of Scope
 
-- Switching dispatch key from HTTP status to RFC 7807 `type` URI (Q1 from issue — deferred, status-code dispatch is simpler and degrades gracefully)
-- Adding `--cloud-url` flag to the CLI (#545 — separate issue)
-- Auditing other CLI commands for similar lossy error mapping (Q3 — follow-up)
-- Changing the cloud's error response format
+- [Exclusion 1]
 
 ---
 
