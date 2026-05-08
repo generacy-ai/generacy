@@ -9,6 +9,7 @@ import { z } from 'zod';
 export interface LaunchOptions {
   claim?: string;
   dir?: string;
+  cloudUrl?: string;
   logLevel?: string;
 }
 

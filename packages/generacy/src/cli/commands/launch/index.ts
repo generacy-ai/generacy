@@ -24,6 +24,7 @@ import { pullImage, startCluster, streamLogsUntilActivation } from './compose.js
 import { openBrowser } from './browser.js';
 import { registerCluster } from './registry.js';
 import { resolve } from 'node:path';
+import { resolveCloudUrl } from '../../utils/cloud-url.js';
 
 /**
  * Create the `launch` subcommand.
@@ -35,6 +36,7 @@ export function launchCommand(): Command {
     .description('Bootstrap a new cluster from a cloud-issued claim code')
     .option('--claim <code>', 'Claim code from the Generacy cloud dashboard')
     .option('--dir <path>', 'Project directory (default: ~/Generacy/<projectName>)')
+    .option('--cloud-url <url>', 'Cloud API URL (overrides GENERACY_CLOUD_URL env var)')
     .action(async (_opts, cmd) => {
       await launchAction(cmd.opts() as LaunchOptions);
     });
@@ -94,7 +96,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   logger.debug({ claimCode }, 'Using claim code');
 
   // ── 4. Fetch launch-config from cloud API ───────────────────────────
-  const cloudUrl = process.env['GENERACY_CLOUD_URL'] ?? 'https://api.generacy.ai';
+  const cloudUrl = resolveCloudUrl(opts.cloudUrl);
   let config;
   try {
     const spin = p.spinner();
