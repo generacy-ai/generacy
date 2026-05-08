@@ -348,7 +348,7 @@ describe('scaffoldEnvFile', () => {
     expect(content).toContain('SMEE_CHANNEL_URL=');
   });
 
-  it('derives relay URL from cloudUrl (https → wss)', () => {
+  it('writes GENERACY_API_URL and GENERACY_RELAY_URL (not GENERACY_CLOUD_URL)', () => {
     scaffoldEnvFile(dir, {
       clusterId: 'c1',
       projectId: 'p1',
@@ -358,7 +358,42 @@ describe('scaffoldEnvFile', () => {
     });
 
     const content = readFileSync(join(dir, '.env'), 'utf-8');
-    expect(content).toContain('GENERACY_CLOUD_URL=wss://api.generacy.ai/relay?projectId=p1');
+    expect(content).toContain('GENERACY_API_URL=https://api.generacy.ai');
+    expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=p1');
+    expect(content).not.toContain('GENERACY_CLOUD_URL');
+  });
+
+  it('with cloud object, values come directly from cloud', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+      cloud: {
+        apiUrl: 'https://api-staging.generacy.ai',
+        relayUrl: 'wss://api-staging.generacy.ai/relay?projectId=p1',
+      },
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).toContain('GENERACY_API_URL=https://api-staging.generacy.ai');
+    expect(content).toContain('GENERACY_RELAY_URL=wss://api-staging.generacy.ai/relay?projectId=p1');
+    expect(content).not.toContain('GENERACY_CLOUD_URL');
+  });
+
+  it('without cloud object, GENERACY_API_URL from cloudUrl, GENERACY_RELAY_URL derived', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).toContain('GENERACY_API_URL=https://api.generacy.ai');
+    expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=p1');
   });
 
   it('uses default values when optionals are omitted', () => {

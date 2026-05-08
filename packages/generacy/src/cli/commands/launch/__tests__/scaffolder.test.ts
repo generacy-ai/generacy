@@ -257,9 +257,38 @@ describe('scaffoldProject', () => {
     expect(content).toContain('GENERACY_CLUSTER_ID=cluster_abc123');
     expect(content).toContain('GENERACY_PROJECT_ID=proj_abc123');
     expect(content).toContain('GENERACY_ORG_ID=org_xyz789');
-    expect(content).toContain('GENERACY_CLOUD_URL=wss://api.generacy.ai/relay?projectId=proj_abc123');
+    expect(content).toContain('GENERACY_API_URL=https://api.generacy.ai');
+    expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=proj_abc123');
+    expect(content).not.toContain('GENERACY_CLOUD_URL');
     expect(content).toContain('PROJECT_NAME=my-project');
     expect(content).toContain('REPO_URL=generacy-ai/example-project');
+  });
+
+  it('cloud object flows through to .env generation', () => {
+    const projectDir = join(tempDir, 'cloud-project');
+    const configWithCloud: LaunchConfig = {
+      ...mockConfig,
+      cloud: {
+        apiUrl: 'https://api-staging.generacy.ai',
+        appUrl: 'https://staging.generacy.ai',
+        relayUrl: 'wss://api-staging.generacy.ai/relay?projectId=proj_abc123',
+      },
+    };
+    scaffoldProject(projectDir, configWithCloud);
+
+    const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
+    expect(content).toContain('GENERACY_API_URL=https://api-staging.generacy.ai');
+    expect(content).toContain('GENERACY_RELAY_URL=wss://api-staging.generacy.ai/relay?projectId=proj_abc123');
+    expect(content).not.toContain('GENERACY_CLOUD_URL');
+  });
+
+  it('backward compat when cloud absent — derives from cloudUrl', () => {
+    const projectDir = join(tempDir, 'no-cloud-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
+    expect(content).toContain('GENERACY_API_URL=https://api.generacy.ai');
+    expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=proj_abc123');
   });
 
   // -------------------------------------------------------------------------

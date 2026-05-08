@@ -165,6 +165,18 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `.github/workflows/publish-cluster-microservices-image.yml` — NEW in #534: Same shape as cluster-base workflow, targeting `generacy-ai/cluster-microservices` repo and `ghcr.io/generacy-ai/cluster-microservices` image.
 - Motivation: Template repos previously contained workflow files that got copied into user-project repos during creation, causing `403 Resource not accessible by integration` errors (GitHub App lacks `Workflows: write`). Moving builds here eliminates that.
 
+## Cloud URL Disambiguation (#549)
+
+- Split `GENERACY_CLOUD_URL` into three purpose-specific env vars: `GENERACY_API_URL` (HTTP REST), `GENERACY_RELAY_URL` (WebSocket relay), `GENERACY_APP_URL` (dashboard, CLI-only).
+- `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts` gains optional `cloud: { apiUrl, appUrl, relayUrl }` object alongside deprecated `cloudUrl`.
+- `packages/generacy/src/cli/utils/cloud-url.ts`: `resolveCloudUrl()` renamed to `resolveApiUrl()`, reads `GENERACY_API_URL` first, falls back to `GENERACY_CLOUD_URL` with debug deprecation log.
+- `packages/orchestrator/src/config/loader.ts`: Line ~245 reads `GENERACY_API_URL` (was `GENERACY_CLOUD_URL`) for activation; line ~263 reads `GENERACY_RELAY_URL` (was `GENERACY_CLOUD_URL`) for relay. Both fall back to old var with deprecation log. `projectId` append logic (~280-290) removed (cloud pre-appends).
+- `packages/cluster-relay/src/relay.ts`: Interface comment updated to reference `GENERACY_RELAY_URL` (env var read happens in orchestrator config loader, not directly here).
+- `packages/generacy/src/cli/commands/cluster/scaffolder.ts`: `scaffoldEnvFile()` writes `GENERACY_API_URL` and `GENERACY_RELAY_URL` (not `GENERACY_CLOUD_URL`). When `LaunchConfig.cloud` present, uses cloud-provided values; otherwise derives from `cloudUrl` via `deriveRelayUrl()`.
+- `GENERACY_APP_URL` NOT written to cluster `.env` (no consumer). Cloud sends it in `LaunchConfig.cloud.appUrl`; CLI stores it in registry's `cloudUrl` field.
+- Registry `cloudUrl` field name unchanged (persisted data). Value sourced from `config.cloud?.appUrl ?? config.cloudUrl`.
+- Scope: generacy repo only. Cloud-side (`buildLaunchConfig`), cluster-base (`.env.template`), and Phase 4 cleanup are follow-up issues.
+
 ## Scoped Docker Socket Proxy (#497, v1.5 phase 9)
 
 - `packages/credhelper-daemon/src/docker-bind-mount-guard.ts` — NEW in #497: Validates `POST /containers/create` bind mounts are under `GENERACY_SCRATCH_DIR`. Inspects both `HostConfig.Binds` (string format) and `HostConfig.Mounts` (object format, `Type: "bind"` only). Uses `path.resolve()` for canonicalization. Only active when `upstreamIsHost=true` (host-socket mode); DinD mode skips validation.

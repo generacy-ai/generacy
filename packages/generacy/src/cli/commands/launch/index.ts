@@ -24,7 +24,7 @@ import { pullImage, startCluster, streamLogsUntilActivation } from './compose.js
 import { openBrowser } from './browser.js';
 import { registerCluster } from './registry.js';
 import { resolve } from 'node:path';
-import { resolveCloudUrl } from '../../utils/cloud-url.js';
+import { resolveApiUrl } from '../../utils/cloud-url.js';
 
 /**
  * Create the `launch` subcommand.
@@ -96,7 +96,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   logger.debug({ claimCode: '<redacted>' }, 'Using claim code');
 
   // ── 4. Fetch launch-config from cloud API ───────────────────────────
-  const cloudUrl = resolveCloudUrl(opts.cloudUrl);
+  const cloudUrl = resolveApiUrl(opts.cloudUrl);
   let config;
   try {
     const spin = p.spinner();
@@ -191,7 +191,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
       composePath,
       variant: (config.variant as 'cluster-base' | 'cluster-microservices') ?? 'cluster-base',
       channel: config.channel ?? 'preview',
-      cloudUrl: config.cloudUrl,
+      cloudUrl: config.cloud?.appUrl ?? config.cloudUrl,
       lastSeen: now,
       createdAt: now,
     });

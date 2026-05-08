@@ -66,6 +66,15 @@ const LOADER_ENV_KEYS = [
   'ORCHESTRATOR_SMEE_CHANNEL_URL',
   'WEBHOOK_SETUP_ENABLED',
   'ORCHESTRATOR_WEBHOOK_SETUP_ENABLED',
+  'GENERACY_CLOUD_URL',
+  'GENERACY_API_URL',
+  'GENERACY_RELAY_URL',
+  'GENERACY_API_KEY',
+  'GENERACY_CHANNEL',
+  'GENERACY_KEY_FILE_PATH',
+  'WORKER_WORKSPACE_DIR',
+  'ORCHESTRATOR_WORKER_WORKSPACE_DIR',
+  'GENERACY_CREDENTIAL_ROLE',
 ];
 
 beforeEach(() => {
@@ -344,5 +353,65 @@ describe('orchestrator loader – auto-populate conversations.workspaces', () =>
     const config = loadConfig({ configFile, loadEnv: false });
 
     expect(config.conversations.workspaces).toEqual({ 'acme/my-repo': '/custom/path' });
+  });
+});
+
+describe('orchestrator loader – cloud URL disambiguation (#549)', () => {
+  it('GENERACY_API_URL populates activation.cloudUrl', () => {
+    process.env['GENERACY_API_URL'] = 'https://api-staging.generacy.ai';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.activation.cloudUrl).toBe('https://api-staging.generacy.ai');
+  });
+
+  it('GENERACY_RELAY_URL populates relay.cloudUrl', () => {
+    process.env['GENERACY_RELAY_URL'] = 'wss://api-staging.generacy.ai/relay?projectId=p1';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.relay.cloudUrl).toBe('wss://api-staging.generacy.ai/relay?projectId=p1');
+  });
+
+  it('falls back to GENERACY_CLOUD_URL for activation when GENERACY_API_URL absent', () => {
+    process.env['GENERACY_CLOUD_URL'] = 'https://fallback.generacy.ai';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.activation.cloudUrl).toBe('https://fallback.generacy.ai');
+  });
+
+  it('falls back to GENERACY_CLOUD_URL for relay when GENERACY_RELAY_URL absent', () => {
+    process.env['GENERACY_CLOUD_URL'] = 'wss://fallback.generacy.ai/relay';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.relay.cloudUrl).toBe('wss://fallback.generacy.ai/relay');
+  });
+
+  it('GENERACY_API_URL takes precedence over GENERACY_CLOUD_URL for activation', () => {
+    process.env['GENERACY_API_URL'] = 'https://api-new.generacy.ai';
+    process.env['GENERACY_CLOUD_URL'] = 'https://old.generacy.ai';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.activation.cloudUrl).toBe('https://api-new.generacy.ai');
+  });
+
+  it('GENERACY_RELAY_URL takes precedence over GENERACY_CLOUD_URL for relay', () => {
+    process.env['GENERACY_RELAY_URL'] = 'wss://relay-new.generacy.ai/relay';
+    process.env['GENERACY_CLOUD_URL'] = 'wss://old.generacy.ai/relay';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.relay.cloudUrl).toBe('wss://relay-new.generacy.ai/relay');
+  });
+
+  it('relay URL derives from GENERACY_CHANNEL when no relay env vars set', () => {
+    process.env['GENERACY_CHANNEL'] = 'preview';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.relay.cloudUrl).toBe('wss://api-staging.generacy.ai/relay');
   });
 });

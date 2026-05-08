@@ -99,6 +99,9 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     repoUrl: config.repos?.primary,
     channel: config.channel ?? 'preview',
     workers: 1,
+    cloud: config.cloud
+      ? { apiUrl: config.cloud.apiUrl, relayUrl: config.cloud.relayUrl }
+      : undefined,
   });
 
   preCreateClaudeJson();

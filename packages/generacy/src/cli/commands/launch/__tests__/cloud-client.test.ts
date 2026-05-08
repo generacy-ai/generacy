@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
 import { fetchLaunchConfig } from '../cloud-client.js';
 import { CloudError } from '../cloud-error.js';
+import { LaunchConfigSchema } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Test HTTP server — assigns a per-test handler for flexible response control
@@ -379,5 +380,98 @@ describe('fetchLaunchConfig — HTTP', () => {
     await expect(fetchLaunchConfig(serverUrl, 'some-claim')).rejects.toThrow(
       'Invalid response from cloud',
     );
+  });
+
+  it('parses successfully with cloud object present', async () => {
+    const configWithCloud = {
+      ...VALID_LAUNCH_CONFIG,
+      cloud: {
+        apiUrl: 'https://api-staging.generacy.ai',
+        appUrl: 'https://staging.generacy.ai',
+        relayUrl: 'wss://api-staging.generacy.ai/relay?projectId=proj_abc123',
+      },
+    };
+
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(configWithCloud));
+    };
+
+    const config = await fetchLaunchConfig(serverUrl, 'cloud-claim');
+    expect(config.cloud).toEqual(configWithCloud.cloud);
+  });
+
+  it('parses successfully without cloud object (backward compat)', async () => {
+    handler = (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(VALID_LAUNCH_CONFIG));
+    };
+
+    const config = await fetchLaunchConfig(serverUrl, 'no-cloud-claim');
+    expect(config.cloud).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LaunchConfigSchema — cloud object validation
+// ---------------------------------------------------------------------------
+
+describe('LaunchConfigSchema — cloud object', () => {
+  const BASE = {
+    projectId: 'proj_abc123',
+    projectName: 'my-project',
+    variant: 'cluster-base',
+    cloudUrl: 'https://api.generacy.ai',
+    clusterId: 'cluster_abc123',
+    imageTag: 'ghcr.io/generacy-ai/cluster-base:1.5.0',
+    orgId: 'org_abc123',
+    repos: { primary: 'generacy-ai/example-project' },
+  };
+
+  it('parses with cloud object present', () => {
+    const result = LaunchConfigSchema.safeParse({
+      ...BASE,
+      cloud: {
+        apiUrl: 'https://api-staging.generacy.ai',
+        appUrl: 'https://staging.generacy.ai',
+        relayUrl: 'wss://api-staging.generacy.ai/relay?projectId=proj_abc123',
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cloud?.apiUrl).toBe('https://api-staging.generacy.ai');
+    }
+  });
+
+  it('parses without cloud object (backward compat)', () => {
+    const result = LaunchConfigSchema.safeParse(BASE);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.cloud).toBeUndefined();
+    }
+  });
+
+  it('rejects invalid URLs in cloud object', () => {
+    const result = LaunchConfigSchema.safeParse({
+      ...BASE,
+      cloud: {
+        apiUrl: 'not-a-url',
+        appUrl: 'https://staging.generacy.ai',
+        relayUrl: 'wss://api-staging.generacy.ai/relay',
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('cloud fields are independently validated', () => {
+    const result = LaunchConfigSchema.safeParse({
+      ...BASE,
+      cloud: {
+        apiUrl: 'https://api.generacy.ai',
+        appUrl: 'bad-url',
+        relayUrl: 'wss://api.generacy.ai/relay',
+      },
+    });
+    expect(result.success).toBe(false);
   });
 });
