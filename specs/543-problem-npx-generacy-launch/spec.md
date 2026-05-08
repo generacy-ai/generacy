@@ -1,105 +1,119 @@
-# Fix launch CLI scaffolder to produce a working docker-compose.yml
+# Feature Specification: ## Problem
+
+`npx generacy launch` scaffolds a `docker-compose
 
 **Branch**: `543-problem-npx-generacy-launch` | **Date**: 2026-05-08 | **Status**: Draft
 
 ## Summary
 
-`npx generacy launch` scaffolds a single-service `docker-compose.yml` that is fundamentally incompatible with the `cluster-base` image. The container starts, runs `node` (the default CMD), exits cleanly with code 0, and `restart: unless-stopped` creates a crash loop. The fix is to make the scaffolder emit a multi-service compose matching the canonical cluster-base devcontainer compose structure (orchestrator + worker + redis), with correct entrypoints, volumes, healthchecks, and env vars.
-
 ## Problem
 
-The `cluster-base:preview` image is a devcontainer image whose Dockerfile sets `CMD: ["node"]` (inherited from the upstream typescript-node base). The orchestrator entrypoint (`/usr/local/bin/entrypoint-orchestrator.sh`) exists in the image but is only invoked via the cluster-base repo's own `docker-compose.yml` using a `command:` override.
+`npx generacy launch` scaffolds a `docker-compose.yml` that cannot actually run the cluster. The container starts, exits cleanly with code 0 in ~800ms, and `restart: unless-stopped` revives it — producing a crash loop with no logs.
 
-The launch CLI's `scaffoldDockerCompose` emits a single `cluster` service with no `command:` override, no Redis sidecar (required by the orchestrator's startup sequence), no worker service, wrong volume mounts, and missing healthchecks. The result is a dead-on-arrival cluster.
+Surfaced during the v1.5 staging walkthrough on 2026-05-08. After fixing the previously-known issues (channel propagation, claim regex, activate auth leak, npm dist-tags), a fresh `launch` succeeds at the cloud / scaffold steps but the resulting cluster is dead-on-arrival.
 
-See the [detailed delta table in the issue](https://github.com/generacy-ai/generacy/issues/543) for every difference between the scaffolded and working compose files.
+## Root cause
+
+The `cluster-base:preview` image is a **devcontainer image**, not a runtime image. Inspection of the image config:
+
+```
+ENTRYPOINT: ["docker-entrypoint.sh"]   # upstream typescript-node default
+CMD: ["node"]                          # upstream typescript-node default
+```
+
+The orchestrator entrypoint script (`/usr/local/bin/entrypoint-orchestrator.sh`) is copied into the image by the cluster-base [Dockerfile](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/Dockerfile), but is **never wired up as the container's ENTRYPOINT or CMD**. It's invoked only by the cluster-base repo's [own compose file](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/docker-compose.yml) via a `command:` override.
+
+When `docker compose up` runs the scaffolded compose with no `command:` override, the container runs `node` (the REPL). With no input attached, `node` exits cleanly. Container restarts. Loop forever.
+
+The image is intentionally dual-purpose (devcontainer + runtime), and the cluster-base devcontainer compose handles the wiring. **The launch CLI's scaffolder doesn't.**
+
+## Deltas: scaffolded compose vs. real cluster-base devcontainer compose
+
+The scaffolder ([packages/generacy/src/cli/commands/cluster/scaffolder.ts](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/cluster/scaffolder.ts#L62-L89)) currently emits a single-service compose. The real compose ([cluster-base/.devcontainer/generacy/docker-compose.yml](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/docker-compose.yml)) is fundamentally different. Every difference below contributes to the cluster being unable to boot:
+
+| Aspect | Scaffolded (broken) | Real (works) |
+|---|---|---|
+| Services | One: `cluster` | Three: `orchestrator`, `worker`, `redis` |
+| Command override | none — inherits `node` from image, exits immediately | `command: /usr/local/bin/entrypoint-orchestrator.sh` (and `entrypoint-worker.sh` for worker) |
+| Worker scaling | n/a | `deploy.replicas: ${WORKER_COUNT:-3}` |
+| Redis sidecar | absent | full `redis:7-alpine` service with healthcheck |
+| Volumes | `cluster-data`, `/var/run/docker.sock` | `workspace`, `claude-config`, `~/.claude.json`, `shared-packages`, `npm-cache`, `generacy-data`, `redis-data` + the docker socket mounted at the non-default path `/var/run/docker-host.sock` |
+| Worker tmpfs | n/a | `/run/generacy-credhelper` (uid 1002) and `/run/generacy-control-plane` (uid 1000) — load-bearing for the credentials architecture |
+| Network | default | dedicated `cluster-network` bridge |
+| Healthchecks | none | orchestrator on `/health`, worker on `:9001/health`, redis ping |
+| `depends_on` chain | n/a | worker → orchestrator → redis (all `service_healthy`) |
+| Env vars | 5 inline | 8+ env vars + `env_file: .env` and `.env.local` |
+| Stop grace period | none | `30s` (matters for the credhelper daemon's clean shutdown) |
+| `extra_hosts` | none | `host.docker.internal:host-gateway` |
+
+The orchestrator entrypoint also blocks waiting for Redis (`while ! nc -z redis 6379; do sleep 1; done`), so even if `command:` were fixed, the absence of the redis service would hang the cluster indefinitely without surfacing any error to the user.
+
+## Constraint
+
+**The cluster-base compose structure should be preserved as-is.** It encodes a lot of intentional state — shared Claude config volumes, npm cache persistence, credentials-architecture isolation (uid 1001/1002 + tmpfs sockets), shared-packages volume orchestrator-writes/worker-reads, etc. The fix is **not** to flatten or simplify the structure, but to make the launch scaffolder produce something equivalent to it.
+
+## Proposed direction
+
+Make `scaffoldDockerCompose` emit a compose file that mirrors the cluster-base devcontainer compose, parameterized by the values the launch flow knows (project name, cluster id, image tag, channel, cloud URL, project id). Where the cluster-base compose pulls from `.env`, the scaffolder either generates a `.env` next to the compose or inlines the equivalents.
+
+Two ways to deliver this:
+
+- **A) Scaffolder emits the full compose inline.** The launch CLI knows the shape; the file it writes mirrors the cluster-base devcontainer compose 1:1. Simple to maintain in one place, but drifts when the cluster-base compose changes.
+- **B) Scaffolder fetches a template from the image.** The cluster-base image ships the canonical compose at a known path (e.g. `/usr/local/share/generacy/launch.docker-compose.yml`), and the launch CLI runs a one-shot `docker run --rm cluster-base:<tag> cat <path> > docker-compose.yml`, then patches in the per-project values. Always in sync with the image, but adds a tooling round-trip and a templating concern.
+
+## Open questions for clarify phase
+
+- **Q1**: A or B above? A is simpler today; B avoids drift but adds machinery.
+- **Q2**: How should `.env` and `.env.local` be handled? The cluster-base compose declares them as required/optional respectively. Should the scaffolder generate a `.env` from the LaunchConfig, prompt the user, or inline the values into the compose `environment:` block?
+- **Q3**: `WORKER_COUNT` defaults to 3 in the cluster-base compose. Should the scaffolder respect the project's workers field (already in `cluster.yaml` as `workers: 1`) and pass it through, or always use the image default?
+- **Q4**: `~/.claude.json` is bind-mounted. If the host doesn't have one, `docker compose up` will fail. Should the scaffolder pre-create an empty file, or document the prerequisite, or change the mount to a named volume with copy-from-default semantics?
+- **Q5**: Issue #539's port-allocation work assumed a single-service compose. With orchestrator+worker, the host-port binding is just on the orchestrator's `${ORCHESTRATOR_PORT:-3100}`, plus the worker healthcheck is internal-only (port 9001 not host-exposed). Confirm port discovery / `generacy status` only needs to surface the orchestrator port.
+
+## Reproduction
+
+1. Mint a fresh launch claim in staging (or prod, once the same fixes ship).
+2. `npx -y @generacy-ai/generacy@preview launch --claim=<fresh>`.
+3. Observe the scaffolded `~/Generacy/<project>/.generacy/docker-compose.yml`.
+4. `docker ps --filter name=generacy-cluster` shows `Restarting (0)` repeatedly with no logs.
+5. `docker inspect <container>` shows `ExitCode: 0`, `Error: ""`, container lifetime ~800ms.
+
+## Related
+
+- #539 — port-allocation strategy (assumes single-service compose; will need to be reconciled with the multi-service shape this issue introduces)
+- generacy-ai/cluster-base — source of the canonical compose this issue references
+- The misleading 4xx error message in the CLI ([cloud-client.ts:96-98](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/cloud-client.ts#L96-L98)) is a separate cross-cutting issue worth filing — but in this case the symptom (silent crash loop, no logs, exit 0) was misleading on its own without any 4xx involved.
 
 ## User Stories
 
-### US1: First-time user runs `npx generacy launch`
+### US1: [Primary User Story]
 
-**As a** developer using Generacy for the first time,
-**I want** `npx generacy launch --claim=<code>` to produce a fully working cluster,
-**So that** I can start using Generacy immediately without manual Docker debugging.
-
-**Acceptance Criteria**:
-- [ ] `docker compose up -d` on the scaffolded compose starts orchestrator, worker(s), and Redis
-- [ ] All three services reach healthy state within 60 seconds
-- [ ] The orchestrator completes activation and connects to the cloud relay
-- [ ] No crash loops, no exit-code-0 restarts, no hanging on Redis connection
-
-### US2: Deploy command produces equivalent cluster
-
-**As a** user deploying to a remote VM via `generacy deploy ssh://...`,
-**I want** the scaffolded compose to work identically to the launch flow,
-**So that** remote clusters boot correctly without manual intervention.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Deploy scaffolder uses the same `scaffoldDockerCompose` and produces the same multi-service compose
-- [ ] Remote `docker compose up -d` over SSH boots all three services
-
-### US3: Worker scaling respects project config
-
-**As a** user who has configured `workers: N` in their cluster.yaml,
-**I want** the scaffolded compose to deploy N worker replicas,
-**So that** I get the parallelism I configured.
-
-**Acceptance Criteria**:
-- [ ] `WORKER_COUNT` env var is set from `cluster.yaml` workers field (or `ScaffoldComposeInput`)
-- [ ] `deploy.replicas: ${WORKER_COUNT:-1}` in worker service definition
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `scaffoldDockerCompose` emits three services: `orchestrator`, `worker`, `redis` | P0 | Mirrors cluster-base devcontainer compose |
-| FR-002 | Orchestrator service has `command: /usr/local/bin/entrypoint-orchestrator.sh` | P0 | Without this the image runs `node` and exits |
-| FR-003 | Worker service has `command: /usr/local/bin/entrypoint-worker.sh` | P0 | Same issue as orchestrator |
-| FR-004 | Redis service uses `redis:7-alpine` with ping healthcheck | P0 | Orchestrator blocks on Redis at startup |
-| FR-005 | Orchestrator `depends_on: redis (service_healthy)` | P0 | Ensures boot order |
-| FR-006 | Worker `depends_on: orchestrator (service_healthy)` | P0 | Ensures boot order |
-| FR-007 | Orchestrator healthcheck on `/health` endpoint | P1 | Enables `depends_on` and `generacy status` |
-| FR-008 | Worker healthcheck on `:9001/health` (internal only) | P1 | Enables `depends_on` chain |
-| FR-009 | Docker socket mounted at `/var/run/docker-host.sock` (not default path) | P0 | Required for DinD/host-socket architecture |
-| FR-010 | Named volumes: `workspace`, `claude-config`, `shared-packages`, `npm-cache`, `generacy-data`, `redis-data` | P1 | Matches cluster-base for persistence |
-| FR-011 | Worker tmpfs mounts: `/run/generacy-credhelper` (uid 1002), `/run/generacy-control-plane` (uid 1000) | P0 | Load-bearing for credentials architecture |
-| FR-012 | Dedicated `cluster-network` bridge network | P1 | Service isolation |
-| FR-013 | `stop_grace_period: 30s` on orchestrator and worker | P1 | Clean credhelper shutdown |
-| FR-014 | `extra_hosts: host.docker.internal:host-gateway` | P1 | Required for host networking |
-| FR-015 | `ScaffoldComposeInput` gains `workers` field; compose uses it for `WORKER_COUNT` | P1 | Respects project config |
-| FR-016 | Scaffolder generates `.env` file alongside compose with LaunchConfig values | P2 | Matches cluster-base pattern |
-| FR-017 | Pre-create `~/.claude.json` if missing (empty JSON object) to prevent bind-mount failure | P1 | Prevents Docker error on first run |
-| FR-018 | Remove `version: '3.8'` from emitted compose (deprecated in Compose v2) | P2 | Cleanup |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Launch cluster boots successfully | 100% of launches produce running clusters | Manual test: `npx generacy launch`, all 3 services healthy |
-| SC-002 | No crash loop on fresh launch | 0 restarts within first 5 minutes | `docker inspect` shows `RestartCount: 0` |
-| SC-003 | Deploy produces equivalent cluster | Same compose shape as launch | Diff scaffolded files between launch and deploy |
-| SC-004 | Existing tests pass | All unit tests green | `pnpm test` in packages/generacy |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The cluster-base image continues to ship `/usr/local/bin/entrypoint-orchestrator.sh` and `/usr/local/bin/entrypoint-worker.sh` at those paths.
-- The cluster-base image will not change its service architecture (orchestrator + worker + redis) without a coordinated update.
-- Approach **A** (inline compose in scaffolder) is used initially. Drift risk is acceptable for now; approach B can be pursued later if needed.
-- `cluster-microservices` variant follows the same compose structure as `cluster-base` (same entrypoints, same Redis dependency).
+- [Assumption 1]
 
 ## Out of Scope
 
-- Changing the cluster-base image's ENTRYPOINT/CMD (the image is intentionally dual-purpose).
-- Approach B (fetching compose template from the image at runtime).
-- Reconciling with #539 port-allocation changes (will be handled in #539 or a follow-up).
-- Fixing the misleading 4xx error message in `cloud-client.ts` (separate issue).
-- Adding integration tests that actually boot Docker containers.
-
-## Open Questions
-
-- **Q1**: Should `.env` and `.env.local` be generated, or should all values be inlined into the compose `environment:` block? (Proposed: generate `.env` for cloud-provided values, inline for static values.)
-- **Q2**: Should `~/.claude.json` bind-mount be replaced with a named volume to avoid the missing-file problem? (Proposed: pre-create empty file for now, consider named volume later.)
-- **Q3**: Are there additional env vars beyond what the issue lists that the orchestrator/worker need at boot? (Need to cross-reference cluster-base `.env.example`.)
+- [Exclusion 1]
 
 ---
 
