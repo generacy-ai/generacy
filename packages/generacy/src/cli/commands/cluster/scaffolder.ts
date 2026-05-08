@@ -90,7 +90,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
         image: input.imageTag,
         container_name: `generacy-cluster-${input.clusterId}`,
         restart: 'unless-stopped',
-        ports: ['3100:3100', '3101:3101', '3102:3102'],
+        ports: input.deploymentMode === 'cloud' ? ['3100:3100'] : ['3100'],
         volumes: [
           'cluster-data:/var/lib/generacy',
           '/var/run/docker.sock:/var/run/docker.sock',
