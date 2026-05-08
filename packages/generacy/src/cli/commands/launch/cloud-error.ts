@@ -56,6 +56,7 @@ export function redactClaimUrl(url: string): string {
  */
 export function sanitizeBody(raw: string, maxLen = 120): string {
   // Strip non-printable / control characters (keep printable ASCII + common Unicode)
+  // eslint-disable-next-line no-control-regex
   let cleaned = raw.replace(/[\x00-\x1f\x7f]/g, '');
   // Collapse consecutive whitespace to a single space
   cleaned = cleaned.replace(/\s+/g, ' ').trim();
