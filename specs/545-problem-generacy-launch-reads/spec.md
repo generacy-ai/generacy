@@ -1,101 +1,84 @@
-# Feature Specification: Add `--cloud-url` flag to CLI commands
+# Feature Specification: ## Problem
+
+`generacy launch` reads the cloud URL from a single source: the `GENERACY_CLOUD_URL` env var, falling back to `https://api
 
 **Branch**: `545-problem-generacy-launch-reads` | **Date**: 2026-05-08 | **Status**: Draft
 
 ## Summary
 
-Add a `--cloud-url <url>` CLI flag to `generacy launch` and `generacy deploy` so that non-production cloud environments can be targeted without shell-specific environment variable syntax. This unblocks the cloud UI's copy-paste onboarding flow (generacy-cloud#518) by providing a platform-agnostic way to embed the cloud URL in the command.
-
 ## Problem
 
-`generacy launch` reads the cloud URL from a single source: the `GENERACY_CLOUD_URL` env var, falling back to `https://api.generacy.ai`. This forces users in non-prod environments (staging, dev) to set an env var before running the command — and that syntax differs across PowerShell, bash, fish, and cmd.exe. The cloud UI cannot generate a single copy-paste command that works everywhere.
+`generacy launch` reads the cloud URL from a single source: the `GENERACY_CLOUD_URL` env var, falling back to `https://api.generacy.ai` ([launch/index.ts:97](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/index.ts#L97)).
 
-## Proposed Solution
+This makes the canonical copy-paste flow (cloud UI → user pastes command into terminal) require a manual env-var step whenever the user is in any environment other than prod. From the user's perspective, what should be a one-liner becomes:
 
-Add a `--cloud-url <url>` option with this precedence (highest first):
+```powershell
+$env:GENERACY_CLOUD_URL = "https://api-staging.generacy.ai"
+npx -y @generacy-ai/generacy@preview launch --claim=<code>
+Remove-Item Env:GENERACY_CLOUD_URL  # if they want to clean up
+```
+
+Cross-shell, this is also a UX hazard: the env var syntax is different in PowerShell, bash, fish, cmd.exe, and the cloud UI's copy-paste cannot reasonably ship five variants.
+
+## Proposed addition
+
+Add a `--cloud-url <url>` option to the `launch` command, with this precedence (highest first):
 
 1. `--cloud-url` flag value, if provided
 2. `GENERACY_CLOUD_URL` env var, if set
 3. `https://api.generacy.ai` (current default)
 
-Apply the same flag and precedence chain to `generacy deploy`.
+Same flag (or its equivalent) on the `deploy` command — same problem applies there. Same env-var fallback chain.
+
+## Why this is a prerequisite for [generacy-cloud#TBD](https://github.com/generacy-ai/generacy-cloud/issues/518)
+
+The companion cloud-side issue proposes that the "Run on my computer" copy-paste command embed the cloud URL so users don't need to set the env var. But the cloud can only embed a `--cloud-url=` flag if the CLI accepts one. Without this issue, the cloud is forced to fall back to env-prefix form (`GENERACY_CLOUD_URL=... npx ...`), which is platform-dependent.
+
+## Open questions for clarify phase
+
+- **Q1: Channel-based auto-selection?** During the testing session that surfaced this, one proposal was: when `--channel=preview` is supplied (or detected), default `--cloud-url` to the staging URL automatically. This is convenient but architecturally couples *channel* (which version of the cluster image to use) with *environment* (which cloud to talk to) — those are independent concerns. A user could legitimately want to test the preview cluster image against prod, or run a stable cluster from a staging-minted claim during a release rehearsal. Recommend keeping them decoupled and instead solving the convenience need by making the cloud UI emit the URL explicitly. Worth confirming during clarify.
+- **Q2**: Should the flag be `--cloud-url` (verbose) or `--cloud` (terse)? Terse is friendlier for hand-typing, verbose is more self-documenting in copy-paste commands. Probably verbose since the primary consumer is generated copy-paste.
+- **Q3**: Should the same flag be added to `generacy deploy`, `generacy status`, `generacy open`, and any other commands that talk to the cloud? Spec scope: at minimum `launch` and `deploy` since both consume claim codes.
+- **Q4**: Validation — should the CLI reject obviously-malformed values (`--cloud-url localhost`, missing scheme), or trust the input and let the HTTP client surface the error? The Zod schema for the launch-config response already validates `cloudUrl: z.string().url()` for the *response* — applying the same validation to the *flag input* would be consistent.
+- **Q5**: Backward compat — `GENERACY_CLOUD_URL` stays supported, just demoted in the precedence chain. Confirm.
+
+## Related
+
+- generacy-ai/generacy-cloud#518 — companion cloud issue, needs this flag to land first
+- The CLI's lossy 4xx error mapping ([cloud-client.ts:96-98](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/cloud-client.ts#L96-L98)) made this hard to diagnose during the v1.5 walkthrough — every wrong-cloud-URL surfaced as "Claim code is invalid or expired", which is its own issue worth filing
+- v1.5 onboarding doc references `npx generacy launch --claim=...` without any cloud URL — should be updated when this lands so the doc and the copy-paste UI stay aligned
 
 ## User Stories
 
-### US1: Non-prod onboarding via copy-paste
+### US1: [Primary User Story]
 
-**As a** developer onboarding to a staging/dev Generacy project,
-**I want** to paste a single command from the cloud UI that includes the cloud URL,
-**So that** I don't need to manually set environment variables or know which shell syntax to use.
-
-**Acceptance Criteria**:
-- [ ] `npx generacy launch --claim=<code> --cloud-url=https://api-staging.generacy.ai` works without any env var set
-- [ ] The flag overrides `GENERACY_CLOUD_URL` when both are present
-- [ ] Omitting both flag and env var defaults to `https://api.generacy.ai`
-
-### US2: Deploy to non-prod environment
-
-**As a** platform engineer deploying a cluster to a BYO VM against staging,
-**I want** to pass `--cloud-url` to `generacy deploy`,
-**So that** the device-flow activation and launch-config fetch target the correct cloud.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `generacy deploy ssh://user@host --cloud-url=https://api-staging.generacy.ai` activates against staging
-- [ ] The same 3-tier precedence applies as in `launch`
-
-### US3: Backward compatibility
-
-**As an** existing user with `GENERACY_CLOUD_URL` set in my shell profile,
-**I want** the env var to keep working when I don't pass `--cloud-url`,
-**So that** my existing workflow is unaffected.
-
-**Acceptance Criteria**:
-- [ ] `GENERACY_CLOUD_URL` is still respected when `--cloud-url` is not provided
-- [ ] No breaking changes to existing env-var-based workflows
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `--cloud-url <url>` option to `launch` command | P1 | Commander.js `.option()` |
-| FR-002 | Add `--cloud-url <url>` option to `deploy` command | P1 | Same pattern |
-| FR-003 | Implement 3-tier resolution: flag > env > default | P1 | Shared helper function |
-| FR-004 | Validate `--cloud-url` input as a valid URL with scheme | P2 | Use `z.string().url()` for consistency with existing response validation |
-| FR-005 | Pass resolved cloud URL through to `fetchLaunchConfig()` | P1 | Both launch and deploy call this |
-| FR-006 | Pass resolved cloud URL to device-flow activation (deploy) | P1 | `activation.ts` uses cloud URL |
-| FR-007 | Store resolved cloud URL in `cluster.json` and registry | P1 | Already done post-launch-config fetch; ensure flag value flows through |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Single-command onboarding | Works on bash, PowerShell, fish, cmd.exe | Manual test: paste generated command |
-| SC-002 | Backward compat | Existing env-var workflows unchanged | Automated test: env-var-only path |
-| SC-003 | Precedence correctness | Flag > env > default | Unit test the resolution helper |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The cloud UI (generacy-cloud#518) will embed `--cloud-url=` in generated copy-paste commands once this lands
-- `--cloud-url` is verbose form; no short alias needed since primary consumer is generated copy-paste, not hand-typing
-- Channel and cloud-url remain decoupled (no auto-selection of cloud URL based on `--channel`)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Adding `--cloud-url` to `status`, `open`, or other commands that read cloud URL from the registry (they already have it stored from launch/deploy)
-- Channel-based auto-selection of cloud URL (keeps channel and environment as independent concerns)
-- Fixing the lossy 4xx error mapping in `cloud-client.ts` (separate issue)
-- Updating the v1.5 onboarding doc (follow-up after this lands)
-
-## Open Questions
-
-- **Q1**: Validate flag input eagerly (Zod `z.string().url()`) or let HTTP client surface errors? Recommendation: validate eagerly for better UX.
-- **Q2**: Should a shared `resolveCloudUrl(opts)` helper live in `commands/cluster/` or `cli/utils/`? Recommendation: `cli/utils/` since it's cross-command.
-
-## Related
-
-- generacy-ai/generacy-cloud#518 — companion cloud issue, needs this flag to land first
-- Lossy 4xx error mapping in `cloud-client.ts:96-98` — separate issue to file
-- v1.5 onboarding doc — update when this lands
+- [Exclusion 1]
 
 ---
 
