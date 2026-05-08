@@ -30,17 +30,15 @@ There's also a fourth, related URL — the **app/dashboard URL** — that the cl
 
 ## Proposed shape
 
-Split `GENERACY_CLOUD_URL` into explicit names. **Two** env vars are written to the cluster's `.env`; `GENERACY_APP_URL` is deferred until a cluster-side consumer exists (see Resolved Q5):
+Split `GENERACY_CLOUD_URL` into three explicit names corresponding to the three actual services:
 
-| Name | Value (staging example) | Purpose | Written to cluster `.env`? |
-|---|---|---|---|
-| `GENERACY_API_URL` | `https://api-staging.generacy.ai` | HTTP REST calls (launch-config, device-code, activate, etc.) | Yes |
-| `GENERACY_RELAY_URL` | `wss://api-staging.generacy.ai/relay?projectId=proj_123` | Long-lived WebSocket from cluster-relay package (fully qualified, including projectId) | Yes |
-| `GENERACY_APP_URL` | `https://staging.generacy.ai` | User-facing dashboard / browser deep-links | No — CLI uses for registry only |
+| Name | Value (staging example) | Purpose |
+|---|---|---|
+| `GENERACY_API_URL` | `https://api-staging.generacy.ai` | HTTP REST calls (launch-config, device-code, activate, etc.) |
+| `GENERACY_APP_URL` | `https://staging.generacy.ai` | User-facing dashboard / browser deep-links |
+| `GENERACY_RELAY_URL` | `wss://api-staging.generacy.ai/relay` | Long-lived WebSocket from cluster-relay package |
 
-`GENERACY_RELAY_URL` is kept as a separate, independently-configurable env var (not derived from `GENERACY_API_URL`) for custom-domain and relay-scaling headroom (see Resolved Q1). The cloud sends it fully qualified with `?projectId=` included (see Resolved Q2).
-
-The cloud is the source of truth via a structured `cloud` object on `LaunchConfig`:
+And make the cloud the source of truth via a structured `cloud` object on `LaunchConfig`:
 
 ```ts
 LaunchConfig {
@@ -48,13 +46,13 @@ LaunchConfig {
   cloud: {
     apiUrl: string;    // built from PUBLIC_API_URL || PUBLIC_APP_URL on the cloud
     appUrl: string;    // built from PUBLIC_APP_URL on the cloud
-    relayUrl: string;  // fully qualified: wss://host/relay?projectId=<id>
+    relayUrl: string;  // explicit env var on the cloud, or derived once consistently
   };
   cloudUrl?: string;  // deprecated alias for cloud.appUrl, kept one release for compat
 }
 ```
 
-The launch scaffolder writes `GENERACY_API_URL` and `GENERACY_RELAY_URL` from the new `LaunchConfig.cloud` object. `cloud.appUrl` is used by the CLI for the registry's `cloudUrl` field but not propagated to the cluster runtime. Readers consume the explicit env var. No client-side derivation. No name overload.
+The launch scaffolder writes all three names into the cluster's `.env`. Readers (orchestrator activation, orchestrator relay, cluster-relay) consume the explicit one. No client-side derivation. No name overload.
 
 ## Why this is materially better than today
 
@@ -65,41 +63,35 @@ The launch scaffolder writes `GENERACY_API_URL` and `GENERACY_RELAY_URL` from th
 
 ## Migration plan
 
-**Scope for this issue (#549)**: generacy repo only (Phase 2 + Phase 3 reader/writer changes). Cloud-side and cluster-base changes are separate follow-up issues. Code must tolerate missing `LaunchConfig.cloud` by falling back to existing `LaunchConfig.cloudUrl` (see Resolved Q3).
+Three repos touched, additive first / cleanup last:
 
-**Phase 1: Cloud-side (additive) — SEPARATE ISSUE (generacy-cloud).**
-- Add `cloud.apiUrl`, `cloud.appUrl`, `cloud.relayUrl` to `LaunchConfigSchema` and `buildLaunchConfig`. `cloud.relayUrl` is fully qualified with `?projectId=`. Keep existing `cloudUrl` field as deprecated alias for `cloud.appUrl`.
+**Phase 1: Cloud-side (additive).**
+- Add `cloud.apiUrl`, `cloud.appUrl`, `cloud.relayUrl` to `LaunchConfigSchema` and `buildLaunchConfig` ([generacy-cloud/services/api/src/services/launch-config.ts](https://github.com/generacy-ai/generacy-cloud/blob/develop/services/api/src/services/launch-config.ts)). Keep the existing `cloudUrl` field as `cloud.appUrl`'s value so old CLIs keep working.
 
-**Phase 2: Reader-side (additive, deprecation logs) — THIS ISSUE.**
+**Phase 2: Reader-side (additive, deprecation logs).**
 - CLI: read `GENERACY_API_URL` first, fall back to `GENERACY_CLOUD_URL` with a one-time `[deprecated] GENERACY_CLOUD_URL is ambiguous, prefer GENERACY_API_URL` log.
-- Orchestrator: split the two reads at `loader.ts:245` and `:263` to use `GENERACY_API_URL` and `GENERACY_RELAY_URL` respectively, with the same fallback pattern. Drop the `projectId` append logic at `loader.ts:280-290` (dead code once cloud pre-appends).
+- Orchestrator: split the two reads at `loader.ts:245` and `:263` to use `GENERACY_API_URL` and `GENERACY_RELAY_URL` respectively, with the same fallback pattern.
 - Cluster-relay package: read `GENERACY_RELAY_URL` first, fall back to `GENERACY_CLOUD_URL`.
 - All deprecation logs are debug-level, fired once per process.
-- `LaunchConfigSchema`: add optional `cloud: { apiUrl, appUrl, relayUrl }` object. Keep `cloudUrl` as deprecated alias (see Resolved Q4). Consumers prefer `cloud.appUrl` when present, fall back to `cloudUrl`.
 
-**Phase 3: Writer-side — THIS ISSUE (generacy repo parts only).**
-- Launch scaffolder ([packages/generacy/src/cli/commands/cluster/scaffolder.ts:99](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/cluster/scaffolder.ts#L99)): write `GENERACY_API_URL` and `GENERACY_RELAY_URL` from `LaunchConfig.cloud` (when present) or derived from `LaunchConfig.cloudUrl` (fallback). Do NOT write `GENERACY_APP_URL` to `.env` (see Resolved Q5). Drop `GENERACY_CLOUD_URL` line.
-- Test fixtures (STUB_LAUNCH_CONFIG in cloud-client.ts): add `cloud` object to match new schema.
+**Phase 3: Writer-side.**
+- Launch scaffolder ([packages/generacy/src/cli/commands/cluster/scaffolder.ts:99](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/cluster/scaffolder.ts#L99)): write all three names from the new `LaunchConfig.cloud` object. Drop the old `GENERACY_CLOUD_URL` line (or keep it commented as a transition aid).
+- Cloud worker template generator ([generacy-cloud/services/worker/src/lib/templates.ts:122](https://github.com/generacy-ai/generacy-cloud/blob/develop/services/worker/src/lib/templates.ts#L122)): emit `GENERACY_RELAY_URL=` instead of `GENERACY_CLOUD_URL=`.
+- DigitalOcean cloud-deploy ([generacy-cloud/services/api/src/services/cloud-deploy/digitalocean.ts:84](https://github.com/generacy-ai/generacy-cloud/blob/develop/services/api/src/services/cloud-deploy/digitalocean.ts#L84)): set the right one of the three for what it's actually trying to configure (verify which during plan).
+- Cluster-base `.env.template` ([.devcontainer/generacy/.env.template](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/.env.template)): split the single `GENERACY_CLOUD_URL=wss://...` line into the three new lines.
 
-**Phase 3b: Writer-side — SEPARATE ISSUES (other repos).**
-- Cloud worker template generator: emit `GENERACY_RELAY_URL=` instead of `GENERACY_CLOUD_URL=`.
-- DigitalOcean cloud-deploy: set the correct env var for what it configures.
-- Cluster-base `.env.template`: split into two new lines (`GENERACY_API_URL`, `GENERACY_RELAY_URL`).
-
-**Phase 4 (next major release): cleanup — SEPARATE ISSUE.**
+**Phase 4 (next major release): cleanup.**
 - Remove the `GENERACY_CLOUD_URL` fallbacks from all readers.
-- Remove the deprecated `LaunchConfig.cloudUrl` top-level field.
+- Remove the deprecated `LaunchConfig.cloudUrl` top-level field (`LaunchConfig.cloud.appUrl` replaces it).
 - Update v1.5 onboarding doc to reference the new names.
 
-## Resolved questions (from clarify phase)
+## Open questions for clarify phase
 
-- **Q1 → A**: `GENERACY_RELAY_URL` stays as a separate env var. Not derived from API URL. Reasons: derivation is three transformations (scheme + path + projectId), custom-domain headroom, relay may move to separate domain.
-- **Q2 → A**: Cloud includes `projectId` in `cloud.relayUrl` (fully qualified). Orchestrator's existing `includes('projectId=')` guard handles this. Drop the append logic from `loader.ts:280-290` as dead code.
-- **Q3 → B**: This issue covers generacy repo only. Follow-up issues for: generacy-cloud Phase 1, generacy-cloud Phase 3 writers, cluster-base `.env.template`, generacy Phase 4 cleanup. Code must tolerate missing `LaunchConfig.cloud`.
-- **Q4 → A**: Rename with deprecated alias. `LaunchConfig.cloud.appUrl` is canonical; `cloudUrl` kept for one release. Important: `cloudUrl` is persisted in `~/.generacy/clusters.json`, so breaking rename is not an option.
-- **Q5 → C**: Skip writing `GENERACY_APP_URL` to cluster `.env`. No current consumer. Cloud still sends `cloud.appUrl` in LaunchConfig for CLI registry use. Add env var later when a cluster-side consumer exists.
-- **Q1 (original)**: GitHub OAuth callback URL — out of scope for this issue.
-- **Test fixtures**: STUB_LAUNCH_CONFIG and cloud tests need `cloud` object — confirmed, handled in Phase 3.
+- **Q1**: Should the cloud also send a fourth URL for the GitHub OAuth callback (currently spread across `OAUTH_REDIRECT_URI_*` repo variables on the cloud-cloud side)? Out of scope for this issue?
+- **Q2**: Is there a use case where `GENERACY_RELAY_URL` legitimately differs from `${GENERACY_API_URL}/relay`? If not, should the cluster-relay package derive it from `GENERACY_API_URL` and skip making it a separate env var? (Recommend: keep it explicit, both because it composes the projectId query param differently and because relays can in principle be hosted on a different domain than the API for scaling reasons.)
+- **Q3**: How long should the `GENERACY_CLOUD_URL` deprecation window be? One release feels right given the small population of v1.5 users today, but if there are existing production clusters running older orchestrator builds the window may need to be longer.
+- **Q4**: Should the rename also touch the `LaunchConfig.cloudUrl` field name, renaming it to `LaunchConfig.cloud.appUrl` (with `cloudUrl` as a deprecated alias)? Recommend yes — the new name is clearer about which URL it is.
+- **Q5**: Test fixtures ([packages/generacy/src/cli/commands/launch/cloud-client.ts](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/cloud-client.ts) STUB_LAUNCH_CONFIG, [generacy-cloud/services/api/src/routes/clusters/__tests__/launch-config.test.ts](https://github.com/generacy-ai/generacy-cloud/blob/develop/services/api/src/routes/clusters/__tests__/launch-config.test.ts)) need updating to include the new `cloud` object. Confirm during plan.
 
 ## Related
 
@@ -110,65 +102,35 @@ The launch scaffolder writes `GENERACY_API_URL` and `GENERACY_RELAY_URL` from th
 
 ## User Stories
 
-### US1: Cluster operator deploys without URL confusion
+### US1: [Primary User Story]
 
-**As a** cluster operator running `generacy launch`,
-**I want** each env var to have exactly one meaning,
-**So that** staging vs. production URL mismatches (like the v1.5 walkthrough failure) cannot happen.
-
-**Acceptance Criteria**:
-- [ ] `GENERACY_API_URL` is read by all HTTP API callers (CLI launch, orchestrator activation)
-- [ ] `GENERACY_RELAY_URL` is read by all WebSocket consumers (orchestrator relay config, cluster-relay package)
-- [ ] Falling back to `GENERACY_CLOUD_URL` produces a debug-level deprecation log
-- [ ] Scaffolder writes new env var names to `.env` when `LaunchConfig.cloud` is present
-- [ ] Scaffolder falls back to deriving from `LaunchConfig.cloudUrl` when `cloud` object is absent
-
-### US2: Self-hosted install uses custom domains
-
-**As a** self-hosted Generacy admin,
-**I want** the API, relay, and app URLs to be independently configurable,
-**So that** my `api.acme-corp.internal` and `ws.acme-corp.internal` setup works without string-munging assumptions.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Each URL is an independent env var — no derivation from another
-- [ ] Cloud sends all three in `LaunchConfig.cloud`; cluster consumes as-is
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add optional `cloud` object to `LaunchConfigSchema` (apiUrl, appUrl, relayUrl) | P1 | Zod schema in launch/types.ts |
-| FR-002 | CLI `resolveCloudUrl()` reads `GENERACY_API_URL` first, falls back to `GENERACY_CLOUD_URL` with deprecation log | P1 | cloud-url.ts |
-| FR-003 | Orchestrator config loader reads `GENERACY_API_URL` at line 245, `GENERACY_RELAY_URL` at line 263, both with fallback | P1 | loader.ts |
-| FR-004 | Cluster-relay reads `GENERACY_RELAY_URL` first, falls back to `GENERACY_CLOUD_URL` | P1 | relay.ts |
-| FR-005 | Remove `projectId` append logic from orchestrator loader (dead code once cloud pre-appends) | P2 | loader.ts:280-290 |
-| FR-006 | Scaffolder writes `GENERACY_API_URL` and `GENERACY_RELAY_URL` to `.env` from `LaunchConfig.cloud` | P1 | scaffolder.ts |
-| FR-007 | Scaffolder falls back to deriving from `LaunchConfig.cloudUrl` when `cloud` is absent | P1 | Backward compat |
-| FR-008 | `LaunchConfig.cloudUrl` kept as deprecated alias for `cloud.appUrl` | P1 | One release window |
-| FR-009 | Update STUB_LAUNCH_CONFIG in cloud-client.ts to include `cloud` object | P2 | Test fixture |
-| FR-010 | CLI uses `cloud.appUrl` (or `cloudUrl` fallback) for registry `cloudUrl` field, not written to cluster `.env` | P1 | |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | No reader uses `GENERACY_CLOUD_URL` without fallback chain | 0 direct reads | grep codebase |
-| SC-002 | Scaffolded `.env` contains `GENERACY_API_URL` and `GENERACY_RELAY_URL` | 100% of new clusters | Manual verification / test |
-| SC-003 | Existing clusters (no `LaunchConfig.cloud`) still work | No regressions | Launch with old cloud response |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The cloud-side `LaunchConfig` changes (Phase 1) will land in a separate follow-up issue. This issue's code must work with or without the `cloud` object.
-- The deprecation window of one release is sufficient given the small v1.5 user population.
-- `cloud.relayUrl` from the cloud will always include `?projectId=` when present.
+- [Assumption 1]
 
 ## Out of Scope
 
-- GitHub OAuth callback URL (`OAUTH_REDIRECT_URI_*`) — separate concern
-- Writing `GENERACY_APP_URL` to cluster `.env` — no consumer exists yet
-- Cloud-side changes (generacy-cloud `buildLaunchConfig`, worker template, DigitalOcean deploy) — follow-up issues
-- Cluster-base `.env.template` changes — follow-up issue
-- Phase 4 cleanup (removing fallbacks) — follow-up issue after deprecation window
+- [Exclusion 1]
 
 ---
 
