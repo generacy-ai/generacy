@@ -11,9 +11,9 @@ import { pollClusterStatus } from './status-poller.js';
 import { RegistryEntrySchema, readRegistry, writeRegistry, type RegistryEntry } from '../cluster/registry.js';
 import type { DeployOptions, DeployResult } from './types.js';
 import { DeployError } from './types.js';
+import { resolveCloudUrl } from '../../utils/cloud-url.js';
 
 const DEFAULT_TIMEOUT_S = 300;
-const DEFAULT_CLOUD_URL = 'https://api.generacy.ai';
 
 async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   const logger = getLogger();
@@ -33,7 +33,7 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   logger.info('Docker verified');
 
   // 4. Run device-flow activation
-  const cloudUrl = options.cloudUrl ?? DEFAULT_CLOUD_URL;
+  const cloudUrl = resolveCloudUrl(options.cloudUrl);
   logger.info('Starting device-flow activation...');
   const activation = await runActivation({ cloudUrl, logger });
 
@@ -111,7 +111,7 @@ export function deployCommand(): Command {
     .description('Deploy a Generacy cluster to a remote VM via SSH')
     .argument('<target>', 'SSH target: ssh://[user@]host[:port][/path]')
     .option('--timeout <seconds>', 'Timeout for cluster registration in seconds', String(DEFAULT_TIMEOUT_S))
-    .option('--cloud-url <url>', 'Cloud API URL override')
+    .option('--cloud-url <url>', 'Cloud API URL (overrides GENERACY_CLOUD_URL env var)')
     .action(async (target: string, opts: { timeout?: string; cloudUrl?: string }) => {
       try {
         const result = await handleDeploy({
