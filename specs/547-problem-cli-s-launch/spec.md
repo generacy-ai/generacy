@@ -43,13 +43,11 @@ Differentiate by status code in the cloud client. Suggested mapping:
 
 The cloud already returns RFC 7807 `application/problem+json` bodies with `type`, `title`, `detail`, `instance` — the CLI should at minimum surface `body.detail` in the error message rather than discarding it.
 
-## Resolved questions (from clarify phase)
+## Open questions for clarify phase
 
-- **Q1 (dispatch key)**: Use HTTP status code as the primary dispatch key (simpler, degrades gracefully). Optionally capture the RFC 7807 `type` URI as a `problemType` field on the error class for future use.
-- **Q2 (URL in errors)**: Yes, show the request URL in error messages for debugging — but **redact the claim code** (e.g. `?claim=<redacted>`) since claims are live bootstrap secrets and users routinely paste errors into chat/issues. Also redact the debug log at `launch/index.ts:94`.
-- **Q3 (audit elsewhere)**: `deploy/cloud-client.ts` is a re-export of `fetchLaunchConfig`, so fixing the source fixes both commands automatically.
-- **Q4 (error class)**: Use a custom `CloudError extends Error` with structured fields (`statusCode`, `url`, `detail?`, `retryAfter?`, `problemType?`). Backward-compatible — `instanceof Error` still holds.
-- **Q5 (non-JSON fallback)**: When the response body isn't JSON or lacks `detail`, show status code + redacted URL + first ~120 chars of raw body (sanitized: strip non-printables, collapse whitespace, append `...` on truncation). Display body on a second line.
+- **Q1**: Should the CLI use the response's `type` URI (e.g. `https://generacy.ai/problems/invalid-claim`, `.../claim-expired`, `.../rate-limited`) as the dispatch key instead of HTTP status? More precise (distinguishes "expired" from "consumed" from "format-invalid", all of which are 400/410), but couples the CLI to the exact problem-type vocabulary. Status-code dispatch is simpler and degrades gracefully.
+- **Q2**: Should the CLI ever expose the raw response URL in the user-facing error? Helpful for debugging "wrong cloud" scenarios but leaks the cloud URL into screenshots if the user reports the issue.
+- **Q3**: Should the same lossy-mapping pattern be audited elsewhere in the CLI? The same anti-pattern likely lives in `deploy/cloud-client.ts` (re-exports `fetchLaunchConfig`) and possibly other commands that talk to the cloud.
 
 ## Reproduction (any of three)
 
