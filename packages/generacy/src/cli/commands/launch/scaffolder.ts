@@ -3,7 +3,7 @@
  *
  * Delegates to the shared cluster scaffolder for file writing.
  */
-import { mkdirSync, existsSync } from 'node:fs';
+import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
 import type { LaunchConfig } from './types.js';
@@ -11,7 +11,21 @@ import {
   scaffoldClusterJson,
   scaffoldClusterYaml,
   scaffoldDockerCompose,
+  scaffoldEnvFile,
 } from '../cluster/scaffolder.js';
+
+/**
+ * Pre-create ~/.claude.json if it doesn't exist.
+ *
+ * Docker bind mounts fail if the source file is missing. For local launch,
+ * we bind-mount the host's Claude config into the container.
+ */
+export function preCreateClaudeJson(): void {
+  const claudeJsonPath = join(homedir(), '.claude.json');
+  if (!existsSync(claudeJsonPath)) {
+    writeFileSync(claudeJsonPath, '{}\n', 'utf-8');
+  }
+}
 
 /**
  * Resolve the project directory to an absolute path.
@@ -30,8 +44,8 @@ export function resolveProjectDir(projectName: string, dirOverride?: string): st
  * Scaffold the project directory with Generacy configuration files.
  *
  * Creates `projectDir` (recursively) if it does not exist, then writes the
- * `.generacy/` subdirectory containing `cluster.yaml`, `cluster.json`, and
- * `docker-compose.yml`.
+ * `.generacy/` subdirectory containing `cluster.yaml`, `cluster.json`,
+ * `docker-compose.yml`, and `.env`.
  *
  * @throws If `.generacy/` already exists inside `projectDir`.
  */
@@ -69,5 +83,23 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     projectName: config.projectName,
     cloudUrl: config.cloudUrl,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
+    orgId: config.orgId,
+    channel: config.channel ?? 'preview',
+    workers: 1,
+    repoUrl: config.repos?.primary,
+    claudeConfigMode: 'bind',
   });
+
+  scaffoldEnvFile(generacyDir, {
+    clusterId: config.clusterId,
+    projectId: config.projectId,
+    orgId: config.orgId,
+    cloudUrl: config.cloudUrl,
+    projectName: config.projectName,
+    repoUrl: config.repos?.primary,
+    channel: config.channel ?? 'preview',
+    workers: 1,
+  });
+
+  preCreateClaudeJson();
 }

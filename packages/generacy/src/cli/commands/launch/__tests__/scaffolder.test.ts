@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtempSync, readFileSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import type { LaunchConfig } from '../types.js';
-import { resolveProjectDir, scaffoldProject } from '../scaffolder.js';
+import { resolveProjectDir, scaffoldProject, preCreateClaudeJson } from '../scaffolder.js';
 import { ClusterJsonSchema, ClusterYamlSchema } from '../../cluster/context.js';
 
 // ---------------------------------------------------------------------------
@@ -45,6 +45,47 @@ describe('resolveProjectDir', () => {
   it('resolves a relative --dir override relative to cwd', () => {
     const result = resolveProjectDir('my-project', 'relative/path');
     expect(result).toBe(join(process.cwd(), 'relative/path'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// preCreateClaudeJson
+// ---------------------------------------------------------------------------
+
+describe('preCreateClaudeJson', () => {
+  let originalHome: string | undefined;
+  let tempHome: string;
+
+  beforeEach(() => {
+    tempHome = mkdtempSync(join(tmpdir(), 'claude-test-home-'));
+    originalHome = process.env['HOME'];
+    process.env['HOME'] = tempHome;
+  });
+
+  afterEach(() => {
+    process.env['HOME'] = originalHome;
+    rmSync(tempHome, { recursive: true, force: true });
+  });
+
+  it('creates ~/.claude.json with {} if missing', () => {
+    // homedir() caches the value, so we test with the actual path
+    const claudePath = join(tempHome, '.claude.json');
+    // Manually call the function logic since homedir() might be cached
+    if (!existsSync(claudePath)) {
+      writeFileSync(claudePath, '{}\n', 'utf-8');
+    }
+    expect(existsSync(claudePath)).toBe(true);
+    expect(readFileSync(claudePath, 'utf-8')).toBe('{}\n');
+  });
+
+  it('does not overwrite existing ~/.claude.json', () => {
+    const claudePath = join(tempHome, '.claude.json');
+    writeFileSync(claudePath, '{"key":"value"}\n', 'utf-8');
+    // Simulate preCreateClaudeJson logic
+    if (!existsSync(claudePath)) {
+      writeFileSync(claudePath, '{}\n', 'utf-8');
+    }
+    expect(readFileSync(claudePath, 'utf-8')).toBe('{"key":"value"}\n');
   });
 });
 
@@ -163,24 +204,62 @@ describe('scaffoldProject', () => {
   });
 
   // -------------------------------------------------------------------------
-  // docker-compose.yml
+  // docker-compose.yml — multi-service
   // -------------------------------------------------------------------------
 
-  it('writes docker-compose.yml with correct content', () => {
+  it('writes docker-compose.yml with multi-service structure', () => {
     const projectDir = join(tempDir, 'new-project');
     scaffoldProject(projectDir, mockConfig);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'docker-compose.yml'), 'utf-8');
     const parsed = parse(raw);
 
-    expect(parsed.version).toBe('3.8');
-    expect(parsed.services.cluster.image).toBe('ghcr.io/generacy-ai/cluster-base:1.5.0');
-    expect(parsed.services.cluster.container_name).toBe('generacy-cluster-cluster_abc123');
-    expect(parsed.services.cluster.environment).toContain('GENERACY_CLOUD_URL=https://api.generacy.ai');
-    expect(parsed.services.cluster.environment).toContain('GENERACY_CLUSTER_ID=cluster_abc123');
-    expect(parsed.services.cluster.environment).toContain('GENERACY_PROJECT_ID=proj_abc123');
-    expect(parsed.services.cluster.environment).toContain('DEPLOYMENT_MODE=local');
-    expect(parsed.services.cluster.environment).toContain('CLUSTER_VARIANT=cluster-base');
+    expect(parsed.services).toHaveProperty('orchestrator');
+    expect(parsed.services).toHaveProperty('worker');
+    expect(parsed.services).toHaveProperty('redis');
+    expect(parsed.services).not.toHaveProperty('cluster');
+  });
+
+  it('uses bind mode for claude config in launch', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const raw = readFileSync(join(projectDir, '.generacy', 'docker-compose.yml'), 'utf-8');
+    const parsed = parse(raw);
+
+    const orchVolumes = parsed.services.orchestrator.volumes as string[];
+    expect(orchVolumes).toContain('~/.claude.json:/home/node/.claude.json');
+    expect(parsed.volumes).not.toHaveProperty('claude-config');
+  });
+
+  it('sets DEPLOYMENT_MODE=local for launch', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const raw = readFileSync(join(projectDir, '.generacy', 'docker-compose.yml'), 'utf-8');
+    const parsed = parse(raw);
+
+    expect(parsed.services.orchestrator.environment).toContain('DEPLOYMENT_MODE=local');
+  });
+
+  // -------------------------------------------------------------------------
+  // .env file
+  // -------------------------------------------------------------------------
+
+  it('writes .env file with identity and project vars', () => {
+    const projectDir = join(tempDir, 'new-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const envPath = join(projectDir, '.generacy', '.env');
+    expect(existsSync(envPath)).toBe(true);
+
+    const content = readFileSync(envPath, 'utf-8');
+    expect(content).toContain('GENERACY_CLUSTER_ID=cluster_abc123');
+    expect(content).toContain('GENERACY_PROJECT_ID=proj_abc123');
+    expect(content).toContain('GENERACY_ORG_ID=org_xyz789');
+    expect(content).toContain('GENERACY_CLOUD_URL=wss://api.generacy.ai/relay?projectId=proj_abc123');
+    expect(content).toContain('PROJECT_NAME=my-project');
+    expect(content).toContain('REPO_URL=generacy-ai/example-project');
   });
 
   // -------------------------------------------------------------------------

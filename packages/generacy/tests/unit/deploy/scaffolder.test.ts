@@ -9,10 +9,11 @@ import type { ActivationResult } from '@generacy-ai/activation-client';
 const testConfig: LaunchConfig = {
   projectId: 'proj-123',
   projectName: 'My Test Project',
-  variant: 'standard',
+  variant: 'cluster-base',
   cloudUrl: 'https://cloud.generacy.ai',
   clusterId: 'cluster-abc',
   imageTag: 'generacy/cluster:v1.2.3',
+  orgId: 'org-deploy',
   repos: { primary: 'https://github.com/org/repo.git' },
 };
 
@@ -50,104 +51,94 @@ describe('scaffoldBundle', () => {
   });
 
   describe('.generacy/cluster.yaml', () => {
-    it('exists and contains correct fields', () => {
+    it('exists and contains channel, workers, variant', () => {
       const dir = callScaffold();
       const filePath = join(dir, '.generacy', 'cluster.yaml');
       expect(existsSync(filePath)).toBe(true);
 
       const content = parse(readFileSync(filePath, 'utf-8'));
-      expect(content.variant).toBe('standard');
-      expect(content.imageTag).toBe('generacy/cluster:v1.2.3');
-      expect(content.cloudUrl).toBe(testCloudUrl);
-      expect(content.ports).toEqual({
-        orchestrator: 3100,
-        relay: 3101,
-        controlPlane: 3102,
-      });
+      expect(content.channel).toBe('stable');
+      expect(content.workers).toBe(1);
+      expect(content.variant).toBe('cluster-base');
     });
   });
 
   describe('.generacy/cluster.json', () => {
-    it('exists and contains correct fields', () => {
+    it('exists and contains snake_case fields', () => {
       const dir = callScaffold();
       const filePath = join(dir, '.generacy', 'cluster.json');
       expect(existsSync(filePath)).toBe(true);
 
       const content = JSON.parse(readFileSync(filePath, 'utf-8'));
-      expect(content.clusterId).toBe('cluster-abc');
-      expect(content.projectId).toBe('proj-123');
-      expect(content.projectName).toBe('My Test Project');
-      expect(content.variant).toBe('standard');
-      expect(content.cloudUrl).toBe(testCloudUrl);
-      expect(content.imageTag).toBe('generacy/cluster:v1.2.3');
-    });
-
-    it('contains a valid ISO 8601 createdAt timestamp', () => {
-      const before = new Date().toISOString();
-      const dir = callScaffold();
-      const after = new Date().toISOString();
-
-      const content = JSON.parse(
-        readFileSync(join(dir, '.generacy', 'cluster.json'), 'utf-8'),
-      );
-      expect(content.createdAt).toBeDefined();
-      // Verify it parses as a valid date and falls within the test window
-      const ts = new Date(content.createdAt);
-      expect(ts.getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
-      expect(ts.getTime()).toBeLessThanOrEqual(new Date(after).getTime());
+      expect(content.cluster_id).toBe('cluster-abc');
+      expect(content.project_id).toBe('proj-123');
+      expect(content.org_id).toBe('org-789');
+      expect(content.cloud_url).toBe(testCloudUrl);
     });
   });
 
   describe('docker-compose.yml', () => {
-    it('exists at the root of the temp directory', () => {
+    it('exists in .generacy/ directory', () => {
       const dir = callScaffold();
-      const filePath = join(dir, 'docker-compose.yml');
+      const filePath = join(dir, '.generacy', 'docker-compose.yml');
       expect(existsSync(filePath)).toBe(true);
     });
 
-    it('contains correct service image and container_name', () => {
+    it('contains multi-service structure (orchestrator, worker, redis)', () => {
       const dir = callScaffold();
-      const content = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+      const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
 
-      expect(content.version).toBe('3.8');
-      expect(content.services.cluster.image).toBe('generacy/cluster:v1.2.3');
-      expect(content.services.cluster.container_name).toBe('generacy-cluster-cluster-abc');
-      expect(content.services.cluster.restart).toBe('unless-stopped');
+      expect(content.services).toHaveProperty('orchestrator');
+      expect(content.services).toHaveProperty('worker');
+      expect(content.services).toHaveProperty('redis');
+      expect(content.services).not.toHaveProperty('cluster');
     });
 
-    it('contains correct port mappings', () => {
+    it('uses correct image for orchestrator and worker', () => {
       const dir = callScaffold();
-      const content = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+      const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
 
-      expect(content.services.cluster.ports).toEqual([
-        '3100:3100',
-        '3101:3101',
-        '3102:3102',
-      ]);
+      expect(content.services.orchestrator.image).toBe('generacy/cluster:v1.2.3');
+      expect(content.services.worker.image).toBe('generacy/cluster:v1.2.3');
     });
 
-    it('contains correct volumes', () => {
+    it('uses cloud deployment mode with fixed port binding', () => {
       const dir = callScaffold();
-      const content = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+      const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
 
-      expect(content.services.cluster.volumes).toEqual([
-        'cluster-data:/var/lib/generacy',
-        '/var/run/docker.sock:/var/run/docker.sock',
-      ]);
-      expect(content.volumes).toHaveProperty('cluster-data');
+      expect(content.services.orchestrator.ports).toEqual(['${ORCHESTRATOR_PORT:-3100}:3100']);
+      expect(content.services.orchestrator.environment).toContain('DEPLOYMENT_MODE=cloud');
     });
 
-    it('contains correct environment variables', () => {
+    it('uses named volume for claude-config (not bind mount)', () => {
       const dir = callScaffold();
-      const content = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+      const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
 
-      expect(content.services.cluster.environment).toEqual([
-        `GENERACY_CLOUD_URL=${testCloudUrl}`,
-        'GENERACY_CLUSTER_ID=cluster-abc',
-        'GENERACY_PROJECT_ID=proj-123',
-        'DEPLOYMENT_MODE=cloud',
-        'CLUSTER_VARIANT=standard',
-      ]);
+      const orchVolumes = content.services.orchestrator.volumes as string[];
+      expect(orchVolumes).toContain('claude-config:/home/node/.claude.json');
+      expect(content.volumes).toHaveProperty('claude-config');
+    });
+
+    it('mounts docker socket at /var/run/docker-host.sock', () => {
+      const dir = callScaffold();
+      const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
+
+      const orchVolumes = content.services.orchestrator.volumes as string[];
+      expect(orchVolumes).toContain('/var/run/docker.sock:/var/run/docker-host.sock');
+    });
+  });
+
+  describe('.generacy/.env', () => {
+    it('exists and contains identity vars', () => {
+      const dir = callScaffold();
+      const envPath = join(dir, '.generacy', '.env');
+      expect(existsSync(envPath)).toBe(true);
+
+      const content = readFileSync(envPath, 'utf-8');
+      expect(content).toContain('GENERACY_CLUSTER_ID=cluster-abc');
+      expect(content).toContain('GENERACY_PROJECT_ID=proj-123');
+      expect(content).toContain('GENERACY_ORG_ID=org-789');
+      expect(content).toContain('GENERACY_CLOUD_URL=wss://api.generacy.ai/relay?projectId=proj-123');
     });
   });
 });
