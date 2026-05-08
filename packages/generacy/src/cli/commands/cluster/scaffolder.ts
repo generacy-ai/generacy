@@ -46,6 +46,7 @@ export interface ScaffoldEnvInput {
   channel?: 'stable' | 'preview';
   workers?: number;
   orchestratorPort?: number;
+  cloud?: { apiUrl: string; relayUrl: string };
 }
 
 /**
@@ -256,7 +257,8 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
 export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
   mkdirSync(dir, { recursive: true });
 
-  const relayUrl = deriveRelayUrl(input.cloudUrl, input.projectId);
+  const apiUrl = input.cloud?.apiUrl ?? input.cloudUrl;
+  const relayUrl = input.cloud?.relayUrl ?? deriveRelayUrl(input.cloudUrl, input.projectId);
   const projectName = input.projectName;
   const repoUrl = input.repoUrl ?? '';
   const repoBranch = input.repoBranch ?? 'main';
@@ -269,7 +271,8 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
     `GENERACY_CLUSTER_ID=${input.clusterId}`,
     `GENERACY_PROJECT_ID=${input.projectId}`,
     `GENERACY_ORG_ID=${input.orgId}`,
-    `GENERACY_CLOUD_URL=${relayUrl}`,
+    `GENERACY_API_URL=${apiUrl}`,
+    `GENERACY_RELAY_URL=${relayUrl}`,
     '',
     '# Project',
     `PROJECT_NAME=${projectName}`,

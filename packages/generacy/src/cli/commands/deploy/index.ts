@@ -11,7 +11,7 @@ import { pollClusterStatus } from './status-poller.js';
 import { RegistryEntrySchema, readRegistry, writeRegistry, type RegistryEntry } from '../cluster/registry.js';
 import type { DeployOptions, DeployResult } from './types.js';
 import { DeployError } from './types.js';
-import { resolveCloudUrl } from '../../utils/cloud-url.js';
+import { resolveApiUrl } from '../../utils/cloud-url.js';
 
 const DEFAULT_TIMEOUT_S = 300;
 
@@ -33,7 +33,7 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   logger.info('Docker verified');
 
   // 4. Run device-flow activation
-  const cloudUrl = resolveCloudUrl(options.cloudUrl);
+  const cloudUrl = resolveApiUrl(options.cloudUrl);
   logger.info('Starting device-flow activation...');
   const activation = await runActivation({ cloudUrl, logger });
 
@@ -83,7 +83,7 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
     composePath: `${remotePath}/docker-compose.yml`,
     variant: launchConfig.variant as 'cluster-base' | 'cluster-microservices',
     channel: 'stable',
-    cloudUrl,
+    cloudUrl: launchConfig.cloud?.appUrl ?? cloudUrl,
     lastSeen: now,
     createdAt: now,
     managementEndpoint,

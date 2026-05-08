@@ -22,6 +22,11 @@ const STUB_LAUNCH_CONFIG: LaunchConfig = {
   imageTag: 'ghcr.io/generacy-ai/cluster-base:dev',
   orgId: 'org_stub001',
   repos: { primary: 'generacy-ai/example-project' },
+  cloud: {
+    apiUrl: 'http://localhost:3000',
+    appUrl: 'http://localhost:3000',
+    relayUrl: 'ws://localhost:3000/relay?projectId=proj_stub001',
+  },
 };
 
 /**
