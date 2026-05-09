@@ -177,6 +177,19 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Registry `cloudUrl` field name unchanged (persisted data). Value sourced from `config.cloud?.appUrl ?? config.cloudUrl`.
 - Scope: generacy repo only. Cloud-side (`buildLaunchConfig`), cluster-base (`.env.template`), and Phase 4 cleanup are follow-up issues.
 
+## Phase 4 Cleanup — Remove `GENERACY_CLOUD_URL` Fallback Chains (#551)
+
+- Removes all `GENERACY_CLOUD_URL` fallback chains added in #549 (Phase 2). After this, the old env var is no longer read anywhere.
+- `packages/generacy/src/cli/utils/cloud-url.ts`: `resolveApiUrl()` drops tier-3 `GENERACY_CLOUD_URL` fallback. 3-tier only: flag > `GENERACY_API_URL` > default. `resolveCloudUrl` deprecated alias removed.
+- `packages/orchestrator/src/config/loader.ts`: Activation reads only `GENERACY_API_URL` (throws if missing — fail-loud). Relay reads only `GENERACY_RELAY_URL` (falls back to channel-derived URL, not old var).
+- `packages/cluster-relay/src/relay.ts`: Comment-only update (env var read happens in orchestrator loader).
+- CLI flag rename: `--cloud-url` → `--api-url` (canonical) on both `launch` and `deploy` commands. `--cloud-url` kept as hidden alias with deprecation warning for one release cycle.
+- Error messages in `cloud-client.ts` updated to reference `GENERACY_API_URL` / `--api-url`.
+- Tests: old `GENERACY_CLOUD_URL` assertions replaced with `GENERACY_API_URL`; negative assertions added verifying old var is not honored.
+- SC-001: zero `GENERACY_CLOUD_URL` references in `src/` directories (test files may contain negative assertions only).
+- Orchestrator context: `GENERACY_API_URL` required (missing = error). CLI context: keeps `https://api.generacy.ai` default.
+- Follow-up issues: remove `--cloud-url` hidden alias after one release; generacy-cloud companion issue for `LaunchConfig.cloudUrl` removal.
+
 ## Scoped Docker Socket Proxy (#497, v1.5 phase 9)
 
 - `packages/credhelper-daemon/src/docker-bind-mount-guard.ts` — NEW in #497: Validates `POST /containers/create` bind mounts are under `GENERACY_SCRATCH_DIR`. Inspects both `HostConfig.Binds` (string format) and `HostConfig.Mounts` (object format, `Type: "bind"` only). Uses `path.resolve()` for canonicalization. Only active when `upstreamIsHost=true` (host-socket mode); DinD mode skips validation.
