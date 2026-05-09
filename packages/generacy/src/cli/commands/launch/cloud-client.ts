@@ -129,7 +129,7 @@ export async function fetchLaunchConfig(
         message = `The cloud rejected this request as unauthenticated (${raw.status} from ${redactedUrl}). The claim endpoint should be public — this likely means the cloud is misconfigured. Report this with the URL above.`;
         break;
       case 404:
-        message = `The claim was not found at ${redactedUrl}. Did you mint the claim in a different environment? Set GENERACY_CLOUD_URL to the cloud where the claim was minted.`;
+        message = `The claim was not found at ${redactedUrl}. Did you mint the claim in a different environment? Set GENERACY_API_URL or pass --api-url to point at the cloud where the claim was minted.`;
         break;
       case 410:
         message = 'Claim has been consumed or expired (one-time-use, 10-min TTL). Generate a fresh claim from your project page.';

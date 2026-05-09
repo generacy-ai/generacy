@@ -11,7 +11,7 @@
  *   7. Auto-open browser with verification URL
  *   8. Register cluster in ~/.generacy/clusters.json
  */
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import * as p from '@clack/prompts';
 import { getLogger } from '../../utils/logger.js';
 import { execSafe } from '../../utils/exec.js';
@@ -36,7 +36,12 @@ export function launchCommand(): Command {
     .description('Bootstrap a new cluster from a cloud-issued claim code')
     .option('--claim <code>', 'Claim code from the Generacy cloud dashboard')
     .option('--dir <path>', 'Project directory (default: ~/Generacy/<projectName>)')
-    .option('--cloud-url <url>', 'Cloud API URL (overrides GENERACY_CLOUD_URL env var)')
+    .addOption(
+      new Option('--api-url <url>', 'Cloud API URL (overrides GENERACY_API_URL env var)')
+    )
+    .addOption(
+      new Option('--cloud-url <url>', '[deprecated] Use --api-url instead').hideHelp()
+    )
     .action(async (_opts, cmd) => {
       await launchAction(cmd.opts() as LaunchOptions);
     });
@@ -96,7 +101,10 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   logger.debug({ claimCode: '<redacted>' }, 'Using claim code');
 
   // ── 4. Fetch launch-config from cloud API ───────────────────────────
-  const cloudUrl = resolveApiUrl(opts.cloudUrl);
+  if (opts.cloudUrl && !opts.apiUrl) {
+    p.log.warn('--cloud-url is deprecated, use --api-url instead');
+  }
+  const cloudUrl = resolveApiUrl(opts.apiUrl ?? opts.cloudUrl);
   let config;
   try {
     const spin = p.spinner();

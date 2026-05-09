@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import { rmSync } from 'node:fs';
 import { getLogger } from '../../utils/logger.js';
 import { parseSshTarget, formatSshTarget } from './ssh-target.js';
@@ -111,13 +111,21 @@ export function deployCommand(): Command {
     .description('Deploy a Generacy cluster to a remote VM via SSH')
     .argument('<target>', 'SSH target: ssh://[user@]host[:port][/path]')
     .option('--timeout <seconds>', 'Timeout for cluster registration in seconds', String(DEFAULT_TIMEOUT_S))
-    .option('--cloud-url <url>', 'Cloud API URL (overrides GENERACY_CLOUD_URL env var)')
-    .action(async (target: string, opts: { timeout?: string; cloudUrl?: string }) => {
+    .addOption(
+      new Option('--api-url <url>', 'Cloud API URL (overrides GENERACY_API_URL env var)')
+    )
+    .addOption(
+      new Option('--cloud-url <url>', '[deprecated] Use --api-url instead').hideHelp()
+    )
+    .action(async (target: string, opts: { timeout?: string; apiUrl?: string; cloudUrl?: string }) => {
       try {
+        if (opts.cloudUrl && !opts.apiUrl) {
+          console.warn('[deprecated] --cloud-url is deprecated, use --api-url instead');
+        }
         const result = await handleDeploy({
           target,
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : DEFAULT_TIMEOUT_S,
-          cloudUrl: opts.cloudUrl,
+          cloudUrl: opts.apiUrl ?? opts.cloudUrl,
         });
 
         console.log(`\nCluster deployed successfully!`);

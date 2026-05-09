@@ -138,7 +138,9 @@ describe('scaffoldBundle', () => {
       expect(content).toContain('GENERACY_CLUSTER_ID=cluster-abc');
       expect(content).toContain('GENERACY_PROJECT_ID=proj-123');
       expect(content).toContain('GENERACY_ORG_ID=org-789');
-      expect(content).toContain('GENERACY_CLOUD_URL=wss://api.generacy.ai/relay?projectId=proj-123');
+      expect(content).toContain('GENERACY_API_URL=https://api.generacy.ai');
+      expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=proj-123');
+      expect(content).not.toContain('GENERACY_CLOUD_URL');
     });
   });
 });

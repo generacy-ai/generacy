@@ -176,7 +176,7 @@ describe('fetchLaunchConfig — HTTP', () => {
       }
     });
 
-    it('throws CloudError with statusCode 404 and message containing "not found" and "GENERACY_CLOUD_URL"', async () => {
+    it('throws CloudError with statusCode 404 and message containing "not found" and "GENERACY_API_URL"', async () => {
       handler = (_req, res) => {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'not found' }));
@@ -190,7 +190,7 @@ describe('fetchLaunchConfig — HTTP', () => {
         const ce = error as CloudError;
         expect(ce.statusCode).toBe(404);
         expect(ce.message).toContain('not found');
-        expect(ce.message).toContain('GENERACY_CLOUD_URL');
+        expect(ce.message).toContain('GENERACY_API_URL');
       }
     });
 
