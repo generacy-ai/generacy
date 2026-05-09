@@ -242,12 +242,9 @@ function loadFromEnv(): Record<string, unknown> {
     config.labelMonitor = labelMonitorEnabled === 'true';
   }
 
-  // Activation config (GENERACY_API_URL for device-code flow, falls back to GENERACY_CLOUD_URL)
-  const activationCloudUrl = process.env['GENERACY_API_URL'] ?? process.env['GENERACY_CLOUD_URL'];
+  // Activation config (GENERACY_API_URL for device-code flow — required in orchestrator context)
+  const activationCloudUrl = process.env['GENERACY_API_URL'];
   if (activationCloudUrl) {
-    if (!process.env['GENERACY_API_URL'] && process.env['GENERACY_CLOUD_URL']) {
-      console.debug('[deprecated] GENERACY_CLOUD_URL is ambiguous for activation, prefer GENERACY_API_URL');
-    }
     if (!config.activation) {
       config.activation = {};
     }
@@ -263,13 +260,9 @@ function loadFromEnv(): Record<string, unknown> {
 
   // Relay config (GENERACY_API_KEY for cloud connectivity)
   const relayApiKey = process.env['GENERACY_API_KEY'];
-  let relayCloudUrl = process.env['GENERACY_RELAY_URL'] ?? process.env['GENERACY_CLOUD_URL'];
+  let relayCloudUrl = process.env['GENERACY_RELAY_URL'];
 
-  if (!process.env['GENERACY_RELAY_URL'] && process.env['GENERACY_CLOUD_URL']) {
-    console.debug('[deprecated] GENERACY_CLOUD_URL is ambiguous for relay, prefer GENERACY_RELAY_URL');
-  }
-
-  // Derive relay URL from GENERACY_CHANNEL when neither GENERACY_RELAY_URL nor GENERACY_CLOUD_URL is set
+  // Derive relay URL from GENERACY_CHANNEL when GENERACY_RELAY_URL is not set
   if (!relayCloudUrl) {
     const channel = process.env['GENERACY_CHANNEL'] ?? 'stable';
     const relayHost = channel === 'preview' ? 'api-staging.generacy.ai' : 'api.generacy.ai';

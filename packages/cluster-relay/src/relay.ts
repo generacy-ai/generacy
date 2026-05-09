@@ -22,7 +22,7 @@ export interface Logger {
 export interface ClusterRelayClientOptions {
   /** API key for cloud authentication (GENERACY_API_KEY) */
   apiKey: string;
-  /** Cloud relay WebSocket URL (GENERACY_RELAY_URL) */
+  /** Cloud relay WebSocket URL (set via GENERACY_RELAY_URL env var) */
   cloudUrl?: string;
   /** Base reconnect delay in ms (default: 5000) */
   baseReconnectDelayMs?: number;
