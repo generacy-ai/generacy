@@ -1,98 +1,175 @@
-# Feature Specification: Handle `bootstrap-complete` lifecycle action
+# Feature Specification: ## Problem
+
+The four bootstrap-mode PRs that just landed *describe* an end-to-end flow but **miss one integration point**
 
 **Branch**: `562-problem-four-bootstrap-mode` | **Date**: 2026-05-10 | **Status**: Draft
 
 ## Summary
 
-The control-plane is missing a handler for the `bootstrap-complete` lifecycle action. When the cloud forwards this action after the onboarding wizard's ReadyStep, the control-plane rejects it because `'bootstrap-complete'` is not in the `LifecycleActionSchema` Zod enum. This prevents the sentinel file (`/tmp/generacy-bootstrap-complete`) from being written, which means the `post-activation-watcher.sh` in cluster-base never fires, leaving the cluster stuck in an incomplete bootstrap state.
+## Problem
 
-This is a two-line schema change plus a small handler branch — the missing wire between four otherwise-complete PRs (#558, generacy-cloud#532, cluster-base#22).
+The four bootstrap-mode PRs that just landed *describe* an end-to-end flow but **miss one integration point**. End-to-end onboarding still doesn't work despite every piece appearing complete.
 
-## The Intended Flow
+## The intended flow
 
 ```
 Wizard ReadyStep
-   | POST /lifecycle/bootstrap-complete         (generacy-cloud#532)
-   v
+   │ POST /lifecycle/bootstrap-complete         (generacy-cloud#532)
+   ▼
 Cloud lifecycle endpoint
-   | validateBootstrapComplete (Firestore checks)
-   | requestRouter.routeRequest -> /control-plane/lifecycle/bootstrap-complete
-   v
+   │ validateBootstrapComplete (Firestore checks)
+   │ requestRouter.routeRequest → /control-plane/lifecycle/bootstrap-complete
+   ▼
 Cluster control-plane (in-cluster Unix socket)
-   | handlePostLifecycle, parsed.data === 'bootstrap-complete'   <-- MISSING
-   | writeFile('/tmp/generacy-bootstrap-complete', '')
-   v
+   │ handlePostLifecycle, parsed.data === 'bootstrap-complete'   ◄── MISSING
+   │ writeFile('/tmp/generacy-bootstrap-complete', '')
+   ▼
 post-activation-watcher.sh (cluster-base#22)
-   | Detects sentinel, fires entrypoint-post-activation.sh
-   v
+   │ Detects sentinel, fires entrypoint-post-activation.sh
+   ▼
 setup-credentials + resolve-workspace clone + generacy setup workspace/build
 ```
 
+The control-plane node in this graph is the gap. Every other node exists; this one was assumed.
+
+## Evidence
+
+**cluster-base's post-activation-watcher.sh** explicitly documents the contract it expects:
+> "control-plane bootstrap-complete handler (generacy-cloud#532) writes the sentinel after persisting credentials" — [post-activation-watcher.sh](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/scripts/post-activation-watcher.sh)
+
+(The reference to #532 is slightly misleading — the wizard-side cloud PR (#532) only fires the signal; the *cluster-side* control-plane handler that creates the sentinel is the responsibility of *this* repo, which is what's missing.)
+
+**Cloud-side `lifecycle.ts:165-172`** forwards the literal action string:
+
+```ts
+const response = await config.requestRouter.routeRequest(
+  clusterId,
+  'POST',
+  `/control-plane/lifecycle/${action}`,
+  ...
+);
+```
+
+→ When action is `bootstrap-complete`, URL is `/control-plane/lifecycle/bootstrap-complete`.
+
+**Control-plane router** matches the pattern `/^\/lifecycle\/([^/]+)$/` and extracts `action='bootstrap-complete'`. Then:
+
+**Control-plane `routes/lifecycle.ts:18-22`** runs Zod parse against `LifecycleActionSchema`:
+
+```ts
+const parsed = LifecycleActionSchema.safeParse(action);
+if (!parsed.success) {
+  throw new ControlPlaneError('UNKNOWN_ACTION', `Unknown lifecycle action: ${action}`);
+}
+```
+
+**`LifecycleActionSchema` enum** (`packages/control-plane/src/schemas.ts:39-45`):
+
+```ts
+export const LifecycleActionSchema = z.enum([
+  'clone-peer-repos',
+  'set-default-role',
+  'code-server-start',
+  'code-server-stop',
+  'stop',
+]);
+```
+
+`'bootstrap-complete'` is not in the enum → Zod rejects → ControlPlaneError → 4xx response → sentinel never written → watcher never fires → cluster stuck.
+
+## Reproduction
+
+1. Complete v1.5 onboarding through the wizard's ReadyStep.
+2. Watch network: POST `/lifecycle/bootstrap-complete` to cloud returns 200 (cloud-side success — it forwarded).
+3. Cluster's control-plane log shows the rejection ("Unknown lifecycle action: bootstrap-complete").
+4. `docker compose exec orchestrator ls -la /tmp/generacy-bootstrap-complete` — file does not exist.
+5. Workspace is empty; `git clone` never happened; cluster is stuck in "Ready according to wizard, not actually ready" state.
+
+Manual workaround for testing right now: `docker compose exec orchestrator touch /tmp/generacy-bootstrap-complete`. The watcher then fires correctly and the post-activation flow completes. This confirms the rest of the chain works — only the sentinel write is missing.
+
+## Fix
+
+Two-part patch in `packages/control-plane/src/`:
+
+**`schemas.ts`** — add to the enum:
+
+```diff
+ export const LifecycleActionSchema = z.enum([
+   'clone-peer-repos',
+   'set-default-role',
+   'code-server-start',
+   'code-server-stop',
++  'bootstrap-complete',
+   'stop',
+ ]);
+```
+
+**`routes/lifecycle.ts`** — add a handler branch:
+
+```ts
+if (parsed.data === 'bootstrap-complete') {
+  const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
+  await fs.promises.writeFile(sentinel, '', { flag: 'w' });
+  res.writeHead(200);
+  res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
+  return;
+}
+```
+
+Design notes:
+
+- **Path source**: respect `POST_ACTIVATION_TRIGGER` env var (matches watcher.sh's contract); default `/tmp/generacy-bootstrap-complete` (matches the documented default).
+- **Idempotent**: `flag: 'w'` overwrites; touch-on-existing-file is harmless. Matches the watcher script's idempotency contract.
+- **Body**: empty content — the watcher only checks for *existence*, not content. Could be extended later to write a timestamp for diagnostics, but unnecessary now.
+- **Permissions**: file is created with the orchestrator container's umask (usually 0022 → 0644). Watcher reads as the same uid → fine.
+
+## Test plan
+
+- [ ] Add a test in `packages/control-plane/src/routes/__tests__/lifecycle.test.ts` (or wherever lifecycle tests live) that:
+  - POSTs `/lifecycle/bootstrap-complete`
+  - Asserts 200 response
+  - Asserts the sentinel file exists at the expected path (mockable via `POST_ACTIVATION_TRIGGER`)
+- [ ] Add an `'bootstrap-complete'` case to existing LifecycleActionSchema enum tests if any exist
+- [ ] After deploy: complete the wizard end-to-end on staging, verify the cluster's `/tmp/generacy-bootstrap-complete` appears, post-activation script runs, repo gets cloned
+
+## Related
+
+- #558 — control-plane PUT /credentials/:credentialId handler (orthogonal, also merged; that's the *credential write* path; this is the *signal* path)
+- generacy-ai/generacy-cloud#532 — wizard-side ReadyStep call (merged; works correctly, but its target on the cluster side returns 4xx until this issue lands)
+- generacy-ai/cluster-base#22 — post-activation hook / sentinel watcher (merged; works correctly once something writes the sentinel)
+- This is the missing fourth piece. After it lands, v1.5 onboarding works end-to-end for the first time.
+
 ## User Stories
 
-### US1: End-to-end onboarding completion
+### US1: [Primary User Story]
 
-**As a** new user completing the onboarding wizard,
-**I want** the cluster to automatically begin post-activation setup when I finish the wizard,
-**So that** my workspace is cloned and configured without manual intervention.
-
-**Acceptance Criteria**:
-- [ ] Completing the wizard's ReadyStep triggers the full post-activation flow
-- [ ] The sentinel file is created at the path expected by `post-activation-watcher.sh`
-- [ ] The cluster transitions from bootstrap to ready state without manual workarounds
-
-### US2: Idempotent bootstrap-complete signal
-
-**As an** operator or automated system,
-**I want** repeated `bootstrap-complete` calls to be harmless,
-**So that** retries or duplicate wizard submissions don't cause errors.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Calling `POST /lifecycle/bootstrap-complete` multiple times returns 200 each time
-- [ ] The sentinel file is overwritten (not appended or errored) on repeat calls
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add `'bootstrap-complete'` to `LifecycleActionSchema` enum | P0 | `packages/control-plane/src/schemas.ts` |
-| FR-002 | Add handler branch in `routes/lifecycle.ts` that writes sentinel file | P0 | Uses `fs.promises.writeFile` with `flag: 'w'` |
-| FR-003 | Sentinel path configurable via `POST_ACTIVATION_TRIGGER` env var | P1 | Default: `/tmp/generacy-bootstrap-complete` |
-| FR-004 | Handler returns `{ accepted: true, action, sentinel }` JSON response | P1 | Matches existing lifecycle response pattern |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `POST /lifecycle/bootstrap-complete` returns 200 | Pass | Unit test |
-| SC-002 | Sentinel file exists after successful request | Pass | Unit test with mock path via `POST_ACTIVATION_TRIGGER` |
-| SC-003 | End-to-end wizard completion triggers post-activation flow | Pass | Staging integration test |
-
-## Design Notes
-
-- **Path source**: Respect `POST_ACTIVATION_TRIGGER` env var (matches watcher.sh's contract); default `/tmp/generacy-bootstrap-complete`.
-- **Idempotent**: `flag: 'w'` overwrites; touch-on-existing-file is harmless.
-- **Body**: Empty content — the watcher only checks for *existence*, not content.
-- **Permissions**: File created with container's umask (usually 0022 -> 0644). Watcher reads as same uid.
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The rest of the post-activation chain (watcher.sh, entrypoint-post-activation.sh) is already functional — confirmed by manual `touch` workaround.
-- The cloud-side lifecycle endpoint (generacy-cloud#532) correctly forwards `bootstrap-complete` as the action string.
-- No authentication/authorization changes are needed — the control-plane already handles actor identity via relay-injected headers.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Writing diagnostic content (e.g., timestamp) to the sentinel file — watcher only checks existence.
-- Modifying `post-activation-watcher.sh` or any cluster-base scripts.
-- Cloud-side changes — generacy-cloud#532 is already merged and working.
-- Post-bootstrap credential cache reload for credhelper-daemon (separate follow-up).
-
-## Related Issues
-
-- #558 — control-plane PUT /credentials handler (credential write path)
-- generacy-cloud#532 — wizard ReadyStep lifecycle call (cloud-side, merged)
-- cluster-base#22 — post-activation watcher/sentinel script (merged)
+- [Exclusion 1]
 
 ---
 
