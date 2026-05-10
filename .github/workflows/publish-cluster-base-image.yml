@@ -43,7 +43,11 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          # Build context = directory containing the Dockerfile + its COPY sources
+          # (scripts/, code-server-extensions.txt). Cluster-base#17 removed the
+          # repo-internal publish workflow that knew this; this generacy-side
+          # workflow had been inheriting `.` (repo root) which has no Dockerfile.
+          context: .devcontainer/generacy
           push: true
           tags: |
             ghcr.io/generacy-ai/cluster-base:${{ steps.tags.outputs.channel }}
