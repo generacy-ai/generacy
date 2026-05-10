@@ -11,7 +11,7 @@
 - C: Re-implement the AES-256-GCM file I/O directly in control-plane (duplicated logic, divergence risk)
 - D: Add a `PUT /secrets/:key` endpoint to credhelper-daemon and call it via HTTP from control-plane
 
-**Answer**: *Pending*
+**Answer**: **B** — Extract `ClusterLocalBackend` + `FileStore` + crypto helpers to the shared `@generacy-ai/credhelper` package (~250 LOC). Both daemon and control-plane import from the same source. Architecturally cleanest: single source of truth for storage logic, no dep coupling. *(via @christrudelpw on GitHub)*
 
 ---
 
@@ -24,7 +24,7 @@
 - C: Need a reload mechanism (file watcher, reload endpoint, or re-read from disk at session-begin)
 - D: Moot if Q1 answer is D (HTTP to daemon updates its in-process cache directly)
 
-**Answer**: *Pending*
+**Answer**: **A** — Restart credhelper-daemon on bootstrap-complete. Daemon supervisor stops the daemon, it comes back up, `init()` reloads cache from disk with populated credentials. Bootstrap-complete signal is already a defined event. Follow-up: file issue for cache-reload-on-write mechanism for post-bootstrap credential edits. *(via @christrudelpw on GitHub)*
 
 ---
 
@@ -36,4 +36,4 @@
 - B: Best-effort rollback — attempt `deleteSecret()` if YAML write fails, return 500
 - C: Write metadata first, then secret — metadata without backing secret is safer (GET returns metadata, fetchSecret returns 404 until retry)
 
-**Answer**: *Pending*
+**Answer**: **A** — Fail forward, return 500, orphaned encrypted secret is harmless (still encrypted, no readers, not advertised) and retryable per FR-006 idempotency. 500 response should identify which write step failed in body (`failedAt` field) so retries can diagnose. *(via @christrudelpw on GitHub)*
