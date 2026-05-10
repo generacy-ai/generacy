@@ -10,37 +10,37 @@
 
 ## Phase 1: Extract Storage Modules to `@generacy-ai/credhelper`
 
-- [ ] T001 [US1] Create `packages/credhelper/src/backends/` directory and extract `crypto.ts` from `packages/credhelper-daemon/src/backends/crypto.ts` — copy `encrypt()`, `decrypt()`, `generateMasterKey()`, `EncryptedEntry` interface
-- [ ] T002 [US1] Extract `file-store.ts` from `packages/credhelper-daemon/src/backends/file-store.ts` — copy `CredentialFileStore` class, update import of `crypto.ts` to co-located path
-- [ ] T003 [US1] Create `StorageError` class in `packages/credhelper/src/backends/errors.ts` — codes: `SECRET_NOT_FOUND`, `STORE_CORRUPT`, `STORE_MIGRATION_NEEDED`, `KEY_UNAVAILABLE`
-- [ ] T004 [US1] Extract `cluster-local-backend.ts` from `packages/credhelper-daemon/src/backends/cluster-local-backend.ts` — copy `ClusterLocalBackend` class, replace `CredhelperError` with `StorageError`, update imports to co-located paths
-- [ ] T005 [US1] Add barrel exports in `packages/credhelper/src/index.ts` — export `ClusterLocalBackend`, `CredentialFileStore`, `encrypt`, `decrypt`, `generateMasterKey`, `StorageError`, `EncryptedEntry`
-- [ ] T006 [P] [US1] Replace `packages/credhelper-daemon/src/backends/crypto.ts` with re-export from `@generacy-ai/credhelper`
-- [ ] T007 [P] [US1] Replace `packages/credhelper-daemon/src/backends/file-store.ts` with re-export from `@generacy-ai/credhelper`
-- [ ] T008 [P] [US1] Replace `packages/credhelper-daemon/src/backends/cluster-local-backend.ts` with re-export from `@generacy-ai/credhelper`
-- [ ] T009 [US1] Verify credhelper-daemon existing tests still pass after re-export replacement
+- [X] T001 [US1] Create `packages/credhelper/src/backends/` directory and extract `crypto.ts` from `packages/credhelper-daemon/src/backends/crypto.ts` — copy `encrypt()`, `decrypt()`, `generateMasterKey()`, `EncryptedEntry` interface
+- [X] T002 [US1] Extract `file-store.ts` from `packages/credhelper-daemon/src/backends/file-store.ts` — copy `CredentialFileStore` class, update import of `crypto.ts` to co-located path
+- [X] T003 [US1] Create `StorageError` class in `packages/credhelper/src/backends/errors.ts` — codes: `SECRET_NOT_FOUND`, `STORE_CORRUPT`, `STORE_MIGRATION_NEEDED`, `KEY_UNAVAILABLE`
+- [X] T004 [US1] Extract `cluster-local-backend.ts` from `packages/credhelper-daemon/src/backends/cluster-local-backend.ts` — copy `ClusterLocalBackend` class, replace `CredhelperError` with `StorageError`, update imports to co-located paths
+- [X] T005 [US1] Add barrel exports in `packages/credhelper/src/index.ts` — export `ClusterLocalBackend`, `CredentialFileStore`, `encrypt`, `decrypt`, `generateMasterKey`, `StorageError`, `EncryptedEntry`
+- [X] T006 [P] [US1] Replace `packages/credhelper-daemon/src/backends/crypto.ts` with re-export from `@generacy-ai/credhelper`
+- [X] T007 [P] [US1] Replace `packages/credhelper-daemon/src/backends/file-store.ts` with re-export from `@generacy-ai/credhelper`
+- [X] T008 [P] [US1] Replace `packages/credhelper-daemon/src/backends/cluster-local-backend.ts` with re-export from `@generacy-ai/credhelper`
+- [X] T009 [US1] Verify credhelper-daemon existing tests still pass after re-export replacement
 
 ## Phase 2: Implement Credential Writer Service
 
-- [ ] T010 [US1] Create `packages/control-plane/src/services/credential-writer.ts` — implement `writeCredential(options)` following `default-role-writer.ts` pattern: init backend, write secret, write YAML metadata, emit relay event
-- [ ] T011 [US1] Implement YAML metadata logic in `credential-writer.ts` — read `.agency/credentials.yaml`, merge entry `{ type, backend: 'cluster-local', status: 'active', updatedAt }`, atomic write (temp+rename)
-- [ ] T012 [US1] Implement relay event emission in `credential-writer.ts` — call `getRelayPushEvent()` with channel `cluster.credentials` and payload `{ credentialId, type, status: 'written' }`
+- [X] T010 [US1] Create `packages/control-plane/src/services/credential-writer.ts` — implement `writeCredential(options)` following `default-role-writer.ts` pattern: init backend, write secret, write YAML metadata, emit relay event
+- [X] T011 [US1] Implement YAML metadata logic in `credential-writer.ts` — read `.agency/credentials.yaml`, merge entry `{ type, backend: 'cluster-local', status: 'active', updatedAt }`, atomic write (temp+rename)
+- [X] T012 [US1] Implement relay event emission in `credential-writer.ts` — call `getRelayPushEvent()` with channel `cluster.credentials` and payload `{ credentialId, type, status: 'written' }`
 
 ## Phase 3: Wire Route Handlers
 
-- [ ] T013 [US1] Modify `packages/control-plane/src/routes/credentials.ts` `handlePutCredential` — parse body, validate with `PutCredentialBodySchema` (`{ type: z.string().min(1), value: z.string().min(1) }`), call `writeCredential()`, return 200 or 500 with `failedAt`
-- [ ] T014 [US1] Modify `packages/control-plane/src/routes/credentials.ts` `handleGetCredential` — read `.agency/credentials.yaml`, look up entry by credentialId param, return metadata `{ id, type, backend, status, updatedAt }` or 404
-- [ ] T015 [US1] Wire `ClusterLocalBackend` eager initialization in control-plane startup (`bin/control-plane.ts` or server entry) — call `init()` before listen, fail-fast on missing master key
+- [X] T013 [US1] Modify `packages/control-plane/src/routes/credentials.ts` `handlePutCredential` — parse body, validate with `PutCredentialBodySchema` (`{ type: z.string().min(1), value: z.string().min(1) }`), call `writeCredential()`, return 200 or 500 with `failedAt`
+- [X] T014 [US1] Modify `packages/control-plane/src/routes/credentials.ts` `handleGetCredential` — read `.agency/credentials.yaml`, look up entry by credentialId param, return metadata `{ id, type, backend, status, updatedAt }` or 404
+- [X] T015 [US1] Wire `ClusterLocalBackend` eager initialization in control-plane startup (`bin/control-plane.ts` or server entry) — call `init()` before listen, fail-fast on missing master key
 
 ## Phase 4: Tests
 
-- [ ] T016 [P] [US1] Unit test: `packages/credhelper/src/backends/__tests__/crypto.test.ts` — encrypt/decrypt round-trip with known key, verify different IVs per call
-- [ ] T017 [P] [US1] Unit test: `packages/credhelper/src/backends/__tests__/file-store.test.ts` — load/save with temp directory, atomic write verification, master key auto-generation
-- [ ] T018 [P] [US1] Unit test: `packages/credhelper/src/backends/__tests__/cluster-local-backend.test.ts` — setSecret/fetchSecret/deleteSecret with temp paths, idempotent overwrite
-- [ ] T019 [US1] Unit test: `packages/control-plane/src/services/__tests__/credential-writer.test.ts` — mock backend + mock fs, verify write sequence (secret → metadata → event), partial failure returns correct `failedAt`
-- [ ] T020 [US1] Unit test: `packages/control-plane/src/routes/__tests__/credentials.test.ts` — mock credential-writer, verify request parsing, Zod validation errors, 200/400/500 responses
-- [ ] T021 [US1] Integration test: PUT then GET round-trip returns metadata
-- [ ] T022 [US1] Integration test: PUT same credentialId twice — second overwrites cleanly (idempotency)
+- [X] T016 [P] [US1] Unit test: `packages/credhelper/src/backends/__tests__/crypto.test.ts` — encrypt/decrypt round-trip with known key, verify different IVs per call
+- [X] T017 [P] [US1] Unit test: `packages/credhelper/src/backends/__tests__/file-store.test.ts` — load/save with temp directory, atomic write verification, master key auto-generation
+- [X] T018 [P] [US1] Unit test: `packages/credhelper/src/backends/__tests__/cluster-local-backend.test.ts` — setSecret/fetchSecret/deleteSecret with temp paths, idempotent overwrite
+- [X] T019 [US1] Unit test: `packages/control-plane/__tests__/services/credential-writer.test.ts` — mock backend + mock fs, verify write sequence (secret → metadata → event), partial failure returns correct `failedAt`
+- [X] T020 [US1] Unit test: `packages/control-plane/__tests__/routes/credentials.test.ts` — mock credential-writer, verify request parsing, Zod validation errors, 200/400/500 responses
+- [X] T021 [US1] Integration test: PUT then GET round-trip returns metadata
+- [X] T022 [US1] Integration test: PUT same credentialId twice — second overwrites cleanly (idempotency)
 
 ## Dependencies & Execution Order
 

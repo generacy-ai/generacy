@@ -9,6 +9,8 @@ import {
   type CodeServerManager,
 } from '../../src/services/code-server-manager.js';
 import { initClusterState } from '../../src/state.js';
+import { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import { setCredentialBackend } from '../../src/services/credential-writer.js';
 
 let server: ControlPlaneServer;
 let socketPath: string;
@@ -68,11 +70,26 @@ describe('integration: all routes', () => {
     shutdown: vi.fn(async () => {}),
   };
 
+  let tmpDir: string;
+
   beforeAll(async () => {
     setCodeServerManager(fakeCodeServer);
     initClusterState({ deploymentMode: 'local', variant: 'cluster-base' });
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cp-test-'));
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cp-test-'));
     socketPath = path.join(tmpDir, 'control.sock');
+
+    // Initialize credential backend for credential route tests
+    const agencyDir = path.join(tmpDir, '.agency');
+    await fs.mkdir(agencyDir, { recursive: true });
+    process.env['CREDHELPER_AGENCY_DIR'] = agencyDir;
+
+    const backend = new ClusterLocalBackend({
+      dataPath: path.join(tmpDir, 'credentials.dat'),
+      keyPath: path.join(tmpDir, 'master.key'),
+    });
+    await backend.init();
+    setCredentialBackend(backend);
+
     server = new ControlPlaneServer();
     await server.start(socketPath);
   });
@@ -80,6 +97,7 @@ describe('integration: all routes', () => {
   afterAll(async () => {
     await server.close();
     setCodeServerManager(null);
+    delete process.env['CREDHELPER_AGENCY_DIR'];
   });
 
   // GET /state
@@ -94,22 +112,17 @@ describe('integration: all routes', () => {
     expect(typeof body['lastSeen']).toBe('string');
   });
 
-  // GET /credentials/:id
-  it('GET /credentials/:id returns stub credential', async () => {
-    const res = await request('GET', '/credentials/my-cred');
-    expect(res.status).toBe(200);
+  // GET /credentials/:id — returns 404 when credential doesn't exist
+  it('GET /credentials/:id returns 404 for nonexistent credential', async () => {
+    const res = await request('GET', '/credentials/nonexistent-cred');
+    expect(res.status).toBe(404);
     const body = res.body as Record<string, unknown>;
-    expect(body).toHaveProperty('id', 'my-cred');
-    expect(body).toHaveProperty('type');
-    expect(body).toHaveProperty('backend');
-    expect(body).toHaveProperty('backendKey');
-    expect(body).toHaveProperty('status', 'active');
-    expect(body).toHaveProperty('createdAt');
+    expect(body).toHaveProperty('code', 'NOT_FOUND');
   });
 
   // PUT /credentials/:id
   it('PUT /credentials/:id accepts body with actor header', async () => {
-    const res = await request('PUT', '/credentials/my-cred', { type: 'api-key' }, {
+    const res = await request('PUT', '/credentials/my-cred', { type: 'api-key', value: 'sk-test' }, {
       'x-generacy-actor-user-id': 'user-123',
     });
     expect(res.status).toBe(200);
