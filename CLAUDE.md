@@ -197,3 +197,14 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Per-session scratch directory at `/var/lib/generacy/scratch/<session-id>/` (mode 0700, uid 1001). Created at session begin, cleaned at session end. Exposed as `GENERACY_SCRATCH_DIR` env var.
 - Upstream selection: `ENABLE_DIND=true` → `/var/run/docker.sock` (DinD, no bind-mount guard) → `/var/run/docker-host.sock` (host, with bind-mount guard) → warn at boot, fail per-session.
 - `buildSessionEnv()` in orchestrator already sets `DOCKER_HOST=unix://<sessionDir>/docker.sock`.
+
+## Credential Persistence in Control-Plane (#558)
+
+- `packages/credhelper/src/backends/` — NEW in #558: Extracted from `credhelper-daemon`. `ClusterLocalBackend`, `CredentialFileStore`, and AES-256-GCM crypto helpers (`encrypt`, `decrypt`, `generateMasterKey`). ~250 LOC. Both credhelper-daemon and control-plane import from this single source of truth.
+  - `cluster-local-backend.ts` — `ClusterLocalBackend` implements `WritableBackendClient`. Options: `dataPath` (default `/var/lib/generacy/credentials.dat`), `keyPath` (default `/var/lib/generacy/master.key`). Methods: `init()`, `fetchSecret()`, `setSecret()`, `deleteSecret()`. In-memory cache loaded on `init()`.
+  - `crypto.ts` — AES-256-GCM `encrypt`/`decrypt` with per-credential random 12-byte IV, 16-byte auth tag. `generateMasterKey()` returns 32-byte random buffer.
+  - `file-store.ts` — `CredentialFileStore`: atomic writes (temp+fsync+rename), fd-based advisory locking via `credentials.dat.lock`, master key auto-generation on first boot.
+- `packages/credhelper-daemon/src/backends/` — MODIFIED in #558: Original files replaced with re-exports from `@generacy-ai/credhelper`. Existing daemon code unchanged.
+- `packages/control-plane/src/routes/credentials.ts` — MODIFIED in #558: `handlePutCredential` wired to persist credentials. Validates body with Zod (`PutCredentialBodySchema`: `{ type, value }`), calls `ClusterLocalBackend.setSecret()`, writes metadata to `.agency/credentials.yaml`, emits `cluster.credentials` relay event. `handleGetCredential` reads metadata from YAML. Returns 500 with `failedAt` field on partial failure (AD-3: fail forward).
+- `packages/control-plane/src/services/credential-writer.ts` — NEW in #558: `writeCredential()` orchestrates secret write + YAML metadata write + relay event emission. Follows `default-role-writer.ts` pattern (atomic YAML writes, `yaml` package).
+- Cache coherence: credhelper-daemon restarted on bootstrap-complete (AD-2). Follow-up needed for post-bootstrap credential edit cache reload.

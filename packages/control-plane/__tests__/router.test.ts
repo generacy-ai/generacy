@@ -1,10 +1,15 @@
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
-import { describe, it, expect, beforeEach } from 'vitest';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { dispatch } from '../src/router.js';
 import { ControlPlaneError } from '../src/errors.js';
 import type { ActorContext } from '../src/context.js';
 import { initClusterState } from '../src/state.js';
+import { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import { setCredentialBackend } from '../src/services/credential-writer.js';
 
 function createMockReq(method: string, url: string, headers?: Record<string, string>) {
   return { method, url, headers: headers ?? {} } as unknown as http.IncomingMessage;
@@ -50,8 +55,27 @@ function createMockRes() {
 const actor: ActorContext = { userId: 'test-user', sessionId: 'test-session' };
 
 describe('dispatch', () => {
-  beforeEach(() => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
     initClusterState({ deploymentMode: 'local', variant: 'cluster-base' });
+
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-test-'));
+    const agencyDir = path.join(tmpDir, '.agency');
+    await fs.mkdir(agencyDir, { recursive: true });
+    process.env['CREDHELPER_AGENCY_DIR'] = agencyDir;
+
+    const backend = new ClusterLocalBackend({
+      dataPath: path.join(tmpDir, 'credentials.dat'),
+      keyPath: path.join(tmpDir, 'master.key'),
+    });
+    await backend.init();
+    setCredentialBackend(backend);
+  });
+
+  afterEach(async () => {
+    delete process.env['CREDHELPER_AGENCY_DIR'];
+    await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
   it('GET /state dispatches to state handler and returns 200', async () => {
@@ -67,21 +91,19 @@ describe('dispatch', () => {
     expect(body).toHaveProperty('variant', 'cluster-base');
   });
 
-  it('GET /credentials/abc dispatches to credential GET handler and returns 200', async () => {
+  it('GET /credentials/abc returns 404 for nonexistent credential', async () => {
     const req = createMockReq('GET', '/credentials/abc');
     const res = createMockRes();
 
     await dispatch(req, res, actor);
 
-    expect((res as any).statusCode).toBe(200);
+    expect((res as any).statusCode).toBe(404);
     const body = JSON.parse((res as any).body);
-    expect(body).toHaveProperty('id', 'abc');
-    expect(body).toHaveProperty('type', 'api-key');
-    expect(body).toHaveProperty('backend', 'env');
+    expect(body).toHaveProperty('code', 'NOT_FOUND');
   });
 
   it('PUT /credentials/abc dispatches to credential PUT handler and returns 200', async () => {
-    const req = createMockReqWithBody('PUT', '/credentials/abc', '{"key":"val"}');
+    const req = createMockReqWithBody('PUT', '/credentials/abc', '{"type":"api-key","value":"sk-test"}');
     const res = createMockRes();
 
     await dispatch(req, res, actor);

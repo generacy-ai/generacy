@@ -3,6 +3,8 @@
 import { ControlPlaneServer } from '../src/index.js';
 import { initClusterState } from '../src/state.js';
 import type { DeploymentMode, ClusterVariant } from '../src/schemas.js';
+import { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import { setCredentialBackend } from '../src/services/credential-writer.js';
 
 const DEFAULT_SOCKET_PATH = '/run/generacy-control-plane/control.sock';
 
@@ -11,6 +13,9 @@ const socketPath = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? DEFAULT_SOCKET_PA
 const deploymentMode = (process.env['DEPLOYMENT_MODE'] ?? 'local') as DeploymentMode;
 const variant = (process.env['CLUSTER_VARIANT'] ?? 'cluster-base') as ClusterVariant;
 initClusterState({ deploymentMode, variant });
+
+// Initialize credential backend eagerly — fail-fast on missing master key
+const credentialBackend = new ClusterLocalBackend();
 
 const server = new ControlPlaneServer();
 
@@ -35,8 +40,13 @@ process.on('unhandledRejection', (reason) => {
   process.exit(1);
 });
 
-server
-  .start(socketPath)
+credentialBackend
+  .init()
+  .then(() => {
+    setCredentialBackend(credentialBackend);
+    console.log('[control-plane] Credential backend initialized');
+    return server.start(socketPath);
+  })
   .then(() => {
     console.log(`[control-plane] Listening on ${socketPath}`);
   })

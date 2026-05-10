@@ -97,3 +97,25 @@ export {
   type LoaderConfig,
   type DiscoveredPlugin,
 } from './loader/index.js';
+
+// Backends — extracted storage modules
+export {
+  ClusterLocalBackend,
+  type ClusterLocalBackendOptions,
+} from './backends/cluster-local-backend.js';
+export {
+  CredentialFileStore,
+  CredentialFileEnvelopeSchema,
+  type CredentialFileEnvelope,
+} from './backends/file-store.js';
+export {
+  encrypt,
+  decrypt,
+  generateMasterKey,
+  EncryptedEntrySchema,
+  type EncryptedEntry,
+} from './backends/crypto.js';
+export {
+  StorageError,
+  type StorageErrorCode,
+} from './backends/errors.js';
