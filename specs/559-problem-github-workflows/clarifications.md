@@ -9,7 +9,7 @@
 - A: Yes, adopt Option D (scheduled poll) as recommended by maintainer
 - B: Use a different approach (please specify)
 
-**Answer**: *Pending*
+**Answer**: A — Adopt Option D (scheduled poll from generacy). The cluster-base-as-upstream-template constraint rules out A/B/C. Both cluster-base and cluster-microservices should be handled symmetrically — one poll workflow parameterized over (repo, branch, image-name) tuples.
 
 ### Q2: Polling Interval
 **Context**: Option D uses a cron-triggered GitHub Actions workflow to poll for new commits. The polling interval determines how quickly images are published after a merge. The maintainer suggested 5-10 minutes.
@@ -19,7 +19,7 @@
 - B: 10 minutes (balanced — maintainer's initial suggestion)
 - C: 15 minutes (fewer API calls, still within SC-001's <10 min target most of the time)
 
-**Answer**: *Pending*
+**Answer**: A — 5 minutes. GitHub cron delays can add 10-15 min, so 5-min nominal behaves like 5-15 min actual. Cost is negligible (~60s compute/hour).
 
 ### Q3: SHA State Storage
 **Context**: The poll workflow must compare the current HEAD SHA of cluster-base/cluster-microservices against the last-published SHA to decide whether to trigger a rebuild. This state needs to persist between workflow runs.
@@ -29,7 +29,7 @@
 - B: Store in a GitHub Actions cache key
 - C: Store as a workflow artifact
 
-**Answer**: *Pending*
+**Answer**: A — Query GHCR for latest `sha-*` tag and compare against current branch HEAD. Self-healing, no coordination problem with manual dispatches, no cache eviction or artifact drift issues. Needs `packages: read` permission.
 
 ### Q4: Branch Coverage
 **Context**: The spec mentions both `develop` (`:preview` tag) and `main` (`:stable` tag) branches. The poll workflow could check one or both.
@@ -38,7 +38,7 @@
 - A: Both develop and main (full automation for preview and stable)
 - B: Only develop (main/stable publishes remain manual-dispatch for release control)
 
-**Answer**: *Pending*
+**Answer**: A — Both develop and main. Merging to main IS the release decision; auto-publish keeps symmetric logic. Branch protection rules handle gatekeeping.
 
 ### Q5: Workflow Deduplication
 **Context**: The current `workflow_dispatch` workflows would remain for manual one-off builds. The new cron-poll workflow would also dispatch builds. If a manual dispatch happens close to a poll cycle, the same SHA could be built twice.
@@ -47,4 +47,7 @@
 - A: Skip if SHA already published (check GHCR tags before dispatching) — prevents wasted CI minutes
 - B: Allow duplicates (simpler implementation, Docker push is idempotent)
 
-**Answer**: *Pending*
+**Answer**: A — Skip if SHA already published. The GHCR check from Q3 is already happening; comparing against HEAD is the same operation. Saves CI minutes for no-op poll cycles.
+
+### Design Note (from maintainer)
+The poll workflow's `concurrency:` block should use a per-(repo, branch) key: `cluster-base-poll-${{ matrix.repo }}-${{ matrix.branch }}` with `cancel-in-progress: false`. Prevents parallel checks from cancelling each other.
