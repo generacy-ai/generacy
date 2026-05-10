@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { handlePostLifecycle } from '../../src/routes/lifecycle.js';
 import { ControlPlaneError } from '../../src/errors.js';
 import type { ActorContext } from '../../src/context.js';
@@ -277,6 +280,85 @@ describe('handlePostLifecycle', () => {
     expect(res.writeHead).toHaveBeenCalledWith(200);
     const body = JSON.parse(res._body);
     expect(body).toEqual({ accepted: true, action: 'stop' });
+  });
+
+  // --- bootstrap-complete tests ---
+
+  describe('bootstrap-complete', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = mkdtempSync(join(tmpdir(), 'lifecycle-test-'));
+    });
+
+    afterEach(() => {
+      delete process.env.POST_ACTIVATION_TRIGGER;
+      rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    it('returns 200 and writes sentinel file', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-complete');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({ accepted: true, action: 'bootstrap-complete', sentinel: sentinelPath });
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(readFileSync(sentinelPath, 'utf-8')).toBe('');
+    });
+
+    it('idempotent — second call also returns 200, no error', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-complete');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const req = {} as IncomingMessage;
+
+      const res1 = createMockResponse();
+      await handlePostLifecycle(req, res1, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+      expect(res1.writeHead).toHaveBeenCalledWith(200);
+
+      const res2 = createMockResponse();
+      await handlePostLifecycle(req, res2, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+      expect(res2.writeHead).toHaveBeenCalledWith(200);
+
+      const body = JSON.parse(res2._body);
+      expect(body).toEqual({ accepted: true, action: 'bootstrap-complete', sentinel: sentinelPath });
+    });
+
+    it('POST_ACTIVATION_TRIGGER env var overrides default sentinel path', async () => {
+      const customPath = join(tempDir, 'custom-sentinel');
+      process.env.POST_ACTIVATION_TRIGGER = customPath;
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      const body = JSON.parse(res._body);
+      expect(body.sentinel).toBe(customPath);
+      expect(existsSync(customPath)).toBe(true);
+    });
+
+    it('missing actor returns 401 UNAUTHORIZED', async () => {
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+      const noActor: ActorContext = {};
+
+      await expect(
+        handlePostLifecycle(req, res, noActor, { action: 'bootstrap-complete' }),
+      ).rejects.toThrow(ControlPlaneError);
+
+      try {
+        await handlePostLifecycle(req, res, noActor, { action: 'bootstrap-complete' });
+      } catch (err) {
+        expect((err as ControlPlaneError).code).toBe('UNAUTHORIZED');
+      }
+    });
   });
 
   // --- schema validation tests ---

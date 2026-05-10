@@ -208,3 +208,10 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/src/routes/credentials.ts` — MODIFIED in #558: `handlePutCredential` wired to persist credentials. Validates body with Zod (`PutCredentialBodySchema`: `{ type, value }`), calls `ClusterLocalBackend.setSecret()`, writes metadata to `.agency/credentials.yaml`, emits `cluster.credentials` relay event. `handleGetCredential` reads metadata from YAML. Returns 500 with `failedAt` field on partial failure (AD-3: fail forward).
 - `packages/control-plane/src/services/credential-writer.ts` — NEW in #558: `writeCredential()` orchestrates secret write + YAML metadata write + relay event emission. Follows `default-role-writer.ts` pattern (atomic YAML writes, `yaml` package).
 - Cache coherence: credhelper-daemon restarted on bootstrap-complete (AD-2). Follow-up needed for post-bootstrap credential edit cache reload.
+
+## Bootstrap-Complete Lifecycle Action (#562)
+
+- `packages/control-plane/src/schemas.ts` — MODIFIED in #562: `LifecycleActionSchema` enum extended from 5 to 6 entries, adding `'bootstrap-complete'`.
+- `packages/control-plane/src/routes/lifecycle.ts` — MODIFIED in #562: New handler branch for `bootstrap-complete` action. Writes empty sentinel file at `POST_ACTIVATION_TRIGGER` env var path (default `/tmp/generacy-bootstrap-complete`). Idempotent via `flag: 'w'` overwrite. Returns `{ accepted: true, action, sentinel }`. No request body required.
+- Sentinel file triggers `post-activation-watcher.sh` (cluster-base#22) which runs `entrypoint-post-activation.sh` for workspace clone and setup.
+- Completes the wire between cloud wizard ReadyStep (generacy-cloud#532) and cluster post-activation flow.
