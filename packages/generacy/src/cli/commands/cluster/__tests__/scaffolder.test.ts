@@ -346,6 +346,7 @@ describe('scaffoldEnvFile', () => {
     expect(content).toContain('WEBHOOK_SETUP_ENABLED=true');
     expect(content).toContain('SKIP_PACKAGE_UPDATE=false');
     expect(content).toContain('SMEE_CHANNEL_URL=');
+    expect(content).toContain('GENERACY_BOOTSTRAP_MODE=wizard');
   });
 
   it('writes GENERACY_API_URL and GENERACY_RELAY_URL (not GENERACY_CLOUD_URL)', () => {

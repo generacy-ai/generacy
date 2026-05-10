@@ -288,6 +288,10 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
     'SKIP_PACKAGE_UPDATE=false',
     'SMEE_CHANNEL_URL=',
     '',
+    '# Bootstrap mode — see cluster-base entrypoint scripts',
+    '# `wizard` defers repo cloning until credentials arrive via the activation wizard',
+    'GENERACY_BOOTSTRAP_MODE=wizard',
+    '',
   ];
 
   writeFileSync(join(dir, '.env'), lines.join('\n'), 'utf-8');

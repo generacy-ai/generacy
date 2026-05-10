@@ -10,12 +10,12 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Add `GENERACY_BOOTSTRAP_MODE=wizard` to `scaffoldEnvFile()` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — append 3 lines (2 comments + env var) after the "Cluster runtime" section
-- [ ] T002 [US1] Update existing `scaffoldEnvFile` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` to assert `GENERACY_BOOTSTRAP_MODE=wizard` is present in output
+- [X] T001 [US1] Add `GENERACY_BOOTSTRAP_MODE=wizard` to `scaffoldEnvFile()` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — append 3 lines (2 comments + env var) after the "Cluster runtime" section
+- [X] T002 [US1] Update existing `scaffoldEnvFile` tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` to assert `GENERACY_BOOTSTRAP_MODE=wizard` is present in output
 
 ## Phase 2: Verification
 
-- [ ] T003 [US1][US2] Run `pnpm test` in `packages/generacy` to confirm all tests pass (including updated snapshots)
+- [X] T003 [US1][US2] Run `pnpm test` in `packages/generacy` to confirm all tests pass (including updated snapshots)
 
 ## Dependencies & Execution Order
 
