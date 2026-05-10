@@ -37,6 +37,7 @@ export type StatusUpdate = z.infer<typeof StatusUpdateSchema>;
 
 // Lifecycle
 export const LifecycleActionSchema = z.enum([
+  'bootstrap-complete',
   'clone-peer-repos',
   'set-default-role',
   'code-server-start',

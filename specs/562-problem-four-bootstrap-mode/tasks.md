@@ -10,15 +10,15 @@
 
 ## Phase 1: Schema & Handler
 
-- [ ] T001 [US1] Add `'bootstrap-complete'` to `LifecycleActionSchema` enum in `packages/control-plane/src/schemas.ts`
-- [ ] T002 [US1] Add `bootstrap-complete` handler branch in `packages/control-plane/src/routes/lifecycle.ts` — read `POST_ACTIVATION_TRIGGER` env var (default `/tmp/generacy-bootstrap-complete`), write empty sentinel file with `flag: 'w'`, return `{ accepted: true, action, sentinel }`
+- [X] T001 [US1] Add `'bootstrap-complete'` to `LifecycleActionSchema` enum in `packages/control-plane/src/schemas.ts`
+- [X] T002 [US1] Add `bootstrap-complete` handler branch in `packages/control-plane/src/routes/lifecycle.ts` — read `POST_ACTIVATION_TRIGGER` env var (default `/tmp/generacy-bootstrap-complete`), write empty sentinel file with `flag: 'w'`, return `{ accepted: true, action, sentinel }`
 
 ## Phase 2: Tests
 
-- [ ] T003 [US1] Add test: `POST /lifecycle/bootstrap-complete` returns 200 and writes sentinel file — in `packages/control-plane/__tests__/routes/lifecycle.test.ts`
-- [ ] T004 [US2] Add test: idempotent — second call also returns 200, no error
-- [ ] T005 [P] [US1] Add test: `POST_ACTIVATION_TRIGGER` env var overrides default sentinel path
-- [ ] T006 [P] [US1] Add test: missing actor returns 401 UNAUTHORIZED
+- [X] T003 [US1] Add test: `POST /lifecycle/bootstrap-complete` returns 200 and writes sentinel file — in `packages/control-plane/__tests__/routes/lifecycle.test.ts`
+- [X] T004 [US2] Add test: idempotent — second call also returns 200, no error
+- [X] T005 [P] [US1] Add test: `POST_ACTIVATION_TRIGGER` env var overrides default sentinel path
+- [X] T006 [P] [US1] Add test: missing actor returns 401 UNAUTHORIZED
 
 ## Dependencies & Execution Order
 

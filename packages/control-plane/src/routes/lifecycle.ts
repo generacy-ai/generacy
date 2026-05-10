@@ -1,4 +1,5 @@
 import type http from 'node:http';
+import { writeFile } from 'node:fs/promises';
 import { type ActorContext, requireActor } from '../context.js';
 import { LifecycleActionSchema, ClonePeerReposBodySchema, SetDefaultRoleBodySchema } from '../schemas.js';
 import { ControlPlaneError } from '../errors.js';
@@ -88,6 +89,14 @@ export async function handlePostLifecycle(
     await clonePeerRepos({ repos: bodyResult.data.repos, token: bodyResult.data.token });
     res.writeHead(200);
     res.end(JSON.stringify({ accepted: true, action: parsed.data }));
+    return;
+  }
+
+  if (parsed.data === 'bootstrap-complete') {
+    const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
+    await writeFile(sentinel, '', { flag: 'w' });
+    res.writeHead(200);
+    res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
     return;
   }
 
