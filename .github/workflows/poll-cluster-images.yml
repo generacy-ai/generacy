@@ -1,0 +1,69 @@
+name: Poll Cluster Images
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+  actions: write
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: poll-cluster-${{ matrix.repo }}-${{ matrix.branch }}
+      cancel-in-progress: false
+    strategy:
+      matrix:
+        include:
+          - repo: cluster-base
+            branch: develop
+            image: cluster-base
+            workflow: publish-cluster-base-image.yml
+          - repo: cluster-base
+            branch: main
+            image: cluster-base
+            workflow: publish-cluster-base-image.yml
+          - repo: cluster-microservices
+            branch: develop
+            image: cluster-microservices
+            workflow: publish-cluster-microservices-image.yml
+          - repo: cluster-microservices
+            branch: main
+            image: cluster-microservices
+            workflow: publish-cluster-microservices-image.yml
+    steps:
+      - name: Get HEAD SHA
+        id: head
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FULL_SHA=$(gh api "/repos/generacy-ai/${{ matrix.repo }}/commits/${{ matrix.branch }}" --jq '.sha')
+          SHORT_SHA=$(echo "$FULL_SHA" | cut -c1-7)
+          echo "sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Check GHCR for existing tag
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG_EXISTS=$(gh api "/orgs/generacy-ai/packages/container/${{ matrix.image }}/versions" \
+            --jq "[.[].metadata.container.tags[] | select(. == \"sha-${{ steps.head.outputs.sha }}\")] | length")
+          if [ "$TAG_EXISTS" -gt 0 ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "sha-${{ steps.head.outputs.sha }} already published for ${{ matrix.repo }}/${{ matrix.branch }}"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "New commit sha-${{ steps.head.outputs.sha }} detected for ${{ matrix.repo }}/${{ matrix.branch }}"
+          fi
+
+      - name: Dispatch publish workflow
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run "${{ matrix.workflow }}" -f "ref=${{ matrix.branch }}"
+          echo "Dispatched ${{ matrix.workflow }} for ${{ matrix.branch }}"

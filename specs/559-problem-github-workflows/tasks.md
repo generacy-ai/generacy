@@ -10,17 +10,17 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Create `.github/workflows/poll-cluster-images.yml` with cron schedule (`*/5 * * * *`), `workflow_dispatch` (manual trigger), permissions (`contents: read`, `packages: read`, `actions: write`), and strategy matrix with 4 include entries: (cluster-base, develop), (cluster-base, main), (cluster-microservices, develop), (cluster-microservices, main). Each entry specifies `repo`, `branch`, `image`, and `workflow` fields.
+- [X] T001 [US1] Create `.github/workflows/poll-cluster-images.yml` with cron schedule (`*/5 * * * *`), `workflow_dispatch` (manual trigger), permissions (`contents: read`, `packages: read`, `actions: write`), and strategy matrix with 4 include entries: (cluster-base, develop), (cluster-base, main), (cluster-microservices, develop), (cluster-microservices, main). Each entry specifies `repo`, `branch`, `image`, and `workflow` fields.
 
-- [ ] T002 [US1] Implement the poll job steps: (1) query HEAD SHA via `gh api /repos/generacy-ai/${{ matrix.repo }}/commits/${{ matrix.branch }} --jq '.sha'` and truncate to 7 chars, (2) query GHCR tags via `gh api /orgs/generacy-ai/packages/container/${{ matrix.image }}/versions --jq` and check for `sha-<HEAD_SHA>` existence, (3) conditionally dispatch via `gh workflow run ${{ matrix.workflow }} -f ref=${{ matrix.branch }}` only when tag is missing.
+- [X] T002 [US1] Implement the poll job steps: (1) query HEAD SHA via `gh api /repos/generacy-ai/${{ matrix.repo }}/commits/${{ matrix.branch }} --jq '.sha'` and truncate to 7 chars, (2) query GHCR tags via `gh api /orgs/generacy-ai/packages/container/${{ matrix.image }}/versions --jq` and check for `sha-<HEAD_SHA>` existence, (3) conditionally dispatch via `gh workflow run ${{ matrix.workflow }} -f ref=${{ matrix.branch }}` only when tag is missing.
 
-- [ ] T003 [US1] Add per-matrix-entry concurrency keys: `group: poll-cluster-${{ matrix.repo }}-${{ matrix.branch }}`, `cancel-in-progress: false`.
+- [X] T003 [US1] Add per-matrix-entry concurrency keys: `group: poll-cluster-${{ matrix.repo }}-${{ matrix.branch }}`, `cancel-in-progress: false`.
 
 ## Phase 2: Verification
 
-- [ ] T004 [US1] Verify existing publish workflows (`publish-cluster-base-image.yml`, `publish-cluster-microservices-image.yml`) are unchanged — manual `workflow_dispatch` path preserved.
+- [X] T004 [US1] Verify existing publish workflows (`publish-cluster-base-image.yml`, `publish-cluster-microservices-image.yml`) are unchanged — manual `workflow_dispatch` path preserved.
 
-- [ ] T005 [US1] Dry-run validation: review the workflow YAML for correct `gh api` jq filters, 7-char SHA truncation matching existing `git rev-parse --short=7` convention, and proper `gh workflow run` invocation syntax.
+- [X] T005 [US1] Dry-run validation: review the workflow YAML for correct `gh api` jq filters, 7-char SHA truncation matching existing `git rev-parse --short=7` convention, and proper `gh workflow run` invocation syntax.
 
 ## Dependencies & Execution Order
 
