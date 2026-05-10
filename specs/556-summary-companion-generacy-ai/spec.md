@@ -1,6 +1,10 @@
-# Feature Specification: Launch scaffolder writes `GENERACY_BOOTSTRAP_MODE=wizard`
+# Feature Specification: ## Summary
+
+Companion to [generacy-ai/cluster-base#20](https://github
 
 **Branch**: `556-summary-companion-generacy-ai` | **Date**: 2026-05-10 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -19,7 +23,7 @@ This issue covers the launch CLI's writer side — the `wizard` value needs to l
 
 ## Scope
 
-Update `scaffoldEnvFile` in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` (called from `launch/scaffolder.ts:79-91`) to emit one additional line:
+Update [scaffoldEnvFile in packages/generacy/src/cli/commands/cluster/scaffolder.ts](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/cluster/scaffolder.ts) (function called from [launch/scaffolder.ts:79-91](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/launch/scaffolder.ts#L79-L91)) to emit one additional line:
 
 ```env
 # Bootstrap mode — see cluster-base entrypoint scripts
@@ -35,57 +39,7 @@ The launch CLI flow always uses wizard mode; no conditional needed.
 - **Sibling:** generacy-ai/generacy-cloud#528 — same env var written by the DigitalOcean cloud-deploy path.
 - **Coordination point:** the env var name. If cluster-base#20's plan phase settles on a different name (e.g. `GENERACY_LAUNCH_MODE`), this issue's implementation must match.
 
-## User Stories
-
-### US1: Launch-flow cluster defers repo cloning
-
-**As a** developer running `npx generacy launch`,
-**I want** the cluster to defer repo cloning until I've completed the bootstrap wizard and provided credentials,
-**So that** the entrypoint scripts don't fail trying to clone before credentials exist.
-
-**Acceptance Criteria**:
-- [ ] The scaffolded `.generacy/.env` file contains `GENERACY_BOOTSTRAP_MODE=wizard`
-- [ ] The env var is always emitted for launch-flow clusters (no conditional)
-- [ ] Existing `.env` content (API URL, relay URL, cluster identity vars) is unaffected
-
-### US2: Deploy-flow cluster also defers repo cloning
-
-**As a** team lead running `generacy deploy ssh://...`,
-**I want** the deploy scaffolder to also emit `GENERACY_BOOTSTRAP_MODE=wizard`,
-**So that** remote-deployed clusters behave identically to local launch clusters.
-
-**Acceptance Criteria**:
-- [ ] Deploy flow calls the same `scaffoldEnvFile` and inherits the new line
-- [ ] No deploy-specific changes needed (shared scaffolder covers both)
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | `scaffoldEnvFile()` emits `GENERACY_BOOTSTRAP_MODE=wizard` in output | P1 | Append after existing env vars |
-| FR-002 | Line includes explanatory comments matching cluster-base convention | P2 | Two comment lines before the var |
-| FR-003 | No conditional logic — always emit for all callers of `scaffoldEnvFile` | P1 | Both launch and deploy use wizard mode |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Env var present in scaffolded `.env` | 100% of launch/deploy runs | `grep GENERACY_BOOTSTRAP_MODE` on output file |
-| SC-002 | Existing snapshot tests updated | All pass | `pnpm test` in generacy package |
-| SC-003 | No regressions in existing `.env` content | Zero diff outside new lines | Compare before/after scaffold output |
-
-## Assumptions
-
-- The env var name `GENERACY_BOOTSTRAP_MODE` is finalized in cluster-base#20. If renamed, this implementation must be updated to match.
-- `scaffoldEnvFile` is the single point of `.env` generation for both launch and deploy flows.
-
-## Out of Scope
-
-- Reading/acting on `GENERACY_BOOTSTRAP_MODE` (that's cluster-base#20)
-- Cloud-deploy writer (that's generacy-cloud#528)
-- Adding `GENERACY_BOOTSTRAP_MODE` support to `devcontainer.json` or VS Code flows
-
-## Test Plan
+## Test plan
 
 - [ ] Update `scaffoldEnvFile` to emit the new line
 - [ ] Update existing `.env` snapshot tests to include the new line
@@ -95,6 +49,39 @@ The launch CLI flow always uses wizard mode; no conditional needed.
 
 - generacy-ai/cluster-base#20 — umbrella for the bootstrap mode work; this is the launch-CLI writer side
 - generacy-ai/generacy-cloud#528 — companion DigitalOcean cloud-deploy writer
+- generacy-ai/generacy-cloud#528 — investigation issue for the wizard→cluster credential-delivery path
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
+## Assumptions
+
+- [Assumption 1]
+
+## Out of Scope
+
+- [Exclusion 1]
 
 ---
 
