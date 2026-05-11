@@ -666,11 +666,15 @@ describe('ClusterRelay', () => {
     expect(routes[1].prefix).toBe('/short');
   });
 
-  it('defaults routes to empty array via ClusterRelayClientOptions', () => {
+  it('ClusterRelayClientOptions without routes defaults to empty array', () => {
     relay = new ClusterRelay(
-      { apiKey: 'test-key', cloudUrl: `ws://localhost:${port}` },
+      {
+        apiKey: 'test-key',
+        cloudUrl: `ws://localhost:${port}`,
+      },
       silentLogger,
     );
+
     expect(relay['config'].routes).toEqual([]);
   });
 

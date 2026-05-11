@@ -60,6 +60,15 @@ export interface ClusterRelayClient {
 }
 
 /**
+ * Path-prefix route entry for dispatching relay-proxied requests to a
+ * unix-socket or HTTP target.
+ */
+export interface RouteEntry {
+  prefix: string;
+  target: string;
+}
+
+/**
  * Options for creating a ClusterRelayClient instance.
  */
 export interface ClusterRelayClientOptions {
@@ -77,6 +86,9 @@ export interface ClusterRelayClientOptions {
 
   /** API key for authenticating relay-proxied requests to the orchestrator */
   orchestratorApiKey?: string;
+
+  /** Path-prefix routes for dispatching relay-proxied requests to unix sockets or HTTP targets */
+  routes?: RouteEntry[];
 }
 
 // =============================================================================

@@ -30,7 +30,7 @@ export interface ClusterRelayClientOptions {
   orchestratorUrl?: string;
   /** API key for authenticating relay-proxied requests to the orchestrator */
   orchestratorApiKey?: string;
-  /** Prefix-based routes for dispatching relay requests to in-cluster services */
+  /** Path-prefix routes for dispatching API requests to unix sockets or HTTP targets */
   routes?: RouteEntry[];
 }
 
