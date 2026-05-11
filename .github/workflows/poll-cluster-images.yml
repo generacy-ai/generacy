@@ -17,6 +17,7 @@ jobs:
       group: poll-cluster-${{ matrix.repo }}-${{ matrix.branch }}
       cancel-in-progress: false
     strategy:
+      fail-fast: false
       matrix:
         include:
           - repo: cluster-base
@@ -65,5 +66,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh workflow run "${{ matrix.workflow }}" -f "ref=${{ matrix.branch }}"
+          # gh workflow run defaults to detecting the repo via `git`, but this
+          # workflow has no actions/checkout step (polling doesn't need source).
+          # Pass --repo explicitly to bypass git detection.
+          gh workflow run "${{ matrix.workflow }}" \
+            --repo "${{ github.repository }}" \
+            -f "ref=${{ matrix.branch }}"
           echo "Dispatched ${{ matrix.workflow }} for ${{ matrix.branch }}"
