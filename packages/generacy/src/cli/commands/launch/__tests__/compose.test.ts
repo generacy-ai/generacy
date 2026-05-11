@@ -134,6 +134,28 @@ describe('streamLogsUntilActivation', () => {
     expect(result.userCode).toBe('ABCD-1234');
   });
 
+  it('does not include trailing JSON-escaped newline in extracted URL', async () => {
+    // The orchestrator's pino logger emits its activation message as JSON
+    // where embedded newlines are encoded as literal \n (backslash-n).
+    // The regex must NOT capture the trailing two-character escape sequence.
+    const mockChild = createMockChildProcess();
+    mockedSpawn.mockReturnValue(mockChild);
+
+    const promise = streamLogsUntilActivation('/project', 5000);
+
+    mockChild.stdout.emit(
+      'data',
+      Buffer.from(
+        // Realistic JSON log line as docker compose logs would surface it:
+        '{"level":30,"msg":"  Go to: https://staging.generacy.ai/cluster-activate\\n  Enter code: ABCD-1234\\n"}\n',
+      ),
+    );
+
+    const result = await promise;
+    expect(result.verificationUri).toBe('https://staging.generacy.ai/cluster-activate');
+    expect(result.userCode).toBe('ABCD-1234');
+  });
+
   it('resolves when both patterns are matched', async () => {
     const mockChild = createMockChildProcess();
     mockedSpawn.mockReturnValue(mockChild);
