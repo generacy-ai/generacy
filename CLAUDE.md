@@ -67,6 +67,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `src/config.ts` — `RelayConfig` loaded from env vars + overrides. v1.5 #489 adds `routes: RouteEntry[]`, `activationCode?`, `clusterApiKeyId?`.
   - `src/relay.ts` — `ClusterRelay` class: WebSocket lifecycle, state machine (disconnected→connecting→authenticating→connected), auto-reconnect with exponential backoff, heartbeat, message dispatch. v1.5 #489 adds `activation` field to handshake.
   - `src/dispatcher.ts` — NEW in #489: pure-function path-prefix dispatcher. `sortRoutes()`, `resolveRoute()`, Unix socket detection.
+  - `ClusterRelayClientOptions` (#574): Added `routes?: RouteEntry[]` field. Threaded into `RelayConfigSchema.parse()` in constructor's options branch. Allows orchestrator to configure path-prefix routing without constructing raw `RelayConfig`. Defaults to `[]` (non-breaking).
 
 ## Orchestrator Activation
 
@@ -78,6 +79,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Cloud URL precedence: `GENERACY_CLOUD_URL` env > derived from relay WSS URL > `https://api.generacy.ai`.
   - Retry budget: 5 retries, exponential backoff (2s-32s, ~62s total) for initial cloud requests.
   - Integration: `server.ts` calls `activate()` before relay construction; sets `config.relay.apiKey` and `config.relay.clusterApiKeyId` from result. #517 fix: also overrides `config.activation.cloudUrl` and `config.relay.cloudUrl` (derived WSS: `https://X` → `wss://X/relay`) from `activationResult.cloudUrl` when present. #567 fix: in wizard mode (no existing API key), activation runs as a background promise so `server.listen()` is not blocked. Relay bridge and conversation manager initialization extracted into `initializeRelayBridge()` and `initializeConversationManager()` helper functions, called asynchronously after activation succeeds. `/health` endpoint responds immediately regardless of activation state.
+  - #574 fix: `initializeRelayBridge()` now passes `routes: [{ prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' }]` to `ClusterRelayClientOptions`. This routes cloud-sent `/control-plane/*` API requests to the control-plane unix socket instead of falling back to the orchestrator (which returned 404). Prefix is stripped by the dispatcher, so `/control-plane/credentials/:id` becomes `/credentials/:id` on the socket.
 
 ## CLI Package (generacy)
 

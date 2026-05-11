@@ -6,6 +6,7 @@ import { parseRelayMessage } from './messages.js';
 import { collectMetadata } from './metadata.js';
 import { handleApiRequest } from './proxy.js';
 import { sortRoutes } from './dispatcher.js';
+import type { RouteEntry } from './config.js';
 
 export type RelayState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'disconnecting';
 
@@ -30,6 +31,8 @@ export interface ClusterRelayClientOptions {
   orchestratorUrl?: string;
   /** API key for authenticating relay-proxied requests to the orchestrator */
   orchestratorApiKey?: string;
+  /** Path-prefix routes for dispatching API requests to unix sockets or HTTP targets */
+  routes?: RouteEntry[];
 }
 
 type EventMap = {
@@ -86,6 +89,7 @@ export class ClusterRelay {
         baseReconnectDelayMs: opts.baseReconnectDelayMs,
         orchestratorUrl: opts.orchestratorUrl,
         orchestratorApiKey: opts.orchestratorApiKey,
+        routes: opts.routes,
       });
     }
     this.logger = logger ?? defaultLogger;
