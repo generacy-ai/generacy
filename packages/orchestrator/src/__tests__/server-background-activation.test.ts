@@ -124,9 +124,14 @@ describe('T007: Relay bridge initializes after background activation succeeds', 
       expect(config.relay.apiKey).toBe('test-api-key');
     }, { timeout: 5000 });
 
-    // Config should be updated
+    // Config should be updated. The relay URL must include ?projectId=<id> —
+    // the relay-server's auth middleware (generacy-cloud relay-auth.ts) rejects
+    // connections without it as 401 "projectId query parameter required",
+    // leaving the cluster permanently offline.
     expect(config.relay.clusterApiKeyId).toBe('test-key-id');
-    expect(config.relay.cloudUrl).toBe('wss://test.example.com/relay');
+    expect(config.relay.cloudUrl).toBe(
+      'wss://test.example.com/relay?projectId=test-project',
+    );
   }, 15_000);
 });
 
