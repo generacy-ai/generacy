@@ -647,6 +647,33 @@ describe('ClusterRelay', () => {
     ]);
   });
 
+  it('accepts routes via ClusterRelayClientOptions and sorts them', () => {
+    relay = new ClusterRelay(
+      {
+        apiKey: 'test-key',
+        cloudUrl: `ws://localhost:${port}`,
+        routes: [
+          { prefix: '/short', target: 'unix:///tmp/short.sock' },
+          { prefix: '/longer/path', target: 'unix:///tmp/long.sock' },
+        ],
+      },
+      silentLogger,
+    );
+
+    const routes = relay['config'].routes;
+    expect(routes).toHaveLength(2);
+    expect(routes[0].prefix).toBe('/longer/path');
+    expect(routes[1].prefix).toBe('/short');
+  });
+
+  it('defaults routes to empty array via ClusterRelayClientOptions', () => {
+    relay = new ClusterRelay(
+      { apiKey: 'test-key', cloudUrl: `ws://localhost:${port}` },
+      silentLogger,
+    );
+    expect(relay['config'].routes).toEqual([]);
+  });
+
   it('ignores invalid relay messages from the server', async () => {
     const warnLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 

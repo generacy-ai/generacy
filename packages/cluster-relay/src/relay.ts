@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import type { RelayConfig } from './config.js';
+import type { RelayConfig, RouteEntry } from './config.js';
 import { RelayConfigSchema } from './config.js';
 import type { RelayMessage, ClusterMetadata, Activation } from './messages.js';
 import { parseRelayMessage } from './messages.js';
@@ -30,6 +30,8 @@ export interface ClusterRelayClientOptions {
   orchestratorUrl?: string;
   /** API key for authenticating relay-proxied requests to the orchestrator */
   orchestratorApiKey?: string;
+  /** Prefix-based routes for dispatching relay requests to in-cluster services */
+  routes?: RouteEntry[];
 }
 
 type EventMap = {
@@ -80,13 +82,15 @@ export class ClusterRelay {
       } as RelayConfig;
     } else {
       const opts = config as ClusterRelayClientOptions;
-      this.config = RelayConfigSchema.parse({
+      const parsed = RelayConfigSchema.parse({
         apiKey: opts.apiKey,
         relayUrl: opts.cloudUrl,
         baseReconnectDelayMs: opts.baseReconnectDelayMs,
         orchestratorUrl: opts.orchestratorUrl,
         orchestratorApiKey: opts.orchestratorApiKey,
+        routes: opts.routes,
       });
+      this.config = { ...parsed, routes: sortRoutes(parsed.routes) };
     }
     this.logger = logger ?? defaultLogger;
   }
