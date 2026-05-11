@@ -637,6 +637,12 @@ async function initializeRelayBridge(
       cloudUrl: config.relay.cloudUrl,
       orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
       orchestratorApiKey: relayInternalKey,
+      routes: [
+        {
+          prefix: '/control-plane',
+          target: `unix://${controlPlaneSocket}`,
+        },
+      ],
     });
     relayBridge = new RelayBridge({
       client: relayClient,

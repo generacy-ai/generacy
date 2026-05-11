@@ -647,6 +647,36 @@ describe('ClusterRelay', () => {
     ]);
   });
 
+  it('routes passed via ClusterRelayClientOptions appear in parsed config', () => {
+    relay = new ClusterRelay(
+      {
+        apiKey: 'test-key',
+        cloudUrl: `ws://localhost:${port}`,
+        routes: [
+          { prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' },
+        ],
+      },
+      silentLogger,
+    );
+
+    const routes = relay['config'].routes;
+    expect(routes).toEqual([
+      { prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' },
+    ]);
+  });
+
+  it('ClusterRelayClientOptions without routes defaults to empty array', () => {
+    relay = new ClusterRelay(
+      {
+        apiKey: 'test-key',
+        cloudUrl: `ws://localhost:${port}`,
+      },
+      silentLogger,
+    );
+
+    expect(relay['config'].routes).toEqual([]);
+  });
+
   it('ignores invalid relay messages from the server', async () => {
     const warnLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 

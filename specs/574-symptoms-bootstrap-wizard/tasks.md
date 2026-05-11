@@ -10,17 +10,17 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [P] [US2] Add `routes?: RouteEntry[]` to `ClusterRelayClientOptions` in `packages/cluster-relay/src/relay.ts` and thread it into the `RelayConfigSchema.parse()` call in the constructor's options branch
-- [ ] T002 [P] [US2] Add unit test in `packages/cluster-relay/src/__tests__/relay.test.ts` verifying that `routes` passed via `ClusterRelayClientOptions` appear in the parsed `config.routes`
+- [X] T001 [P] [US2] Add `routes?: RouteEntry[]` to `ClusterRelayClientOptions` in `packages/cluster-relay/src/relay.ts` and thread it into the `RelayConfigSchema.parse()` call in the constructor's options branch
+- [X] T002 [P] [US2] Add unit test in `packages/cluster-relay/src/__tests__/relay.test.ts` verifying that `routes` passed via `ClusterRelayClientOptions` appear in the parsed `config.routes`
 
 ## Phase 2: Orchestrator Wiring
 
-- [ ] T003 [US1] Pass `/control-plane` route to relay client in `initializeRelayBridge` in `packages/orchestrator/src/server.ts` — add `routes: [{ prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' }]` to the relay client constructor call
-- [ ] T004 [US1] Add unit test in `packages/orchestrator/src/__tests__/server.test.ts` asserting `initializeRelayBridge` passes a route with `prefix: '/control-plane'` and `target: 'unix:///run/generacy-control-plane/control.sock'`
+- [X] T003 [US1] Pass `/control-plane` route to relay client in `initializeRelayBridge` in `packages/orchestrator/src/server.ts` — add `routes: [{ prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' }]` to the relay client constructor call
+- [X] T004 [US1] Add unit test in `packages/orchestrator/src/__tests__/server.test.ts` asserting `initializeRelayBridge` passes a route with `prefix: '/control-plane'` and `target: 'unix:///run/generacy-control-plane/control.sock'`
 
 ## Phase 3: Validation
 
-- [ ] T005 Run existing test suites for both `packages/cluster-relay` and `packages/orchestrator` to confirm no regressions
+- [X] T005 Run existing test suites for both `packages/cluster-relay` and `packages/orchestrator` to confirm no regressions
 
 ## Dependencies & Execution Order
 
