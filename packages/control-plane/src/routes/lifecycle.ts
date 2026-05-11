@@ -1,11 +1,10 @@
 import type http from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { type ActorContext, requireActor } from '../context.js';
-import { LifecycleActionSchema, ClonePeerReposBodySchema, SetDefaultRoleBodySchema } from '../schemas.js';
+import { LifecycleActionSchema, ClonePeerReposBodySchema } from '../schemas.js';
 import { ControlPlaneError } from '../errors.js';
 import { getCodeServerManager } from '../services/code-server-manager.js';
 import { readBody } from '../util/read-body.js';
-import { setDefaultRole } from '../services/default-role-writer.js';
 import { clonePeerRepos } from '../services/peer-repo-cloner.js';
 
 export async function handlePostLifecycle(
@@ -43,28 +42,6 @@ export async function handlePostLifecycle(
   if (parsed.data === 'code-server-stop') {
     const manager = getCodeServerManager();
     await manager.stop();
-    res.writeHead(200);
-    res.end(JSON.stringify({ accepted: true, action: parsed.data }));
-    return;
-  }
-
-  if (parsed.data === 'set-default-role') {
-    const raw = await readBody(req);
-    let body: unknown;
-    try {
-      body = JSON.parse(raw);
-    } catch {
-      throw new ControlPlaneError('INVALID_REQUEST', 'Invalid JSON body');
-    }
-
-    const bodyResult = SetDefaultRoleBodySchema.safeParse(body);
-    if (!bodyResult.success) {
-      throw new ControlPlaneError('INVALID_REQUEST', 'Invalid set-default-role body', {
-        errors: bodyResult.error.issues.map((i) => i.message),
-      });
-    }
-
-    await setDefaultRole({ role: bodyResult.data.role });
     res.writeHead(200);
     res.end(JSON.stringify({ accepted: true, action: parsed.data }));
     return;
