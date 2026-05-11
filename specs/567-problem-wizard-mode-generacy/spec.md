@@ -1,89 +1,127 @@
-# Feature Specification: Background Activation in Wizard Mode
+# Feature Specification: ## Problem
 
-Orchestrator blocks HTTP server startup on cluster activation polling, causing healthcheck timeout and cascading container failures in wizard mode.
+In wizard mode (`GENERACY_BOOTSTRAP_MODE=wizard`), the orchestrator's HTTP server never starts listening on port 3100
 
 **Branch**: `567-problem-wizard-mode-generacy` | **Date**: 2026-05-11 | **Status**: Draft
 
 ## Summary
 
-In wizard mode (`GENERACY_BOOTSTRAP_MODE=wizard`), `createServer()` in `packages/orchestrator/src/server.ts` awaits `activate()` before calling `server.listen()`. The `activate()` function polls for up to 10 minutes waiting for the user to complete device-code approval in-browser. During this wait, port 3100 is never bound, so the Docker healthcheck (`curl -f http://localhost:3100/health`) fails, the worker container never starts (due to `service_healthy` dependency), and the launch CLI throws `Failed to start cluster`. The user can never reach the browser activation step because the CLI fails first — a circular dependency.
+## Problem
 
-This was previously masked by a schema parse error in the cloud's `pending` discriminator (fixed in generacy-cloud#534), which caused `pollForApproval` to fail immediately and skip activation. Now that polling works correctly, the blocking await is exposed.
+In wizard mode (`GENERACY_BOOTSTRAP_MODE=wizard`), the orchestrator's HTTP server never starts listening on port 3100. The `createServer()` function at [packages/orchestrator/src/server.ts:307-332](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/server.ts#L307-L332) **awaits** `activate()` — which now correctly waits for user device-code approval via the polling loop in [activation/index.ts:68](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/activation/index.ts#L68). That polling loop runs for up to 10 minutes (the device code's TTL) waiting for approval.
 
-**Recommended fix**: Background the activation call so the HTTP server starts immediately. Extract relay-bridge initialization into a function that runs after activation completes asynchronously (Approach A from the issue).
+While `activate()` is awaited, the rest of `createServer()` doesn't run — including the eventual `server.listen()` call in `startServer()` ([line 628](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/server.ts#L628)). Result: container is up, the node process is alive, but nothing is bound to port 3100.
+
+Cascading consequences:
+- Compose healthcheck (`curl -f http://localhost:3100/health`) fails with `Failed to connect to localhost port 3100`.
+- Worker container's `depends_on: { orchestrator: { condition: service_healthy } }` (in the launch scaffolder's emitted compose) never satisfies.
+- `docker compose up -d` reports `dependency failed to start: container ...orchestrator-1 is unhealthy`.
+- Launch CLI's `startCluster()` throws → `Failed to start cluster`.
+- User can't even reach the activation step in their browser, so the orchestrator's wait never gets resolved.
+
+## Why this didn't happen before
+
+This bug was **masked** by the `pending` vs `authorization_pending` discriminator mismatch fixed in [generacy-cloud#534](https://github.com/generacy-ai/generacy-cloud/pull/534). With that bug, `pollForApproval` failed immediately on schema parse error, the orchestrator caught the exception (line 326-330), logged "Cluster activation skipped", and proceeded to start the HTTP server. Healthcheck passed, worker started, launch CLI succeeded. Activation was effectively no-op'd.
+
+Now that polling works correctly, the orchestrator actually waits — exposing this circular dependency.
+
+## Verified via direct inspection
+
+```
+$ docker exec todo-list-example18-orchestrator-1 ps -ef
+node     1  0  node /shared-packages/node_modules/.bin/generacy orchestrator --port 3100 ...
+node   515  1  bash /usr/local/bin/post-activation-watcher.sh
+$ docker exec todo-list-example18-orchestrator-1 ss -ltnp
+LISTEN  127.0.0.11:40985  0.0.0.0:*  (Docker DNS only — nothing on 3100)
+$ docker inspect ... --format '{{json .State.Health}}'
+"Output": "curl: (7) Failed to connect to localhost port 3100 after 0 ms: Couldn't connect to server"
+```
+
+## Proposed fix
+
+Background the activation. The HTTP server should start listening immediately so the healthcheck and worker can come up, and activation runs concurrently. When activation completes, the relay bridge initializes (currently happens synchronously after activation, line 334+).
+
+Cleanest sketch:
+
+```typescript
+// In createServer, replace the awaited activation block (line 307-332) with:
+let activationPromise: Promise<void> | null = null;
+if (!isWorkerMode && !config.relay.apiKey) {
+  activationPromise = activate({...})
+    .then((result) => {
+      config.relay.apiKey = result.apiKey;
+      config.relay.clusterApiKeyId = result.clusterApiKeyId;
+      // ... rest of the existing post-activation config wiring ...
+      return initializeRelayBridge(server, config, ...);  // extracted from server.ts:334+
+    })
+    .catch((error) => {
+      server.log.warn(`Cluster activation skipped: ${error}`);
+    });
+}
+
+// Continue with rest of setup that doesn't depend on activation
+// ...
+// server.listen runs in startServer, not blocked by activation
+```
+
+This requires extracting the relay-bridge init block (lines 334 to roughly 390) into a function that takes the server + apiKey + config and wires up the relay/lease/tunnel/conversation manager. The inline state (`relayBridge`, `statusReporter` wiring, `conversationManager.setRelayBridge`) needs to be threaded through.
+
+## Alternative shapes worth considering during clarify
+
+- **A — Background activation, refactor relay-bridge init into a function** (described above). Cleanest separation; ~50-line extraction.
+- **B — Move activation entirely outside `createServer()`.** Caller (CLI) decides whether to await activation before or after `startServer()`. More invasive contract change but conceptually cleanest.
+- **C — Drop worker's `service_healthy` dependency, change to `service_started`.** Compose stops blocking on the orchestrator becoming healthy. Worker has to handle connection retries against an orchestrator that may not be up yet. But: the orchestrator IS up (process running), it just isn't listening. Worker would still hit connection-refused and need retry logic. Probably already does, but worth verifying. Less invasive but moves the problem rather than fixing it.
+- **D — Dedicated lightweight healthcheck listener that comes up immediately.** A tiny socket listener on a different port, just for the healthcheck. Completely decouples healthcheck from orchestrator startup. Heavyweight infra for a startup-ordering concern.
+
+Recommend **A**. The refactor is bounded, the state extraction is mechanical, and the architectural model ("HTTP server starts immediately, activation runs in background, relay/lease/conversation manager wire up when activation completes") matches what users expect.
+
+## Test plan
+
+- [ ] After fix: orchestrator container's `/health` responds within ~10s of container start (not 10+ minutes)
+- [ ] `docker compose up -d` succeeds even when activation hasn't completed
+- [ ] Worker container starts and operates correctly even if orchestrator is in pre-activation state (background polling)
+- [ ] After user completes activation in browser, relay bridge initializes and cluster starts processing workflows
+- [ ] If activation is interrupted/expired, orchestrator continues running (current `catch` block behavior preserved)
+- [ ] Existing test: `Cluster activation skipped` log line still appears on activation failure
+
+## Related
+
+- generacy-ai/generacy-cloud#534 — the PR that exposed this bug by fixing the `pending` discriminator. (Not regressing #534 — this is a deeper bug it surfaced.)
+- generacy-ai/generacy#566 — earlier fix that made orchestrator boot in wizard mode at all (label monitor graceful degrade)
+- generacy-ai/cluster-base#21 — bootstrap mode env var (the wizard-mode path that exposes this orchestration ordering)
+- v1.5 onboarding doc Flow B/C — describes the wizard appearing in the browser shortly after launch; with this bug, the launch CLI never reaches the activation step
 
 ## User Stories
 
-### US1: First-time cluster launch in wizard mode
+### US1: [Primary User Story]
 
-**As a** developer running `npx generacy launch` for the first time,
-**I want** the orchestrator container to become healthy immediately after starting,
-**So that** the worker container can start, the CLI succeeds, and I can complete the device-code activation flow in my browser.
-
-**Acceptance Criteria**:
-- [ ] Orchestrator's `/health` endpoint responds within ~10s of container start, regardless of activation state
-- [ ] `docker compose up -d` succeeds without waiting for activation to complete
-- [ ] Worker container starts even while orchestrator is in pre-activation (polling) state
-
-### US2: Activation completes after server is already running
-
-**As a** developer who has just approved the device code in the browser,
-**I want** the relay bridge and conversation manager to initialize automatically,
-**So that** the cluster begins processing workflows without requiring a container restart.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] After user completes activation in browser, relay bridge connects and cluster becomes fully operational
-- [ ] No manual intervention or container restart required after activation approval
-
-### US3: Activation failure does not crash the orchestrator
-
-**As a** developer whose activation attempt expires or fails,
-**I want** the orchestrator to continue running and serving HTTP requests,
-**So that** I can retry activation or debug the issue without losing the running container.
-
-**Acceptance Criteria**:
-- [ ] If activation times out or errors, orchestrator logs a warning and continues running
-- [ ] `Cluster activation skipped` log line still appears on activation failure (backward-compatible behavior)
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `activate()` must not block `server.listen()` — run activation as a background promise | P0 | Core fix |
-| FR-002 | Extract relay-bridge init (server.ts ~L334-390) into a callable function `initializeRelayBridge()` | P1 | Required by FR-001 to wire relay after async activation |
-| FR-003 | On activation success, call `initializeRelayBridge()` to set up relay, lease manager, tunnel handler, conversation manager | P1 | Current inline code moved into the extracted function |
-| FR-004 | On activation failure, log warning and continue — do not crash or block the server | P1 | Preserves existing catch-block behavior |
-| FR-005 | `/health` endpoint must respond successfully even when activation is pending | P1 | Decouples healthcheck from activation state |
-| FR-006 | Unhandled promise rejection from background activation must be caught (no process crash) | P1 | `.catch()` on the background promise |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Healthcheck response time after container start | < 15 seconds | `time curl http://localhost:3100/health` after `docker compose up` |
-| SC-002 | `docker compose up -d` exit code in wizard mode | 0 (success) | Run launch flow end-to-end with wizard mode |
-| SC-003 | Relay bridge operational after activation approval | Connected within 30s of approval | Check relay logs for connection established |
-| SC-004 | Zero `ECONNREFUSED` errors from worker on startup | 0 errors | Worker container logs during startup |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The orchestrator's HTTP routes (health, lifecycle, etc.) do not require activation to have completed — they can serve responses in a pre-activation state
-- The relay bridge, conversation manager, and status reporter are the only components that depend on activation results (apiKey, clusterApiKeyId)
-- Worker container already has retry logic for connecting to the orchestrator (so even if there's a brief window, it recovers)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Changing the compose healthcheck strategy (e.g., switching to `service_started`) — the fix should make `service_healthy` work correctly
-- Adding a separate healthcheck listener on a different port (Approach D — over-engineered)
-- Moving activation outside `createServer()` entirely (Approach B — more invasive, deferred)
-- Post-activation credential cache reload (separate issue)
-
-## Related
-
-- generacy-ai/generacy-cloud#534 — the PR that exposed this bug by fixing the `pending` discriminator
-- generacy-ai/generacy#566 — earlier fix for label monitor in wizard mode
-- generacy-ai/cluster-base#21 — bootstrap mode env var
-- v1.5 onboarding doc Flow B/C — wizard appearing in browser shortly after launch
+- [Exclusion 1]
 
 ---
 
