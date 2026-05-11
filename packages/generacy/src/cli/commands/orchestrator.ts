@@ -120,13 +120,18 @@ export function orchestratorCommand(): Command {
         config.labelMonitor = true;
       }
 
-      // Validate label monitor requirements
+      // Label monitor needs at least one repo to monitor. If it's enabled but
+      // no repos are configured (e.g. wizard-mode bootstrap where the workspace
+      // hasn't been cloned yet), warn and disable rather than exit — the server
+      // itself only initializes the label monitor when both labelMonitor and
+      // repositories.length > 0 are truthy (see server.ts), so a CLI exit here
+      // is stricter than what the runtime requires.
       if (config.labelMonitor && config.repositories.length === 0) {
-        console.error(
-          'Label monitor enabled but no valid repositories configured. ' +
-          'Set MONITORED_REPOS env var or use --monitored-repos flag.',
+        console.warn(
+          'Label monitor requested but no repositories configured — disabling. ' +
+          'Set MONITORED_REPOS env var or use --monitored-repos flag, then restart.',
         );
-        process.exit(1);
+        config.labelMonitor = false;
       }
 
       // Setup auth with CLI token
