@@ -647,22 +647,23 @@ describe('ClusterRelay', () => {
     ]);
   });
 
-  it('routes passed via ClusterRelayClientOptions appear in parsed config', () => {
+  it('accepts routes via ClusterRelayClientOptions and sorts them', () => {
     relay = new ClusterRelay(
       {
         apiKey: 'test-key',
         cloudUrl: `ws://localhost:${port}`,
         routes: [
-          { prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' },
+          { prefix: '/short', target: 'unix:///tmp/short.sock' },
+          { prefix: '/longer/path', target: 'unix:///tmp/long.sock' },
         ],
       },
       silentLogger,
     );
 
     const routes = relay['config'].routes;
-    expect(routes).toEqual([
-      { prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' },
-    ]);
+    expect(routes).toHaveLength(2);
+    expect(routes[0].prefix).toBe('/longer/path');
+    expect(routes[1].prefix).toBe('/short');
   });
 
   it('ClusterRelayClientOptions without routes defaults to empty array', () => {

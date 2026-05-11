@@ -1,12 +1,11 @@
 import WebSocket from 'ws';
-import type { RelayConfig } from './config.js';
+import type { RelayConfig, RouteEntry } from './config.js';
 import { RelayConfigSchema } from './config.js';
 import type { RelayMessage, ClusterMetadata, Activation } from './messages.js';
 import { parseRelayMessage } from './messages.js';
 import { collectMetadata } from './metadata.js';
 import { handleApiRequest } from './proxy.js';
 import { sortRoutes } from './dispatcher.js';
-import type { RouteEntry } from './config.js';
 
 export type RelayState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'disconnecting';
 
@@ -83,7 +82,7 @@ export class ClusterRelay {
       } as RelayConfig;
     } else {
       const opts = config as ClusterRelayClientOptions;
-      this.config = RelayConfigSchema.parse({
+      const parsed = RelayConfigSchema.parse({
         apiKey: opts.apiKey,
         relayUrl: opts.cloudUrl,
         baseReconnectDelayMs: opts.baseReconnectDelayMs,
@@ -91,6 +90,7 @@ export class ClusterRelay {
         orchestratorApiKey: opts.orchestratorApiKey,
         routes: opts.routes,
       });
+      this.config = { ...parsed, routes: sortRoutes(parsed.routes) };
     }
     this.logger = logger ?? defaultLogger;
   }
