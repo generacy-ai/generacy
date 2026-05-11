@@ -300,6 +300,20 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.volumes).toHaveProperty('redis-data');
   });
 
+  it('mounts shared-packages at /shared-packages (cluster-base entrypoint contract)', () => {
+    // The cluster-base entrypoint scripts (`entrypoint-orchestrator.sh`,
+    // `entrypoint-worker.sh`) run `npm install --prefix /shared-packages`
+    // and resolve `/shared-packages/node_modules/.bin/generacy`. The volume
+    // MUST mount at that exact path on both services — mounting it elsewhere
+    // means orchestrator and worker each install/resolve against their own
+    // empty overlay filesystem, and the worker exits with MODULE_NOT_FOUND.
+    scaffoldDockerCompose(dir, baseInput);
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    expect(parsed.services.orchestrator.volumes).toContain('shared-packages:/shared-packages');
+    expect(parsed.services.worker.volumes).toContain('shared-packages:/shared-packages');
+  });
+
   it('sanitizes project name', () => {
     scaffoldDockerCompose(dir, { ...baseInput, projectName: 'My Awesome Project!' });
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));

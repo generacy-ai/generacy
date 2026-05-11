@@ -133,11 +133,21 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       ? ['${ORCHESTRATOR_PORT:-3100}:3100']
       : ['${ORCHESTRATOR_PORT:-3100}'];
 
-  // Shared volumes for orchestrator and worker
+  // Shared volumes for orchestrator and worker.
+  //
+  // shared-packages MUST mount at /shared-packages — that's where the
+  // cluster-base entrypoint scripts (`entrypoint-orchestrator.sh`) run
+  // `npm install --prefix /shared-packages`, and the worker's entrypoint
+  // resolves `/shared-packages/node_modules/.bin/generacy` to spawn the
+  // worker process. Mounting it anywhere else means the orchestrator's
+  // install writes to its own overlay filesystem (not the volume), the
+  // worker's resolve looks at its own overlay (empty), and the worker
+  // exits with "Cannot find module '/shared-packages/node_modules/.bin/generacy'".
+  // Matches the canonical cluster-base devcontainer compose.
   const sharedVolumes = [
     'workspace:/workspaces',
     claudeConfigVolume,
-    'shared-packages:/home/node/.local/share/generacy/packages',
+    'shared-packages:/shared-packages',
     'npm-cache:/home/node/.npm',
     'generacy-data:/var/lib/generacy',
   ];
