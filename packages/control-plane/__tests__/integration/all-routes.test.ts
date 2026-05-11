@@ -138,14 +138,11 @@ describe('integration: all routes', () => {
   });
 
   // GET /roles/:id
-  it('GET /roles/:id returns stub role', async () => {
+  it('GET /roles/:id returns 404 for nonexistent role', async () => {
     const res = await request('GET', '/roles/my-role');
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
     const body = res.body as Record<string, unknown>;
-    expect(body).toHaveProperty('id', 'my-role');
-    expect(body).toHaveProperty('description');
-    expect(body).toHaveProperty('credentials');
-    expect(Array.isArray(body['credentials'])).toBe(true);
+    expect(body).toHaveProperty('code', 'NOT_FOUND');
   });
 
   // PUT /roles/:id

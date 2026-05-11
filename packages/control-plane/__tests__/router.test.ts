@@ -113,17 +113,15 @@ describe('dispatch', () => {
     expect(body).toEqual({ ok: true });
   });
 
-  it('GET /roles/abc dispatches to role GET handler and returns 200', async () => {
+  it('GET /roles/abc dispatches to role GET handler and returns 404 for nonexistent role', async () => {
     const req = createMockReq('GET', '/roles/abc');
     const res = createMockRes();
 
     await dispatch(req, res, actor);
 
-    expect((res as any).statusCode).toBe(200);
+    expect((res as any).statusCode).toBe(404);
     const body = JSON.parse((res as any).body);
-    expect(body).toHaveProperty('id', 'abc');
-    expect(body).toHaveProperty('description', 'Stub role');
-    expect(body).toHaveProperty('credentials');
+    expect(body).toHaveProperty('code', 'NOT_FOUND');
   });
 
   it('PUT /roles/abc dispatches to role PUT handler and returns 200', async () => {
