@@ -1,103 +1,88 @@
-# Feature Specification: Remove Role Selection from Bootstrap Wizard
+# Feature Specification: ## Problem
 
-Roles are workspace-level (`.agency/roles/`), not cluster-level. The wizard's "Role Selection" step and its supporting endpoints are a layer of configuration that doesn't correspond to anything real.
+The bootstrap wizard's step 3 ("Role Selection") asks the user to pick a "default role" for the cluster and persists it via a \`set-default-role\` lifecycle action on the control-plane
 
 **Branch**: `582-problem-bootstrap-wizard-s` | **Date**: 2026-05-11 | **Status**: Draft
 
 ## Summary
 
-Remove the "Role Selection" step (step 3) from the bootstrap wizard and all supporting cluster-side code. In the agency model, roles are per-workspace and per-workflow — there is no "cluster default role." The wizard step, the `set-default-role` lifecycle action, and the `/roles/:id` control-plane routes should all be deleted.
+## Problem
 
-Originally surfaced when the wizard 404'd on `GET /control-plane/roles` (#580). The correct fix is removal, not adding the missing endpoint.
+The bootstrap wizard's step 3 ("Role Selection") asks the user to pick a "default role" for the cluster and persists it via a \`set-default-role\` lifecycle action on the control-plane. This is conceptually wrong.
 
-## Scope
+In the agency model, roles are:
+- **Per-workspace**, defined as YAML files in \`.agency/roles/\` (checked into the user's repo)
+- **Per-workflow**, selected at spawn time — workflows declare which role they need, and the credhelper-daemon's [\`loadRole(roleId)\`](packages/credhelper-daemon/bin/credhelper-daemon.ts#L63-L68) hands back the matching \`RoleConfig\`
 
-This issue spans two repos:
+There is no "cluster default role" anywhere else in the system. The wizard step and its supporting cluster-side endpoints are a layer of configuration that doesn't correspond to anything real.
 
-### generacy (this repo) — control-plane package
-- Delete `packages/control-plane/src/routes/roles.ts`
-- Delete `packages/control-plane/src/services/default-role-writer.ts`
-- Remove `/roles/:id` route entries from `packages/control-plane/src/router.ts`
-- Remove `set-default-role` action branch from `packages/control-plane/src/routes/lifecycle.ts`
-- Drop `set-default-role` from `LifecycleActionSchema` and remove `SetDefaultRoleBodySchema` from `packages/control-plane/src/schemas.ts`
+Originally surfaced when the wizard 404'd on \`GET /control-plane/roles\` (#580). The reflex was to add the missing list endpoint. The correct fix is to remove the step.
 
-### generacy-cloud (companion repo — separate PR)
-- Delete `RoleSelectionStep.tsx` and its test
-- Drop step 3 from `BootstrapWizard.tsx`, renumber (5 → 4 steps)
-- Delete `use-cluster-roles.ts` hook
-- Delete `PUT /:roleId` forwarder route in API and its tests
+## What to remove
+
+**generacy-cloud / web:**
+- [\`packages/web/src/components/clusters/bootstrap/steps/RoleSelectionStep.tsx\`](https://github.com/generacy-ai/generacy-cloud/blob/main/packages/web/src/components/clusters/bootstrap/steps/RoleSelectionStep.tsx) — delete
+- [\`packages/web/src/components/clusters/bootstrap/steps/__tests__/RoleSelectionStep.test.tsx\`](https://github.com/generacy-ai/generacy-cloud/blob/main/packages/web/src/components/clusters/bootstrap/steps/__tests__/RoleSelectionStep.test.tsx) — delete
+- [\`packages/web/src/components/clusters/bootstrap/BootstrapWizard.tsx\`](https://github.com/generacy-ai/generacy-cloud/blob/main/packages/web/src/components/clusters/bootstrap/BootstrapWizard.tsx) — drop step 3 from the step array, renumber (5 → 4 steps), update step indicator labels
+- [\`packages/web/src/lib/hooks/use-cluster-roles.ts\`](https://github.com/generacy-ai/generacy-cloud/blob/main/packages/web/src/lib/hooks/use-cluster-roles.ts) — delete (only the wizard step consumes it)
+
+**generacy-cloud / api:**
+- [\`services/api/src/routes/clusters/roles.ts\`](https://github.com/generacy-ai/generacy-cloud/blob/main/services/api/src/routes/clusters/roles.ts) — delete the \`PUT /:roleId\` forwarder route and its registration in \`index.ts\`
+- Tests under \`services/api/src/__tests__/routes/clusters/roles.test.ts\` — delete
+
+**generacy / control-plane:**
+- [\`packages/control-plane/src/routes/roles.ts\`](packages/control-plane/src/routes/roles.ts) — delete
+- [\`packages/control-plane/src/router.ts\`](packages/control-plane/src/router.ts) — remove the two \`/roles/:id\` route entries
+- [\`packages/control-plane/src/services/default-role-writer.ts\`](packages/control-plane/src/services/default-role-writer.ts) — delete
+- [\`packages/control-plane/src/routes/lifecycle.ts\`](packages/control-plane/src/routes/lifecycle.ts) — remove the \`set-default-role\` action branch and the \`setDefaultRole\` import
+- [\`packages/control-plane/src/schemas.ts\`](packages/control-plane/src/schemas.ts) — drop \`set-default-role\` from the lifecycle action enum and the related body schema
 
 ## What NOT to touch
 
-- Org-level role catalog management (`/org/[orgId]/settings/roles/`)
-- Role recipes (`role-recipes.ts`) — used by org settings page
-- credhelper-daemon's `loadRole()` from `.agency/roles/` — this is the correct, workspace-level path
+- [\`packages/web/src/app/org/[orgId]/settings/roles/\`](https://github.com/generacy-ai/generacy-cloud/tree/main/packages/web/src/app/org/[orgId]/settings/roles) — org-level role catalog management is a separate concern, leave it alone.
+- [\`packages/web/src/components/roles/role-recipes.ts\`](https://github.com/generacy-ai/generacy-cloud/blob/main/packages/web/src/components/roles/role-recipes.ts) — recipes are used by the org settings page; leave them.
+- credhelper-daemon's role loading from \`.agency/roles/\` — this is the correct, workspace-level path; leave it.
+
+## Test plan
+- [ ] After change: launch a fresh cluster, hit bootstrap wizard, verify there are 4 steps (not 5) and step 3 is now "Peer Repos"
+- [ ] Existing wizard tests pass with the updated step count
+- [ ] No remaining references to \`useClusterRoles\`, \`setDefaultRole\`, \`set-default-role\`, or \`handleGetRole\` / \`handlePutRole\` in the codebase (\`grep\` clean)
+
+## Related
+- Supersedes #580 (and PR #581, both closed)
+- #572 (cluster ↔ cloud contract consolidation umbrella)
 
 ## User Stories
 
-### US1: Developer bootstrapping a new cluster
+### US1: [Primary User Story]
 
-**As a** developer setting up a new Generacy cluster,
-**I want** the bootstrap wizard to only show relevant configuration steps,
-**So that** I'm not confused by a "Role Selection" step that has no effect on the system.
-
-**Acceptance Criteria**:
-- [ ] Bootstrap wizard shows 4 steps (was 5)
-- [ ] Step 3 is now "Peer Repos" (was "Role Selection")
-- [ ] Wizard completes successfully without the role selection step
-
-### US2: Platform maintainer
-
-**As a** platform maintainer,
-**I want** dead cluster-level role configuration code removed,
-**So that** there is no confusion between workspace-level roles (the real thing) and a non-existent cluster default role concept.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] No `/roles/:id` routes in control-plane
-- [ ] No `set-default-role` lifecycle action
-- [ ] No `default-role-writer` service
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Delete `roles.ts` route handler from control-plane | P1 | Handles GET/PUT `/roles/:id` |
-| FR-002 | Delete `default-role-writer.ts` service | P1 | Writes `defaults.role` to `.generacy/config.yaml` |
-| FR-003 | Remove `/roles/:id` entries from `router.ts` | P1 | Two entries (GET and PUT) |
-| FR-004 | Remove `set-default-role` branch from `lifecycle.ts` | P1 | Including the `setDefaultRole` import |
-| FR-005 | Drop `set-default-role` from `LifecycleActionSchema` enum | P1 | And remove `SetDefaultRoleBodySchema` |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Zero references to removed code | 0 hits | `grep -r 'set-default-role\|SetDefaultRole\|handleGetRole\|handlePutRole\|default-role-writer' packages/control-plane/src/` |
-| SC-002 | Control-plane builds cleanly | Pass | `tsc --noEmit` in control-plane package |
-| SC-003 | Existing tests pass | Pass | Test suite for control-plane |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The companion generacy-cloud changes (wizard UI, API forwarder) will be handled in a separate PR against that repo
-- No other consumer of the `/roles/:id` control-plane endpoints exists
-- The `LifecycleActionSchema` change is backwards-compatible because no existing cluster sends `set-default-role` outside the wizard flow being removed
+- [Assumption 1]
 
 ## Out of Scope
 
-- Org-level role management UI and API
-- credhelper-daemon role loading
-- Any new role-related features
-- Cloud-side wizard changes (separate repo/PR)
-
-## Related
-
-- Supersedes #580 (and PR #581, both closed)
-- #572 (cluster ↔ cloud contract consolidation umbrella)
-
-## Test Plan
-
-- [ ] After change: launch a fresh cluster, hit bootstrap wizard, verify there are 4 steps (not 5) and step 3 is now "Peer Repos"
-- [ ] Existing wizard tests pass with the updated step count
-- [ ] No remaining references to `useClusterRoles`, `setDefaultRole`, `set-default-role`, or `handleGetRole` / `handlePutRole` in the codebase (`grep` clean)
+- [Exclusion 1]
 
 ---
 
