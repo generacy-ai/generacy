@@ -303,127 +303,33 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     }
   }
 
-  // Run cluster activation (full mode only, when no API key is already configured)
+  // Initialize relay bridge (full mode only, when API key is configured)
+  let relayBridge: RelayBridge | null = null;
+  let activationPending = false;
+
   if (!isWorkerMode && !config.relay.apiKey) {
-    try {
-      const activationResult = await activate({
-        cloudUrl: config.activation.cloudUrl,
-        keyFilePath: config.activation.keyFilePath,
-        clusterJsonPath: config.activation.clusterJsonPath,
-        logger: server.log as unknown as import('pino').Logger,
-      });
-      config.relay.apiKey = activationResult.apiKey;
-      config.relay.clusterApiKeyId = activationResult.clusterApiKeyId;
-      if (activationResult.cloudUrl) {
-        config.activation.cloudUrl = activationResult.cloudUrl;
-        const relayUrl = activationResult.cloudUrl
-          .replace(/^https:/, 'wss:')
-          .replace(/^http:/, 'ws:')
-          .replace(/\/$/, '') + '/relay';
-        config.relay.cloudUrl = relayUrl;
-      }
-      server.log.info('Cluster activation complete');
-    } catch (error) {
-      // Activation failure must not block orchestrator boot
+    // Wizard mode: background the activation so server.listen() is not blocked
+    activationPending = true;
+    activateInBackground(config, server, apiKeyStore, (bridge, convMgr) => {
+      relayBridge = bridge;
+      conversationManager = convMgr;
+      activationPending = false;
+    }).catch((error) => {
+      activationPending = false;
       server.log.warn(
         `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
       );
-    }
-  }
-
-  // Initialize relay bridge (full mode only, when API key is configured)
-  let relayBridge: RelayBridge | null = null;
-  if (!isWorkerMode && config.relay.apiKey) {
-    try {
-      // Dynamic import — @generacy-ai/cluster-relay may not be installed yet (Phase 2.1)
-      const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
-
-      // Generate internal API key for relay-proxied requests
-      const relayInternalKey = crypto.randomUUID();
-      apiKeyStore.addKey(relayInternalKey, {
-        name: 'relay-internal',
-        scopes: ['admin'],
-        createdAt: new Date().toISOString(),
-      });
-
-      const relayClient = new RelayClientImpl({
-        apiKey: config.relay.apiKey,
-        cloudUrl: config.relay.cloudUrl,
-        orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
-        orchestratorApiKey: relayInternalKey,
-      });
-      relayBridge = new RelayBridge({
-        client: relayClient,
-        server,
-        sseManager: getSSESubscriptionManager(),
-        logger: server.log,
-        config: config.relay,
-      });
-
-      // Wire lease manager into relay bridge (full mode)
-      const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
-      relayBridge.setLeaseManager(fullModeLeaseManager);
-
-      // Wire TunnelHandler for IDE tunnel support (#519)
-      const codeServerManager = getCodeServerManager();
-      if (codeServerManager) {
-        const tunnelHandler = new TunnelHandler(
-          { send: (msg: unknown) => relayClient.send(msg as import('./types/relay.js').RelayMessage) },
-          codeServerManager,
-        );
-        relayBridge.setTunnelHandler(tunnelHandler);
-      }
-
-      server.log.info('Relay bridge configured');
-    } catch (error) {
-      // Package not installed or import failed — skip silently (local-only mode)
-      server.log.info(
-        `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-
-  // Create StatusReporter for pushing lifecycle state to the control-plane (full mode only)
-  const controlPlaneSocket = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? '/run/generacy-control-plane/control.sock';
-  const statusReporter = new StatusReporter({ socketPath: controlPlaneSocket });
-
-  if (relayBridge) {
-    relayBridge.setStatusReporter(statusReporter);
+    });
+  } else if (!isWorkerMode && config.relay.apiKey) {
+    // API key already exists: initialize relay bridge synchronously
+    const result = await initializeRelayBridge(config, server, apiKeyStore);
+    relayBridge = result.relayBridge;
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
   let conversationManager: ConversationManager | null = null;
   if (!isWorkerMode && Object.keys(config.conversations.workspaces).length > 0) {
-    // Wire CredhelperHttpClient for the conversation launcher when daemon is available
-    const convSocketPath = process.env['GENERACY_CREDHELPER_SOCKET'] ?? '/run/generacy-credhelper/control.sock';
-    const convCredhelperClient = existsSync(convSocketPath)
-      ? new CredhelperHttpClient({ socketPath: convSocketPath })
-      : undefined;
-
-    const agentLauncher = createAgentLauncher({
-      default: defaultProcessFactory,
-      interactive: conversationProcessFactory,
-    }, convCredhelperClient);
-    const conversationSpawner = new ConversationSpawner(
-      agentLauncher,
-      config.conversations.shutdownGracePeriodMs,
-      config.worker.credentialRole,
-    );
-    conversationManager = new ConversationManager(
-      config.conversations,
-      conversationSpawner,
-      server.log,
-    );
-
-    // Wire conversation output to relay bridge
-    if (relayBridge) {
-      relayBridge.setConversationManager(conversationManager);
-    }
-
-    server.log.info(
-      { workspaces: Object.keys(config.conversations.workspaces) },
-      'Conversation manager configured',
-    );
+    conversationManager = await initializeConversationManager(config, server, relayBridge);
   }
 
   // Register routes (unless skipped for testing)
@@ -564,7 +470,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
-      if (relayBridge) {
+      // Only start relay bridge here if it was initialized synchronously.
+      // The background activation path calls relayBridge.start() itself.
+      if (relayBridge && !activationPending) {
         relayBridge.start().catch((error) => {
           server.log.error({ err: error }, 'Relay bridge start failed');
         });
@@ -649,6 +557,155 @@ export async function createTestServer(
 export async function createProductionServer(): Promise<FastifyInstance> {
   const config = loadConfig();
   return createServer({ config });
+}
+
+/**
+ * Run cluster activation in the background so server.listen() is not blocked.
+ * On success, initializes relay bridge, conversation manager, and starts the relay.
+ */
+async function activateInBackground(
+  config: OrchestratorConfig,
+  server: FastifyInstance,
+  apiKeyStore: InMemoryApiKeyStore,
+  onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
+): Promise<void> {
+  const activationResult = await activate({
+    cloudUrl: config.activation.cloudUrl,
+    keyFilePath: config.activation.keyFilePath,
+    clusterJsonPath: config.activation.clusterJsonPath,
+    logger: server.log as unknown as import('pino').Logger,
+  });
+
+  config.relay.apiKey = activationResult.apiKey;
+  config.relay.clusterApiKeyId = activationResult.clusterApiKeyId;
+  if (activationResult.cloudUrl) {
+    config.activation.cloudUrl = activationResult.cloudUrl;
+    const relayUrl = activationResult.cloudUrl
+      .replace(/^https:/, 'wss:')
+      .replace(/^http:/, 'ws:')
+      .replace(/\/$/, '') + '/relay';
+    config.relay.cloudUrl = relayUrl;
+  }
+  server.log.info('Cluster activation complete');
+
+  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore);
+  const conversationManager = await initializeConversationManager(config, server, relayBridge);
+
+  onInitialized(relayBridge, conversationManager);
+
+  // Server is already listening — start relay bridge directly
+  if (relayBridge) {
+    await relayBridge.start();
+  }
+}
+
+/**
+ * Initialize relay bridge and status reporter.
+ * Extracted from createServer() for reuse in background activation path.
+ */
+async function initializeRelayBridge(
+  config: OrchestratorConfig,
+  server: FastifyInstance,
+  apiKeyStore: InMemoryApiKeyStore,
+): Promise<{ relayBridge: RelayBridge | null; statusReporter: StatusReporter }> {
+  const controlPlaneSocket = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? '/run/generacy-control-plane/control.sock';
+  const statusReporter = new StatusReporter({ socketPath: controlPlaneSocket });
+
+  let relayBridge: RelayBridge | null = null;
+  if (!config.relay.apiKey) {
+    return { relayBridge, statusReporter };
+  }
+  try {
+    const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+
+    const relayInternalKey = crypto.randomUUID();
+    apiKeyStore.addKey(relayInternalKey, {
+      name: 'relay-internal',
+      scopes: ['admin'],
+      createdAt: new Date().toISOString(),
+    });
+
+    const relayClient = new RelayClientImpl({
+      apiKey: config.relay.apiKey,
+      cloudUrl: config.relay.cloudUrl,
+      orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
+      orchestratorApiKey: relayInternalKey,
+    });
+    relayBridge = new RelayBridge({
+      client: relayClient,
+      server,
+      sseManager: getSSESubscriptionManager(),
+      logger: server.log,
+      config: config.relay,
+    });
+
+    const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
+    relayBridge.setLeaseManager(fullModeLeaseManager);
+
+    const codeServerManager = getCodeServerManager();
+    if (codeServerManager) {
+      const tunnelHandler = new TunnelHandler(
+        { send: (msg: unknown) => relayClient.send(msg as import('./types/relay.js').RelayMessage) },
+        codeServerManager,
+      );
+      relayBridge.setTunnelHandler(tunnelHandler);
+    }
+
+    relayBridge.setStatusReporter(statusReporter);
+
+    server.log.info('Relay bridge configured');
+  } catch (error) {
+    server.log.info(
+      `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  return { relayBridge, statusReporter };
+}
+
+/**
+ * Initialize ConversationManager.
+ * Extracted from createServer() for reuse in background activation path.
+ */
+async function initializeConversationManager(
+  config: OrchestratorConfig,
+  server: FastifyInstance,
+  relayBridge: RelayBridge | null,
+): Promise<ConversationManager | null> {
+  if (Object.keys(config.conversations.workspaces).length === 0) {
+    return null;
+  }
+
+  const convSocketPath = process.env['GENERACY_CREDHELPER_SOCKET'] ?? '/run/generacy-credhelper/control.sock';
+  const convCredhelperClient = existsSync(convSocketPath)
+    ? new CredhelperHttpClient({ socketPath: convSocketPath })
+    : undefined;
+
+  const agentLauncher = createAgentLauncher({
+    default: defaultProcessFactory,
+    interactive: conversationProcessFactory,
+  }, convCredhelperClient);
+  const conversationSpawner = new ConversationSpawner(
+    agentLauncher,
+    config.conversations.shutdownGracePeriodMs,
+    config.worker.credentialRole,
+  );
+  const conversationManager = new ConversationManager(
+    config.conversations,
+    conversationSpawner,
+    server.log,
+  );
+
+  if (relayBridge) {
+    relayBridge.setConversationManager(conversationManager);
+  }
+
+  server.log.info(
+    { workspaces: Object.keys(config.conversations.workspaces) },
+    'Conversation manager configured',
+  );
+
+  return conversationManager;
 }
 
 // Type augmentation for config access
