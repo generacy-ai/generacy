@@ -580,10 +580,17 @@ async function activateInBackground(
   config.relay.clusterApiKeyId = activationResult.clusterApiKeyId;
   if (activationResult.cloudUrl) {
     config.activation.cloudUrl = activationResult.cloudUrl;
+    // Relay-server's auth middleware requires ?projectId=<id> on the upgrade
+    // request (see generacy-cloud/services/api/src/middleware/relay-auth.ts).
+    // Append it here so the cluster's WS connection isn't rejected with
+    // 401 "projectId query parameter required" — without the relay link,
+    // the cloud treats the cluster as offline and rejects credential pushes
+    // with "Cluster is not connected for this project".
     const relayUrl = activationResult.cloudUrl
       .replace(/^https:/, 'wss:')
       .replace(/^http:/, 'ws:')
-      .replace(/\/$/, '') + '/relay';
+      .replace(/\/$/, '') + '/relay'
+      + `?projectId=${encodeURIComponent(activationResult.projectId)}`;
     config.relay.cloudUrl = relayUrl;
   }
   server.log.info('Cluster activation complete');
