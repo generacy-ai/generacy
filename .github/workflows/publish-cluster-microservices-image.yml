@@ -43,7 +43,7 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: .
+          context: .devcontainer/generacy
           push: true
           tags: |
             ghcr.io/generacy-ai/cluster-microservices:${{ steps.tags.outputs.channel }}
