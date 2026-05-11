@@ -39,7 +39,6 @@ export type StatusUpdate = z.infer<typeof StatusUpdateSchema>;
 export const LifecycleActionSchema = z.enum([
   'bootstrap-complete',
   'clone-peer-repos',
-  'set-default-role',
   'code-server-start',
   'code-server-stop',
   'stop',
@@ -51,11 +50,6 @@ export const ClonePeerReposBodySchema = z.object({
   token: z.string().optional(),
 });
 export type ClonePeerReposBody = z.infer<typeof ClonePeerReposBodySchema>;
-
-export const SetDefaultRoleBodySchema = z.object({
-  role: z.string().min(1).max(64).regex(/^[a-z0-9-]+$/),
-});
-export type SetDefaultRoleBody = z.infer<typeof SetDefaultRoleBodySchema>;
 
 export const LifecycleResponseSchema = z.object({
   accepted: z.literal(true),

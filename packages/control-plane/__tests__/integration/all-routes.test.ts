@@ -137,34 +137,6 @@ describe('integration: all routes', () => {
     expect(body).toHaveProperty('error', 'Missing actor identity');
   });
 
-  // GET /roles/:id
-  it('GET /roles/:id returns stub role', async () => {
-    const res = await request('GET', '/roles/my-role');
-    expect(res.status).toBe(200);
-    const body = res.body as Record<string, unknown>;
-    expect(body).toHaveProperty('id', 'my-role');
-    expect(body).toHaveProperty('description');
-    expect(body).toHaveProperty('credentials');
-    expect(Array.isArray(body['credentials'])).toBe(true);
-  });
-
-  // PUT /roles/:id
-  it('PUT /roles/:id accepts body with actor header', async () => {
-    const res = await request('PUT', '/roles/my-role', { description: 'updated' }, {
-      'x-generacy-actor-user-id': 'user-123',
-    });
-    expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true });
-  });
-
-  it('PUT /roles/:id without actor header returns 401', async () => {
-    const res = await request('PUT', '/roles/my-role', { description: 'updated' });
-    expect(res.status).toBe(401);
-    const body = res.body as Record<string, unknown>;
-    expect(body).toHaveProperty('code', 'UNAUTHORIZED');
-    expect(body).toHaveProperty('error', 'Missing actor identity');
-  });
-
   // POST /lifecycle/:action (valid)
   const actorHeaders = { 'x-generacy-actor-user-id': 'user-123' };
 

@@ -4,7 +4,6 @@ import type { RouteHandler } from './types.js';
 import { ControlPlaneError } from './errors.js';
 import { handleGetState } from './routes/state.js';
 import { handleGetCredential, handlePutCredential } from './routes/credentials.js';
-import { handleGetRole, handlePutRole } from './routes/roles.js';
 import { handlePostLifecycle } from './routes/lifecycle.js';
 import { handlePostAuditBatch } from './routes/audit.js';
 import { handlePostStatus } from './routes/status.js';
@@ -34,18 +33,6 @@ const routes: Route[] = [
     pattern: /^\/credentials\/([^/]+)$/,
     paramNames: ['id'],
     handler: handlePutCredential,
-  },
-  {
-    method: 'GET',
-    pattern: /^\/roles\/([^/]+)$/,
-    paramNames: ['id'],
-    handler: handleGetRole,
-  },
-  {
-    method: 'PUT',
-    pattern: /^\/roles\/([^/]+)$/,
-    paramNames: ['id'],
-    handler: handlePutRole,
   },
   {
     method: 'POST',

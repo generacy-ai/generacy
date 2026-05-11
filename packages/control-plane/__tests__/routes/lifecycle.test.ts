@@ -11,9 +11,6 @@ import {
   type CodeServerManager,
 } from '../../src/services/code-server-manager.js';
 
-vi.mock('../../src/services/default-role-writer.js', () => ({
-  setDefaultRole: vi.fn(async () => {}),
-}));
 vi.mock('../../src/services/peer-repo-cloner.js', () => ({
   clonePeerRepos: vi.fn(async () => []),
 }));
@@ -185,71 +182,6 @@ describe('handlePostLifecycle', () => {
     }
   });
 
-  // --- set-default-role tests ---
-
-  it('set-default-role — success: calls setDefaultRole and returns accepted', async () => {
-    const { readBody } = await import('../../src/util/read-body.js');
-    const { setDefaultRole } = await import('../../src/services/default-role-writer.js');
-    vi.mocked(readBody).mockResolvedValueOnce(JSON.stringify({ role: 'developer' }));
-    vi.mocked(setDefaultRole).mockResolvedValueOnce(undefined);
-
-    const req = {} as IncomingMessage;
-    const res = createMockResponse();
-
-    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'set-default-role' });
-
-    expect(setDefaultRole).toHaveBeenCalledWith({ role: 'developer' });
-    expect(res.writeHead).toHaveBeenCalledWith(200);
-    const body = JSON.parse(res._body);
-    expect(body).toEqual({ accepted: true, action: 'set-default-role' });
-  });
-
-  it('set-default-role — invalid body: empty role triggers INVALID_REQUEST', async () => {
-    const { readBody } = await import('../../src/util/read-body.js');
-    vi.mocked(readBody).mockResolvedValueOnce(JSON.stringify({ role: '' }));
-
-    const req = {} as IncomingMessage;
-    const res = createMockResponse();
-
-    await expect(
-      handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'set-default-role' }),
-    ).rejects.toThrow(ControlPlaneError);
-
-    vi.mocked(readBody).mockResolvedValueOnce(JSON.stringify({ role: '' }));
-    try {
-      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'set-default-role' });
-    } catch (err) {
-      expect((err as ControlPlaneError).code).toBe('INVALID_REQUEST');
-    }
-  });
-
-  it('set-default-role — role not found: propagates ControlPlaneError from service', async () => {
-    const { readBody } = await import('../../src/util/read-body.js');
-    const { setDefaultRole } = await import('../../src/services/default-role-writer.js');
-    vi.mocked(readBody).mockResolvedValueOnce(JSON.stringify({ role: 'nonexistent' }));
-    vi.mocked(setDefaultRole).mockRejectedValueOnce(
-      new ControlPlaneError('INVALID_REQUEST', "Role 'nonexistent' not found"),
-    );
-
-    const req = {} as IncomingMessage;
-    const res = createMockResponse();
-
-    await expect(
-      handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'set-default-role' }),
-    ).rejects.toThrow(ControlPlaneError);
-
-    vi.mocked(readBody).mockResolvedValueOnce(JSON.stringify({ role: 'nonexistent' }));
-    vi.mocked(setDefaultRole).mockRejectedValueOnce(
-      new ControlPlaneError('INVALID_REQUEST', "Role 'nonexistent' not found"),
-    );
-    try {
-      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'set-default-role' });
-    } catch (err) {
-      expect((err as ControlPlaneError).code).toBe('INVALID_REQUEST');
-      expect((err as ControlPlaneError).message).toBe("Role 'nonexistent' not found");
-    }
-  });
-
   // --- clone-peer-repos additional tests ---
 
   it('clone-peer-repos — empty repos array returns accepted', async () => {
@@ -363,23 +295,11 @@ describe('handlePostLifecycle', () => {
 
   // --- schema validation tests ---
 
-  it('set-default-role and stop are valid actions (not UNKNOWN_ACTION)', async () => {
-    // set-default-role needs a body, so mock readBody
-    const { readBody } = await import('../../src/util/read-body.js');
-    const { setDefaultRole } = await import('../../src/services/default-role-writer.js');
-    vi.mocked(readBody).mockResolvedValueOnce(JSON.stringify({ role: 'dev' }));
-    vi.mocked(setDefaultRole).mockResolvedValueOnce(undefined);
-
+  it('stop is a valid action (not UNKNOWN_ACTION)', async () => {
     const req = {} as IncomingMessage;
-    const res1 = createMockResponse();
+    const res = createMockResponse();
 
-    // set-default-role should not throw UNKNOWN_ACTION
-    await handlePostLifecycle(req, res1, { userId: 'u-test' }, { action: 'set-default-role' });
-    expect(res1.writeHead).toHaveBeenCalledWith(200);
-
-    // stop should not throw UNKNOWN_ACTION
-    const res2 = createMockResponse();
-    await handlePostLifecycle(req, res2, { userId: 'u-test' }, { action: 'stop' });
-    expect(res2.writeHead).toHaveBeenCalledWith(200);
+    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'stop' });
+    expect(res.writeHead).toHaveBeenCalledWith(200);
   });
 });
