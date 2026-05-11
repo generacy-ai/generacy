@@ -53,11 +53,21 @@ export function startCluster(projectDir: string): void {
 /** Default timeout for waiting on activation output (120 seconds). */
 const DEFAULT_TIMEOUT_MS = 120_000;
 
-/** Pattern to extract the verification URI from container logs. */
-const VERIFICATION_URI_RE = /Go to:\s+(https?:\/\/\S+)/;
+/** Pattern to extract the verification URI from container logs.
+ *
+ * The orchestrator's pino logger emits its activation message as JSON, where
+ * embedded newlines are encoded as literal `\n` two-character escape sequences.
+ * `\S+` would greedily include those two chars in the captured URL, and the
+ * trailing backslash gets rewritten by the OS / browser into a slash —
+ * yielding e.g. `https://app/cluster-activate/n` (404).
+ * Restrict to URL-safe characters so the capture stops at the backslash. */
+const VERIFICATION_URI_RE = /Go to:\s+(https?:\/\/[^\s\\"']+)/;
 
-/** Pattern to extract the user code from container logs. */
-const USER_CODE_RE = /Enter code:\s+(\S+)/;
+/** Pattern to extract the user code from container logs.
+ *
+ * Same JSON-log concern as VERIFICATION_URI_RE — stop at quote/backslash
+ * boundaries so the captured code doesn't trail off into the next field. */
+const USER_CODE_RE = /Enter code:\s+([^\s\\"']+)/;
 
 /**
  * Stream `docker compose logs -f` and watch for activation patterns.
