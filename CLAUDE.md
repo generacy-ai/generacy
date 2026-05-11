@@ -159,11 +159,12 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Registry entry includes `managementEndpoint: "ssh://user@host:port/path"`.
   - Lifecycle commands (`stop`, `up`, `down`, etc.) transparently forward `docker compose` over SSH when `managementEndpoint` starts with `ssh://`. Extended in `commands/cluster/compose.ts`.
 
-## Cluster Image Build Workflows (#534)
+## Cluster Image Build Workflows (#534, #559)
 
 - `.github/workflows/publish-cluster-base-image.yml` — NEW in #534: Manual `workflow_dispatch` workflow to build and push the `cluster-base` Docker image to GHCR. Checks out `generacy-ai/cluster-base` at a specified ref (`develop` or `main`), maps `develop` -> `:preview` and `main` -> `:stable` tags, pushes to `ghcr.io/generacy-ai/cluster-base`. Also pushes `:sha-<short>` immutable tag. Uses `docker/build-push-action@v6`, `docker/login-action@v3`, `docker/setup-buildx-action@v3`. Permissions: `contents: read`, `packages: write`.
 - `.github/workflows/publish-cluster-microservices-image.yml` — NEW in #534: Same shape as cluster-base workflow, targeting `generacy-ai/cluster-microservices` repo and `ghcr.io/generacy-ai/cluster-microservices` image.
-- Motivation: Template repos previously contained workflow files that got copied into user-project repos during creation, causing `403 Resource not accessible by integration` errors (GitHub App lacks `Workflows: write`). Moving builds here eliminates that.
+- `.github/workflows/poll-cluster-images.yml` — NEW in #559: Cron-poll workflow (`schedule: */5 * * * *`) that auto-detects new commits on `cluster-base` and `cluster-microservices` repos (`develop` and `main` branches) and dispatches the existing publish workflows when HEAD SHA has no matching `sha-*` tag in GHCR. Uses `strategy.matrix` with 4 (repo, branch, image, workflow) tuples. GHCR tags are the source of truth (no external state). Per-(repo, branch) concurrency keys with `cancel-in-progress: false`. Permissions: `contents: read`, `packages: read`, `actions: write`.
+- Motivation: Template repos previously contained workflow files that got copied into user-project repos during creation, causing `403 Resource not accessible by integration` errors (GitHub App lacks `Workflows: write`). Moving builds here eliminates that. #559 adds automatic triggering so merges don't sit unpublished until manual dispatch.
 
 ## Cloud URL Disambiguation (#549)
 
