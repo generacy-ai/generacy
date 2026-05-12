@@ -179,6 +179,56 @@ describe('CodeServerProcessManager', () => {
     await mgr.stop();
   });
 
+  it('onStatusChange callback fires when status transitions to running', async () => {
+    const wrapperBin = path.join(tmpDir, 'wrapper.sh');
+    await fs.writeFile(
+      wrapperBin,
+      `#!/bin/sh\nexec "${process.execPath}" "${fakeBin}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    const mgr = new CodeServerProcessManager({
+      binPath: wrapperBin,
+      socketPath,
+      idleTimeoutMs: 60_000,
+    });
+
+    const statuses: string[] = [];
+    mgr.onStatusChange((status) => statuses.push(status));
+
+    await mgr.start();
+    await waitForFile(socketPath, 5000);
+    // Wait for status transition to 'running'
+    await waitFor(() => statuses.includes('running'), 5000);
+    expect(statuses).toContain('running');
+
+    await mgr.stop();
+    // After stop, callback should fire with 'stopped'
+    expect(statuses).toContain('stopped');
+  });
+
+  it('onStatusChange callback fires with stopped on exit', async () => {
+    const wrapperBin = path.join(tmpDir, 'wrapper.sh');
+    await fs.writeFile(
+      wrapperBin,
+      `#!/bin/sh\nexec "${process.execPath}" "${fakeBin}" "$@"\n`,
+      { mode: 0o755 },
+    );
+    const mgr = new CodeServerProcessManager({
+      binPath: wrapperBin,
+      socketPath,
+      idleTimeoutMs: 60_000,
+    });
+
+    const statuses: string[] = [];
+    mgr.onStatusChange((status) => statuses.push(status));
+
+    await mgr.start();
+    await waitForFile(socketPath, 5000);
+    await mgr.stop();
+
+    expect(statuses[statuses.length - 1]).toBe('stopped');
+  });
+
   it('stop() is a no-op when not running', async () => {
     const mgr = new CodeServerProcessManager({
       binPath: '/bin/false',

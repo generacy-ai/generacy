@@ -278,6 +278,9 @@ export interface ClusterMetadataPayload {
 
   /** ISO 8601 timestamp of this report */
   reportedAt: string;
+
+  /** Whether code-server is running and ready for connections */
+  codeServerReady?: boolean;
 }
 
 /**

@@ -210,6 +210,7 @@ export const HealthResponseSchema = z.object({
   status: HealthStatusSchema,
   timestamp: z.string().datetime(),
   services: z.record(ServiceStatusSchema),
+  codeServerReady: z.boolean().optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 

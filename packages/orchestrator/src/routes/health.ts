@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { HealthResponse, HealthStatus, ServiceStatus } from '../types/index.js';
+import { getCodeServerManager } from '@generacy-ai/control-plane';
 
 /**
  * Health check options
@@ -42,6 +43,7 @@ export async function setupHealthRoutes(
                 type: 'object',
                 additionalProperties: { type: 'string', enum: ['ok', 'error'] },
               },
+              codeServerReady: { type: 'boolean' },
             },
           },
           503: {
@@ -53,6 +55,7 @@ export async function setupHealthRoutes(
                 type: 'object',
                 additionalProperties: { type: 'string', enum: ['ok', 'error'] },
               },
+              codeServerReady: { type: 'boolean' },
             },
           },
         },
@@ -81,10 +84,13 @@ export async function setupHealthRoutes(
         overallStatus = 'error';
       }
 
+      const codeServerReady = getCodeServerManager()?.getStatus() === 'running';
+
       const response: HealthResponse = {
         status: overallStatus,
         timestamp: new Date().toISOString(),
         services,
+        codeServerReady,
       };
 
       const statusCode = overallStatus === 'error' ? 503 : 200;

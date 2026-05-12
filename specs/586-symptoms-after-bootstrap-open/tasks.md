@@ -10,27 +10,27 @@
 
 ## Phase 1: Code-Server Auto-Start (Gap C)
 
-- [ ] T001 [US1] Trigger code-server start on `bootstrap-complete` in `packages/control-plane/src/routes/lifecycle.ts`
+- [X] T001 [US1] Trigger code-server start on `bootstrap-complete` in `packages/control-plane/src/routes/lifecycle.ts`
   - After the sentinel file write (line 74), add async fire-and-forget call: `getCodeServerManager().start().catch(err => logger.error(...))`
   - Do NOT await — keep `bootstrap-complete` response fast
   - Logger import may be needed (check existing imports)
 
-- [ ] T002 [US1] Add test for bootstrap-complete triggering code-server-start in `packages/control-plane/__tests__/routes/lifecycle.test.ts`
+- [X] T002 [US1] Add test for bootstrap-complete triggering code-server-start in `packages/control-plane/__tests__/routes/lifecycle.test.ts`
   - Mock `getCodeServerManager()` to return a mock with `start()` spy
   - Assert `start()` is called after `bootstrap-complete` action
   - Assert the response returns immediately (not blocked by start)
 
 ## Phase 2: Relay Route & Health Endpoint (Gap B + FR-003)
 
-- [ ] T003 [P] [US1] Add `/code-server` relay route in `packages/orchestrator/src/server.ts` `initializeRelayBridge()` (~line 640)
+- [X] T003 [P] [US1] Add `/code-server` relay route in `packages/orchestrator/src/server.ts` `initializeRelayBridge()` (~line 640)
   - Read `CODE_SERVER_SOCKET_PATH` env var with default `/run/code-server.sock`
   - Add `{ prefix: '/code-server', target: \`unix://${codeServerSocket}\` }` to the `routes` array
   - Same pattern as existing `/control-plane` route
 
-- [ ] T004 [P] [US1] Add `codeServerReady` to health response schema in `packages/orchestrator/src/types/api.ts` (~line 209)
+- [X] T004 [P] [US1] Add `codeServerReady` to health response schema in `packages/orchestrator/src/types/api.ts` (~line 209)
   - Add `codeServerReady: z.boolean().optional()` to `HealthResponseSchema`
 
-- [ ] T005 [US1] Add `codeServerReady` to `/health` handler in `packages/orchestrator/src/routes/health.ts`
+- [X] T005 [US1] Add `codeServerReady` to `/health` handler in `packages/orchestrator/src/routes/health.ts`
   - Import `getCodeServerManager` from `@generacy-ai/control-plane`
   - In the handler (~line 84), add `codeServerReady: getCodeServerManager()?.getStatus() === 'running'` to the response object
   - Also add `codeServerReady` to the Fastify JSON schema (lines 38-44) as `{ type: 'boolean' }`

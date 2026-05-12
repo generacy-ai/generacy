@@ -72,6 +72,13 @@ export async function handlePostLifecycle(
   if (parsed.data === 'bootstrap-complete') {
     const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
     await writeFile(sentinel, '', { flag: 'w' });
+
+    // Fire-and-forget: start code-server asynchronously (don't block the response)
+    const manager = getCodeServerManager();
+    manager.start().catch(() => {
+      // code-server start failure is non-fatal; metadata will report codeServerReady: false
+    });
+
     res.writeHead(200);
     res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
     return;

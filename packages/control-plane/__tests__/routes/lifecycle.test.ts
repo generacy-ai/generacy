@@ -276,6 +276,44 @@ describe('handlePostLifecycle', () => {
       expect(existsSync(customPath)).toBe(true);
     });
 
+    it('triggers code-server start (fire-and-forget)', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-cs');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const manager = createFakeManager();
+      setCodeServerManager(manager);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(manager.start).toHaveBeenCalledOnce();
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      // Response returns immediately (not blocked by start)
+      const body = JSON.parse(res._body);
+      expect(body.accepted).toBe(true);
+    });
+
+    it('does not fail bootstrap-complete if code-server start rejects', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-cs-fail');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const manager = createFakeManager({
+        start: vi.fn(async () => { throw new Error('binary not found'); }),
+      });
+      setCodeServerManager(manager);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      // Should NOT throw — fire-and-forget
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      expect(existsSync(sentinelPath)).toBe(true);
+    });
+
     it('missing actor returns 401 UNAUTHORIZED', async () => {
       const req = {} as IncomingMessage;
       const res = createMockResponse();

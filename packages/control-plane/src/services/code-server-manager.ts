@@ -15,6 +15,7 @@ export interface CodeServerManager {
   touch(): void;
   getStatus(): CodeServerStatus;
   shutdown(): Promise<void>;
+  onStatusChange(callback: (status: CodeServerStatus) => void): void;
 }
 
 export interface CodeServerManagerOptions {
@@ -50,8 +51,13 @@ export class CodeServerProcessManager implements CodeServerManager {
   private status: CodeServerStatus = 'stopped';
   private idleTimer: NodeJS.Timeout | null = null;
   private exitWaiters: Array<() => void> = [];
+  private statusChangeCallback: ((status: CodeServerStatus) => void) | null = null;
 
   constructor(private readonly opts: CodeServerManagerOptions) {}
+
+  onStatusChange(callback: (status: CodeServerStatus) => void): void {
+    this.statusChangeCallback = callback;
+  }
 
   getStatus(): CodeServerStatus {
     return this.status;
@@ -86,6 +92,7 @@ export class CodeServerProcessManager implements CodeServerManager {
       this.child = null;
       this.status = 'stopped';
       this.clearIdleTimer();
+      this.statusChangeCallback?.('stopped');
       const waiters = this.exitWaiters;
       this.exitWaiters = [];
       for (const w of waiters) w();
@@ -95,6 +102,7 @@ export class CodeServerProcessManager implements CodeServerManager {
       this.child = null;
       this.status = 'stopped';
       this.clearIdleTimer();
+      this.statusChangeCallback?.('stopped');
     });
 
     this.child = child;
@@ -102,7 +110,10 @@ export class CodeServerProcessManager implements CodeServerManager {
     // Mark running once the socket appears (best-effort) and start the idle timer.
     this.waitForSocket().then(
       () => {
-        if (this.child === child) this.status = 'running';
+        if (this.child === child) {
+          this.status = 'running';
+          this.statusChangeCallback?.('running');
+        }
       },
       () => {
         // socket never appeared; leave status as 'starting' until exit cleans up

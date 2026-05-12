@@ -113,6 +113,7 @@ export interface ClusterMetadata {
   orchestratorVersion: string;
   gitRemotes: GitRemote[];
   uptime: number;
+  codeServerReady?: boolean;
 }
 
 // --- Zod Schemas ---
