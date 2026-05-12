@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { ClusterRelayClient, RelayMessage } from '../types/relay.js';
+import type { ClusterRelayClient } from '../types/relay.js';
 
 const ALLOWED_CHANNELS = [
   'cluster.vscode-tunnel',
@@ -10,8 +10,9 @@ const ALLOWED_CHANNELS = [
 ] as const;
 
 export const RelayEventRequestSchema = z.object({
-  channel: z.enum(ALLOWED_CHANNELS),
-  payload: z.unknown(),
+  event: z.enum(ALLOWED_CHANNELS),
+  data: z.unknown(),
+  timestamp: z.string().datetime(),
 });
 
 export type RelayEventRequest = z.infer<typeof RelayEventRequestSchema>;
@@ -36,15 +37,15 @@ export function setupInternalRelayEventsRoute(
         });
       }
 
-      const { channel, payload } = parsed.data;
+      const { event, data, timestamp } = parsed.data;
 
       if (client.isConnected) {
         client.send({
           type: 'event',
-          event: channel,
-          data: payload,
-          timestamp: new Date().toISOString(),
-        } as unknown as RelayMessage);
+          event,
+          data,
+          timestamp,
+        });
       }
 
       return reply.status(204).send();

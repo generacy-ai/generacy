@@ -153,7 +153,6 @@ export {
   type RelayMessage,
   type RelayApiRequest,
   type RelayApiResponse,
-  type RelayEvent,
   type RelayMetadata,
   type ClusterMetadataPayload,
   type GitRemoteInfo,

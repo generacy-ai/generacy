@@ -500,6 +500,9 @@ importers:
       '@generacy-ai/activation-client':
         specifier: workspace:^
         version: link:../activation-client
+      '@generacy-ai/cluster-relay':
+        specifier: workspace:^
+        version: link:../cluster-relay
       '@generacy-ai/config':
         specifier: workspace:^
         version: link:../config

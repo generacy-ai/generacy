@@ -1,4 +1,4 @@
-export type PushEventFn = (channel: string, payload: unknown) => void;
+export type PushEventFn = (event: string, data: unknown) => void;
 
 let pushEventFn: PushEventFn | undefined;
 

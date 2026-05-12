@@ -16,6 +16,7 @@ export {
   type Activation,
   ActorSchema,
   ActivationSchema,
+  EventMessageSchema,
   RelayMessageSchema,
   ClusterMetadataSchema,
   GitRemoteSchema,

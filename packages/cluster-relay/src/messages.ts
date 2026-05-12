@@ -22,8 +22,9 @@ export interface ApiResponseMessage {
 
 export interface EventMessage {
   type: 'event';
-  channel: string;
-  event: unknown;
+  event: string;
+  data: unknown;
+  timestamp: string;
 }
 
 export interface ConversationInputMessage {
@@ -165,10 +166,11 @@ const ApiResponseMessageSchema = z.object({
   timestamp: z.string().optional(),
 });
 
-const EventMessageSchema = z.object({
+export const EventMessageSchema = z.object({
   type: z.literal('event'),
-  channel: z.string().min(1),
-  event: z.unknown(),
+  event: z.string().min(1),
+  data: z.unknown(),
+  timestamp: z.string().datetime(),
 });
 
 const ConversationInputDataSchema = z.object({

@@ -229,8 +229,8 @@ export class ClusterRelay {
   /**
    * Push an event to the cloud (library mode).
    */
-  pushEvent(channel: string, event: unknown): void {
-    this.send({ type: 'event', channel, event });
+  pushEvent(event: string, data: unknown): void {
+    this.send({ type: 'event', event, data, timestamp: new Date().toISOString() });
   }
 
   /**
