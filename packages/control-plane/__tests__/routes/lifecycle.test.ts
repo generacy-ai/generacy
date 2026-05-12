@@ -10,12 +10,20 @@ import {
   setCodeServerManager,
   type CodeServerManager,
 } from '../../src/services/code-server-manager.js';
+import { writeWizardEnvFile } from '../../src/services/wizard-env-writer.js';
+import { getRelayPushEvent } from '../../src/relay-events.js';
 
 vi.mock('../../src/services/peer-repo-cloner.js', () => ({
   clonePeerRepos: vi.fn(async () => []),
 }));
 vi.mock('../../src/util/read-body.js', () => ({
   readBody: vi.fn(async () => '{}'),
+}));
+vi.mock('../../src/services/wizard-env-writer.js', () => ({
+  writeWizardEnvFile: vi.fn(async () => ({ written: [], failed: [] })),
+}));
+vi.mock('../../src/relay-events.js', () => ({
+  getRelayPushEvent: vi.fn(() => undefined),
 }));
 
 function createMockResponse() {
@@ -65,6 +73,8 @@ function createFakeManager(overrides: Partial<CodeServerManager> = {}): CodeServ
 describe('handlePostLifecycle', () => {
   afterEach(() => {
     setCodeServerManager(null);
+    delete process.env.AGENCY_DIR;
+    delete process.env.WIZARD_CREDS_PATH;
   });
 
   it('returns 200 with accepted: true for clone-peer-repos', async () => {
@@ -226,6 +236,8 @@ describe('handlePostLifecycle', () => {
     afterEach(() => {
       delete process.env.POST_ACTIVATION_TRIGGER;
       rmSync(tempDir, { recursive: true, force: true });
+      vi.mocked(writeWizardEnvFile).mockReset();
+      vi.mocked(writeWizardEnvFile).mockResolvedValue({ written: [], failed: [] });
     });
 
     it('returns 200 and writes sentinel file', async () => {
@@ -328,6 +340,84 @@ describe('handlePostLifecycle', () => {
       } catch (err) {
         expect((err as ControlPlaneError).code).toBe('UNAUTHORIZED');
       }
+    });
+
+    it('bootstrap-complete writes env file before sentinel', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-env-before');
+      const agencyDir = join(tempDir, 'agency');
+      const envFilePath = join(tempDir, 'wizard-credentials.env');
+
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+      process.env.AGENCY_DIR = agencyDir;
+      process.env.WIZARD_CREDS_PATH = envFilePath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({ written: ['github-main-org'], failed: [] });
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(writeWizardEnvFile).toHaveBeenCalledWith({ agencyDir, envFilePath });
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({ accepted: true, action: 'bootstrap-complete', sentinel: sentinelPath });
+    });
+
+    it('bootstrap-complete with no credentials.yaml still writes sentinel', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-no-creds');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({ written: [], failed: [] });
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+    });
+
+    it('bootstrap-complete with unseal failure still writes sentinel (non-fatal)', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-unseal-fail');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockRejectedValueOnce(new Error('unseal exploded'));
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      // Should NOT throw — the catch swallows the error
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+    });
+
+    it('relay warning emitted on partial credential unseal failure', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-partial');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: ['good-cred'],
+        failed: ['bad-cred'],
+      });
+
+      const mockPushEvent = vi.fn();
+      vi.mocked(getRelayPushEvent).mockReturnValueOnce(mockPushEvent);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(mockPushEvent).toHaveBeenCalledWith('cluster.bootstrap', {
+        warning: 'credential-unseal-partial',
+        failed: ['bad-cred'],
+        written: ['good-cred'],
+      });
+      expect(res.writeHead).toHaveBeenCalledWith(200);
     });
   });
 

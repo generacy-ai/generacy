@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Create `wizard-env-writer.ts` service — `packages/control-plane/src/services/wizard-env-writer.ts`
+- [X] T001 [US1] Create `wizard-env-writer.ts` service — `packages/control-plane/src/services/wizard-env-writer.ts`
   - `writeWizardEnvFile(options)`: read `.agency/credentials.yaml`, enumerate credential IDs/types, call `ClusterLocalBackend.fetchSecret()` for each, map to env vars, write env file (mode 0600)
   - `mapCredentialToEnvEntries(id, type, value)`: static mapping — `github-app`/`github-pat` → `GH_TOKEN`, ID matching `anthropic` → `ANTHROPIC_API_KEY`, fallback → `idToEnvName(id)`
   - `idToEnvName(id)`: kebab-case to UPPER_SNAKE (`my-api-key` → `MY_API_KEY`)
@@ -18,7 +18,7 @@
   - Return `{ written: string[], failed: string[] }` with best-effort semantics (partial unseal → partial file + failed list)
   - Reuse `getCredentialBackend()` singleton from `credential-writer.ts`
 
-- [ ] T002 [US1] Modify `bootstrap-complete` handler in `lifecycle.ts` — `packages/control-plane/src/routes/lifecycle.ts`
+- [X] T002 [US1] Modify `bootstrap-complete` handler in `lifecycle.ts` — `packages/control-plane/src/routes/lifecycle.ts`
   - Import `writeWizardEnvFile` from new service
   - Before writing sentinel file: call `writeWizardEnvFile({ agencyDir, envFilePath })`
   - On partial failure (`result.failed.length > 0`): emit `cluster.bootstrap` relay warning via `getRelayPushEvent()`
@@ -28,7 +28,7 @@
 
 ## Phase 2: Tests
 
-- [ ] T003 [P] [US1] Write unit tests for `wizard-env-writer.ts` — `packages/control-plane/__tests__/services/wizard-env-writer.test.ts`
+- [X] T003 [P] [US1] Write unit tests for `wizard-env-writer.ts` — `packages/control-plane/__tests__/services/wizard-env-writer.test.ts`
   - Happy path: two credentials (github-app + api-key) → env file with `GH_TOKEN` and `ANTHROPIC_API_KEY`
   - Empty `credentials.yaml` → empty env file, no error
   - Missing `credentials.yaml` → empty result, no error
@@ -39,7 +39,7 @@
   - File permissions: written with mode 0600
   - Mock `ClusterLocalBackend` via `setCredentialBackend()` DI pattern (same as `credential-writer.test.ts`)
 
-- [ ] T004 [P] [US1] Add lifecycle integration tests — `packages/control-plane/__tests__/routes/lifecycle.test.ts`
+- [X] T004 [P] [US1] Add lifecycle integration tests — `packages/control-plane/__tests__/routes/lifecycle.test.ts`
   - `bootstrap-complete` writes env file before sentinel
   - `bootstrap-complete` with no `credentials.yaml` still writes sentinel successfully
   - `bootstrap-complete` with unseal failure still writes sentinel (non-fatal)
@@ -48,7 +48,7 @@
 
 ## Phase 3: Verification
 
-- [ ] T005 [US1] Run tests and verify build — `packages/control-plane`
+- [X] T005 [US1] Run tests and verify build — `packages/control-plane`
   - Run `pnpm test` in `packages/control-plane` to verify all new and existing tests pass
   - Run `pnpm build` (or `tsc --noEmit`) to verify no type errors
   - Verify no lint errors
