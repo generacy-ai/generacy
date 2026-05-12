@@ -10,24 +10,24 @@
 
 ## Phase 1: Schema & Types
 
-- [ ] T001 [US1] Add `vscode-tunnel-start` and `vscode-tunnel-stop` to `LifecycleActionSchema` in `packages/control-plane/src/schemas.ts`
+- [X] T001 [US1] Add `vscode-tunnel-start` and `vscode-tunnel-stop` to `LifecycleActionSchema` in `packages/control-plane/src/schemas.ts`
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Create `VsCodeTunnelProcessManager` in `packages/control-plane/src/services/vscode-tunnel-manager.ts` — singleton DI, `start()`/`stop()`/`getStatus()`/`shutdown()`, child process spawn with SIGTERM/SIGKILL, stdout line-by-line parsing for device code (`/[A-Z0-9]{4}-[A-Z0-9]{4}/`) and verification URI, 30s device-code timeout, relay event emission on `cluster.vscode-tunnel` channel, env-based options (`VSCODE_CLI_BIN`, `GENERACY_CLUSTER_ID`)
-- [ ] T003 [P] [US1] Add `vscode-tunnel-start` and `vscode-tunnel-stop` dispatch branches in `packages/control-plane/src/routes/lifecycle.ts` — call `getVsCodeTunnelManager().start()`/`.stop()`, return JSON result
-- [ ] T004 [P] [US1] Wire tunnel auto-start into `bootstrap-complete` handler in `packages/control-plane/src/routes/lifecycle.ts` — call `getVsCodeTunnelManager().start()` after writing sentinel file
-- [ ] T005 [P] [US1] Add `shutdown()` call for tunnel manager in `packages/control-plane/src/server.ts` close handler
+- [X] T002 [US1] Create `VsCodeTunnelProcessManager` in `packages/control-plane/src/services/vscode-tunnel-manager.ts` — singleton DI, `start()`/`stop()`/`getStatus()`/`shutdown()`, child process spawn with SIGTERM/SIGKILL, stdout line-by-line parsing for device code (`/[A-Z0-9]{4}-[A-Z0-9]{4}/`) and verification URI, 30s device-code timeout, relay event emission on `cluster.vscode-tunnel` channel, env-based options (`VSCODE_CLI_BIN`, `GENERACY_CLUSTER_ID`)
+- [X] T003 [P] [US1] Add `vscode-tunnel-start` and `vscode-tunnel-stop` dispatch branches in `packages/control-plane/src/routes/lifecycle.ts` — call `getVsCodeTunnelManager().start()`/`.stop()`, return JSON result
+- [X] T004 [P] [US1] Wire tunnel auto-start into `bootstrap-complete` handler in `packages/control-plane/src/routes/lifecycle.ts` — call `getVsCodeTunnelManager().start()` after writing sentinel file
+- [X] T005 [P] [US1] Add `shutdown()` call for tunnel manager in `packages/control-plane/src/server.ts` close handler
 
 ## Phase 3: Scaffolder Volume
 
-- [ ] T006 [US2] Add `vscode-cli:/home/node/.vscode-cli` named volume to orchestrator service in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — volume declaration + mount, orchestrator only
+- [X] T006 [US2] Add `vscode-cli:/home/node/.vscode-cli` named volume to orchestrator service in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` — volume declaration + mount, orchestrator only
 
 ## Phase 4: Tests
 
-- [ ] T007 [P] [US1] Create unit tests for `VsCodeTunnelProcessManager` in `packages/control-plane/__tests__/vscode-tunnel-manager.test.ts` — mock `child_process.spawn`, test state machine transitions (stopped→starting→authorization_pending→connected), device code parsing, 30s timeout→error, stop/SIGTERM/SIGKILL, relay event emission
-- [ ] T008 [P] [US1] Create lifecycle route integration tests in `packages/control-plane/__tests__/lifecycle-vscode-tunnel.test.ts` — test `vscode-tunnel-start`/`vscode-tunnel-stop` dispatch, bootstrap-complete auto-start
-- [ ] T009 [P] [US2] Add `vscode-cli` volume assertions to scaffolder tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`
+- [X] T007 [P] [US1] Create unit tests for `VsCodeTunnelProcessManager` in `packages/control-plane/__tests__/vscode-tunnel-manager.test.ts` — mock `child_process.spawn`, test state machine transitions (stopped→starting→authorization_pending→connected), device code parsing, 30s timeout→error, stop/SIGTERM/SIGKILL, relay event emission
+- [X] T008 [P] [US1] Create lifecycle route integration tests in `packages/control-plane/__tests__/lifecycle-vscode-tunnel.test.ts` — test `vscode-tunnel-start`/`vscode-tunnel-stop` dispatch, bootstrap-complete auto-start
+- [X] T009 [P] [US2] Add `vscode-cli` volume assertions to scaffolder tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`
 
 ## Dependencies & Execution Order
 
