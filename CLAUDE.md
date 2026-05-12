@@ -253,3 +253,11 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `packages/control-plane/bin/control-plane.ts` — MODIFIED in #594: Reads `ORCHESTRATOR_INTERNAL_API_KEY` and `ORCHESTRATOR_URL` (default `http://127.0.0.1:3100`) env vars. Calls `setRelayPushEvent()` with an HTTP callback that POSTs to `/internal/relay-events`. Fire-and-forget with `.catch(log)`.
   - Companion change in `cluster-base` entrypoint: `entrypoint-orchestrator.sh` generates ephemeral UUID key via `uuidgen`, exports as `ORCHESTRATOR_INTERNAL_API_KEY` before spawning both processes.
   - Graceful degradation: if `ORCHESTRATOR_INTERNAL_API_KEY` is unset, logs warning and continues (existing `if (pushEvent)` guards remain).
+
+## Wizard-Mode Relay Bridge Fix (#598)
+
+- Bug: In wizard mode (`!config.relay.apiKey` at startup), `setupInternalRelayEventsRoute()` is called inside `initializeRelayBridge()` **after** `server.listen()`. Fastify rejects post-listen route registration, causing the entire relay bridge initialization to fail silently. Cluster stays offline; wizard shows "Cluster is not reachable".
+- Root cause: PR #594 added route registration as a side-effect inside `initializeRelayBridge()`, which runs after `server.listen()` in wizard mode (#567 background activation path).
+- Fix: Deferred binding pattern — register `/internal/relay-events` route and `ORCHESTRATOR_INTERNAL_API_KEY` in `apiKeyStore` **before** `server.listen()` in `createServer()`. Route handler uses a getter `() => ClusterRelayClient | null` instead of a direct client reference. Returns 503 before activation completes. `initializeRelayBridge()` assigns the client ref post-activation via setter callback; no longer calls `server.post()` or registers API keys.
+- `packages/orchestrator/src/routes/internal-relay-events.ts` — MODIFIED in #598: `setupInternalRelayEventsRoute` signature changed to accept `getRelayClient: () => ClusterRelayClient | null`. Returns 503 with `{ error: "relay not yet initialized" }` when getter returns null.
+- `packages/orchestrator/src/server.ts` — MODIFIED in #598: Route registration and API key moved from `initializeRelayBridge()` to `createServer()` (before `server.listen()`). Mutable `relayClientRef` closed over by getter. `initializeRelayBridge()` takes optional setter callback to assign client ref post-activation.
