@@ -41,13 +41,18 @@ const VERIFICATION_URI_PATTERN = /https:\/\/github\.com\/login\/device/;
 const CONNECTED_PATTERN = /https:\/\/vscode\.dev\/tunnel\/[\w-]+|is connected|tunnel is ready/i;
 const TUNNEL_URL_PATTERN = /(https:\/\/vscode\.dev\/tunnel\/[\w-]+[\w\-/]*)/;
 
+export function deriveTunnelName(clusterId: string): string {
+  const compact = clusterId.replace(/-/g, '');
+  return `g-${compact.slice(0, 18)}`;
+}
+
 export function loadOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): VsCodeTunnelManagerOptions {
-  const tunnelName = env['GENERACY_CLUSTER_ID'];
-  if (!tunnelName) throw new Error('GENERACY_CLUSTER_ID is required for VS Code tunnel');
+  const clusterId = env['GENERACY_CLUSTER_ID'];
+  if (!clusterId) throw new Error('GENERACY_CLUSTER_ID is required for VS Code tunnel');
 
   return {
     binPath: env['VSCODE_CLI_BIN'] ?? DEFAULT_VSCODE_CLI_BIN,
-    tunnelName,
+    tunnelName: deriveTunnelName(clusterId),
   };
 }
 
