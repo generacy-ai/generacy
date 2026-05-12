@@ -39,8 +39,8 @@ describe('writeWizardEnvFile', () => {
   });
 
   it('happy path: writes two credentials to env file', async () => {
-    // Store secrets in backend
-    await backend.setSecret('github-main-org', 'ghp_abc123');
+    // Store secrets in backend (github-app value is JSON with token field)
+    await backend.setSecret('github-main-org', '{"installationId":1,"token":"ghp_abc123"}');
     await backend.setSecret('anthropic-api-key', 'sk-ant-xyz789');
 
     // Write credentials.yaml
@@ -103,7 +103,7 @@ describe('writeWizardEnvFile', () => {
 
   it('partial unseal failure: writes partial file with failed entries', async () => {
     // Only store one secret — the other will fail to unseal
-    await backend.setSecret('github-main-org', 'ghp_abc123');
+    await backend.setSecret('github-main-org', '{"installationId":1,"token":"ghp_abc123"}');
 
     const yamlContent = {
       credentials: {
@@ -137,7 +137,7 @@ describe('writeWizardEnvFile', () => {
   });
 
   it('writes env file with mode 0600', async () => {
-    await backend.setSecret('github-main-org', 'ghp_abc123');
+    await backend.setSecret('github-main-org', '{"installationId":1,"token":"ghp_abc123"}');
 
     const yamlContent = {
       credentials: {
@@ -162,9 +162,31 @@ describe('writeWizardEnvFile', () => {
 });
 
 describe('mapCredentialToEnvEntries', () => {
-  it('maps github-app type to GH_TOKEN', () => {
-    const entries = mapCredentialToEnvEntries('github-main-org', 'github-app', 'ghp_abc');
-    expect(entries).toEqual([{ key: 'GH_TOKEN', value: 'ghp_abc' }]);
+  it('maps github-app type to GH_TOKEN by extracting token from JSON', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc"}',
+    );
+    expect(entries).toEqual([{ key: 'GH_TOKEN', value: 'ghs_abc' }]);
+  });
+
+  it('github-app with missing token field returns empty', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1}',
+    );
+    expect(entries).toEqual([]);
+  });
+
+  it('github-app with unparseable value returns empty', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      'not-json',
+    );
+    expect(entries).toEqual([]);
   });
 
   it('maps github-pat type to GH_TOKEN', () => {

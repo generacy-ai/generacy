@@ -34,7 +34,18 @@ export function mapCredentialToEnvEntries(
   type: string,
   value: string,
 ): EnvEntry[] {
-  if (type === 'github-app' || type === 'github-pat') {
+  if (type === 'github-app') {
+    try {
+      const parsed = JSON.parse(value) as { token?: unknown };
+      if (typeof parsed.token === 'string' && parsed.token.length > 0) {
+        return [{ key: 'GH_TOKEN', value: parsed.token }];
+      }
+    } catch {
+      // unparseable value — skip GH_TOKEN entirely
+    }
+    return [];
+  }
+  if (type === 'github-pat') {
     return [{ key: 'GH_TOKEN', value }];
   }
   if (/anthropic/i.test(id) && type === 'api-key') {
