@@ -261,3 +261,10 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Fix: Deferred binding pattern — register `/internal/relay-events` route and `ORCHESTRATOR_INTERNAL_API_KEY` in `apiKeyStore` **before** `server.listen()` in `createServer()`. Route handler uses a getter `() => ClusterRelayClient | null` instead of a direct client reference. Returns 503 before activation completes. `initializeRelayBridge()` assigns the client ref post-activation via setter callback; no longer calls `server.post()` or registers API keys.
 - `packages/orchestrator/src/routes/internal-relay-events.ts` — MODIFIED in #598: `setupInternalRelayEventsRoute` signature changed to accept `getRelayClient: () => ClusterRelayClient | null`. Returns 503 with `{ error: "relay not yet initialized" }` when getter returns null.
 - `packages/orchestrator/src/server.ts` — MODIFIED in #598: Route registration and API key moved from `initializeRelayBridge()` to `createServer()` (before `server.listen()`). Mutable `relayClientRef` closed over by getter. `initializeRelayBridge()` takes optional setter callback to assign client ref post-activation.
+
+## EventMessage Wire-Shape Fix (#600)
+
+- Bug: `POST /internal/relay-events` handler constructs EventMessage with swapped field names (`channel`/`event` instead of `event`/`data`), causing all relay events forwarded from control-plane to be silently dropped by the cloud.
+- Root cause: #594 used local `EventMessage` interface field names (`{ channel, event }`) but the cloud expects wire format `{ event: channelName, data: payload, timestamp: ISO }`. The `as unknown as RelayMessage` double-cast hid the type mismatch.
+- Fix: `packages/orchestrator/src/routes/internal-relay-events.ts` — change `client.send()` call to use `event: channel, data: payload, timestamp: new Date().toISOString()`. Cast retained because `EventMessage` interface update is out of scope (#572).
+- Affects all four IPC channels: `cluster.vscode-tunnel`, `cluster.audit`, `cluster.credentials`, `cluster.bootstrap`.

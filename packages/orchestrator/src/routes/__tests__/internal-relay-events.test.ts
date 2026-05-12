@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { setupInternalRelayEventsRoute } from '../internal-relay-events.js';
 import { createAuthMiddleware, InMemoryApiKeyStore } from '../../auth/index.js';
-import type { ClusterRelayClient, RelayMessage } from '../../types/relay.js';
+import type { ClusterRelayClient } from '../../types/relay.js';
 
 function createMockRelayClient(overrides: Partial<ClusterRelayClient> = {}): ClusterRelayClient {
   return {
@@ -39,36 +39,39 @@ describe('POST /internal/relay-events', () => {
     });
     server.addHook('preHandler', authMiddleware);
 
-    setupInternalRelayEventsRoute(server, relayClient);
+    setupInternalRelayEventsRoute(server, () => relayClient);
     await server.ready();
   });
 
   it('forwards a valid event to the relay client and returns 204', async () => {
+    const timestamp = new Date().toISOString();
     const response = await server.inject({
       method: 'POST',
       url: '/internal/relay-events',
       headers: { authorization: `Bearer ${testApiKey}` },
       payload: {
-        channel: 'cluster.vscode-tunnel',
-        payload: { status: 'starting' },
+        event: 'cluster.vscode-tunnel',
+        data: { status: 'starting' },
+        timestamp,
       },
     });
 
     expect(response.statusCode).toBe(204);
     expect(relayClient.send).toHaveBeenCalledWith({
       type: 'event',
-      channel: 'cluster.vscode-tunnel',
-      event: { status: 'starting' },
+      event: 'cluster.vscode-tunnel',
+      data: { status: 'starting' },
+      timestamp,
     });
   });
 
   it('accepts all allowed channels', async () => {
-    for (const channel of ['cluster.audit', 'cluster.credentials', 'cluster.bootstrap']) {
+    for (const event of ['cluster.audit', 'cluster.credentials', 'cluster.bootstrap']) {
       const response = await server.inject({
         method: 'POST',
         url: '/internal/relay-events',
         headers: { authorization: `Bearer ${testApiKey}` },
-        payload: { channel, payload: { test: true } },
+        payload: { event, data: { test: true }, timestamp: new Date().toISOString() },
       });
       expect(response.statusCode).toBe(204);
     }
@@ -81,8 +84,9 @@ describe('POST /internal/relay-events', () => {
       url: '/internal/relay-events',
       headers: { authorization: `Bearer ${testApiKey}` },
       payload: {
-        channel: 'not.a.real.channel',
-        payload: {},
+        event: 'not.a.real.channel',
+        data: {},
+        timestamp: new Date().toISOString(),
       },
     });
 
@@ -90,12 +94,12 @@ describe('POST /internal/relay-events', () => {
     expect(relayClient.send).not.toHaveBeenCalled();
   });
 
-  it('rejects a request with missing channel', async () => {
+  it('rejects a request with missing event', async () => {
     const response = await server.inject({
       method: 'POST',
       url: '/internal/relay-events',
       headers: { authorization: `Bearer ${testApiKey}` },
-      payload: { payload: {} },
+      payload: { data: {}, timestamp: new Date().toISOString() },
     });
 
     expect(response.statusCode).toBe(400);
@@ -106,8 +110,9 @@ describe('POST /internal/relay-events', () => {
       method: 'POST',
       url: '/internal/relay-events',
       payload: {
-        channel: 'cluster.vscode-tunnel',
-        payload: {},
+        event: 'cluster.vscode-tunnel',
+        data: {},
+        timestamp: new Date().toISOString(),
       },
     });
 
@@ -121,8 +126,9 @@ describe('POST /internal/relay-events', () => {
       url: '/internal/relay-events',
       headers: { authorization: 'Bearer wrong-key' },
       payload: {
-        channel: 'cluster.vscode-tunnel',
-        payload: {},
+        event: 'cluster.vscode-tunnel',
+        data: {},
+        timestamp: new Date().toISOString(),
       },
     });
 
@@ -139,7 +145,7 @@ describe('POST /internal/relay-events', () => {
       skipRoutes: ['/health'],
     });
     disconnectedServer.addHook('preHandler', authMiddleware);
-    setupInternalRelayEventsRoute(disconnectedServer, relayClient);
+    setupInternalRelayEventsRoute(disconnectedServer, () => relayClient);
     await disconnectedServer.ready();
 
     const response = await disconnectedServer.inject({
@@ -147,8 +153,9 @@ describe('POST /internal/relay-events', () => {
       url: '/internal/relay-events',
       headers: { authorization: `Bearer ${testApiKey}` },
       payload: {
-        channel: 'cluster.vscode-tunnel',
-        payload: { status: 'starting' },
+        event: 'cluster.vscode-tunnel',
+        data: { status: 'starting' },
+        timestamp: new Date().toISOString(),
       },
     });
 
