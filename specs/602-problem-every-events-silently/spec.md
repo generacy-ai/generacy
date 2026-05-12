@@ -74,14 +74,10 @@ export const EventMessageSchema = z.object({
 
 (\`timestamp\` becomes required where it was previously optional — minor breaking change.)
 
-Export both \`EventMessageSchema\` and \`RelayMessageSchema\` as named exports to unblock the cloud companion PR. Cloud's \`relay-server.ts\` needs the full discriminated-union schema for validating inbound WebSocket messages.
-
 ### Step 2: Update all cluster-side senders to the canonical shape
 
 - \`packages/orchestrator/src/services/relay-bridge.ts:390\` — change \`channel\` → \`event\`, \`event\` → \`data\`, add \`timestamp\`
 - \`packages/orchestrator/src/routes/internal-relay-events.ts\` — same change (overlap with #600; can fold or ship serially)
-- **Replace orchestrator's local relay types** (\`packages/orchestrator/src/types/relay.ts\`) with imports from \`@generacy-ai/cluster-relay\` — eliminate \`RelayEvent\` and \`RelayJobEvent\` (both share \`type: 'event'\` discriminant, making TS narrowing impossible). At minimum, delete these two types and import canonical \`EventMessage\` from cluster-relay. Other relay types can be migrated in follow-up.
-- **Rename \`PushEventFn\` signature** in control-plane: change from \`(channel, payload)\` to \`(event, data)\`, update HTTP body shape from \`{channel, payload}\` to \`{event, data, timestamp}\`, update orchestrator's \`/internal/relay-events\` Zod schema to match. Positional callers (\`pushEvent('cluster.audit', x)\`) are unchanged.
 
 Remove every \`as RelayMessage\` and \`as unknown as RelayMessage\` cast on event sends. Let the type system enforce.
 
@@ -130,60 +126,35 @@ Four times in two weeks. The structural fix takes the door away. Wire-shape drif
 
 ## User Stories
 
-### US1: Relay Events Reach Cloud
+### US1: [Primary User Story]
 
-**As a** cluster operator,
-**I want** all relay events (audit, credentials, vscode-tunnel, bootstrap) to be received by the cloud,
-**So that** the dashboard reflects real-time cluster state without silent data loss.
-
-**Acceptance Criteria**:
-- [ ] All four orchestrator send-sites emit the canonical `{type, event, data, timestamp}` shape
-- [ ] Cloud receives and processes events from all channels (no silent drops)
-- [ ] No `as RelayMessage` or `as unknown as RelayMessage` casts remain on event sends
-
-### US2: Type-Safe Event Contract
-
-**As a** developer working on cluster-cloud integration,
-**I want** a single canonical event schema shared between repos,
-**So that** wire-shape drift causes a compile error instead of a runtime silent drop.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `EventMessage` and `EventMessageSchema` defined once in `@generacy-ai/cluster-relay`
-- [ ] Orchestrator's duplicate `RelayEvent`/`RelayJobEvent` types deleted, imports from cluster-relay
-- [ ] `PushEventFn` signature uses canonical field names (`event`, `data`)
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Define canonical `EventMessage` type with `{type, event, data, timestamp}` in `cluster-relay` | P1 | Adopt cloud convention |
-| FR-002 | Export `EventMessageSchema` and `RelayMessageSchema` from `cluster-relay` | P1 | Unblocks cloud companion PR |
-| FR-003 | Update `relay-bridge.ts:390` to emit canonical shape | P1 | Currently emits `{channel, event}` — silently dropped |
-| FR-004 | Update `internal-relay-events.ts` to emit canonical shape | P1 | Currently emits `{channel, event}` — #600 |
-| FR-005 | Delete `RelayEvent`/`RelayJobEvent` from orchestrator's `types/relay.ts`, import from cluster-relay | P1 | Eliminates dual-discriminant trap |
-| FR-006 | Rename `PushEventFn` from `(channel, payload)` to `(event, data)`, update HTTP body and Zod schema | P1 | End-to-end canonical naming |
-| FR-007 | Remove all `as RelayMessage` / `as unknown as RelayMessage` casts on event sends | P1 | Let type system enforce |
-| FR-008 | Add round-trip unit test for `EventMessage` schema in cluster-relay | P2 | Locks the contract |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Zero `as RelayMessage` casts on event sends | 0 remaining | Grep across orchestrator |
-| SC-002 | All event channels reach cloud | 100% (audit, credentials, tunnel, bootstrap, job) | Integration test / manual verify |
-| SC-003 | Single `EventMessage` definition | 1 source of truth in cluster-relay | No duplicate definitions in orchestrator or control-plane |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Cloud's existing `{event, data}` convention is the correct canonical shape (more semantically self-describing)
-- Cloud companion PR (Steps 3-4: import schema, validate with Zod) will be done separately
-- Positional callers of `pushEvent()` do not need changes (only the type signature and HTTP body shape change)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Cloud-side changes (Steps 3-4: re-export types, Zod validation) — separate companion PR
-- Other message types (`ApiRequestMessage`, `ApiResponseMessage`, conversation, lease, tunnel) — follow-up if needed
-- Migrating non-event relay types from orchestrator's `types/relay.ts` to cluster-relay imports — follow-up
+- [Exclusion 1]
 
 ---
 
