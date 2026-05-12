@@ -242,3 +242,13 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/src/routes/lifecycle.ts` — MODIFIED in #589: `bootstrap-complete` handler calls `writeWizardEnvFile()` before writing sentinel file. Env file write failure is non-fatal (logged, continues to sentinel).
 - Env file consumed by `entrypoint-post-activation.sh` (cluster-base companion PR) which sources it with `set -a; source $WIZARD_CREDS; set +a` then deletes it.
 - Root cause: wizard credentials stored encrypted in `credentials.dat` via `PUT /credentials/:id`, but post-activation bash scripts check `$GH_TOKEN` env var — nothing in the bootstrap flow exported tokens as process env vars.
+
+## Control-Plane Relay Event IPC (#594)
+
+- Bug: control-plane process never calls `setRelayPushEvent()` — all relay events (`cluster.vscode-tunnel`, `cluster.audit`, `cluster.credentials`) emitted from control-plane are silently dropped because `getRelayPushEvent()` returns `undefined`.
+- Root cause: control-plane and orchestrator are separate processes (no shared memory). Orchestrator owns the `ClusterRelay` WebSocket client but control-plane has no IPC channel to reach it.
+- Fix: HTTP-based IPC channel from control-plane to orchestrator.
+  - `packages/orchestrator/src/server.ts` — MODIFIED in #594: New `POST /internal/relay-events` Fastify route. Accepts `{ channel, payload }`, validates with Zod, forwards via `relayClient.send({ type: 'event', channel, event: payload })`. Authenticated via `ORCHESTRATOR_INTERNAL_API_KEY` added to `apiKeyStore` (follows existing `relayInternalKey` pattern at line ~628).
+  - `packages/control-plane/bin/control-plane.ts` — MODIFIED in #594: Reads `ORCHESTRATOR_INTERNAL_API_KEY` and `ORCHESTRATOR_URL` (default `http://127.0.0.1:3100`) env vars. Calls `setRelayPushEvent()` with an HTTP callback that POSTs to `/internal/relay-events`. Fire-and-forget with `.catch(log)`.
+  - Companion change in `cluster-base` entrypoint: `entrypoint-orchestrator.sh` generates ephemeral UUID key via `uuidgen`, exports as `ORCHESTRATOR_INTERNAL_API_KEY` before spawning both processes.
+  - Graceful degradation: if `ORCHESTRATOR_INTERNAL_API_KEY` is unset, logs warning and continues (existing `if (pushEvent)` guards remain).
