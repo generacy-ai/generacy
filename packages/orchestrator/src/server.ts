@@ -47,6 +47,7 @@ import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
 import { TunnelHandler, getCodeServerManager } from '@generacy-ai/control-plane';
+import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 
 /**
  * Server creation options
@@ -650,6 +651,18 @@ async function initializeRelayBridge(
         },
       ],
     });
+    // Register control-plane internal API key for relay event IPC
+    const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
+    if (controlPlaneKey) {
+      apiKeyStore.addKey(controlPlaneKey, {
+        name: 'control-plane-internal',
+        scopes: ['admin'],
+        createdAt: new Date().toISOString(),
+      });
+      setupInternalRelayEventsRoute(server, relayClient);
+      server.log.info('Control-plane relay event IPC endpoint registered');
+    }
+
     relayBridge = new RelayBridge({
       client: relayClient,
       server,
