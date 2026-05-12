@@ -41,8 +41,9 @@ export function setupInternalRelayEventsRoute(
       if (client.isConnected) {
         client.send({
           type: 'event',
-          channel,
-          event: payload,
+          event: channel,
+          data: payload,
+          timestamp: new Date().toISOString(),
         } as unknown as RelayMessage);
       }
 
