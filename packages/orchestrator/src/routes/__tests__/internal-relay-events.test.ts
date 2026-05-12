@@ -39,7 +39,7 @@ describe('POST /internal/relay-events', () => {
     });
     server.addHook('preHandler', authMiddleware);
 
-    setupInternalRelayEventsRoute(server, relayClient);
+    setupInternalRelayEventsRoute(server, () => relayClient);
     await server.ready();
   });
 
@@ -57,8 +57,9 @@ describe('POST /internal/relay-events', () => {
     expect(response.statusCode).toBe(204);
     expect(relayClient.send).toHaveBeenCalledWith({
       type: 'event',
-      channel: 'cluster.vscode-tunnel',
-      event: { status: 'starting' },
+      event: 'cluster.vscode-tunnel',
+      data: { status: 'starting' },
+      timestamp: expect.any(String),
     });
   });
 
@@ -139,7 +140,7 @@ describe('POST /internal/relay-events', () => {
       skipRoutes: ['/health'],
     });
     disconnectedServer.addHook('preHandler', authMiddleware);
-    setupInternalRelayEventsRoute(disconnectedServer, relayClient);
+    setupInternalRelayEventsRoute(disconnectedServer, () => relayClient);
     await disconnectedServer.ready();
 
     const response = await disconnectedServer.inject({
