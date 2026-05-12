@@ -37,9 +37,9 @@
 
 ## Phase 5: Verification
 
-- [ ] T016 [P] [US1] Run TypeScript compilation across all three packages (`cluster-relay`, `orchestrator`, `control-plane`) — zero errors
-- [ ] T017 [P] [US1] Run existing tests in cluster-relay (`pnpm --filter @generacy-ai/cluster-relay test`)
-- [ ] T018 [US1] Grep for remaining `as RelayMessage` and `as unknown as RelayMessage` casts on event sends — zero matches (SC-001)
+- [X] T016 [P] [US1] Run TypeScript compilation across all three packages (`cluster-relay`, `orchestrator`, `control-plane`) — zero errors
+- [X] T017 [P] [US1] Run existing tests in cluster-relay (`pnpm --filter @generacy-ai/cluster-relay test`)
+- [X] T018 [US1] Grep for remaining `as RelayMessage` and `as unknown as RelayMessage` casts on event sends — zero matches (SC-001)
 
 ## Dependencies & Execution Order
 

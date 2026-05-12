@@ -210,10 +210,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     if (config.relay.apiKey) {
       try {
         const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+        // Cast: package's RelayMessage is a subset of local RelayMessage (lease types not in package yet — follow-up)
         workerRelayClient = new RelayClientImpl({
           apiKey: config.relay.apiKey,
           cloudUrl: config.relay.cloudUrl,
-        });
+        }) as unknown as import('./types/relay.js').ClusterRelayClient;
         jobEventEmitter = (event: string, data: Record<string, unknown>) => {
           try {
             if (!workerRelayClient?.isConnected) return;
@@ -653,6 +654,7 @@ async function initializeRelayBridge(
 
     const codeServerSocket = process.env['CODE_SERVER_SOCKET_PATH'] ?? '/run/generacy-control-plane/code-server.sock';
 
+    // Cast: package's RelayMessage is a subset of local RelayMessage (lease types not in package yet — follow-up)
     const relayClient = new RelayClientImpl({
       apiKey: config.relay.apiKey,
       cloudUrl: config.relay.cloudUrl,
@@ -668,7 +670,7 @@ async function initializeRelayBridge(
           target: `unix://${codeServerSocket}`,
         },
       ],
-    });
+    }) as unknown as import('./types/relay.js').ClusterRelayClient;
 
     // Assign relay client ref for the deferred-binding route registered in createServer()
     if (setRelayClient) {

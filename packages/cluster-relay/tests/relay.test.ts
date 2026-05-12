@@ -261,11 +261,12 @@ describe('ClusterRelay', () => {
     await waitFor(() => serverReceived.some((m) => m.type === 'event'));
 
     const eventMsg = serverReceived.find((m) => m.type === 'event');
-    expect(eventMsg).toEqual({
+    expect(eventMsg).toMatchObject({
       type: 'event',
-      channel: 'metrics',
-      event: { cpu: 42 },
+      event: 'metrics',
+      data: { cpu: 42 },
     });
+    expect(eventMsg).toHaveProperty('timestamp');
 
     await relay.disconnect();
     await connectPromise;
@@ -469,8 +470,9 @@ describe('ClusterRelay', () => {
             ws.send(
               JSON.stringify({
                 type: 'event',
-                channel: 'ch1',
-                event: { x: 1 },
+                event: 'ch1',
+                data: { x: 1 },
+                timestamp: new Date().toISOString(),
               }),
             );
           }, 30);
@@ -487,15 +489,15 @@ describe('ClusterRelay', () => {
     await waitFor(() => received1.some((m) => m.type === 'event'));
     await waitFor(() => received2.some((m) => m.type === 'event'));
 
-    expect(received1.find((m) => m.type === 'event')).toEqual({
+    expect(received1.find((m) => m.type === 'event')).toMatchObject({
       type: 'event',
-      channel: 'ch1',
-      event: { x: 1 },
+      event: 'ch1',
+      data: { x: 1 },
     });
-    expect(received2.find((m) => m.type === 'event')).toEqual({
+    expect(received2.find((m) => m.type === 'event')).toMatchObject({
       type: 'event',
-      channel: 'ch1',
-      event: { x: 1 },
+      event: 'ch1',
+      data: { x: 1 },
     });
 
     await relay.disconnect();
