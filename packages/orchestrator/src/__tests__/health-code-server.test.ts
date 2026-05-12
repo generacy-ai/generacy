@@ -21,7 +21,7 @@ import { createServer } from '../server.js';
 import { createTestConfig } from '../config/index.js';
 import { getCodeServerManager } from '@generacy-ai/control-plane';
 
-let mockManager = {
+const mockManager = {
   start: vi.fn(async () => ({ status: 'starting' as const, socket_path: '/tmp/cs.sock' })),
   stop: vi.fn(async () => {}),
   touch: vi.fn(),
