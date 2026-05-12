@@ -22,6 +22,7 @@ export async function collectMetadata(
     orchestratorVersion: health.version,
     gitRemotes,
     uptime: health.uptime,
+    codeServerReady: health.codeServerReady,
   };
 }
 
@@ -29,6 +30,7 @@ interface HealthData {
   version: string;
   channel: 'preview' | 'stable';
   uptime: number;
+  codeServerReady: boolean;
 }
 
 async function fetchHealth(config: RelayConfig): Promise<HealthData> {
@@ -42,12 +44,13 @@ async function fetchHealth(config: RelayConfig): Promise<HealthData> {
         version: String(data['version'] ?? '0.0.0'),
         channel: (data['channel'] === 'preview' ? 'preview' : 'stable') as 'preview' | 'stable',
         uptime: Number(data['uptime'] ?? 0),
+        codeServerReady: data['codeServerReady'] === true,
       };
     }
   } catch {
     // Orchestrator unreachable — use defaults
   }
-  return { version: '0.0.0', channel: 'stable', uptime: 0 };
+  return { version: '0.0.0', channel: 'stable', uptime: 0, codeServerReady: false };
 }
 
 interface MetricsData {

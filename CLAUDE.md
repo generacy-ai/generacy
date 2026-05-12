@@ -81,6 +81,20 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - Retry budget: 5 retries, exponential backoff (2s-32s, ~62s total) for initial cloud requests.
   - Integration: `server.ts` calls `activate()` before relay construction; sets `config.relay.apiKey` and `config.relay.clusterApiKeyId` from result. #517 fix: also overrides `config.activation.cloudUrl` and `config.relay.cloudUrl` (derived WSS: `https://X` → `wss://X/relay`) from `activationResult.cloudUrl` when present. #567 fix: in wizard mode (no existing API key), activation runs as a background promise so `server.listen()` is not blocked. Relay bridge and conversation manager initialization extracted into `initializeRelayBridge()` and `initializeConversationManager()` helper functions, called asynchronously after activation succeeds. `/health` endpoint responds immediately regardless of activation state.
   - #574 fix: `initializeRelayBridge()` now passes `routes: [{ prefix: '/control-plane', target: 'unix:///run/generacy-control-plane/control.sock' }]` to `ClusterRelayClientOptions`. This routes cloud-sent `/control-plane/*` API requests to the control-plane unix socket instead of falling back to the orchestrator (which returned 404). Prefix is stripped by the dispatcher, so `/control-plane/credentials/:id` becomes `/credentials/:id` on the socket.
+  - #586 fix: `initializeRelayBridge()` adds second route `{ prefix: '/code-server', target: 'unix:///run/code-server.sock' }` (configurable via `CODE_SERVER_SOCKET_PATH` env). Routes cloud IDE proxy traffic to code-server's Unix socket. Same pattern as #574.
+
+## Open IDE Flow (#586)
+
+- Three independent gaps prevented "Open IDE" from working after bootstrap:
+  - **Gap A**: No `codeServerReady` producer — cluster metadata never included the field.
+  - **Gap B**: No `/code-server` relay route — cloud IDE proxy traffic fell through to orchestrator (404).
+  - **Gap C**: Code-server never started — `bootstrap-complete` only wrote sentinel file.
+- `packages/control-plane/src/routes/lifecycle.ts` — `bootstrap-complete` handler triggers `code-server-start` async (fire-and-forget). Response returns immediately; readiness propagated via metadata.
+- `packages/orchestrator/src/routes/health.ts` — `/health` endpoint gains `codeServerReady` boolean from `CodeServerManager.getStatus() === 'running'`.
+- `packages/cluster-relay/src/metadata.ts` — `collectMetadata` reads `codeServerReady` from `/health` response (handshake/reconnect path).
+- `packages/orchestrator/src/services/relay-bridge.ts` — `collectMetadata` queries `CodeServerManager.getStatus()` in-process (periodic metadata path).
+- `packages/control-plane/src/services/code-server-manager.ts` — `CodeServerManager` interface gains `onStatusChange(callback)`. On transition to `running`, triggers `RelayBridge.sendMetadata()` for seconds-latency propagation (not 60s heartbeat).
+- Cloud-side schema for `codeServerReady` exists top-to-bottom (Firestore, SSE, ReadyStep). No cloud changes needed.
 
 ## CLI Package (generacy)
 

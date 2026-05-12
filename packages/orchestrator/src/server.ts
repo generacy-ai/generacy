@@ -632,6 +632,8 @@ async function initializeRelayBridge(
       createdAt: new Date().toISOString(),
     });
 
+    const codeServerSocket = process.env['CODE_SERVER_SOCKET_PATH'] ?? '/run/code-server.sock';
+
     const relayClient = new RelayClientImpl({
       apiKey: config.relay.apiKey,
       cloudUrl: config.relay.cloudUrl,
@@ -641,6 +643,10 @@ async function initializeRelayBridge(
         {
           prefix: '/control-plane',
           target: `unix://${controlPlaneSocket}`,
+        },
+        {
+          prefix: '/code-server',
+          target: `unix://${codeServerSocket}`,
         },
       ],
     });
@@ -662,6 +668,14 @@ async function initializeRelayBridge(
         codeServerManager,
       );
       relayBridge.setTunnelHandler(tunnelHandler);
+
+      // Push metadata immediately when code-server becomes ready (seconds-latency, not 60s heartbeat)
+      const bridge = relayBridge;
+      codeServerManager.onStatusChange((status) => {
+        if (status === 'running') {
+          bridge.sendMetadata();
+        }
+      });
     }
 
     relayBridge.setStatusReporter(statusReporter);

@@ -29,6 +29,7 @@ import { ConversationRelayInputSchema } from '../conversation/types.js';
 import type { ConversationOutputEvent } from '../conversation/types.js';
 import type { LeaseManager } from './lease-manager.js';
 import type { StatusReporter } from './status-reporter.js';
+import { getCodeServerManager } from '@generacy-ai/control-plane';
 
 export interface TunnelHandlerLike {
   handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
@@ -473,7 +474,7 @@ export class RelayBridge {
     }
   }
 
-  private sendMetadata(): void {
+  sendMetadata(): void {
     try {
       const metadata = this.collectMetadata();
       if (this.client.isConnected) {
@@ -497,6 +498,7 @@ export class RelayBridge {
       activeWorkflowCount: this.getActiveWorkflowCount(),
       gitRemotes: this.getGitRemotes(),
       reportedAt: new Date().toISOString(),
+      codeServerReady: getCodeServerManager()?.getStatus() === 'running',
     };
 
     // Add cluster.yaml fields if available

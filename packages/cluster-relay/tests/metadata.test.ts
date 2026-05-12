@@ -30,7 +30,7 @@ function createMockFetch(options?: {
         throw new Error('Health endpoint unreachable');
       }
       return new Response(
-        JSON.stringify({ version: '1.0.0', channel: 'stable', uptime: 7200 }),
+        JSON.stringify({ version: '1.0.0', channel: 'stable', uptime: 7200, codeServerReady: true }),
         { status: 200 },
       );
     }
@@ -70,6 +70,7 @@ describe('collectMetadata', () => {
       orchestratorVersion: '1.0.0',
       gitRemotes: [{ name: 'origin', url: 'git@github.com:org/repo.git' }],
       uptime: 7200,
+      codeServerReady: true,
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -129,7 +130,47 @@ describe('collectMetadata', () => {
       orchestratorVersion: '0.0.0',
       gitRemotes: [{ name: 'origin', url: 'git@github.com:org/repo.git' }],
       uptime: 0,
+      codeServerReady: false,
     });
+  });
+
+  it('includes codeServerReady from /health response', async () => {
+    const mockFetch = createMockFetch();
+    vi.stubGlobal('fetch', mockFetch);
+
+    const metadata = await collectMetadata(baseConfig);
+    expect(metadata.codeServerReady).toBe(true);
+  });
+
+  it('defaults codeServerReady to false when field missing from /health', async () => {
+    const mockFetch = vi.fn(async (url: string | URL | Request) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.endsWith('/health')) {
+        return new Response(
+          JSON.stringify({ version: '1.0.0', channel: 'stable', uptime: 100 }),
+          { status: 200 },
+        );
+      }
+      if (urlStr.endsWith('/metrics')) {
+        return new Response(
+          JSON.stringify({ workerCount: 1, activeWorkflows: 0 }),
+          { status: 200 },
+        );
+      }
+      return new Response('Not found', { status: 404 });
+    });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const metadata = await collectMetadata(baseConfig);
+    expect(metadata.codeServerReady).toBe(false);
+  });
+
+  it('defaults codeServerReady to false when /health fails', async () => {
+    const mockFetch = createMockFetch({ healthThrows: true });
+    vi.stubGlobal('fetch', mockFetch);
+
+    const metadata = await collectMetadata(baseConfig);
+    expect(metadata.codeServerReady).toBe(false);
   });
 
   it('parses git remotes correctly from git remote -v output', async () => {
