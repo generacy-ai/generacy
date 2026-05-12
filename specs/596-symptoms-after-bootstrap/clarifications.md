@@ -9,7 +9,7 @@
 - A: Fix both in this PR (same root cause, same fix pattern)
 - B: Fix only `health.ts` now; file a follow-up for `relay-bridge.ts`
 
-**Answer**: *Pending*
+**Answer**: A — Fix both in this PR. Same root cause, same fix shape. Splitting creates a window where `/health` reports correctly but the 60s metadata heartbeat overwrites Firestore with the wrong value. The cluster-relay path (`collectMetadata` in `packages/cluster-relay/src/metadata.ts`) already reads `codeServerReady` from `/health` over HTTP, so once `/health` is correct that path is fixed transitively. Only the in-process relay-bridge callsite needs explicit attention.
 
 ### Q2: Async ripple in collectMetadata
 **Context**: If `relay-bridge.ts` is in scope (Q1=A), `collectMetadata()` is currently synchronous. Adding an async socket probe requires making it `async`, which ripples into `sendMetadata()` (the caller). Two strategies: (a) make `collectMetadata`/`sendMetadata` async, or (b) cache the last probe result (updated on a short interval or from `/health` calls) and read it synchronously in `collectMetadata`.
@@ -18,4 +18,4 @@
 - A: Make `collectMetadata()` and `sendMetadata()` async (simplest, consistent with health.ts)
 - B: Cache the probe result and read synchronously (avoids async ripple, bounded staleness)
 
-**Answer**: *Pending*
+**Answer**: A — Make it async, but extract the probe into a shared helper (`packages/orchestrator/src/services/code-server-probe.ts`). The async ripple is shallow: `collectMetadata` → `sendMetadata` → the `setInterval` callback. Three function signatures change, one `.catch()` on the interval callback. Option B's cache management (TTL, invalidation, stale-state risk) is worse than the async cost. Drop `getCodeServerManager()?.getStatus()` calls entirely — they were the wrong abstraction (cross-process singleton fallacy). The probe is the right abstraction.
