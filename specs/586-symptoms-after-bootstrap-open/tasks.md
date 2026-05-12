@@ -36,44 +36,44 @@
   - Also add `codeServerReady` to the Fastify JSON schema (lines 38-44) as `{ type: 'boolean' }`
   - Handle case where `getCodeServerManager()` returns null (use `false`)
 
-- [ ] T006 [US1] Add health endpoint test in `packages/orchestrator/__tests__/routes/health.test.ts`
+- [X] T006 [US1] Add health endpoint test in `packages/orchestrator/__tests__/routes/health.test.ts`
   - Test that `/health` response includes `codeServerReady: false` when manager status is not 'running'
   - Test that `/health` response includes `codeServerReady: true` when manager status is 'running'
   - Mock `getCodeServerManager()` singleton
 
 ## Phase 3: Dual Metadata Path (Gap A)
 
-- [ ] T007 [P] [US1] Add `codeServerReady` to `cluster-relay/src/metadata.ts` `collectMetadata`
+- [X] T007 [P] [US1] Add `codeServerReady` to `cluster-relay/src/metadata.ts` `collectMetadata`
   - Add `codeServerReady: boolean` to `HealthData` interface (line 28-32)
   - In `fetchHealth()` (line 41-45), extract `codeServerReady: data['codeServerReady'] === true` (default `false`)
   - In `collectMetadata()` return (line 18-26), add `codeServerReady: health.codeServerReady`
 
-- [ ] T008 [P] [US1] Add `codeServerReady` to `relay-bridge.ts` `collectMetadata` in `packages/orchestrator/src/services/relay-bridge.ts`
+- [X] T008 [P] [US1] Add `codeServerReady` to `relay-bridge.ts` `collectMetadata` in `packages/orchestrator/src/services/relay-bridge.ts`
   - Import `getCodeServerManager` from control-plane (or use existing import path)
   - In `collectMetadata()` (line 493-514), add `codeServerReady: getCodeServerManager()?.getStatus() === 'running'` to returned object
   - Update `ClusterMetadataPayload` type in `packages/orchestrator/src/types/relay.ts` if needed
 
-- [ ] T009 [US1] Add metadata tests
+- [X] T009 [US1] Add metadata tests
   - `packages/cluster-relay/__tests__/metadata.test.ts`: Test `collectMetadata` includes `codeServerReady` from `/health` response; test default `false` when field missing
   - `packages/orchestrator/__tests__/services/relay-bridge.test.ts`: Test `collectMetadata` includes `codeServerReady` from code-server manager status
 
 ## Phase 4: Out-of-Band Metadata Push (FR-006)
 
-- [ ] T010 [US1] Add `onStatusChange` callback to `CodeServerManager` interface and implementation in `packages/control-plane/src/services/code-server-manager.ts`
+- [X] T010 [US1] Add `onStatusChange` callback to `CodeServerManager` interface and implementation in `packages/control-plane/src/services/code-server-manager.ts`
   - Add `onStatusChange(callback: (status: CodeServerStatus) => void): void` to `CodeServerManager` interface (line 12-18)
   - In `CodeServerProcessManager`: add private `statusChangeCallback` field, implement `onStatusChange()` setter
   - In `start()` method: after `this.status = 'running'` (line 105), call `this.statusChangeCallback?.('running')`
   - In exit/error handlers: after `this.status = 'stopped'`, call `this.statusChangeCallback?.('stopped')`
 
-- [ ] T011 [US1] Make `sendMetadata()` callable externally in `packages/orchestrator/src/services/relay-bridge.ts`
+- [X] T011 [US1] Make `sendMetadata()` callable externally in `packages/orchestrator/src/services/relay-bridge.ts`
   - `sendMetadata()` is currently private (line 476). Either make it public or add a public wrapper method
   - This is needed so the orchestrator can trigger a metadata send from the code-server callback
 
-- [ ] T012 [US1] Wire code-server status change to relay metadata push in `packages/orchestrator/src/server.ts` `initializeRelayBridge()`
+- [X] T012 [US1] Wire code-server status change to relay metadata push in `packages/orchestrator/src/server.ts` `initializeRelayBridge()`
   - After creating the relay bridge and getting `codeServerManager` (~line 658-665), wire: `codeServerManager.onStatusChange((status) => { if (status === 'running') relayBridge.sendMetadata(); })`
   - This ensures `codeServerReady: true` reaches cloud within seconds of code-server starting
 
-- [ ] T013 [US1] Add test for out-of-band metadata push
+- [X] T013 [US1] Add test for out-of-band metadata push
   - Test that `CodeServerProcessManager.onStatusChange` callback fires on status transitions
   - Test that the wiring in `initializeRelayBridge` calls `sendMetadata()` when status becomes 'running'
 
