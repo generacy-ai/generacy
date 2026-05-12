@@ -10,20 +10,20 @@
 
 ## Phase 1: Route Handler Refactor
 
-- [ ] T001 [US1] Modify `setupInternalRelayEventsRoute` in `packages/orchestrator/src/routes/internal-relay-events.ts` to accept `getRelayClient: () => ClusterRelayClient | null` instead of direct `relayClient` parameter (FR-002)
-- [ ] T002 [US1] Add 503 early return in route handler when `getRelayClient()` returns `null`, responding with `{ error: "relay not yet initialized" }` (FR-003)
+- [X] T001 [US1] Modify `setupInternalRelayEventsRoute` in `packages/orchestrator/src/routes/internal-relay-events.ts` to accept `getRelayClient: () => ClusterRelayClient | null` instead of direct `relayClient` parameter (FR-002)
+- [X] T002 [US1] Add 503 early return in route handler when `getRelayClient()` returns `null`, responding with `{ error: "relay not yet initialized" }` (FR-003)
 
 ## Phase 2: Server Startup Rewiring
 
-- [ ] T003 [US1] In `packages/orchestrator/src/server.ts` `createServer()`, add mutable `relayClientRef` variable and register `ORCHESTRATOR_INTERNAL_API_KEY` in `apiKeyStore` **before** `server.listen()` (FR-006)
-- [ ] T004 [US1] Call `setupInternalRelayEventsRoute(server, () => relayClientRef)` before `server.listen()` in `createServer()` (FR-001)
-- [ ] T005 [US1] Remove `setupInternalRelayEventsRoute()` call and API key registration from `initializeRelayBridge()` (FR-005)
-- [ ] T006 [US1] Add optional `setRelayClient` callback parameter to `initializeRelayBridge()` signature; call it after relay client construction to assign `relayClientRef` (FR-004)
+- [X] T003 [US1] In `packages/orchestrator/src/server.ts` `createServer()`, add mutable `relayClientRef` variable and register `ORCHESTRATOR_INTERNAL_API_KEY` in `apiKeyStore` **before** `server.listen()` (FR-006)
+- [X] T004 [US1] Call `setupInternalRelayEventsRoute(server, () => relayClientRef)` before `server.listen()` in `createServer()` (FR-001)
+- [X] T005 [US1] Remove `setupInternalRelayEventsRoute()` call and API key registration from `initializeRelayBridge()` (FR-005)
+- [X] T006 [US1] Add optional `setRelayClient` callback parameter to `initializeRelayBridge()` signature; call it after relay client construction to assign `relayClientRef` (FR-004)
 
 ## Phase 3: Verification
 
-- [ ] T007 [US2] Verify non-wizard mode path: ensure `relayClientRef` is assigned before `server.listen()` when `config.relay.apiKey` is present (no behavioral change)
-- [ ] T008 [US1] Build packages (`pnpm build` in orchestrator) and verify no type errors
+- [X] T007 [US2] Verify non-wizard mode path: ensure `relayClientRef` is assigned before `server.listen()` when `config.relay.apiKey` is present (no behavioral change)
+- [X] T008 [US1] Build packages (`pnpm build` in orchestrator) and verify no type errors
 
 ## Dependencies & Execution Order
 

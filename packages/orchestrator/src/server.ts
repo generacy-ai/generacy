@@ -308,6 +308,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   let relayBridge: RelayBridge | null = null;
   let activationPending = false;
 
+  // Register internal relay events route BEFORE server.listen() (deferred binding pattern).
+  // The getter resolves to null until activation completes; the route returns 503 in that window.
+  let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  if (!isWorkerMode) {
+    const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
+    if (controlPlaneKey) {
+      apiKeyStore.addKey(controlPlaneKey, {
+        name: 'control-plane-internal',
+        scopes: ['admin'],
+        createdAt: new Date().toISOString(),
+      });
+      setupInternalRelayEventsRoute(server, () => relayClientRef);
+      server.log.info('Control-plane relay event IPC endpoint registered');
+    }
+  }
+
   if (!isWorkerMode && !config.relay.apiKey) {
     // Wizard mode: background the activation so server.listen() is not blocked
     activationPending = true;
@@ -315,7 +331,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       relayBridge = bridge;
       conversationManager = convMgr;
       activationPending = false;
-    }).catch((error) => {
+    }, (client) => { relayClientRef = client; }).catch((error) => {
       activationPending = false;
       server.log.warn(
         `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -323,7 +339,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     });
   } else if (!isWorkerMode && config.relay.apiKey) {
     // API key already exists: initialize relay bridge synchronously
-    const result = await initializeRelayBridge(config, server, apiKeyStore);
+    const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
     relayBridge = result.relayBridge;
   }
 
@@ -569,6 +585,7 @@ async function activateInBackground(
   server: FastifyInstance,
   apiKeyStore: InMemoryApiKeyStore,
   onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
+  setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
 ): Promise<void> {
   const activationResult = await activate({
     cloudUrl: config.activation.cloudUrl,
@@ -596,7 +613,7 @@ async function activateInBackground(
   }
   server.log.info('Cluster activation complete');
 
-  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore);
+  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore, setRelayClient);
   const conversationManager = await initializeConversationManager(config, server, relayBridge);
 
   onInitialized(relayBridge, conversationManager);
@@ -615,6 +632,7 @@ async function initializeRelayBridge(
   config: OrchestratorConfig,
   server: FastifyInstance,
   apiKeyStore: InMemoryApiKeyStore,
+  setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
 ): Promise<{ relayBridge: RelayBridge | null; statusReporter: StatusReporter }> {
   const controlPlaneSocket = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? '/run/generacy-control-plane/control.sock';
   const statusReporter = new StatusReporter({ socketPath: controlPlaneSocket });
@@ -651,16 +669,10 @@ async function initializeRelayBridge(
         },
       ],
     });
-    // Register control-plane internal API key for relay event IPC
-    const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
-    if (controlPlaneKey) {
-      apiKeyStore.addKey(controlPlaneKey, {
-        name: 'control-plane-internal',
-        scopes: ['admin'],
-        createdAt: new Date().toISOString(),
-      });
-      setupInternalRelayEventsRoute(server, relayClient);
-      server.log.info('Control-plane relay event IPC endpoint registered');
+
+    // Assign relay client ref for the deferred-binding route registered in createServer()
+    if (setRelayClient) {
+      setRelayClient(relayClient);
     }
 
     relayBridge = new RelayBridge({

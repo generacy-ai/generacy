@@ -18,11 +18,16 @@ export type RelayEventRequest = z.infer<typeof RelayEventRequestSchema>;
 
 export function setupInternalRelayEventsRoute(
   server: FastifyInstance,
-  relayClient: ClusterRelayClient,
+  getRelayClient: () => ClusterRelayClient | null,
 ): void {
   server.post(
     '/internal/relay-events',
     async (request: FastifyRequest, reply: FastifyReply) => {
+      const client = getRelayClient();
+      if (!client) {
+        return reply.status(503).send({ error: 'relay not yet initialized' });
+      }
+
       const parsed = RelayEventRequestSchema.safeParse(request.body);
       if (!parsed.success) {
         return reply.status(400).send({
@@ -33,8 +38,8 @@ export function setupInternalRelayEventsRoute(
 
       const { channel, payload } = parsed.data;
 
-      if (relayClient.isConnected) {
-        relayClient.send({
+      if (client.isConnected) {
+        client.send({
           type: 'event',
           channel,
           event: payload,
