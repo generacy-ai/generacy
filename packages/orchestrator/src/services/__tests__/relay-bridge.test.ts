@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+
+vi.mock('../code-server-probe.js', () => ({
+  probeCodeServerSocket: vi.fn(async () => false),
+}));
+
 import { RelayBridge } from '../relay-bridge.js';
 import type { ClusterRelayClient, RelayMessage, RelayBridgeOptions } from '../../types/relay.js';
 import type { SSESubscriptionManager } from '../../sse/subscriptions.js';
@@ -441,6 +446,9 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
+      // Flush the async sendMetadata() promise
+      await vi.advanceTimersByTimeAsync(0);
+
       const metadataSends = mockClient.send.mock.calls.filter(
         (call: unknown[]) => (call[0] as RelayMessage).type === 'metadata',
       );
@@ -461,6 +469,9 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
+      // Flush the async initial sendMetadata()
+      await vi.advanceTimersByTimeAsync(0);
+
       // Clear the initial send
       mockClient.send.mockClear();
 
@@ -479,6 +490,7 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
 
@@ -500,6 +512,7 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
 
@@ -521,6 +534,9 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!(); // Should not throw
 
+      // Flush the async sendMetadata() promise
+      await vi.advanceTimersByTimeAsync(0);
+
       expect(mockLogger.error).toHaveBeenCalledWith(
         { err: 'Send failed' },
         'Error sending metadata',
@@ -534,14 +550,17 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
+      // Flush the async sendMetadata() promise
+      await vi.advanceTimersByTimeAsync(0);
+
       const metadataSends = mockClient.send.mock.calls.filter(
         (call: unknown[]) => (call[0] as RelayMessage).type === 'metadata',
       );
       expect(metadataSends).toHaveLength(0);
     });
 
-    it('should collect metadata with expected fields', () => {
-      const metadata = bridge.collectMetadata();
+    it('should collect metadata with expected fields', async () => {
+      const metadata = await bridge.collectMetadata();
 
       expect(metadata.uptimeSeconds).toBeGreaterThanOrEqual(0);
       expect(metadata.activeWorkflowCount).toBe(0);

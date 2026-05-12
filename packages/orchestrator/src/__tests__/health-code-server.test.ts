@@ -1,10 +1,14 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 
+vi.mock('../services/code-server-probe.js', () => ({
+  probeCodeServerSocket: vi.fn(async () => false),
+}));
+
 vi.mock('@generacy-ai/control-plane', async (importOriginal) => {
   const original = await importOriginal<typeof import('@generacy-ai/control-plane')>();
   return {
     ...original,
-    getCodeServerManager: vi.fn(() => mockManager),
+    getCodeServerManager: vi.fn(() => null),
   };
 });
 
@@ -19,15 +23,9 @@ vi.mock('@generacy-ai/workflow-engine', async (importOriginal) => {
 import type { FastifyInstance } from 'fastify';
 import { createServer } from '../server.js';
 import { createTestConfig } from '../config/index.js';
-import { getCodeServerManager } from '@generacy-ai/control-plane';
+import { probeCodeServerSocket } from '../services/code-server-probe.js';
 
-const mockManager = {
-  start: vi.fn(async () => ({ status: 'starting' as const, socket_path: '/tmp/cs.sock' })),
-  stop: vi.fn(async () => {}),
-  touch: vi.fn(),
-  getStatus: vi.fn(() => 'stopped' as const),
-  shutdown: vi.fn(async () => {}),
-};
+const mockProbe = vi.mocked(probeCodeServerSocket);
 
 describe('GET /health — codeServerReady', () => {
   let server: FastifyInstance;
@@ -44,8 +42,8 @@ describe('GET /health — codeServerReady', () => {
     await server?.close();
   });
 
-  it('includes codeServerReady: false when status is not running', async () => {
-    mockManager.getStatus.mockReturnValue('stopped');
+  it('includes codeServerReady: false when probe returns false', async () => {
+    mockProbe.mockResolvedValue(false);
 
     const response = await server.inject({ method: 'GET', url: '/health' });
     const body = JSON.parse(response.body);
@@ -53,8 +51,8 @@ describe('GET /health — codeServerReady', () => {
     expect(body.codeServerReady).toBe(false);
   });
 
-  it('includes codeServerReady: true when status is running', async () => {
-    mockManager.getStatus.mockReturnValue('running');
+  it('includes codeServerReady: true when probe returns true', async () => {
+    mockProbe.mockResolvedValue(true);
 
     const response = await server.inject({ method: 'GET', url: '/health' });
     const body = JSON.parse(response.body);
