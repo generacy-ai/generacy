@@ -10,7 +10,7 @@
 - B: Include cluster-base FR-001 as well (cross-repo PR or companion PR)
 - C: All FRs in a single issue across all repos
 
-**Answer**: *Pending*
+**Answer**: A — Generacy repo only — FR-002, FR-003, FR-006, FR-007 (cluster-base and generacy-cloud tracked in separate issues). Pattern in this project has been one issue per repo. Cross-repo issues have caused work to be left behind (e.g., #582). File companion issues for cluster-base (Dockerfile `code` CLI install) and generacy-cloud (UI changes).
 
 ### Q2: Tunnel Process Management Pattern
 **Context**: FR-006 lists two approaches: `code tunnel service install` (systemd-based) or supervisor integration. Containers typically lack systemd. The existing `CodeServerProcessManager` uses a managed child process with idle timeout. The choice affects the `vscode-tunnel-start` lifecycle action architecture (FR-002).
@@ -20,7 +20,7 @@
 - B: `code tunnel service install` — investigate systemd-in-container feasibility first
 - C: Supervisor process (e.g., supervisord) — separate process manager
 
-**Answer**: *Pending*
+**Answer**: A — Managed child process (like CodeServerProcessManager). Containers don't run systemd as PID 1, so `code tunnel service install` requires workarounds. Supervisor is overkill for one process. Replicate the existing `CodeServerProcessManager` pattern.
 
 ### Q3: Relay Event Schema
 **Context**: FR-003 says "surface device code to web UI via relay event channel" using `cluster.vscode-tunnel` (or similar), but doesn't define the event payload schema. The tunnel has several states (starting, waiting-for-auth, authenticated/connected, disconnected, error). The web UI needs structured data to show the right UX at each stage.
@@ -30,7 +30,7 @@
 - B: Minimal — only emit when device code is available: `{ deviceCode: string, verificationUri: string }` and when tunnel is connected: `{ tunnelName: string }`
 - C: Mirror code-server pattern — return status from lifecycle action response, don't use relay events for state
 
-**Answer**: *Pending*
+**Answer**: A — Full lifecycle events. The device code arrives asynchronously after spawn, so return-from-action doesn't work. Web UI needs distinct UX for starting (spinner), awaiting-auth (show code), connected (open button), and error (retry). Use `authorization_pending` instead of `awaiting-auth` for consistency with v1.5 activation naming.
 
 ### Q4: Auth State Persistence Across Container Recreation
 **Context**: US2 requires the tunnel to survive "cluster restarts" without re-authentication. `code tunnel` stores GitHub auth tokens in `~/.vscode-cli/`. A `docker restart` preserves container filesystem, but `docker compose down && up` (used by `generacy update`) recreates containers, losing `~/.vscode-cli/`. This distinction affects whether a named Docker volume mount is needed.
@@ -40,7 +40,7 @@
 - B: Only survive `docker restart` — re-auth on recreation is acceptable for v1
 - C: Defer persistence (P2) — implement basic start/stop first, add persistence later
 
-**Answer**: *Pending*
+**Answer**: A — Named volume. `generacy update` does `docker compose down && up`, evicting overlay filesystem. Without a volume, every update re-prompts for GitHub auth. Add `vscode-cli:/home/node/.vscode-cli` volume in scaffolder. Private to orchestrator container only.
 
 ### Q5: Stdout Parsing Strategy for Device Code
 **Context**: FR-002 requires parsing the device code from `code tunnel` stdout. The `code tunnel` CLI outputs an interactive prompt containing a URL (`github.com/login/device`) and a code (e.g., `ABCD-1234`). If Microsoft changes this output format, parsing breaks silently. The spec assumes this format is stable.
@@ -50,4 +50,4 @@
 - B: Regex parsing, hard fail — if pattern doesn't match, emit error event, stop tunnel
 - C: Investigate `code tunnel` API/structured output first before committing to stdout parsing
 
-**Answer**: *Pending*
+**Answer**: A — Regex with fallback. No `--output json` for `code tunnel` exists. Forward raw stdout to relay event when parsing fails so user can complete activation manually. Pin `code` CLI version in cluster-base Dockerfile. Pattern: line-by-line scan for `/^([A-Z0-9]{4}-[A-Z0-9]{4})/` and `https://github.com/login/device` URL; emit `authorization_pending` event; if 30s without match, emit `error` with raw last-20-lines as `details`.

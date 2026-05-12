@@ -1,88 +1,143 @@
-# Feature Specification: VS Code Desktop tunnel — cluster-owned tunnel with device-code auth
+# Feature Specification: ## Symptoms
 
-**Branch**: `584-symptoms-after-completing` | **Issue**: #584 | **Date**: 2026-05-12 | **Status**: Draft
+After completing bootstrap, clicking "VS Code Desktop" → following the dialog instructions to run \`code tunnel --accept-server-license-terms --name <clusterId>\` → authenticating via GitHub device code → connecting from VS Code Desktop lands you on the user's local machine (Windows host in my case), NOT inside the cluster's orchestrator container
+
+**Branch**: `584-symptoms-after-completing` | **Date**: 2026-05-12 | **Status**: Draft
 
 ## Summary
 
-VS Code Desktop tunnel connections land on the user's local machine instead of the cluster's orchestrator container. Two compounding bugs: (1) the `code` CLI (Microsoft's tunnel binary) is not installed in cluster-base — only `code-server` (browser IDE) is present, and (2) the dialog UX asks users to copy-paste a CLI command into "a terminal", which they run on their host machine instead of inside the cluster.
+## Symptoms
 
-The fix replaces the manual copy-paste flow with a cluster-owned tunnel: the cluster starts `code tunnel` itself, surfaces a GitHub device code to the web UI, and the user authenticates via `github.com/login/device`. This mirrors the existing v1.5 cluster activation device-code pattern.
+After completing bootstrap, clicking "VS Code Desktop" → following the dialog instructions to run \`code tunnel --accept-server-license-terms --name <clusterId>\` → authenticating via GitHub device code → connecting from VS Code Desktop lands you on the user's local machine (Windows host in my case), NOT inside the cluster's orchestrator container. Same observation in a browser tunnel session.
 
-## Root Cause
+## Root cause (two compounding bugs)
 
-### 1. Missing `code` CLI in cluster-base
+### 1. The \`code\` CLI is not installed in cluster-base
 
-The Dockerfile installs `code-server` (open-source browser IDE) but not Microsoft's `code` CLI, which provides the `code tunnel` subcommand. These are distinct binaries. Running `code tunnel ...` inside the cluster fails with `command not found`.
+[\`.devcontainer/generacy/Dockerfile\`](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/Dockerfile#L36-L46) installs \`code-server\` (the open-source browser IDE), but never installs Microsoft's proprietary \`code\` CLI. The two are distinct:
+- \`code-server\` = browser IDE, listens on a socket. Pre-installed. Served via the control-plane's [\`tunnel-handler\`](packages/control-plane/src/services/tunnel-handler.ts) over the relay.
+- \`code\` = Microsoft's CLI for the \`code tunnel\` subcommand. **Not** installed.
 
-### 2. Fragile copy-paste UX
+So running \`code tunnel ...\` inside the browser IDE's terminal would fail with \`command not found\` — the dialog's instructions cannot actually be followed.
 
-`VSCodeDesktopDialog.tsx` shows `code tunnel --accept-server-license-terms --name ${clusterId}` with a copy button. Users paste this into their local terminal, binding the tunnel to their host machine. The deep link then opens VS Code attached to the wrong host.
+### 2. The dialog's UX hands the user a CLI string and assumes they paste it in the right terminal
+
+[\`VSCodeDesktopDialog.tsx:28\`](https://github.com/generacy-ai/generacy-cloud/blob/main/packages/web/src/components/clusters/VSCodeDesktopDialog.tsx#L28) shows \`code tunnel --accept-server-license-terms --name \${clusterId}\` with a copy button. Users with VS Code Desktop already installed locally will paste this into whatever terminal they have open — including their host shell. The resulting tunnel binds to their host machine, so the subsequent deep link \`vscode://vscode-remote/tunnel+\${clusterId}/\` opens a remote session attached to the wrong host.
+
+This is what happened in my run. Even ignoring bug #1, the UX is structurally fragile.
+
+## Proposed fix
+
+The cluster should own its own \`code tunnel\`. The flow should be:
+
+1. **cluster-base:** add the \`code\` CLI to the image. Microsoft publishes it as part of the [VS Code CLI distribution](https://code.visualstudio.com/docs/remote/tunnels#_using-the-code-cli) — a standalone tarball at \`https://update.code.visualstudio.com/latest/cli-linux-x64/stable\`. Drop into \`/usr/local/bin/code\`.
+2. **control-plane:** add a \`vscode-tunnel-start\` lifecycle action that spawns \`code tunnel service install --accept-server-license-terms --name <clusterId>\` (or just \`code tunnel --name <clusterId>\` as a daemon) inside the orchestrator container. Parse the device code from stdout and surface it.
+3. **web bootstrap step** (or a separate post-bootstrap step): show the device code from the cluster (analogous to the existing v1.5 cluster activation device-code flow), tell the user to go to \`github.com/login/device\` and enter that code. After auth, the tunnel is bound to the user's GitHub account but **runs on the cluster**, so the \`vscode://vscode-remote/tunnel+<clusterId>/\` deep link lands in the cluster.
+4. **VSCodeDesktopDialog:** remove the copy-paste CLI block entirely. Either auto-show the device code or skip the dialog when the tunnel is already running.
+
+This mirrors the v1.5 cluster activation pattern exactly: cluster initiates, surfaces device code to web, user authenticates, cluster proceeds.
+
+## Test plan
+- [ ] After cluster-base rebuild: \`docker exec <orchestrator> code --version\` returns a version
+- [ ] Bootstrap completes, web UI surfaces a device code from the cluster (not a CLI string)
+- [ ] After GitHub auth, \`vscode://vscode-remote/tunnel+<clusterId>/\` opens VS Code Desktop attached to the orchestrator container — terminal lands in \`/workspaces/<project>\`, the workspace mounts are visible, \`node\` user, etc.
+- [ ] Tunnel persists across cluster restarts (or re-binds on restart)
+
+## Related
+- #572 (cluster ↔ cloud contract umbrella)
+- Cluster-base image install of \`code\` may want its own cluster-base-side issue once this is scoped
+
+## Scope
+
+This issue covers **generacy repo only**: control-plane lifecycle actions, relay events, auto-start logic, and scaffolder volume addition. Companion issues needed for:
+- **cluster-base**: Dockerfile `code` CLI install (FR-001)
+- **generacy-cloud**: UI removes copy-paste dialog, replaces with device-code display + relay event listener (FR-004/FR-005)
 
 ## User Stories
 
-### US1: Developer connects VS Code Desktop to cluster
+### US1: VS Code Desktop Connection via Cluster-Owned Tunnel
 
-**As a** developer using Generacy,
-**I want** VS Code Desktop to connect directly to my cluster's orchestrator container,
-**So that** I can edit code, run commands, and use extensions in the cluster environment without manual CLI setup.
+**As a** developer completing bootstrap,
+**I want** the cluster to automatically start a VS Code tunnel and surface the GitHub device code in the web UI,
+**So that** I can authenticate once and connect VS Code Desktop directly to the cluster without running commands locally.
 
 **Acceptance Criteria**:
-- [ ] Clicking "VS Code Desktop" in the web UI initiates a device-code flow (no CLI copy-paste)
-- [ ] The web UI displays a GitHub device code and a link to `github.com/login/device`
-- [ ] After authenticating, the `vscode://` deep link opens VS Code Desktop attached to the cluster container
-- [ ] Terminal inside VS Code lands in `/workspaces/<project>` as the `node` user
+- [ ] `vscode-tunnel-start` lifecycle action spawns `code tunnel` inside the orchestrator container
+- [ ] Device code and verification URI are surfaced to the web UI via `cluster.vscode-tunnel` relay events
+- [ ] After GitHub auth, `vscode://vscode-remote/tunnel+<clusterId>/` opens VS Code Desktop attached to the orchestrator container
+- [ ] No CLI string is presented to the user for local execution
 
-### US2: Tunnel persists across cluster lifecycle
+### US2: Tunnel Persistence Across Cluster Restarts
 
 **As a** developer,
-**I want** the VS Code tunnel to survive cluster restarts,
-**So that** I don't have to re-authenticate every time the cluster reboots.
+**I want** the VS Code tunnel to survive cluster restarts and container recreation,
+**So that** I don't need to re-authenticate with GitHub after running `generacy update`.
 
 **Acceptance Criteria**:
-- [ ] Tunnel auto-starts on cluster boot (or re-binds on restart)
-- [ ] No re-authentication required after a cluster restart if the GitHub token is still valid
+- [ ] `~/.vscode-cli/` is persisted via a named Docker volume (`vscode-cli`)
+- [ ] Tunnel auth survives both `docker restart` and `docker compose down && up`
+- [ ] Volume is private to the orchestrator container (not shared with workers)
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Install Microsoft `code` CLI in cluster-base image (`/usr/local/bin/code`) | P1 | Standalone tarball from `update.code.visualstudio.com/latest/cli-linux-x64/stable` |
-| FR-002 | Add `vscode-tunnel-start` lifecycle action in control-plane | P1 | Spawns `code tunnel` with `--name <clusterId>`, parses device code from stdout |
-| FR-003 | Surface device code to web UI via relay event channel | P1 | Use `cluster.vscode-tunnel` relay channel (or similar) |
-| FR-004 | Web UI displays device code and `github.com/login/device` link | P1 | Replace current copy-paste CLI dialog |
-| FR-005 | Remove manual CLI copy-paste block from `VSCodeDesktopDialog.tsx` | P1 | generacy-cloud repo |
-| FR-006 | Tunnel auto-starts on cluster boot or lifecycle trigger | P2 | `code tunnel service install` or supervisor integration |
-| FR-007 | Add `vscode-tunnel-stop` lifecycle action | P2 | Clean shutdown of tunnel process |
+| FR-002 | `vscode-tunnel-start` lifecycle action in control-plane | P1 | Spawns `code tunnel --accept-server-license-terms --name <clusterId>` |
+| FR-003 | Relay events on `cluster.vscode-tunnel` channel | P1 | Full lifecycle: `starting`, `authorization_pending`, `connected`, `disconnected`, `error` |
+| FR-006 | Auto-start tunnel on bootstrap-complete or container start | P2 | Follow `CodeServerProcessManager` pattern (managed child process) |
+| FR-007 | `vscode-tunnel-stop` lifecycle action | P2 | Stops the tunnel process |
+| FR-008 | `vscode-cli` named volume in scaffolder | P1 | Persists `~/.vscode-cli/` across container recreation |
+
+## Relay Event Schema
+
+Channel: `cluster.vscode-tunnel`
+
+```typescript
+{
+  status: 'starting' | 'authorization_pending' | 'connected' | 'disconnected' | 'error';
+  deviceCode?: string;        // present when status === 'authorization_pending'
+  verificationUri?: string;   // present when status === 'authorization_pending'
+  tunnelName?: string;        // present when status === 'connected'
+  error?: string;             // present when status === 'error'
+  details?: string;           // raw stdout on parse failure
+}
+```
+
+## Device Code Parsing Strategy
+
+- Regex parsing of `code tunnel` stdout (no `--output json` available)
+- Line-by-line scan for `/^([A-Z0-9]{4}-[A-Z0-9]{4})/` and `https://github.com/login/device`
+- On match: emit `authorization_pending` event with `deviceCode` and `verificationUri`
+- On 30s timeout without match: emit `error` event with raw last-20-lines as `details`
+- Fallback ensures user can still complete activation manually even if format changes
+
+## Process Management
+
+- Follow existing `CodeServerProcessManager` pattern (managed child process with start/stop lifecycle actions)
+- No systemd dependency (container doesn't run systemd as PID 1)
+- No supervisor needed (overkill for single process)
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `code --version` in orchestrator container | Returns valid version | `docker exec <orchestrator> code --version` |
-| SC-002 | Web UI shows device code (not CLI string) | 100% of bootstrap completions | Manual QA / E2E test |
-| SC-003 | VS Code Desktop deep link lands in cluster | Terminal at `/workspaces/<project>`, `node` user | Manual QA |
-| SC-004 | Tunnel survives cluster restart | Re-binds without re-auth | Restart cluster, verify tunnel reconnects |
+| SC-001 | Tunnel lifecycle actions | Both `vscode-tunnel-start` and `vscode-tunnel-stop` work | Integration test |
+| SC-002 | Relay events emitted | All 5 status states emit correctly | Unit test |
+| SC-003 | Auth persistence | Tunnel reconnects without re-auth after `docker compose down && up` | Manual test |
 
 ## Assumptions
 
-- Microsoft's standalone `code` CLI tarball is redistributable within Docker images (MIT-licensed CLI component)
-- The `code tunnel` command's stdout device-code output format is stable and parseable
-- GitHub device-code auth tokens persist across process restarts when using `code tunnel service install`
-- The relay event channel pattern (used by audit, credentials, bootstrap) is suitable for surfacing tunnel state
+- The `code` CLI will be installed in cluster-base via a companion issue
+- `code tunnel` stdout format is stable enough for regex parsing (version-pinned in cluster-base)
+- The relay event infrastructure (`setRelayPushEvent`) works the same as `cluster.bootstrap` channel
 
 ## Out of Scope
 
-- Browser-based VS Code (code-server) — already working via tunnel-handler over relay
-- Multi-user tunnel support (one tunnel per cluster is sufficient for v1)
-- Tunnel authentication via means other than GitHub device code
-- Windows/macOS cluster-base variants (Linux x64 only)
-
-## Cross-Repo Scope
-
-This feature spans three repositories:
-1. **cluster-base** — Dockerfile change to install `code` CLI
-2. **generacy** (this repo) — control-plane lifecycle action, relay event wiring
-3. **generacy-cloud** — Web UI dialog replacement, device-code display
+- FR-001: `code` CLI installation in cluster-base Dockerfile (companion issue)
+- FR-004: Web UI device code display (generacy-cloud companion issue)
+- FR-005: VSCodeDesktopDialog removal/replacement (generacy-cloud companion issue)
+- Idle timeout for tunnel process (defer to follow-up)
+- Multi-user tunnel support
 
 ---
 
