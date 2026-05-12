@@ -632,7 +632,7 @@ async function initializeRelayBridge(
       createdAt: new Date().toISOString(),
     });
 
-    const codeServerSocket = process.env['CODE_SERVER_SOCKET_PATH'] ?? '/run/code-server.sock';
+    const codeServerSocket = process.env['CODE_SERVER_SOCKET_PATH'] ?? '/run/generacy-control-plane/code-server.sock';
 
     const relayClient = new RelayClientImpl({
       apiKey: config.relay.apiKey,

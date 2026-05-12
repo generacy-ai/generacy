@@ -95,6 +95,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/orchestrator/src/services/relay-bridge.ts` — `collectMetadata` queries `CodeServerManager.getStatus()` in-process (periodic metadata path).
 - `packages/control-plane/src/services/code-server-manager.ts` — `CodeServerManager` interface gains `onStatusChange(callback)`. On transition to `running`, triggers `RelayBridge.sendMetadata()` for seconds-latency propagation (not 60s heartbeat).
 - Cloud-side schema for `codeServerReady` exists top-to-bottom (Firestore, SSE, ReadyStep). No cloud changes needed.
+- #588 fix: `DEFAULT_CODE_SERVER_SOCKET` changed from `/run/code-server.sock` to `/run/generacy-control-plane/code-server.sock`. The `/run/` dir is root-owned; reuses existing control-plane tmpfs mount (writable by uid 1000). Orchestrator relay-route fallback in `server.ts` updated to match. `CODE_SERVER_SOCKET_PATH` env var override still works.
 
 ## CLI Package (generacy)
 
