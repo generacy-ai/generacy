@@ -200,11 +200,11 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       if (codeMatch && this.status === 'starting') {
         this.clearDeviceCodeTimer();
         this.status = 'authorization_pending';
-        this.deviceCode = codeMatch[1];
+        this.deviceCode = codeMatch[1] ?? null;
         this.verificationUri = 'https://github.com/login/device';
         emitTunnelEvent({
           status: 'authorization_pending',
-          deviceCode: this.deviceCode,
+          deviceCode: this.deviceCode ?? undefined,
           verificationUri: this.verificationUri,
           tunnelName: this.opts.tunnelName,
         });
