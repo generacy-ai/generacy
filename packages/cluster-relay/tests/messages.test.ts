@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   parseRelayMessage,
   RelayMessageSchema,
+  EventMessageSchema,
 } from '../src/messages.js';
 
 describe('messages', () => {
@@ -44,8 +45,9 @@ describe('messages', () => {
     it('parses a valid event message', () => {
       const msg = {
         type: 'event',
-        channel: 'workflows',
-        event: { status: 'completed' },
+        event: 'cluster.audit',
+        data: { status: 'completed' },
+        timestamp: '2026-05-12T18:00:00.000Z',
       };
       const result = parseRelayMessage(msg);
       expect(result).toEqual(msg);
@@ -169,6 +171,44 @@ describe('messages', () => {
       const types = ['api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error', 'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close'];
       // Confirm schema accepts these types by checking discriminator key
       expect(RelayMessageSchema.options).toHaveLength(11);
+    });
+  });
+
+  describe('EventMessage round-trip', () => {
+    it('round-trips through JSON serialization and schema parse', () => {
+      const original = {
+        type: 'event' as const,
+        event: 'cluster.vscode-tunnel',
+        data: { status: 'connected', tunnelId: 'tun-1' },
+        timestamp: '2026-05-12T18:00:00.000Z',
+      };
+      const json = JSON.stringify(original);
+      const parsed = JSON.parse(json);
+      const result = EventMessageSchema.safeParse(parsed);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data).toEqual(original);
+      }
+    });
+
+    it('rejects event message with empty event name', () => {
+      const result = EventMessageSchema.safeParse({
+        type: 'event',
+        event: '',
+        data: {},
+        timestamp: '2026-05-12T18:00:00.000Z',
+      });
+      expect(result.success).toBe(false);
+    });
+
+    it('rejects event message with invalid timestamp', () => {
+      const result = EventMessageSchema.safeParse({
+        type: 'event',
+        event: 'cluster.audit',
+        data: {},
+        timestamp: 'not-a-timestamp',
+      });
+      expect(result.success).toBe(false);
     });
   });
 

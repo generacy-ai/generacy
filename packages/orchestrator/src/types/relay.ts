@@ -5,9 +5,9 @@
  * must implement for the orchestrator relay integration (Phase 2.2).
  */
 
-import type { SSEChannel, SSEEvent } from './sse.js';
 import type { SSESubscriptionManager } from '../sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
+import type { EventMessage } from '@generacy-ai/cluster-relay';
 import type {
   RelayLeaseRequest,
   RelayLeaseGranted,
@@ -120,20 +120,6 @@ export interface RelayConversationOutput {
   };
 }
 
-/**
- * Job lifecycle event sent from worker to cloud via relay WebSocket.
- * Matches the cloud API's EventMessage type for direct handling by
- * MessageHandler.handleEvent().
- */
-export interface RelayJobEvent {
-  type: 'event';
-  /** Job lifecycle event name (e.g., 'job:created', 'job:phase_changed') */
-  event: string;
-  /** Event payload with job metadata */
-  data: Record<string, unknown>;
-  /** ISO 8601 timestamp of event emission */
-  timestamp: string;
-}
 
 /**
  * Discriminated union of all relay message types.
@@ -166,8 +152,7 @@ export interface RelayTunnelClose {
 export type RelayMessage =
   | RelayApiRequest
   | RelayApiResponse
-  | RelayEvent
-  | RelayJobEvent
+  | EventMessage
   | RelayMetadata
   | RelayConversationInput
   | RelayConversationOutput
@@ -229,16 +214,6 @@ export interface RelayApiResponse {
   body: unknown;
 }
 
-/**
- * SSE event forwarded from cluster to cloud subscribers.
- */
-export interface RelayEvent {
-  type: 'event';
-  /** SSE channel the event belongs to */
-  channel: SSEChannel;
-  /** The SSE event payload */
-  event: SSEEvent;
-}
 
 /**
  * Cluster metadata report sent on connect and periodically.

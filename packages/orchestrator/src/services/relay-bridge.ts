@@ -141,11 +141,11 @@ export class RelayBridge {
     try {
       if (!this.client.isConnected) return;
       this.client.send({
-        type: 'event' as const,
+        type: 'event',
         event,
         data,
         timestamp: new Date().toISOString(),
-      } as RelayMessage);
+      });
     } catch (error) {
       this.logger.warn(
         { err: error instanceof Error ? error.message : String(error), event },
@@ -388,8 +388,9 @@ export class RelayBridge {
         if (this.client.isConnected) {
           this.client.send({
             type: 'event',
-            channel,
-            event: event as SSEEvent,
+            event: channel,
+            data: event as SSEEvent,
+            timestamp: new Date().toISOString(),
           });
         }
       } catch (error) {

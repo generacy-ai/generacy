@@ -46,14 +46,14 @@ const orchestratorUrl = process.env['ORCHESTRATOR_URL'] ?? 'http://127.0.0.1:310
 const internalApiKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
 
 if (internalApiKey) {
-  setRelayPushEvent((channel, payload) => {
+  setRelayPushEvent((event, data) => {
     fetch(`${orchestratorUrl}/internal/relay-events`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         'authorization': `Bearer ${internalApiKey}`,
       },
-      body: JSON.stringify({ channel, payload }),
+      body: JSON.stringify({ event, data, timestamp: new Date().toISOString() }),
     }).catch((err) => {
       console.error('[control-plane] Failed to push relay event:', err instanceof Error ? err.message : String(err));
     });

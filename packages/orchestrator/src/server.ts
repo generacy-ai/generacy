@@ -218,11 +218,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           try {
             if (!workerRelayClient?.isConnected) return;
             workerRelayClient.send({
-              type: 'event' as const,
+              type: 'event',
               event,
               data,
               timestamp: new Date().toISOString(),
-            } as import('./types/relay.js').RelayMessage);
+            });
           } catch (err) {
             server.log.warn(
               { err: err instanceof Error ? err.message : String(err), event },

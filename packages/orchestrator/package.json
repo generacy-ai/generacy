@@ -31,6 +31,7 @@
     "@fastify/oauth2": "^8.0.0",
     "@fastify/rate-limit": "^10.0.0",
     "@generacy-ai/activation-client": "workspace:^",
+    "@generacy-ai/cluster-relay": "workspace:^",
     "@generacy-ai/config": "workspace:^",
     "@generacy-ai/control-plane": "workspace:^",
     "@generacy-ai/credhelper": "workspace:^",
