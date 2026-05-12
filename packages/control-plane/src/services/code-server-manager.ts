@@ -28,7 +28,7 @@ export interface CodeServerManagerOptions {
 }
 
 export const DEFAULT_CODE_SERVER_BIN = '/usr/local/bin/code-server';
-export const DEFAULT_CODE_SERVER_SOCKET = '/run/code-server.sock';
+export const DEFAULT_CODE_SERVER_SOCKET = '/run/generacy-control-plane/code-server.sock';
 export const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export function loadOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): CodeServerManagerOptions {

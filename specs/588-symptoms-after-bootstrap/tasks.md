@@ -10,12 +10,12 @@
 
 ## Phase 1: Core Fix
 
-- [ ] T001 [P] [US1] Update `DEFAULT_CODE_SERVER_SOCKET` from `'/run/code-server.sock'` to `'/run/generacy-control-plane/code-server.sock'` in `packages/control-plane/src/services/code-server-manager.ts`
-- [ ] T002 [P] [US1] Update orchestrator relay-route fallback for `CODE_SERVER_SOCKET_PATH` from `'/run/code-server.sock'` to `'/run/generacy-control-plane/code-server.sock'` in `packages/orchestrator/src/server.ts`
+- [X] T001 [P] [US1] Update `DEFAULT_CODE_SERVER_SOCKET` from `'/run/code-server.sock'` to `'/run/generacy-control-plane/code-server.sock'` in `packages/control-plane/src/services/code-server-manager.ts`
+- [X] T002 [P] [US1] Update orchestrator relay-route fallback for `CODE_SERVER_SOCKET_PATH` from `'/run/code-server.sock'` to `'/run/generacy-control-plane/code-server.sock'` in `packages/orchestrator/src/server.ts`
 
 ## Phase 2: Verification
 
-- [ ] T003 [US1] Verify no other references to the old socket path `/run/code-server.sock` remain in the codebase (grep check)
+- [X] T003 [US1] Verify no other references to the old socket path `/run/code-server.sock` remain in the codebase (grep check)
 
 ## Dependencies & Execution Order
 
