@@ -233,3 +233,10 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/src/routes/lifecycle.ts` — MODIFIED in #562: New handler branch for `bootstrap-complete` action. Writes empty sentinel file at `POST_ACTIVATION_TRIGGER` env var path (default `/tmp/generacy-bootstrap-complete`). Idempotent via `flag: 'w'` overwrite. Returns `{ accepted: true, action, sentinel }`. No request body required.
 - Sentinel file triggers `post-activation-watcher.sh` (cluster-base#22) which runs `entrypoint-post-activation.sh` for workspace clone and setup.
 - Completes the wire between cloud wizard ReadyStep (generacy-cloud#532) and cluster post-activation flow.
+
+## Wizard Credentials Env Bridge (#589)
+
+- `packages/control-plane/src/services/wizard-env-writer.ts` — NEW in #589: `writeWizardEnvFile()` unseals wizard-stored credentials and writes them to a transient env file at `/var/lib/generacy/wizard-credentials.env` (mode 0600). Reads credential IDs/types from `.agency/credentials.yaml`, calls `ClusterLocalBackend.fetchSecret()` for each, maps to env var names (e.g., `github-app` → `GH_TOKEN`, `anthropic` pattern → `ANTHROPIC_API_KEY`). Best-effort: partial unseal failures write partial file + emit `cluster.bootstrap` relay warning.
+- `packages/control-plane/src/routes/lifecycle.ts` — MODIFIED in #589: `bootstrap-complete` handler calls `writeWizardEnvFile()` before writing sentinel file. Env file write failure is non-fatal (logged, continues to sentinel).
+- Env file consumed by `entrypoint-post-activation.sh` (cluster-base companion PR) which sources it with `set -a; source $WIZARD_CREDS; set +a` then deletes it.
+- Root cause: wizard credentials stored encrypted in `credentials.dat` via `PUT /credentials/:id`, but post-activation bash scripts check `$GH_TOKEN` env var — nothing in the bootstrap flow exported tokens as process env vars.

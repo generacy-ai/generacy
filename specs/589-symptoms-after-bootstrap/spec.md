@@ -1,96 +1,144 @@
-# Feature Specification: Post-Activation Wizard Credentials Surfacing
+# Feature Specification: ## Symptoms
+
+After the bootstrap wizard's "Install GitHub App" step completes successfully and credentials land on the cluster, the post-activation script still fails with:
+
+\`\`\`
+[setup-credentials] WARNING: GH_TOKEN not set — git operations requiring auth will fail
+[post-activation] Cloning project repo: christrudelpw/onboarding-test-4 (branch: main)
+fatal:
 
 **Branch**: `589-symptoms-after-bootstrap` | **Date**: 2026-05-12 | **Status**: Draft
 
 ## Summary
 
-After the bootstrap wizard completes and credentials (GitHub App token, Anthropic API key) are stored in the cluster-local credstore, the post-activation script fails because those credentials are never exported as environment variables. The `setup-credentials.sh` script expects `GH_TOKEN` in the process environment but nothing bridges the sealed credstore to bash.
-
-The fix (Option A) has the control-plane's `bootstrap-complete` handler unseal stored credentials and write a transient `.env` file before triggering the post-activation sentinel. The cluster-base post-activation script sources this file, then deletes it after consumption.
-
 ## Symptoms
 
-```
-[setup-credentials] WARNING: GH_TOKEN not set - git operations requiring auth will fail
+After the bootstrap wizard's "Install GitHub App" step completes successfully and credentials land on the cluster, the post-activation script still fails with:
+
+\`\`\`
+[setup-credentials] WARNING: GH_TOKEN not set — git operations requiring auth will fail
 [post-activation] Cloning project repo: christrudelpw/onboarding-test-4 (branch: main)
 fatal: ...
-post-activation exited 128
-```
+\`\`\`
 
-## Root Cause
+The post-activation script then exits non-zero (\`post-activation exited 128\` in the orchestrator log).
 
-The bootstrap wizard credential flow stores secrets in encrypted `credentials.dat` via `ClusterLocalBackend`, but nothing in the `bootstrap-complete` -> post-activation pipeline exports those secrets as env vars. The bash scripts (`setup-credentials.sh`, `entrypoint-post-activation.sh`) cannot access the credhelper-daemon's session-based API.
+## Root cause
+
+The bootstrap wizard's credential flow:
+
+1. User installs the GitHub App via the wizard
+2. Cloud forwards the credential through the relay → cluster's control-plane
+3. Control-plane's [\`handlePutCredential\`](packages/control-plane/src/routes/credentials.ts) writes:
+   - Encrypted blob to \`/var/lib/generacy/credentials.dat\` (sealed via cluster-local backend)
+   - Metadata stub to \`/workspaces/.agency/credentials.yaml\` (\`type: github-app, status: active\`)
+4. Bootstrap-complete fires → \`/tmp/generacy-bootstrap-complete\` sentinel written
+5. \`post-activation-watcher.sh\` detects sentinel → spawns \`entrypoint-post-activation.sh\`
+6. That script runs [\`setup-credentials.sh\`](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/scripts/setup-credentials.sh), which checks \`${GH_TOKEN:-}\`
+
+**Nothing in steps 2-5 exports the GitHub token as a process env var.** It's sealed in the cluster-local credstore, accessible only via the credhelper-daemon, but \`setup-credentials.sh\` is a bash script that doesn't go through credhelper. From its perspective, the credentials may as well not exist.
+
+Verified on a live cluster:
+
+\`\`\`
+$ docker exec onboarding-test-4-orchestrator-1 env | grep -i 'gh_token\|github_token'
+# (empty)
+
+$ docker exec onboarding-test-4-orchestrator-1 cat /workspaces/.agency/credentials.yaml
+credentials:
+  github-main-org:
+    type: github-app
+    backend: cluster-local
+    status: active
+\`\`\`
+
+The credential is *known* to the cluster but unreachable from bash.
+
+## Fix options
+
+### A. Control-plane writes a transient env file on bootstrap-complete
+
+The [\`bootstrap-complete\` handler](packages/control-plane/src/routes/lifecycle.ts#L97-L118) already knows it's about to wake the post-activation watcher. Before writing the sentinel, it can unseal the cluster-local credentials it just received and write them to a node-owned file:
+
+\`\`\`bash
+# /var/lib/generacy/wizard-credentials.env (mode 0600, owned by node)
+GH_TOKEN=ghs_...
+ANTHROPIC_API_KEY=sk-ant-...
+\`\`\`
+
+Then update [\`entrypoint-post-activation.sh\`](https://github.com/generacy-ai/cluster-base/blob/develop/.devcontainer/generacy/scripts/entrypoint-post-activation.sh) to source that file before calling \`setup-credentials.sh\`:
+
+\`\`\`bash
+WIZARD_CREDS=/var/lib/generacy/wizard-credentials.env
+if [ -f "$WIZARD_CREDS" ]; then
+  set -a; source "$WIZARD_CREDS"; set +a
+fi
+bash /usr/local/bin/setup-credentials.sh
+\`\`\`
+
+Pros: minimal change. Pre-existing credentials.dat continues to be the long-term store; the env file is just a one-shot bridge to bash scripts. Can be deleted by the post-activation script after consumption.
+
+Cons: secrets briefly on-disk in plaintext. Mitigations: \`tmpfs\` mount for the env file path, or delete after first read.
+
+### B. setup-credentials.sh calls a generacy CLI
+
+\`generacy credentials get <id>\` would print the unsealed value. setup-credentials.sh becomes:
+
+\`\`\`bash
+GH_TOKEN="${GH_TOKEN:-$(generacy credentials get github-main-org --field=token 2>/dev/null)}"
+\`\`\`
+
+Pros: no on-disk plaintext. Single command per credential, idempotent.
+
+Cons: requires a new CLI subcommand (\`generacy credentials get\`) that doesn't exist yet. More plumbing.
+
+### C. Mount credhelper socket and use it from bash
+
+The credhelper-daemon already runs and exposes a unix socket. setup-credentials.sh could use \`curl --unix-socket\` to fetch creds. But the credhelper API is session-based (intended for per-worker process credential bundles), so this is awkward for a one-shot bash script.
+
+Recommend **A** for v1 — fastest path to unblocking the post-activation flow. **B** is the right long-term answer (no disk plaintext, single source of truth, composable with other scripts), file as a follow-up.
+
+## Test plan
+- [ ] After fix: wizard completes → post-activation runs → \`git clone\` succeeds (assuming the repo exists and \`REPO_URL\` is well-formed — see related issue for the URL normalization gap)
+- [ ] The transient env file is deleted after first successful read
+- [ ] On second cluster start (post-activation already ran once), the flow is a no-op — no stale env file remains
+
+## Related
+- generacy-ai/cluster-base#26 (\`code\` CLI / vscode-cli volume — adjacent to this same wizard-credential delivery seam)
+- generacy-ai/generacy-cloud (to be filed) — \`REPO_URL\` is being sent as \`owner/repo\` shorthand; even if \`GH_TOKEN\` were set, \`git clone\` would still fail
+- #572 (cluster ↔ cloud contract consolidation — wizard credentials delivery belongs here)
 
 ## User Stories
 
-### US1: First-time cluster bootstrap succeeds end-to-end
+### US1: [Primary User Story]
 
-**As a** developer onboarding via the bootstrap wizard,
-**I want** the credentials I provide in the wizard to be available to the post-activation setup scripts,
-**So that** the project repo clone and workspace setup complete automatically without manual intervention.
-
-**Acceptance Criteria**:
-- [ ] After wizard completion, `git clone` of the project repo succeeds using the wizard-provided GitHub token
-- [ ] No manual `docker exec` or env var injection is required
-- [ ] The transient credentials file is deleted after consumption (no plaintext secrets persist on disk)
-
-### US2: Idempotent re-start does not leak stale credentials
-
-**As a** developer restarting a previously-bootstrapped cluster,
-**I want** the post-activation flow to be a no-op on subsequent starts,
-**So that** no stale or outdated credential files accumulate.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] On second container start (post-activation already ran), no wizard-credentials.env file is written or remains
-- [ ] The post-activation watcher recognizes the cluster is already set up and skips credential surfacing
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `bootstrap-complete` handler unseals all stored credentials from `ClusterLocalBackend` before writing the sentinel file | P1 | Control-plane package |
-| FR-002 | Unsealed credentials written to `/var/lib/generacy/wizard-credentials.env` (mode 0600, uid node) as `KEY=value` pairs | P1 | Transient env file |
-| FR-003 | Credential type mapping: `github-app` -> `GH_TOKEN`, `api-key` (anthropic) -> `ANTHROPIC_API_KEY` | P1 | Extensible mapping table |
-| FR-004 | `entrypoint-post-activation.sh` sources `wizard-credentials.env` before calling `setup-credentials.sh` | P1 | cluster-base repo change |
-| FR-005 | `wizard-credentials.env` is deleted after successful consumption (first read) | P2 | Defense in depth |
-| FR-006 | If no credentials exist in the credstore at bootstrap-complete time, the handler still succeeds (empty env file or no file) | P1 | Graceful degradation |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Post-activation `git clone` succeeds after wizard | 100% of wizard-complete flows | Manual E2E test on live cluster |
-| SC-002 | No plaintext credential files persist after post-activation completes | 0 files at `/var/lib/generacy/wizard-credentials.env` after setup | `ls` / `stat` check post-setup |
-| SC-003 | `bootstrap-complete` handler latency increase | < 100ms | Unseal is a local AES-256-GCM decrypt, should be sub-ms |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- `ClusterLocalBackend` is initialized and contains the wizard-written credentials by the time `bootstrap-complete` fires (steps 2-3 complete before step 4)
-- The post-activation scripts in cluster-base can be modified (separate PR to `generacy-ai/cluster-base`)
-- `/var/lib/generacy/` directory exists and is writable by the node user (already true for `credentials.dat` and `master.key`)
-- Only Option A (transient env file) is in scope for this issue; Option B (CLI subcommand) is a follow-up
+- [Assumption 1]
 
 ## Out of Scope
 
-- `generacy credentials get` CLI subcommand (Option B) — follow-up issue
-- `REPO_URL` normalization (`owner/repo` -> full HTTPS URL) — separate issue
-- Cache coherence for credhelper-daemon after bootstrap-complete credential writes
-- cluster-base `entrypoint-post-activation.sh` changes (tracked in cluster-base repo, referenced here for context)
-
-## Cross-Repo Dependencies
-
-| Repo | Change | Blocking? |
-|------|--------|-----------|
-| `generacy` (this repo) | Control-plane `bootstrap-complete` handler writes env file | Yes |
-| `generacy-ai/cluster-base` | `entrypoint-post-activation.sh` sources env file, deletes after use | Yes (separate PR) |
-
-## Related
-
-- generacy-ai/cluster-base#26 (vscode-cli volume — adjacent wizard-credential seam)
-- generacy-ai/generacy-cloud (to be filed) — `REPO_URL` sent as `owner/repo` shorthand
-- #572 (cluster <-> cloud contract consolidation)
-- #558 (credential persistence in control-plane — the write side of this flow)
-- #562 (bootstrap-complete lifecycle action — the trigger)
+- [Exclusion 1]
 
 ---
 
