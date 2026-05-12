@@ -42,6 +42,8 @@ export const LifecycleActionSchema = z.enum([
   'code-server-start',
   'code-server-stop',
   'stop',
+  'vscode-tunnel-start',
+  'vscode-tunnel-stop',
 ]);
 export type LifecycleAction = z.infer<typeof LifecycleActionSchema>;
 

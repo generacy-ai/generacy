@@ -5,6 +5,7 @@ import { extractActorContext } from './context.js';
 import { ControlPlaneError, sendError } from './errors.js';
 import { dispatch } from './router.js';
 import { getCodeServerManager } from './services/code-server-manager.js';
+import { getVsCodeTunnelManager } from './services/vscode-tunnel-manager.js';
 
 export class ControlPlaneServer {
   private server: http.Server;
@@ -66,6 +67,11 @@ export class ControlPlaneServer {
           await getCodeServerManager().shutdown();
         } catch {
           // Best-effort: don't block server shutdown on a wedged code-server child
+        }
+        try {
+          await getVsCodeTunnelManager().shutdown();
+        } catch {
+          // Best-effort: don't block server shutdown on a wedged tunnel child
         }
         if (this.socketPath) {
           try {
