@@ -574,9 +574,10 @@ describe('VsCodeTunnelProcessManager', () => {
       pushLine(child, 'Enter code WXYZ-5678 at https://github.com/login/device');
       expect(mgr.getStatus()).toBe('authorization_pending');
 
-      // Process exits — fields should be cleared
+      // Process exits unexpectedly during authorization_pending — transitions to error
+      // (FR-002: unexpected exit before reaching connected state)
       child.emit('exit');
-      expect(mgr.getStatus()).toBe('stopped');
+      expect(mgr.getStatus()).toBe('error');
 
       // After exit, child is null so a new start() spawns fresh — no stale re-emit
       // Verify by checking no authorization_pending event was emitted between exit and now
@@ -633,7 +634,7 @@ describe('VsCodeTunnelProcessManager', () => {
       expect(mgr.getStatus()).toBe('disconnected');
     });
 
-    it('transitions to stopped when non-connected process exits', async () => {
+    it('transitions to error when non-connected process exits unexpectedly', async () => {
       const child = createMockChild();
       spawnMock.mockReturnValue(child);
 
@@ -641,9 +642,10 @@ describe('VsCodeTunnelProcessManager', () => {
       await mgr.start();
       expect(mgr.getStatus()).toBe('starting');
 
-      // Process exits before reaching connected state
+      // Process exits before reaching connected state — per FR-002 this is an
+      // unexpected failure (user-initiated termination would go through stop()).
       child.emit('exit');
-      expect(mgr.getStatus()).toBe('stopped');
+      expect(mgr.getStatus()).toBe('error');
     });
 
     it('can be restarted after disconnection', async () => {

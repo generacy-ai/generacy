@@ -65,6 +65,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
   private deviceCode: string | null = null;
   private verificationUri: string | null = null;
   private tunnelUrl: string | null = null;
+  private stopping = false;
 
   constructor(private readonly opts: VsCodeTunnelManagerOptions) {}
 
@@ -105,13 +106,17 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
     child.on('exit', (code) => {
       const wasConnected = this.status === 'connected';
       const wasPending = this.status === 'authorization_pending' || this.status === 'starting';
+      const stopInitiated = this.stopping;
+      this.stopping = false;
       this.child = null;
       this.clearDeviceCodeTimer();
       this.deviceCode = null;
       this.verificationUri = null;
       this.tunnelUrl = null;
 
-      if (wasConnected) {
+      if (stopInitiated) {
+        this.status = 'stopped';
+      } else if (wasConnected) {
         this.status = 'disconnected';
         emitTunnelEvent({ status: 'disconnected', tunnelName: this.opts.tunnelName });
       } else if (wasPending) {
@@ -181,6 +186,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
     const child = this.child;
     if (!child) return;
 
+    this.stopping = true;
     return new Promise<void>((resolve) => {
       this.exitWaiters.push(resolve);
       child.kill('SIGTERM');
