@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { HealthResponse, HealthStatus, ServiceStatus } from '../types/index.js';
-import { getCodeServerManager } from '@generacy-ai/control-plane';
+import { probeCodeServerSocket } from '../services/code-server-probe.js';
 
 /**
  * Health check options
@@ -84,7 +84,7 @@ export async function setupHealthRoutes(
         overallStatus = 'error';
       }
 
-      const codeServerReady = getCodeServerManager()?.getStatus() === 'running';
+      const codeServerReady = await probeCodeServerSocket();
 
       const response: HealthResponse = {
         status: overallStatus,

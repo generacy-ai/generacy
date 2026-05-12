@@ -1,5 +1,5 @@
 /**
- * Tests for RelayBridge.collectMetadata() — codeServerReady field (#586).
+ * Tests for RelayBridge.collectMetadata() — codeServerReady field (#586, #596).
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -13,23 +13,17 @@ vi.mock('node:fs', () => ({
   existsSync: vi.fn(() => false),
 }));
 
-const mockManager = {
-  start: vi.fn(),
-  stop: vi.fn(),
-  touch: vi.fn(),
-  getStatus: vi.fn(() => 'stopped' as const),
-  shutdown: vi.fn(),
-  onStatusChange: vi.fn(),
-};
-
-vi.mock('@generacy-ai/control-plane', () => ({
-  getCodeServerManager: vi.fn(() => mockManager),
+vi.mock('../../../src/services/code-server-probe.js', () => ({
+  probeCodeServerSocket: vi.fn(async () => false),
 }));
 
+import { probeCodeServerSocket } from '../../../src/services/code-server-probe.js';
 import { RelayBridge } from '../../../src/services/relay-bridge.js';
 import type { ClusterRelayClient } from '../../../src/types/relay.js';
 import type { SSESubscriptionManager } from '../../../src/sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
+
+const mockProbe = vi.mocked(probeCodeServerSocket);
 
 function createRelayBridge(): RelayBridge {
   const fakeClient = {
@@ -63,27 +57,25 @@ describe('RelayBridge.collectMetadata — codeServerReady', () => {
     vi.clearAllMocks();
   });
 
-  it('includes codeServerReady: false when manager status is not running', () => {
-    mockManager.getStatus.mockReturnValue('stopped');
+  it('includes codeServerReady: false when probe returns false', async () => {
+    mockProbe.mockResolvedValue(false);
     const bridge = createRelayBridge();
-    const metadata = bridge.collectMetadata();
+    const metadata = await bridge.collectMetadata();
 
     expect(metadata.codeServerReady).toBe(false);
   });
 
-  it('includes codeServerReady: true when manager status is running', () => {
-    mockManager.getStatus.mockReturnValue('running');
+  it('includes codeServerReady: true when probe returns true', async () => {
+    mockProbe.mockResolvedValue(true);
     const bridge = createRelayBridge();
-    const metadata = bridge.collectMetadata();
+    const metadata = await bridge.collectMetadata();
 
     expect(metadata.codeServerReady).toBe(true);
   });
 
-  it('includes codeServerReady: false when manager status is starting', () => {
-    mockManager.getStatus.mockReturnValue('starting');
+  it('collectMetadata returns a promise', () => {
     const bridge = createRelayBridge();
-    const metadata = bridge.collectMetadata();
-
-    expect(metadata.codeServerReady).toBe(false);
+    const result = bridge.collectMetadata();
+    expect(result).toBeInstanceOf(Promise);
   });
 });

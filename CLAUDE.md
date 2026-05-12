@@ -96,6 +96,7 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/src/services/code-server-manager.ts` — `CodeServerManager` interface gains `onStatusChange(callback)`. On transition to `running`, triggers `RelayBridge.sendMetadata()` for seconds-latency propagation (not 60s heartbeat).
 - Cloud-side schema for `codeServerReady` exists top-to-bottom (Firestore, SSE, ReadyStep). No cloud changes needed.
 - #588 fix: `DEFAULT_CODE_SERVER_SOCKET` changed from `/run/code-server.sock` to `/run/generacy-control-plane/code-server.sock`. The `/run/` dir is root-owned; reuses existing control-plane tmpfs mount (writable by uid 1000). Orchestrator relay-route fallback in `server.ts` updated to match. `CODE_SERVER_SOCKET_PATH` env var override still works.
+- #596 fix: `codeServerReady` was always `false` because orchestrator's `getCodeServerManager()?.getStatus()` queries a module-scoped singleton in its own process, but code-server is started by the control-plane process (separate child process with its own singleton). Fix: replace both callsites (`health.ts:87`, `relay-bridge.ts:501`) with `probeCodeServerSocket()` — an async `net.connect()` probe against the unix socket. New shared helper at `packages/orchestrator/src/services/code-server-probe.ts`. `collectMetadata()` and `sendMetadata()` in `relay-bridge.ts` made async. `cluster-relay/src/metadata.ts` fixed transitively (reads from `/health` over HTTP).
 
 ## CLI Package (generacy)
 

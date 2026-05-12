@@ -29,7 +29,7 @@ import { ConversationRelayInputSchema } from '../conversation/types.js';
 import type { ConversationOutputEvent } from '../conversation/types.js';
 import type { LeaseManager } from './lease-manager.js';
 import type { StatusReporter } from './status-reporter.js';
-import { getCodeServerManager } from '@generacy-ai/control-plane';
+import { probeCodeServerSocket } from './code-server-probe.js';
 
 export interface TunnelHandlerLike {
   handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
@@ -165,7 +165,12 @@ export class RelayBridge {
     this.setupEventForwarding();
 
     // Send metadata immediately on connect
-    this.sendMetadata();
+    this.sendMetadata().catch((err) => {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Error in initial metadata send',
+      );
+    });
 
     // Start periodic metadata timer
     this.startMetadataTimer();
@@ -463,7 +468,12 @@ export class RelayBridge {
   private startMetadataTimer(): void {
     this.clearMetadataTimer();
     this.metadataTimer = setInterval(() => {
-      this.sendMetadata();
+      this.sendMetadata().catch((err) => {
+        this.logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'Error in periodic metadata send',
+        );
+      });
     }, this.config.metadataIntervalMs);
   }
 
@@ -474,9 +484,9 @@ export class RelayBridge {
     }
   }
 
-  sendMetadata(): void {
+  async sendMetadata(): Promise<void> {
     try {
-      const metadata = this.collectMetadata();
+      const metadata = await this.collectMetadata();
       if (this.client.isConnected) {
         this.client.send({
           type: 'metadata',
@@ -491,14 +501,14 @@ export class RelayBridge {
     }
   }
 
-  collectMetadata(): ClusterMetadataPayload {
+  async collectMetadata(): Promise<ClusterMetadataPayload> {
     const metadata: ClusterMetadataPayload = {
       version: this.getVersion(),
       uptimeSeconds: process.uptime(),
       activeWorkflowCount: this.getActiveWorkflowCount(),
       gitRemotes: this.getGitRemotes(),
       reportedAt: new Date().toISOString(),
-      codeServerReady: getCodeServerManager()?.getStatus() === 'running',
+      codeServerReady: await probeCodeServerSocket(),
     };
 
     // Add cluster.yaml fields if available
