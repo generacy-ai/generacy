@@ -60,6 +60,8 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
   private exitWaiters: Array<() => void> = [];
   private deviceCodeTimer: NodeJS.Timeout | null = null;
   private stdoutBuffer: string[] = [];
+  private deviceCode: string | null = null;
+  private verificationUri: string | null = null;
 
   constructor(private readonly opts: VsCodeTunnelManagerOptions) {}
 
@@ -69,6 +71,16 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
 
   async start(): Promise<VsCodeTunnelStartResult> {
     if (this.child) {
+      if (this.status === 'authorization_pending' && this.deviceCode) {
+        emitTunnelEvent({
+          status: 'authorization_pending',
+          deviceCode: this.deviceCode,
+          verificationUri: this.verificationUri ?? 'https://github.com/login/device',
+          tunnelName: this.opts.tunnelName,
+        });
+      } else if (this.status === 'connected') {
+        emitTunnelEvent({ status: 'connected', tunnelName: this.opts.tunnelName });
+      }
       return { status: this.status, tunnelName: this.opts.tunnelName };
     }
 
@@ -91,6 +103,8 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       const wasConnected = this.status === 'connected';
       this.child = null;
       this.clearDeviceCodeTimer();
+      this.deviceCode = null;
+      this.verificationUri = null;
 
       if (wasConnected) {
         this.status = 'disconnected';
@@ -108,6 +122,8 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       this.child = null;
       this.status = 'error';
       this.clearDeviceCodeTimer();
+      this.deviceCode = null;
+      this.verificationUri = null;
       emitTunnelEvent({ status: 'error', error: 'Failed to spawn VS Code CLI process' });
     });
 
@@ -184,10 +200,12 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       if (codeMatch && this.status === 'starting') {
         this.clearDeviceCodeTimer();
         this.status = 'authorization_pending';
+        this.deviceCode = codeMatch[1] ?? null;
+        this.verificationUri = 'https://github.com/login/device';
         emitTunnelEvent({
           status: 'authorization_pending',
-          deviceCode: codeMatch[1],
-          verificationUri: 'https://github.com/login/device',
+          deviceCode: this.deviceCode ?? undefined,
+          verificationUri: this.verificationUri,
           tunnelName: this.opts.tunnelName,
         });
       } else if (uriMatch && this.status === 'starting') {
@@ -201,6 +219,8 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
     if (this.child === child && CONNECTED_PATTERN.test(line)) {
       this.clearDeviceCodeTimer();
       this.status = 'connected';
+      this.deviceCode = null;
+      this.verificationUri = null;
       emitTunnelEvent({ status: 'connected', tunnelName: this.opts.tunnelName });
     }
   }
