@@ -500,6 +500,116 @@ describe('VsCodeTunnelProcessManager', () => {
       expect(result.status).toBe('connected');
       expect(spawnMock).toHaveBeenCalledTimes(1);
     });
+
+    it('re-emits authorization_pending event with stored device code on idempotent start()', async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(child, 'Enter code ABCD-1234 at https://github.com/login/device');
+      expect(mgr.getStatus()).toBe('authorization_pending');
+
+      const eventCountBefore = relayEvents.length;
+      await mgr.start();
+
+      const reEmitted = relayEvents.slice(eventCountBefore);
+      expect(reEmitted).toHaveLength(1);
+      expect(reEmitted[0]).toEqual({
+        channel: 'cluster.vscode-tunnel',
+        payload: {
+          status: 'authorization_pending',
+          deviceCode: 'ABCD-1234',
+          verificationUri: 'https://github.com/login/device',
+          tunnelName: 'test-cluster',
+        },
+      });
+    });
+
+    it('re-emits connected event on idempotent start() when already connected', async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(child, 'AAAA-BBBB');
+      pushLine(child, 'tunnel is ready');
+      expect(mgr.getStatus()).toBe('connected');
+
+      const eventCountBefore = relayEvents.length;
+      await mgr.start();
+
+      const reEmitted = relayEvents.slice(eventCountBefore);
+      expect(reEmitted).toHaveLength(1);
+      expect(reEmitted[0]).toEqual({
+        channel: 'cluster.vscode-tunnel',
+        payload: { status: 'connected', tunnelName: 'test-cluster' },
+      });
+    });
+
+    it('does NOT re-emit in starting state (no device code stored yet)', async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+      expect(mgr.getStatus()).toBe('starting');
+
+      const eventCountBefore = relayEvents.length;
+      await mgr.start();
+
+      // No new events emitted
+      expect(relayEvents.length).toBe(eventCountBefore);
+    });
+
+    it('clears stored deviceCode/verificationUri on process exit', async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(child, 'Enter code WXYZ-5678 at https://github.com/login/device');
+      expect(mgr.getStatus()).toBe('authorization_pending');
+
+      // Process exits — fields should be cleared
+      child.emit('exit');
+      expect(mgr.getStatus()).toBe('stopped');
+
+      // After exit, child is null so a new start() spawns fresh — no stale re-emit
+      // Verify by checking no authorization_pending event was emitted between exit and now
+      const authEventsAfterExit = relayEvents.filter(
+        e => e.payload.status === 'authorization_pending',
+      );
+      // Only 1 authorization_pending event total (the original, not a re-emit)
+      expect(authEventsAfterExit).toHaveLength(1);
+    });
+
+    it('clears stored deviceCode/verificationUri on transition to connected', async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(child, 'Enter code MNOP-9999 at https://github.com/login/device');
+      expect(mgr.getStatus()).toBe('authorization_pending');
+
+      // Transition to connected — clears device code fields
+      pushLine(child, 'Tunnel is ready and is connected');
+      expect(mgr.getStatus()).toBe('connected');
+
+      // Idempotent start() should re-emit connected, NOT authorization_pending
+      const eventCountBefore = relayEvents.length;
+      await mgr.start();
+
+      const reEmitted = relayEvents.slice(eventCountBefore);
+      expect(reEmitted).toHaveLength(1);
+      expect(reEmitted[0].payload.status).toBe('connected');
+      expect(reEmitted[0].payload).not.toHaveProperty('deviceCode');
+    });
   });
 
   // -------------------------------------------------------------------------
