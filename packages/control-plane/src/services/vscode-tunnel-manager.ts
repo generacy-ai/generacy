@@ -13,6 +13,7 @@ export interface VsCodeTunnelEvent {
   deviceCode?: string;
   verificationUri?: string;
   tunnelName?: string;
+  tunnelUrl?: string;
   error?: string;
   details?: string;
 }
@@ -37,7 +38,8 @@ export const DEFAULT_FORCE_KILL_TIMEOUT_MS = 5_000;
 
 const DEVICE_CODE_PATTERN = /([A-Z0-9]{4}-[A-Z0-9]{4})/;
 const VERIFICATION_URI_PATTERN = /https:\/\/github\.com\/login\/device/;
-const CONNECTED_PATTERN = /is connected|tunnel is ready/i;
+const CONNECTED_PATTERN = /https:\/\/vscode\.dev\/tunnel\/[\w-]+|is connected|tunnel is ready/i;
+const TUNNEL_URL_PATTERN = /(https:\/\/vscode\.dev\/tunnel\/[\w-]+[\w\-/]*)/;
 
 export function loadOptionsFromEnv(env: NodeJS.ProcessEnv = process.env): VsCodeTunnelManagerOptions {
   const tunnelName = env['GENERACY_CLUSTER_ID'];
@@ -62,6 +64,8 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
   private stdoutBuffer: string[] = [];
   private deviceCode: string | null = null;
   private verificationUri: string | null = null;
+  private tunnelUrl: string | null = null;
+  private stopping = false;
 
   constructor(private readonly opts: VsCodeTunnelManagerOptions) {}
 
@@ -79,7 +83,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
           tunnelName: this.opts.tunnelName,
         });
       } else if (this.status === 'connected') {
-        emitTunnelEvent({ status: 'connected', tunnelName: this.opts.tunnelName });
+        emitTunnelEvent({ status: 'connected', tunnelName: this.opts.tunnelName, tunnelUrl: this.tunnelUrl ?? undefined });
       }
       return { status: this.status, tunnelName: this.opts.tunnelName };
     }
@@ -99,16 +103,31 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       detached: false,
     });
 
-    child.on('exit', () => {
+    child.on('exit', (code) => {
       const wasConnected = this.status === 'connected';
+      const wasPending = this.status === 'authorization_pending' || this.status === 'starting';
+      const stopInitiated = this.stopping;
+      this.stopping = false;
       this.child = null;
       this.clearDeviceCodeTimer();
       this.deviceCode = null;
       this.verificationUri = null;
+      this.tunnelUrl = null;
 
-      if (wasConnected) {
+      if (stopInitiated) {
+        this.status = 'stopped';
+      } else if (wasConnected) {
         this.status = 'disconnected';
         emitTunnelEvent({ status: 'disconnected', tunnelName: this.opts.tunnelName });
+      } else if (wasPending) {
+        this.status = 'error';
+        const last20 = this.stdoutBuffer.slice(-20).join('\n');
+        emitTunnelEvent({
+          status: 'error',
+          error: `code tunnel exited (code ${code}) before reaching connected state`,
+          details: last20 || undefined,
+          tunnelName: this.opts.tunnelName,
+        });
       } else {
         this.status = 'stopped';
       }
@@ -167,6 +186,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
     const child = this.child;
     if (!child) return;
 
+    this.stopping = true;
     return new Promise<void>((resolve) => {
       this.exitWaiters.push(resolve);
       child.kill('SIGTERM');
@@ -221,7 +241,9 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       this.status = 'connected';
       this.deviceCode = null;
       this.verificationUri = null;
-      emitTunnelEvent({ status: 'connected', tunnelName: this.opts.tunnelName });
+      const urlMatch = line.match(TUNNEL_URL_PATTERN);
+      this.tunnelUrl = urlMatch?.[1] ?? null;
+      emitTunnelEvent({ status: 'connected', tunnelName: this.opts.tunnelName, tunnelUrl: this.tunnelUrl ?? undefined });
     }
   }
 
