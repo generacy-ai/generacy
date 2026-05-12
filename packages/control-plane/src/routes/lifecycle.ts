@@ -7,6 +7,8 @@ import { getCodeServerManager } from '../services/code-server-manager.js';
 import { getVsCodeTunnelManager } from '../services/vscode-tunnel-manager.js';
 import { readBody } from '../util/read-body.js';
 import { clonePeerRepos } from '../services/peer-repo-cloner.js';
+import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
+import { getRelayPushEvent } from '../relay-events.js';
 
 export async function handlePostLifecycle(
   req: http.IncomingMessage,
@@ -95,6 +97,23 @@ export async function handlePostLifecycle(
   }
 
   if (parsed.data === 'bootstrap-complete') {
+    // Unseal wizard credentials and write transient env file before sentinel
+    const agencyDir = process.env.AGENCY_DIR ?? '/workspaces/.agency';
+    const envFilePath = process.env.WIZARD_CREDS_PATH ?? '/var/lib/generacy/wizard-credentials.env';
+    try {
+      const envResult = await writeWizardEnvFile({ agencyDir, envFilePath });
+      if (envResult.failed.length > 0) {
+        const pushEvent = getRelayPushEvent();
+        pushEvent?.('cluster.bootstrap', {
+          warning: 'credential-unseal-partial',
+          failed: envResult.failed,
+          written: envResult.written,
+        });
+      }
+    } catch {
+      // Non-fatal: log and continue — post-activation will see missing env vars
+    }
+
     const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
     await writeFile(sentinel, '', { flag: 'w' });
 
