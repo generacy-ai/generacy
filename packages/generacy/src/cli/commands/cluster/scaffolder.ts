@@ -156,7 +156,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   const orchestratorVolumes = [
     ...sharedVolumes,
     '/var/run/docker.sock:/var/run/docker-host.sock',
-    'vscode-cli:/home/node/.vscode-cli',
+    'vscode-cli-state:/home/node/.vscode/cli',
   ];
 
   const tmpfsMounts = [
@@ -249,7 +249,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       'shared-packages': null,
       'npm-cache': null,
       'generacy-data': null,
-      'vscode-cli': null,
+      'vscode-cli-state': null,
       'redis-data': null,
       ...(claudeConfigMode === 'volume' ? { 'claude-config': null } : {}),
     },

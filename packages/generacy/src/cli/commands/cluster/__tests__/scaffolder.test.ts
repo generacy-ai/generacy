@@ -176,10 +176,10 @@ describe('scaffoldDockerCompose', () => {
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
-    expect(orchVolumes).toContain('vscode-cli:/home/node/.vscode-cli');
+    expect(orchVolumes).toContain('vscode-cli-state:/home/node/.vscode/cli');
 
     const workerVolumes = parsed.services.worker.volumes as string[];
-    expect(workerVolumes).not.toContain('vscode-cli:/home/node/.vscode-cli');
+    expect(workerVolumes).not.toContain('vscode-cli-state:/home/node/.vscode/cli');
   });
 
   it('includes tmpfs mounts on orchestrator and worker', () => {
@@ -309,7 +309,7 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.volumes).toHaveProperty('npm-cache');
     expect(parsed.volumes).toHaveProperty('generacy-data');
     expect(parsed.volumes).toHaveProperty('redis-data');
-    expect(parsed.volumes).toHaveProperty('vscode-cli');
+    expect(parsed.volumes).toHaveProperty('vscode-cli-state');
   });
 
   it('mounts shared-packages at /shared-packages (cluster-base entrypoint contract)', () => {
