@@ -268,3 +268,9 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Root cause: #594 used local `EventMessage` interface field names (`{ channel, event }`) but the cloud expects wire format `{ event: channelName, data: payload, timestamp: ISO }`. The `as unknown as RelayMessage` double-cast hid the type mismatch.
 - Fix: `packages/orchestrator/src/routes/internal-relay-events.ts` — change `client.send()` call to use `event: channel, data: payload, timestamp: new Date().toISOString()`. Cast retained because `EventMessage` interface update is out of scope (#572).
 - Affects all four IPC channels: `cluster.vscode-tunnel`, `cluster.audit`, `cluster.credentials`, `cluster.bootstrap`.
+
+## VS Code Tunnel Name Derivation (#608)
+
+- Bug: `code tunnel --name <cluster-uuid>` fails on fresh clusters because Microsoft's tunnel service rejects names longer than 20 characters. Cluster UUIDs are 36 chars.
+- `packages/control-plane/src/services/vscode-tunnel-manager.ts` — MODIFIED in #608: New exported `deriveTunnelName(clusterId)` pure function: strips hyphens, prefixes `g-`, takes first 18 hex chars (total 20). `loadOptionsFromEnv()` calls `deriveTunnelName()` instead of passing raw cluster ID. For UUID `9e5c8a0d-755e-40b3-b0c3-43e849f0bb90`, yields `g-9e5c8a0d755e40b3b0`.
+- Web-side deep link fix is a companion issue in generacy-cloud (reads `tunnelName` from relay event instead of recomputing).

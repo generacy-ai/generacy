@@ -31,6 +31,7 @@ vi.mock('../src/relay-events.js', () => ({
 import {
   VsCodeTunnelProcessManager,
   loadOptionsFromEnv,
+  deriveTunnelName,
   DEFAULT_VSCODE_CLI_BIN,
   type VsCodeTunnelManagerOptions,
   type VsCodeTunnelEvent,
@@ -702,15 +703,39 @@ describe('VsCodeTunnelProcessManager', () => {
 });
 
 // ---------------------------------------------------------------------------
+// deriveTunnelName
+// ---------------------------------------------------------------------------
+describe('deriveTunnelName', () => {
+  it('derives known mapping from UUID', () => {
+    expect(deriveTunnelName('9e5c8a0d-755e-40b3-b0c3-43e849f0bb90')).toBe('g-9e5c8a0d755e40b3b0');
+  });
+
+  it('output length is <= 20 characters', () => {
+    expect(deriveTunnelName('9e5c8a0d-755e-40b3-b0c3-43e849f0bb90').length).toBeLessThanOrEqual(20);
+  });
+
+  it('is deterministic (same input -> same output)', () => {
+    const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    expect(deriveTunnelName(id)).toBe(deriveTunnelName(id));
+  });
+
+  it('handles already-hyphen-free input', () => {
+    const result = deriveTunnelName('9e5c8a0d755e40b3b0c343e849f0bb90');
+    expect(result).toBe('g-9e5c8a0d755e40b3b0');
+    expect(result.length).toBeLessThanOrEqual(20);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // loadOptionsFromEnv
 // ---------------------------------------------------------------------------
 describe('loadOptionsFromEnv', () => {
-  it('returns options from env vars', () => {
+  it('returns options with derived tunnel name from env vars', () => {
     const opts = loadOptionsFromEnv({
-      GENERACY_CLUSTER_ID: 'my-cluster',
+      GENERACY_CLUSTER_ID: '9e5c8a0d-755e-40b3-b0c3-43e849f0bb90',
       VSCODE_CLI_BIN: '/opt/vscode/code',
     });
-    expect(opts.tunnelName).toBe('my-cluster');
+    expect(opts.tunnelName).toBe('g-9e5c8a0d755e40b3b0');
     expect(opts.binPath).toBe('/opt/vscode/code');
   });
 
