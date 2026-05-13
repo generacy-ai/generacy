@@ -10,12 +10,12 @@
 
 ## Phase 1: Fix
 
-- [ ] T001 [US1] Update orchestrator service volume mount from `vscode-cli:/home/node/.vscode-cli` to `vscode-cli-state:/home/node/.vscode/cli` in `scaffoldDockerCompose()` (`packages/generacy/src/cli/commands/cluster/scaffolder.ts`, line ~159)
-- [ ] T002 [US1] Update top-level `volumes:` declaration from `vscode-cli: null` to `vscode-cli-state: null` in the same function (`packages/generacy/src/cli/commands/cluster/scaffolder.ts`, line ~252)
+- [X] T001 [US1] Update orchestrator service volume mount from `vscode-cli:/home/node/.vscode-cli` to `vscode-cli-state:/home/node/.vscode/cli` in `scaffoldDockerCompose()` (`packages/generacy/src/cli/commands/cluster/scaffolder.ts`, line ~159)
+- [X] T002 [US1] Update top-level `volumes:` declaration from `vscode-cli: null` to `vscode-cli-state: null` in the same function (`packages/generacy/src/cli/commands/cluster/scaffolder.ts`, line ~252)
 
 ## Phase 2: Verification
 
-- [ ] T003 [US1] Verify scaffolded `docker-compose.yml` output contains `vscode-cli-state:/home/node/.vscode/cli` and `vscode-cli-state: null` (run existing tests or inspect output manually)
+- [X] T003 [US1] Verify scaffolded `docker-compose.yml` output contains `vscode-cli-state:/home/node/.vscode/cli` and `vscode-cli-state: null` (run existing tests or inspect output manually)
 
 ## Dependencies & Execution Order
 
