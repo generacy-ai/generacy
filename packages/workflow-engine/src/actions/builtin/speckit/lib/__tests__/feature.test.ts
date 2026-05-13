@@ -439,6 +439,97 @@ describe('createFeature()', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Test: feature numbers >= 1000 (no cap)
+  // -------------------------------------------------------------------------
+  describe('feature numbers >= 1000', () => {
+    it('succeeds for issue number 1000', async () => {
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '1000-test-feature';
+        return 'abc123def456';
+      });
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 1000,
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.feature_num).toBe('1000');
+      expect(result.branch_name).toBe('1000-test-feature');
+    });
+
+    it('succeeds for issue number 9999', async () => {
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '9999-test-feature';
+        return 'abc123def456';
+      });
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 9999,
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      expect(result.feature_num).toBe('9999');
+      expect(result.branch_name).toBe('9999-test-feature');
+    });
+
+    it('generates correct branch name with 4+ digit numbers (padStart widens naturally)', async () => {
+      (git().revparse as ReturnType<typeof vi.fn>).mockImplementation(async (args: string[]) => {
+        if (Array.isArray(args) && args.includes('--abbrev-ref')) return '1004-my-feature';
+        return 'abc123def456';
+      });
+
+      const result = await createFeature({
+        description: 'my feature',
+        number: 1004,
+        short_name: 'my-feature',
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(true);
+      // padStart(3, '0') on 1004 returns '1004' (no truncation)
+      expect(result.feature_num).toBe('1004');
+      expect(result.branch_name).toBe('1004-my-feature');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Test: failure paths return error field
+  // -------------------------------------------------------------------------
+  describe('failure paths return error field', () => {
+    it('returns error when repository root is not found', async () => {
+      mockFs.findRepoRoot.mockResolvedValue(null);
+
+      const result = await createFeature({
+        description: 'test feature',
+        number: 42,
+        cwd: '/nonexistent',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Could not find repository root');
+    });
+
+    it('returns error when branch name is invalid', async () => {
+      // Force an invalid branch name by using a short_name with uppercase
+      // FEATURE_NAME_PATTERN requires lowercase: /^\d+-[a-z0-9]+(?:-[a-z0-9]+)*$/
+      const result = await createFeature({
+        description: 'test feature',
+        number: 42,
+        short_name: 'INVALID_NAME',
+        cwd: '/repo',
+      });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Invalid branch name');
+      expect(result.error).toContain('042-INVALID_NAME');
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // Test: base_commit SHA is returned in output
   // -------------------------------------------------------------------------
   describe('base_commit output', () => {
