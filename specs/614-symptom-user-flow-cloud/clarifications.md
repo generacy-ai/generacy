@@ -10,7 +10,7 @@
 - B: FR-005 only — CLI signals force-reactivation on `--claim` (explicit intent, simpler)
 - C: Both — FR-004 as the runtime guard, FR-005 as the CLI-level belt-and-suspenders
 
-**Answer**: *Pending*
+**Answer**: B — FR-005 only. The user's scenario is explicitly "archive → re-add → new claim." FR-005 maps directly to that intent. FR-004 has definitional problems (what counts as "healthy"?) and couples activation to credhelper internals. Defer FR-004 to a follow-up only if a non-claim-driven re-activation scenario surfaces.
 
 ### Q2: Fix B signal propagation mechanism
 **Context**: FR-005 requires the CLI's `--claim` intent to reach the orchestrator running inside a Docker container. The CLI (`npx generacy launch`) runs on the host; the orchestrator runs in a container started by `docker compose up`. The scaffolder writes `.generacy/.env` which is bind-mounted into the container. The `generacy-data` named volume persists `/var/lib/generacy/` (including the stale `cluster-api-key` file) across `docker compose down` + re-up when the compose project name stays the same.
@@ -20,7 +20,7 @@
 - B: CLI runs `docker volume rm <project>_generacy-data` before `docker compose up` (wipes all persisted cluster state)
 - C: CLI writes a sentinel file to the volume via `docker run --rm -v ...` that the orchestrator checks
 
-**Answer**: *Pending*
+**Answer**: C — sentinel via `docker run --rm -v`. Specifically, have the CLI delete the stale `cluster-api-key` and `cluster.json` from the volume before `docker compose up` when `--claim` is supplied. With those files removed, `activation/index.ts:35`'s `readKeyFile()` returns null, the existing-key short-circuit doesn't fire, and the device-code flow runs — with zero orchestrator code change. Option A has a stale-env-var clearing problem; Option B (`docker volume rm`) is a sledgehammer that destroys audit logs, master key, etc.
 
 ### Q3: Env file regeneration necessity (FR-001)
 **Context**: `wizard-credentials.env` is sourced then **deleted** by `entrypoint-post-activation.sh` during initial bootstrap. After bootstrap, no process reads this file. The issue body confirms: "After startup, the orchestrator's process environment is frozen." The load-bearing change for credential refresh is `gh auth login --with-token` (FR-002), which updates `~/.config/gh/hosts.yml` — the file `gh` actually reads on every invocation. Regenerating the env file on every `PUT /credentials` would write to a file with no consumer.
@@ -30,4 +30,4 @@
 - B: Drop FR-001 — no consumer exists after bootstrap; implement FR-002 only to keep the change minimal
 - C: Keep FR-001 but demote to P3 — implement after FR-002 if time permits
 
-**Answer**: *Pending*
+**Answer**: A — keep FR-001 (P1). **Correction**: The clarify-phase premise that "env file has no consumer after bootstrap" is factually wrong. `entrypoint-post-activation.sh` does NOT delete the file — it sources it, and the file persists in the volume. On every container restart, the entrypoint re-sources `wizard-credentials.env`, exports `GH_TOKEN`, and re-invokes `setup-credentials.sh` → `gh auth login --with-token`. So FR-001 is load-bearing for the restart path: without it, a container restart would re-source the stale token from the env file, recreating the original 401 bug. FR-001 is P1 alongside FR-002, not defense-in-depth.

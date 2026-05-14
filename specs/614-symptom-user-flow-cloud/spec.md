@@ -1,103 +1,164 @@
-# Bugfix: Stale credential surface after cluster re-add and credential refresh
+# Feature Specification: ## Symptom
 
-**Branch**: `614-symptom-user-flow-cloud` | **Issue**: #614 | **Date**: 2026-05-14 | **Status**: Draft | **Type**: Bugfix
+User flow: in the cloud UI, archive a cluster → click "Add cluster" → run the new `npx generacy launch --claim=<new-claim>` from the dashboard
+
+**Branch**: `614-symptom-user-flow-cloud` | **Date**: 2026-05-14 | **Status**: Draft
 
 ## Summary
 
-When a user archives a cluster and re-adds it via `npx generacy launch --claim=<new-claim>`, the orchestrator boots with a stale API key from the previous activation (Problem 1) and continues using expired GitHub credentials forever (Problem 2). Even though the cloud successfully PUTs fresh credentials to the cluster on every WebSocket reconnect, the cluster never re-surfaces the new token into `gh auth`'s config — causing perpetual 401 errors on all GitHub API calls.
+## Symptom
 
-Two independent cluster-side fixes are required:
+User flow: in the cloud UI, archive a cluster → click "Add cluster" → run the new `npx generacy launch --claim=<new-claim>` from the dashboard. The cluster boots; its `onboarding-test-10-orchestrator-1` logs show:
 
-- **Fix A** (high-priority): `handlePutCredential` must re-run `gh auth login --with-token` when a github-app or github-pat credential is updated, so the orchestrator's `gh` CLI picks up the new token immediately.
-- **Fix B** (medium-priority): The activation flow must not skip device-code activation when a stale key file exists but the cluster is being re-initialized with a new claim code.
+```
+{"msg":"Checking for existing cluster API key"}
+{"msg":"Existing cluster API key found, skipping activation"}
+{"msg":"Cluster activation complete"}
+{"msg":"Relay bridge configured"}
+[relay] WebSocket connected, sending handshake
+{"msg":"Relay connected to cloud"}
+```
 
-## Root Cause Analysis
+…then every subsequent GitHub API call from the orchestrator's monitors 401s every minute, forever:
+
+```
+Failed to list open PRs for christrudelpw/onboarding-test-10:
+  HTTP 401: Bad credentials (https://api.github.com/graphql)
+  Try authenticating with: gh auth login
+
+Failed to list issues with label "process:speckit-feature":
+  non-200 OK status code: 401 Unauthorized
+```
+
+Even after `generacy-ai/generacy-cloud#568` (cloud re-mints + re-delivers fresh `github-main-org` credential to the cluster on every WS reconnect), the orchestrator continues to 401. The cluster runs, the relay works, but the orchestrator cannot make any authenticated GitHub call.
+
+## Root cause: two separate cluster-side problems
 
 ### Problem 1 — Activation skip gates on key-file presence alone
 
-`packages/orchestrator/src/activation/index.ts` short-circuits the entire device-code flow if `/var/lib/generacy/cluster-api-key` exists on disk. When docker volumes survive a `docker compose down` + re-add, the stale key file causes the orchestrator to skip wizard-mode activation entirely — no credential delivery, no `bootstrap-complete`, no fresh environment.
+[`packages/orchestrator/src/activation/index.ts:34-47`](packages/orchestrator/src/activation/index.ts#L34-L47):
 
-### Problem 2 — `handlePutCredential` doesn't re-surface GH_TOKEN
+```ts
+const existingKey = await readKeyFile(keyFilePath);
+if (existingKey) {
+  logger.info('Existing cluster API key found, skipping activation');
+  const metadata = await readClusterJson(clusterJsonPath);
+  return { apiKey: existingKey, ... };
+}
+```
 
-`packages/control-plane/src/routes/credentials.ts` persists credentials to the encrypted store and emits relay events, but does not:
-- Rewrite `/var/lib/generacy/wizard-credentials.env` with the new token
-- Re-run `gh auth login --with-token` to update `~/.config/gh/hosts.yml`
+If the key file is present on disk, the entire device-code activation flow is short-circuited and `activate()` returns immediately. This is the correct behaviour for *normal* cluster restarts (same machine, same project, key still valid). It is **wrong** for the user's "re-add a cluster" flow:
 
-The `gh` CLI reads from `hosts.yml` on every invocation. Without updating it, all GitHub API calls use the stale token from the original wizard run.
+1. User runs `npx generacy launch --claim=<old-claim>` once → activation runs → key persisted into the named docker volume.
+2. User clicks "Stop cluster" / `docker compose down` → containers gone, volume intact.
+3. User archives the cluster from the cloud UI → user clicks "Add cluster" → cloud issues a new claim → user runs `npx generacy launch --claim=<new-claim>`.
+4. CLI scaffolds the project, `docker compose up` runs, the orchestrator boots — and finds the **stale** key file in the volume. Activation is skipped. No fresh wizard run, no credential delivery, no `bootstrap-complete` lifecycle action — and the orchestrator boots with stale environment from the previous setup.
+
+The cluster-API-key being valid in the cloud (relay accepts it because it's still in Firestore under `clusters/<projectId>/api_keys/...`) compounds the misdiagnosis: from the cluster's perspective everything looks fine, from the cloud's perspective the WS connection is healthy, but the credential surface is stuck wherever it was at the end of the original wizard run.
+
+### Problem 2 — `handlePutCredential` doesn't re-surface the credential as `GH_TOKEN`
+
+[`packages/control-plane/src/routes/credentials.ts:62-117`](packages/control-plane/src/routes/credentials.ts#L62-L117) accepts the PUT, calls `writeCredential(...)`, and that's it. `writeCredential` does two things ([`services/credential-writer.ts:28-65`](packages/control-plane/src/services/credential-writer.ts#L28-L65)):
+
+1. Persists the secret via `ClusterLocalBackend.setSecret(credentialId, value)` — encrypted at rest in the credhelper-daemon's store.
+2. Writes metadata to `.agency/credentials.yaml`.
+3. Emits a `cluster.credentials` relay event with `status: 'written'`.
+
+What it does **not** do:
+
+- It does not re-run [`writeWizardEnvFile`](packages/control-plane/src/services/wizard-env-writer.ts#L62) — which is the function that translates `type: 'github-app'`'s `value.token` into the `GH_TOKEN=<...>` line in `/var/lib/generacy/wizard-credentials.env`. That function only runs from the `bootstrap-complete` lifecycle action ([`routes/lifecycle.ts:99-115`](packages/control-plane/src/routes/lifecycle.ts#L99-L115)), which fires exactly once at the end of the wizard.
+- The env file persists in the volume and is re-sourced by `entrypoint-post-activation.sh` on every container restart (not deleted after bootstrap). `setup-credentials.sh` then runs `gh auth login --with-token` from the sourced `$GH_TOKEN` and writes `~/.config/gh/hosts.yml`. Since `~/.config/gh/hosts.yml` lives in the ephemeral container filesystem (not the named volume), it is recreated from the env file on every restart. This makes the env file the source-of-truth for `gh`'s auth state across container restarts.
+
+So even though cloud-side #568 successfully PUTs a fresh installation token to the cluster every reconnect, the cluster:
+
+- ✅ Writes the new token into the credhelper store.
+- ❌ Does not rewrite `/var/lib/generacy/wizard-credentials.env` (the source-of-truth for `gh` auth on container restart).
+- ❌ Does not re-run `gh auth login --with-token` (the live-refresh path for `~/.config/gh/hosts.yml`).
+- ❌ Does not signal the orchestrator (or its child `gh` processes) to refresh their cached auth state.
+
+The orchestrator keeps calling `gh` with the same token from yesterday's wizard run. `gh` 401s. The Firestore doc says the cluster is "online", the credhelper has the right secret, but the gh CLI's view of the world is hours stale. On container restart, the entrypoint re-sources the stale env file, recreating the same 401.
+
+## Recommended fix
+
+Two changes that together close the gap:
+
+### Fix A (high-priority) — `handlePutCredential` rewrites GH_TOKEN surface for github credentials
+
+In [`packages/control-plane/src/routes/credentials.ts`](packages/control-plane/src/routes/credentials.ts), after the existing `writeCredential(...)` call succeeds, if the credential type is `github-app` or `github-pat`:
+
+1. **(P1 — restart path)** Re-run `writeWizardEnvFile({ agencyDir, envFilePath })` so the env file is regenerated with the new token in the `GH_TOKEN=...` line. This is load-bearing: on container restart, `entrypoint-post-activation.sh` re-sources this file and runs `setup-credentials.sh` to recreate `~/.config/gh/hosts.yml`. Without this step, a restart would revert to the stale token. (`mapCredentialToEnvEntries` already knows how to extract `token` from the github-app value JSON; no schema work needed.)
+2. **(P1 — live-refresh path)** Re-invoke `gh auth login --with-token` with the new token so `~/.config/gh/hosts.yml` is updated immediately. The orchestrator's `GhCliGitHubClient` uses `gh` which reads that config on every call. (Either shell out to `gh auth login --with-token <<<"$NEW_TOKEN"` from the control-plane, or — cleaner — write the token directly to `~/.config/gh/hosts.yml` and let `gh` pick it up.)
+
+Both steps are scoped to github-app / github-pat credentials. Other credential types (anthropic-api-key, etc.) are unaffected because their env entries don't need a separate auth surface.
+
+### Fix B (medium-priority) — CLI `--claim` signals force-reactivation by clearing stale key files
+
+When the CLI receives a `--claim` argument, it should delete the stale `cluster-api-key` and `cluster.json` from the `generacy-data` Docker volume before running `docker compose up`. Implementation: `docker run --rm -v <project>_generacy-data:/v alpine rm -f /v/cluster-api-key /v/cluster.json`. With those files removed, [`activation/index.ts:35`](packages/orchestrator/src/activation/index.ts#L35)'s `readKeyFile()` returns null, the existing-key short-circuit doesn't fire, and the device-code flow runs — **with zero orchestrator code change**.
+
+This approach was chosen over two alternatives:
+- ~~Health-check approach (FR-004)~~: Checking credential health at activation time has definitional problems (what counts as "healthy"?) and couples activation to credhelper internals. Deferred to a follow-up only if a non-claim-driven re-activation scenario surfaces.
+- ~~`docker volume rm`~~: Destroys all persisted cluster state (audit logs, credhelper master key, scratch directories).
+
+Fix A is the load-bearing change — it makes refresh-on-reconnect (#568 in generacy-cloud) actually take effect. Fix B ensures the re-add flow starts clean.
+
+### Fix C (longer-term) — Orchestrator's GitHub client should mint-on-demand via credhelper-daemon
+
+The deeper architectural fix: don't cache `GH_TOKEN` in the orchestrator's environment at all. The credhelper-daemon's per-worker minting flow (referenced in #547's design) is the right primitive — each call to `GhCliGitHubClient` would mint a short-lived token from the daemon, which always serves from the freshest secret in the store. This removes the entire class of stale-env-var bugs.
+
+Out of scope for this fix; tracked here for context. Companion to `generacy-ai/generacy#572` (consolidating the cluster ↔ cloud connection contract).
+
+## Verified
+
+- Cloud-side: PR `generacy-ai/generacy-cloud#568` is deployed (commit `83820a0` on api-staging) and the refresh-on-reconnect path is exercised on every WS connect.
+- Cluster-side: orchestrator container logs from the user's 14:49 UTC reconnect show no `gh auth login` re-invocation and no env-file rewrite. The 401s continue every minute. The Firestore cluster doc has fresh `lastSeen` / `connectedAt` and the relay-server side reports a healthy connection — confirming the credential PUT is being forwarded but the cluster's response surface is incomplete.
+- Cluster-base setup-credentials.sh (the entrypoint script that does the initial `gh auth login --with-token`) only runs once at container startup. There is no re-invocation hook after that.
+
+## Test plan
+
+- [ ] Implement Fix A. Add a unit test that PUTs a `type: 'github-app'` credential with a new token and verifies (1) the env file's `GH_TOKEN=` line is rewritten, (2) `gh auth login --with-token` is invoked / `hosts.yml` is updated.
+- [ ] Implement Fix B (or the simpler variant: respect `--claim` as a force-reactivate signal).
+- [ ] Manual: reproduce the user flow (archive cluster in cloud → re-add → `npx generacy launch --claim=<new>` on a host whose docker volume still has the old key file) → confirm activation runs, wizard credentials reach the cluster, orchestrator's first PR-monitor poll succeeds without 401.
+- [ ] Manual: drop a fresh credential via `PUT /credentials/github-main-org` to a running cluster → orchestrator's next `gh` invocation uses the new token (verifiable by minting a stale-then-fresh token and watching the API call succeed).
+
+## Related
+
+- `generacy-ai/generacy-cloud#567` (cloud-side root cause discussion)
+- `generacy-ai/generacy-cloud#568` (cloud-side refresh-on-reconnect — does its job but cluster doesn't act on it)
+- #547 (initial mint-at-wizard-time on cloud)
+- #589 / #591 (cluster-side `wizard-env-writer` that consumes the initial wizard delivery)
+- #572 (umbrella: cluster ↔ cloud connection contract — Fix C lives under this)
 
 ## User Stories
 
-### US1: Cluster re-add works without manual intervention
+### US1: [Primary User Story]
 
-**As a** platform user,
-**I want** to archive a cluster and re-add it with a new claim code,
-**So that** the new cluster boots with fresh credentials and GitHub API calls succeed immediately.
-
-**Acceptance Criteria**:
-- [ ] Orchestrator detects stale activation state when re-launched with a new claim and re-runs device-code flow
-- [ ] GitHub API calls succeed on the first PR-monitor poll after re-add
-
-### US2: Credential refresh on reconnect takes effect immediately
-
-**As a** platform user,
-**I want** credential refreshes delivered by the cloud (via `PUT /credentials/:id`) to take effect immediately,
-**So that** I don't experience perpetual 401 errors when installation tokens rotate.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] After `PUT /credentials/github-main-org` with a new token, the next `gh` CLI invocation uses the new token
-- [ ] The env file `/var/lib/generacy/wizard-credentials.env` is regenerated with the updated `GH_TOKEN`
-- [ ] `~/.config/gh/hosts.yml` is updated with the new token
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `handlePutCredential` re-runs `writeWizardEnvFile()` after persisting a github-app or github-pat credential | P1 | Fix A — load-bearing change |
-| FR-002 | `handlePutCredential` invokes `gh auth login --with-token` (or writes `hosts.yml` directly) after persisting a github-app or github-pat credential | P1 | Fix A — makes `gh` pick up new token |
-| FR-003 | Credential refresh logic is scoped to `github-app` and `github-pat` types only; other types (anthropic-api-key, etc.) are unaffected | P1 | No regressions for non-GitHub credentials |
-| FR-004 | Activation skip in `activate()` considers credential health, not just key-file presence | P2 | Fix B — stale key file detection |
-| FR-005 | When CLI passes `--claim`, treat as explicit re-activation signal; ignore existing key file | P2 | Fix B — simpler variant; user intent is clear |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `PUT /credentials/github-main-org` with type `github-app` results in updated `hosts.yml` | 100% | Unit test: verify `gh auth login --with-token` is invoked or `hosts.yml` updated |
-| SC-002 | `PUT /credentials/github-main-org` with type `github-app` results in updated env file | 100% | Unit test: verify `GH_TOKEN=` line in env file matches new token |
-| SC-003 | Re-add flow (archive → new claim → launch) completes wizard and delivers fresh credentials | 100% | Manual test: orchestrator's first PR-monitor poll succeeds without 401 |
-| SC-004 | Normal cluster restart (no re-add) continues to skip activation as before | 100% | Regression test: existing key + existing credentials = skip activation |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Cloud-side `generacy-cloud#568` (refresh-on-reconnect via PUT) is deployed and working. This fix makes the cluster act on those PUTs.
-- `gh auth login --with-token` is available in the cluster-base container image.
-- The control-plane process has filesystem access to `~/.config/gh/hosts.yml` (same user context as the orchestrator).
-- Docker named volumes persist across `docker compose down` (confirmed behavior).
+- [Assumption 1]
 
 ## Out of Scope
 
-- **Fix C** — Orchestrator's GitHub client minting tokens on-demand via credhelper-daemon (tracked under #572)
-- Cloud-side changes (already shipped in `generacy-cloud#568`)
-- Cluster-base entrypoint script changes (the fix works at the control-plane application layer)
-- Credential rotation for non-GitHub credential types
-
-## Related Issues
-
-- `generacy-ai/generacy-cloud#567` — Cloud-side root cause discussion
-- `generacy-ai/generacy-cloud#568` — Cloud-side refresh-on-reconnect (does its job; cluster doesn't act on it)
-- #547 — Initial mint-at-wizard-time on cloud
-- #589 / #591 — Cluster-side `wizard-env-writer` that consumes the initial wizard delivery
-- #572 — Umbrella: cluster-to-cloud connection contract (Fix C lives here)
-
-## Test Plan
-
-- [ ] Unit test: PUT `type: 'github-app'` credential → verify env file `GH_TOKEN=` rewritten with new token
-- [ ] Unit test: PUT `type: 'github-app'` credential → verify `gh auth login --with-token` invoked / `hosts.yml` updated
-- [ ] Unit test: PUT `type: 'api-key'` credential → verify no env file rewrite or `gh auth` invocation
-- [ ] Unit test: Activation with existing key file but missing `credentials.yaml` → falls through to device-code flow
-- [ ] Unit test: Activation with existing key file and valid `credentials.yaml` → skips activation (regression guard)
-- [ ] Manual: Archive cluster → re-add with new claim → verify orchestrator's first PR-monitor poll succeeds
-- [ ] Manual: PUT fresh credential to running cluster → next `gh` invocation uses new token
+- [Exclusion 1]
 
 ---
 
