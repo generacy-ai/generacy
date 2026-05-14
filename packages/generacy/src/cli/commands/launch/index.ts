@@ -25,6 +25,8 @@ import { openBrowser } from './browser.js';
 import { registerCluster } from './registry.js';
 import { resolve } from 'node:path';
 import { resolveApiUrl } from '../../utils/cloud-url.js';
+import { sanitizeComposeProjectName } from '../cluster/scaffolder.js';
+import { clearStaleActivation } from './volume-cleanup.js';
 
 /**
  * Create the `launch` subcommand.
@@ -136,6 +138,15 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
     const msg = error instanceof Error ? error.message : String(error);
     p.log.error(`Failed to scaffold project: ${msg}`);
     process.exit(1);
+  }
+
+  // ── 6b. Clear stale activation if --claim is present ──────────────────
+  if (opts.claim) {
+    const composeName = sanitizeComposeProjectName(config.projectName, config.clusterId);
+    const cleared = clearStaleActivation(composeName);
+    if (cleared) {
+      logger.debug('Stale activation files cleared from volume');
+    }
   }
 
   // ── 7. docker compose pull ──────────────────────────────────────────

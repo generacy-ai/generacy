@@ -11,6 +11,17 @@ import {
 import { ControlPlaneError } from '../../src/errors.js';
 import { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import { setCredentialBackend } from '../../src/services/credential-writer.js';
+import { writeWizardEnvFile } from '../../src/services/wizard-env-writer.js';
+import { refreshGhAuth } from '../../src/services/gh-auth-refresh.js';
+
+vi.mock('../../src/services/wizard-env-writer.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/services/wizard-env-writer.js')>();
+  return { ...original, writeWizardEnvFile: vi.fn().mockResolvedValue({ written: [], failed: [] }) };
+});
+vi.mock('../../src/services/gh-auth-refresh.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/services/gh-auth-refresh.js')>();
+  return { ...original, refreshGhAuth: vi.fn().mockResolvedValue({ ok: true }) };
+});
 
 function createMockResponse() {
   return {
@@ -220,5 +231,78 @@ describe('integration: idempotency', () => {
 
     const body = JSON.parse(res.end.mock.calls[0][0]);
     expect(body.type).toBe('github-pat');
+  });
+});
+
+describe('handlePutCredential post-write refresh', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cred-refresh-test-'));
+    const agencyDir = path.join(tmpDir, '.agency');
+    await fs.mkdir(agencyDir, { recursive: true });
+
+    const backend = new ClusterLocalBackend({
+      dataPath: path.join(tmpDir, 'credentials.dat'),
+      keyPath: path.join(tmpDir, 'master.key'),
+    });
+    await backend.init();
+    setCredentialBackend(backend);
+
+    process.env['CREDHELPER_AGENCY_DIR'] = agencyDir;
+
+    vi.mocked(writeWizardEnvFile).mockClear();
+    vi.mocked(refreshGhAuth).mockClear();
+  });
+
+  afterEach(async () => {
+    delete process.env['CREDHELPER_AGENCY_DIR'];
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('github-app triggers writeWizardEnvFile and refreshGhAuth with extracted token', async () => {
+    const req = createBodyReq({ type: 'github-app', value: '{"installationId":1,"token":"ghs_fresh"}' });
+    const res = createMockResponse();
+
+    await handlePutCredential(req, res as any, stubActor, { id: 'gh-app-1' });
+
+    expect(res.writeHead).toHaveBeenCalledWith(200);
+    const body = JSON.parse(res.end.mock.calls[0][0]);
+    expect(body).toEqual({ ok: true });
+
+    expect(vi.mocked(writeWizardEnvFile)).toHaveBeenCalledWith({
+      agencyDir: path.join(tmpDir, '.agency'),
+    });
+    expect(vi.mocked(refreshGhAuth)).toHaveBeenCalledWith('ghs_fresh');
+  });
+
+  it('github-pat triggers writeWizardEnvFile and refreshGhAuth with raw token', async () => {
+    const req = createBodyReq({ type: 'github-pat', value: 'ghp_rawtoken' });
+    const res = createMockResponse();
+
+    await handlePutCredential(req, res as any, stubActor, { id: 'gh-pat-1' });
+
+    expect(res.writeHead).toHaveBeenCalledWith(200);
+    const body = JSON.parse(res.end.mock.calls[0][0]);
+    expect(body).toEqual({ ok: true });
+
+    expect(vi.mocked(writeWizardEnvFile)).toHaveBeenCalledWith({
+      agencyDir: path.join(tmpDir, '.agency'),
+    });
+    expect(vi.mocked(refreshGhAuth)).toHaveBeenCalledWith('ghp_rawtoken');
+  });
+
+  it('api-key does not trigger writeWizardEnvFile or refreshGhAuth', async () => {
+    const req = createBodyReq({ type: 'api-key', value: 'sk-test' });
+    const res = createMockResponse();
+
+    await handlePutCredential(req, res as any, stubActor, { id: 'api-1' });
+
+    expect(res.writeHead).toHaveBeenCalledWith(200);
+    const body = JSON.parse(res.end.mock.calls[0][0]);
+    expect(body).toEqual({ ok: true });
+
+    expect(vi.mocked(writeWizardEnvFile)).not.toHaveBeenCalled();
+    expect(vi.mocked(refreshGhAuth)).not.toHaveBeenCalled();
   });
 });
