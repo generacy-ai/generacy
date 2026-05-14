@@ -10,32 +10,32 @@
 
 ## Phase 1: Token Provider Infrastructure (workflow-engine)
 
-- [ ] T001 [US2] Update `GitHubClientFactory` type in `packages/workflow-engine/src/actions/github/client/interface.ts` — add optional `tokenProvider?: () => Promise<string | undefined>` parameter
-- [ ] T002 [US2] Modify `GhCliGitHubClient` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts` — add `tokenProvider` constructor parameter, add private `resolveTokenEnv()` method, inject `{ GH_TOKEN }` env in each `gh` CLI method (`listOpenPullRequests`, `listIssuesWithLabel`, etc.) via `executeCommand` options
-- [ ] T003 [US2] Update `createGitHubClient` factory in `packages/workflow-engine/src/actions/github/client/index.ts` — thread `tokenProvider` parameter through to `GhCliGitHubClient` constructor
+- [X] T001 [US2] Update `GitHubClientFactory` type in `packages/workflow-engine/src/actions/github/client/interface.ts` — add optional `tokenProvider?: () => Promise<string | undefined>` parameter
+- [X] T002 [US2] Modify `GhCliGitHubClient` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts` — add `tokenProvider` constructor parameter, add private `resolveTokenEnv()` method, inject `{ GH_TOKEN }` env in each `gh` CLI method (`listOpenPullRequests`, `listIssuesWithLabel`, etc.) via `executeCommand` options
+- [X] T003 [US2] Update `createGitHubClient` factory in `packages/workflow-engine/src/actions/github/client/index.ts` — thread `tokenProvider` parameter through to `GhCliGitHubClient` constructor
 
 ## Phase 2: Wizard Credentials Token Provider (orchestrator)
 
-- [ ] T004 [US1] Create `packages/orchestrator/src/services/wizard-creds-token-provider.ts` — implement `createWizardCredsTokenProvider(envFilePath, logger)` returning `() => Promise<string | undefined>`. Stat-based cache invalidation (re-read on `mtime` change). Custom env file parser for `KEY=VALUE` format. State-transition logging (warn on start-failing, info on resumed).
+- [X] T004 [US1] Create `packages/orchestrator/src/services/wizard-creds-token-provider.ts` — implement `createWizardCredsTokenProvider(envFilePath, logger)` returning `() => Promise<string | undefined>`. Stat-based cache invalidation (re-read on `mtime` change). Custom env file parser for `KEY=VALUE` format. State-transition logging (warn on start-failing, info on resumed).
 
 ## Phase 3: Wire Orchestrator Consumers
 
-- [ ] T005 [US1] Update `PrFeedbackMonitorService` in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` — accept `tokenProvider` in constructor, pass to `createClient()` / `GitHubClientFactory` calls
-- [ ] T006 [P] [US1] Update `LabelMonitorService` in `packages/orchestrator/src/services/label-monitor-service.ts` — same pattern as T005
-- [ ] T007 [P] [US1] Update `LabelSyncService` in `packages/orchestrator/src/services/label-sync-service.ts` — same pattern as T005
-- [ ] T008 [US1] Update `WebhookSetupService` in `packages/orchestrator/src/services/webhook-setup-service.ts` — accept `tokenProvider` in constructor, resolve token before each `executeCommand('gh', ...)` call, pass `GH_TOKEN` in env option
-- [ ] T009 [US1] Update `server.ts` wiring in `packages/orchestrator/src/server.ts` — create wizard-creds token provider instance, pass to `PrFeedbackMonitorService`, `LabelMonitorService`, `LabelSyncService`, `WebhookSetupService` constructors
+- [X] T005 [US1] Update `PrFeedbackMonitorService` in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` — accept `tokenProvider` in constructor, pass to `createClient()` / `GitHubClientFactory` calls
+- [X] T006 [P] [US1] Update `LabelMonitorService` in `packages/orchestrator/src/services/label-monitor-service.ts` — same pattern as T005
+- [X] T007 [P] [US1] Update `LabelSyncService` in `packages/orchestrator/src/services/label-sync-service.ts` — same pattern as T005
+- [X] T008 [US1] Update `WebhookSetupService` in `packages/orchestrator/src/services/webhook-setup-service.ts` — accept `tokenProvider` in constructor, resolve token before each `executeCommand('gh', ...)` call, pass `GH_TOKEN` in env option
+- [X] T009 [US1] Update `server.ts` wiring in `packages/orchestrator/src/server.ts` — create wizard-creds token provider instance, pass to `PrFeedbackMonitorService`, `LabelMonitorService`, `LabelSyncService`, `WebhookSetupService` constructors
 
 ## Phase 4: Worker Process Callsites
 
-- [ ] T010 [P] [US2] Update `packages/orchestrator/src/worker/claude-cli-worker.ts` — pass `undefined` for `tokenProvider` at `createGitHubClient` / `GitHubClientFactory` callsite
-- [ ] T011 [P] [US2] Update `packages/orchestrator/src/worker/pr-feedback-handler.ts` — pass `undefined` for `tokenProvider` at callsite
+- [X] T010 [P] [US2] Update `packages/orchestrator/src/worker/claude-cli-worker.ts` — pass `undefined` for `tokenProvider` at `createGitHubClient` / `GitHubClientFactory` callsite
+- [X] T011 [P] [US2] Update `packages/orchestrator/src/worker/pr-feedback-handler.ts` — pass `undefined` for `tokenProvider` at callsite
 
 ## Phase 5: Tests & Verification
 
-- [ ] T012 [P] [US1] Unit tests for `wizard-creds-token-provider.ts` — test cases: file missing returns undefined, file malformed returns undefined, `GH_TOKEN` absent returns undefined, happy path returns token, stat-based cache (no re-read when mtime unchanged), state-transition logging (warn once on failure, info once on recovery)
-- [ ] T013 [P] [US2] Unit tests for `GhCliGitHubClient` token injection — test cases: token provider set results in `GH_TOKEN` in spawn env, undefined provider does not set env, provider returning undefined does not set env
-- [ ] T014 [US1] Verification grep: confirm no orchestrator-process `gh` invocation relies on ambient auth (SC-001)
+- [X] T012 [P] [US1] Unit tests for `wizard-creds-token-provider.ts` — test cases: file missing returns undefined, file malformed returns undefined, `GH_TOKEN` absent returns undefined, happy path returns token, stat-based cache (no re-read when mtime unchanged), state-transition logging (warn once on failure, info once on recovery)
+- [X] T013 [P] [US2] Unit tests for `GhCliGitHubClient` token injection — test cases: token provider set results in `GH_TOKEN` in spawn env, undefined provider does not set env, provider returning undefined does not set env
+- [X] T014 [US1] Verification grep: confirm no orchestrator-process `gh` invocation relies on ambient auth (SC-001)
 
 ## Dependencies & Execution Order
 

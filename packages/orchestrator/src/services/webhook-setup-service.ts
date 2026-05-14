@@ -128,14 +128,26 @@ export interface WebhookSetupSummary {
  */
 export class WebhookSetupService {
   private readonly _logger: Logger;
+  private readonly _tokenProvider?: () => Promise<string | undefined>;
 
   /**
    * Creates a new WebhookSetupService instance.
    *
    * @param logger - Logger instance for structured logging (Pino/Fastify compatible)
+   * @param tokenProvider - Optional async function returning a GH_TOKEN for auth
    */
-  constructor(logger: Logger) {
+  constructor(
+    logger: Logger,
+    tokenProvider?: () => Promise<string | undefined>,
+  ) {
     this._logger = logger;
+    this._tokenProvider = tokenProvider;
+  }
+
+  private async resolveTokenEnv(): Promise<Record<string, string> | undefined> {
+    if (!this._tokenProvider) return undefined;
+    const token = await this._tokenProvider();
+    return token ? { GH_TOKEN: token } : undefined;
   }
 
   /**
@@ -428,10 +440,11 @@ export class WebhookSetupService {
     repo: string
   ): Promise<GitHubWebhook[]> {
     try {
+      const env = await this.resolveTokenEnv();
       const result = await executeCommand('gh', [
         'api',
         `/repos/${owner}/${repo}/hooks`,
-      ]);
+      ], { env });
 
       if (result.exitCode !== 0) {
         this._logger.warn(
@@ -487,6 +500,7 @@ export class WebhookSetupService {
     repo: string,
     smeeChannelUrl: string
   ): Promise<number> {
+    const env = await this.resolveTokenEnv();
     const result = await executeCommand('gh', [
       'api',
       '-X', 'POST',
@@ -495,7 +509,7 @@ export class WebhookSetupService {
       '-f', 'config[content_type]=json',
       '-F', 'events[]=issues',
       '-F', 'active=true',
-    ]);
+    ], { env });
 
     if (result.exitCode !== 0) {
       // Extract error message from stderr for better debugging
@@ -552,7 +566,8 @@ export class WebhookSetupService {
       });
     }
 
-    const result = await executeCommand('gh', args);
+    const env = await this.resolveTokenEnv();
+    const result = await executeCommand('gh', args, { env });
 
     if (result.exitCode !== 0) {
       // Extract error message from stderr for better debugging

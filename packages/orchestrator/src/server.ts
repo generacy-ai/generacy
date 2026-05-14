@@ -27,6 +27,7 @@ import { SmeeWebhookReceiver } from './services/smee-receiver.js';
 import { RelayBridge } from './services/relay-bridge.js';
 import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
+import { createWizardCredsTokenProvider } from './services/wizard-creds-token-provider.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
@@ -146,9 +147,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   const isWorkerMode = config.mode === 'worker';
 
+  // Create wizard-creds token provider for orchestrator-process GitHub calls
+  const wizardCredsTokenProvider = !isWorkerMode
+    ? createWizardCredsTokenProvider('/var/lib/generacy/wizard-credentials.env', server.log)
+    : undefined;
+
   // Sync labels for watched repositories (skip in worker mode)
   if (!isWorkerMode && config.repositories.length > 0) {
-    const labelSyncService = new LabelSyncService(server.log, createGitHubClient);
+    const labelSyncService = new LabelSyncService(server.log, createGitHubClient, wizardCredsTokenProvider);
     try {
       const syncResult = await labelSyncService.syncAll(config.repositories);
       server.log.info(
@@ -276,6 +282,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       monitorConfig,
       config.repositories,
       clusterGithubUsername,
+      wizardCredsTokenProvider,
     );
 
     // Create SmeeWebhookReceiver if Smee channel URL is configured
@@ -301,6 +308,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         config.prMonitor,
         config.repositories,
         clusterGithubUsername,
+        wizardCredsTokenProvider,
       );
     }
   }
@@ -482,7 +490,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
 
       if (config.webhookSetup.enabled && config.smee.channelUrl) {
-        const webhookSetupService = new WebhookSetupService(server.log);
+        const webhookSetupService = new WebhookSetupService(server.log, wizardCredsTokenProvider);
         webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });

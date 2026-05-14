@@ -37,6 +37,7 @@ const ADAPTIVE_DIVISOR = 2;
 export class PrFeedbackMonitorService {
   private readonly logger: Logger;
   private readonly createClient: GitHubClientFactory;
+  private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly phaseTracker: PhaseTracker;
   private readonly queueAdapter: QueueAdapter;
   private readonly options: PrFeedbackMonitorOptions;
@@ -54,9 +55,11 @@ export class PrFeedbackMonitorService {
     config: PrMonitorConfig,
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
+    tokenProvider?: () => Promise<string | undefined>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
+    this.tokenProvider = tokenProvider;
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
     this.clusterGithubUsername = clusterGithubUsername;
@@ -97,7 +100,7 @@ export class PrFeedbackMonitorService {
       `Processing PR review event from ${source}`,
     );
 
-    const client = this.createClient();
+    const client = this.createClient(undefined, this.tokenProvider);
 
     // 1. Link PR to orchestrated issue
     const prInput: PrLinkInput = {
@@ -307,7 +310,7 @@ export class PrFeedbackMonitorService {
    * Lists open PRs and processes each through the standard event flow.
    */
   private async pollRepo(owner: string, repo: string): Promise<void> {
-    const client = this.createClient();
+    const client = this.createClient(undefined, this.tokenProvider);
 
     let openPRs;
     try {
@@ -506,7 +509,7 @@ export class PrFeedbackMonitorService {
     issueNumber: number,
   ): Promise<string> {
     try {
-      const client = this.createClient();
+      const client = this.createClient(undefined, this.tokenProvider);
       const issue = await client.getIssue(owner, repo, issueNumber);
 
       // Primary: persistent workflow:* label (authoritative)
