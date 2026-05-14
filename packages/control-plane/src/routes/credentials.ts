@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { type ActorContext, requireActor } from '../context.js';
 import { readBody } from '../util/read-body.js';
 import { writeCredential } from '../services/credential-writer.js';
+import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
+import { extractGhToken, refreshGhAuth } from '../services/gh-auth-refresh.js';
 
 const PutCredentialBodySchema = z.object({
   type: z.string().min(1),
@@ -111,6 +113,29 @@ export async function handlePutCredential(
       failedAt: failedAt ?? 'unknown',
     }));
     return;
+  }
+
+  // Post-write: refresh GH_TOKEN surface for github credentials (best-effort)
+  const { type, value } = result.data;
+  if (type === 'github-app' || type === 'github-pat') {
+    try {
+      await writeWizardEnvFile({ agencyDir });
+    } catch (err: unknown) {
+      // Non-fatal — env file rewrite failure doesn't fail the PUT
+      console.warn('Failed to rewrite wizard env file after credential PUT:', (err as Error).message);
+    }
+
+    const token = extractGhToken(type, value);
+    if (token) {
+      try {
+        const ghResult = await refreshGhAuth(token);
+        if (!ghResult.ok) {
+          console.warn('gh auth refresh failed:', ghResult.error);
+        }
+      } catch (err: unknown) {
+        console.warn('gh auth refresh threw:', (err as Error).message);
+      }
+    }
   }
 
   res.setHeader('Content-Type', 'application/json');
