@@ -10,6 +10,16 @@ export type { ActivationErrorCode } from './errors.js';
 
 const DEFAULT_MAX_CYCLES = 3;
 
+export function buildActivationUrl(verificationUri: string, userCode: string): string {
+  const url = new URL(verificationUri);
+  url.searchParams.set('code', userCode);
+  const projectId = process.env['GENERACY_PROJECT_ID'];
+  if (projectId) {
+    url.searchParams.set('projectId', projectId);
+  }
+  return url.toString();
+}
+
 /**
  * Activate the cluster via device-code flow.
  *
@@ -58,7 +68,7 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
       `  Cluster Activation Required\n` +
       `\n` +
-      `  Go to: ${deviceCode.verification_uri}\n` +
+      `  Go to: ${buildActivationUrl(deviceCode.verification_uri, deviceCode.user_code)}\n` +
       `  Enter code: ${deviceCode.user_code}\n` +
       `\n` +
       `  Code expires in ${Math.floor(deviceCode.expires_in / 60)} minutes.\n` +
