@@ -1,13 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
+vi.mock('../../../utils/exec.js', () => ({
+  execSafe: vi.fn(),
 }));
 
-import { execSync } from 'node:child_process';
+import { execSafe } from '../../../utils/exec.js';
 import { clearStaleActivation } from '../volume-cleanup.js';
 
-const mockedExecSync = vi.mocked(execSync);
+const mockedExecSafe = vi.mocked(execSafe);
 
 describe('clearStaleActivation', () => {
   beforeEach(() => {
@@ -15,45 +15,43 @@ describe('clearStaleActivation', () => {
   });
 
   it('returns true on success', () => {
-    mockedExecSync.mockReturnValue(Buffer.from(''));
+    mockedExecSafe.mockReturnValue({ ok: true, stdout: '', stderr: '' });
 
     expect(clearStaleActivation('my-project')).toBe(true);
   });
 
   it('runs docker command with correct volume name', () => {
-    mockedExecSync.mockReturnValue(Buffer.from(''));
+    mockedExecSafe.mockReturnValue({ ok: true, stdout: '', stderr: '' });
 
     clearStaleActivation('my-project');
 
-    const cmd = mockedExecSync.mock.calls[0]![0] as string;
+    const cmd = mockedExecSafe.mock.calls[0]![0];
     expect(cmd).toContain('my-project_generacy-data');
   });
 
   it('targets cluster-api-key, cluster.json, and wizard-credentials.env', () => {
-    mockedExecSync.mockReturnValue(Buffer.from(''));
+    mockedExecSafe.mockReturnValue({ ok: true, stdout: '', stderr: '' });
 
     clearStaleActivation('my-project');
 
-    const cmd = mockedExecSync.mock.calls[0]![0] as string;
+    const cmd = mockedExecSafe.mock.calls[0]![0];
     expect(cmd).toContain('/v/cluster-api-key');
     expect(cmd).toContain('/v/cluster.json');
     expect(cmd).toContain('/v/wizard-credentials.env');
   });
 
   it('uses docker run --rm with alpine', () => {
-    mockedExecSync.mockReturnValue(Buffer.from(''));
+    mockedExecSafe.mockReturnValue({ ok: true, stdout: '', stderr: '' });
 
     clearStaleActivation('my-project');
 
-    const cmd = mockedExecSync.mock.calls[0]![0] as string;
+    const cmd = mockedExecSafe.mock.calls[0]![0];
     expect(cmd).toMatch(/^docker run --rm/);
     expect(cmd).toContain('alpine');
   });
 
   it('returns false on failure without throwing', () => {
-    mockedExecSync.mockImplementation(() => {
-      throw new Error('docker not available');
-    });
+    mockedExecSafe.mockReturnValue({ ok: false, stdout: '', stderr: 'docker not available' });
 
     expect(clearStaleActivation('my-project')).toBe(false);
   });

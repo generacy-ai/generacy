@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import { execSafe } from '../../utils/exec.js';
 import { getLogger } from '../../utils/logger.js';
 
 /**
@@ -15,11 +15,10 @@ export function clearStaleActivation(composeName: string): boolean {
 
   logger.debug({ volumeName }, 'Clearing stale activation files from volume');
 
-  try {
-    execSync(cmd, { encoding: 'utf-8', timeout: 30_000, stdio: 'pipe' });
-    return true;
-  } catch (err: unknown) {
-    logger.warn({ error: (err as Error).message }, 'Failed to clear stale activation files — cluster may reuse old credentials');
+  const result = execSafe(cmd, { timeout: 30_000, stdio: 'pipe' });
+  if (!result.ok) {
+    logger.warn({ stderr: result.stderr }, 'Failed to clear stale activation files — cluster may reuse old credentials');
     return false;
   }
+  return true;
 }
