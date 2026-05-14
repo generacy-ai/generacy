@@ -1,99 +1,124 @@
-# Feature Specification: Thread projectId into activation URL
+# Feature Specification: ## Context
 
-**Branch**: `616-context-when-user-clicks` | **Issue**: [#616](https://github.com/generacy-ai/generacy/issues/616) | **Date**: 2026-05-14 | **Status**: Draft
+When a user clicks "+ Add Cluster" inside a project on the cloud dashboard, the generated `npx generacy launch --claim=…` command kicks off a fresh activation
+
+**Branch**: `616-context-when-user-clicks` | **Date**: 2026-05-14 | **Status**: Draft
 
 ## Summary
 
-When a user clicks "+ Add Cluster" inside a project, the CLI already knows the `projectId` from the launch-config response, but the orchestrator's printed activation URL (`Go to: …/cluster-activate`) omits it. The user lands on the cluster-activate page and must re-select the project manually. This feature threads `projectId` through to a `?projectId=` query param on the activation URL so the cloud-side page can pre-select and lock the project dropdown.
-
 ## Context
 
-The `projectId` is known at three system boundaries before the user sees the activation URL:
-1. Cloud sets it in the launch-config response
-2. CLI scaffolder writes it to `.generacy/.env` as `GENERACY_PROJECT_ID` (already done — `scaffolder.ts:284`)
-3. Compose mounts `.env` into the orchestrator container
+When a user clicks "+ Add Cluster" inside a project on the cloud dashboard, the generated `npx generacy launch --claim=…` command kicks off a fresh activation. The CLI fetches `launch-config?claim=…` from the cloud — which already includes `projectId` — then scaffolds and starts the cluster. The orchestrator runs the device-code flow and prints something like:
 
-But the orchestrator's `activate()` function (`activation/index.ts:56-66`) prints the raw `verification_uri` from the cloud without appending any query params. The CLI's log scraper (`compose.ts`) then extracts `verificationUri` and `userCode` separately and could reconstruct a URL, but currently passes the bare URI to `openBrowser`.
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Cluster Activation Required
+
+  Go to: https://staging.generacy.ai/cluster-activate
+  Enter code: ABCD-1234
+
+  Code expires in 10 minutes.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+The URL is bare. When the user opens it, the cluster-activate page asks them to pick a project — even though the project was known three system boundaries ago. The companion `generacy-ai/generacy-cloud` issue updates the cluster-activate page to honor a `?projectId=` query param and skip the dropdown. This issue covers the cluster-side changes so the URL the orchestrator emits actually carries that param.
+
+## Proposed change
+
+### 1. CLI scaffolder writes `GENERACY_PROJECT_ID` into `.generacy/.env`
+
+[`packages/generacy/src/cli/commands/launch/scaffolder.ts`](packages/generacy/src/cli/commands/launch/scaffolder.ts): when scaffolding the project directory, write `GENERACY_PROJECT_ID=${config.projectId}` to `.generacy/.env`. The compose file already bind-mounts this `.env` into the orchestrator container, so the var is available as `process.env.GENERACY_PROJECT_ID` at orchestrator startup. The CLI already has `config.projectId` from the launch-config response, no schema change needed.
+
+### 2. Orchestrator threads `projectId` through to the printed activation URL
+
+[`packages/orchestrator/src/activation/index.ts:50-66`](packages/orchestrator/src/activation/index.ts#L50-L66): after the cloud returns the `deviceCode` response, construct the user-facing URL by combining `verification_uri` + `user_code` + `projectId`:
+
+```ts
+const projectId = process.env.GENERACY_PROJECT_ID;
+const url = new URL(deviceCode.verification_uri);
+url.searchParams.set('code', deviceCode.user_code);
+if (projectId) url.searchParams.set('projectId', projectId);
+const activationUrl = url.toString();
+
+logger.info(
+  `\n` +
+  `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+  `  Cluster Activation Required\n` +
+  `\n` +
+  `  Go to: ${activationUrl}\n` +
+  `  Enter code: ${deviceCode.user_code}\n` +
+  `\n` +
+  `  Code expires in ${Math.floor(deviceCode.expires_in / 60)} minutes.\n` +
+  `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`,
+);
+```
+
+When `GENERACY_PROJECT_ID` is unset (e.g., cluster started directly via `docker compose up` outside the `npx launch` flow), `projectId` is undefined and the URL just gets `?code=…` — graceful fallback to the existing two-step flow.
+
+### 3. CLI log-scraper detection still works
+
+[`packages/generacy/src/cli/commands/launch/compose.ts`](packages/generacy/src/cli/commands/launch/compose.ts)'s `streamLogsUntilActivation` parses the orchestrator's log to extract `verificationUri` + `userCode`. With this change the `Go to:` line now contains a full URL with both params; the parser should pull that whole URL and use it directly for the `openBrowser(activationUrl)` call rather than rebuilding. Otherwise the user opens a URL without the `projectId` param even though the cluster emitted one.
+
+Minor: rename `activationUrl: string; userCode: string;` if the structure changes to a single URL. The browser-open step just needs *some* URL.
+
+## Out of scope
+
+- Cluster-activate page-side changes (companion issue in `generacy-ai/generacy-cloud`).
+- `--claim`-as-force-reactivate-signal behavior (already covered by #614 / FR-005 — that PR's CLI changes are a natural place to bundle this scaffolder tweak if they ship together).
+
+## Security note
+
+The `projectId` query param is an identifier, not a credential. The cloud's existing `/api/clusters/activate` endpoint authorizes by user-owns-project. So all this changes is pre-fill behavior; if the cluster somehow emits a stale or wrong projectId, the activation call would 403 — same as if a malicious link supplied a projectId directly.
+
+## Test plan
+
+- [ ] `npx generacy launch --claim=<valid>` → `.generacy/.env` contains `GENERACY_PROJECT_ID=<projectId>`.
+- [ ] Cluster boots, orchestrator prints `Go to: …/cluster-activate?code=…&projectId=…` (both params present).
+- [ ] CLI's `streamLogsUntilActivation` picks up the new URL form and `openBrowser` opens it as-is (browser tab opens the cluster-activate page with both params populated).
+- [ ] When `GENERACY_PROJECT_ID` is unset (e.g., manual `docker compose up` without the `.generacy/.env` shim), the URL just gets `?code=…` — current behavior preserved.
+- [ ] Unit test for the URL construction: validate `URL.searchParams.set('code', …)` round-trips correctly when the cloud's `verification_uri` already has a trailing slash or fragment.
+
+## Independence
+
+The cloud-side change (the cluster-activate page reading `?projectId=`) is independent and safe to ship first — the page just ignores the param until cluster-side starts emitting it. So this issue and its cloud counterpart can ship in either order, but the user-visible win lands only when both have shipped.
+
+## Related
+
+- Companion: `generacy-ai/generacy-cloud` issue for cluster-activate page changes (accept `?projectId=`, pre-select + lock).
+- #614 (cluster-side activation force-reactivate signal — natural bundle if they land together).
+- `generacy-ai/generacy-cloud#553` (Add Cluster within project — the UX that surfaces this gap).
 
 ## User Stories
 
-### US1: Seamless project context during activation
+### US1: [Primary User Story]
 
-**As a** developer adding a cluster to an existing project,
-**I want** the activation URL to carry my project context,
-**So that** the cluster-activate page pre-selects my project and I don't have to pick it from a dropdown.
-
-**Acceptance Criteria**:
-- [ ] When `GENERACY_PROJECT_ID` is set, the activation URL includes `?code=…&projectId=…`
-- [ ] When `GENERACY_PROJECT_ID` is unset, the URL just has `?code=…` (graceful fallback)
-- [ ] CLI opens browser with the full parameterized URL
-
-### US2: Manual docker compose users unaffected
-
-**As a** developer running `docker compose up` directly (not via `npx generacy launch`),
-**I want** activation to work as before,
-**So that** the absence of `GENERACY_PROJECT_ID` doesn't break my flow.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] No `projectId` param when env var is absent — current behavior preserved
-- [ ] No errors or warnings about missing `GENERACY_PROJECT_ID`
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Orchestrator reads `GENERACY_PROJECT_ID` env var and appends `projectId` query param to the activation URL alongside `code` | P1 | `activation/index.ts:50-66` |
-| FR-002 | Use `URL` API to construct the activation URL with both `code` and `projectId` params from `verification_uri` | P1 | Handles edge cases (trailing slashes, existing params) |
-| FR-003 | CLI log scraper extracts the full parameterized URL from "Go to:" line and passes it directly to `openBrowser` | P1 | `compose.ts` — existing regex already captures the full URL |
-| FR-004 | Graceful fallback: when `GENERACY_PROJECT_ID` is unset, URL gets only `?code=…` | P1 | No breaking change for non-launch flows |
-
-## Analysis of Existing Code
-
-### Already done (no changes needed)
-- **`scaffolder.ts:284`**: `scaffoldEnvFile()` already writes `GENERACY_PROJECT_ID=${input.projectId}` to `.generacy/.env`
-- **`compose.ts:64`**: `VERIFICATION_URI_RE` regex (`/Go to:\s+(https?:\/\/[^\s\\"']+)/`) already captures the full URL including query params — no regex change needed
-
-### Needs modification
-- **`activation/index.ts:56-66`**: Replace bare `${deviceCode.verification_uri}` with URL-constructed string that includes `code` and optional `projectId` params
-- **`compose.ts:88`**: Return type and caller may need adjustment — the extracted `verificationUri` will now contain `?code=…&projectId=…`, so callers should use it directly rather than rebuilding a URL
-
-## Security Note
-
-`projectId` is an identifier, not a credential. The cloud's `/api/clusters/activate` endpoint authorizes by user-owns-project. A stale/wrong `projectId` results in 403 — same as a manually crafted URL.
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Activation URL includes `projectId` param when env var is set | 100% of launch flows | Manual test: `npx generacy launch --claim=…` |
-| SC-002 | Activation URL omits `projectId` param when env var is unset | 100% of direct compose flows | Manual test: `docker compose up` without `.env` |
-| SC-003 | CLI opens browser with full parameterized URL | First browser tab has both params | Observe browser URL bar |
-
-## Test Plan
-
-- [ ] `npx generacy launch --claim=<valid>` → `.generacy/.env` contains `GENERACY_PROJECT_ID=<projectId>` (already true)
-- [ ] Cluster boots, orchestrator prints `Go to: …/cluster-activate?code=…&projectId=…`
-- [ ] CLI's `streamLogsUntilActivation` extracts the full URL and `openBrowser` opens it as-is
-- [ ] When `GENERACY_PROJECT_ID` is unset, URL just gets `?code=…` — current behavior preserved
-- [ ] Unit test: URL construction round-trips correctly when `verification_uri` has trailing slash or existing query params
-
-## Out of Scope
-
-- Cloud-side cluster-activate page changes (companion issue in `generacy-ai/generacy-cloud`)
-- `--claim`-as-force-reactivate-signal (covered by #614)
-- Schema changes to `LaunchConfig` or device-code response
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The compose file's `env_file` directive mounts `.generacy/.env` into the orchestrator container (confirmed in `scaffoldDockerCompose`)
-- The cloud's `verification_uri` response is a valid URL parseable by `new URL()`
-- The CLI log scraper regex already captures URL query params (confirmed)
+- [Assumption 1]
 
-## Related
+## Out of Scope
 
-- Companion: `generacy-ai/generacy-cloud` issue for cluster-activate page changes (accept `?projectId=`, pre-select + lock)
-- #614 (cluster-side activation force-reactivate signal)
-- `generacy-ai/generacy-cloud#553` (Add Cluster within project UX)
+- [Exclusion 1]
 
 ---
 
