@@ -3,7 +3,7 @@ import http from 'node:http';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { activate } from '../index.js';
+import { activate, buildActivationUrl } from '../index.js';
 import { ActivationError } from '../errors.js';
 import { NativeHttpClient } from '../client.js';
 import { writeKeyFile, writeClusterJson } from '../persistence.js';
@@ -271,5 +271,54 @@ describe('activate (integration)', () => {
       const serialized = JSON.stringify(call);
       expect(serialized).not.toContain('secret_key_never_log_this');
     }
+  });
+});
+
+describe('buildActivationUrl', () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env['GENERACY_PROJECT_ID'];
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it('appends code param to verification_uri', () => {
+    const result = buildActivationUrl('https://app.generacy.ai/cluster-activate', 'ABCD-1234');
+    const url = new URL(result);
+    expect(url.searchParams.get('code')).toBe('ABCD-1234');
+    expect(url.searchParams.has('projectId')).toBe(false);
+  });
+
+  it('appends projectId when GENERACY_PROJECT_ID is set', () => {
+    process.env['GENERACY_PROJECT_ID'] = 'proj_abc123';
+    const result = buildActivationUrl('https://app.generacy.ai/cluster-activate', 'ABCD-1234');
+    const url = new URL(result);
+    expect(url.searchParams.get('code')).toBe('ABCD-1234');
+    expect(url.searchParams.get('projectId')).toBe('proj_abc123');
+  });
+
+  it('omits projectId when GENERACY_PROJECT_ID is unset', () => {
+    const result = buildActivationUrl('https://app.generacy.ai/cluster-activate', 'TEST-CODE');
+    const url = new URL(result);
+    expect(url.searchParams.get('code')).toBe('TEST-CODE');
+    expect(url.searchParams.has('projectId')).toBe(false);
+  });
+
+  it('merges with existing query params on verification_uri', () => {
+    const result = buildActivationUrl('https://app.generacy.ai/cluster-activate?existing=value', 'CODE-99');
+    const url = new URL(result);
+    expect(url.searchParams.get('existing')).toBe('value');
+    expect(url.searchParams.get('code')).toBe('CODE-99');
+  });
+
+  it('handles verification_uri with trailing slash', () => {
+    const result = buildActivationUrl('https://app.generacy.ai/cluster-activate/', 'SLASH-01');
+    const url = new URL(result);
+    expect(url.pathname).toBe('/cluster-activate/');
+    expect(url.searchParams.get('code')).toBe('SLASH-01');
   });
 });

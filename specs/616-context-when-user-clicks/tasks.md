@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [P] [US1] Add `buildActivationUrl` helper to orchestrator activation (`packages/orchestrator/src/activation/index.ts`)
+- [X] T001 [P] [US1] Add `buildActivationUrl` helper to orchestrator activation (`packages/orchestrator/src/activation/index.ts`)
   - Create exported pure function `buildActivationUrl(verificationUri: string, userCode: string): string`
   - Use `new URL(verificationUri)` to construct URL
   - Append `code` param via `url.searchParams.set('code', userCode)`
@@ -18,14 +18,14 @@
   - Return `url.toString()`
   - Replace `${deviceCode.verification_uri}` on line 61 with `${buildActivationUrl(deviceCode.verification_uri, deviceCode.user_code)}`
 
-- [ ] T002 [P] [US1] Update deploy activation to use parameterized URL (`packages/generacy/src/cli/commands/deploy/activation.ts`)
+- [X] T002 [P] [US1] Update deploy activation to use parameterized URL (`packages/generacy/src/cli/commands/deploy/activation.ts`)
   - Add `buildActivationUrl` helper (same pattern as T001 but reads `projectId` from deploy context or env)
   - Replace `deviceCode.verification_uri` on lines 43 and 47 with built URL including `code` and optional `projectId`
   - `openUrl()` call on line 47 should use the built URL
 
 ## Phase 2: Tests
 
-- [ ] T003 [US1] Add unit tests for `buildActivationUrl` (`packages/orchestrator/src/activation/__tests__/activate.test.ts`)
+- [X] T003 [US1] Add unit tests for `buildActivationUrl` (`packages/orchestrator/src/activation/__tests__/activate.test.ts`)
   - Test: basic URL with `verification_uri` + `user_code` → URL contains `?code=XXXX`
   - Test: with `GENERACY_PROJECT_ID` set → URL contains `&projectId=<uuid>`
   - Test: without `GENERACY_PROJECT_ID` → no `projectId` param (US2 graceful fallback)

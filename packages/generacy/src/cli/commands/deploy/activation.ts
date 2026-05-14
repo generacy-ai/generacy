@@ -11,6 +11,15 @@ import { DeployError } from './types.js';
 
 const DEFAULT_MAX_CYCLES = 3;
 
+function buildActivationUrl(verificationUri: string, userCode: string, projectId?: string): string {
+  const url = new URL(verificationUri);
+  url.searchParams.set('code', userCode);
+  if (projectId) {
+    url.searchParams.set('projectId', projectId);
+  }
+  return url.toString();
+}
+
 export interface ActivateOptions {
   cloudUrl: string;
   logger: ActivationLogger;
@@ -39,12 +48,13 @@ export async function runActivation(options: ActivateOptions): Promise<Activatio
       const deviceCode = await initDeviceFlow(cloudUrl, httpClient, logger, maxRetries);
 
       // Open browser for user approval
+      const activationUrl = buildActivationUrl(deviceCode.verification_uri, deviceCode.user_code, process.env['GENERACY_PROJECT_ID']);
       console.log(`\nOpen this URL to approve the deployment:`);
-      console.log(`  ${deviceCode.verification_uri}`);
+      console.log(`  ${activationUrl}`);
       console.log(`\nEnter code: ${deviceCode.user_code}`);
       console.log(`Code expires in ${Math.floor(deviceCode.expires_in / 60)} minutes.\n`);
 
-      openUrl(deviceCode.verification_uri);
+      openUrl(activationUrl);
 
       const pollResult = await pollForApproval({
         cloudUrl,
