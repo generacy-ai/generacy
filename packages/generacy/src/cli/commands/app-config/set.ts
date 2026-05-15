@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { execSync } from 'node:child_process';
+import { exec } from '../../utils/exec.js';
 import { getClusterContext } from '../../utils/cluster-context.js';
 
 export function setCommand(): Command {
@@ -32,10 +32,7 @@ export function setCommand(): Command {
       ];
 
       try {
-        const result = execSync(curlCmd.join(' '), {
-          encoding: 'utf-8',
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
+        const result = exec(curlCmd.join(' '));
         const parsed = JSON.parse(result);
         if (parsed.accepted) {
           const secretTag = options.secret ? ' (secret)' : '';

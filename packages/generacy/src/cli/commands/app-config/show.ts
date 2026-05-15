@@ -1,5 +1,5 @@
 import { Command } from 'commander';
-import { execSync } from 'node:child_process';
+import { exec } from '../../utils/exec.js';
 import { getLogger } from '../../utils/logger.js';
 import { getClusterContext } from '../../utils/cluster-context.js';
 
@@ -23,9 +23,8 @@ export function showCommand(): Command {
       // Fetch manifest
       let manifest: { appConfig: null | Record<string, unknown> } = { appConfig: null };
       try {
-        const manifestRaw = execSync(
+        const manifestRaw = exec(
           [...curlBase, 'http://localhost/app-config/manifest'].join(' '),
-          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
         );
         manifest = JSON.parse(manifestRaw);
       } catch (err) {
@@ -35,9 +34,8 @@ export function showCommand(): Command {
       // Fetch values
       let values: { env: Array<Record<string, unknown>>; files: Array<Record<string, unknown>> } = { env: [], files: [] };
       try {
-        const valuesRaw = execSync(
+        const valuesRaw = exec(
           [...curlBase, 'http://localhost/app-config/values'].join(' '),
-          { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] },
         );
         values = JSON.parse(valuesRaw);
       } catch (err) {
