@@ -6,6 +6,7 @@ export const ExposureConfigSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('gcloud-external-account') }),
   z.object({ kind: z.literal('localhost-proxy'), port: z.number() }),
   z.object({ kind: z.literal('docker-socket-proxy') }),
+  z.object({ kind: z.literal('file'), path: z.string(), mode: z.number().optional() }),
 ]);
 
 export const ExposureOutputSchema = z.discriminatedUnion('kind', [
@@ -32,6 +33,12 @@ export const ExposureOutputSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('docker-socket-proxy'),
     socketPath: z.string(),
+  }),
+  z.object({
+    kind: z.literal('file'),
+    data: z.string(),
+    path: z.string(),
+    mode: z.number(),
   }),
 ]);
 

@@ -21,7 +21,7 @@ export const gcpServiceAccountPlugin: CredentialTypePlugin = {
   type: 'gcp-service-account',
   credentialSchema,
   scopeSchema,
-  supportedExposures: ['env', 'gcloud-external-account'],
+  supportedExposures: ['env', 'gcloud-external-account', 'file'],
 
   async mint(ctx: MintContext): Promise<{ value: Secret; expiresAt: Date }> {
     const baseToken = await ctx.backend.fetchSecret(ctx.backendKey);
@@ -79,6 +79,19 @@ export const gcpServiceAccountPlugin: CredentialTypePlugin = {
         subjectTokenType:
           'urn:ietf:params:oauth:token-type:access_token',
         tokenUrl: 'https://sts.googleapis.com/v1/token',
+      };
+    }
+    if (kind === 'file') {
+      if (cfg.kind !== 'file') {
+        throw new Error(`Expected file exposure config, got: ${cfg.kind}`);
+      }
+      // For SA JSON key mode: write the token/key as a JSON file
+      const content = JSON.stringify({ access_token: secret.value }, null, 2);
+      return {
+        kind: 'file',
+        data: Buffer.from(content),
+        path: cfg.path,
+        mode: cfg.mode,
       };
     }
     throw new Error(`Unsupported exposure kind: ${kind}`);

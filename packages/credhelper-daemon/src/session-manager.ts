@@ -324,6 +324,35 @@ export class SessionManager {
           continue;
         }
 
+        // file exposure: render the file and track for session cleanup
+        if (expose.as === 'file') {
+          const filePath = (expose as { path?: string }).path;
+          if (!filePath) {
+            throw new CredhelperError(
+              'INVALID_ROLE',
+              `File exposure for credential ${credRef.ref} missing required 'path' field`,
+              { credentialRef: credRef.ref },
+            );
+          }
+          const fileMode = (expose as { mode?: number }).mode;
+          const exposureCfg = { kind: 'file' as const, path: filePath, mode: fileMode };
+          const exposureData = plugin.renderExposure(expose.as, credValue, exposureCfg);
+
+          await this.renderer.renderPluginExposure(sessionDir, dataSocketPath, credRef.ref, exposureData);
+          this.renderer.trackFileForSession(sessionId, filePath);
+
+          this.auditLog?.record({
+            action: 'exposure.render',
+            sessionId,
+            credentialId: credRef.ref,
+            role,
+            pluginId: credEntry.type,
+            exposureKind: expose.as,
+            success: true,
+          });
+          continue;
+        }
+
         // Build ExposureConfig for this kind (localhost-proxy and docker-socket-proxy
         // are handled above with continue, so only env/git/gcloud reach here)
         const exposureCfg = expose.as === 'env'
@@ -409,6 +438,9 @@ export class SessionManager {
     if (session.dockerProxy) {
       await session.dockerProxy.stop();
     }
+
+    // Clean session-scoped file exposures
+    await this.renderer.cleanupSessionFiles(sessionId);
 
     // Clean scratch directory
     if (session.scratchDir) {

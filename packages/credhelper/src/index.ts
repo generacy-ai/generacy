@@ -20,6 +20,7 @@ export {
   type PluginGitCredentialHelperExposure,
   type PluginGcloudExternalAccountExposure,
   type PluginLocalhostProxyExposure,
+  type PluginFileExposure,
 } from './types/plugin-exposure.js';
 export {
   type BeginSessionRequest,

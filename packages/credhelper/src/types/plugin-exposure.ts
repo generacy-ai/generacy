@@ -25,8 +25,16 @@ export interface PluginLocalhostProxyExposure {
   headers: Record<string, string>;
 }
 
+export interface PluginFileExposure {
+  kind: 'file';
+  data: Buffer;
+  path: string;
+  mode?: number;
+}
+
 export type PluginExposureData =
   | PluginEnvExposure
   | PluginGitCredentialHelperExposure
   | PluginGcloudExternalAccountExposure
-  | PluginLocalhostProxyExposure;
+  | PluginLocalhostProxyExposure
+  | PluginFileExposure;

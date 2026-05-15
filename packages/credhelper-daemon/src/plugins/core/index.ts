@@ -7,9 +7,10 @@ import { awsStsPlugin } from './aws-sts.js';
 import { stripeRestrictedKeyPlugin } from './stripe-restricted-key.js';
 import { apiKeyPlugin } from './api-key.js';
 import { envPassthroughPlugin } from './env-passthrough.js';
+import { credentialFilePlugin } from './credential-file.js';
 
 /**
- * All 7 core credential type plugins, statically registered.
+ * All 8 core credential type plugins, statically registered.
  * These are registered directly by the daemon — no discovery pipeline needed.
  */
 export const CORE_PLUGINS: ReadonlyArray<CredentialTypePlugin> = [
@@ -20,4 +21,5 @@ export const CORE_PLUGINS: ReadonlyArray<CredentialTypePlugin> = [
   stripeRestrictedKeyPlugin,
   apiKeyPlugin,
   envPassthroughPlugin,
+  credentialFilePlugin,
 ];

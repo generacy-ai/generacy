@@ -6,6 +6,9 @@ import type { DeploymentMode, ClusterVariant } from '../src/schemas.js';
 import { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import { setCredentialBackend } from '../src/services/credential-writer.js';
 import { setRelayPushEvent } from '../src/relay-events.js';
+import { AppConfigEnvStore } from '../src/services/app-config-env-store.js';
+import { AppConfigFileStore } from '../src/services/app-config-file-store.js';
+import { setAppConfigStores } from '../src/routes/app-config.js';
 
 const DEFAULT_SOCKET_PATH = '/run/generacy-control-plane/control.sock';
 
@@ -63,11 +66,22 @@ if (internalApiKey) {
   console.warn('[control-plane] ORCHESTRATOR_INTERNAL_API_KEY not set — relay events will be silently dropped');
 }
 
+// Initialize app-config stores
+const appConfigEnvStore = new AppConfigEnvStore();
+const appConfigFileStore = new AppConfigFileStore(credentialBackend);
+
 credentialBackend
   .init()
-  .then(() => {
+  .then(async () => {
     setCredentialBackend(credentialBackend);
     console.log('[control-plane] Credential backend initialized');
+
+    // Initialize app-config stores
+    await appConfigEnvStore.init();
+    await appConfigFileStore.init();
+    setAppConfigStores(appConfigEnvStore, appConfigFileStore, credentialBackend);
+    console.log('[control-plane] App-config stores initialized');
+
     return server.start(socketPath);
   })
   .then(() => {
