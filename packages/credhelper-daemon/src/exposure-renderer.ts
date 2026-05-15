@@ -1,11 +1,12 @@
 import path from 'node:path';
-import { appendFile, chmod } from 'node:fs/promises';
+import { appendFile, chmod, writeFile, rename, unlink } from 'node:fs/promises';
 
 import type { PluginExposureData, ProxyRule } from '@generacy-ai/credhelper';
 import { CredhelperError } from './errors.js';
-import { mkdirSafe, writeFileSafe } from './util/fs.js';
+import { mkdirSafe, writeFileSafe, chownSafe } from './util/fs.js';
 import { DockerProxy } from './docker-proxy.js';
 import { LocalhostProxy } from './exposure/localhost-proxy.js';
+import { isPathDenied } from './file-path-denylist.js';
 import type { DockerRule, DockerProxyHandle, LocalhostProxyHandle } from './types.js';
 
 /**
@@ -53,7 +54,67 @@ export class ExposureRenderer {
         // localhost-proxy is handled directly by SessionManager, which
         // calls renderLocalhostProxy with the role's proxy config.
         break;
+      case 'file':
+        await this.renderFileExposure(data.path, data.data, data.mode);
+        break;
     }
+  }
+
+  /** Paths of files written by renderFileExposure, tracked for cleanup. */
+  private readonly sessionFilePaths = new Map<string, string[]>();
+
+  /** Track a file written by renderFileExposure for session cleanup. */
+  trackFileForSession(sessionId: string, filePath: string): void {
+    const existing = this.sessionFilePaths.get(sessionId) ?? [];
+    existing.push(filePath);
+    this.sessionFilePaths.set(sessionId, existing);
+  }
+
+  /** Clean up all session-scoped files written by renderFileExposure. */
+  async cleanupSessionFiles(sessionId: string): Promise<void> {
+    const paths = this.sessionFilePaths.get(sessionId);
+    if (!paths) return;
+    for (const p of paths) {
+      try {
+        await unlink(p);
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+          console.warn(`[credhelper] Failed to clean session file ${p}:`, (err as Error).message);
+        }
+      }
+    }
+    this.sessionFilePaths.delete(sessionId);
+  }
+
+  /**
+   * Write a credential blob to an absolute path with denylist validation.
+   * Uses atomic temp+rename. Default mode 0o640.
+   */
+  async renderFileExposure(
+    targetPath: string,
+    data: Buffer,
+    mode?: number,
+  ): Promise<void> {
+    const absPath = path.resolve(targetPath);
+
+    if (isPathDenied(absPath)) {
+      throw new CredhelperError(
+        'INVALID_REQUEST',
+        `File exposure path '${absPath}' is in a restricted system directory`,
+        { path: absPath },
+      );
+    }
+
+    const fileMode = mode ?? 0o640;
+    const parentDir = path.dirname(absPath);
+    await mkdirSafe(parentDir, 0o750);
+
+    // Atomic write: temp + rename
+    const tmpPath = `${absPath}.tmp.${process.pid}`;
+    await writeFile(tmpPath, data, { mode: fileMode });
+    await chmod(tmpPath, fileMode);
+    await chownSafe(tmpPath, 1002, 1000); // credhelper:node
+    await rename(tmpPath, absPath);
   }
 
   /**

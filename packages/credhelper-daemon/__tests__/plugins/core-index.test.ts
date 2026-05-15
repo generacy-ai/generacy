@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { CORE_PLUGINS } from '../../src/plugins/core/index.js';
 
 describe('CORE_PLUGINS', () => {
-  it('contains exactly 7 plugins', () => {
-    expect(CORE_PLUGINS).toHaveLength(7);
+  it('contains exactly 8 plugins', () => {
+    expect(CORE_PLUGINS).toHaveLength(8);
   });
 
   it('each plugin has a unique type', () => {
     const types = CORE_PLUGINS.map((p) => p.type);
-    expect(new Set(types).size).toBe(7);
+    expect(new Set(types).size).toBe(8);
   });
 
   it('includes all expected plugin types', () => {
@@ -20,6 +20,7 @@ describe('CORE_PLUGINS', () => {
     expect(types).toContain('stripe-restricted-key');
     expect(types).toContain('api-key');
     expect(types).toContain('env-passthrough');
+    expect(types).toContain('credential-file');
   });
 
   it('each plugin has a valid interface shape', () => {

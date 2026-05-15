@@ -6,10 +6,34 @@ import { getLogger } from '../../utils/logger.js';
 
 // -- Zod Schemas --
 
+export const AppConfigEnvEntrySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  secret: z.boolean().default(false),
+  default: z.string().optional(),
+  required: z.boolean().default(true),
+});
+
+export const AppConfigFileEntrySchema = z.object({
+  id: z.string().min(1),
+  description: z.string().optional(),
+  mountPath: z.string().min(1),
+  required: z.boolean().default(true),
+});
+
+export const AppConfigSchema = z.object({
+  schemaVersion: z.literal('1'),
+  env: z.array(AppConfigEnvEntrySchema).default([]),
+  files: z.array(AppConfigFileEntrySchema).default([]),
+});
+
+export type AppConfig = z.infer<typeof AppConfigSchema>;
+
 export const ClusterYamlSchema = z.object({
   channel: z.enum(['stable', 'preview']).default('stable'),
   workers: z.number().int().positive().default(1),
   variant: z.enum(['cluster-base', 'cluster-microservices']).default('cluster-base'),
+  appConfig: AppConfigSchema.optional(),
 });
 
 export type ClusterYaml = z.infer<typeof ClusterYamlSchema>;

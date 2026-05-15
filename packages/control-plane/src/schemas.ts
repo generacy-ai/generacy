@@ -126,3 +126,38 @@ export const ErrorResponseSchema = z.object({
   details: z.unknown().optional(),
 });
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
+
+// App Config schemas
+export const AppConfigEnvEntrySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  secret: z.boolean().default(false),
+  default: z.string().optional(),
+  required: z.boolean().default(true),
+});
+
+export const AppConfigFileEntrySchema = z.object({
+  id: z.string().min(1),
+  description: z.string().optional(),
+  mountPath: z.string().min(1),
+  required: z.boolean().default(true),
+});
+
+export const AppConfigSchema = z.object({
+  schemaVersion: z.literal('1'),
+  env: z.array(AppConfigEnvEntrySchema).default([]),
+  files: z.array(AppConfigFileEntrySchema).default([]),
+});
+export type AppConfig = z.infer<typeof AppConfigSchema>;
+
+export const PutAppConfigEnvBodySchema = z.object({
+  name: z.string().min(1),
+  value: z.string(),
+  secret: z.boolean().default(false),
+});
+export type PutAppConfigEnvBody = z.infer<typeof PutAppConfigEnvBodySchema>;
+
+export const PostAppConfigFileBodySchema = z.object({
+  data: z.string(),
+});
+export type PostAppConfigFileBody = z.infer<typeof PostAppConfigFileBodySchema>;

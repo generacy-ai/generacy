@@ -7,6 +7,13 @@ import { handleGetCredential, handlePutCredential } from './routes/credentials.j
 import { handlePostLifecycle } from './routes/lifecycle.js';
 import { handlePostAuditBatch } from './routes/audit.js';
 import { handlePostStatus } from './routes/status.js';
+import {
+  handleGetManifest,
+  handleGetValues,
+  handlePutEnv,
+  handleDeleteEnv,
+  handlePostFile,
+} from './routes/app-config.js';
 
 interface Route {
   method: string;
@@ -51,6 +58,36 @@ const routes: Route[] = [
     pattern: /^\/internal\/status$/,
     paramNames: [],
     handler: handlePostStatus,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/app-config\/manifest$/,
+    paramNames: [],
+    handler: handleGetManifest,
+  },
+  {
+    method: 'GET',
+    pattern: /^\/app-config\/values$/,
+    paramNames: [],
+    handler: handleGetValues,
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/app-config\/env$/,
+    paramNames: [],
+    handler: handlePutEnv,
+  },
+  {
+    method: 'DELETE',
+    pattern: /^\/app-config\/env\/([^/]+)$/,
+    paramNames: ['name'],
+    handler: handleDeleteEnv,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/app-config\/files\/([^/]+)$/,
+    paramNames: ['id'],
+    handler: handlePostFile,
   },
 ];
 
