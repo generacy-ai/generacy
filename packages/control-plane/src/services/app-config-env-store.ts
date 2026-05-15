@@ -1,5 +1,4 @@
 import fs from 'node:fs/promises';
-import fsSyncModule from 'node:fs';
 import path from 'node:path';
 
 const DEFAULT_ENV_PATH = '/var/lib/generacy-app-config/env';
@@ -7,15 +6,15 @@ const DEFAULT_ENV_PATH = '/var/lib/generacy-app-config/env';
 /**
  * Atomic read-modify-write store for app-config environment variables.
  * Stores bare KEY="escaped_value" format compatible with Docker Compose env_file.
- * Uses advisory file locking via a .lock file for concurrency.
+ * Serializes writes via an in-process mutex; this store is owned by a single
+ * control-plane daemon per cluster.
  */
 export class AppConfigEnvStore {
   private readonly envPath: string;
-  private readonly lockPath: string;
+  private writeChain: Promise<unknown> = Promise.resolve();
 
   constructor(envPath?: string) {
     this.envPath = envPath ?? DEFAULT_ENV_PATH;
-    this.lockPath = `${this.envPath}.lock`;
   }
 
   async init(): Promise<void> {
@@ -113,15 +112,11 @@ export class AppConfigEnvStore {
     await fs.rename(tmpPath, this.envPath);
   }
 
-  /** Simple advisory lock using a lock file. */
+  /** Serialize writes through an in-process promise chain. */
   private async withLock<T>(fn: () => Promise<T>): Promise<T> {
-    const lockFd = await fs.open(this.lockPath, 'w');
-    try {
-      await (lockFd as unknown as { lock(exclusive: boolean): Promise<void> }).lock(true);
-      return await fn();
-    } finally {
-      await lockFd.close();
-    }
+    const next = this.writeChain.then(fn, fn);
+    this.writeChain = next.catch(() => undefined);
+    return next;
   }
 }
 
