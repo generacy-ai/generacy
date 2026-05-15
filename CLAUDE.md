@@ -285,3 +285,19 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/orchestrator/src/services/webhook-setup-service.ts` — MODIFIED in #620: Resolves token before `executeCommand('gh', ...)` calls, passes `GH_TOKEN` in env option.
 - Worker-process callers (`claude-cli-worker.ts`, `pr-feedback-handler.ts`) pass `undefined` for `tokenProvider` — they use credhelper session env.
 - Token source: `/var/lib/generacy/wizard-credentials.env`, kept fresh by `handlePutCredential` (#614) on cloud-pushed credential refreshes.
+
+## Control-Plane Daemon Crash Resilience (#624)
+
+- Prevents zombie cluster state when `AppConfigEnvStore.init()` throws EACCES (uid 1000 can't write `/var/lib/generacy-app-config/`). Two fixes:
+- **Store resilience**: `AppConfigEnvStore` and `AppConfigFileStore` catch EACCES on preferred path, fall back to `/tmp/generacy-app-config/`. If both fail, store enters disabled/no-op mode: GETs return empty shape, PUTs return 503 `{ error: 'app-config-store-disabled' }`.
+  - `packages/control-plane/src/types/init-result.ts` — NEW in #624: `StoreStatus` (`'ok' | 'fallback' | 'disabled'`), `StoreInitResult`, `InitResult`, `StoreDisabledError` types.
+  - `packages/control-plane/src/services/app-config-env-store.ts` — MODIFIED in #624: `init()` catches EACCES/EPERM/EROFS, tries `/tmp/generacy-app-config/env` fallback, enters disabled mode on double failure. `getStatus()`/`getInitResult()` accessors. `set()` throws `StoreDisabledError` when disabled; `getAll()` returns `[]`.
+  - `packages/control-plane/src/services/app-config-file-store.ts` — MODIFIED in #624: Same fallback + disabled pattern as AppConfigEnvStore.
+  - `packages/control-plane/bin/control-plane.ts` — MODIFIED in #624: Structured init sequence — each store initialized individually with try/catch, emits JSON log lines per store (`{ event: 'store-init', store, status, path?, reason? }`). Writes aggregated `InitResult` to `/run/generacy-control-plane/init-result.json`. Daemon continues running regardless of store status.
+- **Orchestrator detection**: New `probeControlPlaneSocket()` helper mirrors `probeCodeServerSocket()`. Health endpoint and relay metadata gain `controlPlaneReady` and `initResult` fields. Startup socket-wait with error push + grace exit.
+  - `packages/orchestrator/src/services/control-plane-probe.ts` — NEW in #624: `probeControlPlaneSocket(socketPath?, timeoutMs?)` → `Promise<boolean>`. Same `net.connect()` pattern as `code-server-probe.ts`. Default socket: `/run/generacy-control-plane/control.sock`, env var: `CONTROL_PLANE_SOCKET_PATH`, timeout: 500ms.
+  - `packages/orchestrator/src/routes/health.ts` — MODIFIED in #624: Adds `controlPlaneReady: boolean` field from `probeControlPlaneSocket()`.
+  - `packages/orchestrator/src/types/relay.ts` — MODIFIED in #624: `ClusterMetadataPayload` gains optional `controlPlaneReady?: boolean` and `initResult?: { stores: Record<string, StoreStatus>; warnings: string[] }`.
+  - `packages/orchestrator/src/services/relay-bridge.ts` — MODIFIED in #624: `collectMetadata()` calls `probeControlPlaneSocket()`, reads `init-result.json` for relay metadata.
+  - `packages/cluster-relay/src/metadata.ts` — MODIFIED in #624: Reads `controlPlaneReady` from orchestrator `/health` response.
+  - `packages/orchestrator/src/server.ts` — MODIFIED in #624: After `server.listen()`, polls `probeControlPlaneSocket()` every 1s for `CONTROL_PLANE_WAIT_TIMEOUT` (default 15s). On timeout: pushes `error` status via relay with reason, waits ~30s grace window, then `process.exit(1)`.
