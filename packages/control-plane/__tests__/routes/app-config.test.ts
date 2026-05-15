@@ -97,7 +97,7 @@ describe('app-config routes', () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(200);
       const body = JSON.parse(res.end.mock.calls[0][0]);
-      expect(body.appConfig).toBeNull();
+      expect(body).toBeNull();
     });
 
     it('returns parsed appConfig when present', async () => {
@@ -119,10 +119,13 @@ describe('app-config routes', () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(200);
       const body = JSON.parse(res.end.mock.calls[0][0]);
-      expect(body.appConfig).toBeDefined();
-      expect(body.appConfig.env).toHaveLength(1);
-      expect(body.appConfig.env[0].name).toBe('TEST_VAR');
-      expect(body.appConfig.files).toHaveLength(1);
+      expect(body).toBeDefined();
+      expect(body.env).toHaveLength(1);
+      expect(body.env[0].name).toBe('TEST_VAR');
+      expect(body.files).toHaveLength(1);
+      expect(body.schemaVersion).toBe('1');
+      // SC-001: no envelope wrapper — top-level keys are exactly the bare manifest shape
+      expect(Object.keys(body).sort()).toEqual(['env', 'files', 'schemaVersion']);
     });
 
     it('returns null when cluster.yaml does not exist', async () => {
@@ -131,7 +134,7 @@ describe('app-config routes', () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(200);
       const body = JSON.parse(res.end.mock.calls[0][0]);
-      expect(body.appConfig).toBeNull();
+      expect(body).toBeNull();
     });
   });
 
