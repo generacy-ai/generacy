@@ -136,6 +136,38 @@ describe('writeWizardEnvFile', () => {
     expect(envContent).not.toContain('MISSING_CRED');
   });
 
+  it('writes GH_TOKEN, GH_USERNAME, GH_EMAIL when accountLogin present in stored secret', async () => {
+    await backend.setSecret(
+      'github-main-org',
+      '{"installationId":1,"token":"ghp_abc123","accountLogin":"alice"}',
+    );
+
+    const yamlContent = {
+      credentials: {
+        'github-main-org': {
+          type: 'github-app',
+          backend: 'cluster-local',
+          status: 'active',
+          updatedAt: '2026-05-12T10:00:00.000Z',
+        },
+      },
+    };
+    await fs.writeFile(
+      path.join(agencyDir, 'credentials.yaml'),
+      YAML.stringify(yamlContent),
+    );
+
+    const result = await writeWizardEnvFile({ agencyDir, envFilePath });
+
+    expect(result.written).toEqual(['github-main-org']);
+    expect(result.failed).toEqual([]);
+
+    const envContent = await fs.readFile(envFilePath, 'utf8');
+    expect(envContent).toContain('GH_TOKEN=ghp_abc123');
+    expect(envContent).toContain('GH_USERNAME=alice');
+    expect(envContent).toContain('GH_EMAIL=alice@users.noreply.github.com');
+  });
+
   it('writes env file with mode 0600', async () => {
     await backend.setSecret('github-main-org', '{"installationId":1,"token":"ghp_abc123"}');
 
@@ -167,6 +199,37 @@ describe('mapCredentialToEnvEntries', () => {
       'github-main-org',
       'github-app',
       '{"installationId":1,"token":"ghs_abc"}',
+    );
+    expect(entries).toEqual([{ key: 'GH_TOKEN', value: 'ghs_abc' }]);
+  });
+
+  it('github-app with accountLogin returns GH_TOKEN + GH_USERNAME + GH_EMAIL', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"alice"}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'alice' },
+      { key: 'GH_EMAIL', value: 'alice@users.noreply.github.com' },
+    ]);
+  });
+
+  it('github-app without accountLogin returns GH_TOKEN only', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc"}',
+    );
+    expect(entries).toEqual([{ key: 'GH_TOKEN', value: 'ghs_abc' }]);
+  });
+
+  it('github-app with empty string accountLogin returns GH_TOKEN only', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":""}',
     );
     expect(entries).toEqual([{ key: 'GH_TOKEN', value: 'ghs_abc' }]);
   });
