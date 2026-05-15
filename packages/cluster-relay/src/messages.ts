@@ -115,6 +115,7 @@ export interface ClusterMetadata {
   gitRemotes: GitRemote[];
   uptime: number;
   codeServerReady?: boolean;
+  controlPlaneReady?: boolean;
 }
 
 // --- Zod Schemas ---
