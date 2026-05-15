@@ -49,11 +49,17 @@ interface Logger {
 export class LabelSyncService {
   private readonly logger: Logger;
   private readonly createClient: GitHubClientFactory;
+  private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly syncedRepos: Set<string> = new Set();
 
-  constructor(logger: Logger, createClient: GitHubClientFactory) {
+  constructor(
+    logger: Logger,
+    createClient: GitHubClientFactory,
+    tokenProvider?: () => Promise<string | undefined>,
+  ) {
     this.logger = logger;
     this.createClient = createClient;
+    this.tokenProvider = tokenProvider;
   }
 
   /**
@@ -61,7 +67,7 @@ export class LabelSyncService {
    * Lists existing labels, diffs against WORKFLOW_LABELS, creates/updates as needed.
    */
   async syncRepo(owner: string, repo: string): Promise<RepoSyncResult> {
-    const client = this.createClient();
+    const client = this.createClient(undefined, this.tokenProvider);
     const results: LabelSyncResult[] = [];
     let created = 0;
     let updated = 0;

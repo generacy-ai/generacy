@@ -28,9 +28,25 @@ import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
  */
 export class GhCliGitHubClient implements GitHubClient {
   private workdir: string;
+  private tokenProvider?: () => Promise<string | undefined>;
 
-  constructor(workdir?: string) {
+  constructor(
+    workdir?: string,
+    tokenProvider?: () => Promise<string | undefined>,
+  ) {
     this.workdir = workdir ?? process.cwd();
+    this.tokenProvider = tokenProvider;
+  }
+
+  private async resolveTokenEnv(): Promise<Record<string, string> | undefined> {
+    if (!this.tokenProvider) return undefined;
+    const token = await this.tokenProvider();
+    return token ? { GH_TOKEN: token } : undefined;
+  }
+
+  private async executeGh(args: string[]) {
+    const env = await this.resolveTokenEnv();
+    return executeCommand('gh', args, { cwd: this.workdir, env });
   }
 
   // ==========================================================================
@@ -38,10 +54,10 @@ export class GhCliGitHubClient implements GitHubClient {
   // ==========================================================================
 
   async getRepoInfo(): Promise<RepoInfo> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'repo', 'view',
       '--json', 'owner,name,defaultBranchRef',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to get repo info: ${result.stderr}`);
@@ -69,11 +85,11 @@ export class GhCliGitHubClient implements GitHubClient {
   // ==========================================================================
 
   async getIssue(owner: string, repo: string, number: number): Promise<Issue> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'issue', 'view', String(number),
       '-R', `${owner}/${repo}`,
       '--json', 'number,title,body,state,labels,assignees,milestone,createdAt,updatedAt',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to get issue #${number}: ${result.stderr}`);
@@ -106,14 +122,14 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listIssuesWithLabel(owner: string, repo: string, label: string): Promise<Issue[]> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'issue', 'list',
       '-R', `${owner}/${repo}`,
       '--label', label,
       '--state', 'open',
       '--json', 'number,title,body,state,labels,assignees,milestone,createdAt,updatedAt',
       '--limit', '100',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to list issues with label "${label}": ${result.stderr}`);
@@ -167,18 +183,18 @@ export class GhCliGitHubClient implements GitHubClient {
       }
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to update issue #${number}: ${result.stderr}`);
     }
   }
 
   async addIssueComment(owner: string, repo: string, number: number, body: string): Promise<Comment> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'issue', 'comment', String(number),
       '-R', `${owner}/${repo}`,
       '--body', body,
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to add comment to issue #${number}: ${result.stderr}`);
@@ -195,11 +211,11 @@ export class GhCliGitHubClient implements GitHubClient {
 
   async getIssueComments(owner: string, repo: string, number: number): Promise<Comment[]> {
     // Use REST API to get numeric comment IDs (gh issue view --json returns GraphQL node IDs)
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'api',
       `/repos/${owner}/${repo}/issues/${number}/comments`,
       '--paginate',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to get comments for issue #${number}: ${result.stderr}`);
@@ -228,12 +244,12 @@ export class GhCliGitHubClient implements GitHubClient {
 
   async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
     // gh CLI doesn't have a direct command to edit comments, use API
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'api',
       '-X', 'PATCH',
       `/repos/${owner}/${repo}/issues/comments/${commentId}`,
       '-f', `body=${body}`,
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to update comment ${commentId}: ${result.stderr}`);
@@ -258,7 +274,7 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--draft');
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to create PR: ${result.stderr}`);
     }
@@ -301,11 +317,11 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async getPullRequest(owner: string, repo: string, number: number): Promise<PullRequest> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'pr', 'view', String(number),
       '-R', `${owner}/${repo}`,
       '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,mergeable,createdAt,updatedAt',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to get PR #${number}: ${result.stderr}`);
@@ -346,17 +362,17 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--body', data.body);
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to update PR #${number}: ${result.stderr}`);
     }
 
     // Handle state change separately
     if (data.state === 'closed') {
-      const closeResult = await executeCommand('gh', [
+      const closeResult = await this.executeGh([
         'pr', 'close', String(number),
         '-R', `${owner}/${repo}`,
-      ], { cwd: this.workdir });
+      ]);
       if (closeResult.exitCode !== 0) {
         throw new Error(`Failed to close PR #${number}: ${closeResult.stderr}`);
       }
@@ -364,10 +380,10 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async markPRReady(owner: string, repo: string, number: number): Promise<void> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'pr', 'ready', String(number),
       '-R', `${owner}/${repo}`,
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to mark PR #${number} as ready: ${result.stderr}`);
@@ -376,11 +392,11 @@ export class GhCliGitHubClient implements GitHubClient {
 
   async getPRComments(owner: string, repo: string, number: number): Promise<Comment[]> {
     // Get review comments using API
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'api',
       `/repos/${owner}/${repo}/pulls/${number}/comments`,
       '--jq', '.[] | {id: .id, body: .body, author: .user.login, path: .path, line: .line, in_reply_to_id: .in_reply_to_id, created_at: .created_at, updated_at: .updated_at}',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       // No comments is not an error
@@ -407,12 +423,12 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'api',
       '-X', 'POST',
       `/repos/${owner}/${repo}/pulls/${number}/comments/${commentId}/replies`,
       '-f', `body=${body}`,
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to reply to comment ${commentId}: ${result.stderr}`);
@@ -433,13 +449,13 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'pr', 'list',
       '-R', `${owner}/${repo}`,
       '--state', 'open',
       '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
       '--limit', '100',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to list open PRs for ${owner}/${repo}: ${result.stderr}`);
@@ -468,13 +484,13 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'pr', 'list',
       '-R', `${owner}/${repo}`,
       '--head', branch,
       '--json', 'number,title,body,state,isDraft,headRefName,baseRefName,labels,createdAt,updatedAt',
       '--limit', '1',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       return null;
@@ -515,7 +531,7 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--add-label', label);
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to add labels: ${result.stderr}`);
     }
@@ -529,7 +545,7 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--remove-label', label);
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       // Label might not exist, don't fail
       if (!result.stderr.includes('not found')) {
@@ -539,12 +555,12 @@ export class GhCliGitHubClient implements GitHubClient {
   }
 
   async getRepoLabels(owner: string, repo: string): Promise<Label[]> {
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'label', 'list',
       '-R', `${owner}/${repo}`,
       '--json', 'name,color,description',
       '--limit', '1000',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       throw new Error(`Failed to get labels: ${result.stderr}`);
@@ -575,7 +591,7 @@ export class GhCliGitHubClient implements GitHubClient {
         args.push('--description', label.description);
       }
 
-      const result = await executeCommand('gh', args, { cwd: this.workdir });
+      const result = await this.executeGh(args);
       if (result.exitCode !== 0) {
         throw new Error(`Failed to update label ${label.name}: ${result.stderr}`);
       }
@@ -591,7 +607,7 @@ export class GhCliGitHubClient implements GitHubClient {
         args.push('--description', label.description);
       }
 
-      const result = await executeCommand('gh', args, { cwd: this.workdir });
+      const result = await this.executeGh(args);
       if (result.exitCode !== 0) {
         throw new Error(`Failed to create label ${label.name}: ${result.stderr}`);
       }
@@ -877,11 +893,11 @@ export class GhCliGitHubClient implements GitHubClient {
 
   async listBranches(owner: string, repo: string): Promise<string[]> {
     // List remote branches using gh api
-    const result = await executeCommand('gh', [
+    const result = await this.executeGh([
       'api',
       `/repos/${owner}/${repo}/branches`,
       '--jq', '.[].name',
-    ], { cwd: this.workdir });
+    ]);
 
     if (result.exitCode !== 0) {
       // Fallback to git
@@ -922,7 +938,7 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--description', description);
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to create label ${name}: ${result.stderr}`);
     }
@@ -938,7 +954,7 @@ export class GhCliGitHubClient implements GitHubClient {
       args.push('--description', data.description);
     }
 
-    const result = await executeCommand('gh', args, { cwd: this.workdir });
+    const result = await this.executeGh(args);
     if (result.exitCode !== 0) {
       throw new Error(`Failed to update label ${name}: ${result.stderr}`);
     }

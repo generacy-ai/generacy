@@ -274,3 +274,14 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Bug: `code tunnel --name <cluster-uuid>` fails on fresh clusters because Microsoft's tunnel service rejects names longer than 20 characters. Cluster UUIDs are 36 chars.
 - `packages/control-plane/src/services/vscode-tunnel-manager.ts` — MODIFIED in #608: New exported `deriveTunnelName(clusterId)` pure function: strips hyphens, prefixes `g-`, takes first 18 hex chars (total 20). `loadOptionsFromEnv()` calls `deriveTunnelName()` instead of passing raw cluster ID. For UUID `9e5c8a0d-755e-40b3-b0c3-43e849f0bb90`, yields `g-9e5c8a0d755e40b3b0`.
 - Web-side deep link fix is a companion issue in generacy-cloud (reads `tunnelName` from relay event instead of recomputing).
+
+## Orchestrator GitHub Monitors Credential Resolution (#620)
+
+- Decouples orchestrator GitHub monitors from ambient `gh auth` state by injecting tokens explicitly via `tokenProvider` pattern.
+- `packages/workflow-engine/src/actions/github/client/gh-cli.ts` — MODIFIED in #620: `GhCliGitHubClient` constructor gains `tokenProvider?: () => Promise<string | undefined>`. Each `gh` CLI method resolves token before `executeCommand` and passes `{ env: { GH_TOKEN } }` in options.
+- `packages/workflow-engine/src/actions/github/client/interface.ts` — MODIFIED in #620: `GitHubClientFactory` type gains optional `tokenProvider` parameter.
+- `packages/orchestrator/src/services/wizard-creds-token-provider.ts` — NEW in #620: `createWizardCredsTokenProvider(envFilePath, logger)` returns `() => Promise<string | undefined>`. Re-reads `/var/lib/generacy/wizard-credentials.env` on `mtime` change. State-transition logging: one warning when resolution starts failing, one info when it resumes.
+- `packages/orchestrator/src/server.ts` — MODIFIED in #620: Creates wizard-creds token provider, passes to `PrFeedbackMonitorService`, `LabelMonitorService`, `LabelSyncService`, `WebhookSetupService` constructors.
+- `packages/orchestrator/src/services/webhook-setup-service.ts` — MODIFIED in #620: Resolves token before `executeCommand('gh', ...)` calls, passes `GH_TOKEN` in env option.
+- Worker-process callers (`claude-cli-worker.ts`, `pr-feedback-handler.ts`) pass `undefined` for `tokenProvider` — they use credhelper session env.
+- Token source: `/var/lib/generacy/wizard-credentials.env`, kept fresh by `handlePutCredential` (#614) on cloud-pushed credential refreshes.
