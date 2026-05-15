@@ -2,8 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import type { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import type { StoreStatus, StoreInitResult } from '../types/init-result.js';
+import { StoreDisabledError } from '../types/init-result.js';
 
 const DEFAULT_VALUES_PATH = '/var/lib/generacy-app-config/values.yaml';
+const FALLBACK_VALUES_PATH = '/tmp/generacy-app-config/values.yaml';
+const PERMISSION_ERRORS = new Set(['EACCES', 'EPERM', 'EROFS']);
 
 export interface AppConfigFileMetadata {
   updatedAt: string;
@@ -26,7 +30,9 @@ export interface AppConfigValuesMetadata {
  * and tracks metadata in a YAML file.
  */
 export class AppConfigFileStore {
-  private readonly valuesPath: string;
+  private valuesPath: string;
+  private status: StoreStatus = 'ok';
+  private disabledReason?: string;
 
   constructor(
     private readonly backend: ClusterLocalBackend,
@@ -36,11 +42,43 @@ export class AppConfigFileStore {
   }
 
   async init(): Promise<void> {
-    await fs.mkdir(path.dirname(this.valuesPath), { recursive: true });
+    try {
+      await fs.mkdir(path.dirname(this.valuesPath), { recursive: true });
+    } catch (err: unknown) {
+      if (!PERMISSION_ERRORS.has((err as NodeJS.ErrnoException).code ?? '')) throw err;
+      const fallbackPath = FALLBACK_VALUES_PATH;
+      try {
+        await fs.mkdir(path.dirname(fallbackPath), { recursive: true });
+        this.valuesPath = fallbackPath;
+        this.status = 'fallback';
+      } catch (err2: unknown) {
+        if (!PERMISSION_ERRORS.has((err2 as NodeJS.ErrnoException).code ?? '')) throw err2;
+        this.status = 'disabled';
+        this.disabledReason = `Both ${path.dirname(this.valuesPath)} and ${path.dirname(fallbackPath)} failed: ${(err as NodeJS.ErrnoException).code}`;
+        return;
+      }
+    }
+  }
+
+  getStatus(): StoreStatus {
+    return this.status;
+  }
+
+  getInitResult(): StoreInitResult {
+    return {
+      status: this.status,
+      path: this.status !== 'disabled' ? this.valuesPath : undefined,
+      reason: this.status === 'fallback'
+        ? `EACCES on preferred path, using ${this.valuesPath}`
+        : this.disabledReason,
+    };
   }
 
   /** Store a file blob: encrypt in backend, write to mountPath, update metadata. */
   async setFile(id: string, mountPath: string, data: Buffer): Promise<void> {
+    if (this.status === 'disabled') {
+      throw new StoreDisabledError('app-config-store-disabled', this.disabledReason);
+    }
     const backendKey = `app-config/file/${id}`;
     const base64Data = data.toString('base64');
 
@@ -66,6 +104,9 @@ export class AppConfigFileStore {
 
   /** Set an env var's metadata (secret flag and timestamp). */
   async setEnvMetadata(name: string, secret: boolean): Promise<void> {
+    if (this.status === 'disabled') {
+      throw new StoreDisabledError('app-config-store-disabled', this.disabledReason);
+    }
     const meta = await this.readMetadata();
     meta.env[name] = {
       secret,
@@ -87,6 +128,7 @@ export class AppConfigFileStore {
 
   /** Read all values metadata. */
   async getMetadata(): Promise<AppConfigValuesMetadata> {
+    if (this.status === 'disabled') return { env: {}, files: {} };
     return this.readMetadata();
   }
 

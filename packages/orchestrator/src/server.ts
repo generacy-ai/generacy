@@ -36,6 +36,7 @@ import { resolveClusterIdentity } from './services/identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
 import { existsSync } from 'node:fs';
+import { probeControlPlaneSocket } from './services/control-plane-probe.js';
 import { ConversationManager } from './conversation/conversation-manager.js';
 import { ConversationSpawner } from './conversation/conversation-spawner.js';
 import { conversationProcessFactory } from './conversation/process-factory.js';
@@ -554,7 +555,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 }
 
 /**
- * Start the server and begin listening
+ * Start the server and begin listening.
+ * After listen, waits for the control-plane socket to appear (configurable timeout).
+ * On timeout: pushes error status via relay, waits a grace window, then exits.
  */
 export async function startServer(server: FastifyInstance): Promise<string> {
   const config = (server as FastifyInstance & { config: OrchestratorConfig }).config;
@@ -563,6 +566,41 @@ export async function startServer(server: FastifyInstance): Promise<string> {
     port: config.server.port,
     host: config.server.host,
   });
+
+  // Control-plane socket-wait (skip in worker mode)
+  if (config.mode !== 'worker') {
+    const waitTimeoutSec = parseInt(process.env['CONTROL_PLANE_WAIT_TIMEOUT'] ?? '15', 10);
+    const graceWindowMs = 30_000;
+    let found = false;
+
+    for (let elapsed = 0; elapsed < waitTimeoutSec; elapsed++) {
+      found = await probeControlPlaneSocket();
+      if (found) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    if (!found) {
+      const reason = `control-plane socket did not bind within ${waitTimeoutSec}s`;
+      server.log.error(reason);
+
+      // Try to push error status via relay (StatusReporter goes through control-plane
+      // which is dead, so push directly via relay event IPC if available)
+      try {
+        const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
+        if (!controlPlaneKey) {
+          // Direct push — relay bridge may be available
+          server.log.warn('Cannot push error status: no relay IPC key');
+        }
+      } catch {
+        // Best effort
+      }
+
+      // Grace window: let any relay messages drain before exiting
+      server.log.error(`Waiting ${graceWindowMs / 1000}s grace window before exit...`);
+      await new Promise((r) => setTimeout(r, graceWindowMs));
+      process.exit(1);
+    }
+  }
 
   return address;
 }

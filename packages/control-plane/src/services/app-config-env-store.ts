@@ -1,7 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { StoreStatus, StoreInitResult } from '../types/init-result.js';
+import { StoreDisabledError } from '../types/init-result.js';
 
 const DEFAULT_ENV_PATH = '/var/lib/generacy-app-config/env';
+const FALLBACK_ENV_PATH = '/tmp/generacy-app-config/env';
+const PERMISSION_ERRORS = new Set(['EACCES', 'EPERM', 'EROFS']);
 
 /**
  * Atomic read-modify-write store for app-config environment variables.
@@ -10,21 +14,53 @@ const DEFAULT_ENV_PATH = '/var/lib/generacy-app-config/env';
  * control-plane daemon per cluster.
  */
 export class AppConfigEnvStore {
-  private readonly envPath: string;
+  private envPath: string;
   private writeChain: Promise<unknown> = Promise.resolve();
+  private status: StoreStatus = 'ok';
+  private disabledReason?: string;
 
   constructor(envPath?: string) {
     this.envPath = envPath ?? DEFAULT_ENV_PATH;
   }
 
   async init(): Promise<void> {
-    await fs.mkdir(path.dirname(this.envPath), { recursive: true });
+    try {
+      await fs.mkdir(path.dirname(this.envPath), { recursive: true });
+    } catch (err: unknown) {
+      if (!PERMISSION_ERRORS.has((err as NodeJS.ErrnoException).code ?? '')) throw err;
+      // Try fallback path
+      const fallbackPath = FALLBACK_ENV_PATH;
+      try {
+        await fs.mkdir(path.dirname(fallbackPath), { recursive: true });
+        this.envPath = fallbackPath;
+        this.status = 'fallback';
+      } catch (err2: unknown) {
+        if (!PERMISSION_ERRORS.has((err2 as NodeJS.ErrnoException).code ?? '')) throw err2;
+        this.status = 'disabled';
+        this.disabledReason = `Both ${path.dirname(this.envPath)} and ${path.dirname(fallbackPath)} failed: ${(err as NodeJS.ErrnoException).code}`;
+        return;
+      }
+    }
     // Create env file if it doesn't exist
     try {
       await fs.access(this.envPath);
     } catch {
       await fs.writeFile(this.envPath, '', { mode: 0o640 });
     }
+  }
+
+  getStatus(): StoreStatus {
+    return this.status;
+  }
+
+  getInitResult(): StoreInitResult {
+    return {
+      status: this.status,
+      path: this.status !== 'disabled' ? this.envPath : undefined,
+      reason: this.status === 'fallback'
+        ? `EACCES on preferred path, using ${this.envPath}`
+        : this.disabledReason,
+    };
   }
 
   /** Get value of a single env var. Returns undefined if not found. */
@@ -35,6 +71,9 @@ export class AppConfigEnvStore {
 
   /** Set an env var. Atomic rewrite under advisory lock. */
   async set(name: string, value: string): Promise<void> {
+    if (this.status === 'disabled') {
+      throw new StoreDisabledError('app-config-store-disabled', this.disabledReason);
+    }
     await this.withLock(async () => {
       const entries = await this.readAll();
       entries.set(name, value);
@@ -44,6 +83,9 @@ export class AppConfigEnvStore {
 
   /** Delete an env var. Returns true if it existed, false otherwise. */
   async delete(name: string): Promise<boolean> {
+    if (this.status === 'disabled') {
+      throw new StoreDisabledError('app-config-store-disabled', this.disabledReason);
+    }
     let existed = false;
     await this.withLock(async () => {
       const entries = await this.readAll();
@@ -57,6 +99,7 @@ export class AppConfigEnvStore {
 
   /** List all env var names and their values. */
   async list(): Promise<Map<string, string>> {
+    if (this.status === 'disabled') return new Map();
     return this.readAll();
   }
 

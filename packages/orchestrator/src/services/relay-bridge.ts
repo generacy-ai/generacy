@@ -29,7 +29,9 @@ import { ConversationRelayInputSchema } from '../conversation/types.js';
 import type { ConversationOutputEvent } from '../conversation/types.js';
 import type { LeaseManager } from './lease-manager.js';
 import type { StatusReporter } from './status-reporter.js';
+import { readFile } from 'node:fs/promises';
 import { probeCodeServerSocket } from './code-server-probe.js';
+import { probeControlPlaneSocket } from './control-plane-probe.js';
 
 export interface TunnelHandlerLike {
   handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
@@ -503,14 +505,41 @@ export class RelayBridge {
   }
 
   async collectMetadata(): Promise<ClusterMetadataPayload> {
+    const [codeServerReady, controlPlaneReady] = await Promise.all([
+      probeCodeServerSocket(),
+      probeControlPlaneSocket(),
+    ]);
+
     const metadata: ClusterMetadataPayload = {
       version: this.getVersion(),
       uptimeSeconds: process.uptime(),
       activeWorkflowCount: this.getActiveWorkflowCount(),
       gitRemotes: this.getGitRemotes(),
       reportedAt: new Date().toISOString(),
-      codeServerReady: await probeCodeServerSocket(),
+      codeServerReady,
+      controlPlaneReady,
     };
+
+    // Read init-result.json for control-plane store status
+    try {
+      const raw = await readFile('/run/generacy-control-plane/init-result.json', 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed?.stores) {
+        const stores: Record<string, 'ok' | 'fallback' | 'disabled'> = {};
+        for (const [key, val] of Object.entries(parsed.stores)) {
+          const v = val as { status?: string };
+          if (v?.status === 'ok' || v?.status === 'fallback' || v?.status === 'disabled') {
+            stores[key] = v.status;
+          }
+        }
+        metadata.initResult = {
+          stores,
+          warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+        };
+      }
+    } catch {
+      // init-result.json may not exist yet — graceful degradation
+    }
 
     // Add cluster.yaml fields if available
     const clusterData = this.readClusterYaml();

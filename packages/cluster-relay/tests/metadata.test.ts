@@ -30,7 +30,13 @@ function createMockFetch(options?: {
         throw new Error('Health endpoint unreachable');
       }
       return new Response(
-        JSON.stringify({ version: '1.0.0', channel: 'stable', uptime: 7200, codeServerReady: true }),
+        JSON.stringify({
+          version: '1.0.0',
+          channel: 'stable',
+          uptime: 7200,
+          codeServerReady: true,
+          controlPlaneReady: true,
+        }),
         { status: 200 },
       );
     }
@@ -71,6 +77,7 @@ describe('collectMetadata', () => {
       gitRemotes: [{ name: 'origin', url: 'git@github.com:org/repo.git' }],
       uptime: 7200,
       codeServerReady: true,
+      controlPlaneReady: true,
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -131,6 +138,7 @@ describe('collectMetadata', () => {
       gitRemotes: [{ name: 'origin', url: 'git@github.com:org/repo.git' }],
       uptime: 0,
       codeServerReady: false,
+      controlPlaneReady: false,
     });
   });
 

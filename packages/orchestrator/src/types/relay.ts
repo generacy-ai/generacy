@@ -256,6 +256,15 @@ export interface ClusterMetadataPayload {
 
   /** Whether code-server is running and ready for connections */
   codeServerReady?: boolean;
+
+  /** Whether the control-plane Unix socket is accepting connections */
+  controlPlaneReady?: boolean;
+
+  /** Init results from the control-plane daemon (read from init-result.json) */
+  initResult?: {
+    stores: Record<string, 'ok' | 'fallback' | 'disabled'>;
+    warnings: string[];
+  };
 }
 
 /**

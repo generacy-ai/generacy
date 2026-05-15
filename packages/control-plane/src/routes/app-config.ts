@@ -15,6 +15,7 @@ import {
 import type { AppConfigEnvStore } from '../services/app-config-env-store.js';
 import type { AppConfigFileStore } from '../services/app-config-file-store.js';
 import type { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import { StoreDisabledError } from '../types/init-result.js';
 
 // Inline denylist check (same logic as credhelper-daemon)
 const DENIED_PREFIXES = [
@@ -193,17 +194,27 @@ export async function handlePutEnv(
   const fileStore = requireFileStore();
   const backend = requireBackend();
 
-  if (secret) {
-    // Store encrypted in backend
-    const backendKey = `app-config/env/${name}`;
-    await backend.setSecret(backendKey, value);
-  } else {
-    // Write to plaintext env file
-    await envStore.set(name, value);
-  }
+  try {
+    if (secret) {
+      // Store encrypted in backend
+      const backendKey = `app-config/env/${name}`;
+      await backend.setSecret(backendKey, value);
+    } else {
+      // Write to plaintext env file
+      await envStore.set(name, value);
+    }
 
-  // Update metadata
-  await fileStore.setEnvMetadata(name, secret);
+    // Update metadata
+    await fileStore.setEnvMetadata(name, secret);
+  } catch (err: unknown) {
+    if (err instanceof StoreDisabledError) {
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(503);
+      res.end(JSON.stringify({ error: 'app-config-store-disabled', reason: err.reason }));
+      return;
+    }
+    throw err;
+  }
 
   // Emit relay event
   const pushEvent = getRelayPushEvent();
@@ -247,14 +258,24 @@ export async function handleDeleteEnv(
     return;
   }
 
-  if (entry.secret) {
-    const backendKey = `app-config/env/${name}`;
-    await backend.deleteSecret(backendKey);
-  } else {
-    await envStore.delete(name);
-  }
+  try {
+    if (entry.secret) {
+      const backendKey = `app-config/env/${name}`;
+      await backend.deleteSecret(backendKey);
+    } else {
+      await envStore.delete(name);
+    }
 
-  await fileStore.deleteEnvMetadata(name);
+    await fileStore.deleteEnvMetadata(name);
+  } catch (err: unknown) {
+    if (err instanceof StoreDisabledError) {
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(503);
+      res.end(JSON.stringify({ error: 'app-config-store-disabled', reason: err.reason }));
+      return;
+    }
+    throw err;
+  }
 
   // Emit relay event
   const pushEvent = getRelayPushEvent();
@@ -348,7 +369,17 @@ export async function handlePostFile(
   const data = Buffer.from(result.data.data, 'base64');
   const fileStore = requireFileStore();
 
-  await fileStore.setFile(id, fileEntry.mountPath, data);
+  try {
+    await fileStore.setFile(id, fileEntry.mountPath, data);
+  } catch (err: unknown) {
+    if (err instanceof StoreDisabledError) {
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(503);
+      res.end(JSON.stringify({ error: 'app-config-store-disabled', reason: err.reason }));
+      return;
+    }
+    throw err;
+  }
 
   // Emit relay event
   const pushEvent = getRelayPushEvent();

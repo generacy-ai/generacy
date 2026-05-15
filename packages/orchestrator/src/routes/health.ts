@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { HealthResponse, HealthStatus, ServiceStatus } from '../types/index.js';
 import { probeCodeServerSocket } from '../services/code-server-probe.js';
+import { probeControlPlaneSocket } from '../services/control-plane-probe.js';
 
 /**
  * Health check options
@@ -84,13 +85,17 @@ export async function setupHealthRoutes(
         overallStatus = 'error';
       }
 
-      const codeServerReady = await probeCodeServerSocket();
+      const [codeServerReady, controlPlaneReady] = await Promise.all([
+        probeCodeServerSocket(),
+        probeControlPlaneSocket(),
+      ]);
 
       const response: HealthResponse = {
         status: overallStatus,
         timestamp: new Date().toISOString(),
         services,
         codeServerReady,
+        controlPlaneReady,
       };
 
       const statusCode = overallStatus === 'error' ? 503 : 200;
