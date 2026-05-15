@@ -10,18 +10,18 @@
 
 ## Phase 1: Production Fix
 
-- [ ] T001 [US1] Remove envelope wrapper in `handleGetManifest` — change `res.end(JSON.stringify({ appConfig }))` to `res.end(JSON.stringify(appConfig))` in `packages/control-plane/src/routes/app-config.ts:111`
+- [X] T001 [US1] Remove envelope wrapper in `handleGetManifest` — change `res.end(JSON.stringify({ appConfig }))` to `res.end(JSON.stringify(appConfig))` in `packages/control-plane/src/routes/app-config.ts:111`
 
 ## Phase 2: Test Updates
 
-- [ ] T002 [US1] Update "returns null when no appConfig" test to assert `body` is `null` instead of `body.appConfig` is `null` in `packages/control-plane/__tests__/routes/app-config.test.ts` (~line 99-100)
-- [ ] T003 [P] [US1] Update "returns parsed appConfig when present" test to assert bare shape (`body.env`, `body.files`, `body.schemaVersion`) instead of `body.appConfig.env` in `packages/control-plane/__tests__/routes/app-config.test.ts` (~line 121-126)
-- [ ] T004 [P] [US1] Update "returns null when cluster.yaml does not exist" test to assert `body` is `null` instead of `body.appConfig` is `null` in `packages/control-plane/__tests__/routes/app-config.test.ts` (~line 133-134)
-- [ ] T005 [US1] Add SC-001 assertion: when non-null, verify top-level keys are exactly `schemaVersion`, `env`, `files` (no `appConfig` wrapper key)
+- [X] T002 [US1] Update "returns null when no appConfig" test to assert `body` is `null` instead of `body.appConfig` is `null` in `packages/control-plane/__tests__/routes/app-config.test.ts` (~line 99-100)
+- [X] T003 [P] [US1] Update "returns parsed appConfig when present" test to assert bare shape (`body.env`, `body.files`, `body.schemaVersion`) instead of `body.appConfig.env` in `packages/control-plane/__tests__/routes/app-config.test.ts` (~line 121-126)
+- [X] T004 [P] [US1] Update "returns null when cluster.yaml does not exist" test to assert `body` is `null` instead of `body.appConfig` is `null` in `packages/control-plane/__tests__/routes/app-config.test.ts` (~line 133-134)
+- [X] T005 [US1] Add SC-001 assertion: when non-null, verify top-level keys are exactly `schemaVersion`, `env`, `files` (no `appConfig` wrapper key)
 
 ## Phase 3: Verification
 
-- [ ] T006 Run `vitest run` in `packages/control-plane` to confirm all tests pass
+- [X] T006 Run `vitest run` in `packages/control-plane` to confirm all tests pass
 
 ## Dependencies & Execution Order
 

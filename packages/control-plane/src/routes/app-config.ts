@@ -108,7 +108,7 @@ export async function handleGetManifest(
     const appConfig = await readManifest();
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(200);
-    res.end(JSON.stringify({ appConfig }));
+    res.end(JSON.stringify(appConfig));
   } catch (err: unknown) {
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(500);
