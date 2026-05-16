@@ -9,7 +9,7 @@
 - A: FR-003 always deletes after pull (try/finally). FR-005 is a defensive re-check that tolerates file-not-found.
 - B: FR-003 only deletes on pull success. On pull failure, the file persists for debugging until FR-005 or manual cleanup.
 
-**Answer**: *Pending*
+**Answer**: **A** — FR-003 always deletes the remote scoped config in `try/finally` after pull; FR-005 becomes a defensive recheck that tolerates file-not-found. Option B leaves credentials on the remote VM on pull failure, which is a bad security posture. Idempotent cleanup is the safer pattern.
 
 ### Q2: Credential Forward Transport
 **Context**: FR-004 says "Forward credentials to credhelper via control-plane after cluster handshake." The deploy CLI has both cloud API access (via activation apiKey) and SSH access to the remote. Two plausible transports exist.
@@ -18,7 +18,7 @@
 - A: Cloud API proxy (relay path) — decoupled from SSH, mirrors how the web UI writes credentials
 - B: Direct SSH to control-plane socket — avoids cloud dependency, guaranteed reachable since SSH is already verified
 
-**Answer**: *Pending*
+**Answer**: **B** — Direct SSH to control-plane socket. SSH is already established; the control-plane is reachable via `docker compose exec orchestrator curl --unix-socket ...` over the same SSH connection. No relay round-trip, no cloud dependency, consistent with the local-launch credhelper-forward path.
 
 ### Q3: Credential Forward Timing
 **Context**: The current `handleDeploy()` flow ends after `pollClusterStatus()` confirms `connected` and registers the cluster locally. Adding credential forwarding after the poll adds latency to the CLI (the cluster is already running).
@@ -28,7 +28,7 @@
 - B: Fire-and-forget — CLI triggers forward but doesn't wait for confirmation
 - C: Cloud-delegated — cloud handles forward automatically after first handshake; CLI does nothing extra
 
-**Answer**: *Pending*
+**Answer**: **A** — Inline/blocking. The forward is fast (one SSH command wrapping one docker exec), and surfacing failure immediately is more valuable than hiding a quiet credhelper failure. The latency cost is small compared to the deploy time already waited through.
 
 ### Q4: Array vs Single Credential Handling
 **Context**: `LaunchConfig.registryCredentials` is typed as `z.array(RegistryCredentialSchema).optional()` (an array), but the spec's Out of Scope says "Multi-registry authentication (single registry per deploy for now)." The current schema supports multiple entries.
@@ -37,7 +37,7 @@
 - A: Write all entries — the Docker config.json `auths` object naturally supports multiple registries, no extra complexity
 - B: First-only with warning — enforce the "single registry" constraint explicitly, reject or warn on multiple entries
 
-**Answer**: *Pending*
+**Answer**: **A** — Write all entries. Docker config.json's `auths` object natively supports multiple registries; iterating over an array adds no complexity. The "single registry per deploy" constraint is a UI/cloud-side limit, not something the CLI needs to enforce.
 
 ### Q5: Forward Failure Behavior
 **Context**: If credential forwarding (FR-004) fails after the cluster is already running and healthy, the deploy is otherwise successful. Failing the entire command means the user has to re-deploy or manually intervene on an already-running cluster.
@@ -47,4 +47,4 @@
 - B: Soft fail — warn with remediation steps, exit 0 since cluster is running
 - C: Retry (3 attempts, exponential backoff), then soft-fail if exhausted
 
-**Answer**: *Pending*
+**Answer**: **B** — Soft fail with clear remediation message. Cluster is already running and healthy; hard-failing because credhelper-forward failed is overkill. Print a remediation message suggesting `generacy registry-login --remote <host>` or re-entering credentials in generacy.ai. Adding 1-2 auto-retries with brief backoff before soft-failing is acceptable but not essential.
