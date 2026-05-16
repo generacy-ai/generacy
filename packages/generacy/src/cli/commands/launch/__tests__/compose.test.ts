@@ -34,7 +34,7 @@ const mockedRmSync = vi.mocked(rmSync);
 // ---------------------------------------------------------------------------
 
 import { pullImage, startCluster, streamLogsUntilActivation } from '../compose.js';
-import type { RegistryCredentials } from '../types.js';
+import type { RegistryCredential } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -85,11 +85,9 @@ describe('pullImage', () => {
 // ---------------------------------------------------------------------------
 
 describe('pullImage with registryCredentials', () => {
-  const creds: RegistryCredentials = {
-    url: 'ghcr.io',
-    username: 'myuser',
-    password: 'mytoken',
-  };
+  const creds: RegistryCredential[] = [
+    { host: 'ghcr.io', username: 'myuser', password: 'mytoken' },
+  ];
 
   beforeEach(() => {
     vi.clearAllMocks();
