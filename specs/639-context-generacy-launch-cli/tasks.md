@@ -10,26 +10,26 @@
 
 ## Phase 1: Schema & Types
 
-- [ ] T001 [US1] Add `RegistryCredentialsSchema` and extend `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts`
+- [X] T001 [US1] Add `RegistryCredentialsSchema` and extend `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts`
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Implement scoped Docker config write + cleanup in `pullImage` (`packages/generacy/src/cli/commands/launch/compose.ts`)
+- [X] T002 [US1] Implement scoped Docker config write + cleanup in `pullImage` (`packages/generacy/src/cli/commands/launch/compose.ts`)
   - Accept optional `registryCredentials?: RegistryCredentials` parameter
   - When present: create `<projectDir>/.docker/`, write `config.json` (mode 0600), set `DOCKER_CONFIG` env on subprocess
   - `finally` block: `rmSync('<projectDir>/.docker', { recursive: true, force: true })`
-- [ ] T003 [US2] Preserve no-creds path — when `registryCredentials` is undefined, run `docker compose pull` with inherited env (existing behavior)
-- [ ] T004 [US3] Add error parsing for 401/unauthorized and 404/not-found patterns in pull stderr, emit actionable error messages
-- [ ] T005 [US1] Thread `config.registryCredentials` from launch orchestration to `pullImage` call in `packages/generacy/src/cli/commands/launch/index.ts`
+- [X] T003 [US2] Preserve no-creds path — when `registryCredentials` is undefined, run `docker compose pull` with inherited env (existing behavior)
+- [X] T004 [US3] Add error parsing for 401/unauthorized and 404/not-found patterns in pull stderr, emit actionable error messages
+- [X] T005 [US1] Thread `config.registryCredentials` from launch orchestration to `pullImage` call in `packages/generacy/src/cli/commands/launch/index.ts`
 
 ## Phase 3: Tests
 
-- [ ] T006 [P] [US2] Test: no-creds path calls `execSync` without `DOCKER_CONFIG` env override
-- [ ] T007 [P] [US1] Test: with-creds path writes scoped `<projectDir>/.docker/config.json` with correct base64 auth, passes `DOCKER_CONFIG` env
-- [ ] T008 [P] [US1] Test: scoped config directory is removed after successful pull
-- [ ] T009 [P] [US1] Test: scoped config directory is removed even when pull throws
-- [ ] T010 [P] [US3] Test: 401 stderr pattern produces auth-failure error message
-- [ ] T011 [P] [US3] Test: 404 stderr pattern produces image-not-found error message
+- [X] T006 [P] [US2] Test: no-creds path calls `execSync` without `DOCKER_CONFIG` env override
+- [X] T007 [P] [US1] Test: with-creds path writes scoped `<projectDir>/.docker/config.json` with correct base64 auth, passes `DOCKER_CONFIG` env
+- [X] T008 [P] [US1] Test: scoped config directory is removed after successful pull
+- [X] T009 [P] [US1] Test: scoped config directory is removed even when pull throws
+- [X] T010 [P] [US3] Test: 401 stderr pattern produces auth-failure error message
+- [X] T011 [P] [US3] Test: 404 stderr pattern produces image-not-found error message
 
 ## Dependencies & Execution Order
 
