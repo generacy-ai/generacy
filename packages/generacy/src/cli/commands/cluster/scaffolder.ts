@@ -157,11 +157,13 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
     ...sharedVolumes,
     '/var/run/docker.sock:/var/run/docker-host.sock',
     'vscode-cli-state:/home/node/.vscode/cli',
+    'generacy-app-config-data:/var/lib/generacy-app-config',
   ];
 
   const tmpfsMounts = [
     '/run/generacy-credhelper:uid=1002',
     '/run/generacy-control-plane:uid=1000',
+    '/run/generacy-app-config:mode=1750,uid=1000,gid=1000',
   ];
 
   const envFile = [
@@ -207,7 +209,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
         deploy: {
           replicas: '${WORKER_COUNT:-1}',
         },
-        volumes: sharedVolumes,
+        volumes: [...sharedVolumes, 'generacy-app-config-data:/var/lib/generacy-app-config:ro'],
         tmpfs: tmpfsMounts,
         environment: [
           'REDIS_URL=redis://redis:6379',
@@ -251,6 +253,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       'generacy-data': null,
       'vscode-cli-state': null,
       'redis-data': null,
+      'generacy-app-config-data': null,
       ...(claudeConfigMode === 'volume' ? { 'claude-config': null } : {}),
     },
     networks: {
