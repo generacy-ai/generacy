@@ -4,6 +4,8 @@ import path from 'node:path';
 import os from 'node:os';
 import { AppConfigFileStore } from '../../src/services/app-config-file-store.js';
 import { StoreDisabledError } from '../../src/types/init-result.js';
+import { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import type { AppConfig } from '../../src/schemas.js';
 
 function createMockBackend() {
   return {
@@ -283,6 +285,158 @@ describe('AppConfigFileStore', () => {
       });
 
       await expect(store.init()).rejects.toThrow('ENOSPC');
+    });
+  });
+
+  // ─── renderAll() ─────────────────────────────────────────────────
+
+  describe('renderAll()', () => {
+    let backend: ClusterLocalBackend;
+    let store: AppConfigFileStore;
+    let mountDir: string;
+
+    async function createRealBackend(): Promise<ClusterLocalBackend> {
+      const b = new ClusterLocalBackend({
+        dataPath: path.join(tmpDir, 'credentials.dat'),
+        keyPath: path.join(tmpDir, 'master.key'),
+      });
+      await b.init();
+      return b;
+    }
+
+    beforeEach(async () => {
+      backend = await createRealBackend();
+      const valuesPath = path.join(tmpDir, 'app-config', 'values.yaml');
+      store = new AppConfigFileStore(backend as never, valuesPath);
+      await store.init();
+      mountDir = path.join(tmpDir, 'mounts');
+      await fs.mkdir(mountDir, { recursive: true });
+    });
+
+    // T007: happy path
+    it('renders uploaded files to their mountPath', async () => {
+      const mountPath = path.join(mountDir, 'sa.json');
+      const fileData = Buffer.from('{"type":"service_account"}');
+      await store.setFile('gcp-sa', mountPath, fileData);
+
+      // Delete the file at mountPath to simulate container recreate
+      await fs.rm(mountPath);
+
+      const manifest: AppConfig = {
+        schemaVersion: '1',
+        env: [],
+        files: [{ id: 'gcp-sa', mountPath, required: true }],
+      };
+
+      const result = await store.renderAll(async () => manifest);
+
+      expect(result.rendered).toEqual(['gcp-sa']);
+      expect(result.failed).toEqual([]);
+
+      const written = await fs.readFile(mountPath);
+      expect(written).toEqual(fileData);
+    });
+
+    // T008: denylisted mountPath skipped
+    it('skips files with denylisted mountPath', async () => {
+      const safeMountPath = path.join(mountDir, 'temp.json');
+      await store.setFile('denied-file', safeMountPath, Buffer.from('data'));
+
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const manifest: AppConfig = {
+        schemaVersion: '1',
+        env: [],
+        files: [{ id: 'denied-file', mountPath: '/etc/foo', required: true }],
+      };
+
+      const result = await store.renderAll(async () => manifest);
+
+      expect(result.rendered).toEqual([]);
+      expect(result.failed).toEqual(['denied-file']);
+    });
+
+    // T009: missing blob in backend
+    it('skips files when backend fetchSecret throws', async () => {
+      const mountPath = path.join(mountDir, 'missing.json');
+      await store.setFile('blob-missing', mountPath, Buffer.from('data'));
+
+      // Delete the blob from backend to simulate missing data
+      await backend.deleteSecret('app-config/file/blob-missing');
+
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const manifest: AppConfig = {
+        schemaVersion: '1',
+        env: [],
+        files: [{ id: 'blob-missing', mountPath, required: true }],
+      };
+
+      const result = await store.renderAll(async () => manifest);
+
+      expect(result.rendered).toEqual([]);
+      expect(result.failed).toEqual(['blob-missing']);
+    });
+
+    // T010: orphaned file (id not in manifest)
+    it('skips orphaned files not in manifest', async () => {
+      const mountPath = path.join(mountDir, 'orphan.json');
+      await store.setFile('orphan-id', mountPath, Buffer.from('data'));
+
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      // Manifest has no files
+      const manifest: AppConfig = {
+        schemaVersion: '1',
+        env: [],
+        files: [],
+      };
+
+      const result = await store.renderAll(async () => manifest);
+
+      expect(result.rendered).toEqual([]);
+      expect(result.failed).toEqual(['orphan-id']);
+    });
+
+    // T011: disabled store returns empty immediately
+    it('returns empty result when store is disabled', async () => {
+      const disabledBackend = createMockBackend();
+      const disabledStore = new AppConfigFileStore(disabledBackend as never);
+
+      vi.spyOn(fs, 'mkdir').mockImplementation(async () => {
+        const err = new Error('EACCES: permission denied') as NodeJS.ErrnoException;
+        err.code = 'EACCES';
+        throw err;
+      });
+
+      await disabledStore.init();
+      expect(disabledStore.getStatus()).toBe('disabled');
+
+      vi.restoreAllMocks();
+
+      const result = await disabledStore.renderAll(async () => ({
+        schemaVersion: '1' as const,
+        env: [],
+        files: [{ id: 'x', mountPath: '/tmp/x', required: true }],
+      }));
+
+      expect(result.rendered).toEqual([]);
+      expect(result.failed).toEqual([]);
+    });
+
+    // T012: setFile still works after atomicWriteFile extraction
+    it('setFile writes file correctly after atomicWriteFile refactor', async () => {
+      const mountPath = path.join(mountDir, 'refactor-test.txt');
+      const data = Buffer.from('refactor-test-content');
+
+      await store.setFile('refactor-id', mountPath, data);
+
+      const written = await fs.readFile(mountPath);
+      expect(written).toEqual(data);
+
+      const meta = await store.getMetadata();
+      expect(meta.files['refactor-id']).toBeDefined();
+      expect(meta.files['refactor-id'].size).toBe(data.length);
     });
   });
 });

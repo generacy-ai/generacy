@@ -11,7 +11,7 @@ import { setRelayPushEvent } from '../src/relay-events.js';
 import { AppConfigEnvStore } from '../src/services/app-config-env-store.js';
 import { AppConfigFileStore } from '../src/services/app-config-file-store.js';
 import { AppConfigSecretEnvStore } from '../src/services/app-config-secret-env-store.js';
-import { setAppConfigStores } from '../src/routes/app-config.js';
+import { setAppConfigStores, readManifest } from '../src/routes/app-config.js';
 import type { InitResult } from '../src/types/init-result.js';
 
 const DEFAULT_SOCKET_PATH = '/run/generacy-control-plane/control.sock';
@@ -149,6 +149,19 @@ credentialBackend
       }
     } catch (err) {
       console.error('[control-plane] Secret env render error:', err instanceof Error ? err.message : String(err));
+    }
+
+    // Boot-time render of files
+    try {
+      const fileRenderResult = await appConfigFileStore.renderAll(readManifest);
+      if (fileRenderResult.failed.length > 0) {
+        console.warn(`[control-plane] Partial file render: ${fileRenderResult.rendered.length} ok, ${fileRenderResult.failed.length} failed`);
+        initResult.warnings.push(`appConfigFile render: ${fileRenderResult.failed.length} files failed to render`);
+      } else if (fileRenderResult.rendered.length > 0) {
+        console.log(`[control-plane] Rendered ${fileRenderResult.rendered.length} files to mount paths`);
+      }
+    } catch (err) {
+      console.error('[control-plane] File render error:', err instanceof Error ? err.message : String(err));
     }
 
     setAppConfigStores(appConfigEnvStore, appConfigFileStore, credentialBackend, appConfigSecretEnvStore);
