@@ -10,21 +10,21 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] [US2] Add app-config tmpfs mount to `tmpfsMounts` array in `packages/generacy/src/cli/commands/cluster/scaffolder.ts:162-165` — append `/run/generacy-app-config:mode=1750,uid=1000,gid=1000`
-- [ ] T002 [US1] Add `generacy-app-config-data:/var/lib/generacy-app-config` to `orchestratorVolumes` array in `scaffolder.ts:156-160` (read-write)
-- [ ] T003 [US1] Add `generacy-app-config-data:/var/lib/generacy-app-config:ro` to worker volumes in `scaffolder.ts:210` — inline spread `[...sharedVolumes, 'generacy-app-config-data:/var/lib/generacy-app-config:ro']`
-- [ ] T004 [US1] Add `'generacy-app-config-data': null` to top-level `volumes` declaration in `scaffolder.ts:247-255`
+- [X] T001 [US1] [US2] Add app-config tmpfs mount to `tmpfsMounts` array in `packages/generacy/src/cli/commands/cluster/scaffolder.ts:162-165` — append `/run/generacy-app-config:mode=1750,uid=1000,gid=1000`
+- [X] T002 [US1] Add `generacy-app-config-data:/var/lib/generacy-app-config` to `orchestratorVolumes` array in `scaffolder.ts:156-160` (read-write)
+- [X] T003 [US1] Add `generacy-app-config-data:/var/lib/generacy-app-config:ro` to worker volumes in `scaffolder.ts:210` — inline spread `[...sharedVolumes, 'generacy-app-config-data:/var/lib/generacy-app-config:ro']`
+- [X] T004 [US1] Add `'generacy-app-config-data': null` to top-level `volumes` declaration in `scaffolder.ts:247-255`
 
 ## Phase 2: Tests
 
-- [ ] T005 [P] [US2] Extend tmpfs test (line 185-193) in `__tests__/scaffolder.test.ts` to assert `/run/generacy-app-config:mode=1750,uid=1000,gid=1000` on both orchestrator and worker services
-- [ ] T006 [P] [US1] Add test in `__tests__/scaffolder.test.ts`: orchestrator volumes contain `generacy-app-config-data:/var/lib/generacy-app-config` (rw, no suffix)
-- [ ] T007 [P] [US1] Add test in `__tests__/scaffolder.test.ts`: worker volumes contain `generacy-app-config-data:/var/lib/generacy-app-config:ro` (read-only) and do NOT contain the rw variant
-- [ ] T008 [P] [US1] Extend named volumes test (line 303-313) in `__tests__/scaffolder.test.ts` to assert `generacy-app-config-data` is in top-level volumes declaration
+- [X] T005 [P] [US2] Extend tmpfs test (line 185-193) in `__tests__/scaffolder.test.ts` to assert `/run/generacy-app-config:mode=1750,uid=1000,gid=1000` on both orchestrator and worker services
+- [X] T006 [P] [US1] Add test in `__tests__/scaffolder.test.ts`: orchestrator volumes contain `generacy-app-config-data:/var/lib/generacy-app-config` (rw, no suffix)
+- [X] T007 [P] [US1] Add test in `__tests__/scaffolder.test.ts`: worker volumes contain `generacy-app-config-data:/var/lib/generacy-app-config:ro` (read-only) and do NOT contain the rw variant
+- [X] T008 [P] [US1] Extend named volumes test (line 303-313) in `__tests__/scaffolder.test.ts` to assert `generacy-app-config-data` is in top-level volumes declaration
 
 ## Phase 3: Verification
 
-- [ ] T009 Run `pnpm vitest packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` and confirm all tests pass
+- [X] T009 Run `pnpm vitest packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` and confirm all tests pass
 
 ## Dependencies & Execution Order
 

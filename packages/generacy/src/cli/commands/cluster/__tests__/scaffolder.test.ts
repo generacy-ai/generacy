@@ -188,8 +188,10 @@ describe('scaffoldDockerCompose', () => {
 
     expect(parsed.services.orchestrator.tmpfs).toContain('/run/generacy-credhelper:uid=1002');
     expect(parsed.services.orchestrator.tmpfs).toContain('/run/generacy-control-plane:uid=1000');
+    expect(parsed.services.orchestrator.tmpfs).toContain('/run/generacy-app-config:mode=1750,uid=1000,gid=1000');
     expect(parsed.services.worker.tmpfs).toContain('/run/generacy-credhelper:uid=1002');
     expect(parsed.services.worker.tmpfs).toContain('/run/generacy-control-plane:uid=1000');
+    expect(parsed.services.worker.tmpfs).toContain('/run/generacy-app-config:mode=1750,uid=1000,gid=1000');
   });
 
   it('includes healthchecks for all services', () => {
@@ -300,6 +302,23 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.worker.deploy.replicas).toBe('${WORKER_COUNT:-1}');
   });
 
+  it('mounts app-config-data volume rw on orchestrator', () => {
+    scaffoldDockerCompose(dir, baseInput);
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    const orchVolumes = parsed.services.orchestrator.volumes as string[];
+    expect(orchVolumes).toContain('generacy-app-config-data:/var/lib/generacy-app-config');
+  });
+
+  it('mounts app-config-data volume ro on worker', () => {
+    scaffoldDockerCompose(dir, baseInput);
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    const workerVolumes = parsed.services.worker.volumes as string[];
+    expect(workerVolumes).toContain('generacy-app-config-data:/var/lib/generacy-app-config:ro');
+    expect(workerVolumes).not.toContain('generacy-app-config-data:/var/lib/generacy-app-config');
+  });
+
   it('declares all expected named volumes', () => {
     scaffoldDockerCompose(dir, baseInput);
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
@@ -310,6 +329,7 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.volumes).toHaveProperty('generacy-data');
     expect(parsed.volumes).toHaveProperty('redis-data');
     expect(parsed.volumes).toHaveProperty('vscode-cli-state');
+    expect(parsed.volumes).toHaveProperty('generacy-app-config-data');
   });
 
   it('mounts shared-packages at /shared-packages (cluster-base entrypoint contract)', () => {
