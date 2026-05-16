@@ -10,24 +10,24 @@
 
 ## Phase 1: Schema Extension
 
-- [ ] T001 [US1] Add `registryCredentials` field to `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts` — array of `{ host: z.string(), auth: z.string() }`, optional
+- [X] T001 [US1] Add `registryCredentials` field to `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts` — array of `{ host: z.string(), auth: z.string() }`, optional
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US1] Create `packages/generacy/src/cli/commands/launch/credential-forward.ts` with `probeControlPlaneReady(projectDir, opts)` — runs `docker compose exec -T orchestrator curl --unix-socket /run/generacy-control-plane/control.sock -sf http://localhost/state` with retry loop (10 attempts, 2s interval)
-- [ ] T003 [P] [US1] Implement `forwardRegistryCredentials(projectDir, credentials)` in `credential-forward.ts` — for each `{ host, auth }`, PUTs to `/credentials/registry-<host>` via docker compose exec curl. Returns `{ forwarded: string[], failed: string[] }`
-- [ ] T004 [P] [US1] Implement `cleanupScopedDockerConfig(projectDir)` in `credential-forward.ts` — removes `<projectDir>/.generacy/.docker/` recursively using `fs.rm({ recursive: true, force: true })`
+- [X] T002 [US1] Create `packages/generacy/src/cli/commands/launch/credential-forward.ts` with `probeControlPlaneReady(projectDir, opts)` — runs `docker compose exec -T orchestrator curl --unix-socket /run/generacy-control-plane/control.sock -sf http://localhost/state` with retry loop (10 attempts, 2s interval)
+- [X] T003 [P] [US1] Implement `forwardRegistryCredentials(projectDir, credentials)` in `credential-forward.ts` — for each `{ host, auth }`, PUTs to `/credentials/registry-<host>` via docker compose exec curl. Returns `{ forwarded: string[], failed: string[] }`
+- [X] T004 [P] [US1] Implement `cleanupScopedDockerConfig(projectDir)` in `credential-forward.ts` — removes `<projectDir>/.generacy/.docker/` recursively using `fs.rm({ recursive: true, force: true })`
 
 ## Phase 3: Integration
 
-- [ ] T005 [US1] Integrate credential forwarding into `launchAction` in `packages/generacy/src/cli/commands/launch/index.ts` — after `streamLogsUntilActivation` resolves and before `registerCluster`: probe control-plane, forward creds, cleanup on success, warn on failure (non-fatal)
+- [X] T005 [US1] Integrate credential forwarding into `launchAction` in `packages/generacy/src/cli/commands/launch/index.ts` — after `streamLogsUntilActivation` resolves and before `registerCluster`: probe control-plane, forward creds, cleanup on success, warn on failure (non-fatal)
 
 ## Phase 4: Tests
 
-- [ ] T006 [P] [US1] Write unit tests for `probeControlPlaneReady` — mock `spawnSync`, test success on first attempt, success after retries, and timeout exhaustion
-- [ ] T007 [P] [US1] Write unit tests for `forwardRegistryCredentials` — mock `spawnSync`, test success path (200 exit 0), partial failure (some hosts fail), and all-fail scenario
-- [ ] T008 [P] [US1] Write unit tests for `cleanupScopedDockerConfig` — mock `fs.rm`, test successful deletion and idempotent behavior when dir doesn't exist
-- [ ] T009 [US1] Write integration test for the full credential-forward flow in `launchAction` — verify: creds forwarded + cleanup on success, warning logged + no cleanup on probe failure, warning logged + no cleanup on PUT failure
+- [X] T006 [P] [US1] Write unit tests for `probeControlPlaneReady` — mock `spawnSync`, test success on first attempt, success after retries, and timeout exhaustion
+- [X] T007 [P] [US1] Write unit tests for `forwardRegistryCredentials` — mock `spawnSync`, test success path (200 exit 0), partial failure (some hosts fail), and all-fail scenario
+- [X] T008 [P] [US1] Write unit tests for `cleanupScopedDockerConfig` — mock `fs.rm`, test successful deletion and idempotent behavior when dir doesn't exist
+- [X] T009 [US1] Write integration test for the full credential-forward flow in `launchAction` — verify: creds forwarded + cleanup on success, warning logged + no cleanup on probe failure, warning logged + no cleanup on PUT failure
 
 ## Dependencies & Execution Order
 

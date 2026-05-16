@@ -27,6 +27,7 @@ import { resolve } from 'node:path';
 import { resolveApiUrl } from '../../utils/cloud-url.js';
 import { sanitizeComposeProjectName } from '../cluster/scaffolder.js';
 import { clearStaleActivation } from './volume-cleanup.js';
+import { probeControlPlaneReady, forwardRegistryCredentials, cleanupScopedDockerConfig } from './credential-forward.js';
 
 /**
  * Create the `launch` subcommand.
@@ -199,7 +200,29 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   p.log.info(`\n  Your activation code: ${userCode}\n`);
   openBrowser(activationUrl);
 
-  // ── 11. Register cluster ────────────────────────────────────────────
+  // ── 11. Forward registry credentials to credhelper ─────────────────
+  if (config.registryCredentials?.length) {
+    try {
+      const ready = await probeControlPlaneReady(projectDir, { retries: 10, intervalMs: 2000 });
+      if (ready) {
+        const result = forwardRegistryCredentials(projectDir, config.registryCredentials);
+        if (result.forwarded.length > 0) {
+          await cleanupScopedDockerConfig(projectDir);
+          logger.debug({ forwarded: result.forwarded }, 'Registry credentials forwarded');
+        }
+        if (result.failed.length > 0) {
+          p.log.warn(`Failed to forward registry credentials for: ${result.failed.join(', ')}`);
+        }
+      } else {
+        p.log.warn('Control-plane not ready — skipping credential forward. Re-enter via cloud UI.');
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      p.log.warn(`Credential forwarding failed: ${msg}`);
+    }
+  }
+
+  // ── 12. Register cluster ────────────────────────────────────────────
   try {
     const composePath = resolve(projectDir, '.generacy', 'docker-compose.yml');
     const now = new Date().toISOString();

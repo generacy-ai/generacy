@@ -27,6 +27,16 @@ export const CloudUrlsSchema = z.object({
 export type CloudUrls = z.infer<typeof CloudUrlsSchema>;
 
 /**
+ * Schema for a registry credential entry (host + base64-encoded auth).
+ */
+export const RegistryCredentialSchema = z.object({
+  host: z.string().min(1),
+  auth: z.string().min(1),
+});
+
+export type RegistryCredential = z.infer<typeof RegistryCredentialSchema>;
+
+/**
  * Zod schema for the cloud launch-config response.
  */
 export const LaunchConfigSchema = z.object({
@@ -44,6 +54,7 @@ export const LaunchConfigSchema = z.object({
     clone: z.array(z.string()).optional(),
   }),
   cloud: CloudUrlsSchema.optional(),
+  registryCredentials: z.array(RegistryCredentialSchema).optional(),
 });
 
 /**
