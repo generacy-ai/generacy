@@ -7,7 +7,7 @@
 import { execSync, spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import type { RegistryCredentials } from './types.js';
+import type { RegistryCredential } from './types.js';
 
 /** Compose file path relative to the project directory. */
 const COMPOSE_FILE = '.generacy/docker-compose.yml';
@@ -16,8 +16,9 @@ const COMPOSE_FILE = '.generacy/docker-compose.yml';
  * Pull the cluster image via `docker compose pull`.
  *
  * When `registryCredentials` is provided, writes a scoped Docker config
- * directory with the auth entry and passes `DOCKER_CONFIG` to the subprocess.
- * The scoped directory is always cleaned up in a `finally` block.
+ * directory with an auth entry for every host and passes `DOCKER_CONFIG`
+ * to the subprocess. The scoped directory is always cleaned up in a
+ * `finally` block.
  *
  * When no credentials are provided, runs with inherited env (ambient auth).
  *
@@ -25,8 +26,8 @@ const COMPOSE_FILE = '.generacy/docker-compose.yml';
  * @param registryCredentials - Optional registry credentials from LaunchConfig.
  * @throws {Error} If the pull command fails.
  */
-export function pullImage(projectDir: string, registryCredentials?: RegistryCredentials): void {
-  if (!registryCredentials) {
+export function pullImage(projectDir: string, registryCredentials?: RegistryCredential[]): void {
+  if (!registryCredentials || registryCredentials.length === 0) {
     // No-creds path: use ambient Docker auth (existing behavior)
     try {
       execSync(`docker compose -f ${COMPOSE_FILE} pull`, {
@@ -44,10 +45,13 @@ export function pullImage(projectDir: string, registryCredentials?: RegistryCred
   const configPath = join(dockerConfigDir, 'config.json');
 
   mkdirSync(dockerConfigDir, { recursive: true });
-  const auth = Buffer.from(`${registryCredentials.username}:${registryCredentials.password}`).toString('base64');
-  const dockerConfig = JSON.stringify({
-    auths: { [registryCredentials.url]: { auth } },
-  });
+  const auths: Record<string, { auth: string }> = {};
+  for (const cred of registryCredentials) {
+    auths[cred.host] = {
+      auth: Buffer.from(`${cred.username}:${cred.password}`).toString('base64'),
+    };
+  }
+  const dockerConfig = JSON.stringify({ auths });
   writeFileSync(configPath, dockerConfig, { mode: 0o600 });
 
   try {

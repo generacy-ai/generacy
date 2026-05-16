@@ -45,6 +45,7 @@
         "packages/generacy/src/cli/commands/claude-login/index.ts",
         "packages/generacy/src/cli/commands/launch/browser.ts",
         "packages/generacy/src/cli/commands/launch/compose.ts",
+        "packages/generacy/src/cli/commands/launch/credential-forward.ts",
         "packages/generacy/src/cli/utils/browser.ts",
         "packages/generacy/src/cli/utils/exec.ts",
         "packages/generacy/src/cli/commands/deploy/ssh-client.ts",
