@@ -10,7 +10,7 @@
 - B: Extend existing `GET /credentials/:id` with a `?include=value` query param
 - C: Different approach (describe)
 
-**Answer**: *Pending*
+**Answer**: **A** — New endpoint `GET /credentials/:id/value` on the control-plane, restricted to local-socket callers and audit-logged separately. Existing metadata endpoint stays unchanged. Docker registry credentials are uniquely host-bound (consumed by `docker compose pull` on the host), unlike other credential types rendered into session environments via credhelper plugins. A new endpoint makes the "raw value read" capability explicit and easy to audit. Implementation note: control-plane will need a new IPC path to credhelper-daemon (which holds the encrypted store via its uid-isolated process). The current `GET /credentials/:id` only reads YAML metadata directly; the value endpoint needs to call credhelper-daemon over its Unix socket and ask for the raw secret.
 
 ### Q2: Credential Value Shape
 **Context**: The spec assumes "Docker auth JSON (base64-encoded user:pass in auth field)" but doesn't specify the exact structure stored. When we write the scoped `config.json`, we need to know whether the stored value is the full Docker config structure or just the inner auth entry.
@@ -21,7 +21,7 @@
 - C: Raw base64-encoded `user:pass` string (CLI wraps it into Docker config format)
 - D: JSON with discrete fields: `{"username":"...","password":"..."}`
 
-**Answer**: *Pending*
+**Answer**: **D** — JSON with discrete fields: `{"username": "...", "password": "..."}`. Follows the existing `github-app` credential pattern. Host is derived from credentialId (`registry-<host>`), so it's not duplicated in the value. CLI builds the Docker config structure (`{"auths":{<host>:{"auth": base64(user:pass)}}}`) from these fields when materializing the scoped config. Most explicit; future-proof for additional fields (e.g., token expiration).
 
 ### Q3: Sibling Helper Availability
 **Context**: The spec references a shared `materializeScopedDockerConfig()` helper from the sibling issue "Pull cluster image with scoped private-registry credentials". This helper does not exist in the codebase yet. The spec says both issues share it, but doesn't specify which implements it first.
@@ -31,7 +31,7 @@
 - B: Sibling implements it first (we depend on sibling)
 - C: Either can implement it — just pick one and share
 
-**Answer**: *Pending*
+**Answer**: **B** — Sibling (#639, "Pull cluster image with scoped private-registry credentials") implements `materializeScopedDockerConfig()` first; this issue consumes it. The helper lives in a shared utility module (`packages/generacy/src/cli/utils/docker-config.ts` or similar). If sequencing flips and #641 lands first, this issue implements; #639 consumes. Coordinate so it lands once.
 
 ### Q4: Scoped Config Path and Crash Safety
 **Context**: The spec places the scoped config at `<projectDir>/.docker/config.json`. This directory sits at the project root where it could be accidentally committed if the process crashes before cleanup. The `try/finally` pattern handles normal exits but not SIGKILL or power loss.
@@ -42,4 +42,4 @@
 - C: Under `.generacy/.docker/` (already gitignored by convention)
 - D: System temp directory (fully isolated from project)
 
-**Answer**: *Pending*
+**Answer**: **C** — Under `<projectDir>/.generacy/.docker/`. The `.generacy/` directory is already CLI-managed (cluster.yaml, cluster.json scaffolded there) and follows the existing gitignore convention; placing the scoped Docker config under it inherits the safety net and clarifies ownership. Project root `.docker/` could be confused with a user's manual Docker conventions; system temp directory loses project-scoping.
