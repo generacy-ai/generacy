@@ -16,6 +16,7 @@ import type { AppConfigEnvStore } from '../services/app-config-env-store.js';
 import type { AppConfigFileStore } from '../services/app-config-file-store.js';
 import type { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import { StoreDisabledError } from '../types/init-result.js';
+import { resolveGeneracyDir } from '../services/project-dir-resolver.js';
 
 // Inline denylist check (same logic as credhelper-daemon)
 const DENIED_PREFIXES = [
@@ -37,17 +38,9 @@ function isPathDenied(absPath: string): boolean {
   return false;
 }
 
-const DEFAULT_GENERACY_DIR = '.generacy';
-
-function getGeneracyDir(): string {
-  return process.env['GENERACY_PROJECT_DIR']
-    ? path.join(process.env['GENERACY_PROJECT_DIR'], '.generacy')
-    : DEFAULT_GENERACY_DIR;
-}
-
 /** Read and parse appConfig from cluster.yaml in the working tree. */
 async function readManifest(): Promise<AppConfig | null> {
-  const generacyDir = getGeneracyDir();
+  const generacyDir = await resolveGeneracyDir();
   const yamlPath = path.join(generacyDir, 'cluster.yaml');
 
   let raw: string;

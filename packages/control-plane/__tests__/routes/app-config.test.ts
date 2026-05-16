@@ -17,6 +17,7 @@ import { AppConfigEnvStore } from '../../src/services/app-config-env-store.js';
 import { AppConfigFileStore } from '../../src/services/app-config-file-store.js';
 import { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import { setRelayPushEvent } from '../../src/relay-events.js';
+import { resetGeneracyDirCache } from '../../src/services/project-dir-resolver.js';
 
 function createMockResponse() {
   return {
@@ -71,6 +72,7 @@ describe('app-config routes', () => {
 
     setAppConfigStores(envStore, fileStore, backend);
 
+    resetGeneracyDirCache();
     process.env['GENERACY_PROJECT_DIR'] = tmpDir;
 
     relayEvents = [];
