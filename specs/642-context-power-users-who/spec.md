@@ -1,10 +1,10 @@
-# Feature Specification: `generacy registry-login` subcommand
+# Feature Specification: ## Context
+
+Power users who bypass the cloud UI (Flow C — local power-user) need a CLI command to set registry credentials for the project's private image
 
 **Branch**: `642-context-power-users-who` | **Date**: 2026-05-16 | **Status**: Draft
 
 ## Summary
-
-Add `generacy registry-login <registry-host>` and `generacy registry-logout <registry-host>` CLI subcommands for power users (Flow C) to authenticate with private container registries without round-tripping through the cloud UI. Credentials are project-scoped (written to `<projectDir>/.docker/config.json`) and optionally forwarded to the running cluster's credhelper.
 
 ## Context
 
@@ -14,87 +14,85 @@ To prevent cross-project credential bleed, the command writes to project-scoped 
 
 Part of [docs/cluster-variants-and-custom-images-plan.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/cluster-variants-and-custom-images-plan.md) — Phase 2 Track B.
 
+## Scope
+
+- **New subcommand** `generacy registry-login <registry-host>`:
+  - Interactive prompts for username + token (token field uses no-echo input).
+  - Writes to `<projectDir>/.docker/config.json` for that host.
+  - If the cluster is running, also forwards to credhelper via the control-plane (same as the post-launch forward in the sibling issue) so that future `generacy update` runs work even without the scoped config.
+- **Help text** clarifies scope:
+  ```
+  generacy registry-login <host>
+    Authenticate with a private container registry for this project's cluster.
+    Credentials are scoped to this project directory and forwarded to the running
+    cluster's credhelper if available. To set machine-wide credentials, use
+    'docker login' directly.
+  ```
+- **`generacy registry-logout <registry-host>`**: removes both the scoped config entry and the credhelper entry. Useful for credential rotation.
+
+## Acceptance criteria
+
+- `registry-login` writes a valid docker config that `docker compose pull` can use.
+- Token entry does not echo to terminal.
+- `~/.docker/config.json` is never modified.
+- If cluster is running, credhelper receives the credential.
+- `registry-logout` cleanly removes both sources.
+- Tests cover: scoped write, cluster-running forward, cluster-offline scope-only, logout.
+
+## Out of scope
+
+- Cloud UI sync (the cloud doesn't learn about manually-entered creds; that's fine — the credhelper is the source of truth and the `Project.image.registryHasCredentials` flag stays unchanged unless the user does it via the cloud UI).
+
 ## User Stories
 
 ### US1: Power user authenticates with private registry
 
-**As a** power user running a local cluster with a custom image,
-**I want** to authenticate with my private container registry via the CLI,
-**So that** `docker compose pull` can pull my custom image without requiring cloud UI interaction.
+**As a** local power user (Flow C),
+**I want** to set registry credentials from the CLI,
+**So that** I can pull private images without round-tripping through the cloud UI.
 
 **Acceptance Criteria**:
-- [ ] Running `generacy registry-login ghcr.io` prompts for username and token
-- [ ] Token input does not echo to terminal
-- [ ] Credentials are written to `<projectDir>/.docker/config.json`
-- [ ] `docker compose pull` succeeds using the scoped config
+- [ ] `generacy registry-login <host>` prompts for username + token (no-echo)
+- [ ] Writes valid Docker config to `<projectDir>/.generacy/.docker/config.json`
 - [ ] `~/.docker/config.json` is never modified
-
-### US2: Running cluster receives forwarded credentials
-
-**As a** power user with a running cluster,
-**I want** registry credentials to be forwarded to the cluster's credhelper,
-**So that** future `generacy update` commands work without re-entering credentials.
-
-**Acceptance Criteria**:
-- [ ] If cluster is running, credhelper receives the credential via control-plane
-- [ ] If cluster is not running, only the scoped config is written (no error)
-- [ ] Forwarding failure is non-fatal (scoped config still written)
-
-### US3: Power user rotates or removes registry credentials
-
-**As a** power user rotating registry tokens,
-**I want** to cleanly remove credentials from both the scoped config and credhelper,
-**So that** stale tokens don't persist in either location.
-
-**Acceptance Criteria**:
-- [ ] `generacy registry-logout ghcr.io` removes the host entry from scoped config
-- [ ] If cluster is running, credhelper entry is also removed
-- [ ] Command succeeds even if only one location has the credential
+- [ ] If cluster is running, forwards credential via `docker compose exec` to control-plane
+- [ ] `generacy registry-logout <host>` removes scoped config entry and control-plane credential
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `registry-login <host>` prompts interactively for username + token | P1 | Token uses no-echo input (`@clack/prompts` password field) |
-| FR-002 | Writes base64-encoded auth to `<projectDir>/.docker/config.json` | P1 | Standard Docker config format: `{"auths":{"host":{"auth":"base64"}}}` |
-| FR-003 | Merges with existing scoped config (doesn't overwrite other hosts) | P1 | Atomic read-modify-write |
-| FR-004 | Forwards credential to control-plane if cluster is running | P2 | PUT to control-plane `/credentials/registry-<host>` via relay or direct |
-| FR-005 | `registry-logout <host>` removes entry from scoped config | P1 | |
-| FR-006 | `registry-logout <host>` removes credhelper entry if cluster running | P2 | DELETE to control-plane |
-| FR-007 | Help text documents project-scoped vs machine-wide distinction | P1 | |
-| FR-008 | Sets `DOCKER_CONFIG` env var in generated docker-compose to point at scoped config | P1 | Required for `docker compose pull` to use scoped config |
+| FR-001 | Interactive prompt for username + token (no-echo input) | P1 | Use `@clack/prompts` password field |
+| FR-002 | Write Docker config to `<projectDir>/.generacy/.docker/config.json` | P1 | Standard Docker `config.json` format with `auths.<host>.auth` = base64(user:token) |
+| FR-003 | Never modify `~/.docker/config.json` | P1 | Hard requirement |
+| FR-004 | Forward credential to control-plane if cluster running | P1 | Via `docker compose exec orchestrator curl --unix-socket /run/generacy-control-plane/control.sock PUT /credentials/registry-<host>` |
+| FR-005 | Credential value format: JSON `{"username":"...","password":"..."}` | P1 | Host derived from credentialId; consistent with sibling issues |
+| FR-006 | Store in control-plane with type `docker-registry` (no credhelper plugin) | P1 | Plugin deferred to v1.7 |
+| FR-007 | `compose.ts` helper auto-detects `<projectDir>/.generacy/.docker/config.json` and sets `DOCKER_CONFIG` env var on spawn | P1 | Applies to `up`, `update`, `pull`, all compose commands |
+| FR-008 | `registry-logout` removes scoped config entry and control-plane credential | P2 | |
+| FR-009 | Help text clarifies project-scoped vs machine-wide distinction | P2 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Scoped config is valid Docker auth JSON | 100% | `docker compose pull` succeeds with scoped config |
-| SC-002 | No modification to `~/.docker/config.json` | 0 writes | Assertion in tests |
-| SC-003 | Token never visible in terminal output | 100% | No-echo verified in tests |
-| SC-004 | Credential forward works when cluster is running | Pass | Integration test with running cluster |
-| SC-005 | Logout removes from both sources | Pass | Unit + integration tests |
-
-## Technical Notes
-
-- Docker config format: `{"auths":{"<host>":{"auth":"<base64(username:token)>"}}}`
-- Scoped config path: `<projectDir>/.docker/config.json` (sibling to `.generacy/`)
-- `DOCKER_CONFIG=<projectDir>/.docker` must be set in compose environment for pull to use it
-- Cluster-forward path: control-plane `PUT /credentials/registry-<host>` (same pattern as wizard credential writes in #558)
-- Uses `getClusterContext()` from `src/cli/utils/cluster-context.ts` to resolve project directory
-- Interactive prompts via `@clack/prompts` (consistent with existing CLI UX)
+| SC-001 | `docker compose pull` succeeds with scoped config | Pass | Integration test with private registry |
+| SC-002 | Token never echoed to terminal | Pass | Manual verification |
+| SC-003 | `~/.docker/config.json` unchanged after command | Pass | Unit test |
+| SC-004 | Cross-terminal session auto-detect works | Pass | Test: write config, new process runs `generacy update` successfully |
 
 ## Assumptions
 
-- The `.docker/config.json` format with base64 `auth` field is sufficient (no credential helpers or OAuth token flows needed)
-- Control-plane credential forwarding follows the existing `PUT /credentials/:id` route pattern
-- The scoped docker config directory (`.docker/`) can live at project root alongside `.generacy/`
+- The project directory has a `.generacy/` subdirectory (standard cluster scaffold)
+- Docker config path is `<projectDir>/.generacy/.docker/config.json` (inside `.generacy/` to keep project root clean)
+- The `compose.ts` helper is the single point where all `docker compose` invocations pass through
+- Control-plane `PUT /credentials/:id` endpoint already accepts arbitrary type strings
 
 ## Out of Scope
 
 - Cloud UI sync (cloud doesn't learn about manually-entered creds)
-- OAuth/device-flow registry auth (only username+token supported)
-- Automatic credential refresh or expiry handling
-- Registry health-check / login verification (`docker login --verify` equivalent)
+- New credhelper plugin for `docker-registry` (deferred to v1.7)
+- Machine-wide Docker auth (users use `docker login` directly)
 
 ---
 
