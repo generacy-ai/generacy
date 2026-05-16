@@ -9,8 +9,14 @@ vi.mock('../../../utils/logger.js', () => ({
   getLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn() }),
 }));
 
+vi.mock('../../registry-login/docker-config.js', () => ({
+  dockerConfigExists: vi.fn(),
+  getDockerConfigDir: vi.fn(),
+}));
+
 import { dockerComposeArgs, runCompose } from '../compose.js';
 import { execSafe } from '../../../utils/exec.js';
+import { dockerConfigExists, getDockerConfigDir } from '../../registry-login/docker-config.js';
 
 const mockCtx: ClusterContext = {
   projectRoot: '/projects/my-app',
@@ -35,6 +41,7 @@ describe('dockerComposeArgs', () => {
 describe('runCompose', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(dockerConfigExists).mockReturnValue(false);
   });
 
   it('calls execSafe with correct full command string', () => {
@@ -80,5 +87,28 @@ describe('runCompose', () => {
     expect(parts[3]).toBe('--file=/projects/my-app/.generacy/docker-compose.yml');
     expect(parts[4]).toBe('down');
     expect(parts[5]).toBe('--volumes');
+  });
+
+  it('sets DOCKER_CONFIG env when scoped config exists', () => {
+    vi.mocked(execSafe).mockReturnValue({ ok: true, stdout: '', stderr: '' });
+    vi.mocked(dockerConfigExists).mockReturnValue(true);
+    vi.mocked(getDockerConfigDir).mockReturnValue('/projects/my-app/.generacy/.docker');
+
+    runCompose(mockCtx, ['pull']);
+
+    expect(execSafe).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ env: { DOCKER_CONFIG: '/projects/my-app/.generacy/.docker' } }),
+    );
+  });
+
+  it('does not set DOCKER_CONFIG when scoped config absent', () => {
+    vi.mocked(execSafe).mockReturnValue({ ok: true, stdout: '', stderr: '' });
+    vi.mocked(dockerConfigExists).mockReturnValue(false);
+
+    runCompose(mockCtx, ['pull']);
+
+    expect(execSafe).toHaveBeenCalledWith(expect.any(String));
+    expect(execSafe).not.toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ env: expect.anything() }));
   });
 });
