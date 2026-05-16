@@ -27,6 +27,17 @@ export const CloudUrlsSchema = z.object({
 export type CloudUrls = z.infer<typeof CloudUrlsSchema>;
 
 /**
+ * Registry credentials for authenticating against a private container registry.
+ */
+export const RegistryCredentialsSchema = z.object({
+  url: z.string().min(1),
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
+export type RegistryCredentials = z.infer<typeof RegistryCredentialsSchema>;
+
+/**
  * Zod schema for the cloud launch-config response.
  */
 export const LaunchConfigSchema = z.object({
@@ -44,6 +55,7 @@ export const LaunchConfigSchema = z.object({
     clone: z.array(z.string()).optional(),
   }),
   cloud: CloudUrlsSchema.optional(),
+  registryCredentials: RegistryCredentialsSchema.optional(),
 });
 
 /**

@@ -153,7 +153,7 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
   try {
     const spin = p.spinner();
     spin.start('Pulling cluster image...');
-    pullImage(projectDir);
+    pullImage(projectDir, config.registryCredentials);
     spin.stop('Image pulled');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
