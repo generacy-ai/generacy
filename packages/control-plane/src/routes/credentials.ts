@@ -3,11 +3,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
+import { StorageError } from '@generacy-ai/credhelper';
 import { type ActorContext, requireActor } from '../context.js';
 import { readBody } from '../util/read-body.js';
-import { writeCredential } from '../services/credential-writer.js';
+import { writeCredential, getCredentialBackend } from '../services/credential-writer.js';
 import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
 import { extractGhToken, refreshGhAuth } from '../services/gh-auth-refresh.js';
+import { getRelayPushEvent } from '../relay-events.js';
 
 const PutCredentialBodySchema = z.object({
   type: z.string().min(1),
@@ -15,6 +17,53 @@ const PutCredentialBodySchema = z.object({
 });
 
 const DEFAULT_AGENCY_DIR = '.agency';
+
+export async function handleGetCredentialValue(
+  _req: http.IncomingMessage,
+  res: http.ServerResponse,
+  _actor: ActorContext,
+  params: Record<string, string>,
+): Promise<void> {
+  const credentialId = params['id'] ?? 'unknown';
+  const backend = getCredentialBackend();
+
+  if (!backend) {
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(500);
+    res.end(JSON.stringify({ error: 'Credential backend not initialized', code: 'BACKEND_ERROR' }));
+    return;
+  }
+
+  let value: string;
+  try {
+    value = await backend.fetchSecret(credentialId);
+  } catch (err: unknown) {
+    if (err instanceof StorageError && err.code === 'SECRET_NOT_FOUND') {
+      res.setHeader('Content-Type', 'application/json');
+      res.writeHead(404);
+      res.end(JSON.stringify({ error: `Credential '${credentialId}' not found`, code: 'CREDENTIAL_NOT_FOUND' }));
+      return;
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.writeHead(500);
+    res.end(JSON.stringify({ error: 'Failed to fetch credential value', code: 'BACKEND_ERROR' }));
+    return;
+  }
+
+  // Emit audit relay event
+  const pushEvent = getRelayPushEvent();
+  if (pushEvent) {
+    pushEvent('cluster.credentials', {
+      action: 'credential_value_read',
+      credentialId,
+      timestamp: new Date().toISOString(),
+    });
+  }
+
+  res.setHeader('Content-Type', 'application/json');
+  res.writeHead(200);
+  res.end(JSON.stringify({ value }));
+}
 
 export async function handleGetCredential(
   _req: http.IncomingMessage,
