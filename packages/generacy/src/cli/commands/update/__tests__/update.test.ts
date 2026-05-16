@@ -62,7 +62,7 @@ describe('updateCommand', () => {
     await updateCommand().parseAsync(['update'], { from: 'user' });
 
     expect(callOrder).toEqual(['pull', 'up -d']);
-    expect(runCompose).toHaveBeenCalledWith(mockCtx, ['pull']);
+    expect(runCompose).toHaveBeenCalledWith(mockCtx, ['pull'], undefined);
     expect(runCompose).toHaveBeenCalledWith(mockCtx, ['up', '-d']);
     expect(upsertRegistryEntry).toHaveBeenCalledWith(mockCtx);
   });

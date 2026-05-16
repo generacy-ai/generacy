@@ -23,7 +23,11 @@ function findManagementEndpoint(ctx: ClusterContext): string | undefined {
   return entry?.managementEndpoint;
 }
 
-export function runCompose(ctx: ClusterContext, subcommand: string[]): ExecResult {
+export interface RunComposeOptions {
+  env?: Record<string, string>;
+}
+
+export function runCompose(ctx: ClusterContext, subcommand: string[], options?: RunComposeOptions): ExecResult {
   const logger = getLogger();
   const managementEndpoint = findManagementEndpoint(ctx);
 
@@ -31,7 +35,10 @@ export function runCompose(ctx: ClusterContext, subcommand: string[]): ExecResul
   if (managementEndpoint?.startsWith('ssh://')) {
     const target = parseSshTarget(managementEndpoint);
     const remotePath = target.remotePath ?? ctx.projectRoot;
-    const remoteCmd = `cd "${remotePath}" && docker compose ${subcommand.join(' ')}`;
+    const envPrefix = options?.env
+      ? Object.entries(options.env).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' ') + ' '
+      : '';
+    const remoteCmd = `cd "${remotePath}" && ${envPrefix}docker compose ${subcommand.join(' ')}`;
     logger.debug({ remoteCmd, host: target.host }, 'Running docker compose over SSH');
 
     try {
@@ -47,5 +54,8 @@ export function runCompose(ctx: ClusterContext, subcommand: string[]): ExecResul
   const args = dockerComposeArgs(ctx);
   const cmd = ['docker', 'compose', ...args, ...subcommand].join(' ');
   logger.debug({ cmd }, 'Running docker compose');
+  if (options?.env) {
+    return execSafe(cmd, { env: options.env });
+  }
   return execSafe(cmd);
 }
