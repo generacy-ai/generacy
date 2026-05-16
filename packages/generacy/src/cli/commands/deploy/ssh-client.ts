@@ -54,6 +54,36 @@ export function sshExec(target: SshTarget, command: string): string {
 }
 
 /**
+ * Execute a command on the remote host via SSH, piping content to stdin.
+ * Used for writing file content without shell escaping issues.
+ */
+export function sshExecWithInput(target: SshTarget, command: string, input: string): string {
+  const logger = getLogger();
+  const args = [...buildSshArgs(target), command];
+  const cmd = ['ssh', ...args].join(' ');
+  logger.debug({ cmd }, 'SSH exec with stdin');
+
+  try {
+    return execSync(cmd, {
+      encoding: 'utf-8',
+      input,
+      timeout: 30_000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim();
+  } catch (error) {
+    const execErr = error as { stderr?: string | Buffer; message?: string };
+    const stderr = typeof execErr.stderr === 'string'
+      ? execErr.stderr.trim()
+      : (execErr.stderr?.toString() ?? '').trim();
+    throw new DeployError(
+      `SSH command failed: ${stderr || execErr.message || 'unknown error'}`,
+      'SSH_CONNECT_FAILED',
+      error instanceof Error ? error : undefined,
+    );
+  }
+}
+
+/**
  * Verify SSH connectivity to the target host.
  */
 export function verifySshConnectivity(target: SshTarget): void {

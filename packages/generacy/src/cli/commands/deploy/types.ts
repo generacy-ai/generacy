@@ -29,7 +29,8 @@ export type DeployErrorCode =
   | 'SCP_FAILED'
   | 'COMPOSE_FAILED'
   | 'REGISTRATION_TIMEOUT'
-  | 'PULL_FAILED';
+  | 'PULL_FAILED'
+  | 'CREDENTIAL_WRITE_FAILED';
 
 export class DeployError extends Error {
   constructor(

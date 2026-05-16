@@ -5,6 +5,12 @@ import { DeployError } from '../../../src/cli/commands/deploy/types.js';
 vi.mock('../../../src/cli/commands/deploy/ssh-client.js', () => ({
   scpDirectory: vi.fn(),
   sshExec: vi.fn(),
+  sshExecWithInput: vi.fn(),
+}));
+
+vi.mock('../../../src/cli/commands/deploy/remote-credentials.js', () => ({
+  writeRemoteDockerConfig: vi.fn(),
+  cleanupRemoteDockerConfig: vi.fn(),
 }));
 
 vi.mock('../../../src/cli/utils/logger.js', () => ({

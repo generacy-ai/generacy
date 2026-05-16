@@ -8,6 +8,7 @@ import { fetchLaunchConfig } from './cloud-client.js';
 import { scaffoldBundle } from './scaffolder.js';
 import { deployToRemote } from './remote-compose.js';
 import { pollClusterStatus } from './status-poller.js';
+import { forwardCredentialsToCluster } from './credential-forward.js';
 import { RegistryEntrySchema, readRegistry, writeRegistry, type RegistryEntry } from '../cluster/registry.js';
 import type { DeployOptions, DeployResult } from './types.js';
 import { DeployError } from './types.js';
@@ -57,9 +58,10 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   logger.info('Generating bootstrap bundle...');
   const bundleDir = scaffoldBundle(launchConfig, activation, cloudUrl);
 
-  // 8. Transfer and start
+  // 8. Transfer and start (with registry credentials if present)
+  const registryCredentials = launchConfig.registryCredentials;
   try {
-    deployToRemote(target, bundleDir, remotePath);
+    deployToRemote(target, bundleDir, remotePath, registryCredentials);
   } finally {
     // Clean up temp dir
     try { rmSync(bundleDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -72,7 +74,25 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
 
   logger.info('Cluster registered successfully!');
 
-  // 10. Add to local registry
+  // 10. Forward registry credentials to credhelper (soft-fail)
+  if (registryCredentials && registryCredentials.length > 0) {
+    logger.info('Forwarding registry credentials to cluster...');
+    const forwardResult = forwardCredentialsToCluster(target, remotePath, registryCredentials, logger);
+    if (forwardResult.failed.length > 0) {
+      logger.warn(
+        `Failed to forward credentials for: ${forwardResult.failed.join(', ')}`,
+      );
+      console.warn(
+        `\nWarning: Could not forward registry credentials for: ${forwardResult.failed.join(', ')}` +
+        '\nRemediation: Re-enter credentials in the Generacy dashboard or run `generacy registry-login --remote`',
+      );
+    }
+    if (forwardResult.forwarded.length > 0) {
+      logger.info(`Forwarded credentials for: ${forwardResult.forwarded.join(', ')}`);
+    }
+  }
+
+  // 11. Add to local registry
   const managementEndpoint = formatSshTarget({ ...target, remotePath });
   const now = new Date().toISOString();
   const registry = readRegistry();
