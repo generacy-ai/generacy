@@ -4,6 +4,8 @@ import YAML from 'yaml';
 import type { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import type { StoreStatus, StoreInitResult } from '../types/init-result.js';
 import { StoreDisabledError } from '../types/init-result.js';
+import type { AppConfig } from '../schemas.js';
+import { isPathDenied } from '../routes/app-config.js';
 
 const DEFAULT_VALUES_PATH = '/var/lib/generacy-app-config/values.yaml';
 const FALLBACK_VALUES_PATH = '/tmp/generacy-app-config/values.yaml';
@@ -85,8 +87,14 @@ export class AppConfigFileStore {
     // Store encrypted blob in backend
     await this.backend.setSecret(backendKey, base64Data);
 
-    // Write decoded content to mountPath (atomic: temp + rename)
-    const absPath = path.resolve(mountPath);
+    // Write decoded content to mountPath
+    await this.atomicWriteFile(path.resolve(mountPath), data);
+
+    // Update metadata
+    await this.updateFileMetadata(id, data.length);
+  }
+
+  private async atomicWriteFile(absPath: string, data: Buffer): Promise<void> {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     const tmpPath = `${absPath}.tmp.${process.pid}`;
     const fd = await fs.open(tmpPath, 'w', 0o640);
@@ -97,9 +105,58 @@ export class AppConfigFileStore {
       await fd.close();
     }
     await fs.rename(tmpPath, absPath);
+  }
 
-    // Update metadata
-    await this.updateFileMetadata(id, data.length);
+  /**
+   * Boot-time full render: walk metadata for file entries, decrypt each blob,
+   * resolve mountPath from manifest, write atomically. Best-effort: skip entries that fail.
+   */
+  async renderAll(
+    readManifest: () => Promise<AppConfig | null>,
+  ): Promise<{ rendered: string[]; failed: string[] }> {
+    if (this.status === 'disabled') {
+      return { rendered: [], failed: [] };
+    }
+
+    const meta = await this.readMetadata();
+    const manifest = await readManifest();
+    const rendered: string[] = [];
+    const failed: string[] = [];
+
+    const manifestFiles = new Map(
+      (manifest?.files ?? []).map(f => [f.id, f]),
+    );
+
+    for (const id of Object.keys(meta.files)) {
+      const fileEntry = manifestFiles.get(id);
+      if (!fileEntry) {
+        console.warn(`[app-config-file] Skipping orphaned file '${id}': not in current manifest`);
+        failed.push(id);
+        continue;
+      }
+
+      if (isPathDenied(fileEntry.mountPath)) {
+        console.warn(`[app-config-file] Skipping file '${id}': mountPath '${fileEntry.mountPath}' is denylisted`);
+        failed.push(id);
+        continue;
+      }
+
+      try {
+        const base64Data = await this.backend.fetchSecret(`app-config/file/${id}`);
+        const data = Buffer.from(base64Data, 'base64');
+        await this.atomicWriteFile(path.resolve(fileEntry.mountPath), data);
+        rendered.push(id);
+      } catch (err: unknown) {
+        console.warn(
+          `[app-config-file] Failed to render file '${id}':`,
+          err instanceof Error ? err.message : String(err),
+        );
+        failed.push(id);
+      }
+    }
+
+    console.log(JSON.stringify({ event: 'files-rendered', count: rendered.length, skipped: failed.length }));
+    return { rendered, failed };
   }
 
   /** Set an env var's metadata (secret flag and timestamp). */

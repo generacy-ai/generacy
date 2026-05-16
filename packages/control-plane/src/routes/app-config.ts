@@ -27,7 +27,7 @@ const DENIED_PREFIXES = [
   '/run/generacy-control-plane/',
 ] as const;
 
-function isPathDenied(absPath: string): boolean {
+export function isPathDenied(absPath: string): boolean {
   const resolved = path.resolve(absPath);
   if (resolved === '/') return true;
   const withSlash = resolved.endsWith('/') ? resolved : resolved + '/';
@@ -40,7 +40,7 @@ function isPathDenied(absPath: string): boolean {
 }
 
 /** Read and parse appConfig from cluster.yaml in the working tree. */
-async function readManifest(): Promise<AppConfig | null> {
+export async function readManifest(): Promise<AppConfig | null> {
   const generacyDir = await resolveGeneracyDir();
   const yamlPath = path.join(generacyDir, 'cluster.yaml');
 
