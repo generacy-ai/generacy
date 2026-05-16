@@ -27,11 +27,16 @@ export const CloudUrlsSchema = z.object({
 export type CloudUrls = z.infer<typeof CloudUrlsSchema>;
 
 /**
- * Schema for a registry credential entry (host + base64-encoded auth).
+ * Schema for a registry credential entry (host + username + password).
+ *
+ * The cloud sends plain username/password; consumers compute base64 auth
+ * locally — pullImage for the scoped Docker config, and
+ * forwardRegistryCredentials for the credhelper PUT body.
  */
 export const RegistryCredentialSchema = z.object({
   host: z.string().min(1),
-  auth: z.string().min(1),
+  username: z.string().min(1),
+  password: z.string().min(1),
 });
 
 export type RegistryCredential = z.infer<typeof RegistryCredentialSchema>;
@@ -61,4 +66,3 @@ export const LaunchConfigSchema = z.object({
  * Response from GET /api/clusters/launch-config?claim=<code>.
  */
 export type LaunchConfig = z.infer<typeof LaunchConfigSchema>;
-

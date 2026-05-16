@@ -80,8 +80,8 @@ describe('forwardRegistryCredentials', () => {
     mockedSpawnSync.mockReturnValue({ status: 0 } as any);
 
     const result = forwardRegistryCredentials('/project', [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
-      { host: 'docker.io', auth: 'YWJjOjEyMw==' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
+      { host: 'docker.io', username: 'abc', password: '123' },
     ]);
 
     expect(result.forwarded).toEqual(['ghcr.io', 'docker.io']);
@@ -94,8 +94,8 @@ describe('forwardRegistryCredentials', () => {
       .mockReturnValueOnce({ status: 1 } as any);
 
     const result = forwardRegistryCredentials('/project', [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
-      { host: 'private.registry.com', auth: 'YWJjOjEyMw==' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
+      { host: 'private.registry.com', username: 'abc', password: '123' },
     ]);
 
     expect(result.forwarded).toEqual(['ghcr.io']);
@@ -106,28 +106,29 @@ describe('forwardRegistryCredentials', () => {
     mockedSpawnSync.mockReturnValue({ status: 1 } as any);
 
     const result = forwardRegistryCredentials('/project', [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
-      { host: 'docker.io', auth: 'YWJjOjEyMw==' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
+      { host: 'docker.io', username: 'abc', password: '123' },
     ]);
 
     expect(result.forwarded).toEqual([]);
     expect(result.failed).toEqual(['ghcr.io', 'docker.io']);
   });
 
-  it('sends correct PUT request with credential body', () => {
+  it('sends correct PUT request with base64-encoded auth in body', () => {
     mockedSpawnSync.mockReturnValue({ status: 0 } as any);
 
     forwardRegistryCredentials('/project', [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
     ]);
 
+    const expectedAuth = Buffer.from('user:pass').toString('base64');
     const args = mockedSpawnSync.mock.calls[0]![1] as string[];
     expect(args).toContain('-X');
     expect(args).toContain('PUT');
     expect(args).toContain('http://localhost/credentials/registry-ghcr.io');
     expect(args).toContain('Content-Type: application/json');
     expect(args).toContain('x-generacy-actor-user-id: system:cli-launch');
-    expect(args).toContain(JSON.stringify({ type: 'registry', value: 'dXNlcjpwYXNz' }));
+    expect(args).toContain(JSON.stringify({ type: 'registry', value: expectedAuth }));
   });
 });
 

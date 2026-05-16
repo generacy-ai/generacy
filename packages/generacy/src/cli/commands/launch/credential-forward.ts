@@ -75,7 +75,8 @@ export function forwardRegistryCredentials(
 
   for (const cred of credentials) {
     const credId = `registry-${cred.host}`;
-    const body = JSON.stringify({ type: 'registry', value: cred.auth });
+    const auth = Buffer.from(`${cred.username}:${cred.password}`).toString('base64');
+    const body = JSON.stringify({ type: 'registry', value: auth });
 
     const result = spawnSync(
       'docker',

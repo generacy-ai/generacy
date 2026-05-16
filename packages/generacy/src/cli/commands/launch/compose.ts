@@ -5,7 +5,9 @@
  * the device-flow activation URL emitted by the orchestrator on first boot.
  */
 import { execSync, spawn } from 'node:child_process';
-import { resolve } from 'node:path';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import type { RegistryCredential } from './types.js';
 
 /** Compose file path relative to the project directory. */
 const COMPOSE_FILE = '.generacy/docker-compose.yml';
@@ -13,21 +15,81 @@ const COMPOSE_FILE = '.generacy/docker-compose.yml';
 /**
  * Pull the cluster image via `docker compose pull`.
  *
- * Runs synchronously; throws on non-zero exit.
+ * When `registryCredentials` is provided, writes a scoped Docker config
+ * directory with an auth entry for every host and passes `DOCKER_CONFIG`
+ * to the subprocess. The scoped directory is always cleaned up in a
+ * `finally` block.
+ *
+ * When no credentials are provided, runs with inherited env (ambient auth).
  *
  * @param projectDir - Absolute path to the project root.
+ * @param registryCredentials - Optional registry credentials from LaunchConfig.
  * @throws {Error} If the pull command fails.
  */
-export function pullImage(projectDir: string): void {
+export function pullImage(projectDir: string, registryCredentials?: RegistryCredential[]): void {
+  if (!registryCredentials || registryCredentials.length === 0) {
+    // No-creds path: use ambient Docker auth (existing behavior)
+    try {
+      execSync(`docker compose -f ${COMPOSE_FILE} pull`, {
+        cwd: projectDir,
+        stdio: 'pipe',
+      });
+    } catch (error) {
+      throw parsePullError(error);
+    }
+    return;
+  }
+
+  // Scoped credentials path
+  const dockerConfigDir = join(projectDir, '.docker');
+  const configPath = join(dockerConfigDir, 'config.json');
+
+  mkdirSync(dockerConfigDir, { recursive: true });
+  const auths: Record<string, { auth: string }> = {};
+  for (const cred of registryCredentials) {
+    auths[cred.host] = {
+      auth: Buffer.from(`${cred.username}:${cred.password}`).toString('base64'),
+    };
+  }
+  const dockerConfig = JSON.stringify({ auths });
+  writeFileSync(configPath, dockerConfig, { mode: 0o600 });
+
   try {
     execSync(`docker compose -f ${COMPOSE_FILE} pull`, {
       cwd: projectDir,
       stdio: 'pipe',
+      env: { ...process.env, DOCKER_CONFIG: dockerConfigDir },
     });
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
-    throw new Error(`docker compose pull failed: ${msg}`);
+    throw parsePullError(error);
+  } finally {
+    rmSync(dockerConfigDir, { recursive: true, force: true });
   }
+}
+
+/**
+ * Parse Docker pull errors into actionable messages.
+ */
+function parsePullError(error: unknown): Error {
+  const msg = error instanceof Error ? error.message : String(error);
+  const lower = msg.toLowerCase();
+
+  if (lower.includes('unauthorized') || lower.includes('authentication required') || lower.includes('denied')) {
+    return new Error(
+      `Registry authentication failed. Check that your registry credentials are valid.\n` +
+      `  If using cloud-configured credentials, verify them in the Generacy dashboard.\n` +
+      `  If using ambient Docker auth, run \`docker login\` for the target registry.`,
+    );
+  }
+
+  if (lower.includes('manifest unknown') || lower.includes('not found')) {
+    return new Error(
+      `Image not found. The requested container image does not exist at the specified registry.\n` +
+      `  Verify the image name and tag in your project configuration.`,
+    );
+  }
+
+  return new Error(`docker compose pull failed: ${msg}`);
 }
 
 /**

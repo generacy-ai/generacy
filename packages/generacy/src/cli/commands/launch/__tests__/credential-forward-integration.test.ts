@@ -36,7 +36,7 @@ describe('credential-forward integration flow', () => {
     mockedSpawnSync.mockReturnValue({ status: 0 } as any);
 
     const creds: RegistryCredential[] = [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
     ];
 
     const ready = await probeControlPlaneReady('/project', { retries: 3, intervalMs: 10 });
@@ -73,8 +73,8 @@ describe('credential-forward integration flow', () => {
       .mockReturnValueOnce({ status: 1 } as any); // PUT docker.io
 
     const creds: RegistryCredential[] = [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
-      { host: 'docker.io', auth: 'YWJjOjEyMw==' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
+      { host: 'docker.io', username: 'abc', password: '123' },
     ];
 
     const ready = await probeControlPlaneReady('/project', { retries: 1, intervalMs: 10 });
@@ -99,8 +99,8 @@ describe('credential-forward integration flow', () => {
       .mockReturnValueOnce({ status: 1 } as any); // PUT private.reg failure
 
     const creds: RegistryCredential[] = [
-      { host: 'ghcr.io', auth: 'dXNlcjpwYXNz' },
-      { host: 'private.reg', auth: 'c2VjcmV0' },
+      { host: 'ghcr.io', username: 'user', password: 'pass' },
+      { host: 'private.reg', username: 'secret', password: 'token' },
     ];
 
     const ready = await probeControlPlaneReady('/project', { retries: 1, intervalMs: 10 });
