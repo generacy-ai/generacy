@@ -3,6 +3,7 @@ name: Extension CI
 on:
   pull_request:
     branches: [develop, main]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'packages/generacy-extension/**'
 
@@ -16,6 +17,7 @@ permissions:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@v4
 
