@@ -92,6 +92,58 @@ describe('daemon entrypoint structured init', () => {
     expect(written.timestamp).toBeTruthy();
   });
 
+  it('full init sequence with secrets renders secrets.env', async () => {
+    const { AppConfigEnvStore } = await import('../../src/services/app-config-env-store.js');
+    const { AppConfigFileStore } = await import('../../src/services/app-config-file-store.js');
+    const { AppConfigSecretEnvStore } = await import('../../src/services/app-config-secret-env-store.js');
+    const { ClusterLocalBackend } = await import('@generacy-ai/credhelper');
+
+    const backend = new ClusterLocalBackend({
+      dataPath: path.join(tmpDir, 'credentials.dat'),
+      keyPath: path.join(tmpDir, 'master.key'),
+    });
+    await backend.init();
+
+    const appConfigDir = path.join(tmpDir, 'app-config');
+    const envStore = new AppConfigEnvStore(path.join(appConfigDir, 'env'));
+    await envStore.init();
+
+    const fileStore = new AppConfigFileStore(backend, path.join(appConfigDir, 'values.yaml'));
+    await fileStore.init();
+
+    // Pre-seed: store a secret in backend + metadata
+    await backend.setSecret('app-config/env/MY_SECRET', 'secret123');
+    await fileStore.setEnvMetadata('MY_SECRET', true);
+    // Also a non-secret
+    await envStore.set('MY_PLAIN', 'plain_val');
+    await fileStore.setEnvMetadata('MY_PLAIN', false);
+
+    const secretEnvStore = new AppConfigSecretEnvStore(
+      backend, fileStore, path.join(appConfigDir, 'secrets.env'),
+    );
+    await secretEnvStore.init();
+    const renderResult = await secretEnvStore.renderAll();
+
+    expect(renderResult.rendered).toEqual(['MY_SECRET']);
+    expect(renderResult.failed).toEqual([]);
+
+    // Verify file contents
+    const raw = await fs.readFile(path.join(appConfigDir, 'secrets.env'), 'utf8');
+    expect(raw).toBe('MY_SECRET="secret123"\n');
+
+    // Verify init result aggregation
+    const initResult: InitResult = {
+      stores: {
+        appConfigEnv: envStore.getInitResult(),
+        appConfigFile: fileStore.getInitResult(),
+        appConfigSecretEnv: secretEnvStore.getInitResult(),
+      },
+      warnings: [],
+    };
+    expect(initResult.stores['appConfigSecretEnv']!.status).toBe('ok');
+    expect(initResult.stores['appConfigSecretEnv']!.path).toBe(path.join(appConfigDir, 'secrets.env'));
+  });
+
   it('continues running when store enters fallback mode', async () => {
     const { AppConfigEnvStore } = await import('../../src/services/app-config-env-store.js');
 

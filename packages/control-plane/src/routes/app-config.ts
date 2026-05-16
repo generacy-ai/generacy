@@ -14,6 +14,7 @@ import {
 } from '../schemas.js';
 import type { AppConfigEnvStore } from '../services/app-config-env-store.js';
 import type { AppConfigFileStore } from '../services/app-config-file-store.js';
+import type { AppConfigSecretEnvStore } from '../services/app-config-secret-env-store.js';
 import type { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import { StoreDisabledError } from '../types/init-result.js';
 import { resolveGeneracyDir } from '../services/project-dir-resolver.js';
@@ -64,15 +65,18 @@ async function readManifest(): Promise<AppConfig | null> {
 let envStoreInstance: AppConfigEnvStore | undefined;
 let fileStoreInstance: AppConfigFileStore | undefined;
 let backendInstance: ClusterLocalBackend | undefined;
+let secretEnvStoreInstance: AppConfigSecretEnvStore | undefined;
 
 export function setAppConfigStores(
   envStore: AppConfigEnvStore,
   fileStore: AppConfigFileStore,
   backend: ClusterLocalBackend,
+  secretEnvStore?: AppConfigSecretEnvStore,
 ): void {
   envStoreInstance = envStore;
   fileStoreInstance = fileStore;
   backendInstance = backend;
+  secretEnvStoreInstance = secretEnvStore;
 }
 
 function requireEnvStore(): AppConfigEnvStore {
@@ -88,6 +92,11 @@ function requireFileStore(): AppConfigFileStore {
 function requireBackend(): ClusterLocalBackend {
   if (!backendInstance) throw new Error('ClusterLocalBackend not initialized');
   return backendInstance;
+}
+
+function requireSecretEnvStore(): AppConfigSecretEnvStore {
+  if (!secretEnvStoreInstance) throw new Error('AppConfigSecretEnvStore not initialized');
+  return secretEnvStoreInstance;
 }
 
 // --- Route Handlers ---
@@ -186,18 +195,35 @@ export async function handlePutEnv(
   const envStore = requireEnvStore();
   const fileStore = requireFileStore();
   const backend = requireBackend();
+  const secretEnvStore = requireSecretEnvStore();
 
   try {
-    if (secret) {
-      // Store encrypted in backend
-      const backendKey = `app-config/env/${name}`;
+    // Read prior metadata to detect secret-flag transitions
+    const meta = await fileStore.getMetadata();
+    const priorEntry = meta.env[name];
+    const priorSecret = priorEntry?.secret ?? undefined;
+    const backendKey = `app-config/env/${name}`;
+
+    if (priorSecret === true && !secret) {
+      // Transition true → false: write plaintext first, delete encrypted second
+      await envStore.set(name, value);
+      await backend.deleteSecret(backendKey);
+      await secretEnvStore.delete(name);
+    } else if (priorSecret === false && secret) {
+      // Transition false → true: write encrypted first, delete plaintext second
       await backend.setSecret(backendKey, value);
+      await secretEnvStore.set(name, value);
+      await envStore.delete(name);
+    } else if (secret) {
+      // New or same-flag secret
+      await backend.setSecret(backendKey, value);
+      await secretEnvStore.set(name, value);
     } else {
-      // Write to plaintext env file
+      // New or same-flag non-secret
       await envStore.set(name, value);
     }
 
-    // Update metadata
+    // Update metadata last
     await fileStore.setEnvMetadata(name, secret);
   } catch (err: unknown) {
     if (err instanceof StoreDisabledError) {
@@ -239,6 +265,7 @@ export async function handleDeleteEnv(
   const envStore = requireEnvStore();
   const fileStore = requireFileStore();
   const backend = requireBackend();
+  const secretEnvStore = requireSecretEnvStore();
 
   // Check metadata to determine if secret or plaintext
   const meta = await fileStore.getMetadata();
@@ -255,6 +282,7 @@ export async function handleDeleteEnv(
     if (entry.secret) {
       const backendKey = `app-config/env/${name}`;
       await backend.deleteSecret(backendKey);
+      await secretEnvStore.delete(name);
     } else {
       await envStore.delete(name);
     }

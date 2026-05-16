@@ -15,6 +15,7 @@ import {
 } from '../../src/routes/app-config.js';
 import { AppConfigEnvStore } from '../../src/services/app-config-env-store.js';
 import { AppConfigFileStore } from '../../src/services/app-config-file-store.js';
+import { AppConfigSecretEnvStore } from '../../src/services/app-config-secret-env-store.js';
 import { ClusterLocalBackend } from '@generacy-ai/credhelper';
 import { setRelayPushEvent } from '../../src/relay-events.js';
 import { resetGeneracyDirCache } from '../../src/services/project-dir-resolver.js';
@@ -48,6 +49,7 @@ describe('app-config routes', () => {
   let backend: ClusterLocalBackend;
   let envStore: AppConfigEnvStore;
   let fileStore: AppConfigFileStore;
+  let secretEnvStore: AppConfigSecretEnvStore;
   let relayEvents: Array<{ event: string; data: unknown }>;
 
   beforeEach(async () => {
@@ -70,7 +72,10 @@ describe('app-config routes', () => {
     fileStore = new AppConfigFileStore(backend, path.join(appConfigDir, 'values.yaml'));
     await fileStore.init();
 
-    setAppConfigStores(envStore, fileStore, backend);
+    secretEnvStore = new AppConfigSecretEnvStore(backend, fileStore, path.join(appConfigDir, 'secrets.env'));
+    await secretEnvStore.init();
+
+    setAppConfigStores(envStore, fileStore, backend, secretEnvStore);
 
     resetGeneracyDirCache();
     process.env['GENERACY_PROJECT_DIR'] = tmpDir;
@@ -324,6 +329,121 @@ describe('app-config routes', () => {
 
       expect(relayEvents).toHaveLength(1);
       expect((relayEvents[0]!.data as any).action).toBe('file-set');
+    });
+  });
+
+  describe('PUT /app-config/env secret-flag transitions', () => {
+    it('PUT with secret:true writes to backend + secrets.env', async () => {
+      const req = createBodyReq({ name: 'SEC_VAR', value: 'secret_val', secret: true });
+      const res = createMockResponse();
+      await handlePutEnv(req, res as any, stubActor, {});
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+
+      // In backend
+      const backendVal = await backend.fetchSecret('app-config/env/SEC_VAR');
+      expect(backendVal).toBe('secret_val');
+
+      // In secrets.env
+      const secretEntries = await secretEnvStore.list();
+      expect(secretEntries.get('SEC_VAR')).toBe('secret_val');
+
+      // NOT in plaintext env
+      const envVal = await envStore.get('SEC_VAR');
+      expect(envVal).toBeUndefined();
+    });
+
+    it('PUT with secret:false writes to plaintext env only (secrets.env unchanged)', async () => {
+      // Pre-set a secret to ensure secrets.env has known content
+      const reqSecret = createBodyReq({ name: 'EXISTING_SECRET', value: 'sec', secret: true });
+      await handlePutEnv(reqSecret, createMockResponse() as any, stubActor, {});
+
+      const secretsBefore = await secretEnvStore.list();
+
+      // Now PUT a non-secret
+      const req = createBodyReq({ name: 'PLAIN_VAR', value: 'plain_val', secret: false });
+      const res = createMockResponse();
+      await handlePutEnv(req, res as any, stubActor, {});
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+
+      // In plaintext env
+      const envVal = await envStore.get('PLAIN_VAR');
+      expect(envVal).toBe('plain_val');
+
+      // secrets.env content unchanged
+      const secretsAfter = await secretEnvStore.list();
+      expect(secretsAfter.size).toBe(secretsBefore.size);
+      expect(secretsAfter.get('EXISTING_SECRET')).toBe('sec');
+      expect(secretsAfter.has('PLAIN_VAR')).toBe(false);
+    });
+
+    it('transition true→false: cleans up backend + secrets.env, writes plaintext', async () => {
+      // First set as secret
+      const req1 = createBodyReq({ name: 'TRANS_VAR', value: 'v1', secret: true });
+      await handlePutEnv(req1, createMockResponse() as any, stubActor, {});
+
+      // Then change to non-secret
+      const req2 = createBodyReq({ name: 'TRANS_VAR', value: 'v2', secret: false });
+      const res = createMockResponse();
+      await handlePutEnv(req2, res as any, stubActor, {});
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+
+      // Now in plaintext
+      const envVal = await envStore.get('TRANS_VAR');
+      expect(envVal).toBe('v2');
+
+      // Removed from secrets.env
+      const secretEntries = await secretEnvStore.list();
+      expect(secretEntries.has('TRANS_VAR')).toBe(false);
+
+      // Removed from backend
+      await expect(backend.fetchSecret('app-config/env/TRANS_VAR')).rejects.toThrow();
+    });
+
+    it('transition false→true: cleans up plaintext, writes backend + secrets.env', async () => {
+      // First set as non-secret
+      const req1 = createBodyReq({ name: 'TRANS_VAR2', value: 'v1', secret: false });
+      await handlePutEnv(req1, createMockResponse() as any, stubActor, {});
+
+      // Then change to secret
+      const req2 = createBodyReq({ name: 'TRANS_VAR2', value: 'v2', secret: true });
+      const res = createMockResponse();
+      await handlePutEnv(req2, res as any, stubActor, {});
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+
+      // In backend
+      const backendVal = await backend.fetchSecret('app-config/env/TRANS_VAR2');
+      expect(backendVal).toBe('v2');
+
+      // In secrets.env
+      const secretEntries = await secretEnvStore.list();
+      expect(secretEntries.get('TRANS_VAR2')).toBe('v2');
+
+      // Removed from plaintext
+      const envVal = await envStore.get('TRANS_VAR2');
+      expect(envVal).toBeUndefined();
+    });
+
+    it('DELETE of secret removes from both backend and secrets.env', async () => {
+      // Set secret first
+      const req = createBodyReq({ name: 'DEL_SECRET', value: 'sec', secret: true });
+      await handlePutEnv(req, createMockResponse() as any, stubActor, {});
+
+      // Delete it
+      const res = createMockResponse();
+      await handleDeleteEnv(createEmptyReq(), res as any, stubActor, { name: 'DEL_SECRET' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+
+      // Gone from secrets.env
+      const secretEntries = await secretEnvStore.list();
+      expect(secretEntries.has('DEL_SECRET')).toBe(false);
+
+      // Gone from backend
+      await expect(backend.fetchSecret('app-config/env/DEL_SECRET')).rejects.toThrow();
     });
   });
 

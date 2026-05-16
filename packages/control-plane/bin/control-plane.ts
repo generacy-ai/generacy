@@ -10,6 +10,7 @@ import { setCredentialBackend } from '../src/services/credential-writer.js';
 import { setRelayPushEvent } from '../src/relay-events.js';
 import { AppConfigEnvStore } from '../src/services/app-config-env-store.js';
 import { AppConfigFileStore } from '../src/services/app-config-file-store.js';
+import { AppConfigSecretEnvStore } from '../src/services/app-config-secret-env-store.js';
 import { setAppConfigStores } from '../src/routes/app-config.js';
 import type { InitResult } from '../src/types/init-result.js';
 
@@ -124,7 +125,33 @@ credentialBackend
       initResult.warnings.push(`appConfigFile: ${fileResult.reason ?? fileResult.status}`);
     }
 
-    setAppConfigStores(appConfigEnvStore, appConfigFileStore, credentialBackend);
+    const appConfigSecretEnvStore = new AppConfigSecretEnvStore(credentialBackend, appConfigFileStore);
+    try {
+      await appConfigSecretEnvStore.init();
+    } catch (err) {
+      console.error('[control-plane] AppConfigSecretEnvStore init error (unexpected):', err instanceof Error ? err.message : String(err));
+    }
+    const secretEnvResult = appConfigSecretEnvStore.getInitResult();
+    initResult.stores['appConfigSecretEnv'] = secretEnvResult;
+    console.log(JSON.stringify({ event: 'store-init', store: 'appConfigSecretEnv', ...secretEnvResult }));
+    if (secretEnvResult.status !== 'ok') {
+      initResult.warnings.push(`appConfigSecretEnv: ${secretEnvResult.reason ?? secretEnvResult.status}`);
+    }
+
+    // Boot-time render of secrets
+    try {
+      const renderResult = await appConfigSecretEnvStore.renderAll();
+      if (renderResult.failed.length > 0) {
+        console.warn(`[control-plane] Partial secret render: ${renderResult.rendered.length} ok, ${renderResult.failed.length} failed`);
+        initResult.warnings.push(`appConfigSecretEnv render: ${renderResult.failed.length} secrets failed to unseal`);
+      } else if (renderResult.rendered.length > 0) {
+        console.log(`[control-plane] Rendered ${renderResult.rendered.length} secrets to env file`);
+      }
+    } catch (err) {
+      console.error('[control-plane] Secret env render error:', err instanceof Error ? err.message : String(err));
+    }
+
+    setAppConfigStores(appConfigEnvStore, appConfigFileStore, credentialBackend, appConfigSecretEnvStore);
     console.log('[control-plane] App-config stores initialized');
 
     await writeInitResult(initResult);
