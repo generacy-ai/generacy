@@ -1,91 +1,70 @@
-# Feature Specification: Launch directory selection prompt
+# Feature Specification: ## Context
+
+When a user runs `npx generacy launch` interactively, the CLI resolves the project directory to `~/Generacy/<projectName>` and asks a yes/no confirmation
 
 **Branch**: `649-context-when-user-runs` | **Date**: 2026-05-17 | **Status**: Draft
 
 ## Summary
 
-Replace the yes/no `confirmDirectory` prompt in `generacy launch` with a multi-option select prompt that lets users choose between the default location (`~/Generacy/<projectName>`), the current working directory, or a custom path — without needing to restart the command with `--dir`.
+## Context
+
+When a user runs `npx generacy launch` interactively, the CLI resolves the project directory to `~/Generacy/<projectName>` and asks a yes/no confirmation. If the user answers "no", the flow exits with a hint to re-run with `--dir`.
+
+See [packages/generacy/src/cli/commands/launch/prompts.ts:37-43](packages/generacy/src/cli/commands/launch/prompts.ts#L37-L43) and [packages/generacy/src/cli/commands/launch/index.ts:125-132](packages/generacy/src/cli/commands/launch/index.ts#L125-L132).
+
+Users who want the project scaffolded into the directory they ran the command from currently have to cancel, re-read the help, and re-invoke with `--dir .`. The CLI already has all the information it needs to just ask.
+
+## Proposal
+
+Replace the yes/no `confirmDirectory` prompt with a select prompt offering at least:
+
+1. **Default** — `~/Generacy/<projectName>` (current behavior)
+2. **Current directory** — `<cwd>` (or `<cwd>/<projectName>` if cwd is non-empty — TBD)
+3. **Custom path** — free-text entry
+
+When `--dir` is passed explicitly, skip the select and keep current confirm-only behavior so non-interactive / scripted use is unchanged.
+
+## Open questions
+
+- If choosing "current directory" and cwd is non-empty (or already contains a `.generacy/`), should we scaffold into `<cwd>/<projectName>` instead, or refuse? The existing scaffolder already throws if `.generacy/` exists ([scaffolder.ts:57-62](packages/generacy/src/cli/commands/launch/scaffolder.ts#L57-L62)) — we may just want to surface that earlier in the prompt.
+
+## Files
+
+- `packages/generacy/src/cli/commands/launch/prompts.ts`
+- `packages/generacy/src/cli/commands/launch/index.ts`
+- `packages/generacy/src/cli/commands/launch/scaffolder.ts` (`resolveProjectDir`)
 
 ## User Stories
 
-### US1: Developer launching from their preferred workspace
+### US1: [Primary User Story]
 
-**As a** developer running `npx generacy launch`,
-**I want** to choose where the project is scaffolded inline,
-**So that** I don't have to cancel and re-run with `--dir` when I want the project in my current directory.
-
-**Acceptance Criteria**:
-- [ ] Interactive launch shows a select prompt with at least 3 options: default path, current directory, custom path
-- [ ] Selecting "current directory" scaffolds into `process.cwd()`
-- [ ] Selecting "custom path" opens a free-text input for the user to type a path
-- [ ] When `--dir` is passed explicitly, the select is skipped (existing confirm-only behavior preserved)
-
-### US2: Scripted/CI usage remains unchanged
-
-**As a** CI pipeline or script author,
-**I want** `--dir` to bypass interactive selection entirely,
-**So that** non-interactive automation is not broken.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `generacy launch --claim=X --dir=/some/path` does not prompt for directory selection
-- [ ] Behavior with `--dir` matches current production (confirm prompt or auto-proceed)
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Replace `p.confirm()` in `confirmDirectory` with `p.select()` offering 3 options | P1 | Options: default, cwd, custom |
-| FR-002 | "Custom path" option triggers a `p.text()` follow-up for free-text entry | P1 | Validate path is writable |
-| FR-003 | Skip select prompt when `opts.dir` is provided | P1 | Preserves scripted use |
-| FR-004 | Surface `.generacy/` conflict early if user selects a dir that already contains one | P2 | Existing scaffolder throws; show actionable error in prompt before proceeding |
-| FR-005 | Display resolved absolute path in each option label | P2 | e.g. `~/Generacy/my-project`, `/home/user/code` |
-
-## Design Notes
-
-### Prompt flow (no `--dir`)
-
-```
-? Where should the project be created?
-> ~/Generacy/<projectName>  (default)
-  <cwd>                     (current directory)
-  Enter a custom path...
-```
-
-If user selects "custom path":
-```
-? Enter project directory path:
-> _
-```
-
-### Edge cases
-
-- **cwd already has `.generacy/`**: Show warning inline in the option label (e.g., `<cwd> (already contains .generacy/)`) or disable the option. Let the scaffolder's existing guard handle the error if selected anyway.
-- **cwd == default path**: Collapse into a single option (don't show duplicate).
-- **Non-empty cwd**: Scaffold directly into cwd (don't append `/<projectName>` — the user explicitly chose "here").
-
-## Files to Modify
-
-- `packages/generacy/src/cli/commands/launch/prompts.ts` — replace `confirmDirectory` with `selectDirectory`
-- `packages/generacy/src/cli/commands/launch/index.ts` — call new prompt, handle selection result
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Zero `confirmDirectory` references in codebase | 0 | grep |
-| SC-002 | `--dir` flag still bypasses prompt | Pass | Unit/integration test |
-| SC-003 | All 3 options produce valid scaffold | Pass | Manual test |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- `@clack/prompts` `p.select()` is already available (it is — used elsewhere in the CLI)
-- No changes needed to the scaffolder itself (it already accepts any absolute path)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Changing `--dir` flag behavior or adding new CLI flags
-- Modifying the scaffolder's `.generacy/` conflict logic (just surface existing errors earlier)
-- Changes to `deploy` command directory handling
+- [Exclusion 1]
 
 ---
 
