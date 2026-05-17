@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Replace `confirmDirectory` with `selectDirectory` in `packages/generacy/src/cli/commands/launch/prompts.ts`
+- [X] T001 [US1] Replace `confirmDirectory` with `selectDirectory` in `packages/generacy/src/cli/commands/launch/prompts.ts`
   - Remove `confirmDirectory` export
   - Add `selectDirectory(defaultDir: string, cwd: string): Promise<string>` export
   - Build options array: default path, cwd (if different from default), custom sentinel
@@ -18,7 +18,7 @@
   - Handle `__custom__` selection with `p.text()` follow-up and `path.resolve()`
   - Guard all prompts with `exitIfCancelled`
 
-- [ ] T002 [US1] [US2] Update caller in `packages/generacy/src/cli/commands/launch/index.ts`
+- [X] T002 [US1] [US2] Update caller in `packages/generacy/src/cli/commands/launch/index.ts`
   - Replace `confirmDirectory` import with `selectDirectory`
   - When `opts.dir` provided: use `resolveProjectDir(config.projectName, opts.dir)` directly (no prompt)
   - When `opts.dir` not provided: call `selectDirectory(resolveProjectDir(config.projectName), process.cwd())`

@@ -17,7 +17,7 @@ import { getLogger } from '../../utils/logger.js';
 import { execSafe } from '../../utils/exec.js';
 import { checkNodeVersion } from '../../utils/node-version.js';
 import type { LaunchOptions } from './types.js';
-import { promptClaimCode, confirmDirectory } from './prompts.js';
+import { promptClaimCode, selectDirectory } from './prompts.js';
 import { fetchLaunchConfig } from './cloud-client.js';
 import { scaffoldProject, resolveProjectDir } from './scaffolder.js';
 import { pullImage, startCluster, streamLogsUntilActivation } from './compose.js';
@@ -122,14 +122,10 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
 
   logger.debug({ config }, 'Received launch config');
 
-  // ── 5. Determine project directory + confirm ────────────────────────
-  const projectDir = resolveProjectDir(config.projectName, opts.dir);
-  const confirmed = await confirmDirectory(projectDir);
-  if (!confirmed) {
-    p.log.info('Use --dir to specify a different directory.');
-    p.cancel('Launch cancelled.');
-    process.exit(130);
-  }
+  // ── 5. Determine project directory ──────────────────────────────────
+  const projectDir = opts.dir
+    ? resolveProjectDir(config.projectName, opts.dir)
+    : await selectDirectory(resolveProjectDir(config.projectName), process.cwd());
 
   // ── 6. Scaffold project directory ───────────────────────────────────
   try {

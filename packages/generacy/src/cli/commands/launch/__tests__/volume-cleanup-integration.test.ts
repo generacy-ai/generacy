@@ -53,7 +53,7 @@ vi.mock('../scaffolder.js', () => ({
 
 vi.mock('../prompts.js', () => ({
   promptClaimCode: vi.fn().mockResolvedValue('test-claim'),
-  confirmDirectory: vi.fn().mockResolvedValue(true),
+  selectDirectory: vi.fn().mockResolvedValue('/tmp/test-project'),
 }));
 
 vi.mock('../cloud-client.js', () => ({
