@@ -10,7 +10,7 @@
 
 ## Phase 1: Implementation
 
-- [ ] T001 [US1] Add stable dist-tag step to `.github/workflows/release.yml`
+- [X] T001 [US1] Add stable dist-tag step to `.github/workflows/release.yml`
   - Insert a new step after the `changesets` step (after line 52) and before the `publish-devcontainer-feature` job
   - Guard on `if: steps.changesets.outputs.published == 'true'`
   - Extract version from `steps.changesets.outputs.publishedPackages` using `jq`:
@@ -24,7 +24,7 @@
 
 ## Phase 2: Verification
 
-- [ ] T002 [US1] Verify workflow YAML syntax
+- [X] T002 [US1] Verify workflow YAML syntax
   - Validate that the modified `release.yml` is valid YAML (no parse errors)
   - Confirm the new step is correctly indented under the `release` job's `steps` list
   - Confirm `publish-devcontainer-feature` job's `if` condition is unaffected
