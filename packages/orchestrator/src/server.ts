@@ -48,6 +48,7 @@ import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
+import { PostActivationRetryService } from './services/post-activation-retry.js';
 import { TunnelHandler, getCodeServerManager } from '@generacy-ai/control-plane';
 import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 
@@ -351,6 +352,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     // API key already exists: initialize relay bridge synchronously
     const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
     relayBridge = result.relayBridge;
+
+    // Check if post-activation needs to be retried (activated but completion flag absent)
+    const retryService = new PostActivationRetryService({
+      logger: server.log,
+      sendRelayEvent: relayClientRef
+        ? (channel, payload) => relayClientRef!.send({
+            type: 'event',
+            event: channel,
+            data: payload,
+            timestamp: new Date().toISOString(),
+          } as unknown as import('./types/relay.js').RelayMessage)
+        : undefined,
+    });
+    const postActivationState = retryService.checkPostActivationState();
+    if (postActivationState.needsRetry) {
+      server.log.info('Post-activation incomplete on restart — triggering retry');
+      retryService.triggerPostActivationRetry().catch((err) => {
+        server.log.error({ err }, 'Post-activation retry failed');
+      });
+    }
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
@@ -660,7 +681,11 @@ async function activateInBackground(
   }
   server.log.info('Cluster activation complete');
 
-  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore, setRelayClient);
+  let localRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
+  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
+    localRelayClient = client;
+    setRelayClient?.(client);
+  });
   const conversationManager = await initializeConversationManager(config, server, relayBridge);
 
   onInitialized(relayBridge, conversationManager);
@@ -668,6 +693,27 @@ async function activateInBackground(
   // Server is already listening — start relay bridge directly
   if (relayBridge) {
     await relayBridge.start();
+  }
+
+  // Check if post-activation needs to be retried (wizard-mode: activation just completed
+  // but post-activation may have failed on a prior container lifecycle)
+  const retryService = new PostActivationRetryService({
+    logger: server.log,
+    sendRelayEvent: localRelayClient
+      ? (channel, payload) => localRelayClient!.send({
+          type: 'event',
+          event: channel,
+          data: payload,
+          timestamp: new Date().toISOString(),
+        } as unknown as import('./types/relay.js').RelayMessage)
+      : undefined,
+  });
+  const postActivationState = retryService.checkPostActivationState();
+  if (postActivationState.needsRetry) {
+    server.log.info('Post-activation incomplete after wizard activation — triggering retry');
+    retryService.triggerPostActivationRetry().catch((err) => {
+      server.log.error({ err }, 'Post-activation retry failed');
+    });
   }
 }
 
