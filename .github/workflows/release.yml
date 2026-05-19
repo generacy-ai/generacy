@@ -51,6 +51,20 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      - name: Add @stable dist-tag
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          VERSION=$(echo '${{ steps.changesets.outputs.publishedPackages }}' \
+            | jq -r '.[] | select(.name == "@generacy-ai/generacy") | .version')
+          if [ -n "$VERSION" ]; then
+            echo "Adding @stable dist-tag for @generacy-ai/generacy@$VERSION"
+            npm dist-tag add @generacy-ai/generacy@$VERSION stable
+          else
+            echo "Package @generacy-ai/generacy not in published set, skipping"
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
   publish-devcontainer-feature:
     needs: release
     if: needs.release.outputs.published == 'true'
