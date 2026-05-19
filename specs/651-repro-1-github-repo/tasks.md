@@ -10,21 +10,21 @@
 
 ## Phase 1: Core Fix
 
-- [ ] T001 [US1] Remove `?? 'main'` fallback from `repoBranch` assignment in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` (line ~279). Change `const repoBranch = input.repoBranch ?? 'main'` to `const repoBranch = input.repoBranch`
-- [ ] T002 [US1] Make the `REPO_BRANCH=` line conditional in the env lines array in `scaffolder.ts` (line ~294-295). Use spread syntax: `...(repoBranch ? [\`REPO_BRANCH=${repoBranch}\`] : [])` so the line is omitted when no branch is specified
+- [X] T001 [US1] Remove `?? 'main'` fallback from `repoBranch` assignment in `packages/generacy/src/cli/commands/cluster/scaffolder.ts` (line ~279). Change `const repoBranch = input.repoBranch ?? 'main'` to `const repoBranch = input.repoBranch`
+- [X] T002 [US1] Make the `REPO_BRANCH=` line conditional in the env lines array in `scaffolder.ts` (line ~294-295). Use spread syntax: `...(repoBranch ? [\`REPO_BRANCH=${repoBranch}\`] : [])` so the line is omitted when no branch is specified
 
 ## Phase 2: Test Updates
 
-- [ ] T003 [US1] Update existing assertion in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` (line ~387) — if test does not pass explicit `repoBranch`, change to assert `REPO_BRANCH` is absent from generated `.env`
-- [ ] T004 [US1] Update "uses defaults for optional fields" test (line ~457) — assert `REPO_BRANCH` line is omitted when `repoBranch` is not provided
-- [ ] T005 [P] [US1] Add test case: no `repoBranch` provided → `REPO_BRANCH` line absent from `.env` output
-- [ ] T006 [P] [US2] Add test case: explicit `repoBranch: 'develop'` → `.env` contains `REPO_BRANCH=develop`
-- [ ] T007 [P] [US2] Add test case: explicit `repoBranch: 'main'` → `.env` contains `REPO_BRANCH=main` (opt-in, not default)
+- [X] T003 [US1] Update existing assertion in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` (line ~387) — if test does not pass explicit `repoBranch`, change to assert `REPO_BRANCH` is absent from generated `.env`
+- [X] T004 [US1] Update "uses defaults for optional fields" test (line ~457) — assert `REPO_BRANCH` line is omitted when `repoBranch` is not provided
+- [X] T005 [P] [US1] Add test case: no `repoBranch` provided → `REPO_BRANCH` line absent from `.env` output
+- [X] T006 [P] [US2] Add test case: explicit `repoBranch: 'develop'` → `.env` contains `REPO_BRANCH=develop`
+- [X] T007 [P] [US2] Add test case: explicit `repoBranch: 'main'` → `.env` contains `REPO_BRANCH=main` (opt-in, not default)
 
 ## Phase 3: Verification
 
-- [ ] T008 Run `pnpm test` in `packages/generacy` and confirm all tests pass
-- [ ] T009 Verify SC-001: no hardcoded `'main'` fallback for `repoBranch` remains in `scaffolder.ts`
+- [X] T008 Run `pnpm test` in `packages/generacy` and confirm all tests pass
+- [X] T009 Verify SC-001: no hardcoded `'main'` fallback for `repoBranch` remains in `scaffolder.ts`
 
 ## Dependencies & Execution Order
 

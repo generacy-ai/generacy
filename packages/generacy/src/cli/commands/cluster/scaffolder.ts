@@ -276,7 +276,7 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
   const relayUrl = input.cloud?.relayUrl ?? deriveRelayUrl(input.cloudUrl, input.projectId);
   const projectName = input.projectName;
   const repoUrl = input.repoUrl ?? '';
-  const repoBranch = input.repoBranch ?? 'main';
+  const repoBranch = input.repoBranch;
   const channel = input.channel ?? 'preview';
   const workers = input.workers ?? 1;
   const port = input.orchestratorPort ?? 3100;
@@ -292,7 +292,7 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
     '# Project',
     `PROJECT_NAME=${projectName}`,
     `REPO_URL=${repoUrl}`,
-    `REPO_BRANCH=${repoBranch}`,
+    ...(repoBranch ? [`REPO_BRANCH=${repoBranch}`] : []),
     `GENERACY_CHANNEL=${channel}`,
     `WORKER_COUNT=${workers}`,
     '',
