@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/generacy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Headless workflow execution CLI for Generacy - run workflows in containers without VS Code",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

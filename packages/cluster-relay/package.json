@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/cluster-relay",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "WebSocket client connecting local clusters to generacy-cloud for bidirectional communication",
   "type": "module",
   "main": "./dist/index.js",
