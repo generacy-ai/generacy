@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/generacy-plugin-jira",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Atlassian Jira integration plugin for Generacy",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/generacy-plugin-github-actions",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GitHub Actions integration plugin for Generacy",
   "type": "module",
   "main": "./dist/index.js",
