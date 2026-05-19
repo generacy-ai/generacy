@@ -384,7 +384,7 @@ describe('scaffoldEnvFile', () => {
     expect(content).toContain('GENERACY_ORG_ID=org_ghi');
     expect(content).toContain('PROJECT_NAME=my-project');
     expect(content).toContain('REPO_URL=https://github.com/org/repo');
-    expect(content).toContain('REPO_BRANCH=main');
+    expect(content).not.toContain('REPO_BRANCH=');
     expect(content).toContain('GENERACY_CHANNEL=preview');
     expect(content).toContain('WORKER_COUNT=2');
     expect(content).toContain('ORCHESTRATOR_PORT=3100');
@@ -443,6 +443,48 @@ describe('scaffoldEnvFile', () => {
     expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=p1');
   });
 
+  it('omits REPO_BRANCH when repoBranch is not provided', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+      repoUrl: 'https://github.com/org/repo',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).not.toContain('REPO_BRANCH=');
+  });
+
+  it('writes REPO_BRANCH when repoBranch is explicitly set to develop', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+      repoBranch: 'develop',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).toContain('REPO_BRANCH=develop');
+  });
+
+  it('writes REPO_BRANCH when repoBranch is explicitly set to main (opt-in)', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+      repoBranch: 'main',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).toContain('REPO_BRANCH=main');
+  });
+
   it('uses default values when optionals are omitted', () => {
     scaffoldEnvFile(dir, {
       clusterId: 'c1',
@@ -454,7 +496,7 @@ describe('scaffoldEnvFile', () => {
 
     const content = readFileSync(join(dir, '.env'), 'utf-8');
     expect(content).toContain('REPO_URL=');
-    expect(content).toContain('REPO_BRANCH=main');
+    expect(content).not.toContain('REPO_BRANCH=');
     expect(content).toContain('GENERACY_CHANNEL=preview');
     expect(content).toContain('WORKER_COUNT=1');
     expect(content).toContain('ORCHESTRATOR_PORT=3100');
