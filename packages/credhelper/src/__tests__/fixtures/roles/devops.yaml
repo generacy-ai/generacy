@@ -1,0 +1,24 @@
+schemaVersion: "1"
+id: devops
+description: Infra + ops; broad GCP, can send ops mail via proxied SendGrid.
+
+credentials:
+  - ref: gcp-dev-project
+    scope:
+      scopes:
+        - cloud-platform
+    expose:
+      - as: gcloud-external-account
+
+  - ref: sendgrid
+    expose:
+      - as: localhost-proxy
+        port: 7823
+
+proxy:
+  sendgrid:
+    upstream: https://api.sendgrid.com
+    default: deny
+    allow:
+      - method: POST
+        path: /v3/mail/send

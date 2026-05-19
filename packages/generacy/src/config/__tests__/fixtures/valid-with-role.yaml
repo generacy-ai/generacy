@@ -1,0 +1,13 @@
+# Valid config fixture with role field in defaults
+# Tests that the optional role field parses correctly
+
+project:
+  id: "proj_role12345"
+  name: "Role Test Project"
+
+repos:
+  primary: "github.com/test/role-test"
+
+defaults:
+  agent: claude-code
+  role: developer

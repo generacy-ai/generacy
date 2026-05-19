@@ -283,6 +283,7 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       spec_file: '',
       feature_dir: '',
       git_branch_created: false,
+      error: 'Could not find repository root',
     };
   }
 
@@ -295,18 +296,6 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
   const featureNum = branchConfig.numberPadding > 0
     ? String(featureNumInt).padStart(branchConfig.numberPadding, '0')
     : String(featureNumInt);
-
-  // Validate number range
-  if (featureNumInt > 999) {
-    return {
-      success: false,
-      branch_name: '',
-      feature_num: '',
-      spec_file: '',
-      feature_dir: '',
-      git_branch_created: false,
-    };
-  }
 
   // Create branch name using configured pattern
   const branchName = input.short_name
@@ -322,6 +311,7 @@ export async function createFeature(input: CreateFeatureInput): Promise<CreateFe
       spec_file: '',
       feature_dir: '',
       git_branch_created: false,
+      error: `Invalid branch name: ${branchName}`,
     };
   }
 

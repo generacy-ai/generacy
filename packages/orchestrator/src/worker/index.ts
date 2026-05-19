@@ -14,7 +14,6 @@ export {
   type JournalEventType,
   type JournalEntry,
   PHASE_SEQUENCE,
-  PHASE_TO_COMMAND,
   PHASE_TO_STAGE,
   STAGE_MARKERS,
 } from './types.js';

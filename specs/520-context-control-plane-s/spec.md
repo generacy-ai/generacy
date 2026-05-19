@@ -1,0 +1,84 @@
+# 520: Control-plane mutator routes should reject missing actor with 401
+
+**Branch**: `520-context-control-plane-s` | **Date**: 2026-05-01 | **Status**: Draft
+
+## Summary
+
+The control-plane's mutator routes (`PUT /credentials/:id`, `PUT /roles/:id`, `POST /lifecycle/:action`) extract actor user/session IDs from relay-injected request headers but don't enforce their presence. An unauthenticated request (missing `x-generacy-actor-user-id` header) can mutate cluster state without an audit trail. This fix adds a 401 guard to all external-facing mutator routes.
+
+## Background
+
+- Original control-plane implementation: #490.
+- Actor identity is extracted in `context.ts` via `extractActorContext(req)`, producing an `ActorContext` with optional `userId` and `sessionId`.
+- The relay proxy injects `x-generacy-actor-user-id` and `x-generacy-actor-session-id` headers before forwarding requests to the control-plane socket.
+- Error response shape per #490-Q4: `{ error: string, code: string, details?: Record<string, unknown> }`.
+- Existing error codes: `INVALID_REQUEST`, `NOT_FOUND`, `UNKNOWN_ACTION`, `SERVICE_UNAVAILABLE`, `INTERNAL_ERROR`. Missing: `UNAUTHORIZED`.
+
+## User Stories
+
+### US1: Cluster operator expects mutator routes to require identity
+
+**As a** cluster operator,
+**I want** the control-plane to reject state-mutating requests that lack actor identity,
+**So that** all cluster mutations have an audit trail and unauthenticated access is prevented.
+
+**Acceptance Criteria**:
+- PUT/POST external routes return 401 when `x-generacy-actor-user-id` header is absent or empty.
+- Response body matches structured error shape: `{ "error": "Missing actor identity", "code": "UNAUTHORIZED" }`.
+
+### US2: Diagnostic tooling can still query state without actor headers
+
+**As a** developer or monitoring agent,
+**I want** GET routes (`/state`, `/credentials/:id`, `/roles/:id`) to remain accessible without actor headers,
+**So that** diagnostic and health-check tooling is not blocked.
+
+**Acceptance Criteria**:
+- GET routes return normal responses when actor headers are absent.
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Add `UNAUTHORIZED` error code to `ControlPlaneErrorCode` with HTTP status 401. | P1 | Extends `errors.ts` |
+| FR-002 | Add `requireActor(actor: ActorContext): void` guard that throws `ControlPlaneError('UNAUTHORIZED', 'Missing actor identity')` when `actor.userId` is falsy. | P1 | New helper in `context.ts` |
+| FR-003 | Call `requireActor(actor)` at the entry point of `handlePutCredential`. | P1 | `routes/credentials.ts` |
+| FR-004 | Call `requireActor(actor)` at the entry point of `handlePutRole`. | P1 | `routes/roles.ts` |
+| FR-005 | Call `requireActor(actor)` at the entry point of `handlePostLifecycle`. | P1 | `routes/lifecycle.ts` |
+| FR-006 | Internal routes (`POST /internal/audit-batch`, `POST /internal/status`) remain unguarded — they are called by in-cluster services without relay-injected actor headers. | P1 | No changes needed |
+| FR-007 | GET routes remain unguarded for diagnostic access. | P1 | No changes needed |
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `packages/control-plane/src/errors.ts` | Add `UNAUTHORIZED` to error code enum/union and map to HTTP 401 |
+| `packages/control-plane/src/context.ts` | Add `requireActor()` guard function |
+| `packages/control-plane/src/routes/credentials.ts` | Call `requireActor(actor)` in `handlePutCredential` |
+| `packages/control-plane/src/routes/roles.ts` | Call `requireActor(actor)` in `handlePutRole` |
+| `packages/control-plane/src/routes/lifecycle.ts` | Call `requireActor(actor)` in `handlePostLifecycle` |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Mutator routes reject missing actor | 401 returned | Unit tests for PUT credentials, PUT roles, POST lifecycle without actor header |
+| SC-002 | Mutator routes accept valid actor | 200 returned | Unit tests for same routes with `x-generacy-actor-user-id` header present |
+| SC-003 | GET routes unaffected | 200 returned | Unit tests for GET state, GET credentials, GET roles without actor header |
+| SC-004 | Error shape matches standard | `{ error, code }` | Assert response body structure in tests |
+
+## Assumptions
+
+- The relay proxy is the only entry point for external requests; internal services call `/internal/*` routes directly on the Unix socket.
+- `sessionId` is not required for authorization — only `userId` presence is enforced.
+- The `ControlPlaneError` catch-all in `server.ts` already handles serialization via `sendError()`, so throwing from route handlers is sufficient.
+
+## Out of Scope
+
+- Role-based access control (checking _which_ user is authorized for _which_ action).
+- Rate limiting or brute-force protection.
+- Enforcing actor on internal routes (`/internal/*`).
+- Enforcing `sessionId` presence (only `userId` is required).
+
+---
+
+*Generated by speckit*

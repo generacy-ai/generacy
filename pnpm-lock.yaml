@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@generacy-ai/orchestrator':
+        specifier: workspace:*
+        version: link:packages/orchestrator
       express:
         specifier: ^4.21.0
         version: 4.22.1
@@ -44,6 +47,22 @@ importers:
         version: 8.13.1(@types/ioredis-mock@8.2.6(ioredis@5.10.0))(ioredis@5.10.0)
       typescript:
         specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.4(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/activation-client:
+    dependencies:
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.0.0
+        version: 20.19.35
+      typescript:
+        specifier: ^5.6.0
         version: 5.9.3
       vitest:
         specifier: ^3.2.4
@@ -93,6 +112,72 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
 
+  packages/control-plane:
+    dependencies:
+      '@generacy-ai/credhelper':
+        specifier: workspace:*
+        version: link:../credhelper
+      yaml:
+        specifier: ^2.7.0
+        version: 2.8.2
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.35
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/credhelper:
+    dependencies:
+      yaml:
+        specifier: ^2.4.0
+        version: 2.8.2
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.35
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/credhelper-daemon:
+    dependencies:
+      '@generacy-ai/credhelper':
+        specifier: workspace:*
+        version: link:../credhelper
+      picomatch:
+        specifier: ^4.0.4
+        version: 4.0.4
+    devDependencies:
+      '@types/node':
+        specifier: ^20.14.0
+        version: 20.19.35
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.0.18
+        version: 4.0.18(@opentelemetry/api@1.9.0)(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
+
   packages/devcontainer-feature: {}
 
   packages/generacy:
@@ -100,6 +185,9 @@ importers:
       '@clack/prompts':
         specifier: ^0.9
         version: 0.9.1
+      '@generacy-ai/activation-client':
+        specifier: workspace:*
+        version: link:../activation-client
       '@generacy-ai/config':
         specifier: workspace:*
         version: link:../config
@@ -409,9 +497,24 @@ importers:
       '@fastify/rate-limit':
         specifier: ^10.0.0
         version: 10.3.0
+      '@generacy-ai/activation-client':
+        specifier: workspace:^
+        version: link:../activation-client
+      '@generacy-ai/cluster-relay':
+        specifier: workspace:^
+        version: link:../cluster-relay
       '@generacy-ai/config':
         specifier: workspace:^
         version: link:../config
+      '@generacy-ai/control-plane':
+        specifier: workspace:^
+        version: link:../control-plane
+      '@generacy-ai/credhelper':
+        specifier: workspace:^
+        version: link:../credhelper
+      '@generacy-ai/generacy-plugin-claude-code':
+        specifier: workspace:^
+        version: link:../generacy-plugin-claude-code
       '@generacy-ai/workflow-engine':
         specifier: workspace:^
         version: link:../workflow-engine
@@ -1434,6 +1537,9 @@ packages:
 
   '@types/node@22.19.13':
     resolution: {integrity: sha512-akNQMv0wW5uyRpD2v2IEyRSZiR+BeGuoB6L310EgGObO44HSMNT8z1xzio28V8qOrgYaopIDNA18YgdXd+qTiw==}
+
+  '@types/picomatch@4.0.3':
+    resolution: {integrity: sha512-iG0T6+nYJ9FAPmx9SsUlnwcq1ZVRuCXcVEvWnntoPlrOpwtSTKNDC9uVAxTsC3PUvJ+99n4RpAcNgBbHX3JSnQ==}
 
   '@types/qs@6.14.0':
     resolution: {integrity: sha512-eOunJqu0K1923aExK6y8p6fsihYEn/BYuQ4g0CxAAgFc4b/ZLN4CrsRZ55srTdqoiLzU2B2evC+apEIxprEzkQ==}
@@ -3118,8 +3224,8 @@ packages:
     resolution: {integrity: sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA==}
     engines: {node: '>=8.6'}
 
-  picomatch@4.0.3:
-    resolution: {integrity: sha512-5gTmgEY/sqK6gFXLIsQNH19lWb4ebPDLA4SdLP7dsWkIXHWlG66oPuVvXSGFPppYZz8ZDZq0dYYrbHfBCVUb1Q==}
+  picomatch@4.0.4:
+    resolution: {integrity: sha512-QP88BAKvMam/3NxH6vj2o21R6MjxZUAd6nlwAS/pnGvN9IVLocLHxGYIzFhg6fUQ+5th6P4dv4eW9jX3DSIj7A==}
     engines: {node: '>=12'}
 
   pify@4.0.1:
@@ -3704,14 +3810,17 @@ packages:
 
   uuid@10.0.0:
     resolution: {integrity: sha512-8XkAphELsDnEGrDxUOHB3RGvXz6TeuYSGEZBOjtTtPm2lwhGBjLgOzLHB63IUWfBpNucQjND6d3AOudO+H3RWQ==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   uuid@9.0.1:
     resolution: {integrity: sha512-b+1eJOlsR9K8HJpow9Ok3fiWOWSIcIzXodvv0rQjVoOVNpWMpxf1wZNpt4y9h10odCNrqnYp1OBzRktckBe3sA==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   vary@1.1.2:
@@ -4881,6 +4990,8 @@ snapshots:
     dependencies:
       undici-types: 6.21.0
 
+  '@types/picomatch@4.0.3': {}
+
   '@types/qs@6.14.0': {}
 
   '@types/range-parser@1.2.7': {}
@@ -5968,9 +6079,9 @@ snapshots:
     dependencies:
       pend: 1.2.0
 
-  fdir@6.5.0(picomatch@4.0.3):
+  fdir@6.5.0(picomatch@4.0.4):
     optionalDependencies:
-      picomatch: 4.0.3
+      picomatch: 4.0.4
 
   fengari-interop@0.1.4(fengari@0.1.5):
     dependencies:
@@ -6785,7 +6896,7 @@ snapshots:
 
   picomatch@2.3.1: {}
 
-  picomatch@4.0.3: {}
+  picomatch@4.0.4: {}
 
   pify@4.0.1: {}
 
@@ -7341,8 +7452,8 @@ snapshots:
 
   tinyglobby@0.2.15:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
+      fdir: 6.5.0(picomatch@4.0.4)
+      picomatch: 4.0.4
 
   tinypool@1.1.1: {}
 
@@ -7488,8 +7599,8 @@ snapshots:
   vite@7.3.1(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       esbuild: 0.27.3
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
+      fdir: 6.5.0(picomatch@4.0.4)
+      picomatch: 4.0.4
       postcss: 8.5.8
       rollup: 4.59.0
       tinyglobby: 0.2.15
@@ -7502,8 +7613,8 @@ snapshots:
   vite@7.3.1(@types/node@22.19.13)(tsx@4.21.0)(yaml@2.8.2):
     dependencies:
       esbuild: 0.27.3
-      fdir: 6.5.0(picomatch@4.0.3)
-      picomatch: 4.0.3
+      fdir: 6.5.0(picomatch@4.0.4)
+      picomatch: 4.0.4
       postcss: 8.5.8
       rollup: 4.59.0
       tinyglobby: 0.2.15
@@ -7528,7 +7639,7 @@ snapshots:
       expect-type: 1.3.0
       magic-string: 0.30.21
       pathe: 2.0.3
-      picomatch: 4.0.3
+      picomatch: 4.0.4
       std-env: 3.10.0
       tinybench: 2.9.0
       tinyexec: 0.3.2
@@ -7569,7 +7680,7 @@ snapshots:
       expect-type: 1.3.0
       magic-string: 0.30.21
       pathe: 2.0.3
-      picomatch: 4.0.3
+      picomatch: 4.0.4
       std-env: 3.10.0
       tinybench: 2.9.0
       tinyexec: 0.3.2
@@ -7609,7 +7720,7 @@ snapshots:
       magic-string: 0.30.21
       obug: 2.1.1
       pathe: 2.0.3
-      picomatch: 4.0.3
+      picomatch: 4.0.4
       std-env: 3.10.0
       tinybench: 2.9.0
       tinyexec: 1.0.2

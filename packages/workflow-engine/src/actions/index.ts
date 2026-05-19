@@ -257,6 +257,16 @@ export { CorrelationTimeoutError } from '../errors/correlation-timeout.js';
 export { SpecKitAction } from './builtin/speckit/index.js';
 export * from './builtin/speckit/types.js';
 
+// Re-export process launcher registration
+export {
+  registerProcessLauncher,
+  getProcessLauncher,
+  clearProcessLauncher,
+  type LaunchFunction,
+  type LaunchFunctionRequest,
+  type LaunchFunctionHandle,
+} from './process-launcher.js';
+
 // Re-export CLI utilities
 export {
   checkCLI,

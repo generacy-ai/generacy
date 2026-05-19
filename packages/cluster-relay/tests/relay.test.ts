@@ -21,6 +21,7 @@ function createConfig(port: number, overrides?: Partial<RelayConfig>): RelayConf
     heartbeatIntervalMs: 500,
     baseReconnectDelayMs: 50,
     maxReconnectDelayMs: 200,
+    routes: [],
     ...overrides,
   };
 }
@@ -260,11 +261,12 @@ describe('ClusterRelay', () => {
     await waitFor(() => serverReceived.some((m) => m.type === 'event'));
 
     const eventMsg = serverReceived.find((m) => m.type === 'event');
-    expect(eventMsg).toEqual({
+    expect(eventMsg).toMatchObject({
       type: 'event',
-      channel: 'metrics',
-      event: { cpu: 42 },
+      event: 'metrics',
+      data: { cpu: 42 },
     });
+    expect(eventMsg).toHaveProperty('timestamp');
 
     await relay.disconnect();
     await connectPromise;
@@ -468,8 +470,9 @@ describe('ClusterRelay', () => {
             ws.send(
               JSON.stringify({
                 type: 'event',
-                channel: 'ch1',
-                event: { x: 1 },
+                event: 'ch1',
+                data: { x: 1 },
+                timestamp: new Date().toISOString(),
               }),
             );
           }, 30);
@@ -486,15 +489,15 @@ describe('ClusterRelay', () => {
     await waitFor(() => received1.some((m) => m.type === 'event'));
     await waitFor(() => received2.some((m) => m.type === 'event'));
 
-    expect(received1.find((m) => m.type === 'event')).toEqual({
+    expect(received1.find((m) => m.type === 'event')).toMatchObject({
       type: 'event',
-      channel: 'ch1',
-      event: { x: 1 },
+      event: 'ch1',
+      data: { x: 1 },
     });
-    expect(received2.find((m) => m.type === 'event')).toEqual({
+    expect(received2.find((m) => m.type === 'event')).toMatchObject({
       type: 'event',
-      channel: 'ch1',
-      event: { x: 1 },
+      event: 'ch1',
+      data: { x: 1 },
     });
 
     await relay.disconnect();
@@ -564,6 +567,117 @@ describe('ClusterRelay', () => {
 
     await relay.disconnect();
     await connectPromise;
+  });
+
+  it('handshake includes activation when configured', async () => {
+    const serverReceived: unknown[] = [];
+
+    wss.on('connection', (ws) => {
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        serverReceived.push(msg);
+        if (msg.type === 'handshake') {
+          ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }
+      });
+    });
+
+    relay = new ClusterRelay(
+      createConfig(port, { activationCode: 'claim-abc', clusterApiKeyId: 'key-1' }),
+      silentLogger,
+    );
+    const connectPromise = relay.connect();
+
+    await waitFor(() => relay.state === 'connected');
+
+    const handshakeMsg = serverReceived.find(
+      (m: any) => m.type === 'handshake',
+    ) as any;
+    expect(handshakeMsg).toBeDefined();
+    expect(handshakeMsg.activation).toEqual({
+      code: 'claim-abc',
+      clusterApiKeyId: 'key-1',
+    });
+
+    await relay.disconnect();
+    await connectPromise;
+  });
+
+  it('handshake omits activation when not configured', async () => {
+    const serverReceived: unknown[] = [];
+
+    wss.on('connection', (ws) => {
+      ws.on('message', (data) => {
+        const msg = JSON.parse(data.toString());
+        serverReceived.push(msg);
+        if (msg.type === 'handshake') {
+          ws.send(JSON.stringify({ type: 'heartbeat' }));
+        }
+      });
+    });
+
+    relay = new ClusterRelay(createConfig(port), silentLogger);
+    const connectPromise = relay.connect();
+
+    await waitFor(() => relay.state === 'connected');
+
+    const handshakeMsg = serverReceived.find(
+      (m: any) => m.type === 'handshake',
+    ) as any;
+    expect(handshakeMsg).toBeDefined();
+    expect(handshakeMsg.activation).toBeUndefined();
+
+    await relay.disconnect();
+    await connectPromise;
+  });
+
+  it('routes are pre-sorted in constructor', () => {
+    relay = new ClusterRelay(
+      createConfig(port, {
+        routes: [
+          { prefix: '/a', target: 'http://a' },
+          { prefix: '/abc', target: 'http://abc' },
+        ],
+      }),
+      silentLogger,
+    );
+
+    const routes = relay['config'].routes;
+    expect(routes).toEqual([
+      { prefix: '/abc', target: 'http://abc' },
+      { prefix: '/a', target: 'http://a' },
+    ]);
+  });
+
+  it('accepts routes via ClusterRelayClientOptions and sorts them', () => {
+    relay = new ClusterRelay(
+      {
+        apiKey: 'test-key',
+        cloudUrl: `ws://localhost:${port}`,
+        routes: [
+          { prefix: '/short', target: 'unix:///tmp/short.sock' },
+          { prefix: '/longer/path', target: 'unix:///tmp/long.sock' },
+        ],
+      },
+      silentLogger,
+    );
+
+    const routes = relay['config'].routes;
+    expect(routes).toHaveLength(2);
+    expect(routes[0].prefix).toBe('/longer/path');
+    expect(routes[1].prefix).toBe('/short');
+  });
+
+  it('ClusterRelayClientOptions without routes defaults to empty array', () => {
+    relay = new ClusterRelay(
+      {
+        apiKey: 'test-key',
+        cloudUrl: `ws://localhost:${port}`,
+      },
+      silentLogger,
+    );
+
+    expect(relay['config'].routes).toEqual([]);
   });
 
   it('ignores invalid relay messages from the server', async () => {

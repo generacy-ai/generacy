@@ -1,0 +1,67 @@
+# @generacy-ai/credhelper — Configuration Schema Reference
+#
+# Defines the expected shapes of all YAML configuration files
+# consumed by the credentials architecture.
+
+---
+# backends.yaml — where secrets come from
+backends:
+  schemaVersion: "1"  # literal "1"
+  backends:           # array of BackendEntry
+    - id: string              # unique identifier
+      type: string            # backend type (generacy-cloud, env, vault, etc.)
+      endpoint: string?       # optional URL
+      auth:                   # optional, passthrough schema
+        mode: string          # required: routing key for auth handler
+        # ... additional fields per backend type (passthrough)
+
+---
+# credentials.yaml — declarations of available credentials
+credentials:
+  schemaVersion: "1"
+  credentials:        # array of CredentialEntry
+    - id: string              # unique identifier
+      type: string            # credential type (maps to plugin)
+      backend: string         # references backends.yaml entry by id
+      backendKey: string      # key within the backend
+      mint:                   # optional mint config
+        ttl: string           # duration string (e.g. "1h")
+        scopeTemplate:        # optional record of scope template fields
+          fieldName: "required" | value
+
+---
+# roles/<name>.yaml — per-role credential recipe
+role:
+  schemaVersion: "1"
+  id: string
+  description: string
+  extends: string?            # optional: inherit from another role
+  credentials:                # array of credential references
+    - ref: string             # references credentials.yaml entry by id
+      scope:                  # optional: validated by plugin's scopeSchema
+        key: value
+      expose:                 # array of exposure configs
+        - as: ExposureKind    # env | git-credential-helper | gcloud-external-account | localhost-proxy | docker-socket-proxy
+          name: string?       # for 'env' kind
+          port: number?       # for 'localhost-proxy' kind
+  proxy:                      # optional: per-service HTTP proxy configs
+    serviceName:
+      upstream: string        # URL
+      default: "deny"
+      allow:
+        - method: string      # HTTP method
+          path: string        # URL path pattern
+  docker:                     # optional: docker socket proxy allowlist
+    default: "deny"
+    allow:
+      - method: string
+        path: string
+        name: string?         # container name filter
+
+---
+# trusted-plugins.yaml — SHA-pinned plugin allowlist
+trustedPlugins:
+  schemaVersion: "1"
+  plugins:                    # record: plugin name → pin
+    "plugin-name":
+      sha256: string          # hex-encoded SHA256 hash

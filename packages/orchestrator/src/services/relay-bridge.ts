@@ -28,6 +28,17 @@ import type { ConversationManager } from '../conversation/conversation-manager.j
 import { ConversationRelayInputSchema } from '../conversation/types.js';
 import type { ConversationOutputEvent } from '../conversation/types.js';
 import type { LeaseManager } from './lease-manager.js';
+import type { StatusReporter } from './status-reporter.js';
+import { readFile } from 'node:fs/promises';
+import { probeCodeServerSocket } from './code-server-probe.js';
+import { probeControlPlaneSocket } from './control-plane-probe.js';
+
+export interface TunnelHandlerLike {
+  handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
+  handleData(msg: { tunnelId: string; data: string }): void;
+  handleClose(msg: { tunnelId: string; reason?: string }): void;
+  cleanup(): void;
+}
 
 export class RelayBridge {
   private readonly client: ClusterRelayClient;
@@ -37,6 +48,8 @@ export class RelayBridge {
   private readonly config: RelayBridgeOptions['config'];
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;
+  private statusReporter: StatusReporter | null = null;
+  private tunnelHandler: TunnelHandlerLike | null = null;
 
   private running = false;
   private metadataTimer: NodeJS.Timeout | null = null;
@@ -130,11 +143,11 @@ export class RelayBridge {
     try {
       if (!this.client.isConnected) return;
       this.client.send({
-        type: 'event' as const,
+        type: 'event',
         event,
         data,
         timestamp: new Date().toISOString(),
-      } as RelayMessage);
+      });
     } catch (error) {
       this.logger.warn(
         { err: error instanceof Error ? error.message : String(error), event },
@@ -154,10 +167,20 @@ export class RelayBridge {
     this.setupEventForwarding();
 
     // Send metadata immediately on connect
-    this.sendMetadata();
+    this.sendMetadata().catch((err) => {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Error in initial metadata send',
+      );
+    });
 
     // Start periodic metadata timer
     this.startMetadataTimer();
+
+    // Push ready status to control-plane
+    if (this.statusReporter) {
+      this.statusReporter.pushStatus('ready').catch(() => {});
+    }
   }
 
   private handleDisconnected(reason: string): void {
@@ -168,6 +191,16 @@ export class RelayBridge {
 
     // Clear metadata timer
     this.clearMetadataTimer();
+
+    // Clean up tunnel connections (stateless across reconnects)
+    if (this.tunnelHandler) {
+      this.tunnelHandler.cleanup();
+    }
+
+    // Push degraded status to control-plane
+    if (this.statusReporter) {
+      this.statusReporter.pushStatus('degraded', `Relay disconnected: ${reason}`).catch(() => {});
+    }
   }
 
   private handleError(error: Error): void {
@@ -196,6 +229,20 @@ export class RelayBridge {
    */
   setLeaseManager(manager: LeaseManager): void {
     this.leaseManager = manager;
+  }
+
+  /**
+   * Wire a StatusReporter to push lifecycle state to the control-plane.
+   */
+  setStatusReporter(reporter: StatusReporter): void {
+    this.statusReporter = reporter;
+  }
+
+  /**
+   * Wire a TunnelHandler to receive tunnel messages from the relay.
+   */
+  setTunnelHandler(handler: TunnelHandlerLike): void {
+    this.tunnelHandler = handler;
   }
 
   private handleMessage(msg: RelayMessage): void {
@@ -231,6 +278,23 @@ export class RelayBridge {
           },
           timestamp: new Date().toISOString(),
         } as SSEEvent);
+      } else if (msg.type === 'tunnel_open') {
+        if (this.tunnelHandler) {
+          this.tunnelHandler.handleOpen(msg).catch((error) => {
+            this.logger.error(
+              { err: error instanceof Error ? error.message : String(error), tunnelId: msg.tunnelId },
+              'Error handling tunnel open',
+            );
+          });
+        }
+      } else if (msg.type === 'tunnel_data') {
+        if (this.tunnelHandler) {
+          this.tunnelHandler.handleData(msg);
+        }
+      } else if (msg.type === 'tunnel_close') {
+        if (this.tunnelHandler) {
+          this.tunnelHandler.handleClose(msg);
+        }
       }
     } catch (error) {
       this.logger.error(
@@ -326,8 +390,9 @@ export class RelayBridge {
         if (this.client.isConnected) {
           this.client.send({
             type: 'event',
-            channel,
-            event: event as SSEEvent,
+            event: channel,
+            data: event as SSEEvent,
+            timestamp: new Date().toISOString(),
           });
         }
       } catch (error) {
@@ -406,7 +471,12 @@ export class RelayBridge {
   private startMetadataTimer(): void {
     this.clearMetadataTimer();
     this.metadataTimer = setInterval(() => {
-      this.sendMetadata();
+      this.sendMetadata().catch((err) => {
+        this.logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'Error in periodic metadata send',
+        );
+      });
     }, this.config.metadataIntervalMs);
   }
 
@@ -417,9 +487,9 @@ export class RelayBridge {
     }
   }
 
-  private sendMetadata(): void {
+  async sendMetadata(): Promise<void> {
     try {
-      const metadata = this.collectMetadata();
+      const metadata = await this.collectMetadata();
       if (this.client.isConnected) {
         this.client.send({
           type: 'metadata',
@@ -434,14 +504,42 @@ export class RelayBridge {
     }
   }
 
-  collectMetadata(): ClusterMetadataPayload {
+  async collectMetadata(): Promise<ClusterMetadataPayload> {
+    const [codeServerReady, controlPlaneReady] = await Promise.all([
+      probeCodeServerSocket(),
+      probeControlPlaneSocket(),
+    ]);
+
     const metadata: ClusterMetadataPayload = {
       version: this.getVersion(),
       uptimeSeconds: process.uptime(),
       activeWorkflowCount: this.getActiveWorkflowCount(),
       gitRemotes: this.getGitRemotes(),
       reportedAt: new Date().toISOString(),
+      codeServerReady,
+      controlPlaneReady,
     };
+
+    // Read init-result.json for control-plane store status
+    try {
+      const raw = await readFile('/run/generacy-control-plane/init-result.json', 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed?.stores) {
+        const stores: Record<string, 'ok' | 'fallback' | 'disabled'> = {};
+        for (const [key, val] of Object.entries(parsed.stores)) {
+          const v = val as { status?: string };
+          if (v?.status === 'ok' || v?.status === 'fallback' || v?.status === 'disabled') {
+            stores[key] = v.status;
+          }
+        }
+        metadata.initResult = {
+          stores,
+          warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
+        };
+      }
+    } catch {
+      // init-result.json may not exist yet — graceful degradation
+    }
 
     // Add cluster.yaml fields if available
     const clusterData = this.readClusterYaml();

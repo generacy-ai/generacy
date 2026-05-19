@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
-import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadDefaultsRole, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -217,6 +217,16 @@ function loadFromEnv(): Record<string, unknown> {
     (config.worker as Record<string, unknown>).workspaceDir = workerWorkspaceDir;
   }
 
+  // Credential role: env var overrides config file
+  const credentialRole = process.env['GENERACY_CREDENTIAL_ROLE']
+    ?? (configPath ? tryLoadDefaultsRole(configPath) : null);
+  if (credentialRole) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).credentialRole = credentialRole;
+  }
+
   // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)
   const smeeChannelUrl = process.env['SMEE_CHANNEL_URL'] ?? process.env[`${ENV_PREFIX}SMEE_CHANNEL_URL`];
   if (smeeChannelUrl) {
@@ -232,11 +242,27 @@ function loadFromEnv(): Record<string, unknown> {
     config.labelMonitor = labelMonitorEnabled === 'true';
   }
 
+  // Activation config (GENERACY_API_URL for device-code flow — required in orchestrator context)
+  const activationCloudUrl = process.env['GENERACY_API_URL'];
+  if (activationCloudUrl) {
+    if (!config.activation) {
+      config.activation = {};
+    }
+    (config.activation as Record<string, unknown>).cloudUrl = activationCloudUrl;
+  }
+  const activationKeyFile = process.env['GENERACY_KEY_FILE_PATH'];
+  if (activationKeyFile) {
+    if (!config.activation) {
+      config.activation = {};
+    }
+    (config.activation as Record<string, unknown>).keyFilePath = activationKeyFile;
+  }
+
   // Relay config (GENERACY_API_KEY for cloud connectivity)
   const relayApiKey = process.env['GENERACY_API_KEY'];
-  let relayCloudUrl = process.env['GENERACY_CLOUD_URL'];
+  let relayCloudUrl = process.env['GENERACY_RELAY_URL'];
 
-  // Derive relay URL from GENERACY_CHANNEL when GENERACY_CLOUD_URL is not set
+  // Derive relay URL from GENERACY_CHANNEL when GENERACY_RELAY_URL is not set
   if (!relayCloudUrl) {
     const channel = process.env['GENERACY_CHANNEL'] ?? 'stable';
     const relayHost = channel === 'preview' ? 'api-staging.generacy.ai' : 'api.generacy.ai';
@@ -251,23 +277,7 @@ function loadFromEnv(): Record<string, unknown> {
       (config.relay as Record<string, unknown>).apiKey = relayApiKey;
     }
     if (relayCloudUrl) {
-      // Auto-append ?projectId from .generacy/config.yaml if not already in the URL
-      let resolvedUrl = relayCloudUrl;
-      if (!relayCloudUrl.includes('projectId=') && configPath) {
-        try {
-          const raw = readFileSync(configPath, 'utf-8');
-          const doc = parseYaml(raw) as Record<string, unknown>;
-          const project = doc['project'] as Record<string, unknown> | undefined;
-          const projectId = project?.['id'];
-          if (typeof projectId === 'string' && projectId) {
-            const sep = relayCloudUrl.includes('?') ? '&' : '?';
-            resolvedUrl = `${relayCloudUrl}${sep}projectId=${projectId}`;
-          }
-        } catch {
-          // Non-fatal: proceed with URL as-is
-        }
-      }
-      (config.relay as Record<string, unknown>).cloudUrl = resolvedUrl;
+      (config.relay as Record<string, unknown>).cloudUrl = relayCloudUrl;
     }
   }
 

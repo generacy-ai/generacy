@@ -1,0 +1,9 @@
+schemaVersion: "1"
+id: circular-b
+description: Circular extends test — B extends A.
+extends: circular-a
+
+credentials:
+  - ref: gcp-dev-project
+    expose:
+      - as: gcloud-external-account

@@ -12,11 +12,12 @@ import type { EventMessage } from './messages.js';
 /**
  * Create an EventMessage for sending over the relay.
  */
-export function createEventMessage(channel: string, event: unknown): EventMessage {
+export function createEventMessage(event: string, data: unknown): EventMessage {
   return {
     type: 'event',
-    channel,
     event,
+    data,
+    timestamp: new Date().toISOString(),
   };
 }
 

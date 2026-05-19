@@ -694,6 +694,10 @@ describe('isQuestionComment', () => {
     expect(isQuestionComment('## Answers\n\n### Q1: Auth\n**Answer: A** — OAuth')).toBe(false);
   });
 
+  it('does not flag answer comment with "Answers to Clarification Questions" heading (#433)', () => {
+    expect(isQuestionComment('## Answers to Clarification Questions\n\n### Q1: A — OAuth\n\nExplanation...')).toBe(false);
+  });
+
   it('does not flag unrelated comment', () => {
     expect(isQuestionComment('This looks great, thanks for the update!')).toBe(false);
   });
@@ -820,6 +824,44 @@ The following questions were identified during spec analysis. Please answer to u
     const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
     expect(writtenContent).toContain('**Answer**: A');
     expect(writtenContent).toContain('**Answer**: PostgreSQL');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T008: regression test — "Answers to Clarification Questions" heading (#433)
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers — regression: answer heading false positive (#433)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('picks up answers from comment titled "Answers to Clarification Questions"', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      // Bot's questions comment (should be filtered)
+      {
+        id: 1,
+        body: `<!-- generacy-clarifications:42 -->\n## Clarification Questions\n\n### Q1: Authentication method\n**Question**: Which?`,
+      },
+      // User's answer with "Answers to Clarification Questions" heading (should NOT be filtered)
+      {
+        id: 2,
+        body: `## Answers to Clarification Questions\n\nQ1: A\nQ2: Use PostgreSQL`,
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+    expect(writtenContent).toContain('**Answer**: Use PostgreSQL');
   });
 });
 

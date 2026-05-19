@@ -201,8 +201,23 @@ export const RelayConfigSchema = z.object({
   metadataIntervalMs: z.number().int().min(10000).default(60000),
   /** Path to cluster.yaml relative to workspace root */
   clusterYamlPath: z.string().min(1).default('.generacy/cluster.yaml'),
+  /** Cluster API key ID (non-secret prefix for diagnostics) */
+  clusterApiKeyId: z.string().optional(),
 });
 export type RelayConfig = z.infer<typeof RelayConfigSchema>;
+
+/**
+ * Activation configuration for device-code flow
+ */
+export const ActivationConfigSchema = z.object({
+  /** Base URL of the Generacy cloud for activation API calls */
+  cloudUrl: z.string().url().default('https://api.generacy.ai'),
+  /** Path to the cluster API key file */
+  keyFilePath: z.string().default('/var/lib/generacy/cluster-api-key'),
+  /** Path to the cluster metadata JSON file */
+  clusterJsonPath: z.string().default('/var/lib/generacy/cluster.json'),
+});
+export type ActivationConfig = z.infer<typeof ActivationConfigSchema>;
 
 /**
  * Smee.io webhook proxy configuration
@@ -259,6 +274,7 @@ export const OrchestratorConfigSchema = z.object({
   worker: WorkerConfigSchema.default({}),
   conversations: ConversationConfigSchema.default({}),
   relay: RelayConfigSchema.default({}),
+  activation: ActivationConfigSchema.default({}),
   lease: LeaseConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),

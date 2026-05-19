@@ -1,0 +1,21 @@
+schemaVersion: "1"
+id: developer
+description: Implementation role — can push code.
+extends: reviewer
+
+credentials:
+  - ref: github-main-org
+    scope:
+      repositories:
+        - tetrad-development
+        - generacy
+        - agency
+      permissions:
+        contents: write
+        pull_requests: write
+        issues: write
+        workflows: write
+    expose:
+      - as: git-credential-helper
+      - as: env
+        name: GITHUB_TOKEN

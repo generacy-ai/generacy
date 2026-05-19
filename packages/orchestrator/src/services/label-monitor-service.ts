@@ -52,6 +52,7 @@ const ADAPTIVE_DIVISOR = 3;
 export class LabelMonitorService {
   private readonly logger: Logger;
   private readonly createClient: GitHubClientFactory;
+  private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly phaseTracker: PhaseTracker;
   private readonly queueAdapter: QueueAdapter;
   private readonly options: LabelMonitorOptions;
@@ -76,9 +77,11 @@ export class LabelMonitorService {
     config: MonitorConfig,
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
+    tokenProvider?: () => Promise<string | undefined>,
   ) {
     this.logger = logger;
     this.createClient = createClient;
+    this.tokenProvider = tokenProvider;
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
     this.clusterGithubUsername = clusterGithubUsername;
@@ -182,7 +185,7 @@ export class LabelMonitorService {
 
     let freshLabels: string[];
     try {
-      const client = this.createClient();
+      const client = this.createClient(undefined, this.tokenProvider);
       const issue = await client.getIssue(owner, repo, issueNumber);
       freshLabels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
     } catch (error) {
@@ -283,7 +286,7 @@ export class LabelMonitorService {
     let description = `Issue #${issueNumber}`;
     let fetchedIssue: Awaited<ReturnType<ReturnType<GitHubClientFactory>['getIssue']>> | null = null;
     try {
-      const client = this.createClient();
+      const client = this.createClient(undefined, this.tokenProvider);
       fetchedIssue = await client.getIssue(owner, repo, issueNumber);
       description = fetchedIssue.body || fetchedIssue.title;
     } catch (error) {
@@ -323,13 +326,13 @@ export class LabelMonitorService {
       // even if the prior run failed mid-implementation.
       try {
         // Reuse issue data from description fetch if available, otherwise re-fetch
-        const issue = fetchedIssue ?? await this.createClient().getIssue(owner, repo, issueNumber);
+        const issue = fetchedIssue ?? await this.createClient(undefined, this.tokenProvider).getIssue(owner, repo, issueNumber);
         const completedLabels = issue.labels
           .map(l => typeof l === 'string' ? l : l.name)
           .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX) || name.startsWith(FAILED_LABEL_PREFIX));
 
         const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
-        const client = this.createClient();
+        const client = this.createClient(undefined, this.tokenProvider);
         await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
         await client.addLabels(owner, repo, issueNumber, [
           AGENT_IN_PROGRESS_LABEL,
@@ -439,7 +442,7 @@ export class LabelMonitorService {
    * @param checkCompleted - Whether to also check completed:* labels for resume detection
    */
   private async pollRepo(owner: string, repo: string, checkCompleted: boolean): Promise<void> {
-    const client = this.createClient();
+    const client = this.createClient(undefined, this.tokenProvider);
 
     try {
       // Check known process:* labels for issues (REST API, 2 calls per repo)

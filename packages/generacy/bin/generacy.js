@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-/**
- * Generacy CLI entry point
- */
-import { run } from '../dist/cli/index.js';
+import { checkNodeVersion } from '../dist/cli/utils/node-version.js';
+
+checkNodeVersion(22);
+
+const { run } = await import('../dist/cli/index.js');
 
 run().catch((error) => {
   console.error('Fatal error:', error);

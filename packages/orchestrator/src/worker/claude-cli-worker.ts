@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { createGitHubClient, createFeature } from '@generacy-ai/workflow-engine';
+import { existsSync } from 'node:fs';
+import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
+import type { LaunchFunctionRequest, LaunchFunctionHandle } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
@@ -18,20 +20,28 @@ import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
+import { createAgentLauncher } from '../launcher/launcher-setup.js';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
+import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
+import { conversationProcessFactory } from '../conversation/process-factory.js';
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
  */
-const defaultProcessFactory: ProcessFactory = {
+export const defaultProcessFactory: ProcessFactory = {
   spawn(
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal },
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number; detached?: boolean },
   ): ChildProcessHandle {
     const child: ChildProcess = spawn(command, args, {
       cwd: options.cwd,
-      env: { ...process.env, ...options.env },
+      env: options.env,
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(options.uid !== undefined && { uid: options.uid }),
+      ...(options.gid !== undefined && { gid: options.gid }),
+      ...(options.detached !== undefined && { detached: options.detached }),
     });
 
     const exitPromise = new Promise<number | null>((resolve) => {
@@ -85,6 +95,7 @@ export class ClaudeCliWorker {
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
+  private readonly agentLauncher: AgentLauncher;
 
   constructor(
     private readonly config: WorkerConfig,
@@ -96,6 +107,52 @@ export class ClaudeCliWorker {
     this.jobEventEmitter = deps.jobEventEmitter;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
+
+    // Credential role fail-fast check: if role is configured, the daemon must be reachable
+    const socketPath = process.env['GENERACY_CREDHELPER_SOCKET'] ?? '/run/generacy-credhelper/control.sock';
+    let credhelperClient: CredhelperHttpClient | undefined;
+    if (config.credentialRole) {
+      if (!existsSync(socketPath)) {
+        throw new CredhelperUnavailableError(socketPath);
+      }
+      credhelperClient = new CredhelperHttpClient({ socketPath });
+    } else if (existsSync(socketPath)) {
+      // Daemon is available but no role configured — wire client for opportunistic use
+      credhelperClient = new CredhelperHttpClient({ socketPath });
+    }
+
+    // AgentLauncher: plugin-based process dispatch
+    this.agentLauncher = createAgentLauncher({
+      default: this.processFactory,
+      interactive: conversationProcessFactory,
+    }, credhelperClient);
+
+    // Wire workflow-engine's process launcher to route through AgentLauncher
+    clearProcessLauncher();
+    registerProcessLauncher(async (request: LaunchFunctionRequest): Promise<LaunchFunctionHandle> => {
+      const launchHandle = await this.agentLauncher.launch({
+        intent: {
+          kind: request.kind,
+          command: request.command,
+          ...(request.kind === 'generic-subprocess'
+            ? { args: request.args }
+            : {}),
+          env: request.env,
+          detached: request.detached,
+        } as import('../launcher/types.js').LaunchIntent,
+        cwd: request.cwd,
+        env: request.env,
+        signal: request.signal,
+        detached: request.detached,
+      });
+      return {
+        stdout: launchHandle.process.stdout,
+        stderr: launchHandle.process.stderr,
+        pid: launchHandle.process.pid,
+        kill: (sig?: NodeJS.Signals) => launchHandle.process.kill(sig),
+        exitPromise: launchHandle.process.exitPromise,
+      };
+    });
   }
 
   /**
@@ -167,7 +224,7 @@ export class ClaudeCliWorker {
         const prFeedbackHandler = new PrFeedbackHandler(
           this.config,
           workerLogger,
-          this.processFactory,
+          this.agentLauncher,
           this.sseEmitter,
         );
 
@@ -290,9 +347,10 @@ export class ClaudeCliWorker {
       const gateChecker = new GateChecker(workerLogger);
 
       const cliSpawner = new CliSpawner(
-        this.processFactory,
+        this.agentLauncher,
         workerLogger,
         this.config.shutdownGracePeriodMs,
+        this.config.credentialRole,
       );
 
       const conversationLogger = featureResult.feature_dir

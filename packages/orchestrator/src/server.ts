@@ -27,6 +27,7 @@ import { SmeeWebhookReceiver } from './services/smee-receiver.js';
 import { RelayBridge } from './services/relay-bridge.js';
 import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
+import { createWizardCredsTokenProvider } from './services/wizard-creds-token-provider.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
@@ -34,12 +35,22 @@ import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { resolveClusterIdentity } from './services/identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
+import { existsSync } from 'node:fs';
+import { probeControlPlaneSocket } from './services/control-plane-probe.js';
 import { ConversationManager } from './conversation/conversation-manager.js';
 import { ConversationSpawner } from './conversation/conversation-spawner.js';
 import { conversationProcessFactory } from './conversation/process-factory.js';
+import { createAgentLauncher } from './launcher/launcher-setup.js';
+import { CredhelperHttpClient } from './launcher/credhelper-client.js';
+import { defaultProcessFactory } from './worker/claude-cli-worker.js';
 import { setupConversationRoutes } from './routes/conversations.js';
 import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
+import { activate } from './activation/index.js';
+import { StatusReporter } from './services/status-reporter.js';
+import { PostActivationRetryService } from './services/post-activation-retry.js';
+import { TunnelHandler, getCodeServerManager } from '@generacy-ai/control-plane';
+import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 
 /**
  * Server creation options
@@ -138,9 +149,14 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   const isWorkerMode = config.mode === 'worker';
 
+  // Create wizard-creds token provider for orchestrator-process GitHub calls
+  const wizardCredsTokenProvider = !isWorkerMode
+    ? createWizardCredsTokenProvider('/var/lib/generacy/wizard-credentials.env', server.log)
+    : undefined;
+
   // Sync labels for watched repositories (skip in worker mode)
   if (!isWorkerMode && config.repositories.length > 0) {
-    const labelSyncService = new LabelSyncService(server.log, createGitHubClient);
+    const labelSyncService = new LabelSyncService(server.log, createGitHubClient, wizardCredsTokenProvider);
     try {
       const syncResult = await labelSyncService.syncAll(config.repositories);
       server.log.info(
@@ -202,19 +218,20 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     if (config.relay.apiKey) {
       try {
         const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+        // Cast: package's RelayMessage is a subset of local RelayMessage (lease types not in package yet — follow-up)
         workerRelayClient = new RelayClientImpl({
           apiKey: config.relay.apiKey,
           cloudUrl: config.relay.cloudUrl,
-        });
+        }) as unknown as import('./types/relay.js').ClusterRelayClient;
         jobEventEmitter = (event: string, data: Record<string, unknown>) => {
           try {
             if (!workerRelayClient?.isConnected) return;
             workerRelayClient.send({
-              type: 'event' as const,
+              type: 'event',
               event,
               data,
               timestamp: new Date().toISOString(),
-            } as import('./types/relay.js').RelayMessage);
+            });
           } catch (err) {
             server.log.warn(
               { err: err instanceof Error ? err.message : String(err), event },
@@ -267,6 +284,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       monitorConfig,
       config.repositories,
       clusterGithubUsername,
+      wizardCredsTokenProvider,
     );
 
     // Create SmeeWebhookReceiver if Smee channel URL is configured
@@ -292,74 +310,74 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         config.prMonitor,
         config.repositories,
         clusterGithubUsername,
+        wizardCredsTokenProvider,
       );
     }
   }
 
   // Initialize relay bridge (full mode only, when API key is configured)
   let relayBridge: RelayBridge | null = null;
-  if (!isWorkerMode && config.relay.apiKey) {
-    try {
-      // Dynamic import — @generacy-ai/cluster-relay may not be installed yet (Phase 2.1)
-      const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+  let activationPending = false;
 
-      // Generate internal API key for relay-proxied requests
-      const relayInternalKey = crypto.randomUUID();
-      apiKeyStore.addKey(relayInternalKey, {
-        name: 'relay-internal',
+  // Register internal relay events route BEFORE server.listen() (deferred binding pattern).
+  // The getter resolves to null until activation completes; the route returns 503 in that window.
+  let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  if (!isWorkerMode) {
+    const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
+    if (controlPlaneKey) {
+      apiKeyStore.addKey(controlPlaneKey, {
+        name: 'control-plane-internal',
         scopes: ['admin'],
         createdAt: new Date().toISOString(),
       });
+      setupInternalRelayEventsRoute(server, () => relayClientRef);
+      server.log.info('Control-plane relay event IPC endpoint registered');
+    }
+  }
 
-      const relayClient = new RelayClientImpl({
-        apiKey: config.relay.apiKey,
-        cloudUrl: config.relay.cloudUrl,
-        orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
-        orchestratorApiKey: relayInternalKey,
-      });
-      relayBridge = new RelayBridge({
-        client: relayClient,
-        server,
-        sseManager: getSSESubscriptionManager(),
-        logger: server.log,
-        config: config.relay,
-      });
-
-      // Wire lease manager into relay bridge (full mode)
-      const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
-      relayBridge.setLeaseManager(fullModeLeaseManager);
-
-      server.log.info('Relay bridge configured');
-    } catch (error) {
-      // Package not installed or import failed — skip silently (local-only mode)
-      server.log.info(
-        `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
+  if (!isWorkerMode && !config.relay.apiKey) {
+    // Wizard mode: background the activation so server.listen() is not blocked
+    activationPending = true;
+    activateInBackground(config, server, apiKeyStore, (bridge, convMgr) => {
+      relayBridge = bridge;
+      conversationManager = convMgr;
+      activationPending = false;
+    }, (client) => { relayClientRef = client; }).catch((error) => {
+      activationPending = false;
+      server.log.warn(
+        `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
       );
+    });
+  } else if (!isWorkerMode && config.relay.apiKey) {
+    // API key already exists: initialize relay bridge synchronously
+    const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
+    relayBridge = result.relayBridge;
+
+    // Check if post-activation needs to be retried (activated but completion flag absent)
+    const retryService = new PostActivationRetryService({
+      logger: server.log,
+      sendRelayEvent: relayClientRef
+        ? (channel, payload) => relayClientRef!.send({
+            type: 'event',
+            event: channel,
+            data: payload,
+            timestamp: new Date().toISOString(),
+          } as unknown as import('./types/relay.js').RelayMessage)
+        : undefined,
+    });
+    const postActivationState = retryService.checkPostActivationState();
+    if (postActivationState.needsRetry) {
+      server.log.info('Post-activation incomplete on restart — triggering retry');
+      retryService.triggerPostActivationRetry().catch((err) => {
+        server.log.error({ err }, 'Post-activation retry failed');
+      });
     }
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
   let conversationManager: ConversationManager | null = null;
   if (!isWorkerMode && Object.keys(config.conversations.workspaces).length > 0) {
-    const conversationSpawner = new ConversationSpawner(
-      conversationProcessFactory,
-      config.conversations.shutdownGracePeriodMs,
-    );
-    conversationManager = new ConversationManager(
-      config.conversations,
-      conversationSpawner,
-      server.log,
-    );
-
-    // Wire conversation output to relay bridge
-    if (relayBridge) {
-      relayBridge.setConversationManager(conversationManager);
-    }
-
-    server.log.info(
-      { workspaces: Object.keys(config.conversations.workspaces) },
-      'Conversation manager configured',
-    );
+    conversationManager = await initializeConversationManager(config, server, relayBridge);
   }
 
   // Register routes (unless skipped for testing)
@@ -494,13 +512,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
 
       if (config.webhookSetup.enabled && config.smee.channelUrl) {
-        const webhookSetupService = new WebhookSetupService(server.log);
+        const webhookSetupService = new WebhookSetupService(server.log, wizardCredsTokenProvider);
         webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });
       }
 
-      if (relayBridge) {
+      // Only start relay bridge here if it was initialized synchronously.
+      // The background activation path calls relayBridge.start() itself.
+      if (relayBridge && !activationPending) {
         relayBridge.start().catch((error) => {
           server.log.error({ err: error }, 'Relay bridge start failed');
         });
@@ -556,7 +576,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 }
 
 /**
- * Start the server and begin listening
+ * Start the server and begin listening.
+ * After listen, waits for the control-plane socket to appear (configurable timeout).
+ * On timeout: pushes error status via relay, waits a grace window, then exits.
  */
 export async function startServer(server: FastifyInstance): Promise<string> {
   const config = (server as FastifyInstance & { config: OrchestratorConfig }).config;
@@ -565,6 +587,41 @@ export async function startServer(server: FastifyInstance): Promise<string> {
     port: config.server.port,
     host: config.server.host,
   });
+
+  // Control-plane socket-wait (skip in worker mode)
+  if (config.mode !== 'worker') {
+    const waitTimeoutSec = parseInt(process.env['CONTROL_PLANE_WAIT_TIMEOUT'] ?? '15', 10);
+    const graceWindowMs = 30_000;
+    let found = false;
+
+    for (let elapsed = 0; elapsed < waitTimeoutSec; elapsed++) {
+      found = await probeControlPlaneSocket();
+      if (found) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+
+    if (!found) {
+      const reason = `control-plane socket did not bind within ${waitTimeoutSec}s`;
+      server.log.error(reason);
+
+      // Try to push error status via relay (StatusReporter goes through control-plane
+      // which is dead, so push directly via relay event IPC if available)
+      try {
+        const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
+        if (!controlPlaneKey) {
+          // Direct push — relay bridge may be available
+          server.log.warn('Cannot push error status: no relay IPC key');
+        }
+      } catch {
+        // Best effort
+      }
+
+      // Grace window: let any relay messages drain before exiting
+      server.log.error(`Waiting ${graceWindowMs / 1000}s grace window before exit...`);
+      await new Promise((r) => setTimeout(r, graceWindowMs));
+      process.exit(1);
+    }
+  }
 
   return address;
 }
@@ -585,6 +642,216 @@ export async function createTestServer(
 export async function createProductionServer(): Promise<FastifyInstance> {
   const config = loadConfig();
   return createServer({ config });
+}
+
+/**
+ * Run cluster activation in the background so server.listen() is not blocked.
+ * On success, initializes relay bridge, conversation manager, and starts the relay.
+ */
+async function activateInBackground(
+  config: OrchestratorConfig,
+  server: FastifyInstance,
+  apiKeyStore: InMemoryApiKeyStore,
+  onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
+  setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
+): Promise<void> {
+  const activationResult = await activate({
+    cloudUrl: config.activation.cloudUrl,
+    keyFilePath: config.activation.keyFilePath,
+    clusterJsonPath: config.activation.clusterJsonPath,
+    logger: server.log as unknown as import('pino').Logger,
+  });
+
+  config.relay.apiKey = activationResult.apiKey;
+  config.relay.clusterApiKeyId = activationResult.clusterApiKeyId;
+  if (activationResult.cloudUrl) {
+    config.activation.cloudUrl = activationResult.cloudUrl;
+    // Relay-server's auth middleware requires ?projectId=<id> on the upgrade
+    // request (see generacy-cloud/services/api/src/middleware/relay-auth.ts).
+    // Append it here so the cluster's WS connection isn't rejected with
+    // 401 "projectId query parameter required" — without the relay link,
+    // the cloud treats the cluster as offline and rejects credential pushes
+    // with "Cluster is not connected for this project".
+    const relayUrl = activationResult.cloudUrl
+      .replace(/^https:/, 'wss:')
+      .replace(/^http:/, 'ws:')
+      .replace(/\/$/, '') + '/relay'
+      + `?projectId=${encodeURIComponent(activationResult.projectId)}`;
+    config.relay.cloudUrl = relayUrl;
+  }
+  server.log.info('Cluster activation complete');
+
+  let localRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
+  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
+    localRelayClient = client;
+    setRelayClient?.(client);
+  });
+  const conversationManager = await initializeConversationManager(config, server, relayBridge);
+
+  onInitialized(relayBridge, conversationManager);
+
+  // Server is already listening — start relay bridge directly
+  if (relayBridge) {
+    await relayBridge.start();
+  }
+
+  // Check if post-activation needs to be retried (wizard-mode: activation just completed
+  // but post-activation may have failed on a prior container lifecycle)
+  const retryService = new PostActivationRetryService({
+    logger: server.log,
+    sendRelayEvent: localRelayClient
+      ? (channel, payload) => localRelayClient!.send({
+          type: 'event',
+          event: channel,
+          data: payload,
+          timestamp: new Date().toISOString(),
+        } as unknown as import('./types/relay.js').RelayMessage)
+      : undefined,
+  });
+  const postActivationState = retryService.checkPostActivationState();
+  if (postActivationState.needsRetry) {
+    server.log.info('Post-activation incomplete after wizard activation — triggering retry');
+    retryService.triggerPostActivationRetry().catch((err) => {
+      server.log.error({ err }, 'Post-activation retry failed');
+    });
+  }
+}
+
+/**
+ * Initialize relay bridge and status reporter.
+ * Extracted from createServer() for reuse in background activation path.
+ */
+async function initializeRelayBridge(
+  config: OrchestratorConfig,
+  server: FastifyInstance,
+  apiKeyStore: InMemoryApiKeyStore,
+  setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
+): Promise<{ relayBridge: RelayBridge | null; statusReporter: StatusReporter }> {
+  const controlPlaneSocket = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? '/run/generacy-control-plane/control.sock';
+  const statusReporter = new StatusReporter({ socketPath: controlPlaneSocket });
+
+  let relayBridge: RelayBridge | null = null;
+  if (!config.relay.apiKey) {
+    return { relayBridge, statusReporter };
+  }
+  try {
+    const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
+
+    const relayInternalKey = crypto.randomUUID();
+    apiKeyStore.addKey(relayInternalKey, {
+      name: 'relay-internal',
+      scopes: ['admin'],
+      createdAt: new Date().toISOString(),
+    });
+
+    const codeServerSocket = process.env['CODE_SERVER_SOCKET_PATH'] ?? '/run/generacy-control-plane/code-server.sock';
+
+    // Cast: package's RelayMessage is a subset of local RelayMessage (lease types not in package yet — follow-up)
+    const relayClient = new RelayClientImpl({
+      apiKey: config.relay.apiKey,
+      cloudUrl: config.relay.cloudUrl,
+      orchestratorUrl: `http://127.0.0.1:${config.server.port}`,
+      orchestratorApiKey: relayInternalKey,
+      routes: [
+        {
+          prefix: '/control-plane',
+          target: `unix://${controlPlaneSocket}`,
+        },
+        {
+          prefix: '/code-server',
+          target: `unix://${codeServerSocket}`,
+        },
+      ],
+    }) as unknown as import('./types/relay.js').ClusterRelayClient;
+
+    // Assign relay client ref for the deferred-binding route registered in createServer()
+    if (setRelayClient) {
+      setRelayClient(relayClient);
+    }
+
+    relayBridge = new RelayBridge({
+      client: relayClient,
+      server,
+      sseManager: getSSESubscriptionManager(),
+      logger: server.log,
+      config: config.relay,
+    });
+
+    const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);
+    relayBridge.setLeaseManager(fullModeLeaseManager);
+
+    const codeServerManager = getCodeServerManager();
+    if (codeServerManager) {
+      const tunnelHandler = new TunnelHandler(
+        { send: (msg: unknown) => relayClient.send(msg as import('./types/relay.js').RelayMessage) },
+        codeServerManager,
+      );
+      relayBridge.setTunnelHandler(tunnelHandler);
+
+      // Push metadata immediately when code-server becomes ready (seconds-latency, not 60s heartbeat)
+      const bridge = relayBridge;
+      codeServerManager.onStatusChange((status) => {
+        if (status === 'running') {
+          bridge.sendMetadata();
+        }
+      });
+    }
+
+    relayBridge.setStatusReporter(statusReporter);
+
+    server.log.info('Relay bridge configured');
+  } catch (error) {
+    server.log.info(
+      `Relay bridge not available: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  return { relayBridge, statusReporter };
+}
+
+/**
+ * Initialize ConversationManager.
+ * Extracted from createServer() for reuse in background activation path.
+ */
+async function initializeConversationManager(
+  config: OrchestratorConfig,
+  server: FastifyInstance,
+  relayBridge: RelayBridge | null,
+): Promise<ConversationManager | null> {
+  if (Object.keys(config.conversations.workspaces).length === 0) {
+    return null;
+  }
+
+  const convSocketPath = process.env['GENERACY_CREDHELPER_SOCKET'] ?? '/run/generacy-credhelper/control.sock';
+  const convCredhelperClient = existsSync(convSocketPath)
+    ? new CredhelperHttpClient({ socketPath: convSocketPath })
+    : undefined;
+
+  const agentLauncher = createAgentLauncher({
+    default: defaultProcessFactory,
+    interactive: conversationProcessFactory,
+  }, convCredhelperClient);
+  const conversationSpawner = new ConversationSpawner(
+    agentLauncher,
+    config.conversations.shutdownGracePeriodMs,
+    config.worker.credentialRole,
+  );
+  const conversationManager = new ConversationManager(
+    config.conversations,
+    conversationSpawner,
+    server.log,
+  );
+
+  if (relayBridge) {
+    relayBridge.setConversationManager(conversationManager);
+  }
+
+  server.log.info(
+    { workspaces: Object.keys(config.conversations.workspaces) },
+    'Conversation manager configured',
+  );
+
+  return conversationManager;
 }
 
 // Type augmentation for config access

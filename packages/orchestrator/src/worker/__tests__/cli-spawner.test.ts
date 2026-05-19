@@ -9,6 +9,9 @@ import type {
   CliSpawnOptions,
 } from '../types.js';
 import type { OutputCapture } from '../output-capture.js';
+import { AgentLauncher } from '../../launcher/agent-launcher.js';
+import { GenericSubprocessPlugin } from '../../launcher/generic-subprocess-plugin.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
 
 // ---------------------------------------------------------------------------
 // Mock Logger
@@ -91,8 +94,12 @@ describe('CliSpawner', () => {
   beforeEach(() => {
     spawnFn = vi.fn();
     factory = { spawn: spawnFn } as unknown as ProcessFactory;
+    // Wire AgentLauncher with real plugins and mock factory
+    const agentLauncher = new AgentLauncher(new Map([['default', factory]]));
+    agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+    agentLauncher.registerPlugin(new GenericSubprocessPlugin());
     // Use a short grace period (50ms) for tests
-    spawner = new CliSpawner(factory, mockLogger, 50);
+    spawner = new CliSpawner(agentLauncher, mockLogger, 50);
   });
 
   describe('spawnPhase - successful spawn', () => {
@@ -414,9 +421,9 @@ describe('CliSpawner', () => {
 });
 
 describe('WorkerConfigSchema - preValidateCommand', () => {
-  it('defaults to pnpm install', () => {
+  it('defaults to pnpm install && pnpm -r --filter ./packages/* build', () => {
     const config = WorkerConfigSchema.parse({});
-    expect(config.preValidateCommand).toBe('pnpm install');
+    expect(config.preValidateCommand).toBe("pnpm install && pnpm -r --filter './packages/*' build");
   });
 
   it('accepts empty string', () => {

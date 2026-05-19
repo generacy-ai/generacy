@@ -1,0 +1,23 @@
+schemaVersion: "1"
+id: senior-developer
+description: Senior developer with elevated access — extends developer (multi-level).
+extends: developer
+
+credentials:
+  - ref: github-main-org
+    scope:
+      repositories:
+        - tetrad-development
+        - generacy
+        - agency
+        - infrastructure
+      permissions:
+        contents: write
+        pull_requests: write
+        issues: write
+        workflows: write
+        actions: write
+    expose:
+      - as: git-credential-helper
+      - as: env
+        name: GITHUB_TOKEN

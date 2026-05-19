@@ -1,0 +1,26 @@
+import { Command } from 'commander';
+
+interface PlaceholderDef {
+  name: string;
+  description: string;
+  phase: string;
+}
+
+const PLACEHOLDERS: PlaceholderDef[] = [
+  { name: 'rebuild',      description: 'Rebuild cluster from scratch',       phase: 'phase 7' },
+];
+
+export function placeholderCommands(): Command[] {
+  return PLACEHOLDERS.map(({ name, description, phase }) => {
+    const cmd = new Command(name);
+    cmd.description(description);
+    cmd.allowUnknownOption(true);
+    cmd.action(() => {
+      console.log(
+        `"${name}" is not yet implemented in this preview — ` +
+        `landing in a future v1.5 ${phase} issue.`
+      );
+    });
+    return cmd;
+  });
+}

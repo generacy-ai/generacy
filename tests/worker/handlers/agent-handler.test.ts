@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
+import { EventEmitter } from 'events';
 import type { Job } from '../../../src/scheduler/types.js';
 import type {
   JobResult,
@@ -13,6 +14,8 @@ import type {
 import { AgentFeature } from '../../../src/agents/types.js';
 import { AgentRegistry } from '../../../src/agents/agent-registry.js';
 import { AgentNotFoundError } from '../../../src/agents/errors.js';
+import { ClaudeCodeInvoker } from '../../../src/agents/claude-code-invoker.js';
+import type { AgentLauncher, LaunchHandle } from '@generacy-ai/orchestrator';
 
 // AgentHandler will be implemented - import when available
 // import { AgentHandler } from '../../../src/worker/handlers/agent-handler.js';
@@ -692,6 +695,72 @@ describe('AgentHandler', () => {
 
       const job2 = createMockJob({ agent: 'claude-code' });
       await expect(handler.handle(job2)).rejects.toThrow(AgentNotFoundError);
+    });
+  });
+
+  describe('AgentLauncher integration', () => {
+    it('end-to-end: job payload → registry → ClaudeCodeInvoker → LaunchRequest', async () => {
+      // Create mock AgentLauncher
+      const stdoutEmitter = new EventEmitter();
+      const stderrEmitter = new EventEmitter();
+      let resolveExit: (code: number | null) => void;
+      const exitPromise = new Promise<number | null>((resolve) => {
+        resolveExit = resolve;
+      });
+
+      const mockLaunchHandle: LaunchHandle = {
+        process: {
+          stdout: stdoutEmitter,
+          stderr: stderrEmitter,
+          stdin: null,
+          pid: 99999,
+          kill: vi.fn(),
+          exitPromise,
+        } as any,
+        outputParser: { processChunk: () => {}, flush: () => {} },
+        metadata: { pluginId: 'claude-code', intentKind: 'invoke' },
+      };
+
+      const mockLauncher = {
+        launch: vi.fn().mockReturnValue(mockLaunchHandle),
+        registerPlugin: vi.fn(),
+      } as unknown as AgentLauncher & { launch: ReturnType<typeof vi.fn> };
+
+      // Wire real ClaudeCodeInvoker through registry
+      const launcherRegistry = new AgentRegistry();
+      const realInvoker = new ClaudeCodeInvoker(mockLauncher);
+      launcherRegistry.register(realInvoker);
+
+      const launcherHandler = new AgentHandler(launcherRegistry, config);
+
+      // Emit output and exit after a tick
+      setTimeout(() => {
+        stdoutEmitter.emit('data', Buffer.from('Agent completed'));
+        setTimeout(() => resolveExit(0), 5);
+      }, 10);
+
+      const job = createMockJob({
+        command: '/speckit:plan',
+        context: {
+          workingDirectory: '/workspace/project',
+          environment: { NODE_ENV: 'test' },
+          mode: 'autonomous',
+        },
+      });
+
+      const result = await launcherHandler.handle(job);
+
+      // Verify the full path
+      expect(result.success).toBe(true);
+      expect(result.output).toContain('Agent completed');
+      expect(mockLauncher.launch).toHaveBeenCalledWith({
+        intent: { kind: 'invoke', command: '/speckit:plan' },
+        cwd: '/workspace/project',
+        env: {
+          NODE_ENV: 'test',
+          CLAUDE_MODE: 'autonomous',
+        },
+      });
     });
   });
 });

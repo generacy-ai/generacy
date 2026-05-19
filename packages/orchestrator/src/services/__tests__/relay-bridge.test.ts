@@ -1,4 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
+
+vi.mock('../code-server-probe.js', () => ({
+  probeCodeServerSocket: vi.fn(async () => false),
+}));
+
 import { RelayBridge } from '../relay-bridge.js';
 import type { ClusterRelayClient, RelayMessage, RelayBridgeOptions } from '../../types/relay.js';
 import type { SSESubscriptionManager } from '../../sse/subscriptions.js';
@@ -441,6 +446,9 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
+      // Flush the async sendMetadata() promise
+      await vi.advanceTimersByTimeAsync(0);
+
       const metadataSends = mockClient.send.mock.calls.filter(
         (call: unknown[]) => (call[0] as RelayMessage).type === 'metadata',
       );
@@ -461,6 +469,9 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
+      // Flush the async initial sendMetadata()
+      await vi.advanceTimersByTimeAsync(0);
+
       // Clear the initial send
       mockClient.send.mockClear();
 
@@ -479,6 +490,7 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
 
@@ -500,6 +512,7 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
 
@@ -521,6 +534,9 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!(); // Should not throw
 
+      // Flush the async sendMetadata() promise
+      await vi.advanceTimersByTimeAsync(0);
+
       expect(mockLogger.error).toHaveBeenCalledWith(
         { err: 'Send failed' },
         'Error sending metadata',
@@ -534,14 +550,17 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
+      // Flush the async sendMetadata() promise
+      await vi.advanceTimersByTimeAsync(0);
+
       const metadataSends = mockClient.send.mock.calls.filter(
         (call: unknown[]) => (call[0] as RelayMessage).type === 'metadata',
       );
       expect(metadataSends).toHaveLength(0);
     });
 
-    it('should collect metadata with expected fields', () => {
-      const metadata = bridge.collectMetadata();
+    it('should collect metadata with expected fields', async () => {
+      const metadata = await bridge.collectMetadata();
 
       expect(metadata.uptimeSeconds).toBeGreaterThanOrEqual(0);
       expect(metadata.activeWorkflowCount).toBe(0);
@@ -590,6 +609,152 @@ describe('RelayBridge', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ err: 'WebSocket closed', event: 'job:failed' }),
         'Failed to emit job event (non-fatal)',
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Tunnel Dispatch
+  // ---------------------------------------------------------------------------
+
+  describe('tunnel dispatch', () => {
+    it('tunnel_open messages are dispatched to tunnelHandler.handleOpen()', async () => {
+      const mockTunnelHandler = {
+        handleOpen: vi.fn().mockResolvedValue(undefined),
+        handleData: vi.fn(),
+        handleClose: vi.fn(),
+        cleanup: vi.fn(),
+      };
+
+      bridge.setTunnelHandler(mockTunnelHandler);
+      await bridge.start();
+
+      const messageHandler = handlers['message']?.[0];
+      expect(messageHandler).toBeDefined();
+
+      const tunnelOpenMsg = {
+        type: 'tunnel_open',
+        tunnelId: 'tun-1',
+        target: '/run/code-server.sock',
+      };
+
+      messageHandler!(tunnelOpenMsg);
+
+      expect(mockTunnelHandler.handleOpen).toHaveBeenCalledWith(tunnelOpenMsg);
+    });
+
+    it('tunnel_data messages are dispatched to tunnelHandler.handleData()', async () => {
+      const mockTunnelHandler = {
+        handleOpen: vi.fn().mockResolvedValue(undefined),
+        handleData: vi.fn(),
+        handleClose: vi.fn(),
+        cleanup: vi.fn(),
+      };
+
+      bridge.setTunnelHandler(mockTunnelHandler);
+      await bridge.start();
+
+      const messageHandler = handlers['message']?.[0];
+      expect(messageHandler).toBeDefined();
+
+      const tunnelDataMsg = {
+        type: 'tunnel_data',
+        tunnelId: 'tun-1',
+        data: 'SGVsbG8gd29ybGQ=',
+      };
+
+      messageHandler!(tunnelDataMsg);
+
+      expect(mockTunnelHandler.handleData).toHaveBeenCalledWith(tunnelDataMsg);
+    });
+
+    it('tunnel_close messages are dispatched to tunnelHandler.handleClose()', async () => {
+      const mockTunnelHandler = {
+        handleOpen: vi.fn().mockResolvedValue(undefined),
+        handleData: vi.fn(),
+        handleClose: vi.fn(),
+        cleanup: vi.fn(),
+      };
+
+      bridge.setTunnelHandler(mockTunnelHandler);
+      await bridge.start();
+
+      const messageHandler = handlers['message']?.[0];
+      expect(messageHandler).toBeDefined();
+
+      const tunnelCloseMsg = {
+        type: 'tunnel_close',
+        tunnelId: 'tun-1',
+        reason: 'client disconnected',
+      };
+
+      messageHandler!(tunnelCloseMsg);
+
+      expect(mockTunnelHandler.handleClose).toHaveBeenCalledWith(tunnelCloseMsg);
+    });
+
+    it('tunnel messages are silently skipped when no tunnelHandler is set', async () => {
+      await bridge.start();
+
+      const messageHandler = handlers['message']?.[0];
+      expect(messageHandler).toBeDefined();
+
+      // Should not throw when no tunnel handler is set
+      expect(() => {
+        messageHandler!({ type: 'tunnel_open', tunnelId: 'tun-1', target: '/run/code-server.sock' });
+      }).not.toThrow();
+
+      expect(() => {
+        messageHandler!({ type: 'tunnel_data', tunnelId: 'tun-1', data: 'SGVsbG8=' });
+      }).not.toThrow();
+
+      expect(() => {
+        messageHandler!({ type: 'tunnel_close', tunnelId: 'tun-1', reason: 'done' });
+      }).not.toThrow();
+
+      // No errors should be logged
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+
+    it('handleDisconnected calls tunnelHandler.cleanup()', async () => {
+      const mockTunnelHandler = {
+        handleOpen: vi.fn().mockResolvedValue(undefined),
+        handleData: vi.fn(),
+        handleClose: vi.fn(),
+        cleanup: vi.fn(),
+      };
+
+      bridge.setTunnelHandler(mockTunnelHandler);
+      await bridge.start();
+
+      const disconnectedHandler = handlers['disconnected']?.[0];
+      expect(disconnectedHandler).toBeDefined();
+
+      disconnectedHandler!('relay server restarted');
+
+      expect(mockTunnelHandler.cleanup).toHaveBeenCalledOnce();
+    });
+
+    it('handleOpen errors are logged without crashing', async () => {
+      const mockTunnelHandler = {
+        handleOpen: vi.fn().mockRejectedValue(new Error('socket connect failed')),
+        handleData: vi.fn(),
+        handleClose: vi.fn(),
+        cleanup: vi.fn(),
+      };
+
+      bridge.setTunnelHandler(mockTunnelHandler);
+      await bridge.start();
+
+      const messageHandler = handlers['message']?.[0];
+      messageHandler!({ type: 'tunnel_open', tunnelId: 'tun-err', target: '/run/code-server.sock' });
+
+      // Wait for the rejected promise to be caught
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ err: 'socket connect failed', tunnelId: 'tun-err' }),
+        'Error handling tunnel open',
       );
     });
   });

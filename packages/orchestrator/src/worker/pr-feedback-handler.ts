@@ -1,11 +1,14 @@
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
-import type { Logger, ProcessFactory } from './types.js';
+import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
+import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
+import { buildLaunchCredentials } from './credentials-helper.js';
 
 /**
  * Handles the `address-pr-feedback` command.
@@ -63,7 +66,7 @@ export class PrFeedbackHandler {
   constructor(
     private readonly config: WorkerConfig,
     private readonly logger: Logger,
-    private readonly processFactory: ProcessFactory,
+    private readonly agentLauncher: AgentLauncher,
     private readonly sseEmitter?: SSEEventEmitter,
   ) {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
@@ -158,6 +161,7 @@ export class PrFeedbackHandler {
         checkoutPath,
         prompt,
         workflowId,
+        prNumber,
       );
 
       // 7. Commit and push changes (even on timeout — partial completion strategy)
@@ -286,15 +290,8 @@ Please proceed with addressing the feedback.`;
     checkoutPath: string,
     prompt: string,
     workflowId: string,
+    prNumber: number,
   ): Promise<boolean> {
-    const args = [
-      '-p',
-      '--output-format', 'stream-json',
-      '--dangerously-skip-permissions',
-      '--verbose',
-      prompt,
-    ];
-
     this.logger.info(
       { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs },
       'Spawning Claude CLI for PR feedback',
@@ -302,10 +299,17 @@ Please proceed with addressing the feedback.`;
 
     let child;
     try {
-      child = this.processFactory.spawn('claude', args, {
+      const handle = await this.agentLauncher.launch({
+        intent: {
+          kind: 'pr-feedback',
+          prNumber,
+          prompt,
+        } as PrFeedbackIntent,
         cwd: checkoutPath,
-        env: {} as Record<string, string>,
+        env: {},
+        credentials: buildLaunchCredentials(this.config.credentialRole),
       });
+      child = handle.process;
     } catch (error) {
       this.logger.error(
         { error: String(error), cwd: checkoutPath },

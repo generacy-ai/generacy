@@ -1,0 +1,32 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`ConversationSpawner integration > snapshot: full spawn args match pre-refactor baseline 1`] = `
+{
+  "args": [
+    "-u",
+    "-c",
+    "import pty, os, sys
+# Prevent PTY line wrapping by setting huge terminal width
+os.environ["COLUMNS"] = "50000"
+def read(fd):
+    data = os.read(fd, 65536)
+    # Strip CRLF that PTY adds, return cleaned data
+    # (pty._copy writes our return value to stdout)
+    return data.replace(b"\\r\\n", b"\\n")
+pty.spawn(sys.argv[1:], read)",
+    "claude",
+    "-p",
+    "Explain this code",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--resume",
+    "ses-xyz",
+    "--dangerously-skip-permissions",
+    "--model",
+    "claude-sonnet-4-6",
+  ],
+  "command": "python3",
+  "cwd": "/workspace/project",
+}
+`;

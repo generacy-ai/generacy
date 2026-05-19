@@ -87,7 +87,6 @@ export {
   type RelayMessage,
   type RelayApiRequest,
   type RelayApiResponse,
-  type RelayEvent,
   type RelayMetadata,
   type ClusterMetadataPayload,
   type GitRemoteInfo,
@@ -230,6 +229,24 @@ export {
   getActiveConnectionCount,
   closeAllSSEConnections,
 } from './routes/events.js';
+
+// Launcher
+export {
+  createAgentLauncher,
+  type AgentLauncher,
+  type GenericSubprocessIntent,
+  type ShellIntent,
+  type LaunchIntent,
+  type LaunchRequest,
+  type LaunchSpec,
+  type AgentLaunchPlugin,
+  type OutputParser,
+  type LaunchHandle,
+} from './launcher/index.js';
+
+// Process factories
+export { defaultProcessFactory } from './worker/claude-cli-worker.js';
+export { conversationProcessFactory } from './conversation/process-factory.js';
 
 // Utils
 export {

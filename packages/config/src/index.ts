@@ -28,4 +28,4 @@ export {
 
 export { convertTemplateConfig } from './convert-template.js';
 
-export { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, findWorkspaceConfigPath, scanForWorkspaceConfig } from './loader.js';
+export { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadDefaultsRole, findWorkspaceConfigPath, scanForWorkspaceConfig } from './loader.js';

@@ -1,8 +1,13 @@
 name: Publish Preview
 
+# Publishes a preview release on every push to develop. Also supports
+# manual dispatch via the Actions UI or:
+#   gh workflow run publish-preview.yml --ref <branch>
+
 on:
   push:
     branches: [develop]
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,11 +35,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build (root)
-        run: pnpm build
-
       - name: Build (packages)
         run: pnpm -r run --if-present build
+
+      - name: Build (root)
+        run: pnpm build
 
       - name: Ensure changesets for preview
         run: |

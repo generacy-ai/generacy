@@ -68,18 +68,6 @@ export function getPhaseSequence(workflowName: string): WorkflowPhase[] {
 }
 
 /**
- * Map each phase to its Claude CLI slash command (null = no CLI command)
- */
-export const PHASE_TO_COMMAND: Record<WorkflowPhase, string | null> = {
-  specify: '/specify',
-  clarify: '/clarify',
-  plan: '/plan',
-  tasks: '/tasks',
-  implement: '/implement',
-  validate: null,
-};
-
-/**
  * Stage types for issue comments
  */
 export type StageType = 'specification' | 'planning' | 'implementation';
@@ -270,7 +258,7 @@ export interface ProcessFactory {
   spawn(
     command: string,
     args: string[],
-    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal },
+    options: { cwd: string; env: Record<string, string>; signal?: AbortSignal; uid?: number; gid?: number; detached?: boolean },
   ): ChildProcessHandle;
 }
 

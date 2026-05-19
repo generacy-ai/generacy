@@ -34,7 +34,7 @@ export interface CreateFeatureInput {
   description: string;
   /** Optional 2-4 word short name for the branch */
   short_name?: string;
-  /** Optional explicit branch number (1-999) */
+  /** Optional explicit feature/issue number */
   number?: number;
   /** Parent epic branch to branch from (for epic children) */
   parent_epic_branch?: string;

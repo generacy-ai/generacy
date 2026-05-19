@@ -1,0 +1,32 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`executeCommand spawn composition (launcher path) > snapshot: executeCommand launcher request 1`] = `
+{
+  "args": [
+    "status",
+    "--porcelain",
+  ],
+  "command": "git",
+  "cwd": "/workspace",
+  "detached": true,
+  "env": {
+    "GIT_TERMINAL_PROMPT": "0",
+  },
+  "kind": "generic-subprocess",
+  "signal": undefined,
+}
+`;
+
+exports[`executeShellCommand spawn composition (launcher path) > snapshot: executeShellCommand launcher request 1`] = `
+{
+  "args": [],
+  "command": "npm run build 2>&1",
+  "cwd": "/workspace",
+  "detached": true,
+  "env": {
+    "NODE_ENV": "production",
+  },
+  "kind": "shell",
+  "signal": undefined,
+}
+`;

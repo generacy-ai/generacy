@@ -9,6 +9,9 @@ import type {
 } from '../types.js';
 import type { QueueItem, PrFeedbackMetadata } from '../../types/index.js';
 import type { WorkerConfig } from '../config.js';
+import { AgentLauncher } from '../../launcher/agent-launcher.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
+import { RecordingProcessFactory } from '../../test-utils/recording-process-factory.js';
 
 // ---------------------------------------------------------------------------
 // Mock Logger
@@ -145,10 +148,12 @@ describe('PrFeedbackHandler', () => {
     vi.clearAllMocks();
     spawnFn = vi.fn();
     processFactory = { spawn: spawnFn } as unknown as ProcessFactory;
+    const agentLauncher = new AgentLauncher(new Map([['default', processFactory]]));
+    agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
     handler = new PrFeedbackHandler(
       defaultConfig,
       mockLogger,
-      processFactory,
+      agentLauncher,
     );
 
     // Default mock implementations
@@ -743,6 +748,98 @@ describe('PrFeedbackHandler', () => {
         }),
         expect.any(String),
       );
+    });
+  });
+
+  describe('AgentLauncher path (T007)', () => {
+    it('calls agentLauncher.launch() with correct PrFeedbackIntent and uses handle.process', async () => {
+      const recordingFactory = new RecordingProcessFactory(0);
+      const agentLauncher = new AgentLauncher(
+        new Map([['default', recordingFactory]]),
+      );
+      agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+
+      const launcherHandler = new PrFeedbackHandler(
+        defaultConfig,
+        mockLogger,
+        agentLauncher,
+      );
+
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: false,
+        staged: [],
+        unstaged: [],
+        untracked: [],
+      });
+
+      await launcherHandler.handle(item, checkoutPath);
+
+      // AgentLauncher should have spawned via the recording factory
+      expect(recordingFactory.calls).toHaveLength(1);
+      const call = recordingFactory.calls[0];
+      expect(call.command).toBe('claude');
+      expect(call.args).toContain('-p');
+      expect(call.args).toContain('--output-format');
+      expect(call.args).toContain('stream-json');
+      expect(call.args).toContain('--dangerously-skip-permissions');
+      expect(call.args).toContain('--verbose');
+      expect(call.cwd).toBe(checkoutPath);
+
+      // The prompt should contain the PR number
+      const promptArg = call.args[call.args.length - 1];
+      expect(promptArg).toContain('PR #100');
+
+      // The direct processFactory should NOT have been called
+      expect(spawnFn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('Snapshot test: spawn-arg composition (T008)', () => {
+    it('launcher path produces correct spawn records', async () => {
+      const launcherFactory = new RecordingProcessFactory(0);
+      const agentLauncher = new AgentLauncher(
+        new Map([['default', launcherFactory]]),
+      );
+      agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+
+      const launcherHandler = new PrFeedbackHandler(
+        defaultConfig,
+        mockLogger,
+        agentLauncher,
+      );
+
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: false,
+        staged: [],
+        unstaged: [],
+        untracked: [],
+      });
+
+      await launcherHandler.handle(item, checkoutPath);
+
+      expect(launcherFactory.calls).toHaveLength(1);
+
+      // Snapshot command/args/cwd for regression detection (env excluded —
+      // AgentLauncher's 3-layer merge includes process.env which varies between runs)
+      const snapshotRecords = launcherFactory.calls.map(({ command, args, cwd }) => ({
+        command,
+        args,
+        cwd,
+      }));
+      expect(snapshotRecords).toMatchSnapshot();
     });
   });
 });

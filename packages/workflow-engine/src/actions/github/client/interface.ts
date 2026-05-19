@@ -334,4 +334,7 @@ export interface GitHubClient {
 /**
  * Factory function type for creating GitHubClient instances
  */
-export type GitHubClientFactory = (workdir?: string) => GitHubClient;
+export type GitHubClientFactory = (
+  workdir?: string,
+  tokenProvider?: () => Promise<string | undefined>,
+) => GitHubClient;

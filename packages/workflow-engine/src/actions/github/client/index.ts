@@ -24,6 +24,9 @@ import type { GitHubClient } from './interface.js';
 /**
  * Create a GitHub client using the default implementation (gh CLI)
  */
-export function createGitHubClient(workdir?: string): GitHubClient {
-  return new GhCliGitHubClient(workdir);
+export function createGitHubClient(
+  workdir?: string,
+  tokenProvider?: () => Promise<string | undefined>,
+): GitHubClient {
+  return new GhCliGitHubClient(workdir, tokenProvider);
 }

@@ -1,0 +1,154 @@
+import http from 'node:http';
+import { EventEmitter } from 'node:events';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { dispatch } from '../src/router.js';
+import { ControlPlaneError } from '../src/errors.js';
+import type { ActorContext } from '../src/context.js';
+import { initClusterState } from '../src/state.js';
+import { ClusterLocalBackend } from '@generacy-ai/credhelper';
+import { setCredentialBackend } from '../src/services/credential-writer.js';
+
+function createMockReq(method: string, url: string, headers?: Record<string, string>) {
+  return { method, url, headers: headers ?? {} } as unknown as http.IncomingMessage;
+}
+
+/**
+ * Creates a mock request backed by an EventEmitter so that handlers calling
+ * `readBody(req)` (which listens for 'data' and 'end' events) can resolve.
+ * After creation the caller should call `emitter.emit('end')` to unblock body reads.
+ */
+function createMockReqWithBody(method: string, url: string, body: string = '') {
+  const emitter = new EventEmitter();
+  const req = Object.assign(emitter, {
+    method,
+    url,
+    headers: {} as Record<string, string>,
+  }) as unknown as http.IncomingMessage;
+
+  // Schedule the body data + end events on the next microtick so the handler
+  // has time to attach its listeners.
+  queueMicrotask(() => {
+    if (body.length > 0) {
+      emitter.emit('data', Buffer.from(body));
+    }
+    emitter.emit('end');
+  });
+
+  return req;
+}
+
+function createMockRes() {
+  const res = {
+    statusCode: 0,
+    headers: {} as Record<string, string>,
+    body: '',
+    setHeader(name: string, value: string) { res.headers[name] = value; },
+    writeHead(status: number) { res.statusCode = status; },
+    end(data?: string) { res.body = data ?? ''; },
+  };
+  return res as unknown as http.ServerResponse;
+}
+
+const actor: ActorContext = { userId: 'test-user', sessionId: 'test-session' };
+
+describe('dispatch', () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    initClusterState({ deploymentMode: 'local', variant: 'cluster-base' });
+
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'router-test-'));
+    const agencyDir = path.join(tmpDir, '.agency');
+    await fs.mkdir(agencyDir, { recursive: true });
+    process.env['CREDHELPER_AGENCY_DIR'] = agencyDir;
+
+    const backend = new ClusterLocalBackend({
+      dataPath: path.join(tmpDir, 'credentials.dat'),
+      keyPath: path.join(tmpDir, 'master.key'),
+    });
+    await backend.init();
+    setCredentialBackend(backend);
+  });
+
+  afterEach(async () => {
+    delete process.env['CREDHELPER_AGENCY_DIR'];
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it('GET /state dispatches to state handler and returns 200', async () => {
+    const req = createMockReq('GET', '/state');
+    const res = createMockRes();
+
+    await dispatch(req, res, actor);
+
+    expect((res as any).statusCode).toBe(200);
+    const body = JSON.parse((res as any).body);
+    expect(body).toHaveProperty('status', 'bootstrapping');
+    expect(body).toHaveProperty('deploymentMode', 'local');
+    expect(body).toHaveProperty('variant', 'cluster-base');
+  });
+
+  it('GET /credentials/abc returns 404 for nonexistent credential', async () => {
+    const req = createMockReq('GET', '/credentials/abc');
+    const res = createMockRes();
+
+    await dispatch(req, res, actor);
+
+    expect((res as any).statusCode).toBe(404);
+    const body = JSON.parse((res as any).body);
+    expect(body).toHaveProperty('code', 'NOT_FOUND');
+  });
+
+  it('PUT /credentials/abc dispatches to credential PUT handler and returns 200', async () => {
+    const req = createMockReqWithBody('PUT', '/credentials/abc', '{"type":"api-key","value":"sk-test"}');
+    const res = createMockRes();
+
+    await dispatch(req, res, actor);
+
+    expect((res as any).statusCode).toBe(200);
+    const body = JSON.parse((res as any).body);
+    expect(body).toEqual({ ok: true });
+  });
+
+  it('POST /lifecycle/clone-peer-repos dispatches to lifecycle handler and returns 200', async () => {
+    const req = createMockReqWithBody('POST', '/lifecycle/clone-peer-repos', JSON.stringify({ repos: [] }));
+    const res = createMockRes();
+
+    await dispatch(req, res, actor);
+
+    expect((res as any).statusCode).toBe(200);
+    const body = JSON.parse((res as any).body);
+    expect(body).toEqual({ accepted: true, action: 'clone-peer-repos' });
+  });
+
+  it('GET /unknown throws NOT_FOUND ControlPlaneError', async () => {
+    const req = createMockReq('GET', '/unknown');
+    const res = createMockRes();
+
+    await expect(dispatch(req, res, actor)).rejects.toThrow(ControlPlaneError);
+
+    try {
+      await dispatch(req, res, actor);
+    } catch (err) {
+      expect(err).toBeInstanceOf(ControlPlaneError);
+      expect((err as ControlPlaneError).code).toBe('NOT_FOUND');
+    }
+  });
+
+  it('POST /state throws INVALID_REQUEST ControlPlaneError (method not allowed)', async () => {
+    const req = createMockReq('POST', '/state');
+    const res = createMockRes();
+
+    await expect(dispatch(req, res, actor)).rejects.toThrow(ControlPlaneError);
+
+    try {
+      await dispatch(req, res, actor);
+    } catch (err) {
+      expect(err).toBeInstanceOf(ControlPlaneError);
+      expect((err as ControlPlaneError).code).toBe('INVALID_REQUEST');
+    }
+  });
+});

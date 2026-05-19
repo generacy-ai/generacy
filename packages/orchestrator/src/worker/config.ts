@@ -26,9 +26,11 @@ export const WorkerConfigSchema = z.object({
   /** Command to run during the validate phase */
   validateCommand: z.string().default('pnpm test && pnpm build'),
   /** Command to run before validation to install dependencies (empty string to skip) */
-  preValidateCommand: z.string().default('pnpm install'),
+  preValidateCommand: z.string().default("pnpm install && pnpm -r --filter './packages/*' build"),
   /** Maximum retries for implement phase when partial progress is detected */
   maxImplementRetries: z.number().int().min(0).max(5).default(2),
+  /** Credential role from .generacy/config.yaml defaults.role — when set, credentials are populated on launch requests */
+  credentialRole: z.string().optional(),
   /** Gate definitions keyed by issue label */
   gates: z.record(z.string(), z.array(GateDefinitionSchema)).default({
     'speckit-feature': [

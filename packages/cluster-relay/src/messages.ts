@@ -9,6 +9,7 @@ export interface ApiRequestMessage {
   path: string;
   headers?: Record<string, string>;
   body?: unknown;
+  actor?: Actor;
 }
 
 export interface ApiResponseMessage {
@@ -21,8 +22,9 @@ export interface ApiResponseMessage {
 
 export interface EventMessage {
   type: 'event';
-  channel: string;
-  event: unknown;
+  event: string;
+  data: unknown;
+  timestamp: string;
 }
 
 export interface ConversationInputMessage {
@@ -53,12 +55,38 @@ export interface HeartbeatMessage {
 export interface HandshakeMessage {
   type: 'handshake';
   metadata: ClusterMetadata;
+  activation?: Activation;
 }
 
 export interface ErrorMessage {
   type: 'error';
   code: string;
   message: string;
+}
+
+export interface TunnelOpenMessage {
+  type: 'tunnel_open';
+  tunnelId: string;
+  target: string;
+}
+
+export interface TunnelOpenAckMessage {
+  type: 'tunnel_open_ack';
+  tunnelId: string;
+  status: 'ok' | 'error';
+  error?: string;
+}
+
+export interface TunnelDataMessage {
+  type: 'tunnel_data';
+  tunnelId: string;
+  data: string;
+}
+
+export interface TunnelCloseMessage {
+  type: 'tunnel_close';
+  tunnelId: string;
+  reason?: string;
 }
 
 export type RelayMessage =
@@ -68,7 +96,11 @@ export type RelayMessage =
   | ConversationMessage
   | HeartbeatMessage
   | HandshakeMessage
-  | ErrorMessage;
+  | ErrorMessage
+  | TunnelOpenMessage
+  | TunnelOpenAckMessage
+  | TunnelDataMessage
+  | TunnelCloseMessage;
 
 export interface GitRemote {
   name: string;
@@ -82,9 +114,24 @@ export interface ClusterMetadata {
   orchestratorVersion: string;
   gitRemotes: GitRemote[];
   uptime: number;
+  codeServerReady?: boolean;
+  controlPlaneReady?: boolean;
 }
 
 // --- Zod Schemas ---
+
+export const ActorSchema = z.object({
+  userId: z.string(),
+  sessionId: z.string().optional(),
+});
+
+export const ActivationSchema = z.object({
+  code: z.string(),
+  clusterApiKeyId: z.string().optional(),
+});
+
+export type Actor = z.infer<typeof ActorSchema>;
+export type Activation = z.infer<typeof ActivationSchema>;
 
 const GitRemoteSchema = z.object({
   name: z.string(),
@@ -108,6 +155,7 @@ const ApiRequestMessageSchema = z.object({
   headers: z.record(z.string()).optional(),
   body: z.unknown().optional(),
   timestamp: z.string().optional(),
+  actor: ActorSchema.optional(),
 });
 
 const ApiResponseMessageSchema = z.object({
@@ -119,10 +167,11 @@ const ApiResponseMessageSchema = z.object({
   timestamp: z.string().optional(),
 });
 
-const EventMessageSchema = z.object({
+export const EventMessageSchema = z.object({
   type: z.literal('event'),
-  channel: z.string().min(1),
-  event: z.unknown(),
+  event: z.string().min(1),
+  data: z.unknown(),
+  timestamp: z.string().datetime(),
 });
 
 const ConversationInputDataSchema = z.object({
@@ -149,12 +198,38 @@ const HeartbeatMessageSchema = z.object({
 const HandshakeMessageSchema = z.object({
   type: z.literal('handshake'),
   metadata: ClusterMetadataSchema,
+  activation: ActivationSchema.optional(),
 });
 
 const ErrorMessageSchema = z.object({
   type: z.literal('error'),
   code: z.string().min(1),
   message: z.string(),
+});
+
+const TunnelOpenMessageSchema = z.object({
+  type: z.literal('tunnel_open'),
+  tunnelId: z.string().min(1),
+  target: z.string().min(1),
+});
+
+const TunnelOpenAckMessageSchema = z.object({
+  type: z.literal('tunnel_open_ack'),
+  tunnelId: z.string().min(1),
+  status: z.enum(['ok', 'error']),
+  error: z.string().optional(),
+});
+
+const TunnelDataMessageSchema = z.object({
+  type: z.literal('tunnel_data'),
+  tunnelId: z.string().min(1),
+  data: z.string().min(1),
+});
+
+const TunnelCloseMessageSchema = z.object({
+  type: z.literal('tunnel_close'),
+  tunnelId: z.string().min(1),
+  reason: z.string().optional(),
 });
 
 export const RelayMessageSchema = z.discriminatedUnion('type', [
@@ -165,6 +240,10 @@ export const RelayMessageSchema = z.discriminatedUnion('type', [
   HeartbeatMessageSchema,
   HandshakeMessageSchema,
   ErrorMessageSchema,
+  TunnelOpenMessageSchema,
+  TunnelOpenAckMessageSchema,
+  TunnelDataMessageSchema,
+  TunnelCloseMessageSchema,
 ]);
 
 export { ClusterMetadataSchema, GitRemoteSchema };

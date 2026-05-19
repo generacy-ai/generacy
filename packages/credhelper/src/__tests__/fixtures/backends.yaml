@@ -1,0 +1,10 @@
+schemaVersion: "1"
+backends:
+  - id: generacy-cloud
+    type: generacy-cloud
+    endpoint: https://api.generacy.com
+    auth:
+      mode: oidc-device
+
+  - id: env
+    type: env

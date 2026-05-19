@@ -36,6 +36,8 @@ import type {
   QueueAdapter,
 } from '../types/index.js';
 import type { Logger } from '../worker/types.js';
+import { AgentLauncher } from '../launcher/agent-launcher.js';
+import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code';
 
 // ==========================================================================
 // Mock GitHub Client
@@ -1660,6 +1662,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   let phaseTracker: MockPhaseTracker;
   let monitorService: PrFeedbackMonitorService;
   let processFactory: any;
+  let agentLauncher: AgentLauncher;
   let mockProcess: any;
 
   beforeEach(async () => {
@@ -1757,6 +1760,8 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     processFactory = {
       spawn: vi.fn(() => mockProcess),
     };
+    agentLauncher = new AgentLauncher(new Map([['default', processFactory]]));
+    agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
   });
 
   afterEach(() => {
@@ -1794,7 +1799,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         gates: {},
       },
       logger,
-      processFactory,
+      agentLauncher,
     );
 
     // Create queue item
@@ -1959,7 +1964,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         gates: {},
       },
       logger,
-      processFactory,
+      agentLauncher,
     );
 
     const queueItem = {
@@ -2014,7 +2019,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         gates: {},
       },
       logger,
-      processFactory,
+      agentLauncher,
     );
 
     const queueItem = {
@@ -2079,7 +2084,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         gates: {},
       },
       logger,
-      processFactory,
+      agentLauncher,
     );
 
     const queueItem = {
@@ -2147,7 +2152,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         gates: {},
       },
       logger,
-      processFactory,
+      agentLauncher,
     );
 
     const queueItem = {
@@ -2229,7 +2234,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         gates: {},
       },
       logger,
-      processFactory,
+      agentLauncher,
     );
 
     const queueItem = {

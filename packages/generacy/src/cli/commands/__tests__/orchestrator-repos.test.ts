@@ -102,12 +102,17 @@ describe('orchestrator CLI repos resolution', () => {
     ]);
   });
 
-  it('exits with error when label monitor enabled but no repos', async () => {
+  it('warns and disables label monitor when enabled but no repos', async () => {
     mockConfig.repositories = [];
 
     await runCommand(['--label-monitor']);
 
-    expect(mockExit).toHaveBeenCalledWith(1);
+    // Should NOT exit — server handles labelMonitor + empty repos gracefully.
+    expect(mockExit).not.toHaveBeenCalled();
+
+    // Label monitor should be disabled in the resulting config passed to the server.
+    const callArgs = vi.mocked(createServer).mock.calls[0]![0];
+    expect(callArgs.config.labelMonitor).toBe(false);
   });
 
   it('delegates config file fallback to loadConfig', async () => {

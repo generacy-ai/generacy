@@ -1,0 +1,125 @@
+# Feature Specification: ## Credentials Architecture — Phase 3 (parallel with #463 and #465)
+
+**Context:** Part of the [credentials architecture plan](https://github
+
+**Branch**: `464-credentials-architecture` | **Date**: 2026-04-13 | **Status**: Draft
+
+## Summary
+
+## Credentials Architecture — Phase 3 (parallel with #463 and #465)
+
+**Context:** Part of the [credentials architecture plan](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/credentials-architecture-plan.md). See decisions #13 and #16, and the "Scoped docker socket proxy" section.
+
+**Depends on:** Phase 2 (#461 daemon — provides session lifecycle, #462 config loading — provides role docker blocks)
+
+## What needs to be done
+
+Implement a scoped docker socket proxy inside `packages/credhelper/`. The proxy mediates all docker API access from workflow processes, enforcing per-role method+path allowlists with default deny.
+
+### Architecture
+
+- The credhelper creates a per-session proxy socket at `/run/generacy-credhelper/sessions/<id>/docker.sock`
+- Workflow processes see `DOCKER_HOST=unix:///run/generacy-credhelper/sessions/<id>/docker.sock`
+- The proxy intercepts each Docker API request, matches against the role's allowlist, and forwards to the upstream socket or rejects
+
+### Upstream socket selection (decision #16)
+
+The proxy is **uniform across cluster variants** — same code, same allowlist logic. Only the upstream differs:
+
+1. If `ENABLE_DIND=true` AND `/var/run/docker.sock` is reachable → forward to `/var/run/docker.sock` (DinD daemon)
+2. Else if `/var/run/docker-host.sock` is mounted → forward to `/var/run/docker-host.sock` (host docker, DooD)
+3. Else → fail closed at credhelper boot with clear error
+
+### Role schema for docker allowlists
+
+Roles declare allowed docker API operations:
+
+```yaml
+docker:
+  default: deny
+  allow:
+    - { method: GET,  path: /containers/json }
+    - { method: GET,  path: "/containers/{id}/json" }
+    - { method: POST, path: "/containers/{id}/start",   name: "firebase-*" }
+    - { method: POST, path: "/containers/{id}/stop",    name: "firebase-*" }
+    - { method: GET,  path: "/containers/{id}/logs" }
+```
+
+### Enforcement
+
+- Parse each incoming HTTP request on the proxy socket
+- Match `method` + `path` against the role's allowlist
+- For container-scoped operations (paths with `{id}`): resolve the container ID to its name, match against the `name` glob pattern if specified
+- **Default deny** — anything not explicitly in the allowlist is rejected with HTTP 403
+- Dangerous paths (`POST /containers/create` with arbitrary bind mounts, `POST /exec`, etc.) should only be allowed if explicitly listed AND constrained
+
+### Security note for non-DinD clusters (cluster-base)
+
+When the upstream is the host docker socket, `POST /containers/create` with bind mounts is effectively granting host filesystem access. The proxy should:
+- Log a warning at boot if the role allows `POST /containers/create` and the upstream is the host socket
+- The role validation in #462 should surface this as a warning
+
+### Per-session lifecycle
+
+- On session begin: create the proxy socket, bind to it, start forwarding
+- On session end: close the proxy socket, tear down proxy state
+- The proxy runs as part of the credhelper daemon process (same uid 1002), not as a separate process
+
+### Implementation approach
+
+Follow the pattern from [Tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) but implemented in Node.js:
+- HTTP CONNECT-style proxying over Unix sockets
+- Request parsing to extract method + path
+- Allowlist matching with glob support for container names
+
+## Acceptance criteria
+
+- Proxy socket is created per session and cleaned up on session end
+- Allowed requests are forwarded correctly and responses returned
+- Denied requests return HTTP 403 with clear error message naming the denied method+path
+- Container name-based filtering works (resolve ID → name → glob match)
+- Upstream auto-detection works for both DinD (`/var/run/docker.sock`) and DooD (`/var/run/docker-host.sock`)
+- Fails closed when no upstream socket is available
+- Unit tests: allowlist matching, glob patterns, deny by default
+- Integration test with a real docker socket (can use DinD in tetrad-development)
+
+## Phase grouping
+
+- **Phase 3** — parallel with #463 and #465
+- **Rebuild cluster after Phase 3 completes**
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
+## Assumptions
+
+- [Assumption 1]
+
+## Out of Scope
+
+- [Exclusion 1]
+
+---
+
+*Generated by speckit*

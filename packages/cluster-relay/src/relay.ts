@@ -1,10 +1,11 @@
 import WebSocket from 'ws';
-import type { RelayConfig } from './config.js';
+import type { RelayConfig, RouteEntry } from './config.js';
 import { RelayConfigSchema } from './config.js';
-import type { RelayMessage, ClusterMetadata } from './messages.js';
+import type { RelayMessage, ClusterMetadata, Activation } from './messages.js';
 import { parseRelayMessage } from './messages.js';
 import { collectMetadata } from './metadata.js';
 import { handleApiRequest } from './proxy.js';
+import { sortRoutes } from './dispatcher.js';
 
 export type RelayState = 'disconnected' | 'connecting' | 'authenticating' | 'connected' | 'disconnecting';
 
@@ -21,7 +22,7 @@ export interface Logger {
 export interface ClusterRelayClientOptions {
   /** API key for cloud authentication (GENERACY_API_KEY) */
   apiKey: string;
-  /** Cloud relay WebSocket URL (GENERACY_CLOUD_URL) */
+  /** Cloud relay WebSocket URL (set via GENERACY_RELAY_URL env var) */
   cloudUrl?: string;
   /** Base reconnect delay in ms (default: 5000) */
   baseReconnectDelayMs?: number;
@@ -29,6 +30,8 @@ export interface ClusterRelayClientOptions {
   orchestratorUrl?: string;
   /** API key for authenticating relay-proxied requests to the orchestrator */
   orchestratorApiKey?: string;
+  /** Path-prefix routes for dispatching API requests to unix sockets or HTTP targets */
+  routes?: RouteEntry[];
 }
 
 type EventMap = {
@@ -73,16 +76,21 @@ export class ClusterRelay {
    */
   constructor(config: RelayConfig | ClusterRelayClientOptions, logger?: Logger) {
     if ('relayUrl' in config) {
-      this.config = config as RelayConfig;
+      this.config = {
+        ...config,
+        routes: sortRoutes(config.routes ?? []),
+      } as RelayConfig;
     } else {
       const opts = config as ClusterRelayClientOptions;
-      this.config = RelayConfigSchema.parse({
+      const parsed = RelayConfigSchema.parse({
         apiKey: opts.apiKey,
         relayUrl: opts.cloudUrl,
         baseReconnectDelayMs: opts.baseReconnectDelayMs,
         orchestratorUrl: opts.orchestratorUrl,
         orchestratorApiKey: opts.orchestratorApiKey,
+        routes: opts.routes,
       });
+      this.config = { ...parsed, routes: sortRoutes(parsed.routes) };
     }
     this.logger = logger ?? defaultLogger;
   }
@@ -221,8 +229,8 @@ export class ClusterRelay {
   /**
    * Push an event to the cloud (library mode).
    */
-  pushEvent(channel: string, event: unknown): void {
-    this.send({ type: 'event', channel, event });
+  pushEvent(event: string, data: unknown): void {
+    this.send({ type: 'event', event, data, timestamp: new Date().toISOString() });
   }
 
   /**
@@ -356,7 +364,13 @@ export class ClusterRelay {
     try {
       const collected = await collectMetadata(this.config);
       const metadata: ClusterMetadata = { ...collected, ...this.metadataOverride };
-      const handshake: RelayMessage = { type: 'handshake', metadata };
+      const handshake: RelayMessage & { activation?: Activation } = { type: 'handshake', metadata };
+      if (this.config.activationCode) {
+        handshake.activation = {
+          code: this.config.activationCode,
+          ...(this.config.clusterApiKeyId ? { clusterApiKeyId: this.config.clusterApiKeyId } : {}),
+        };
+      }
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.ws.send(JSON.stringify(handshake));
       }
