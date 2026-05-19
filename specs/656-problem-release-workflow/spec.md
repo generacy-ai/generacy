@@ -1,0 +1,87 @@
+# Feature Specification: Publish @stable dist-tag on release to main
+
+**Branch**: `656-problem-release-workflow` | **Date**: 2026-05-19 | **Status**: Draft
+
+## Summary
+
+Add a `@stable` npm dist-tag to `@generacy-ai/generacy` when the Changesets release workflow publishes to npm on merge to `main`. This unblocks the cloud's `launch-claim` endpoint from hardcoding `@preview` for all projects, enabling proper channel-based tag resolution (`stable` -> `@stable`, `preview` -> `@preview`).
+
+## Problem
+
+The release workflow at `.github/workflows/release.yml:47` publishes `@generacy-ai/generacy` via Changesets on merge to `main` without specifying a dist-tag, so npm defaults to `@latest`. No `@stable` dist-tag is ever advanced.
+
+`npm view @generacy-ai/generacy dist-tags` currently shows only:
+
+```
+preview: 0.0.0-preview-20260519033506
+```
+
+The cloud's `launch-claim` endpoint is forced to hardcode `packageTag = 'preview'` for every project, including production `channel: stable` ones. Users onboarding a stable-channel project see `npx -y @generacy-ai/generacy@preview launch ...`, which is incorrect for production.
+
+## Solution
+
+Add a post-publish step to `.github/workflows/release.yml` that runs `npm dist-tag add @generacy-ai/generacy@<VERSION> stable` after the Changesets action publishes. This preserves `@latest` (npm default) and adds `@stable` as an explicit alias the cloud can rely on.
+
+Option 1 (tag after publish) is preferred over Option 2 (publish with `--tag stable`) because the latter would remove `@latest` advancement.
+
+## User Stories
+
+### US1: Stable-channel user onboarding
+
+**As a** user onboarding a stable-channel project,
+**I want** the launch command to reference `@generacy-ai/generacy@stable`,
+**So that** I'm clearly running the production release, not a preview snapshot.
+
+**Acceptance Criteria**:
+- [ ] After a Changesets release, `npm view @generacy-ai/generacy dist-tags` shows both `latest` and `stable` pointing at the new version
+- [ ] `npm view @generacy-ai/generacy@stable version` resolves to the latest main-branch release
+
+### US2: Cloud launch-claim endpoint channel resolution
+
+**As a** cloud developer maintaining the launch-claim endpoint,
+**I want** a `@stable` dist-tag published from the release workflow,
+**So that** I can branch `packageTag` by `project.channel` (`preview` -> `@preview`, `stable` -> `@stable`) and remove the hardcoded TODO.
+
+**Acceptance Criteria**:
+- [ ] The `@stable` dist-tag exists on npm after the first release with this change
+- [ ] The companion cloud issue (generacy-cloud#649) can be unblocked
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Add a workflow step after Changesets publish that advances the `@stable` dist-tag to the newly published version | P1 | Conditional on `steps.changesets.outputs.published == 'true'` |
+| FR-002 | Extract the published version from `steps.changesets.outputs.publishedPackages` JSON | P1 | Use `jq` to parse the `@generacy-ai/generacy` entry |
+| FR-003 | Authenticate to npm using `secrets.NPM_TOKEN` via `NODE_AUTH_TOKEN` | P1 | Same pattern as existing publish step |
+| FR-004 | The `@latest` dist-tag must continue to be advanced by the default Changesets publish | P1 | No change to existing publish behavior |
+| FR-005 | The `@preview` dist-tag (from `publish-preview.yml`) must be unaffected | P1 | Different workflow, different tag |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | `@stable` dist-tag exists after release | Present | `npm view @generacy-ai/generacy dist-tags` includes `stable` |
+| SC-002 | `@stable` version matches `@latest` | Equal | `npm view @generacy-ai/generacy@stable version` == `npm view @generacy-ai/generacy@latest version` |
+| SC-003 | `@preview` tag unchanged | Unaffected | `npm view @generacy-ai/generacy@preview version` unchanged before/after |
+| SC-004 | Workflow completes without error | Success | GitHub Actions run is green |
+
+## Assumptions
+
+- The `changesets/action@v1` outputs `publishedPackages` as a JSON array with `name` and `version` fields
+- `NPM_TOKEN` secret has permissions to add dist-tags (standard publish token does)
+- Only `@generacy-ai/generacy` needs the `@stable` tag (other packages in the monorepo don't need it)
+
+## Out of Scope
+
+- Cloud-side changes to branch `packageTag` by channel (generacy-cloud#649)
+- Backfilling `@stable` on already-published versions (first release with this change will establish the tag)
+- Changes to the `publish-preview.yml` workflow
+
+## Related Issues
+
+- generacy-ai/generacy-cloud#518 — original launch-command issue (closed). The TODO at `projects.ts:336` references this directly.
+- generacy-ai/generacy-cloud#649 — companion cloud-side issue that flips `packageTag` to branch by `project.channel` once this lands.
+
+---
+
+*Generated by speckit*
