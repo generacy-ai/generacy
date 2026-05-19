@@ -1,5 +1,11 @@
 # @generacy-ai/cluster-relay
 
+## 0.1.2
+
+### Patch Changes
+
+- da4825e: Initial `stable` dist-tag release. Publishes current main under the `stable` channel so the orchestrator's `npm install @generacy-ai/<pkg>@stable` resolves.
+
 ## 0.1.1
 
 ### Patch Changes
