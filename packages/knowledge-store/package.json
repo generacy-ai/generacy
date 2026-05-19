@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/knowledge-store",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Knowledge store management service for persisting and managing individual knowledge",
   "type": "module",
   "main": "./dist/index.js",

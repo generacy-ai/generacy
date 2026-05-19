@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/generacy-plugin-copilot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "GitHub Copilot Workspace agent platform plugin for Generacy - tracks and monitors Copilot Workspace sessions",
   "type": "module",
   "main": "./dist/index.js",

@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/generacy-plugin-cloud-build",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Google Cloud Build integration plugin for Generacy - enables triggering builds, monitoring status, streaming logs, and managing triggers",
   "type": "module",
   "main": "./dist/index.js",
