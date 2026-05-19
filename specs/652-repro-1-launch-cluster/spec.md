@@ -1,88 +1,131 @@
-# Bug Fix: Cluster restart doesn't retry failed post-activation
+# Feature Specification: ## Repro
 
-**Branch**: `652-repro-1-launch-cluster` | **Date**: 2026-05-19 | **Status**: Draft | **Issue**: [#652](https://github.com/generacy-ai/generacy/issues/652)
+1
+
+**Branch**: `652-repro-1-launch-cluster` | **Date**: 2026-05-19 | **Status**: Draft
 
 ## Summary
 
-When post-activation fails on first boot (e.g., `git clone` fatals due to wrong branch, missing creds, or network error), restarting the cluster does not retry the post-activation script. The `/tmp/generacy-bootstrap-complete` trigger file is lost on container restart (tmpfs), and no wizard runs on subsequent boots (activation already complete), leaving the cluster permanently half-set-up with no recovery path except destroying the data volume.
+## Repro
 
-The fix: track post-activation completion on the data volume (`/var/lib/generacy/post-activation-complete`), and on startup, if activated but post-activation never succeeded, re-run it immediately.
+1. Launch a cluster with a configuration that causes post-activation to fail mid-setup (easiest reproducer today: a project repo whose default branch isn't `main` — see [generacy-ai/generacy#651](https://github.com/generacy-ai/generacy/issues/651) for the underlying cause). The wizard completes, "Cluster activated successfully" is logged, but the post-activation script's `git clone` fatals.
+2. Stop the cluster and restart it (e.g., fix whatever caused the failure, then `docker compose down && up -d` or `npx generacy stop && npx generacy up`).
+3. **Expected:** post-activation re-runs against the now-fixed config, completes successfully, repo gets cloned, cluster is fully set up.
+4. **Actual:** post-activation never re-runs. The cluster reports healthy and "activated," but `/workspaces/<project>/` stays empty and `gh CLI` stays unauthenticated. From the outside, the cluster looks fine; nothing surfaces the half-completed-setup state.
+
+## Root cause
+
+The orchestrator's post-activation flow is gated on the existence of `/tmp/generacy-bootstrap-complete`. On first launch, the wizard creates that file when the user clicks through the activation steps; the `post-activation-watcher` (armed at orchestrator startup) detects the file appearing and runs the `post-activation` script (which does `git clone`, configures gh CLI, etc.).
+
+The container's orchestrator log on a restart with persisted cluster API key:
+
+```
+[orchestrator] Wizard mode — deferring repo clone until activation completes
+[orchestrator] Arming post-activation watcher (trigger: /tmp/generacy-bootstrap-complete)
+[post-activation-watcher] Watching /tmp/generacy-bootstrap-complete (poll every 2s)...
+... Existing cluster API key found, skipping activation
+... Cluster activation complete
+```
+
+Three things are happening simultaneously:
+
+1. **The cluster has a persisted API key** (stored on the data volume, survives restart). It uses this to skip activation — the cloud already knows about this cluster.
+2. **The wizard is skipped** because activation is already complete from the cloud's perspective.
+3. **`/tmp/generacy-bootstrap-complete` is in `/tmp`**, which is wiped on container restart. The watcher is armed, waiting for a trigger that will never appear (no wizard to create it).
+
+The result: post-activation is permanently blocked from running. Any partial state left from the failed first attempt (e.g., an empty `/workspaces/<project>/` directory created by the `Cloning into ...` line before `fatal:`) persists, and there's no recovery path short of destroying the cluster's data volume and starting over.
+
+## Fix
+
+Track post-activation completion **on the data volume**, not in `/tmp`. The orchestrator startup decides what to do based on the persisted state:
+
+| State | Action on startup |
+|---|---|
+| First boot, no prior activation | Arm watcher; wait for wizard trigger (today's behavior) |
+| Prior activation succeeded AND prior post-activation succeeded | Skip post-activation (today's behavior — don't re-clone on every restart) |
+| Prior activation succeeded BUT prior post-activation failed or never completed | **Re-run post-activation immediately** (new behavior — currently this case is silently broken) |
+
+Concretely:
+
+- Persist a flag like `/var/lib/generacy/post-activation-complete` (or a small JSON state file) on the data volume when post-activation succeeds.
+- On orchestrator startup, if cluster is already activated (existing API key) AND `post-activation-complete` is absent → directly run the post-activation script, no need for the wizard trigger file at all.
+- Keep the `/tmp/generacy-bootstrap-complete` trigger as the first-boot signal from the wizard, but treat it as additive — its absence shouldn't mean "skip post-activation forever," it should mean "wait for wizard OR proceed if state file says re-run."
+
+### Defensive cleanup
+
+If post-activation succeeded but left files in a weird state (e.g., the clone partially wrote to `/workspaces/<project>/` before failing), the retry should clean up before retrying:
+
+- If `/workspaces/<project>/` exists and is empty (no `.git`), `rm -rf` it before attempting the clone.
+- If `/workspaces/<project>/.git` exists but doesn't match the configured `REPO_URL`/`REPO_BRANCH`, leave it alone but log a clear warning ("workspace already initialized with different repo — skipping clone").
+- If the configured branch doesn't exist upstream (e.g., #651 bug), surface a structured error that propagates to the cluster status (not just a log line).
+
+## Acceptance criteria
+
+- A cluster where first-boot post-activation fails (any cause — bad branch, missing creds, network blip) can recover by simply restarting. The retry runs post-activation against the current config; if config is now correct, the cluster finishes setup cleanly.
+- A cluster where first-boot post-activation **succeeded** doesn't re-run post-activation on subsequent restarts — same as today's behavior, no regression. (Don't re-clone the repo on every cluster start.)
+- The state file is on the data volume so it survives container restarts.
+- A post-activation failure logs visibly enough that a user or maintainer can tell from `docker compose logs` that the setup didn't complete.
+- Tests cover: first-boot success, first-boot failure + restart success, multi-restart no-op, mid-failure partial-state cleanup.
+
+## Workaround until fixed
+
+Inside the running orchestrator container, manually create the trigger file to force the post-activation watcher to fire:
+
+```bash
+docker exec <project>-orchestrator-1 touch /tmp/generacy-bootstrap-complete
+```
+
+The watcher polls every 2s, will see the file, and run post-activation. Verified to work in the user's case — repo cloned successfully after the manual trigger.
+
+## Why this matters beyond #651
+
+The bug is independent. It bites any cluster where:
+- Network drops during the initial clone.
+- The user's GitHub App needs additional permissions but they're granted mid-wizard.
+- Any other transient failure makes the first post-activation exit non-zero.
+
+In all those cases, the user's natural recovery instinct is "restart the cluster" — which today silently makes the situation worse (cluster looks "activated" externally, but is permanently half-set-up). Fixing this makes restarts a real recovery tool.
+
+## Discovered during
+
+End-to-end testing of v1.6 custom-image flow. After fixing the `REPO_BRANCH=main` issue (#651) by hand-editing `.env` to `develop`, the user restarted the cluster expecting it to re-run setup. The cluster came back up clean ("Existing cluster API key found, skipping activation") but `/workspaces/ai-lawfirm/` stayed empty. Diagnostic investigation in the running container showed the post-activation watcher armed but never triggered — manually touching `/tmp/generacy-bootstrap-complete` immediately ran post-activation, which then succeeded against the fixed branch.
+
+## Related
+
+- generacy-ai/generacy#651 (the bug that surfaced this — but this issue is independently real).
+- generacy-ai/generacy-cloud — primaryBranch issue (longer-term: branch config in the UI; cleaner-failure modes if user picks the wrong branch).
 
 ## User Stories
 
-### US1: Cluster recovery via restart
+### US1: [Primary User Story]
 
-**As a** cluster operator,
-**I want** a failed post-activation to automatically retry when I restart the cluster,
-**So that** fixing the underlying issue (bad branch, missing creds, network) and restarting is a real recovery path.
-
-**Acceptance Criteria**:
-- [ ] Restarting a cluster where post-activation failed re-runs post-activation against current config
-- [ ] If config is now correct, cluster finishes setup cleanly
-- [ ] Visible log output indicates post-activation is retrying
-
-### US2: Successful clusters are unaffected
-
-**As a** cluster operator,
-**I want** a cluster that completed post-activation successfully to not re-run it on restart,
-**So that** repos aren't re-cloned and credentials aren't re-configured on every container restart.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Cluster with successful post-activation skips it on restart (no regression)
-- [ ] State file persists on the data volume across container restarts
-
-### US3: Visible failure state
-
-**As a** cluster operator or maintainer,
-**I want** post-activation failures to be clearly visible in `docker compose logs`,
-**So that** I can diagnose what went wrong without exec-ing into the container.
-
-**Acceptance Criteria**:
-- [ ] Failed post-activation produces structured, visible log output
-- [ ] Cluster status reflects incomplete setup (not falsely "healthy")
-
-## Root Cause
-
-The post-activation flow has a state management bug across three interacting mechanisms:
-
-1. **Persisted API key** on data volume — cluster skips wizard/activation on restart (correct).
-2. **Wizard skipped** — no process creates `/tmp/generacy-bootstrap-complete` on restart (correct behavior, wrong consequence).
-3. **Trigger file in `/tmp`** — wiped on container restart. Watcher arms but trigger never appears. Post-activation permanently blocked.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Persist post-activation completion flag at `/var/lib/generacy/post-activation-complete` on the data volume | P1 | Written only after post-activation succeeds |
-| FR-002 | On startup: if API key exists AND completion flag absent, run post-activation immediately (no wizard trigger needed) | P1 | Core fix |
-| FR-003 | On startup: if API key exists AND completion flag present, skip post-activation (current behavior) | P1 | No regression |
-| FR-004 | On startup: if no API key, arm watcher for wizard trigger (current first-boot behavior) | P1 | No regression |
-| FR-005 | Defensive cleanup: remove empty `/workspaces/<project>/` (no `.git`) before retry | P2 | Partial clone left by failed first attempt |
-| FR-006 | Defensive cleanup: if `.git` exists with different remote/branch, log warning and skip clone | P2 | Don't clobber user work |
-| FR-007 | Surface structured error to cluster status if post-activation fails on retry | P2 | Propagate via relay to cloud dashboard |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | First-boot success path | Works identically to today | Manual E2E test |
-| SC-002 | Failed first-boot + restart | Post-activation retries and succeeds | Automated test |
-| SC-003 | Successful boot + restart | Post-activation skipped, no re-clone | Automated test |
-| SC-004 | Partial-state cleanup | Empty workspace dir removed before retry | Automated test |
-| SC-005 | Zero regression in existing activation flow | Wizard-triggered first boot still works | Manual E2E test |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The data volume at `/var/lib/generacy/` persists across `docker compose down && up -d` (it's a named Docker volume, not a bind mount to `/tmp`).
-- The post-activation script (`entrypoint-post-activation.sh`) is idempotent or safe to re-run after cleanup.
-- Changes span both `generacy` (orchestrator) and `cluster-base` (shell scripts) repos.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Fixing the underlying branch mismatch bug (#651) — that's a separate issue.
-- Cloud-side UI for configuring primary branch — future work.
-- Automatic retry without restart (e.g., backoff loop inside the container) — simplest fix is restart-triggered retry.
-- Changing the `/tmp/generacy-bootstrap-complete` trigger mechanism for first boot — it stays as-is for the wizard flow.
+- [Exclusion 1]
 
 ---
 
