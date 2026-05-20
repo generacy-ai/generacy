@@ -4,15 +4,6 @@
 
 **Branch**: `672-background-generacy-ai` | **Date**: 2026-05-20 | **Status**: Draft
 
-## Design Decision
-
-**Option A selected**: Extract a minimal `@generacy-ai/orchestrator-types` package containing only `AgentLauncher`, `LaunchHandle`, and `OrchestratorConfig` type definitions. Remove `@generacy-ai/orchestrator` from CLI `dependencies`. The `generacy orchestrator` subcommand will use a dynamic `import()` with a clear error message if orchestrator is not installed. `@generacy-ai/orchestrator` moves to `devDependencies` for test usage.
-
-Key rationale:
-- `optionalDependencies` and `peerDependencies` are still installed by default (npm 7+), so they don't reduce install size
-- ~99% of installs are `generacy launch` (needs only types), ~1% are `generacy orchestrator` (needs full server)
-- Orchestrator should re-export its types from the types package to maintain nominal type alignment
-
 ## Summary
 
 ## Background
@@ -68,49 +59,35 @@ Spike: produce a dependency report of every symbol the CLI imports from `@genera
 
 ## User Stories
 
-### US1: Fast CLI Onboarding
+### US1: [Primary User Story]
 
-**As a** new user running `npx generacy launch`,
-**I want** the CLI to install quickly without unnecessary server-side dependencies,
-**So that** my onboarding experience is fast and I only download code that's actually used.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `npx -y @generacy-ai/generacy@stable launch --claim=...` does not install Fastify, ioredis, prom-client, or other orchestrator server deps
-- [ ] `generacy launch` continues to work identically to current behavior
-- [ ] `generacy orchestrator` provides a clear error message with install instructions if orchestrator package is missing
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Create `@generacy-ai/orchestrator-types` package with `AgentLauncher`, `LaunchHandle`, `OrchestratorConfig` type exports | P1 | Types-only, no runtime deps |
-| FR-002 | Update CLI production imports to use `@generacy-ai/orchestrator-types` instead of `@generacy-ai/orchestrator` for type-only imports | P1 | `subprocess.ts`, etc. |
-| FR-003 | Remove `@generacy-ai/orchestrator` from CLI `dependencies` | P1 | Core goal |
-| FR-004 | Add `@generacy-ai/orchestrator` as `devDependency` of CLI package | P1 | For tests |
-| FR-005 | Add dynamic `import()` in `generacy orchestrator` subcommand with clear error if orchestrator not installed | P1 | User-friendly fallback message |
-| FR-006 | Orchestrator package re-exports its types from `@generacy-ai/orchestrator-types` | P2 | Maintains nominal type alignment |
-| FR-007 | Update test imports to reference correct package paths | P1 | Tests keep runtime imports via devDep |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Install size of `npx generacy launch` | Reduce by ~50-100 MB | Compare `du -sh node_modules` before/after |
-| SC-002 | All existing tests pass | 100% | CI green |
-| SC-003 | `generacy launch` works unchanged | No regression | Manual test |
-| SC-004 | `generacy orchestrator` error message | Clear install instructions | Manual test |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- #669 (workspace:^ leak) is fixed before this work begins
-- The types package will contain no Zod schemas or runtime code
-- The `generacy orchestrator` subcommand is a dev/power-user scenario (~1% of installs)
+- [Assumption 1]
 
 ## Out of Scope
 
-- Comprehensive extraction of all orchestrator types (expand later as needed)
-- Auto-install via `npx -y @generacy-ai/orchestrator` fallback (consider in plan phase)
-- Changes to orchestrator's internal structure beyond re-exporting types
+- [Exclusion 1]
 
 ---
 
