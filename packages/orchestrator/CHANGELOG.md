@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2
+
+### Patch Changes
+
+- 8b1a12d: Fix workspace:^ dependency leak in published package. Add prepublishOnly guardrail to all publishable packages to prevent future publishes with unresolved workspace: protocol specifiers.
+- Updated dependencies [95f3c52]
+  - @generacy-ai/control-plane@0.2.0
+
 ## 0.1.1
 
 ### Patch Changes
