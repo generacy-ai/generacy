@@ -96,6 +96,43 @@ export async function handlePostLifecycle(
     return;
   }
 
+  if (parsed.data === 'prepare-workspace') {
+    // Subset of bootstrap-complete: unseal whatever credentials are currently
+    // stored (typically just GitHub after the wizard's GitHubAppInstall step)
+    // and create the post-activation sentinel so the cluster clones the
+    // workspace in the background. Deliberately skips code-server / tunnel
+    // start — those wait for bootstrap-complete at the end of the wizard.
+    //
+    // Idempotent w.r.t. bootstrap-complete: both use the same sentinel path
+    // and the same writeWizardEnvFile call (which writes whatever is sealed
+    // at the moment), so calling bootstrap-complete after prepare-workspace
+    // re-writes the env file with the now-full credential set without
+    // disturbing the already-clone (the post-activation watcher only fires
+    // its hook on the first sentinel appearance).
+    const agencyDir = process.env.AGENCY_DIR ?? '/workspaces/.agency';
+    const envFilePath = process.env.WIZARD_CREDS_PATH ?? '/var/lib/generacy/wizard-credentials.env';
+    try {
+      const envResult = await writeWizardEnvFile({ agencyDir, envFilePath });
+      if (envResult.failed.length > 0) {
+        const pushEvent = getRelayPushEvent();
+        pushEvent?.('cluster.bootstrap', {
+          warning: 'credential-unseal-partial',
+          failed: envResult.failed,
+          written: envResult.written,
+        });
+      }
+    } catch {
+      // Non-fatal: log and continue — post-activation will see missing env vars
+    }
+
+    const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
+    await writeFile(sentinel, '', { flag: 'w' });
+
+    res.writeHead(200);
+    res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
+    return;
+  }
+
   if (parsed.data === 'bootstrap-complete') {
     // Unseal wizard credentials and write transient env file before sentinel
     const agencyDir = process.env.AGENCY_DIR ?? '/workspaces/.agency';

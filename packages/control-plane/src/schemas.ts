@@ -41,6 +41,7 @@ export const LifecycleActionSchema = z.enum([
   'clone-peer-repos',
   'code-server-start',
   'code-server-stop',
+  'prepare-workspace',
   'stop',
   'vscode-tunnel-start',
   'vscode-tunnel-stop',
