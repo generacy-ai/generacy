@@ -10,7 +10,7 @@
 - B: Use Option B (optional dependency) to keep `generacy orchestrator` working out of the box where possible
 - C: Use Option C (conditional peer dependency)
 
-**Answer**: *Pending*
+**Answer**: **A — proceed with Option A.** Only Option A actually removes orchestrator from the install tree of the common path. `optionalDependencies` (B) are installed by default (the "optional" only means "don't fail if sub-install errors"), and `peerDependencies` (C) are auto-installed by npm 7+. The friction for `generacy orchestrator` users (~1% of installs) is acceptable — CLI can detect the missing module and offer `npx -y @generacy-ai/orchestrator` as a fallback. *(Answer from @christrudelpw)*
 
 ### Q2: Test File Import Strategy
 **Context**: `subprocess-snapshot.test.ts` imports `AgentLauncher` (class), `GenericSubprocessPlugin` (class), `RecordingProcessFactory`, and `normalizeSpawnRecords` as *runtime* imports from `@generacy-ai/orchestrator` and `@generacy-ai/orchestrator/test-utils`. These are runtime classes/functions, not types — they can't live in a types-only package. FR-007 says "update test imports to reference new package paths" but doesn't address this mismatch. The natural solution is to add `@generacy-ai/orchestrator` as a `devDependency` (tests work in dev, not installed for end users), but this isn't mentioned in the spec.
@@ -20,7 +20,7 @@
 - B: Move test utilities (`RecordingProcessFactory`, etc.) and the `AgentLauncher` class into the new types package (making it more than types-only)
 - C: Restructure/remove the snapshot test so it doesn't need runtime orchestrator imports
 
-**Answer**: *Pending*
+**Answer**: **A — move `@generacy-ai/orchestrator` to `devDependencies`.** Tests keep current runtime imports unchanged; end users don't install it. The orchestrator package should internally re-export its type from the types package so there's one nominal type definition. *(Answer from @christrudelpw)*
 
 ### Q3: Types Package Scope
 **Context**: FR-001 says "Extract shared types (AgentLauncher, LaunchHandle, OrchestratorConfig, etc.)" — the "etc." is unspecified. The CLI's production code only uses 3 types from orchestrator: `AgentLauncher` (type-only in `subprocess.ts`), and `OrchestratorConfig` (type used in `orchestrator.ts` alongside runtime imports). The orchestrator exports 80+ types covering API schemas, relay types, SSE, monitors, etc. A minimal package is less work and less maintenance; a comprehensive one could serve future consumers.
@@ -30,4 +30,4 @@
 - B: Moderate — types + Zod schemas that are independent of Fastify/Redis (config schemas, auth types, launcher types)
 - C: Comprehensive — all orchestrator type exports that don't depend on heavy runtime code
 
-**Answer**: *Pending*
+**Answer**: **A — minimal.** Only the 3 types currently imported by CLI production code: `AgentLauncher`, `LaunchHandle`, `OrchestratorConfig`. Zod schemas carry runtime `zod` dep (rules out B); auditing 80+ types is high-maintenance for hypothetical value (rules out C). Expand later as needed via minor version bump. *(Answer from @christrudelpw)*
