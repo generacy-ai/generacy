@@ -44,7 +44,7 @@ jobs:
         uses: changesets/action@v1
         with:
           version: pnpm changeset version
-          publish: pnpm changeset publish --tag stable --provenance
+          publish: node scripts/verify-pack-no-workspace-deps.js && pnpm changeset publish --tag stable --provenance
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:

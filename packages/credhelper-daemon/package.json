@@ -19,8 +19,7 @@
     "dev": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "clean": "rm -rf dist",
-    "prepublishOnly": "node ../../scripts/check-workspace-deps.js"
+    "clean": "rm -rf dist"
   },
   "author": "Generacy AI",
   "license": "Apache-2.0",
