@@ -15,7 +15,8 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/check-workspace-deps.js"
   },
   "dependencies": {
     "zod": "^3.23.0"

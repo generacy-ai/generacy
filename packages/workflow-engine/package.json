@@ -18,7 +18,8 @@
     "test:watch": "vitest",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepublishOnly": "node ../../scripts/check-workspace-deps.js"
   },
   "keywords": [
     "workflow",
