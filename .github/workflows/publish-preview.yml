@@ -66,6 +66,9 @@ jobs:
       - name: Version (snapshot)
         run: pnpm changeset version --snapshot preview
 
+      - name: Verify no workspace: leaks in packed tarballs
+        run: node scripts/verify-pack-no-workspace-deps.js
+
       - name: Publish preview
         run: pnpm -r --filter '!generacy-extension' publish --tag preview --no-git-checks --provenance
         env:
