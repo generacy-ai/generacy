@@ -291,6 +291,25 @@ describe('scaffoldProject', () => {
     expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=proj_abc123');
   });
 
+  it('writes REPO_BRANCH=<primaryBranch> when cloud provides one', () => {
+    const projectDir = join(tempDir, 'branch-project');
+    scaffoldProject(projectDir, {
+      ...mockConfig,
+      repos: { ...mockConfig.repos, primaryBranch: 'develop' },
+    });
+
+    const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
+    expect(content).toContain('REPO_BRANCH=develop');
+  });
+
+  it('omits REPO_BRANCH entirely when cloud does not provide primaryBranch', () => {
+    const projectDir = join(tempDir, 'no-branch-project');
+    scaffoldProject(projectDir, mockConfig);
+
+    const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
+    expect(content).not.toContain('REPO_BRANCH=');
+  });
+
   // -------------------------------------------------------------------------
   // Error: .generacy/ already exists
   // -------------------------------------------------------------------------

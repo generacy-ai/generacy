@@ -63,6 +63,7 @@ export function scaffoldBundle(
     cloudUrl,
     projectName: config.projectName,
     repoUrl: config.repos?.primary,
+    repoBranch: config.repos?.primaryBranch,
     channel: 'stable',
     workers: 1,
   });

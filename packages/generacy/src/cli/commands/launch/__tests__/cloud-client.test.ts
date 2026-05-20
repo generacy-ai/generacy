@@ -474,4 +474,23 @@ describe('LaunchConfigSchema — cloud object', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('preserves repos.primaryBranch when present', () => {
+    const result = LaunchConfigSchema.safeParse({
+      ...BASE,
+      repos: { ...BASE.repos, primaryBranch: 'develop' },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.repos.primaryBranch).toBe('develop');
+    }
+  });
+
+  it('parses without repos.primaryBranch (backward compat)', () => {
+    const result = LaunchConfigSchema.safeParse(BASE);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.repos.primaryBranch).toBeUndefined();
+    }
+  });
 });
