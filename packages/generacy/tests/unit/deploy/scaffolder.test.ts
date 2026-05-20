@@ -142,5 +142,23 @@ describe('scaffoldBundle', () => {
       expect(content).toContain('GENERACY_RELAY_URL=wss://api.generacy.ai/relay?projectId=proj-123');
       expect(content).not.toContain('GENERACY_CLOUD_URL');
     });
+
+    it('writes REPO_BRANCH=<primaryBranch> when cloud provides one', () => {
+      const dir = scaffoldBundle(
+        { ...testConfig, repos: { ...testConfig.repos, primaryBranch: 'develop' } },
+        testActivation,
+        testCloudUrl,
+      );
+      tmpDirs.push(dir);
+
+      const content = readFileSync(join(dir, '.generacy', '.env'), 'utf-8');
+      expect(content).toContain('REPO_BRANCH=develop');
+    });
+
+    it('omits REPO_BRANCH entirely when cloud does not provide primaryBranch', () => {
+      const dir = callScaffold();
+      const content = readFileSync(join(dir, '.generacy', '.env'), 'utf-8');
+      expect(content).not.toContain('REPO_BRANCH=');
+    });
   });
 });
