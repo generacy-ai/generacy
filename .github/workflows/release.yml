@@ -18,7 +18,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     outputs:
-      published: ${{ steps.changesets.outputs.published }}
+      published: ${{ steps.mode.outputs.publish }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,36 +39,71 @@ jobs:
       - name: Build (root)
         run: pnpm build
 
-      - name: Verify no workspace protocol leaks in packed tarballs
-        # Run as its own workflow step (not chained into the changesets/action
-        # `publish:` input). `changesets/action@v1` splits the publish string
-        # by whitespace and runs it via execa, not a shell — so a `node …
-        # && pnpm …` chain was silently truncated to just `node`, causing
-        # `pnpm changeset publish` to never run on the prior release.
-        run: node scripts/verify-pack-no-workspace-deps.js
+      # `pnpm changeset publish` shells out to `npm publish`, which does NOT
+      # rewrite `workspace:` deps — only `pnpm publish` does. That's why
+      # @generacy-ai/orchestrator kept leaking `workspace:^` literals into
+      # published tarballs even after we "switched to pnpm changeset publish"
+      # (see generacy-ai/generacy#669). publish-preview.yml has always used
+      # `pnpm -r publish` directly and never hit the bug.
+      #
+      # Split the version and publish paths explicitly:
+      #   - When pending changesets exist → changesets/action runs `pnpm
+      #     changeset version`, opens the Version PR, no publish.
+      #   - When the Version PR has merged (no pending changesets) →
+      #     `pnpm -r publish` runs, which (a) skips already-published
+      #     versions, (b) rewrites workspace: deps at pack time, (c) tags
+      #     with @stable.
 
-      - name: Create Release PR or Publish
-        id: changesets
+      - name: Determine workflow mode
+        id: mode
+        run: |
+          if [ -z "$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Mode: publish (no pending changesets)"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Mode: version (pending changesets, opening Version PR)"
+          fi
+
+      - name: Create Version PR
+        if: steps.mode.outputs.publish == 'false'
         uses: changesets/action@v1
         with:
           version: pnpm changeset version
-          publish: pnpm changeset publish --tag stable --provenance
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify no workspace protocol leaks in packed tarballs
+        if: steps.mode.outputs.publish == 'true'
+        run: node scripts/verify-pack-no-workspace-deps.js
+
+      - name: Publish to npm
+        if: steps.mode.outputs.publish == 'true'
+        run: pnpm -r --filter '!generacy-extension' publish --tag stable --no-git-checks --provenance
+        env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Advance @latest dist-tag for all stable releases
-        if: steps.changesets.outputs.published == 'true'
+      - name: Advance @latest dist-tag for all published packages
+        if: steps.mode.outputs.publish == 'true'
         run: |
-          echo '${{ steps.changesets.outputs.publishedPackages }}' \
-            | jq -r '.[] | "\(.name) \(.version)"' \
-            | while read name version; do
-                echo "Setting $name@$version as @latest"
-                npm dist-tag add "$name@$version" latest
-              done
+          # pnpm publish doesn't surface a structured published-packages list
+          # the way changesets/action did, so iterate workspace packages and
+          # set @latest = current version for each non-private one. `npm
+          # dist-tag add` is idempotent and silently succeeds if already
+          # pointing at the requested version.
+          for pkg in packages/*/package.json; do
+            node -e "
+              const p = require('./$pkg');
+              if (p.private || !p.name) process.exit(0);
+              console.log(p.name, p.version);
+            " | while read name version; do
+              [ -z "$name" ] && continue
+              echo "Setting $name@$version as @latest"
+              npm dist-tag add "$name@$version" latest || echo "  (skipped — version may not be published, e.g. unchanged since last release)"
+            done
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
