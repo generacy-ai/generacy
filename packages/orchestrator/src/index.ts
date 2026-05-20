@@ -254,3 +254,10 @@ export {
   CORRELATION_ID_HEADER,
   generateCorrelationId,
 } from './utils/index.js';
+
+// Re-export types from @generacy-ai/orchestrator-types for backwards compatibility
+export type {
+  AgentLauncher as IAgentLauncher,
+  OrchestratorConfig as OrchestratorConfigBase,
+  ChildProcessHandle,
+} from '@generacy-ai/orchestrator-types';

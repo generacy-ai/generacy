@@ -3,16 +3,41 @@
  * Starts the Fastify-based orchestrator server from @generacy-ai/orchestrator.
  * All service lifecycle (label monitoring, Smee webhooks, worker dispatch, etc.)
  * is managed internally by the Fastify server.
+ *
+ * The orchestrator package is loaded dynamically to avoid pulling its heavy
+ * dependencies (Fastify, ioredis, prom-client, etc.) into the CLI install.
  */
 import crypto from 'node:crypto';
 import { Command } from 'commander';
-import {
-  createServer,
-  startServer,
-  loadConfig,
-  InMemoryApiKeyStore,
-  type OrchestratorConfig,
-} from '@generacy-ai/orchestrator';
+
+async function loadOrchestratorModule() {
+  try {
+    return await import('@generacy-ai/orchestrator');
+  } catch (error: unknown) {
+    const isModuleNotFound =
+      error instanceof Error &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'ERR_MODULE_NOT_FOUND';
+
+    if (isModuleNotFound) {
+      console.error(
+        'The orchestrator package is not installed.\n\n' +
+        'This command requires @generacy-ai/orchestrator, which is not bundled\n' +
+        'with the CLI to keep install size small.\n\n' +
+        'Install it with:\n' +
+        '  pnpm add @generacy-ai/orchestrator\n\n' +
+        'Or if running inside a Generacy cluster, the orchestrator is already\n' +
+        'available as a container service.',
+      );
+    } else {
+      console.error(
+        'Failed to load @generacy-ai/orchestrator:',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+    process.exit(1);
+  }
+}
 
 /**
  * Create the orchestrator command
@@ -35,6 +60,9 @@ export function orchestratorCommand(): Command {
     .option('--log-pretty', 'Pretty print logs')
     .option('--worker-only', 'Run in worker-only mode (dispatch jobs only, no monitoring)')
     .action(async (options) => {
+      const orchestrator = await loadOrchestratorModule();
+      const { createServer, startServer, loadConfig, InMemoryApiKeyStore } = orchestrator;
+
       const port = parseInt(options['port'], 10);
       const host = options['host'] as string;
       const workerTimeout = parseInt(options['workerTimeout'], 10);
@@ -68,7 +96,7 @@ export function orchestratorCommand(): Command {
       }
 
       // Load base config from YAML files and environment variables
-      let config: OrchestratorConfig;
+      let config: ReturnType<typeof loadConfig>;
       try {
         config = loadConfig();
       } catch (error) {
@@ -87,7 +115,7 @@ export function orchestratorCommand(): Command {
       // Override with CLI flags (highest priority)
       config.server.port = port;
       config.server.host = host;
-      config.logging.level = logLevel as OrchestratorConfig['logging']['level'];
+      config.logging.level = logLevel as typeof config.logging.level;
       config.logging.pretty = logPretty;
       config.dispatch.heartbeatTtlMs = workerTimeout;
       config.dispatch.shutdownTimeoutMs = shutdownTimeout;
@@ -135,7 +163,7 @@ export function orchestratorCommand(): Command {
       }
 
       // Setup auth with CLI token
-      let apiKeyStore: InMemoryApiKeyStore | undefined;
+      let apiKeyStore: InstanceType<typeof InMemoryApiKeyStore> | undefined;
       if (authToken) {
         config.auth.enabled = true;
         apiKeyStore = new InMemoryApiKeyStore();

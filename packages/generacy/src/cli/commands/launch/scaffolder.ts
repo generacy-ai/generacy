@@ -97,6 +97,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     cloudUrl: config.cloudUrl,
     projectName: config.projectName,
     repoUrl: config.repos?.primary,
+    repoBranch: config.repos?.primaryBranch,
     channel: config.channel ?? 'preview',
     workers: 1,
     cloud: config.cloud

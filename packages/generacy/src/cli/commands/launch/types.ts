@@ -55,6 +55,7 @@ export const LaunchConfigSchema = z.object({
   orgId: z.string().min(1),
   repos: z.object({
     primary: z.string().min(1),
+    primaryBranch: z.string().min(1).optional(),
     dev: z.array(z.string()).optional(),
     clone: z.array(z.string()).optional(),
   }),

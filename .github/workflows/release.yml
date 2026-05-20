@@ -44,7 +44,7 @@ jobs:
         uses: changesets/action@v1
         with:
           version: pnpm changeset version
-          publish: pnpm changeset publish --tag stable --provenance
+          publish: node scripts/verify-pack-no-workspace-deps.js && pnpm changeset publish --tag stable --provenance
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:
@@ -52,17 +52,15 @@ jobs:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Add @stable dist-tag
+      - name: Advance @latest dist-tag for all stable releases
         if: steps.changesets.outputs.published == 'true'
         run: |
-          VERSION=$(echo '${{ steps.changesets.outputs.publishedPackages }}' \
-            | jq -r '.[] | select(.name == "@generacy-ai/generacy") | .version')
-          if [ -n "$VERSION" ]; then
-            echo "Adding @stable dist-tag for @generacy-ai/generacy@$VERSION"
-            npm dist-tag add @generacy-ai/generacy@$VERSION stable
-          else
-            echo "Package @generacy-ai/generacy not in published set, skipping"
-          fi
+          echo '${{ steps.changesets.outputs.publishedPackages }}' \
+            | jq -r '.[] | "\(.name) \(.version)"' \
+            | while read name version; do
+                echo "Setting $name@$version as @latest"
+                npm dist-tag add "$name@$version" latest
+              done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

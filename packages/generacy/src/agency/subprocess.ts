@@ -4,7 +4,7 @@
  */
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Logger } from '@generacy-ai/workflow-engine';
-import type { AgentLauncher } from '@generacy-ai/orchestrator';
+import type { AgentLauncher } from '@generacy-ai/orchestrator-types';
 import type { AgencyConnection, ToolCallRequest, ToolCallResponse } from './index.js';
 
 /**

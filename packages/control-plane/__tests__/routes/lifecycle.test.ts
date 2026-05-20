@@ -421,6 +421,140 @@ describe('handlePostLifecycle', () => {
     });
   });
 
+  // --- prepare-workspace tests ---
+  // Same wire shape as bootstrap-complete but deliberately skips
+  // code-server / tunnel start so the wizard can fire it earlier (after the
+  // GitHub App step) to kick off the workspace clone in parallel with the
+  // remaining wizard steps.
+
+  describe('prepare-workspace', () => {
+    let tempDir: string;
+
+    beforeEach(() => {
+      tempDir = mkdtempSync(join(tmpdir(), 'lifecycle-test-'));
+    });
+
+    afterEach(() => {
+      delete process.env.POST_ACTIVATION_TRIGGER;
+      delete process.env.AGENCY_DIR;
+      delete process.env.WIZARD_CREDS_PATH;
+      rmSync(tempDir, { recursive: true, force: true });
+      vi.mocked(writeWizardEnvFile).mockReset();
+      vi.mocked(writeWizardEnvFile).mockResolvedValue({ written: [], failed: [] });
+    });
+
+    it('writes the same sentinel path bootstrap-complete uses', async () => {
+      const sentinelPath = join(tempDir, 'prepare-workspace-sentinel');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({ accepted: true, action: 'prepare-workspace', sentinel: sentinelPath });
+      expect(existsSync(sentinelPath)).toBe(true);
+    });
+
+    it('unseals whatever credentials are currently stored (partial is fine)', async () => {
+      const sentinelPath = join(tempDir, 'prepare-workspace-partial');
+      const agencyDir = join(tempDir, 'agency');
+      const envFilePath = join(tempDir, 'wizard-credentials.env');
+
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+      process.env.AGENCY_DIR = agencyDir;
+      process.env.WIZARD_CREDS_PATH = envFilePath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: ['github-main-org'],
+        failed: [],
+      });
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
+
+      expect(writeWizardEnvFile).toHaveBeenCalledWith({ agencyDir, envFilePath });
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+    });
+
+    it('does NOT start code-server (that waits for bootstrap-complete)', async () => {
+      const sentinelPath = join(tempDir, 'prepare-workspace-no-cs');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const manager = createFakeManager();
+      setCodeServerManager(manager);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
+
+      expect(manager.start).not.toHaveBeenCalled();
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+    });
+
+    it('idempotent — bootstrap-complete after prepare-workspace still succeeds', async () => {
+      const sentinelPath = join(tempDir, 'prepare-then-bootstrap');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      const req = {} as IncomingMessage;
+
+      const res1 = createMockResponse();
+      await handlePostLifecycle(req, res1, { userId: 'u-test' }, { action: 'prepare-workspace' });
+      expect(res1.writeHead).toHaveBeenCalledWith(200);
+
+      const res2 = createMockResponse();
+      await handlePostLifecycle(req, res2, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+      expect(res2.writeHead).toHaveBeenCalledWith(200);
+
+      expect(existsSync(sentinelPath)).toBe(true);
+    });
+
+    it('unseal failure is non-fatal (sentinel still written)', async () => {
+      const sentinelPath = join(tempDir, 'prepare-workspace-unseal-fail');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockRejectedValueOnce(new Error('unseal exploded'));
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
+
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+    });
+
+    it('partial unseal emits the same cluster.bootstrap relay warning', async () => {
+      const sentinelPath = join(tempDir, 'prepare-workspace-partial-warn');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: ['good-cred'],
+        failed: ['bad-cred'],
+      });
+
+      const mockPushEvent = vi.fn();
+      vi.mocked(getRelayPushEvent).mockReturnValueOnce(mockPushEvent);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
+
+      expect(mockPushEvent).toHaveBeenCalledWith('cluster.bootstrap', {
+        warning: 'credential-unseal-partial',
+        failed: ['bad-cred'],
+        written: ['good-cred'],
+      });
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+    });
+  });
+
   // --- schema validation tests ---
 
   it('stop is a valid action (not UNKNOWN_ACTION)', async () => {

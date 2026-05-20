@@ -191,9 +191,9 @@ importers:
       '@generacy-ai/config':
         specifier: workspace:*
         version: link:../config
-      '@generacy-ai/orchestrator':
+      '@generacy-ai/orchestrator-types':
         specifier: workspace:*
-        version: link:../orchestrator
+        version: link:../orchestrator-types
       '@generacy-ai/workflow-engine':
         specifier: workspace:*
         version: link:../workflow-engine
@@ -219,6 +219,9 @@ importers:
         specifier: ^3.23.0
         version: 3.25.76
     devDependencies:
+      '@generacy-ai/orchestrator':
+        specifier: workspace:*
+        version: link:../orchestrator
       '@types/diff':
         specifier: ^7
         version: 7.0.2
@@ -515,6 +518,9 @@ importers:
       '@generacy-ai/generacy-plugin-claude-code':
         specifier: workspace:^
         version: link:../generacy-plugin-claude-code
+      '@generacy-ai/orchestrator-types':
+        specifier: workspace:^
+        version: link:../orchestrator-types
       '@generacy-ai/workflow-engine':
         specifier: workspace:^
         version: link:../workflow-engine
@@ -549,6 +555,12 @@ importers:
       vitest:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@20.19.35)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/orchestrator-types:
+    devDependencies:
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
 
   packages/workflow-engine:
     dependencies:
