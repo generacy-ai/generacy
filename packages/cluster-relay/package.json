@@ -21,7 +21,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint src tests --ext .ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "node ../../scripts/check-workspace-deps.js"
   },
   "dependencies": {
     "ws": "^8.18.0",
