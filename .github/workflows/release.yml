@@ -39,12 +39,20 @@ jobs:
       - name: Build (root)
         run: pnpm build
 
+      - name: Verify no workspace protocol leaks in packed tarballs
+        # Run as its own workflow step (not chained into the changesets/action
+        # `publish:` input). `changesets/action@v1` splits the publish string
+        # by whitespace and runs it via execa, not a shell — so a `node …
+        # && pnpm …` chain was silently truncated to just `node`, causing
+        # `pnpm changeset publish` to never run on the prior release.
+        run: node scripts/verify-pack-no-workspace-deps.js
+
       - name: Create Release PR or Publish
         id: changesets
         uses: changesets/action@v1
         with:
           version: pnpm changeset version
-          publish: node scripts/verify-pack-no-workspace-deps.js && pnpm changeset publish --tag stable --provenance
+          publish: pnpm changeset publish --tag stable --provenance
           title: 'chore: version packages'
           commit: 'chore: version packages'
         env:
