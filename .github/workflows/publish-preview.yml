@@ -42,26 +42,26 @@ jobs:
         run: pnpm build
 
       - name: Ensure changesets for preview
+        # Always write a synthetic changeset covering every non-private package,
+        # alongside any user-authored ones. `changeset version --snapshot preview`
+        # only rewrites internal `workspace:*` deps in packages it bumps, so if a
+        # user changeset bumps only a subset of packages, dependents like
+        # control-plane → credhelper retain `workspace:*` in their source — the
+        # prepublishOnly guardrail then aborts the publish.
         run: |
-          CHANGESET_FILES=$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)
-          if [ -n "$CHANGESET_FILES" ]; then
-            echo "Changeset files found, proceeding with preview publish"
-          else
-            echo "No changeset files found, generating synthetic changeset"
-            node -e "
-              const fs = require('fs'), path = require('path');
-              const config = JSON.parse(fs.readFileSync('.changeset/config.json', 'utf8'));
-              const ignore = new Set(config.ignore || []);
-              const pkgs = fs.readdirSync('packages')
-                .map(d => path.join('packages', d, 'package.json'))
-                .filter(p => fs.existsSync(p))
-                .map(p => JSON.parse(fs.readFileSync(p, 'utf8')))
-                .filter(p => !p.private && p.name && !ignore.has(p.name));
-              const lines = ['---', ...pkgs.map(p => '\"' + p.name + '\": patch'), '---', '', 'Preview publish (synthetic)', ''];
-              fs.writeFileSync('.changeset/preview-publish.md', lines.join('\n'));
-              console.log('Created synthetic changeset for ' + pkgs.length + ' packages');
-            "
-          fi
+          node -e "
+            const fs = require('fs'), path = require('path');
+            const config = JSON.parse(fs.readFileSync('.changeset/config.json', 'utf8'));
+            const ignore = new Set(config.ignore || []);
+            const pkgs = fs.readdirSync('packages')
+              .map(d => path.join('packages', d, 'package.json'))
+              .filter(p => fs.existsSync(p))
+              .map(p => JSON.parse(fs.readFileSync(p, 'utf8')))
+              .filter(p => !p.private && p.name && !ignore.has(p.name));
+            const lines = ['---', ...pkgs.map(p => '\"' + p.name + '\": patch'), '---', '', 'Preview publish (synthetic)', ''];
+            fs.writeFileSync('.changeset/preview-publish.md', lines.join('\n'));
+            console.log('Created synthetic changeset for ' + pkgs.length + ' packages');
+          "
 
       - name: Version (snapshot)
         run: pnpm changeset version --snapshot preview
