@@ -10,8 +10,8 @@
 
 ## Phase 1: Workflow Fix
 
-- [ ] T001 [US1] Replace the `Add @stable dist-tag` step (lines 55-67) in `.github/workflows/release.yml` with a new `Advance @latest dist-tag for all stable releases` step that loops over `steps.changesets.outputs.publishedPackages` and runs `npm dist-tag add "$name@$version" latest` for each package
-- [ ] T002 [US2] Verify `publish-preview.yml` is unchanged — confirm it uses `--tag preview` and does NOT touch `@latest`
+- [X] T001 [US1] Replace the `Add @stable dist-tag` step (lines 55-67) in `.github/workflows/release.yml` with a new `Advance @latest dist-tag for all stable releases` step that loops over `steps.changesets.outputs.publishedPackages` and runs `npm dist-tag add "$name@$version" latest` for each package
+- [X] T002 [US2] Verify `publish-preview.yml` is unchanged — confirm it uses `--tag preview` and does NOT touch `@latest`
 
 ## Phase 2: Post-Merge Manual Cleanup
 
