@@ -10,7 +10,7 @@
 - B: Use existing `cluster.bootstrap` channel with a distinguishable event type (e.g., `{ type: 'worker-scaled', workers: N }`)
 - C: Skip the relay event entirely and rely on the relay-bridge's periodic metadata refresh (carries the updated `workers` field from `cluster.yaml`)
 
-**Answer**: *Pending*
+**Answer**: C (with immediate refresh trigger). Skip the relay event channel. The relay-bridge already sends metadata via WebSocket, and the cloud maps `metadata.workerCount` into Firestore. Fix the 60s latency gap by adding `POST /internal/refresh-metadata` on the orchestrator (gated by `ORCHESTRATOR_INTERNAL_API_KEY`), called by the control-plane handler after scale completes. No new channel or cloud-side listener needed.
 
 ### Q2: Compose project name resolution
 **Context**: FR-006 requires running `docker compose up -d --scale worker=<n>` from inside the orchestrator container. Docker Compose needs the project name (`-p` flag) to match the one used when the containers were originally launched — otherwise it creates new containers instead of scaling existing ones. The CLI starts clusters with an explicit `--project-name` (derived from `cluster.json` or directory name in `commands/cluster/compose.ts`), but that value is not passed into the container as an environment variable. Docker Compose does not automatically set `COMPOSE_PROJECT_NAME` inside containers.
@@ -21,7 +21,7 @@
 - C: Derive from `cluster.json` fields (e.g., `cluster_id` or project directory name)
 - D: Rely on Docker Compose's default (parent directory of compose file, i.e., `.generacy` → project name `generacy`)
 
-**Answer**: *Pending*
+**Answer**: None of the listed options — the scaffolded `docker-compose.yml` already has a top-level `name:` field (scaffolder.ts:175). Compose V2 reads it intrinsically, so `docker compose -f <path>/docker-compose.yml up -d --scale worker=N` uses the correct project name without `-p` or env vars. Optionally add `COMPOSE_PROJECT_NAME` as defence-in-depth (option A) only if a real Compose-version issue surfaces.
 
 ### Q3: Docker Compose CLI availability in container
 **Context**: FR-006 assumes `docker compose` (Compose V2 plugin) is available inside the orchestrator container. The codebase shows no existing usage of `docker compose` CLI from within the control-plane or orchestrator — other services use `spawn('git', ...)` or `spawn(binPath, ...)` for their respective CLIs. The issue author states "docker compose calls from inside the orchestrator work," but if the cluster-base image doesn't include the Docker CLI + Compose plugin, the handler would need to use the Docker Engine HTTP API over the socket instead.
@@ -31,4 +31,4 @@
 - B: Docker CLI is not available — use Docker Engine API over Unix socket (service update endpoint)
 - C: Docker CLI should be added to cluster-base as a prerequisite for this feature
 
-**Answer**: *Pending*
+**Answer**: C — Add Docker CLI + Compose plugin to cluster-base. Confirmed blocker: `cluster-base` Dockerfile does NOT install Docker CLI or Compose plugin (unlike `cluster-microservices` which does at lines 75-91). Adds ~70MB. Requires a companion PR to `generacy-ai/cluster-base` repo.
