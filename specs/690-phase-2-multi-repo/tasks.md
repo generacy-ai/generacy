@@ -10,23 +10,23 @@
 
 ## Phase 1: Type Definitions
 
-- [ ] T001 [US1] Add `CommitResult` interface to `packages/orchestrator/src/worker/types.ts` — `{ prUrl?: string; hasChanges: boolean }`
-- [ ] T002 [US1] Add `PhaseAfterContext` interface to `packages/orchestrator/src/worker/types.ts` — extends `WorkerContext` with `phase: WorkflowPhase` and `commitResult: CommitResult`
-- [ ] T003 [US1] Add `PhaseAfterHandler` type to `packages/orchestrator/src/worker/types.ts` — `(context: PhaseAfterContext) => Promise<void>`
+- [X] T001 [US1] Add `CommitResult` interface to `packages/orchestrator/src/worker/types.ts` — `{ prUrl?: string; hasChanges: boolean }`
+- [X] T002 [US1] Add `PhaseAfterContext` interface to `packages/orchestrator/src/worker/types.ts` — extends `WorkerContext` with `phase: WorkflowPhase` and `commitResult: CommitResult`
+- [X] T003 [US1] Add `PhaseAfterHandler` type to `packages/orchestrator/src/worker/types.ts` — `(context: PhaseAfterContext) => Promise<void>`
 
 ## Phase 2: Core Implementation
 
-- [ ] T004 [US1] Add `phaseAfterHandlers?: PhaseAfterHandler[]` to `PhaseLoopDeps` interface in `packages/orchestrator/src/worker/phase-loop.ts:20`
-- [ ] T005 [US1] Invoke `phaseAfterHandlers` sequentially after `labelManager.onPhaseComplete()` (line ~394) and before gate check (line ~397) in `phase-loop.ts` — iterate with `for...of`, fail-fast on first throw
-- [ ] T006 [US1] Pass `phaseAfterHandlers: []` in `PhaseLoopDeps` construction in `packages/orchestrator/src/worker/claude-cli-worker.ts`
-- [ ] T007 [P] [US1] Export new types (`PhaseAfterHandler`, `PhaseAfterContext`, `CommitResult`) from `packages/orchestrator/src/worker/index.ts`
+- [X] T004 [US1] Add `phaseAfterHandlers?: PhaseAfterHandler[]` to `PhaseLoopDeps` interface in `packages/orchestrator/src/worker/phase-loop.ts:20`
+- [X] T005 [US1] Invoke `phaseAfterHandlers` sequentially after `labelManager.onPhaseComplete()` (line ~394) and before gate check (line ~397) in `phase-loop.ts` — iterate with `for...of`, fail-fast on first throw
+- [X] T006 [US1] Pass `phaseAfterHandlers: []` in `PhaseLoopDeps` construction in `packages/orchestrator/src/worker/claude-cli-worker.ts`
+- [X] T007 [P] [US1] Export new types (`PhaseAfterHandler`, `PhaseAfterContext`, `CommitResult`) from `packages/orchestrator/src/worker/index.ts`
 
 ## Phase 3: Tests
 
-- [ ] T008 [US1] Add test: register a no-op handler, verify it runs after commit/push and before gate check in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
-- [ ] T009 [US1] Add test: register a handler that throws, verify the phase fails and gate is not checked in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
-- [ ] T010 [US1] Add test: zero handlers registered produces identical behavior (no regression) in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
-- [ ] T011 [P] [US1] Run existing test suite (`pnpm -F @generacy-ai/orchestrator test`) to verify no regressions
+- [X] T008 [US1] Add test: register a no-op handler, verify it runs after commit/push and before gate check in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
+- [X] T009 [US1] Add test: register a handler that throws, verify the phase fails and gate is not checked in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
+- [X] T010 [US1] Add test: zero handlers registered produces identical behavior (no regression) in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
+- [X] T011 [P] [US1] Run existing test suite (`pnpm -F @generacy-ai/orchestrator test`) to verify no regressions
 
 ## Dependencies & Execution Order
 

@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { LabelManager } from './label-manager.js';
@@ -27,6 +27,8 @@ export interface PhaseLoopDeps {
   conversationLogger?: ConversationLogger;
   /** Optional callback for emitting job lifecycle events */
   jobEventEmitter?: JobEventEmitter;
+  /** Optional callbacks invoked after each phase completes, before gate check */
+  phaseAfterHandlers?: PhaseAfterHandler[];
 }
 
 /**
@@ -392,6 +394,11 @@ export class PhaseLoop {
 
       // 5c. Mark phase as completed in labels
       await labelManager.onPhaseComplete(phase);
+
+      // 5d. Invoke phase:after handlers (post-commit, pre-gate)
+      for (const handler of deps.phaseAfterHandlers ?? []) {
+        await handler({ ...context, phase, commitResult: { prUrl, hasChanges } });
+      }
 
       // 6. Check for review gates
       const gate = gateChecker.checkGate(phase, context.item.workflowName, config);
