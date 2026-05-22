@@ -55,6 +55,7 @@ describe('AI-Dependent Operations', () => {
       stepOutputs: new Map(),
       env: {},
       workdir: '/repo',
+      siblingWorkdirs: {},
       signal: new AbortController().signal,
       logger: mockLogger,
     };

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, findWorkspaceConfigPath } from '@generacy-ai/config';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
@@ -297,6 +298,22 @@ export class ClaudeCliWorker {
         );
       }
 
+      // 5b. Resolve sibling workdirs from workspace config
+      let siblingWorkdirs: Record<string, string> = {};
+      const configPath = findWorkspaceConfigPath(checkoutPath);
+      if (configPath) {
+        const workspaceConfig = tryLoadWorkspaceConfig(configPath);
+        if (workspaceConfig) {
+          siblingWorkdirs = resolveSiblingWorkdirs(workspaceConfig, checkoutPath);
+          if (Object.keys(siblingWorkdirs).length > 0) {
+            workerLogger.info(
+              { siblingCount: Object.keys(siblingWorkdirs).length, siblings: Object.keys(siblingWorkdirs) },
+              'Resolved sibling workdirs from workspace config',
+            );
+          }
+        }
+      }
+
       // 6. Build WorkerContext
       const context: WorkerContext = {
         workerId,
@@ -309,6 +326,7 @@ export class ClaudeCliWorker {
         checkoutPath,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
+        siblingWorkdirs,
       };
 
       // Helper to build job event base payload

@@ -732,6 +732,7 @@ export class WorkflowExecutor {
       stepOutputs: this.executionContext?.getAllStepOutputs() ?? new Map(),
       env: { ...workflow.env, ...options.env, ...step.env },
       workdir: options.cwd || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || process.cwd(),
+      siblingWorkdirs: {},
       signal: this.abortController?.signal ?? new AbortController().signal,
       logger,
     };

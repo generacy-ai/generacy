@@ -594,6 +594,7 @@ export class WorkflowExecutor {
       stepOutputs: this.executionContext?.getAllStepOutputs() ?? new Map(),
       env: { ...workflow.env, ...options.env, ...step.env },
       workdir: options.cwd ?? process.cwd(),
+      siblingWorkdirs: options.siblingWorkdirs ?? {},
       signal: this.abortController?.signal ?? new AbortController().signal,
       logger: actionLogger,
       emitEvent: (event) => {

@@ -191,6 +191,7 @@ export class PhaseLoop {
               timeoutMs: config.phaseTimeoutMs,
               signal: context.signal,
               resumeSessionId: currentSessionId,
+              siblingWorkdirs: context.siblingWorkdirs,
             },
             outputCapture,
           );
