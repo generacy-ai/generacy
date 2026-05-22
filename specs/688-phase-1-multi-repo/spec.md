@@ -1,86 +1,81 @@
-# Feature Specification: Inject sibling-repo awareness into agent prompt
+# Feature Specification: **Phase 1 of [multi-repo workflow support](https://github
 
 **Branch**: `688-phase-1-multi-repo` | **Date**: 2026-05-22 | **Status**: Draft
 
 ## Summary
 
-Phase 1 of [multi-repo workflow support](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/multi-repo-workflows-plan.md). Foundational; not user-visible until Phase 2 (Issue E) picks up the changes the agent makes.
+**Phase 1 of [multi-repo workflow support](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/multi-repo-workflows-plan.md).** Foundational; not user-visible until Phase 2 (Issue E) picks up the changes the agent makes.
 
-The agent (Claude Code) can edit files in sibling repos cloned under `/workspaces/`, but today it has no way to know those repos exist — the orchestrator only mentions the primary workdir. The result is the agent stays inside its primary repo even when the task requires cross-repo edits.
+## Summary
+
+The agent (Claude Code) is fully capable of editing files in sibling repos cloned under `/workspaces/`, but today it has no way to know those repos exist — the orchestrator only mentions the primary workdir. The result is the agent stays inside its primary repo even when the task requires cross-repo edits.
 
 This issue makes the orchestrator tell the agent about sibling repos before each implement phase, so the agent can deliberately edit them when the task calls for it.
 
+## Scope
+
+- In the implement-phase agent spawn path (likely [packages/orchestrator/src/worker/claude-cli-worker.ts](packages/orchestrator/src/worker/claude-cli-worker.ts) or the prompt-assembly code it calls), prepend a short instruction block listing the sibling repos.
+- Format proposal (subject to taste during implementation):
+
+  > **Sibling repos available in this workspace.** You may edit files in any of these as part of this task:
+  > - \`agency\` — \`/workspaces/agency\`
+  > - \`generacy-cloud\` — \`/workspaces/generacy-cloud\`
+  > - …
+  >
+  > Changes you make in sibling repos will be automatically committed and a draft PR created.
+- Source the list from the `siblingWorkdirs` map added by Issue A.
+- If the list is empty, omit the block entirely (don't print a confusing \"no siblings\" message).
+
+## Out of scope
+
+- Actually picking up the changes the agent makes in siblings. That's Issue E.
+- Teaching the agent about cross-repo dependencies (\"this PR in repo A depends on repo B\"). Out of scope — humans coordinate.
+
+## Acceptance
+
+- Implement-phase agent spawn includes the sibling block in its prompt when siblings are configured.
+- No regression in workflows that have no siblings (the block is absent).
+- Manual smoke test: a workflow in tetrad-development sees the agent acknowledge the sibling repos (visible in the conversation log).
+
+## Dependencies
+
+Soft dependency on Issue A for `siblingWorkdirs` — but can be developed against a stub map in parallel, integrated when A lands.
+
+## Blocks
+
+Doesn't strictly block anything, but Phase 2 (Issue E) is much more useful with this in place — otherwise the agent rarely makes cross-repo edits to detect.
+
 ## User Stories
 
-### US1: Cross-repo task execution
+### US1: [Primary User Story]
 
-**As a** developer running a multi-repo workflow,
-**I want** the agent to know about sibling repos in the workspace,
-**So that** it can make coordinated edits across repos when the task requires it.
-
-**Acceptance Criteria**:
-- [ ] Agent prompt includes a sibling-repo instruction block listing all configured sibling repos
-- [ ] Each sibling entry shows repo name and absolute path
-- [ ] Block is omitted entirely when no siblings are configured (no empty/confusing output)
-
-### US2: Single-repo backward compatibility
-
-**As a** developer running a single-repo workflow,
-**I want** the agent prompt to remain unchanged,
-**So that** there is no regression in existing behavior.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] Workflows with no `siblingWorkdirs` produce identical agent prompts as before
-- [ ] No errors or warnings when sibling list is empty or undefined
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | In the implement-phase agent spawn path, prepend a sibling-repo instruction block to the agent prompt | P1 | Likely in `claude-cli-worker.ts` or prompt-assembly code it calls |
-| FR-002 | Source the sibling repo list from the `siblingWorkdirs` map (Issue A) | P1 | Develop against stub map if Issue A hasn't landed |
-| FR-003 | Each entry displays repo name and absolute path (e.g., `` `agency` — `/workspaces/agency` ``) | P1 | |
-| FR-004 | Include a note that changes in sibling repos will be automatically committed with draft PRs | P2 | Forward-looking; actual pickup is Phase 2 |
-| FR-005 | Omit the entire block when sibling list is empty | P1 | Don't show "no siblings" message |
-
-## Prompt Format
-
-Proposed instruction block (subject to refinement during implementation):
-
-> **Sibling repos available in this workspace.** You may edit files in any of these as part of this task:
-> - `agency` — `/workspaces/agency`
-> - `generacy-cloud` — `/workspaces/generacy-cloud`
-> - ...
->
-> Changes you make in sibling repos will be automatically committed and a draft PR created.
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Sibling block present in agent prompt | When siblings configured | Inspect agent conversation log |
-| SC-002 | Sibling block absent | When no siblings configured | Inspect agent conversation log |
-| SC-003 | No regression in single-repo workflows | Zero test failures | Existing test suite passes |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- Sibling repos are cloned under `/workspaces/` (standard cluster layout)
-- `siblingWorkdirs` map from Issue A will provide repo name → path mapping (can stub in parallel)
-- The agent (Claude Code) can already read/write files at arbitrary paths — no permission changes needed
+- [Assumption 1]
 
 ## Out of Scope
 
-- Picking up changes the agent makes in sibling repos (Phase 2 / Issue E)
-- Cross-repo dependency awareness ("this PR in repo A depends on repo B")
-- Any UI changes or user-facing configuration for sibling repos
-
-## Dependencies
-
-- **Soft**: Issue A (`siblingWorkdirs` map) — can develop against a stub map, integrate when A lands
-
-## Blocks
-
-- Phase 2 (Issue E) is much more useful with this in place — otherwise the agent rarely makes cross-repo edits to detect
+- [Exclusion 1]
 
 ---
 
