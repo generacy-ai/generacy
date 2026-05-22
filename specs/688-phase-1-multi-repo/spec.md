@@ -36,11 +36,11 @@ This feature injects a sibling-repo instruction block into the agent prompt befo
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Inject sibling-repo instruction block into the phase prompt when `siblingWorkdirs` is non-empty | P1 | Injection point in `phase-loop.ts` before passing prompt to `cliSpawner.spawnPhase()` |
-| FR-002 | Source sibling list from a defined data structure (stub until Issue A lands) | P1 | Likely a field on `WorkerContext` or `WorkerConfig`, populated upstream by `claude-cli-worker.ts` |
+| FR-001 | Inject sibling-repo instruction block into the phase prompt when `siblingWorkdirs` is non-empty | P1 | Injection point in `phase-loop.ts` before passing prompt to `cliSpawner.spawnPhase()`. Applies to **all CLI phases** (specify, clarify, plan, tasks, implement) — same spawn path, near-zero cost |
+| FR-002 | Source sibling list from phase-loop `context` object | P1 | New field on context, populated upstream by `claude-cli-worker.ts`. Stub with empty default until Issue A (#687) lands |
 | FR-003 | Omit the block entirely when sibling list is empty or undefined | P1 | No "no siblings" message — just the original prompt |
-| FR-004 | Include repo name and absolute path for each sibling entry | P1 | Format: `` `<name>` — `/workspaces/<name>` `` |
-| FR-005 | Draft-PR note in prompt text | P2 | Pending clarification on timing — may defer to Phase 2 |
+| FR-004 | Include repo name (directory basename) and absolute path for each sibling entry | P1 | Format: `` `<basename>` — `/workspaces/<basename>` `` |
+| FR-005 | ~~Draft-PR note in prompt text~~ | ~~P2~~ | **Deferred to Phase 2 (#691)** — prompt should only state what's true today |
 
 ## Key Implementation Details
 
@@ -75,7 +75,7 @@ siblingWorkdirs (Issue A / stub)
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Sibling block present in agent prompt when siblings configured | 100% of implement-phase spawns | Inspect conversation log / stream-json output |
+| SC-001 | Sibling block present in agent prompt when siblings configured | 100% of all-phase spawns | Inspect conversation log / stream-json output |
 | SC-002 | No sibling block when siblings absent | 100% of spawns without config | Verify prompt string matches original format |
 | SC-003 | Agent acknowledges sibling repos | Visible in conversation log | Manual smoke test in tetrad-development |
 
@@ -97,13 +97,13 @@ siblingWorkdirs (Issue A / stub)
 - **Soft**: Issue A (`siblingWorkdirs` map) — can develop against stub in parallel
 - **Files**: `packages/orchestrator/src/worker/phase-loop.ts`, `packages/orchestrator/src/worker/types.ts`, `packages/orchestrator/src/worker/claude-cli-worker.ts`
 
-## Open Questions (see clarifications.md)
+## Resolved Questions (see clarifications.md)
 
-1. Which injection point — phase-loop prompt, per-task prompt, or system-level (CLAUDE.md)?
-2. Where should sibling data live at runtime — context object, WorkerConfig, or filesystem scan?
-3. Inject into implement phase only, or all phases?
-4. Include draft-PR note now or defer to Phase 2?
-5. Repo identifier format — directory basename, repo slug, or full org/repo?
+1. **Injection point**: Phase-loop initial prompt prepend in `phase-loop.ts` (Option A)
+2. **Data source**: New field on phase-loop `context` object, populated by `claude-cli-worker.ts` (Option A)
+3. **Phase scope**: All CLI phases — specify, clarify, plan, tasks, implement (Option B)
+4. **Draft-PR note**: Deferred entirely to Phase 2 (#691) (Option C)
+5. **Repo identifier**: Directory basename (Option A)
 
 ---
 
