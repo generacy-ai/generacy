@@ -62,6 +62,7 @@ describe('executeImplement — increment boundary logic', () => {
       stepOutputs: new Map(),
       env: {},
       workdir: '/repo',
+      siblingWorkdirs: {},
       signal: new AbortController().signal,
       logger: mockLogger,
     };

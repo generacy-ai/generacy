@@ -22,6 +22,7 @@ const mockReaddirSync = vi.mocked(readdirSync);
 function createMockContext(inputs: Record<string, unknown> = {}): ActionContext {
   return {
     workdir: '/test/workdir',
+    siblingWorkdirs: {},
     inputs,
     outputs: {},
     env: {},

@@ -655,7 +655,10 @@ describe('PhaseLoop - sibling workdir prompt injection', () => {
 
   it('prepends sibling block to prompt when siblingWorkdirs is non-empty', async () => {
     const context = createMockContext('specify');
-    context.siblingWorkdirs = ['/workspaces/agency', '/workspaces/generacy-cloud'];
+    context.siblingWorkdirs = {
+      agency: '/workspaces/agency',
+      'generacy-cloud': '/workspaces/generacy-cloud',
+    };
 
     (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
 
@@ -671,7 +674,7 @@ describe('PhaseLoop - sibling workdir prompt injection', () => {
 
   it('passes original issueUrl when siblingWorkdirs is empty', async () => {
     const context = createMockContext('specify');
-    context.siblingWorkdirs = [];
+    context.siblingWorkdirs = {};
 
     (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
 

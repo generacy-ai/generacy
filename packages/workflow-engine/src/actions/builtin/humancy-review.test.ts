@@ -58,6 +58,7 @@ const createMockContext = (overrides?: Partial<ActionContext>): ActionContext =>
   stepOutputs: new Map(),
   env: {},
   workdir: '/tmp/test',
+  siblingWorkdirs: {},
   signal: new AbortController().signal,
   logger: {
     info: vi.fn(),

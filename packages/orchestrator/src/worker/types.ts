@@ -177,6 +177,8 @@ export interface CliSpawnOptions {
   signal: AbortSignal;
   /** Session ID from a previous phase to resume (keeps MCP servers warm, carries context) */
   resumeSessionId?: string;
+  /** Sibling repository working directories (repo name → absolute path) */
+  siblingWorkdirs?: Record<string, string>;
 }
 
 /**
@@ -249,8 +251,8 @@ export interface WorkerContext {
   description: string;
   /** PR URL — set after draft PR is created, updated by PrManager */
   prUrl?: string;
-  /** Absolute paths to sibling repo directories (e.g., ['/workspaces/agency']) */
-  siblingWorkdirs?: string[];
+  /** Sibling repository working directories (repo name → absolute path) */
+  siblingWorkdirs?: Record<string, string>;
 }
 
 /**

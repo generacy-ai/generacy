@@ -183,7 +183,7 @@ export class PhaseLoop {
           }
 
           // CLI phase — spawn Claude CLI (resume previous session if available)
-          const siblingBlock = buildSiblingPromptBlock(context.siblingWorkdirs ?? []);
+          const siblingBlock = buildSiblingPromptBlock(context.siblingWorkdirs ?? {});
           const prompt = siblingBlock
             ? `${siblingBlock}\n\n${context.issueUrl}`
             : context.issueUrl;
@@ -196,6 +196,7 @@ export class PhaseLoop {
               timeoutMs: config.phaseTimeoutMs,
               signal: context.signal,
               resumeSessionId: currentSessionId,
+              siblingWorkdirs: context.siblingWorkdirs,
             },
             outputCapture,
           );

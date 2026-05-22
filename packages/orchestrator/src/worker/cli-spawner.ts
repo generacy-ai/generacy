@@ -53,6 +53,11 @@ export class CliSpawner {
         : 'Spawning new Claude CLI session for phase (via AgentLauncher)',
     );
 
+    const launchEnv: Record<string, string> = { ...options.env };
+    if (options.siblingWorkdirs && Object.keys(options.siblingWorkdirs).length > 0) {
+      launchEnv['GENERACY_SIBLING_WORKDIRS'] = JSON.stringify(options.siblingWorkdirs);
+    }
+
     const handle = await this.agentLauncher.launch({
       intent: {
         kind: 'phase',
@@ -61,7 +66,7 @@ export class CliSpawner {
         sessionId: options.resumeSessionId,
       },
       cwd: options.cwd,
-      env: options.env,
+      env: launchEnv,
       credentials: buildLaunchCredentials(this.credentialRole),
     });
     const child = handle.process;

@@ -12,6 +12,7 @@ export {
   getMonitoredRepos,
   getRepoNames,
   getRepoWorkdir,
+  resolveSiblingWorkdirs,
 } from './repos.js';
 
 export { parseRepoInput, parseRepoList } from './parse-repo-input.js';
