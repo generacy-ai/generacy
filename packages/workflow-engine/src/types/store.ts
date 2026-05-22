@@ -18,6 +18,20 @@ export interface StepOutputData {
 }
 
 /**
+ * Reference to a PR opened in a sibling repo during cross-repo fan-out.
+ */
+export interface LinkedPR {
+  /** Repo short name, e.g. "generacy-cloud" */
+  repo: string;
+  /** PR number in that repo */
+  number: number;
+  /** Branch the PR was opened from */
+  branch: string;
+  /** Full URL to the PR */
+  url: string;
+}
+
+/**
  * Pending review details when workflow is paused
  */
 export interface PendingReview {
@@ -49,6 +63,8 @@ export interface WorkflowState {
   stepOutputs: Record<string, StepOutputData>;
   /** Details of pending human review, if any */
   pendingReview?: PendingReview;
+  /** PRs opened in sibling repos during cross-repo fan-out */
+  linkedPRs?: LinkedPR[];
   /** ISO timestamp when workflow started */
   startedAt: string;
   /** ISO timestamp of last state update */
