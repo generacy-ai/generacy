@@ -87,6 +87,33 @@ export function validateWorkflowState(data: unknown): StateValidationResult {
     }
   }
 
+  // Validate linkedPRs if present
+  if (state.linkedPRs !== undefined) {
+    if (!Array.isArray(state.linkedPRs)) {
+      errors.push('linkedPRs must be an array');
+    } else {
+      for (let i = 0; i < state.linkedPRs.length; i++) {
+        const entry = state.linkedPRs[i] as Record<string, unknown>;
+        if (typeof entry !== 'object' || entry === null) {
+          errors.push(`linkedPRs[${i}] must be an object`);
+          continue;
+        }
+        if (typeof entry.repo !== 'string' || (entry.repo as string).length === 0) {
+          errors.push(`linkedPRs[${i}].repo must be a non-empty string`);
+        }
+        if (typeof entry.number !== 'number') {
+          errors.push(`linkedPRs[${i}].number must be a number`);
+        }
+        if (typeof entry.branch !== 'string' || (entry.branch as string).length === 0) {
+          errors.push(`linkedPRs[${i}].branch must be a non-empty string`);
+        }
+        if (typeof entry.url !== 'string' || (entry.url as string).length === 0) {
+          errors.push(`linkedPRs[${i}].url must be a non-empty string`);
+        }
+      }
+    }
+  }
+
   // Validate ISO timestamps
   const timestamps = ['startedAt', 'updatedAt'];
   for (const field of timestamps) {
