@@ -159,6 +159,7 @@ export type {
 
 // Store types
 export type {
+  LinkedPR,
   WorkflowState,
   WorkflowStore,
   PendingReview,

@@ -4,7 +4,9 @@
  */
 
 export { FilesystemWorkflowStore, validateWorkflowState } from './filesystem-store.js';
+export { addLinkedPR } from './linked-pr.js';
 export type {
+  LinkedPR,
   WorkflowState,
   WorkflowStore,
   PendingReview,
