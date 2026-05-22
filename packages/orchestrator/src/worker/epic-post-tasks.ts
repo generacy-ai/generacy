@@ -365,6 +365,7 @@ export class EpicPostTasks {
       inputs: {},
       stepOutputs: new Map(),
       env: {},
+      siblingWorkdirs: context.siblingWorkdirs ?? {},
       signal: context.signal,
     };
   }
