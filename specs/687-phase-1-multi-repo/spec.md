@@ -1,85 +1,36 @@
-# Feature Specification: Sibling-Repo Discovery and ActionContext Widening
+# Feature Specification: **Phase 1 of [multi-repo workflow support](https://github
 
-**Branch**: `687-phase-1-multi-repo` | **Date**: 2026-05-22 | **Status**: Draft | **Issue**: [#687](https://github.com/generacy-ai/generacy/issues/687)
+**Branch**: `687-phase-1-multi-repo` | **Date**: 2026-05-22 | **Status**: Draft
 
 ## Summary
 
-Phase 1 of [multi-repo workflow support](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/multi-repo-workflows-plan.md). Foundational change; not user-visible on its own.
+**Phase 1 of [multi-repo workflow support](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/multi-repo-workflows-plan.md).** Foundational change; not user-visible on its own.
+
+## Summary
 
 Today the workflow engine assumes one repo per execution: `ActionContext.workdir` and `ExecutionOptions.cwd` are both singular strings. This blocks any cross-repo work because the GitHub client, change detection, and PR creation all hang off a single workdir.
 
 This issue widens the context to also carry a map of sibling repos cloned next to the primary, discovered from `workspace.repos` in `.generacy/config.yaml`.
 
-## User Stories
-
-### US1: Workflow Engine Sibling Awareness
-
-**As a** workflow-engine maintainer,
-**I want** ActionContext and ExecutionOptions to carry a `siblingWorkdirs` map alongside the existing `workdir`,
-**So that** Phase 2 consumers (GitHub client, change detection, PR creation) can operate across multiple repos without further schema changes.
-
-**Acceptance Criteria**:
-- [ ] `ActionContext.siblingWorkdirs` is typed as `Record<string, string>` (repo name -> absolute path)
-- [ ] `ExecutionOptions.siblingWorkdirs` mirrors the same type
-- [ ] Sibling map is populated from `workspace.repos` in `.generacy/config.yaml`
-- [ ] Primary repo is excluded from the sibling map
-- [ ] Missing sibling paths are skipped with info-level log (not error)
-- [ ] Absent config file results in `siblingWorkdirs: {}` with no error
-
-### US2: Backwards-Compatible Execution
-
-**As a** developer running existing single-repo workflows,
-**I want** the workflow engine to behave identically when no config file or sibling repos exist,
-**So that** this change is non-breaking.
-
-**Acceptance Criteria**:
-- [ ] Existing tests pass without modification
-- [ ] `siblingWorkdirs` defaults to `{}` when config is absent
-- [ ] No action handlers are modified
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | Read `workspace.repos` from `.generacy/config.yaml` | P1 | Canonical location: `/workspaces/tetrad-development/.generacy/config.yaml` |
-| FR-002 | Add `siblingWorkdirs: Record<string, string>` to `ActionContext` | P1 | `packages/workflow-engine/src/types/action.ts` |
-| FR-003 | Add `siblingWorkdirs: Record<string, string>` to `ExecutionOptions` | P1 | `packages/workflow-engine/src/types/execution.ts` |
-| FR-004 | Populate `siblingWorkdirs` in executor context construction | P1 | `packages/workflow-engine/src/executor/index.ts` ~line 596 |
-| FR-005 | Exclude the primary repo from sibling map | P1 | Only "other" repos appear |
-| FR-006 | Skip siblings whose paths don't exist on disk | P1 | Log at info level, not error |
-| FR-007 | Graceful fallback when config file is absent | P1 | Treat as empty list of siblings |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Type-checks pass | Zero errors | `pnpm typecheck` in workflow-engine |
-| SC-002 | Unit tests pass | All green | `pnpm test` in workflow-engine |
-| SC-003 | Multi-repo workspace populates siblings | Non-empty `siblingWorkdirs` | Manual test in `tetrad-development` |
-| SC-004 | Single-repo workspace is unaffected | `siblingWorkdirs: {}` | Automated test |
-
 ## Scope
 
-### In Scope
+- Read `workspace.repos` from `.generacy/config.yaml` (canonical location: `/workspaces/tetrad-development/.generacy/config.yaml`). Fall back gracefully if not found (treat as empty list of siblings).
+- Add `siblingWorkdirs: Record<string, string>` (repo name → absolute path) to `ActionContext` in [packages/workflow-engine/src/types/action.ts](packages/workflow-engine/src/types/action.ts) and the equivalent on `ExecutionOptions` in [packages/workflow-engine/src/types/execution.ts](packages/workflow-engine/src/types/execution.ts).
+- Populate `siblingWorkdirs` when constructing the action context in [packages/workflow-engine/src/executor/index.ts](packages/workflow-engine/src/executor/index.ts) (around line 596 where `workdir` is currently set).
+- Exclude the primary repo from the sibling map (only \"other\" repos).
+- Skip siblings whose paths don't exist on disk (logged as info, not error).
 
-- Reading `workspace.repos` config
-- Type additions to `ActionContext` and `ExecutionOptions`
-- Executor wiring to populate `siblingWorkdirs`
-- Disk-existence validation of sibling paths
-- Unit tests for discovery and population logic
+## Out of scope
 
-### Out of Scope
+- No consumers yet. The GitHub client, change detection, and PR creation continue to use the singular `workdir`. Those land in Phase 2 (Issue E).
+- No changes to existing action handlers — they keep reading `workdir` and stay single-repo.
+- No CLI flag or config to override the sibling list.
 
-- No consumers yet (GitHub client, change detection, PR creation stay single-repo — Phase 2)
-- No changes to existing action handlers
-- No CLI flag or config override for sibling list
-- No new config schema validation beyond reading `workspace.repos`
+## Acceptance
 
-## Assumptions
-
-- `.generacy/config.yaml` uses a `workspace.repos` key containing a list of repo entries with at minimum a `name` and cloned path (or derivable path)
-- Sibling repos are cloned as peers under `/workspaces/` (same parent as primary)
-- The primary repo can be identified by matching `workdir` against the repo list
+- Type-checks and unit tests pass.
+- A workflow run in `tetrad-development` populates `siblingWorkdirs` with the other repos in `workspace.repos`.
+- A workflow run in a workspace without `.generacy/config.yaml` populates `siblingWorkdirs: {}` and runs identically to today.
 
 ## Dependencies
 
@@ -88,6 +39,38 @@ None. This is Phase 1; can run in parallel with Issues B and C.
 ## Blocks
 
 Phase 2 issues (D, E) depend on this.
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
+## Assumptions
+
+- [Assumption 1]
+
+## Out of Scope
+
+- [Exclusion 1]
 
 ---
 
