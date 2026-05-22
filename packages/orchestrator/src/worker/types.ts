@@ -249,6 +249,8 @@ export interface WorkerContext {
   description: string;
   /** PR URL — set after draft PR is created, updated by PrManager */
   prUrl?: string;
+  /** Absolute paths to sibling repo directories (e.g., ['/workspaces/agency']) */
+  siblingWorkdirs?: string[];
 }
 
 /**

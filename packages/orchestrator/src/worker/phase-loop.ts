@@ -9,6 +9,7 @@ import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
+import { buildSiblingPromptBlock } from './sibling-prompt.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -182,10 +183,14 @@ export class PhaseLoop {
           }
 
           // CLI phase — spawn Claude CLI (resume previous session if available)
+          const siblingBlock = buildSiblingPromptBlock(context.siblingWorkdirs ?? []);
+          const prompt = siblingBlock
+            ? `${siblingBlock}\n\n${context.issueUrl}`
+            : context.issueUrl;
           result = await cliSpawner.spawnPhase(
             phase as Exclude<typeof phase, 'validate'>,
             {
-              prompt: context.issueUrl,
+              prompt,
               cwd: context.checkoutPath,
               env: { CLAUDE_HEADLESS: 'true' },
               timeoutMs: config.phaseTimeoutMs,

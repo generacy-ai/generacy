@@ -309,6 +309,7 @@ export class ClaudeCliWorker {
         checkoutPath,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
+        siblingWorkdirs: [], // TODO(#687): populate from workspace config
       };
 
       // Helper to build job event base payload

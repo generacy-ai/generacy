@@ -10,19 +10,19 @@
 
 ## Phase 1: Type & Pure Function
 
-- [ ] T001 [P] [US1] Add `siblingWorkdirs?: string[]` to `WorkerContext` in `packages/orchestrator/src/worker/types.ts`
-- [ ] T002 [P] [US1] Create `packages/orchestrator/src/worker/sibling-prompt.ts` with `buildSiblingPromptBlock()` pure function — accepts `string[]`, returns formatted markdown block or `undefined` for empty input
-- [ ] T003 [P] [US1] Create `packages/orchestrator/src/worker/__tests__/sibling-prompt.test.ts` — test empty array returns `undefined`, single path format, multiple paths format, nested dir basename extraction
+- [X] T001 [P] [US1] Add `siblingWorkdirs?: string[]` to `WorkerContext` in `packages/orchestrator/src/worker/types.ts`
+- [X] T002 [P] [US1] Create `packages/orchestrator/src/worker/sibling-prompt.ts` with `buildSiblingPromptBlock()` pure function — accepts `string[]`, returns formatted markdown block or `undefined` for empty input
+- [X] T003 [P] [US1] Create `packages/orchestrator/src/worker/__tests__/sibling-prompt.test.ts` — test empty array returns `undefined`, single path format, multiple paths format, nested dir basename extraction
 
 ## Phase 2: Integration
 
-- [ ] T004 [US1] Inject sibling block in `packages/orchestrator/src/worker/phase-loop.ts` — call `buildSiblingPromptBlock(context.siblingWorkdirs ?? [])` and prepend to prompt before `cliSpawner.spawnPhase()` call (~line 185)
-- [ ] T005 [US2] Stub `siblingWorkdirs: []` in context assembly in `packages/orchestrator/src/worker/claude-cli-worker.ts` (~line 301–312) with `// TODO(#687)` comment
+- [X] T004 [US1] Inject sibling block in `packages/orchestrator/src/worker/phase-loop.ts` — call `buildSiblingPromptBlock(context.siblingWorkdirs ?? [])` and prepend to prompt before `cliSpawner.spawnPhase()` call (~line 185)
+- [X] T005 [US2] Stub `siblingWorkdirs: []` in context assembly in `packages/orchestrator/src/worker/claude-cli-worker.ts` (~line 301–312) with `// TODO(#687)` comment
 
 ## Phase 3: Integration Tests
 
-- [ ] T006 [US1] Add phase-loop test: non-empty `siblingWorkdirs` → `spawnPhase` receives prompt with sibling block prepended, in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
-- [ ] T007 [P] [US2] Add phase-loop test: empty/absent `siblingWorkdirs` → `spawnPhase` receives original `context.issueUrl` unchanged, in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
+- [X] T006 [US1] Add phase-loop test: non-empty `siblingWorkdirs` → `spawnPhase` receives prompt with sibling block prepended, in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
+- [X] T007 [P] [US2] Add phase-loop test: empty/absent `siblingWorkdirs` → `spawnPhase` receives original `context.issueUrl` unchanged, in `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts`
 
 ## Dependencies & Execution Order
 
