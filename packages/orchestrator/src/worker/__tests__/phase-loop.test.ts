@@ -639,3 +639,57 @@ describe('PhaseLoop - job lifecycle events', () => {
     expect(result.completed).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Sibling-repo prompt injection
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - sibling workdir prompt injection', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('prepends sibling block to prompt when siblingWorkdirs is non-empty', async () => {
+    const context = createMockContext('specify');
+    context.siblingWorkdirs = ['/workspaces/agency', '/workspaces/generacy-cloud'];
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['specify']);
+
+    const spawnCall = (deps.cliSpawner.spawnPhase as any).mock.calls[0];
+    const prompt: string = spawnCall[1].prompt;
+    expect(prompt).toContain('**Sibling repos available in this workspace.**');
+    expect(prompt).toContain('`agency` — `/workspaces/agency`');
+    expect(prompt).toContain('`generacy-cloud` — `/workspaces/generacy-cloud`');
+    expect(prompt).toContain(context.issueUrl);
+  });
+
+  it('passes original issueUrl when siblingWorkdirs is empty', async () => {
+    const context = createMockContext('specify');
+    context.siblingWorkdirs = [];
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['specify']);
+
+    const spawnCall = (deps.cliSpawner.spawnPhase as any).mock.calls[0];
+    expect(spawnCall[1].prompt).toBe(context.issueUrl);
+  });
+
+  it('passes original issueUrl when siblingWorkdirs is absent', async () => {
+    const context = createMockContext('specify');
+    // siblingWorkdirs is undefined (not set)
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['specify']);
+
+    const spawnCall = (deps.cliSpawner.spawnPhase as any).mock.calls[0];
+    expect(spawnCall[1].prompt).toBe(context.issueUrl);
+  });
+});
