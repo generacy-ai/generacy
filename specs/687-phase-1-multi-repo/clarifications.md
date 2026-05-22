@@ -10,7 +10,7 @@
 - B: Path-match — same derivation, but if no match, return empty `siblingWorkdirs: {}`
 - C: Basename-match — extract `basename(workdir)` and match against `repos[].name`; simpler but less robust
 
-**Answer**: *Pending*
+**Answer**: B (path-match, empty fallback). Derive each repo's expected path with `getRepoWorkdir(name, dirname(workdir))` and compare against the resolved, realpath-normalized `workdir`. If no match, return `siblingWorkdirs: {}` and log a warning. Don't fall back to "treat all as siblings" — that would silently include the primary in fan-out and corrupt downstream behavior. Fail closed when the primary can't be identified.
 
 ### Q2: Config Injection vs Self-Discovery
 **Context**: The `workflow-engine` package currently has no dependency on `@generacy-ai/config`. The spec says to "read `workspace.repos` from `.generacy/config.yaml`" but doesn't specify the mechanism. Two approaches: (A) add `@generacy-ai/config` as a dependency and use `tryLoadWorkspaceConfig()` + `findWorkspaceConfigPath()` inside the executor, or (B) extend `ExecutionOptions` to accept the config (or pre-resolved sibling map) from the caller (orchestrator already loads workspace config). Option B keeps workflow-engine decoupled from config loading.
@@ -20,7 +20,7 @@
 - B: Caller-injection — add `siblingWorkdirs?: Record<string, string>` to `ExecutionOptions`, let orchestrator resolve and pass it in
 - C: Hybrid — accept optional `siblingWorkdirs` on `ExecutionOptions`, fall back to self-discovery if not provided
 
-**Answer**: *Pending*
+**Answer**: B (caller-injection). Extend `ExecutionOptions` with `siblingWorkdirs?: Record<string, string>` and let the orchestrator resolve and pass it in. The orchestrator already depends on `@generacy-ai/config` (see `packages/orchestrator/src/config/loader.ts`); keeping that dependency out of `workflow-engine` preserves its layering. Hybrid (C) isn't worth the complexity — `workflow-engine` has no use case for running independently of an orchestrator that already loads config.
 
 ### Q3: Sibling Base Path Derivation
 **Context**: `getRepoWorkdir(repoName, basePath)` constructs `${basePath}/${repoName}` with a default `basePath` of `/workspaces`. The spec assumes siblings are "cloned as peers under `/workspaces/`". However, the executor derives `workdir` from `options.cwd ?? process.cwd()`, which could be any path. If the primary repo is at `/home/user/projects/my-repo`, the base path should be `/home/user/projects/`, not `/workspaces/`.
@@ -30,7 +30,7 @@
 - B: Hardcoded — always use `/workspaces` (matches current cluster deployment assumptions)
 - C: Configurable — read from config or env var, defaulting to `/workspaces`
 
-**Answer**: *Pending*
+**Answer**: A (dynamic via `path.dirname(workdir)`). Hardcoding `/workspaces` breaks any non-cluster deployment (local dev outside devcontainers, CI runners, future hosting layouts). The `/workspaces` default in `getRepoWorkdir()` should be overridden with the parent of the primary's resolved workdir.
 
 ### Q4: Config Loading Frequency
 **Context**: The executor's `createActionContext()` is called once per step. If config loading happens there, it means disk I/O on every step. Alternatively, config could be loaded once at the start of `execute()` and cached for the entire workflow run. The latter is more efficient but means the sibling map is stale if config changes mid-execution (unlikely but possible).
@@ -40,4 +40,4 @@
 - B: Per step — load fresh in each `createActionContext()` call
 - C: Lazy singleton — load on first access, cache for remainder of execution
 
-**Answer**: *Pending*
+**Answer**: A (once per `execute()`). Load and cache at workflow start, pass the resolved map into `createActionContext()`. Per-step disk I/O is wasteful for data that doesn't meaningfully change mid-execution. Lazy singleton (C) is marginally lazier but adds state for no real benefit here.

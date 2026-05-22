@@ -303,3 +303,15 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `packages/orchestrator/src/services/relay-bridge.ts` — MODIFIED in #624: `collectMetadata()` calls `probeControlPlaneSocket()`, reads `init-result.json` for relay metadata.
   - `packages/cluster-relay/src/metadata.ts` — MODIFIED in #624: Reads `controlPlaneReady` from orchestrator `/health` response.
   - `packages/orchestrator/src/server.ts` — MODIFIED in #624: After `server.listen()`, polls `probeControlPlaneSocket()` every 1s for `CONTROL_PLANE_WAIT_TIMEOUT` (default 15s). On timeout: pushes `error` status via relay with reason, waits ~30s grace window, then `process.exit(1)`.
+
+## Multi-Repo Workflow Support — Phase 1 (#687)
+
+- Foundational change: widens `ActionContext` and `ExecutionOptions` to carry `siblingWorkdirs: Record<string, string>` (repo name → absolute path) for cross-repo workflow support. Not user-visible on its own; consumers land in Phase 2.
+- `packages/config/src/repos.ts` — NEW function `resolveSiblingWorkdirs(config, primaryWorkdir, basePath?)`: Builds sibling map from `WorkspaceConfig.repos`. Derives base path from `dirname(primaryWorkdir)`. Excludes primary (path-match via `realpathSync`). Skips non-existent siblings. Returns `{}` if primary can't be identified (fail closed).
+- `packages/workflow-engine/src/types/action.ts` — MODIFIED in #687: `ActionContext` gains `siblingWorkdirs: Record<string, string>` (non-optional, defaults to `{}`).
+- `packages/workflow-engine/src/types/execution.ts` — MODIFIED in #687: `ExecutionOptions` gains optional `siblingWorkdirs?: Record<string, string>`.
+- `packages/workflow-engine/src/executor/index.ts` — MODIFIED in #687: `execute()` caches sibling map once per run; `createActionContext()` threads it to every step.
+- `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #687: Resolves sibling map from workspace config after checkout, passes via `CliSpawnOptions`.
+- `packages/orchestrator/src/worker/types.ts` — MODIFIED in #687: `CliSpawnOptions` gains `siblingWorkdirs?: Record<string, string>`.
+- `packages/orchestrator/src/worker/cli-spawner.ts` — MODIFIED in #687: Forwards `siblingWorkdirs` to `AgentLauncher.launch()`.
+- Architecture: Caller-injection pattern — orchestrator resolves map, workflow-engine stays decoupled from `@generacy-ai/config`.
