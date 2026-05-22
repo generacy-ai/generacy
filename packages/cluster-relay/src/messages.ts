@@ -108,7 +108,7 @@ export interface GitRemote {
 }
 
 export interface ClusterMetadata {
-  workerCount: number;
+  workers: number;
   activeWorkflows: number;
   channel: 'preview' | 'stable';
   orchestratorVersion: string;
@@ -139,7 +139,7 @@ const GitRemoteSchema = z.object({
 });
 
 const ClusterMetadataSchema = z.object({
-  workerCount: z.number(),
+  workers: z.number(),
   activeWorkflows: z.number(),
   channel: z.enum(['preview', 'stable']),
   orchestratorVersion: z.string(),

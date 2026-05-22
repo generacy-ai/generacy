@@ -46,7 +46,7 @@ function createMockFetch(options?: {
         throw new Error('Metrics endpoint unreachable');
       }
       return new Response(
-        JSON.stringify({ workerCount: 4, activeWorkflows: 2 }),
+        JSON.stringify({ workers: 4, activeWorkflows: 2 }),
         { status: 200 },
       );
     }
@@ -70,7 +70,7 @@ describe('collectMetadata', () => {
     const metadata = await collectMetadata(baseConfig);
 
     expect(metadata).toEqual({
-      workerCount: 4,
+      workers: 4,
       activeWorkflows: 2,
       channel: 'stable',
       orchestratorVersion: '1.0.0',
@@ -102,7 +102,7 @@ describe('collectMetadata', () => {
     expect(metadata.uptime).toBe(0);
 
     // Metrics should still succeed
-    expect(metadata.workerCount).toBe(4);
+    expect(metadata.workers).toBe(4);
     expect(metadata.activeWorkflows).toBe(2);
   });
 
@@ -112,7 +112,7 @@ describe('collectMetadata', () => {
 
     const metadata = await collectMetadata(baseConfig);
 
-    expect(metadata.workerCount).toBe(0);
+    expect(metadata.workers).toBe(0);
     expect(metadata.activeWorkflows).toBe(0);
 
     // Health should still succeed
@@ -131,7 +131,7 @@ describe('collectMetadata', () => {
     const metadata = await collectMetadata(baseConfig);
 
     expect(metadata).toEqual({
-      workerCount: 0,
+      workers: 0,
       activeWorkflows: 0,
       channel: 'stable',
       orchestratorVersion: '0.0.0',
@@ -161,7 +161,7 @@ describe('collectMetadata', () => {
       }
       if (urlStr.endsWith('/metrics')) {
         return new Response(
-          JSON.stringify({ workerCount: 1, activeWorkflows: 0 }),
+          JSON.stringify({ workers: 1, activeWorkflows: 0 }),
           { status: 200 },
         );
       }
@@ -218,6 +218,6 @@ describe('collectMetadata', () => {
     expect(metadata.gitRemotes).toEqual([]);
     // Other fields should still be populated
     expect(metadata.orchestratorVersion).toBe('1.0.0');
-    expect(metadata.workerCount).toBe(4);
+    expect(metadata.workers).toBe(4);
   });
 });

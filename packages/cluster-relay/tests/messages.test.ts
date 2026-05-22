@@ -93,7 +93,7 @@ describe('messages', () => {
       const msg = {
         type: 'handshake',
         metadata: {
-          workerCount: 2,
+          workers: 2,
           activeWorkflows: 1,
           channel: 'stable',
           orchestratorVersion: '0.1.0',
@@ -154,7 +154,7 @@ describe('messages', () => {
       const result = parseRelayMessage({
         type: 'handshake',
         metadata: {
-          workerCount: 0,
+          workers: 0,
           activeWorkflows: 0,
           channel: 'invalid',
           orchestratorVersion: '0.0.0',
@@ -214,7 +214,7 @@ describe('messages', () => {
 
   describe('actor and activation fields', () => {
     const validMetadata = {
-      workerCount: 2,
+      workers: 2,
       activeWorkflows: 1,
       channel: 'stable',
       orchestratorVersion: '0.1.0',

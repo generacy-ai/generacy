@@ -286,7 +286,7 @@ describe('ClusterRelay', () => {
     });
 
     relay = new ClusterRelay(createConfig(port), silentLogger);
-    relay.setMetadata({ workerCount: 99, channel: 'preview' });
+    relay.setMetadata({ workers: 99, channel: 'preview' });
 
     const connectPromise = relay.connect();
 
@@ -297,7 +297,7 @@ describe('ClusterRelay', () => {
       (m: any) => m.type === 'handshake',
     ) as any;
     expect(handshakeMsg).toBeDefined();
-    expect(handshakeMsg.metadata.workerCount).toBe(99);
+    expect(handshakeMsg.metadata.workers).toBe(99);
     expect(handshakeMsg.metadata.channel).toBe('preview');
 
     await relay.disconnect();

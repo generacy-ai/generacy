@@ -544,8 +544,8 @@ export class RelayBridge {
     // Add cluster.yaml fields if available
     const clusterData = this.readClusterYaml();
     if (clusterData) {
-      if (clusterData.workerCount !== undefined) {
-        metadata.workerCount = clusterData.workerCount;
+      if (clusterData.workers !== undefined) {
+        metadata.workers = clusterData.workers;
       }
       if (clusterData.channel !== undefined) {
         metadata.channel = clusterData.channel;
@@ -605,7 +605,7 @@ export class RelayBridge {
     }
   }
 
-  private readClusterYaml(): { workerCount?: number; channel?: 'preview' | 'stable' } | null {
+  private readClusterYaml(): { workers?: number; channel?: 'preview' | 'stable' } | null {
     try {
       const yamlPath = resolve(this.config.clusterYamlPath);
       if (!existsSync(yamlPath)) return null;
@@ -614,7 +614,7 @@ export class RelayBridge {
       const parsed = parseYaml(content);
 
       return {
-        workerCount: typeof parsed?.workerCount === 'number' ? parsed.workerCount : undefined,
+        workers: typeof parsed?.workers === 'number' ? parsed.workers : undefined,
         channel: parsed?.channel === 'preview' || parsed?.channel === 'stable' ? parsed.channel : undefined,
       };
     } catch {

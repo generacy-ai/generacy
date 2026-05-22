@@ -401,10 +401,10 @@ describe('Relay integration: graceful shutdown', () => {
 // =============================================================================
 
 describe('Relay integration: metadata with missing cluster.yaml', () => {
-  it('should collect metadata without workerCount/channel when cluster.yaml is missing', () => {
+  it('should collect metadata without workers/channel when cluster.yaml is missing', async () => {
     const { bridge } = createTestBridge();
 
-    const metadata = bridge.collectMetadata();
+    const metadata = await bridge.collectMetadata();
 
     // Should have required fields
     expect(metadata.version).toBeDefined();
@@ -414,7 +414,7 @@ describe('Relay integration: metadata with missing cluster.yaml', () => {
     expect(metadata.reportedAt).toBeDefined();
 
     // Optional cluster.yaml fields should be absent
-    expect(metadata.workerCount).toBeUndefined();
+    expect(metadata.workers).toBeUndefined();
     expect(metadata.channel).toBeUndefined();
   });
 });
