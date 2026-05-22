@@ -269,6 +269,33 @@ export interface ProcessFactory {
 /**
  * Handle to a spawned child process
  */
+/**
+ * Result from commitPushAndEnsurePr() — whether the phase produced changes and the PR URL.
+ */
+export interface CommitResult {
+  /** PR URL if one was created or already exists */
+  prUrl?: string;
+  /** Whether the phase produced any git changes */
+  hasChanges: boolean;
+}
+
+/**
+ * Context provided to phase:after handlers.
+ * Includes the full WorkerContext plus the completed phase name and its commit result.
+ */
+export interface PhaseAfterContext extends WorkerContext {
+  /** The phase that just completed */
+  phase: WorkflowPhase;
+  /** Result from commitPushAndEnsurePr() for this phase */
+  commitResult: CommitResult;
+}
+
+/**
+ * Async function that runs after a phase completes (post-commit, pre-gate).
+ * Throwing stops subsequent handlers (fail-fast) and blocks the phase.
+ */
+export type PhaseAfterHandler = (context: PhaseAfterContext) => Promise<void>;
+
 export interface ChildProcessHandle {
   /** Process stdin stream (null when stdio[0] is 'ignore') */
   stdin: NodeJS.WritableStream | null;

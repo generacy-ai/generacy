@@ -446,6 +446,7 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
+        phaseAfterHandlers: [],
       }, phaseSequence);
 
       // 9. Handle completion
