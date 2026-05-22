@@ -45,6 +45,7 @@ export const LifecycleActionSchema = z.enum([
   'stop',
   'vscode-tunnel-start',
   'vscode-tunnel-stop',
+  'worker-scale',
 ]);
 export type LifecycleAction = z.infer<typeof LifecycleActionSchema>;
 
@@ -53,6 +54,11 @@ export const ClonePeerReposBodySchema = z.object({
   token: z.string().optional(),
 });
 export type ClonePeerReposBody = z.infer<typeof ClonePeerReposBodySchema>;
+
+export const WorkerScaleBodySchema = z.object({
+  count: z.number().int().min(1),
+});
+export type WorkerScaleBody = z.infer<typeof WorkerScaleBodySchema>;
 
 export const LifecycleResponseSchema = z.object({
   accepted: z.literal(true),

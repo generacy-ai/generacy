@@ -1,12 +1,13 @@
 import type http from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { type ActorContext, requireActor } from '../context.js';
-import { LifecycleActionSchema, ClonePeerReposBodySchema } from '../schemas.js';
+import { LifecycleActionSchema, ClonePeerReposBodySchema, WorkerScaleBodySchema } from '../schemas.js';
 import { ControlPlaneError } from '../errors.js';
 import { getCodeServerManager } from '../services/code-server-manager.js';
 import { getVsCodeTunnelManager } from '../services/vscode-tunnel-manager.js';
 import { readBody } from '../util/read-body.js';
 import { clonePeerRepos } from '../services/peer-repo-cloner.js';
+import { scaleWorkers } from '../services/worker-scaler.js';
 import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
 import { getRelayPushEvent } from '../relay-events.js';
 
@@ -170,6 +171,41 @@ export async function handlePostLifecycle(
 
     res.writeHead(200);
     res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
+    return;
+  }
+
+  if (parsed.data === 'worker-scale') {
+    const raw = await readBody(req);
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new ControlPlaneError('INVALID_REQUEST', 'Invalid JSON body');
+    }
+
+    const bodyResult = WorkerScaleBodySchema.safeParse(body);
+    if (!bodyResult.success) {
+      throw new ControlPlaneError('INVALID_REQUEST', 'Invalid worker-scale body', {
+        errors: bodyResult.error.issues.map((i) => i.message),
+      });
+    }
+
+    try {
+      const result = await scaleWorkers({ count: bodyResult.data.count });
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        accepted: true,
+        action: 'worker-scale',
+        previousCount: result.previousCount,
+        requestedCount: result.requestedCount,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (message === 'DOCKER_CLI_UNAVAILABLE') {
+        throw new ControlPlaneError('SERVICE_UNAVAILABLE', 'Docker CLI is not available in this container');
+      }
+      throw new ControlPlaneError('INTERNAL_ERROR', `Worker scale failed: ${message}`);
+    }
     return;
   }
 

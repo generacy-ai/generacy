@@ -246,7 +246,7 @@ export interface ClusterMetadataPayload {
   gitRemotes: GitRemoteInfo[];
 
   /** Worker count from cluster.yaml (omitted if file missing) */
-  workerCount?: number;
+  workers?: number;
 
   /** Release channel from cluster.yaml (omitted if file missing) */
   channel?: 'preview' | 'stable';

@@ -51,6 +51,7 @@ import { StatusReporter } from './services/status-reporter.js';
 import { PostActivationRetryService } from './services/post-activation-retry.js';
 import { TunnelHandler, getCodeServerManager } from '@generacy-ai/control-plane';
 import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
+import { setupInternalRefreshMetadataRoute } from './routes/internal-refresh-metadata.js';
 
 /**
  * Server creation options
@@ -322,6 +323,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Register internal relay events route BEFORE server.listen() (deferred binding pattern).
   // The getter resolves to null until activation completes; the route returns 503 in that window.
   let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  let relayBridgeRef: RelayBridge | null = null;
   if (!isWorkerMode) {
     const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
     if (controlPlaneKey) {
@@ -331,6 +333,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         createdAt: new Date().toISOString(),
       });
       setupInternalRelayEventsRoute(server, () => relayClientRef);
+      setupInternalRefreshMetadataRoute(server, () => relayBridgeRef);
       server.log.info('Control-plane relay event IPC endpoint registered');
     }
   }
@@ -340,6 +343,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     activationPending = true;
     activateInBackground(config, server, apiKeyStore, (bridge, convMgr) => {
       relayBridge = bridge;
+      relayBridgeRef = bridge;
       conversationManager = convMgr;
       activationPending = false;
     }, (client) => { relayClientRef = client; }).catch((error) => {
@@ -352,6 +356,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     // API key already exists: initialize relay bridge synchronously
     const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
     relayBridge = result.relayBridge;
+    relayBridgeRef = result.relayBridge;
 
     // Check if post-activation needs to be retried (activated but completion flag absent)
     const retryService = new PostActivationRetryService({
