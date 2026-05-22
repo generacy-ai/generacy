@@ -79,6 +79,10 @@ export interface GitStatus {
   staged: string[];
   unstaged: string[];
   untracked: string[];
+  /** True when local HEAD is ahead of origin/<branch> */
+  hasUnpushed: boolean;
+  /** Number of commits ahead of origin/<branch>. 0 if no remote tracking branch. */
+  unpushedCount: number;
 }
 
 /**

@@ -647,12 +647,35 @@ export class GhCliGitHubClient implements GitHubClient {
       }
     }
 
+    // Detect unpushed commits
+    let hasUnpushed = false;
+    let unpushedCount = 0;
+    if (branch) {
+      try {
+        const revListResult = await executeCommand(
+          'git', ['rev-list', '--count', `origin/${branch}..HEAD`],
+          { cwd: this.workdir }
+        );
+        if (revListResult.exitCode === 0) {
+          const count = parseInt(revListResult.stdout.trim(), 10);
+          if (count > 0) {
+            hasUnpushed = true;
+            unpushedCount = count;
+          }
+        }
+      } catch {
+        // No remote tracking branch or other error — treat as 0 unpushed
+      }
+    }
+
     return {
       branch,
       has_changes: lines.length > 0,
       staged,
       unstaged,
       untracked,
+      hasUnpushed,
+      unpushedCount,
     };
   }
 
