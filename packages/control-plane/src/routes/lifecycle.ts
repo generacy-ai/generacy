@@ -7,7 +7,8 @@ import { getCodeServerManager } from '../services/code-server-manager.js';
 import { getVsCodeTunnelManager } from '../services/vscode-tunnel-manager.js';
 import { readBody } from '../util/read-body.js';
 import { clonePeerRepos } from '../services/peer-repo-cloner.js';
-import { scaleWorkers } from '../services/worker-scaler.js';
+import { scaleWorkers, PartialScaleError } from '../services/worker-scaler.js';
+import { DockerDaemonUnavailableError } from '../services/docker-engine-types.js';
 import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
 import { getRelayPushEvent } from '../relay-events.js';
 
@@ -198,11 +199,44 @@ export async function handlePostLifecycle(
         action: 'worker-scale',
         previousCount: result.previousCount,
         requestedCount: result.requestedCount,
+        actualCount: result.actualCount,
       }));
     } catch (err) {
+      // Partial-failure: 200 OK with partial: true (best-effort succeeded somewhat —
+      // returning 5xx would mislead the cloud UI into showing a hard failure when
+      // the cluster did make progress). cluster.yaml already reflects actualCount.
+      if (err instanceof PartialScaleError || (err instanceof Error && err.name === 'PartialScaleError')) {
+        const partialErr = err as PartialScaleError;
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          accepted: true,
+          action: 'worker-scale',
+          partial: true,
+          previousCount: partialErr.previousCount,
+          requestedCount: partialErr.requested,
+          actualCount: partialErr.actual,
+          error: {
+            code: 'PARTIAL_SCALE',
+            message: partialErr.message,
+          },
+        }));
+        return;
+      }
       const message = err instanceof Error ? err.message : String(err);
-      if (message === 'DOCKER_CLI_UNAVAILABLE') {
-        throw new ControlPlaneError('SERVICE_UNAVAILABLE', 'Docker CLI is not available in this container');
+      // DockerDaemonUnavailableError sets message === 'DOCKER_DAEMON_UNAVAILABLE' for
+      // backward-compat string-match. instanceof preferred but message works too.
+      if (
+        err instanceof DockerDaemonUnavailableError ||
+        message === 'DOCKER_DAEMON_UNAVAILABLE'
+      ) {
+        const details = err instanceof DockerDaemonUnavailableError
+          ? { socketPath: err.socketPath }
+          : undefined;
+        throw new ControlPlaneError(
+          'DOCKER_DAEMON_UNAVAILABLE',
+          'Docker daemon is not reachable',
+          details,
+        );
       }
       throw new ControlPlaneError('INTERNAL_ERROR', `Worker scale failed: ${message}`);
     }
