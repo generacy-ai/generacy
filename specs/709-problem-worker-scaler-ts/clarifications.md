@@ -10,7 +10,7 @@
 - B: `state.yaml` — different basename signals "not user-edited"; less likely to be mistaken for a sibling config.
 - C: `cluster.runtime.yaml` — explicit about purpose, still pairs visually with `cluster.yaml`.
 
-**Answer**: *Pending*
+**Answer**: A — `cluster.local.yaml`. Mirrors the `*.local.*` convention from Next.js, Vite, and dotenv; developers from those ecosystems read it correctly on first sight. Visually pairs with `cluster.yaml` so the local-overrides relationship is obvious in a file listing.
 
 ---
 
@@ -22,7 +22,7 @@
 - B: `workers` plus any other field currently mutated by a control-plane writer (notably `appConfig.*`). Solves the same class of bug for every known writer in one PR.
 - C: `workers` for now, but reserve the runtime-state file's schema so future fields can be added without another structural change. Other writers tracked as explicit follow-up issues.
 
-**Answer**: *Pending*
+**Answer**: C — `workers` only for now; reserve the schema; file follow-ups for other mutating writers. `appConfig` writes have the same bug shape but require deep-merge over nested `env`/`files`/`secrets`, which expands the review surface. Ship the minimal structural change (local file + shallow merge + workers only) and file a sibling issue to migrate `appConfig` writes onto the same mechanism. The runtime-state file is intrinsically extensible (YAML object) so there is no lock-in cost to starting narrow.
 
 ---
 
@@ -34,7 +34,7 @@
 - B: On first scale, copy the current `cluster.yaml` `workers:` value into `cluster.local.yaml` AND reset `cluster.yaml` `workers:` to the template default (e.g. `1`). One-time working-tree change that "completes the migration." Subsequent scales touch only `cluster.local.yaml`.
 - C: On first scale, only write `cluster.local.yaml`. Add a one-shot warning log/event recommending the user hand-edit `cluster.yaml` to the template default. No automatic mutation of `cluster.yaml`.
 
-**Answer**: *Pending*
+**Answer**: A — leave `cluster.yaml` untouched, write only to `cluster.local.yaml`, local-wins. The whole point of #709 is "stop mutating git-tracked files," so a one-shot migration mutation (B) violates the principle in the same PR that establishes it. A stale `workers:` value in `cluster.yaml` is benign under local-wins semantics; it is a documentation issue, not a correctness one, and the user can fix it organically. The upstream merge-conflict case still exists but is the same conflict the user would face under any option.
 
 ---
 
@@ -46,7 +46,7 @@
 - B: Inline merge at each read site. No new module. Each caller reads both files and shallow-merges per top-level key. Lower coordination cost; higher drift risk.
 - C: Helper for orchestrator-process readers (relay-bridge, app-config); worker-scaler reads only `cluster.local.yaml` directly because it only ever cares about its own writes.
 
-**Answer**: *Pending*
+**Answer**: A — single shared helper (e.g. `readMergedClusterConfig()`). Three readers exist today (`worker-scaler`, `relay-bridge`, `app-config`) and more are coming. A shared helper gives every reader the same merge semantics and makes future rule changes (e.g. adding deep-merge for Q5) a one-file edit. Inline merging invites the kind of drift that already bit us elsewhere. Worker-scaler still reads `cluster.yaml` today to update the field, so it benefits from the helper too.
 
 ---
 
@@ -58,7 +58,7 @@
 - B: Deep-merge for known nested objects (`appConfig.env`, `appConfig.files`), shallow elsewhere. Required if `appConfig` fields are in scope.
 - C: Defer the decision: implement shallow now and add deep-merge in the same PR that brings the first nested-field writer into scope.
 
-**Answer**: *Pending*
+**Answer**: C — defer; shallow now; revisit when the first nested-field writer comes in scope. Consistent with Q2=C. Only `workers` (a flat number) is moving in this PR, so shallow per top-level key is correct and sufficient. Deep-merge semantics should be designed alongside the `appConfig.*` migration PR where the nested use case drives the design. Pre-deciding deep-merge for a use case that isn't landing yet is speculative design that ages badly.
 
 ---
 
