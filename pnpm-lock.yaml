@@ -114,6 +114,9 @@ importers:
 
   packages/control-plane:
     dependencies:
+      '@generacy-ai/config':
+        specifier: workspace:*
+        version: link:../config
       '@generacy-ai/credhelper':
         specifier: workspace:*
         version: link:../credhelper

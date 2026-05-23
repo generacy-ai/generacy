@@ -462,10 +462,12 @@ async function doScale(options: ScaleOptions): Promise<ScaleResult> {
     throw cause;
   }
 
-  // Wrote cluster.yaml on any progress, including partial. Atomic temp+rename.
+  // Persist runtime worker count on any progress, including partial. Atomic
+  // temp+rename. Writes to cluster.local.yaml (git-ignored) to avoid mutating
+  // the template-owned, git-tracked cluster.yaml (#709).
   const generacyDir = await resolveGeneracyDir();
-  const yamlPath = join(generacyDir, 'cluster.yaml');
-  await updateClusterYaml(yamlPath, actualCount);
+  const localYamlPath = join(generacyDir, 'cluster.local.yaml');
+  await updateClusterLocalYaml(localYamlPath, actualCount);
 
   // Best-effort: keep .env's WORKER_COUNT in sync so host-side `docker compose
   // up -d` doesn't undo the scale on the next re-up. Failures are non-blocking
@@ -506,12 +508,14 @@ async function doScale(options: ScaleOptions): Promise<ScaleResult> {
 // ---------------------------------------------------------------------------
 
 /**
- * Update the `workers` field in cluster.yaml atomically.
+ * Update the `workers` field in cluster.local.yaml atomically.
+ * Creates the file if absent. Preserves any other top-level fields already
+ * present.
  */
-export async function updateClusterYaml(yamlPath: string, count: number): Promise<void> {
+export async function updateClusterLocalYaml(localYamlPath: string, count: number): Promise<void> {
   let doc: Record<string, unknown>;
   try {
-    const content = await readFile(yamlPath, 'utf-8');
+    const content = await readFile(localYamlPath, 'utf-8');
     doc = (parseYaml(content) as Record<string, unknown>) ?? {};
   } catch {
     doc = {};
@@ -519,7 +523,7 @@ export async function updateClusterYaml(yamlPath: string, count: number): Promis
 
   doc.workers = count;
   const output = stringifyYaml(doc);
-  await atomicWrite(yamlPath, output);
+  await atomicWrite(localYamlPath, output);
 }
 
 /**

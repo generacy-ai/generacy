@@ -2,16 +2,22 @@
  * Tests for RelayBridge.collectMetadata() — codeServerReady field (#586, #596).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(() => 'origin\tgit@github.com:org/repo.git (fetch)\n'),
 }));
 
-vi.mock('node:fs', () => ({
-  readFileSync: vi.fn(() => '{"version":"0.1.0"}'),
-  existsSync: vi.fn(() => false),
-}));
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs');
+  return {
+    ...actual,
+    readFileSync: vi.fn(() => '{"version":"0.1.0"}'),
+  };
+});
 
 vi.mock('../../../src/services/code-server-probe.js', () => ({
   probeCodeServerSocket: vi.fn(async () => false),
@@ -25,7 +31,7 @@ import type { FastifyInstance } from 'fastify';
 
 const mockProbe = vi.mocked(probeCodeServerSocket);
 
-function createRelayBridge(): RelayBridge {
+function createRelayBridge(clusterYamlPath = '/nonexistent/cluster.yaml'): RelayBridge {
   const fakeClient = {
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -47,7 +53,7 @@ function createRelayBridge(): RelayBridge {
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
     config: {
       metadataIntervalMs: 60000,
-      clusterYamlPath: '/nonexistent/cluster.yaml',
+      clusterYamlPath,
     } as any,
   });
 }
@@ -77,5 +83,53 @@ describe('RelayBridge.collectMetadata — codeServerReady', () => {
     const bridge = createRelayBridge();
     const result = bridge.collectMetadata();
     expect(result).toBeInstanceOf(Promise);
+  });
+});
+
+describe('RelayBridge.collectMetadata — cluster.yaml + cluster.local.yaml merge (#709)', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'relay-bridge-metadata-test-'));
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('reads workers and channel from cluster.yaml when no local file exists', async () => {
+    writeFileSync(
+      join(tempDir, 'cluster.yaml'),
+      'channel: stable\nworkers: 2\n',
+    );
+
+    const bridge = createRelayBridge(join(tempDir, 'cluster.yaml'));
+    const metadata = await bridge.collectMetadata();
+
+    expect(metadata.workers).toBe(2);
+    expect(metadata.channel).toBe('stable');
+  });
+
+  it('cluster.local.yaml workers overrides cluster.yaml workers in metadata', async () => {
+    writeFileSync(
+      join(tempDir, 'cluster.yaml'),
+      'channel: stable\nworkers: 1\n',
+    );
+    writeFileSync(join(tempDir, 'cluster.local.yaml'), 'workers: 7\n');
+
+    const bridge = createRelayBridge(join(tempDir, 'cluster.yaml'));
+    const metadata = await bridge.collectMetadata();
+
+    expect(metadata.workers).toBe(7);
+    expect(metadata.channel).toBe('stable');
+  });
+
+  it('omits workers/channel when neither file exists', async () => {
+    const bridge = createRelayBridge(join(tempDir, 'cluster.yaml'));
+    const metadata = await bridge.collectMetadata();
+
+    expect(metadata.workers).toBeUndefined();
+    expect(metadata.channel).toBeUndefined();
   });
 });
