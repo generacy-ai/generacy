@@ -1,6 +1,5 @@
 import { readFile, writeFile, rename } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -174,7 +173,7 @@ export async function triggerMetadataRefresh(
  * Atomic file write: write to temp file, then rename.
  */
 async function atomicWrite(targetPath: string, content: string): Promise<void> {
-  const tmpPath = join(tmpdir(), `generacy-${randomBytes(8).toString('hex')}.tmp`);
+  const tmpPath = join(dirname(targetPath), `.${randomBytes(8).toString('hex')}.tmp`);
   await writeFile(tmpPath, content, { mode: 0o644 });
   await rename(tmpPath, targetPath);
 }

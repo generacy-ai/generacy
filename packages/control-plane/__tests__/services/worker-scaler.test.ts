@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, readdirSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 vi.mock('../../src/services/project-dir-resolver.js', () => ({
@@ -88,6 +88,25 @@ describe('worker-scaler', () => {
 
       const content = readFileSync(envPath, 'utf-8');
       expect(content).toBe('WORKER_COUNT=2\n');
+    });
+
+    // EXDEV prevention: temp file must be created in dirname(targetPath), not os.tmpdir(),
+    // because rename(2) only works within a single filesystem. In containers, /tmp and
+    // /workspaces/ are often on different filesystems (overlay vs named volume).
+    it('creates temp file in target directory, not os.tmpdir()', async () => {
+      const subDir = join(tempDir, 'nested');
+      mkdirSync(subDir);
+      const envPath = join(subDir, '.env');
+
+      await updateEnvFile(envPath, 7);
+
+      // After successful atomic write, no .tmp files should remain in the target dir
+      const remaining = readdirSync(subDir).filter(f => f.endsWith('.tmp'));
+      expect(remaining).toHaveLength(0);
+
+      // The file should exist with correct content (rename succeeded = same filesystem)
+      const content = readFileSync(envPath, 'utf-8');
+      expect(content).toBe('WORKER_COUNT=7\n');
     });
 
     it('handles file without trailing newline', async () => {

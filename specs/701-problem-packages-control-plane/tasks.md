@@ -10,12 +10,12 @@
 
 ## Phase 1: Fix
 
-- [ ] T001 [US1] Fix `atomicWrite()` temp file location in `packages/control-plane/src/services/worker-scaler.ts` — change `join(tmpdir(), ...)` to `join(dirname(targetPath), ...)` with dot-prefixed hidden name, remove unused `tmpdir` import from `node:os`, add `dirname` import from `node:path`
-- [ ] T002 [P] [US1] Update test in `packages/control-plane/__tests__/services/worker-scaler.test.ts` — add assertion that `atomicWrite` creates temp file in `dirname(targetPath)` (not `os.tmpdir()`), add comment documenting the same-filesystem constraint for EXDEV prevention
+- [X] T001 [US1] Fix `atomicWrite()` temp file location in `packages/control-plane/src/services/worker-scaler.ts` — change `join(tmpdir(), ...)` to `join(dirname(targetPath), ...)` with dot-prefixed hidden name, remove unused `tmpdir` import from `node:os`, add `dirname` import from `node:path`
+- [X] T002 [P] [US1] Update test in `packages/control-plane/__tests__/services/worker-scaler.test.ts` — add assertion that `atomicWrite` creates temp file in `dirname(targetPath)` (not `os.tmpdir()`), add comment documenting the same-filesystem constraint for EXDEV prevention
 
 ## Phase 2: Verify
 
-- [ ] T003 [US1] Run `pnpm test` in `packages/control-plane` to verify all existing and new tests pass
+- [X] T003 [US1] Run `pnpm test` in `packages/control-plane` to verify all existing and new tests pass
 
 ## Dependencies & Execution Order
 
