@@ -16,25 +16,25 @@
 
 ## Phase 2: Core — CLI Re-derivation Helper (US2)
 
-- [ ] T010 [US2] Create `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts` with:
+- [X] T010 [US2] Create `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts` with:
   - Exported `DeriveResult` / `SyncEnvResult` interfaces matching `contracts/worker-count-deriver.md`.
   - `deriveWorkerCount(generacyDir, logger)`: read `<generacyDir>/cluster.yaml` via `yaml.parse`, inspect `workers` against the narrow `z.object({ workers: z.unknown() }).partial()` schema, apply FR-009 (clamp 0/negative integer → 1) and FR-010 (any other shape → default 1) rules, return `{ workerCount, source, warnings }`. Pure read; never throws on missing/malformed/unreadable input.
   - `syncEnvWorkerCount(generacyDir, workerCount, logger)`: if `.env` missing → return `{ wrote: false, reason: 'env-missing' }` (no file created); else in-place replace `/^WORKER_COUNT=.*$/m` or append `WORKER_COUNT=<N>`; atomic temp+rename in the same directory; on write error log warning and return `{ wrote: false, reason: 'write-failed', error }`. Never throws.
   - `reconcileWorkerCount(generacyDir, logger)`: composes `deriveWorkerCount` → if `source !== 'cluster.yaml'`, atomically rewrite `cluster.yaml` with `workers: <workerCount>` (full-doc read → mutate `workers` only → `yaml.stringify`) → `syncEnvWorkerCount`. Logs all warnings via `logger.warn` with the exact wording from research.md §D7. Returns `{ workerCount, envWrote }`. Never throws.
 
-- [ ] T011 [US2] Create `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts` with tmp-dir-backed Vitest cases covering every row of the data-model.md FR-009/FR-010 table plus `syncEnvWorkerCount` paths:
+- [X] T011 [US2] Create `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts` with tmp-dir-backed Vitest cases covering every row of the data-model.md FR-009/FR-010 table plus `syncEnvWorkerCount` paths:
   - `deriveWorkerCount`: positive integer (5), `0`, negative (`-3`), non-integer number (`1.5`), string (`"five"`), `null`, array, object, missing key, missing file, unreadable file (permission denied if practical, else corrupt YAML).
   - `syncEnvWorkerCount`: in-place replace preserves all other lines byte-for-byte; append when no `WORKER_COUNT=` line; skip-and-warn when `.env` missing; write-failed path when temp dir is unwritable.
   - `reconcileWorkerCount`: idempotency (running twice on a malformed yaml self-heals on the first call, no-op on the second); cluster.yaml self-heal preserves other keys (`channel`, `variant`, `appConfig`).
 
 ## Phase 3: Core — Orchestrator `.env` Sync in `worker-scaler.ts` (US1)
 
-- [ ] T020 [US1] Modify `packages/control-plane/src/services/worker-scaler.ts` `doScale()`:
+- [X] T020 [US1] Modify `packages/control-plane/src/services/worker-scaler.ts` `doScale()`:
   - After the successful `updateClusterYaml(yamlPath, actualCount)` call, derive `envPath = join(generacyDir, '.env')` and invoke a new private `syncEnvWorkerCountInScaler(envPath, actualCount)` helper.
   - Wrap the call in `try/catch`: on `ENOENT` (file missing) emit `console.warn` with the exact text from research.md §D7 (`WORKER_COUNT sync to .env skipped: file not found at <path>`) and continue. On any other error emit `console.warn` with `WORKER_COUNT sync to .env failed: <error.message>; cluster.yaml is the source of truth` and continue. Never re-throw; the scale operation's return value is unchanged.
   - Implement the new private `syncEnvWorkerCountInScaler(envPath, count)` helper inside the same file: stat → `ENOENT` throws to caller for the skip path; read → in-place regex replace (`/^WORKER_COUNT=.*$/m`) or append; write via the existing `atomicWrite` helper (lines ~529–533).
 
-- [ ] T021 [US1] Extend `packages/control-plane/__tests__/services/worker-scaler.test.ts` with the cases enumerated in research.md §D8.1:
+- [X] T021 [US1] Extend `packages/control-plane/__tests__/services/worker-scaler.test.ts` with the cases enumerated in research.md §D8.1:
   - Scale to N when `.env` exists with `WORKER_COUNT=M` (M ≠ N) → `.env` shows `WORKER_COUNT=N`, all other lines preserved.
   - Scale to N when `.env` exists without a `WORKER_COUNT` line → line appended.
   - Scale to N when `.env` does NOT exist → no file created, warning emitted, `doScale` resolves normally.
@@ -43,13 +43,13 @@
 
 ## Phase 4: Integration — Wire deriver into `up` and `update` (US2)
 
-- [ ] T030 [US2] Modify `packages/generacy/src/cli/commands/up/index.ts`:
+- [X] T030 [US2] Modify `packages/generacy/src/cli/commands/up/index.ts`:
   - Import `reconcileWorkerCount` from `../cluster/worker-count-deriver`.
   - Call `reconcileWorkerCount(generacyDir, logger)` immediately after resolving `generacyDir` and BEFORE `getClusterContext()` (so a clamped/defaulted cluster.yaml is self-healed before the strict schema parses it).
   - On a non-`cluster.yaml` source, surface a single info-level log line via the existing logger (do not double-log warnings — the deriver already logs them).
   - Failures from `reconcileWorkerCount` are impossible by contract; no try/catch needed.
 
-- [ ] T031 [US2] Modify `packages/generacy/src/cli/commands/update/index.ts`:
+- [X] T031 [US2] Modify `packages/generacy/src/cli/commands/update/index.ts`:
   - Identical wiring as T030: import `reconcileWorkerCount`, call it after resolving `generacyDir` and BEFORE `getClusterContext()`, ahead of both `runCompose(ctx, ['pull'])` and `runCompose(ctx, ['up', '-d'])`.
 
 - [ ] T032 [P] [US2] Add `packages/generacy/src/cli/commands/up/__tests__/reconcile.test.ts` (or extend an existing up test file) with `runCompose`-stubbed cases:

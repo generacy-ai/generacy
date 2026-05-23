@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync, mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -723,3 +723,122 @@ describe('updateClusterYaml', () => {
     expect(content).toContain('workers: 2');
   });
 });
+
+// ---------------------------------------------------------------------------
+// .env sync alongside scaleWorkers (#708)
+// ---------------------------------------------------------------------------
+
+describe('scaleWorkers .env sync (#708)', () => {
+  let tempDir: string;
+  let client: FakeDockerEngineClient;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'worker-scaler-env-'));
+    vi.mocked(resolveGeneracyDir).mockResolvedValue(tempDir);
+    process.env['COMPOSE_PROJECT_NAME'] = 'proj';
+    client = new FakeDockerEngineClient();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
+    writeFileSync(join(tempDir, 'cluster.yaml'), 'channel: stable\nworkers: 1\n');
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    delete process.env['COMPOSE_PROJECT_NAME'];
+    rmSync(tempDir, { recursive: true, force: true });
+    vi.restoreAllMocks();
+  });
+
+  it('scale to N when .env exists with WORKER_COUNT=M (M != N) → .env shows WORKER_COUNT=N, other lines preserved', async () => {
+    const envPath = join(tempDir, '.env');
+    const before = '# Identity\nGENERACY_CLUSTER_ID=abc\nWORKER_COUNT=1\nPROJECT_NAME=demo\n';
+    writeFileSync(envPath, before);
+
+    const source = makeReplica(1);
+    client.listResult = replicasToSummaries([source]);
+    client.containers.set(source.id, makeInspect());
+
+    await scaleWorkers({ count: 3, engineClient: client as never });
+
+    const after = readFileSync(envPath, 'utf-8');
+    expect(after).toBe('# Identity\nGENERACY_CLUSTER_ID=abc\nWORKER_COUNT=3\nPROJECT_NAME=demo\n');
+  });
+
+  it('scale to N when .env exists without a WORKER_COUNT line → line appended', async () => {
+    const envPath = join(tempDir, '.env');
+    writeFileSync(envPath, 'GENERACY_CLUSTER_ID=abc\nPROJECT_NAME=demo\n');
+
+    const source = makeReplica(1);
+    client.listResult = replicasToSummaries([source]);
+    client.containers.set(source.id, makeInspect());
+
+    await scaleWorkers({ count: 2, engineClient: client as never });
+
+    const after = readFileSync(envPath, 'utf-8');
+    expect(after).toBe('GENERACY_CLUSTER_ID=abc\nPROJECT_NAME=demo\nWORKER_COUNT=2\n');
+  });
+
+  it('scale to N when .env does NOT exist → no file created, warning emitted, doScale resolves normally', async () => {
+    const envPath = join(tempDir, '.env');
+    expect(existsSync(envPath)).toBe(false);
+
+    const source = makeReplica(1);
+    client.listResult = replicasToSummaries([source]);
+    client.containers.set(source.id, makeInspect());
+
+    const result = await scaleWorkers({ count: 2, engineClient: client as never });
+    expect(result.actualCount).toBe(2);
+    // No .env created.
+    expect(existsSync(envPath)).toBe(false);
+    // Warning emitted.
+    const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(warnMessages.some((m) => /WORKER_COUNT sync to .env skipped: file not found/.test(m))).toBe(true);
+    // cluster.yaml still updated.
+    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
+    expect(yaml).toContain('workers: 2');
+  });
+
+  it('scale to N when env-write throws → scale result unchanged, warning logged, cluster.yaml still updated', async () => {
+    // Make .env a directory so stat() succeeds (skipping the ENOENT branch) but
+    // readFile() throws EISDIR — exercises the catch-all warning path.
+    const envPath = join(tempDir, '.env');
+    mkdirSync(envPath);
+
+    const source = makeReplica(1);
+    client.listResult = replicasToSummaries([source]);
+    client.containers.set(source.id, makeInspect());
+
+    const result = await scaleWorkers({ count: 2, engineClient: client as never });
+
+    expect(result.actualCount).toBe(2);
+    // cluster.yaml still updated (write happened before the .env failure).
+    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
+    expect(yaml).toContain('workers: 2');
+    // Warning logged (not the ENOENT-skip path — the generic failure path).
+    const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
+    expect(
+      warnMessages.some((m) =>
+        /WORKER_COUNT sync to .env failed:.*cluster\.yaml is the source of truth/.test(m),
+      ),
+    ).toBe(true);
+    expect(warnMessages.every((m) => !/sync to .env skipped: file not found/.test(m))).toBe(true);
+  });
+
+  it('write order: cluster.yaml stays updated when .env write throws after a successful updateClusterYaml', async () => {
+    // Same setup as the throw test — confirms ordering invariant explicitly.
+    const envPath = join(tempDir, '.env');
+    mkdirSync(envPath);
+
+    const source = makeReplica(1);
+    client.listResult = replicasToSummaries([source]);
+    client.containers.set(source.id, makeInspect());
+
+    await scaleWorkers({ count: 4, engineClient: client as never });
+
+    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
+    expect(yaml).toContain('workers: 4');
+  });
+});
+
+// Silence unused-import warnings for helpers held in case future cases need them.
+void chmodSync;

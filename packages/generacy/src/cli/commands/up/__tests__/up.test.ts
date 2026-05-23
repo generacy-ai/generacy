@@ -23,7 +23,12 @@ const mockCtx: ClusterContext = {
 };
 
 vi.mock('../../cluster/context.js', () => ({
+  findGeneracyDir: vi.fn(() => mockCtx.generacyDir),
   getClusterContext: vi.fn(() => mockCtx),
+}));
+
+vi.mock('../../cluster/worker-count-deriver.js', () => ({
+  reconcileWorkerCount: vi.fn(() => ({ workerCount: 1, envWrote: false })),
 }));
 
 vi.mock('../../cluster/compose.js', () => ({
