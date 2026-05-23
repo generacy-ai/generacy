@@ -118,4 +118,51 @@ describe('GateChecker', () => {
     const specifyResult = checker.checkGate('specify', 'multi-gate-workflow', config);
     expect(specifyResult).toBeNull();
   });
+
+  describe('checkGates', () => {
+    it('returns all matching gates for a phase', () => {
+      const config = makeConfig({
+        'speckit-feature': [
+          { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
+          { phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' },
+        ],
+      });
+      const result = checker.checkGates('implement', 'speckit-feature', config);
+
+      expect(result).toHaveLength(2);
+      expect(result[0]).toEqual({ phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' });
+      expect(result[1]).toEqual({ phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' });
+    });
+
+    it('returns single gate when only one matches', () => {
+      const config = makeConfig({
+        'speckit-feature': [
+          { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
+          { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
+        ],
+      });
+      const result = checker.checkGates('implement', 'speckit-feature', config);
+
+      expect(result).toHaveLength(1);
+      expect(result[0]).toEqual({ phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' });
+    });
+
+    it('returns empty array when no gates match the phase', () => {
+      const config = makeConfig({
+        'speckit-feature': [
+          { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'always' },
+        ],
+      });
+      const result = checker.checkGates('implement', 'speckit-feature', config);
+
+      expect(result).toEqual([]);
+    });
+
+    it('returns empty array for unknown workflow', () => {
+      const config = makeConfig({});
+      const result = checker.checkGates('implement', 'unknown-workflow', config);
+
+      expect(result).toEqual([]);
+    });
+  });
 });

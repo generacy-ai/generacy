@@ -10,7 +10,7 @@ export const GateDefinitionSchema = z.object({
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
-  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure']),
+  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review']),
 });
 
 /**
@@ -36,6 +36,7 @@ export const WorkerConfigSchema = z.object({
     'speckit-feature': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
       { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
+      { phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' },
     ],
     'speckit-bugfix': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },

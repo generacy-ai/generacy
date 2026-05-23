@@ -59,4 +59,40 @@ export class GateChecker {
     );
     return gate;
   }
+
+  /**
+   * Check all gates that should be evaluated after the given phase completes.
+   * Returns an array of all matching GateDefinitions (may be empty).
+   */
+  checkGates(
+    phase: WorkflowPhase,
+    workflowName: string,
+    config: WorkerConfig,
+  ): GateDefinition[] {
+    const workflowGates = config.gates[workflowName];
+
+    if (!workflowGates || workflowGates.length === 0) {
+      this.logger.debug(
+        { phase, workflowName },
+        'No gates configured for workflow',
+      );
+      return [];
+    }
+
+    const gates = workflowGates.filter((g) => g.phase === phase);
+
+    if (gates.length === 0) {
+      this.logger.debug(
+        { phase, workflowName },
+        'No gates defined for phase',
+      );
+    } else {
+      this.logger.info(
+        { phase, workflowName, gateCount: gates.length },
+        'Found gates for phase',
+      );
+    }
+
+    return gates;
+  }
 }
