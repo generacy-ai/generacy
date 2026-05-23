@@ -10,9 +10,9 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 Confirm `packages/control-plane/__tests__/services/worker-scaler.test.ts` exists and identify the surrounding test helpers (tmp-dir setup, atomicWrite mock points) so new cases can be added with the same fixtures.
-- [ ] T002 [P] Confirm `packages/generacy/src/cli/commands/up/__tests__/` and `packages/generacy/src/cli/commands/update/__tests__/` exist; create the directories if missing so command tests have a home.
-- [ ] T003 [P] Re-read pre-#706 `.env` writer in `worker-scaler.ts` via `git show 4b7876f -- packages/control-plane/src/services/worker-scaler.ts` to confirm the exact regex (`/^WORKER_COUNT=\d+$/m`) and append-when-missing pattern that the new code must match.
+- [X] T001 Confirm `packages/control-plane/__tests__/services/worker-scaler.test.ts` exists and identify the surrounding test helpers (tmp-dir setup, atomicWrite mock points) so new cases can be added with the same fixtures.
+- [X] T002 [P] Confirm `packages/generacy/src/cli/commands/up/__tests__/` and `packages/generacy/src/cli/commands/update/__tests__/` exist; create the directories if missing so command tests have a home.
+- [X] T003 [P] Re-read pre-#706 `.env` writer in `worker-scaler.ts` via `git show 4b7876f -- packages/control-plane/src/services/worker-scaler.ts` to confirm the exact regex (`/^WORKER_COUNT=\d+$/m`) and append-when-missing pattern that the new code must match.
 
 ## Phase 2: Core — CLI Re-derivation Helper (US2)
 
@@ -52,18 +52,18 @@
 - [X] T031 [US2] Modify `packages/generacy/src/cli/commands/update/index.ts`:
   - Identical wiring as T030: import `reconcileWorkerCount`, call it after resolving `generacyDir` and BEFORE `getClusterContext()`, ahead of both `runCompose(ctx, ['pull'])` and `runCompose(ctx, ['up', '-d'])`.
 
-- [ ] T032 [P] [US2] Add `packages/generacy/src/cli/commands/up/__tests__/reconcile.test.ts` (or extend an existing up test file) with `runCompose`-stubbed cases:
+- [X] T032 [P] [US2] Add `packages/generacy/src/cli/commands/up/__tests__/reconcile.test.ts` (or extend an existing up test file) with `runCompose`-stubbed cases:
   - `cluster.yaml` `workers: 5` + `.env` `WORKER_COUNT=1` → `.env` is `WORKER_COUNT=5` before `runCompose` is called.
   - `cluster.yaml` `workers: 0` → `.env` is `WORKER_COUNT=1`, `cluster.yaml` rewritten to `workers: 1`, warning logged.
   - `cluster.yaml` `workers: "five"` → same as above but with malformed-warning text.
 
-- [ ] T033 [P] [US2] Mirror T032 cases in `packages/generacy/src/cli/commands/update/__tests__/reconcile.test.ts`, additionally asserting reconciliation runs before `docker compose pull`.
+- [X] T033 [P] [US2] Mirror T032 cases in `packages/generacy/src/cli/commands/update/__tests__/reconcile.test.ts`, additionally asserting reconciliation runs before `docker compose pull`.
 
 ## Phase 5: Polish
 
 - [ ] T040 [P] Run the full quickstart.md verification block locally for SC-001, SC-002, SC-003, FR-008, FR-009, FR-010 against a real cluster, recording the observed worker counts and warning text in the PR description.
-- [ ] T041 [P] Run `pnpm test --filter @generacy-ai/control-plane worker-scaler` and `pnpm test --filter @generacy-ai/generacy worker-count-deriver` and `pnpm test --filter @generacy-ai/generacy "commands/up"` and `pnpm test --filter @generacy-ai/generacy "commands/update"`; all four suites must pass.
-- [ ] T042 Verify no new lints/type errors with `pnpm -w typecheck` (or the repo's standard CI command); resolve any incidental issues introduced by the new module's imports.
+- [X] T041 [P] Run `pnpm test --filter @generacy-ai/control-plane worker-scaler` and `pnpm test --filter @generacy-ai/generacy worker-count-deriver` and `pnpm test --filter @generacy-ai/generacy "commands/up"` and `pnpm test --filter @generacy-ai/generacy "commands/update"`; all four suites must pass.
+- [X] T042 Verify no new lints/type errors with `pnpm -w typecheck` (or the repo's standard CI command); resolve any incidental issues introduced by the new module's imports.
 
 ## Dependencies & Execution Order
 
