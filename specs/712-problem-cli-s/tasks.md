@@ -69,7 +69,7 @@ All tasks belong to **US1** — "Fix `reconcileWorkerCount` so cloud-UI scaling 
     8. canonical `workers: 0`, local absent → `workerCount=1, source='clamped'`, warnings include `/clamping to 1/`.
   - Use the existing `mkdtempSync` + `writeFileSync` fixture pattern. Reuse `makeLogger()` / `asLogger()` helpers.
 
-- [ ] **T008 [US1]** Add the acceptance-criterion regression test in `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts`
+- [X] **T008 [US1]** Add the acceptance-criterion regression test in `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts`
   - New `it('regression #712: scaled overlay survives reconcileWorkerCount; cluster.yaml byte-identical', ...)`:
     - Write `cluster.yaml: workers: 1`.
     - Write `cluster.local.yaml: workers: 5`.
@@ -81,7 +81,7 @@ All tasks belong to **US1** — "Fix `reconcileWorkerCount` so cloud-UI scaling 
 
 ## Phase 4: Verification
 
-- [ ] **T009 [US1]** Run unit tests and manual verification per `quickstart.md`
+- [X] **T009 [US1]** Run unit tests and manual verification per `quickstart.md`
   - `pnpm --filter @generacy-ai/generacy test -- worker-count-deriver` → all green.
   - `pnpm --filter @generacy-ai/generacy build` → no type errors (catches missed `await` on callers, missed import updates).
   - Manual scenario from `quickstart.md` § "Manual verification — the regression scenario from the spec": confirm `.env` shows `WORKER_COUNT=5` and `cluster.yaml` is unchanged after `node packages/generacy/bin/generacy.js update --dry-run`.
