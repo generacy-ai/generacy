@@ -15,7 +15,7 @@
 - B: Attach only to the project's default network (`<project>_default`). Acceptable if workers in practice are single-network.
 - C: Inspect the original compose-managed worker's `com.docker.compose.*` network labels (if any) and attach to exactly the set listed there.
 
-**Answer**: *Pending*
+**Answer**: **A** — Attach to all networks the source replica is on. Inspect via `NetworkSettings.Networks`; create with the first network, `POST /networks/<id>/connect` for the rest before `start`. Compose-label networks aren't part of compose's documented stable contract; the daemon's actual attachment state is the authoritative source. ([source](https://github.com/generacy-ai/generacy/issues/706#issuecomment-4526309027))
 
 ---
 
@@ -27,7 +27,7 @@
 - B: **Commit what succeeded** — leave the created replicas running, write the actual count (e.g. 3 if 3 of 5 succeeded) to `cluster.yaml`, return a structured error indicating the requested vs actual delta. Best-effort.
 - C: **Fail-fast, no cleanup** — leave created replicas in place, do not update `cluster.yaml`, return an error. Caller can retry or manually reconcile.
 
-**Answer**: *Pending*
+**Answer**: **B** — Commit what succeeded; write the actual count to `cluster.yaml`; return a structured error including both `requested` and `actual`. Strict rollback (A) trades one daemon-failure mode for two — the cleanup itself can fail and leave a worse state. C is the worst of both — running replicas exist but `cluster.yaml` says they don't. With B, the next `scaleWorkers(5)` call against a cluster with 3 simply creates the remaining 2. ([source](https://github.com/generacy-ai/generacy/issues/706#issuecomment-4526309027))
 
 ---
 
@@ -39,7 +39,7 @@
 - B: **No, running only**. Stopped containers are treated as gaps; gap-fill will reuse their names, requiring `force-remove` before create.
 - C: Include them but require an explicit `cleanup` action (out of scope of pure scale) to remove them; warn/log if found.
 
-**Answer**: *Pending*
+**Answer**: **A** — Include stopped/exited replicas (`all=true`). Exited workers occupy a container-number slot AND hold the name; treating them as absent (B) guarantees the Q5 name-collision case. Including them gives an honest count and makes gap-fill collision-free in normal operation. **Sub-decision**: on scale-down, prefer to retire exited replicas before stopping healthy running ones — a crashed worker is a stronger signal to retire than an arbitrary high-numbered live one. ([source](https://github.com/generacy-ai/generacy/issues/706#issuecomment-4526309027))
 
 ---
 
@@ -51,7 +51,7 @@
 - B: **Reject second caller** — return 409 Conflict (or equivalent structured error) if a scale is already in flight. Surfaces concurrency to the cloud UI.
 - C: **No serialization** — accept the race. Argument: cloud UI single-flights from the user's side and the bug is unlikely in practice.
 
-**Answer**: *Pending*
+**Answer**: **A** — In-process async mutex around `scaleWorkers()`. Orchestrator is single-process per cluster, so an in-process lock is correct and sufficient. Mutex handles the pathological cases (two tabs, stale retries, network-blip duplicates) gracefully — second caller waits and operates on the post-first state. B (409) is hostile in normal operation; C is unsafe — two simultaneous enumerate-create cycles can produce duplicate `container-number` labels. ([source](https://github.com/generacy-ai/generacy/issues/706#issuecomment-4526309027))
 
 ---
 
@@ -63,4 +63,4 @@
 - B: **Skip the slot, append instead** — leave the stopped container alone, give the new replica the next unused number. Violates "contiguous from 1" (FR-006/SC-003) but preserves user-visible state.
 - C: **Fail with a structured error** — return an error telling the caller to clean up the stopped container manually. Conservative; protects against destroying user data.
 
-**Answer**: *Pending*
+**Answer**: **A** — Force-remove the stale container (`?force=true`), then create. Given Q3=A, this case effectively never fires in normal operation: exited containers are counted, so gap-fill won't try to claim their names. But if it does (manual user docker ops, edge races), the orchestrator owns these worker containers — removing a stale one to claim its name is the right call. Workers are stateless (workspace volume bind-mounted; container state ephemeral) so there's no user data to destroy. `?force=true` also handles the "actually still running but we thought it was exited" race for free. ([source](https://github.com/generacy-ai/generacy/issues/706#issuecomment-4526309027))

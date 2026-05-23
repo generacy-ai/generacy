@@ -10,6 +10,16 @@ Replace `worker-scaler.ts`'s `docker compose -f … --scale worker=N` shell-out 
 
 The fix uses the Engine API socket (`/var/run/docker-host.sock`, already mounted via Docker-outside-of-Docker) to enumerate worker containers by their `com.docker.compose.*` labels, then create/destroy replicas directly. This removes the compose-file dependency entirely and works uniformly across all cluster launch flows (Flow B `launch`, Flow C devcontainer, future BYO-VM/cloud).
 
+## Clarifications
+
+Resolved 2026-05-23 (see [clarifications.md](./clarifications.md) for full Q&A):
+
+- **Multi-network workers (Q1 → A)**: Cloned replicas attach to **all** networks the source replica is on. Create with the first network in `NetworkingConfig.EndpointsConfig`, then `POST /networks/<id>/connect` for the rest before `start`. Source network set comes from the daemon's `NetworkSettings.Networks` on the source container, not from any `com.docker.compose.*` network labels.
+- **Partial scale-up failure (Q2 → B)**: **Commit what succeeded**. Leave successfully created replicas running, write the achieved count to `cluster.yaml`, return a structured error with `requested` and `actual` fields. Strict rollback is rejected because the rollback itself can fail and produce a worse state.
+- **Counting semantics (Q3 → A)**: Enumerate workers with `?all=true`. Stopped/exited replicas count toward the current total (they hold a container-name + container-number). On scale-down, retire exited replicas first.
+- **Concurrent scale calls (Q4 → A)**: In-process async mutex serializes `scaleWorkers()` calls; second caller waits, then operates on the post-first state. No 409 surfaced to the cloud UI in normal operation.
+- **Gap-fill name collision (Q5 → A)**: If a target slot's container name is held by a stopped container, `DELETE /containers/<id>?force=true` then create. Workers are stateless, so force-remove is safe. With Q3=A in place, this path is an edge case (manual `docker rm` of a running worker) rather than normal operation.
+
 ## Problem
 
 `worker-scaler.ts` ([packages/control-plane/src/services/worker-scaler.ts](https://github.com/generacy-ai/generacy/blob/develop/packages/control-plane/src/services/worker-scaler.ts)) scales by shelling out to `docker compose -f <workspace>/.generacy/docker-compose.yml up -d --scale worker=N`. This assumes the compose file is reachable from inside the orchestrator container. For real local clusters launched via `npx generacy launch`, the compose file is written by the CLI scaffolder on the host (`~/Generacy/<project>/.generacy/docker-compose.yml`), and that host directory is not bind-mounted into the orchestrator.
@@ -65,18 +75,20 @@ Every scale request via the cloud UI fails with ENOENT before `docker compose` i
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Replace `execDockerScale` in `worker-scaler.ts` with Engine API calls via `dockerode` (or equivalent typed client). | P1 | Remove `spawn('docker', …)` and stderr parsing. |
-| FR-002 | Enumerate existing worker containers via `GET /containers/json` filtered by `com.docker.compose.project=<name>` and `com.docker.compose.service=worker`. | P1 | Project name discovered from orchestrator's own container labels. |
-| FR-003 | On scale-up (`requested > current`): inspect an existing worker for full config (image, env, volumes, networks, command, healthcheck, restart policy), then `POST /containers/create` + `POST /containers/<id>/start` per new replica. | P1 | Clone config; mutate only `container-number` label and container name. |
-| FR-004 | On scale-down (`requested < current`): `POST /containers/<id>/stop` + `DELETE /containers/<id>` on the highest-numbered replicas. | P1 | |
+| FR-002 | Enumerate existing worker containers via `GET /containers/json?all=true` filtered by `com.docker.compose.project=<name>` and `com.docker.compose.service=worker`. Include stopped/exited replicas in the current count — they occupy a `container-number` slot and hold their container name. | P1 | `all=true` is required (clarification Q3). Project name discovered from orchestrator's own container labels. |
+| FR-003 | On scale-up (`requested > current`): inspect an existing worker for full config (image, env, volumes, networks, command, healthcheck, restart policy). For each new replica: `POST /containers/create` with the first network attached via `NetworkingConfig.EndpointsConfig`, then `POST /networks/<id>/connect` for every additional network the source replica is on, then `POST /containers/<id>/start`. | P1 | Clone config; mutate only `container-number` label and container name. Multi-network attachment via post-create `connect` matches compose's behaviour (clarification Q1). Source network set comes from the daemon's actual `NetworkSettings.Networks` on the source, not from `com.docker.compose.*` labels. |
+| FR-004 | On scale-down (`requested < current`): `POST /containers/<id>/stop` + `DELETE /containers/<id>` on the replicas to retire. Selection order: **exited/stopped replicas first** (highest-numbered among them), then healthy running replicas (highest-numbered). | P1 | Crashed workers are a stronger signal to retire than arbitrary live ones (clarification Q3). |
 | FR-005 | No-op when `requested == current`. | P1 | |
-| FR-006 | Container-number assignment: fill gaps first (ascending), then append. New replicas are numbered to keep the set contiguous from 1. | P1 | Pure helper, unit-tested. |
+| FR-006 | Container-number assignment: fill gaps first (ascending), then append. New replicas are numbered to keep the set contiguous from 1. Because exited replicas are counted (FR-002), gap-fill in normal operation has no collisions. | P1 | Pure helper, unit-tested. |
 | FR-007 | Reuse the existing `com.docker.compose.config-hash` label value when cloning a replica. | P2 | Pure scale ops don't change service config; reuse is acceptable and matches compose semantics. |
 | FR-008 | Preserve atomic `cluster.yaml` `workers` field update on success. | P1 | Existing logic — keep. |
 | FR-009 | Preserve metadata refresh trigger (`/internal/refresh-metadata`) on success. | P1 | Existing logic — keep. |
 | FR-010 | Remove `.env` `WORKER_COUNT` writes from the scale path. | P2 | Dead state post-first-boot. `cluster.yaml` is the on-disk source of truth. |
 | FR-011 | Use the Engine API socket at `/var/run/docker-host.sock` (already mounted via DooD). | P1 | No new mounts or capabilities. |
-| FR-012 | On failure (e.g. zero existing workers to clone from, daemon unreachable), return a structured error with a clear reason; do not partially scale and leave `cluster.yaml` inconsistent. | P1 | Update `cluster.yaml` only after Engine API operations succeed. |
+| FR-012 | On partial scale failure (e.g. some `POST /containers/create` calls succeed but a subsequent call fails, daemon hiccups mid-operation): **commit what succeeded**. Leave any successfully created/started replicas running, write the actual achieved count to `cluster.yaml`, fire metadata refresh, and return a structured error including both `requested` and `actual` counts. Do not roll back successful creates. On full failure (zero replicas created), do not update `cluster.yaml`. | P1 | Best-effort semantics — strict rollback trades one daemon-failure mode for two (clarification Q2). The error payload lets the cloud UI render "requested 5, scaled to 3" instead of a generic failure; the next `scaleWorkers()` call simply creates the remainder. |
 | FR-013 | Document the "stale clone" drift case in a code comment: if the user edits the host compose file and rebuilds without `docker compose up -d`, scale-up clones a stale replica — same behaviour as compose itself. | P2 | Comment only; not a code change beyond documentation. |
+| FR-014 | Serialize concurrent `scaleWorkers()` calls behind an in-process async mutex. Second concurrent caller waits for the first to complete and then operates on the post-first state. | P1 | Orchestrator is a single process per cluster; in-process lock is correct and sufficient (clarification Q4). Handles two-tab UI, stale retries, and network-blip duplicate requests without surfacing 409s in normal operation. |
+| FR-015 | If gap-fill targets a `container-number` slot whose container name is held by a stopped/exited container (edge case after manual `docker rm` of a running replica), `DELETE /containers/<id>?force=true` on the stale container before creating the new replica in that slot. | P2 | Workers are stateless (workspace volume bind-mounted; container state ephemeral) so force-remove is safe (clarification Q5). `?force=true` also handles the "thought-it-was-exited-but-actually-running" race. In normal operation this path doesn't fire because FR-002 counts exited replicas. |
 
 ## Success Criteria
 
@@ -89,6 +101,10 @@ Every scale request via the cloud UI fails with ENOENT before `docker compose` i
 | SC-005 | `cluster.yaml` reflects requested count after success | Match `workers: N` in YAML | Read `cluster.yaml` post-scale, assert `workers === requested`. |
 | SC-006 | Metadata refresh fires after scale | Single `/internal/refresh-metadata` call per successful scale | Log inspection or test fixture assertion. |
 | SC-007 | No `docker compose` shell-out in `worker-scaler.ts` | Zero `spawn`/`exec` calls to `docker` in the file | Code audit / grep. |
+| SC-008 | Multi-network replicas remain reachable on all source networks | Cloned replica is attached to every network the source was on | Inspect `NetworkSettings.Networks` on a new replica after scale-up against a worker on ≥2 networks. |
+| SC-009 | Partial-failure path commits what succeeded | `cluster.yaml.workers` equals achieved count; error payload includes `requested` and `actual` | Fault-injection test (stub `POST /containers/create` to fail on Nth call), assert `cluster.yaml` and returned error shape. |
+| SC-010 | Concurrent scale calls are serialized | Two simultaneous `scaleWorkers()` invocations produce a final state matching the second call (operates on post-first state), no duplicate `container-number` labels | Concurrency test: fire two `PATCH /workers` requests in parallel, inspect final container set. |
+| SC-011 | Exited replicas counted in current state | A worker in `exited` state is counted toward `current`; scale-up does not collide on its slot, scale-down retires it before healthy replicas | Test fixture with one exited + N running replicas; assert behaviour on both scale-up and scale-down. |
 
 ## Assumptions
 
