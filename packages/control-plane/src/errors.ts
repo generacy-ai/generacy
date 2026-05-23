@@ -6,6 +6,7 @@ export type ControlPlaneErrorCode =
   | 'NOT_FOUND'
   | 'UNKNOWN_ACTION'
   | 'SERVICE_UNAVAILABLE'
+  | 'DOCKER_DAEMON_UNAVAILABLE'
   | 'INTERNAL_ERROR';
 
 export interface ControlPlaneErrorResponse {
@@ -20,6 +21,7 @@ const HTTP_STATUS_MAP: Record<ControlPlaneErrorCode, number> = {
   NOT_FOUND: 404,
   UNKNOWN_ACTION: 400,
   SERVICE_UNAVAILABLE: 503,
+  DOCKER_DAEMON_UNAVAILABLE: 503,
   INTERNAL_ERROR: 500,
 };
 

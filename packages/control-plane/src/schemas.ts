@@ -60,6 +60,29 @@ export const WorkerScaleBodySchema = z.object({
 });
 export type WorkerScaleBody = z.infer<typeof WorkerScaleBodySchema>;
 
+export const WorkerScaleSuccessResponseSchema = z.object({
+  accepted: z.literal(true),
+  action: z.literal('worker-scale'),
+  previousCount: z.number().int().min(0),
+  requestedCount: z.number().int().min(1),
+  actualCount: z.number().int().min(0),
+});
+export type WorkerScaleSuccessResponse = z.infer<typeof WorkerScaleSuccessResponseSchema>;
+
+export const WorkerScalePartialResponseSchema = z.object({
+  accepted: z.literal(true),
+  action: z.literal('worker-scale'),
+  partial: z.literal(true),
+  previousCount: z.number().int().min(0),
+  requestedCount: z.number().int().min(1),
+  actualCount: z.number().int().min(0),
+  error: z.object({
+    code: z.literal('PARTIAL_SCALE'),
+    message: z.string(),
+  }),
+});
+export type WorkerScalePartialResponse = z.infer<typeof WorkerScalePartialResponseSchema>;
+
 export const LifecycleResponseSchema = z.object({
   accepted: z.literal(true),
   action: LifecycleActionSchema,
