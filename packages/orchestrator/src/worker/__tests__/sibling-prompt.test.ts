@@ -10,7 +10,9 @@ describe('buildSiblingPromptBlock', () => {
     const result = buildSiblingPromptBlock({ agency: '/workspaces/agency' });
     expect(result).toBe(
       '**Sibling repos available in this workspace.** You may edit files in any of these as part of this task:\n' +
-      '- `agency` — `/workspaces/agency`',
+      '- `agency` — `/workspaces/agency`\n' +
+      '\n' +
+      'Changes you make in sibling repos will be automatically committed and a draft PR opened, linked to this issue.',
     );
   });
 
@@ -21,7 +23,8 @@ describe('buildSiblingPromptBlock', () => {
     });
     expect(result).toContain('- `agency` — `/workspaces/agency`');
     expect(result).toContain('- `generacy-cloud` — `/workspaces/generacy-cloud`');
-    expect(result!.split('\n').length).toBe(3); // header + 2 entries
+    expect(result).toContain('Changes you make in sibling repos will be automatically committed and a draft PR opened, linked to this issue.');
+    expect(result!.split('\n').length).toBe(5); // header + 2 entries + blank line + auto-PR sentence
   });
 
   it('uses the provided name as the identifier regardless of path location', () => {

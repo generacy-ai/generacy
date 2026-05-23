@@ -11,5 +11,7 @@ export function buildSiblingPromptBlock(
   return [
     '**Sibling repos available in this workspace.** You may edit files in any of these as part of this task:',
     ...lines,
+    '',
+    'Changes you make in sibling repos will be automatically committed and a draft PR opened, linked to this issue.',
   ].join('\n');
 }

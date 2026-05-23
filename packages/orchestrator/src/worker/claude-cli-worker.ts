@@ -4,8 +4,8 @@ import { existsSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, findWorkspaceConfigPath } from '@generacy-ai/config';
-import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
-import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR } from '@generacy-ai/workflow-engine';
+import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
+import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
@@ -107,6 +107,8 @@ export interface ClaudeCliWorkerDeps {
   sseEmitter?: SSEEventEmitter;
   /** Callback for emitting job lifecycle events through the relay */
   jobEventEmitter?: JobEventEmitter;
+  /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
+  tokenProvider?: () => Promise<string | undefined>;
 }
 
 /**
@@ -128,6 +130,7 @@ export class ClaudeCliWorker {
   private readonly processFactory: ProcessFactory;
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
+  private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -140,6 +143,7 @@ export class ClaudeCliWorker {
     this.processFactory = deps.processFactory ?? defaultProcessFactory;
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
+    this.tokenProvider = deps.tokenProvider;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -481,9 +485,27 @@ export class ClaudeCliWorker {
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
         phaseAfterHandlers: [
-          // Reload linkedPRs from workflow state after each phase.
-          // The sibling fan-out handler (Phase 2) writes linkedPRs to the state file;
-          // this handler picks them up so gate evaluation can access context.linkedPRs.
+          // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
+          async () => {
+            const siblings = context.siblingWorkdirs ?? {};
+            if (Object.keys(siblings).length === 0) return;
+            const store = new FilesystemWorkflowStore(context.checkoutPath);
+            const state = await store.load(workflowId);
+            if (!state) return;
+            const fanoutCtx: SiblingFanoutContext = {
+              primaryWorkdir: context.checkoutPath,
+              siblingWorkdirs: siblings,
+              issueNumber: item.issueNumber,
+              primaryRepoName: item.repo,
+              org: item.owner,
+              workflowStore: store,
+              workflowState: state,
+              logger: workerLogger,
+              tokenProvider: this.tokenProvider,
+            };
+            await siblingFanoutHandler(fanoutCtx);
+          },
+          // Reload linkedPRs from workflow state so gate evaluation can access context.linkedPRs.
           async () => {
             const linkedPRs = await loadLinkedPRsFromState(context.checkoutPath, workerLogger);
             if (linkedPRs.length > 0) {
