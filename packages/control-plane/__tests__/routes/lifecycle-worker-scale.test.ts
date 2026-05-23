@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { handlePostLifecycle } from '../../src/routes/lifecycle.js';
-import { ControlPlaneError } from '../../src/errors.js';
+import { PartialScaleError } from '../../src/services/worker-scaler.js';
+import { DockerDaemonUnavailableError } from '../../src/services/docker-engine-types.js';
 
 vi.mock('../../src/services/peer-repo-cloner.js', () => ({
   clonePeerRepos: vi.fn(async () => []),
@@ -14,9 +15,13 @@ vi.mock('../../src/relay-events.js', () => ({
 }));
 
 const mockScaleWorkers = vi.fn();
-vi.mock('../../src/services/worker-scaler.js', () => ({
-  scaleWorkers: (...args: unknown[]) => mockScaleWorkers(...args),
-}));
+vi.mock('../../src/services/worker-scaler.js', async (importOriginal) => {
+  const original = await importOriginal<typeof import('../../src/services/worker-scaler.js')>();
+  return {
+    ...original,
+    scaleWorkers: (...args: unknown[]) => mockScaleWorkers(...args),
+  };
+});
 
 const mockReadBody = vi.fn();
 vi.mock('../../src/util/read-body.js', () => ({
@@ -55,9 +60,13 @@ describe('lifecycle: worker-scale', () => {
     vi.restoreAllMocks();
   });
 
-  it('accepts valid count and returns scale result', async () => {
+  it('accepts valid count and returns scale result with actualCount', async () => {
     mockReadBody.mockResolvedValueOnce(JSON.stringify({ count: 4 }));
-    mockScaleWorkers.mockResolvedValueOnce({ previousCount: 2, requestedCount: 4 });
+    mockScaleWorkers.mockResolvedValueOnce({
+      previousCount: 2,
+      requestedCount: 4,
+      actualCount: 4,
+    });
 
     const req = {} as IncomingMessage;
     const res = createMockResponse();
@@ -72,6 +81,7 @@ describe('lifecycle: worker-scale', () => {
       action: 'worker-scale',
       previousCount: 2,
       requestedCount: 4,
+      actualCount: 4,
     });
   });
 
@@ -119,16 +129,55 @@ describe('lifecycle: worker-scale', () => {
     ).rejects.toMatchObject({ code: 'INVALID_REQUEST' });
   });
 
-  it('returns SERVICE_UNAVAILABLE when docker CLI is missing', async () => {
+  it('returns DOCKER_DAEMON_UNAVAILABLE (503) when daemon is unreachable', async () => {
     mockReadBody.mockResolvedValueOnce(JSON.stringify({ count: 2 }));
-    mockScaleWorkers.mockRejectedValueOnce(new Error('DOCKER_CLI_UNAVAILABLE'));
+    mockScaleWorkers.mockRejectedValueOnce(
+      new DockerDaemonUnavailableError('/var/run/docker-host.sock'),
+    );
 
     const req = {} as IncomingMessage;
     const res = createMockResponse();
 
     await expect(
       handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'worker-scale' }),
-    ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+    ).rejects.toMatchObject({
+      code: 'DOCKER_DAEMON_UNAVAILABLE',
+      details: { socketPath: '/var/run/docker-host.sock' },
+    });
+  });
+
+  it('returns DOCKER_DAEMON_UNAVAILABLE for message-only error (backward-compat)', async () => {
+    mockReadBody.mockResolvedValueOnce(JSON.stringify({ count: 2 }));
+    mockScaleWorkers.mockRejectedValueOnce(new Error('DOCKER_DAEMON_UNAVAILABLE'));
+
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+
+    await expect(
+      handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'worker-scale' }),
+    ).rejects.toMatchObject({ code: 'DOCKER_DAEMON_UNAVAILABLE' });
+  });
+
+  it('maps PartialScaleError to 200 OK with partial: true', async () => {
+    mockReadBody.mockResolvedValueOnce(JSON.stringify({ count: 5 }));
+    const cause = new Error('POST /containers/create returned 500');
+    mockScaleWorkers.mockRejectedValueOnce(new PartialScaleError(5, 3, 1, cause));
+
+    const req = {} as IncomingMessage;
+    const res = createMockResponse();
+
+    await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'worker-scale' });
+
+    expect(res.writeHead).toHaveBeenCalledWith(200);
+    const body = JSON.parse(res._body);
+    expect(body.accepted).toBe(true);
+    expect(body.action).toBe('worker-scale');
+    expect(body.partial).toBe(true);
+    expect(body.previousCount).toBe(1);
+    expect(body.requestedCount).toBe(5);
+    expect(body.actualCount).toBe(3);
+    expect(body.error.code).toBe('PARTIAL_SCALE');
+    expect(body.error.message).toContain('Partial scale');
   });
 
   it('returns INTERNAL_ERROR for other scale failures', async () => {
