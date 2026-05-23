@@ -1,92 +1,111 @@
-# Feature Specification: Fix `.env` `WORKER_COUNT` drift after worker scaling
+# Feature Specification: ## Problem
+
+[#706](https://github
 
 **Branch**: `708-problem-706-https-github` | **Date**: 2026-05-23 | **Status**: Draft
-**Source**: [#708](https://github.com/generacy-ai/generacy/issues/708)
-**Workflow**: `speckit-bugfix`
 
 ## Summary
 
-When a user scales workers via the cloud UI (orchestrator → Engine API), the running replica count diverges from `WORKER_COUNT` in the host's `.env` file. The next `docker compose up -d` (run via `npx generacy update`, `npx generacy up`, or directly) reads the stale `.env`, sees `WORKER_COUNT=1`, and tears down the extra workers the user explicitly scaled to. This bug was introduced by [#706](https://github.com/generacy-ai/generacy/issues/706), which dropped `.env` writes from `worker-scaler.ts` on the (incorrect) reasoning that `WORKER_COUNT` in `.env` was dead state.
-
-Recommended fix is option **C** from the issue: belt-and-suspenders — restore `.env` writes inside `scaleWorkers` AND have the CLI re-derive `WORKER_COUNT` from `cluster.yaml` before invoking `docker compose up -d`.
-
 ## Problem
 
-`.env` is read by the host's compose CLI on every `docker compose up -d`. The scaffolded `docker-compose.yml` declares `deploy.replicas: ${WORKER_COUNT:-1}` for the worker service. When `.env` drifts from `cluster.yaml`:
+[#706](https://github.com/generacy-ai/generacy/issues/706) intentionally dropped \`.env\` writes from \`worker-scaler.ts\` on the reasoning that the orchestrator now owns replica lifecycle and \`WORKER_COUNT\` in \`.env\` is dead state. **That reasoning was wrong.** \`.env\` is read by the host's compose CLI every time \`docker compose up -d\` runs, which the user-facing \`npx generacy up\` and \`npx generacy update\` both invoke.
 
-1. User launches cluster → `.env` has `WORKER_COUNT=1` (scaffolder default) → 1 worker running.
-2. User scales to 5 via the cloud UI → orchestrator updates `cluster.yaml` to `workers: 5` and uses the Engine API to spawn replicas → `.env` still says `WORKER_COUNT=1`.
-3. User runs `npx generacy update` (e.g. to pick up a new image) → `docker compose up -d` reads `.env` → compose sees replicas should be `1` → destroys the 4 extra workers.
+[packages/generacy/src/cli/commands/update/index.ts:114-124](https://github.com/generacy-ai/generacy/blob/develop/packages/generacy/src/cli/commands/update/index.ts#L114-L124):
+\`\`\`ts
+const pullResult = runCompose(ctx, ['pull'], …);
+…
+const upResult = runCompose(ctx, ['up', '-d']);
+\`\`\`
 
-Same hazard applies to any direct `docker compose up -d` from the host.
+The scaffolded compose has \`deploy.replicas: \${WORKER_COUNT:-1}\`. So:
 
-## Fix options considered
+1. User launches cluster → \`.env\` has \`WORKER_COUNT=1\` (scaffolder default) → 1 worker running.
+2. User clicks +/+/+/+ in cloud UI → orchestrator scales to 5 via Engine API → \`cluster.yaml\` updated to \`workers: 5\` → \`.env\` still says \`WORKER_COUNT=1\`.
+3. User runs \`npx generacy update\` later (e.g. to pick up a new image) → \`docker compose up -d\` reads \`.env\` → compose sees the worker service should have 1 replica → **destroys the 4 extra workers** the user explicitly scaled to.
 
-- **A. Restore `.env` writes inside `scaleWorkers`.** Simplest; both `.env` and `cluster.yaml` updated atomically inside the same scale operation.
-- **B. Have `npx generacy up`/`update` read `cluster.yaml` and inject `WORKER_COUNT` into the compose env before running.** Cleaner separation of source-of-truth, but doesn't help users who run raw `docker compose up -d`.
-- **C. Both** (recommended). Worker-scaler covers the "scaled via UI" case; CLI covers the "user edited `cluster.yaml` manually" case and defends against `.env` drift from any other source.
+Same hazard for any direct \`docker compose up -d\` invocation from the host, not just \`npx generacy update\`. The orchestrator-managed state silently loses on every compose re-up.
+
+## Fix options
+
+**A. Restore \`.env\` writes inside \`scaleWorkers\`.** Simplest; re-introduces what the previous (compose-shell-out) implementation already did. Both \`.env\` and \`cluster.yaml\` updated atomically inside the same scale operation. \`.env\` lives next to \`cluster.yaml\`, same filesystem, same \`atomicWrite\` helper already in worker-scaler. Cost: \`.env\` is technically a per-launch artifact that lives on the host filesystem only (cluster-base/cluster-microservices flow A); but for local-CLI launches it's in the project dir and we *can* reach it via \`resolveGeneracyDir\`.
+
+**B. Have \`npx generacy up\` / \`update\` read \`cluster.yaml\` and inject \`WORKER_COUNT\` into the compose env before running.** Cleaner separation of source-of-truth — \`cluster.yaml\` is authoritative and \`.env\` becomes derived state. But requires CLI changes and assumes everyone uses \`npx generacy up\` (a power-user who runs raw \`docker compose up -d\` still has the bug).
+
+**C. Both.** Belt-and-suspenders: worker-scaler keeps \`.env\` in sync (so raw \`docker compose\` works), AND \`npx generacy up\` re-derives WORKER_COUNT from cluster.yaml on each launch (so a stale \`.env\` doesn't override the source of truth). The CLI step also handles the bootstrap case where \`cluster.yaml\` was hand-edited but \`.env\` wasn't.
+
+Recommend **C**. Implementation is small in each layer and the two work together: worker-scaler covers the \"user scaled via UI\" case, CLI covers the \"user edited cluster.yaml manually\" case and serves as a defense against \`.env\` drift from any other source.
+
+## Acceptance
+
+- After scaling to N via the cloud UI, \`.env\`'s \`WORKER_COUNT\` equals N.
+- Running \`npx generacy update\` (or \`docker compose up -d\` directly) does not change the running worker count.
+- A hand-edit of \`cluster.yaml\` followed by \`npx generacy up\` honours the cluster.yaml value, not a stale \`.env\` value.
+
+## Related
+
+- [#706](https://github.com/generacy-ai/generacy/issues/706) — the source of this regression. Closing comments documented \"WORKER_COUNT only matters for the first \`docker compose up\`\" which is incorrect.
 
 ## User Stories
 
-### US1: Worker count persists across compose re-ups
+### US1: Cloud UI scale survives compose re-up
 
-**As a** Generacy user who has scaled workers via the cloud UI,
-**I want** my scaled worker count to survive `npx generacy update` and direct `docker compose up -d`,
-**So that** routine image updates or restarts don't silently destroy workers I'm actively using.
-
-**Acceptance Criteria**:
-- [ ] After scaling to N via the cloud UI, `.env`'s `WORKER_COUNT` equals N.
-- [ ] Running `npx generacy update` after scaling does not change the running worker count.
-- [ ] Running `docker compose up -d` directly (no CLI) after scaling does not change the running worker count.
-
-### US2: Authoritative cluster.yaml wins over stale .env
-
-**As a** Generacy user who has hand-edited `cluster.yaml`,
-**I want** the CLI to honor `cluster.yaml` as the source of truth,
-**So that** a stale `.env` value can't override my intent.
+**As a** Generacy operator who scaled workers via the cloud UI,
+**I want** my chosen worker count to persist across `npx generacy update` and any direct `docker compose up -d`,
+**So that** routine image updates and re-ups do not silently destroy workers I explicitly scaled to.
 
 **Acceptance Criteria**:
-- [ ] A hand-edit of `cluster.yaml` (changing `workers:`) followed by `npx generacy up` results in the running worker count matching `cluster.yaml`, even if `.env` is stale.
-- [ ] `npx generacy update` also re-derives `WORKER_COUNT` from `cluster.yaml` before invoking compose.
+- [ ] After scaling to N via cloud UI, `.env`'s `WORKER_COUNT` equals N.
+- [ ] Running `npx generacy update` after a cloud-UI scale leaves the running worker count unchanged.
+- [ ] A direct `docker compose up -d` from the host after a cloud-UI scale leaves the running worker count unchanged.
+
+### US2: Hand-edited cluster.yaml wins over stale .env
+
+**As a** power user who edits `cluster.yaml` directly,
+**I want** `npx generacy up` / `update` to honour the value in `cluster.yaml` even when `.env` has a stale `WORKER_COUNT`,
+**So that** `cluster.yaml` remains the authoritative source of truth.
+
+**Acceptance Criteria**:
+- [ ] After editing `cluster.yaml` to `workers: N`, the next `npx generacy up` runs N worker replicas regardless of the prior `WORKER_COUNT` in `.env`.
+- [ ] `.env`'s `WORKER_COUNT` is reconciled to N as part of the same CLI invocation.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `scaleWorkers` in `packages/orchestrator/src/services/worker-scaler.ts` MUST write the new worker count to the host project's `.env` file (`WORKER_COUNT=<N>`), atomically alongside the `cluster.yaml` update. | P1 | Use the existing `atomicWrite` helper. `.env` location resolved via the same logic that locates `cluster.yaml` on the host filesystem. |
-| FR-002 | `.env` write MUST preserve other env keys (no clobbering). If `WORKER_COUNT=` exists, update in place; otherwise append. | P1 | |
-| FR-003 | `npx generacy up` MUST read `workers` from `cluster.yaml` and pass `WORKER_COUNT=<N>` to the `docker compose up -d` invocation (via env, not by rewriting `.env`). | P1 | `cluster.yaml` is the source of truth. CLI does not need to write `.env`. |
-| FR-004 | `npx generacy update` MUST follow the same pattern as FR-003 for both `docker compose pull` and `docker compose up -d`. | P1 | Update reuses the same compose-up step. |
-| FR-005 | When `cluster.yaml` is missing or has no `workers` key, the CLI MUST fall back to whatever `.env`/scaffolder default applies today (no behavior change for fresh clusters). | P2 | Fail-soft to current behavior. |
-| FR-006 | Worker-scaler `.env` write failure MUST be logged but MUST NOT block the scale operation succeeding (cluster.yaml + Engine API state are authoritative; `.env` is derived). | P2 | Belt-and-suspenders: even if `.env` write fails, CLI re-derivation at next `up`/`update` will reconcile. |
+| FR-001 | `scaleWorkers` in `worker-scaler.ts` writes the new `WORKER_COUNT` to the host project's `.env` after writing `cluster.yaml`. Uses the existing `atomicWrite` helper. | P1 | Restores the behaviour dropped in #706. |
+| FR-002 | If a `WORKER_COUNT=` line exists in `.env`, replace its value in-place. If it does not exist, append `WORKER_COUNT=<N>` as a new line. Preserve all other lines and ordering. | P1 | |
+| FR-003 | `npx generacy up` reads `workers` from `cluster.yaml` and re-derives `WORKER_COUNT` before invoking `docker compose up -d`. The re-derived value is written back to `.env` so the running compose process sees a consistent value. | P1 | Defends against stale `.env` after hand-edits to `cluster.yaml`. |
+| FR-004 | `npx generacy update` performs the same re-derivation as FR-003 before invoking `docker compose pull` + `docker compose up -d`. | P1 | |
+| FR-005 | If `cluster.yaml` is missing the `workers` key entirely, the CLI falls back to the scaffolder default (`1`) and logs a warning identifying the fallback path. | P2 | |
+| FR-006 | Failures of the `.env` write in `scaleWorkers` (FR-001/FR-002) are logged but non-blocking: the `cluster.yaml` write (the source of truth) remains the authoritative outcome of the scale operation. | P1 | Determines ordering — see FR-007. |
+| FR-007 | Write order in `scaleWorkers` is: `cluster.yaml` first, then `.env`. If the `.env` write fails after a successful `cluster.yaml` write, the next CLI re-derivation (FR-003/FR-004) will reconcile `.env` from `cluster.yaml`. | P1 | Clarified in Q2 (B). |
+| FR-008 | If `.env` does not exist when `scaleWorkers` runs, skip the `.env` write and emit a warning log. Do not create a new `.env` from `scaleWorkers`; rely on the CLI re-derivation path (FR-003/FR-004) to populate `.env` on the next `up`/`update`. | P1 | Clarified in Q1 (B). |
+| FR-009 | If `cluster.yaml` has `workers: 0` or a negative integer, the CLI re-derivation (FR-003/FR-004) clamps the effective `WORKER_COUNT` to `1` and emits a warning log. The clamped value is also written back to `.env`. | P1 | Clarified in Q3 (B). |
+| FR-010 | If `cluster.yaml`'s `workers` value is not a non-negative integer (e.g. string, null, array), the CLI re-derivation treats it identically to a missing key (FR-005): fall through to the scaffolder default and emit a warning log distinguishing "malformed value" from "missing key" for log readers. | P1 | Clarified in Q4 (A). |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `.env` `WORKER_COUNT` matches `cluster.yaml` `workers` after a scaling operation. | 100% | Scale via UI to N=5; inspect `.env`; assert `WORKER_COUNT=5`. |
-| SC-002 | Worker count survives `npx generacy update`. | No replicas destroyed | Scale to N>1, run `npx generacy update`, count running worker containers, assert == N. |
-| SC-003 | Worker count survives direct `docker compose up -d` from the host. | No replicas destroyed | Same as SC-002 but bypassing CLI. |
-| SC-004 | Hand-edited `cluster.yaml` takes effect via `npx generacy up`. | Running count == `cluster.yaml` value | Edit `cluster.yaml` `workers: 3`, run `npx generacy up`, assert 3 worker containers. |
+| SC-001 | Cloud-UI scale survives `npx generacy update` | 100% | Manual test: scale to 5 via UI; run `npx generacy update`; assert `docker compose ps` still shows 5 worker replicas. |
+| SC-002 | Cloud-UI scale survives raw `docker compose up -d` | 100% | Manual test: scale to 5 via UI; run `docker compose up -d` from project dir; assert worker replicas unchanged. |
+| SC-003 | Hand-edited `cluster.yaml` overrides stale `.env` on next `up` | 100% | Manual test: edit `cluster.yaml` `workers: 3` while `.env` says `WORKER_COUNT=5`; run `npx generacy up`; assert 3 worker replicas and `.env`'s `WORKER_COUNT=3`. |
+| SC-004 | `.env` and `cluster.yaml` agree after every `scaleWorkers` call | 100% | Programmatic test: assert post-scale `.env`'s `WORKER_COUNT` equals `cluster.yaml`'s `workers`. |
 
 ## Assumptions
 
-- `.env` lives in the same directory as `cluster.yaml` for local-CLI launches (resolvable via `resolveGeneracyDir` / the existing helper already used by worker-scaler).
-- The host's `docker compose` CLI version honors env-var overrides passed via `--env-file` or process env when interpolating `${WORKER_COUNT:-1}` in `docker-compose.yml`.
-- `cluster.yaml`'s `workers` field is always a non-negative integer when present (no string coercion required beyond existing validation).
-- Cluster-base/cluster-microservices flow A (host filesystem `.env`) is the only deployment shape affected; in-cluster deployments don't have a host-side compose CLI invocation to defend against.
+- `.env` lives next to `cluster.yaml` in the host project directory and is reachable via `resolveGeneracyDir` (the helper already used by `worker-scaler.ts`).
+- The `atomicWrite` helper in `worker-scaler.ts` is suitable for `.env` writes (same filesystem, same trust boundary).
+- `cluster.yaml`'s `workers` field, when present and well-formed, is a non-negative integer. Malformed/zero/negative values are edge cases handled per FR-009 / FR-010.
+- The cluster-base / cluster-microservices flow A path (where `.env` lives on the host filesystem only) is the primary target. Other launch paths that don't materialize `.env` are handled by FR-008 (skip + warn).
+- Cloud-UI scale operations flow through `scaleWorkers` (Engine API path); `cluster.yaml` is updated first by that flow today and continues to be the source of truth.
 
 ## Out of Scope
 
-- Removing `WORKER_COUNT` interpolation from the scaffolded `docker-compose.yml` (a deeper refactor to make orchestrator the sole source of truth — separate issue).
-- Reconciling `.env` from `cluster.yaml` automatically when the daemon starts (the bootstrap-time case is handled by the CLI re-derivation in FR-003/FR-004).
-- Adding a `generacy doctor` check for `.env` ↔ `cluster.yaml` drift (could be a follow-up).
-- Multi-repo / sibling-workdir scaling semantics.
-
-## Related
-
-- [#706](https://github.com/generacy-ai/generacy/issues/706) — the source of this regression. Closing comments documented "WORKER_COUNT only matters for the first `docker compose up`" which is incorrect.
-- [#707](https://github.com/generacy-ai/generacy/pull/707) — the PR that landed #706.
+- Removing the `.env` file or the `WORKER_COUNT` env var from the compose interpolation contract (would require coordinated cluster-base / cluster-microservices template changes).
+- Locking or transactional cross-file writes; partial-failure recovery relies on the next CLI re-derivation as a self-healing mechanism.
+- Surfacing the FR-009 / FR-010 warning logs as a cloud-UI notification (separate concern; warning log is sufficient for v1).
+- Migrating away from `.env` entirely toward `cluster.yaml`-driven compose env injection only.
 
 ---
 
