@@ -805,12 +805,12 @@ describe('scaleWorkers .env sync (#708)', () => {
     // Warning emitted.
     const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(warnMessages.some((m) => /WORKER_COUNT sync to .env skipped: file not found/.test(m))).toBe(true);
-    // cluster.yaml still updated.
-    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 2');
+    // cluster.local.yaml still updated (runtime state, per #709).
+    const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+    expect(localYaml).toContain('workers: 2');
   });
 
-  it('scale to N when env-write throws → scale result unchanged, warning logged, cluster.yaml still updated', async () => {
+  it('scale to N when env-write throws → scale result unchanged, warning logged, cluster.local.yaml still updated', async () => {
     // Make .env a directory so stat() succeeds (skipping the ENOENT branch) but
     // readFile() throws EISDIR — exercises the catch-all warning path.
     const envPath = join(tempDir, '.env');
@@ -823,20 +823,20 @@ describe('scaleWorkers .env sync (#708)', () => {
     const result = await scaleWorkers({ count: 2, engineClient: client as never });
 
     expect(result.actualCount).toBe(2);
-    // cluster.yaml still updated (write happened before the .env failure).
-    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 2');
+    // cluster.local.yaml still updated (write happened before the .env failure).
+    const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+    expect(localYaml).toContain('workers: 2');
     // Warning logged (not the ENOENT-skip path — the generic failure path).
     const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(
       warnMessages.some((m) =>
-        /WORKER_COUNT sync to .env failed:.*cluster\.yaml is the source of truth/.test(m),
+        /WORKER_COUNT sync to .env failed:.*cluster\.local\.yaml is the source of truth/.test(m),
       ),
     ).toBe(true);
     expect(warnMessages.every((m) => !/sync to .env skipped: file not found/.test(m))).toBe(true);
   });
 
-  it('write order: cluster.yaml stays updated when .env write throws after a successful updateClusterYaml', async () => {
+  it('write order: cluster.local.yaml stays updated when .env write throws after a successful updateClusterLocalYaml', async () => {
     // Same setup as the throw test — confirms ordering invariant explicitly.
     const envPath = join(tempDir, '.env');
     mkdirSync(envPath);
@@ -847,8 +847,8 @@ describe('scaleWorkers .env sync (#708)', () => {
 
     await scaleWorkers({ count: 4, engineClient: client as never });
 
-    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 4');
+    const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+    expect(localYaml).toContain('workers: 4');
   });
 });
 

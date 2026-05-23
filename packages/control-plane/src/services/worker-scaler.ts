@@ -471,8 +471,9 @@ async function doScale(options: ScaleOptions): Promise<ScaleResult> {
 
   // Best-effort: keep .env's WORKER_COUNT in sync so host-side `docker compose
   // up -d` doesn't undo the scale on the next re-up. Failures are non-blocking
-  // (cluster.yaml is the source of truth and the CLI re-derivation step will
-  // reconcile .env on the next `npx generacy up` / `update`). See #708.
+  // (cluster.local.yaml is the runtime source of truth and the CLI
+  // re-derivation step will reconcile .env on the next `npx generacy up` /
+  // `update`). See #708.
   const envPath = join(generacyDir, '.env');
   try {
     await syncEnvWorkerCountInScaler(envPath, actualCount);
@@ -485,7 +486,7 @@ async function doScale(options: ScaleOptions): Promise<ScaleResult> {
     } else {
       const msg = err instanceof Error ? err.message : String(err);
       console.warn(
-        `[worker-scaler] WORKER_COUNT sync to .env failed: ${msg}; cluster.yaml is the source of truth`,
+        `[worker-scaler] WORKER_COUNT sync to .env failed: ${msg}; cluster.local.yaml is the source of truth`,
       );
     }
   }
