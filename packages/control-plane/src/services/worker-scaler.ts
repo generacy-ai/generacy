@@ -1,4 +1,4 @@
-import { readFile, writeFile, rename } from 'node:fs/promises';
+import { readFile, stat, writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -467,6 +467,27 @@ async function doScale(options: ScaleOptions): Promise<ScaleResult> {
   const yamlPath = join(generacyDir, 'cluster.yaml');
   await updateClusterYaml(yamlPath, actualCount);
 
+  // Best-effort: keep .env's WORKER_COUNT in sync so host-side `docker compose
+  // up -d` doesn't undo the scale on the next re-up. Failures are non-blocking
+  // (cluster.yaml is the source of truth and the CLI re-derivation step will
+  // reconcile .env on the next `npx generacy up` / `update`). See #708.
+  const envPath = join(generacyDir, '.env');
+  try {
+    await syncEnvWorkerCountInScaler(envPath, actualCount);
+  } catch (err) {
+    const e = err as NodeJS.ErrnoException;
+    if (e?.code === 'ENOENT') {
+      console.warn(
+        `[worker-scaler] WORKER_COUNT sync to .env skipped: file not found at ${envPath}`,
+      );
+    } else {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.warn(
+        `[worker-scaler] WORKER_COUNT sync to .env failed: ${msg}; cluster.yaml is the source of truth`,
+      );
+    }
+  }
+
   if (orchestratorApiKey) {
     triggerMetadataRefresh(orchestratorUrl, orchestratorApiKey).catch(() => {
       // Non-fatal: metadata will refresh on the next periodic cycle.
@@ -530,6 +551,28 @@ async function atomicWrite(targetPath: string, content: string): Promise<void> {
   const tmpPath = join(dirname(targetPath), `.${randomBytes(8).toString('hex')}.tmp`);
   await writeFile(tmpPath, content, { mode: 0o644 });
   await rename(tmpPath, targetPath);
+}
+
+/**
+ * Rewrite `WORKER_COUNT=<count>` in .env. Throws ENOENT if .env is missing
+ * (caller treats that as a skip-and-warn). Other errors propagate to the
+ * caller's catch and are logged as failures. The CLI re-derivation path in
+ * `worker-count-deriver.ts` is the symmetric implementation on the host side.
+ */
+async function syncEnvWorkerCountInScaler(envPath: string, count: number): Promise<void> {
+  await stat(envPath); // throws ENOENT if missing — caller logs the skip
+  const existing = await readFile(envPath, 'utf-8');
+  const line = `WORKER_COUNT=${count}`;
+  const pattern = /^WORKER_COUNT=.*$/m;
+  let next: string;
+  if (pattern.test(existing)) {
+    next = existing.replace(pattern, line);
+  } else if (existing.length === 0) {
+    next = `${line}\n`;
+  } else {
+    next = existing.endsWith('\n') ? `${existing}${line}\n` : `${existing}\n${line}\n`;
+  }
+  await atomicWrite(envPath, next);
 }
 
 // Re-export so existing tests can import from this module.

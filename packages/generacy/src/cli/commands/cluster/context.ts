@@ -59,6 +59,32 @@ export interface ClusterContext {
   projectName: string;
 }
 
+// -- findGeneracyDir --
+
+/**
+ * Walk upward from `cwd` (default: process.cwd()) looking for a directory that
+ * contains `.generacy/cluster.yaml`. Returns the absolute path to that
+ * `.generacy/` directory, or throws if no cluster is found.
+ *
+ * Does NOT parse `cluster.yaml` — safe to call before `reconcileWorkerCount`
+ * for callers that need `generacyDir` without the strict ClusterYamlSchema
+ * gate (which would crash on edge values like `workers: 0` or `workers: "five"`).
+ */
+export function findGeneracyDir(cwd?: string): string {
+  const startDir = cwd ?? process.cwd();
+  let dir = path.resolve(startDir);
+  for (;;) {
+    const clusterYamlPath = path.join(dir, '.generacy', 'cluster.yaml');
+    if (fs.existsSync(clusterYamlPath)) {
+      return path.join(dir, '.generacy');
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  throw new Error("No cluster found. Run 'generacy init' first.");
+}
+
 // -- getClusterContext --
 
 export function getClusterContext(cwd?: string): ClusterContext {
