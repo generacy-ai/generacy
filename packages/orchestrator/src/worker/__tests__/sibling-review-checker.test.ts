@@ -37,11 +37,15 @@ function makePR(overrides: Partial<LinkedPR> & { repo: string; url: string }): L
 
 const mockExecFile = rawExecFile as unknown as ReturnType<typeof vi.fn>;
 
-/** Helper: make next execFile call succeed with given stdout */
+/** Helper: make next execFile call succeed with given stdout.
+ * The vi.fn mock lacks `util.promisify.custom`, so promisify falls back to
+ * single-value mode — the callback's second arg becomes the resolved value.
+ * Pass `{ stdout, stderr }` to match the shape the source destructures.
+ */
 function mockGhResult(stdout: string) {
   mockExecFile.mockImplementationOnce(
-    (_cmd: string, _args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
-      cb(null, stdout, '');
+    (_cmd: string, _args: string[], cb: (err: Error | null, result: { stdout: string; stderr: string }) => void) => {
+      cb(null, { stdout, stderr: '' });
     },
   );
 }
@@ -49,8 +53,8 @@ function mockGhResult(stdout: string) {
 /** Helper: make next execFile call fail with an error */
 function mockGhError(message: string) {
   mockExecFile.mockImplementationOnce(
-    (_cmd: string, _args: string[], cb: (err: Error | null, stdout: string, stderr: string) => void) => {
-      cb(new Error(message), '', '');
+    (_cmd: string, _args: string[], cb: (err: Error | null, result: { stdout: string; stderr: string }) => void) => {
+      cb(new Error(message), { stdout: '', stderr: '' });
     },
   );
 }
