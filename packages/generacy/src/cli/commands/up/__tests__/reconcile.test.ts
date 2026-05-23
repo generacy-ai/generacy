@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ClusterContext } from '../../cluster/context.js';
@@ -62,7 +62,7 @@ describe('up command reconcile (#708)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'up-reconcile-'));
     generacyDir = join(tempDir, '.generacy');
-    require('node:fs').mkdirSync(generacyDir, { recursive: true });
+    mkdirSync(generacyDir, { recursive: true });
     // Stub compose file so getClusterContext doesn't throw (we mock it anyway).
     writeFileSync(join(generacyDir, 'docker-compose.yml'), 'services: {}\n');
     vi.mocked(runCompose).mockReturnValue({ ok: true, stdout: '', stderr: '' });
