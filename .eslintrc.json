@@ -38,6 +38,7 @@
         "packages/workflow-engine/src/actions/cli-utils.ts",
         "packages/orchestrator/src/services/relay-bridge.ts",
         "packages/orchestrator/src/worker/repo-checkout.ts",
+        "packages/orchestrator/src/worker/sibling-review-checker.ts",
         "packages/orchestrator/src/services/identity.ts",
         "packages/cluster-relay/src/metadata.ts",
         "packages/workflow-engine/src/actions/epic/create-pr.ts",

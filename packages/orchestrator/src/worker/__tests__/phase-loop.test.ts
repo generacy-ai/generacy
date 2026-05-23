@@ -51,7 +51,7 @@ function createMockDeps(): PhaseLoopDeps {
       updateStageComment: vi.fn().mockResolvedValue(undefined),
     } as any,
     gateChecker: {
-      checkGate: vi.fn().mockReturnValue(null),
+      checkGates: vi.fn().mockReturnValue([]),
     } as any,
     cliSpawner: {
       spawnPhase: vi.fn().mockResolvedValue(makeSuccessResult('implement')),
@@ -603,11 +603,11 @@ describe('PhaseLoop - job lifecycle events', () => {
     (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('clarify'));
 
     // Gate checker returns a gate for clarify
-    (deps.gateChecker.checkGate as any).mockReturnValue({
+    (deps.gateChecker.checkGates as any).mockReturnValue([{
       phase: 'clarify',
       gateLabel: 'waiting-for:clarification',
       condition: 'always',
-    });
+    }]);
 
     await phaseLoop.executeLoop(context, config, deps, ['clarify']);
 
@@ -723,9 +723,9 @@ describe('PhaseLoop - phaseAfterHandlers', () => {
       callOrder.push('handler');
     });
 
-    (deps.gateChecker.checkGate as any).mockImplementation(() => {
+    (deps.gateChecker.checkGates as any).mockImplementation(() => {
       callOrder.push('checkGate');
-      return null;
+      return [];
     });
 
     deps.phaseAfterHandlers = [handler];
@@ -766,7 +766,7 @@ describe('PhaseLoop - phaseAfterHandlers', () => {
     // Second handler should NOT have been called (fail-fast)
     expect(secondHandler).not.toHaveBeenCalled();
     // Gate should NOT have been checked
-    expect(deps.gateChecker.checkGate).not.toHaveBeenCalled();
+    expect(deps.gateChecker.checkGates).not.toHaveBeenCalled();
   });
 
   it('produces identical behavior when zero handlers are registered', async () => {
@@ -782,6 +782,6 @@ describe('PhaseLoop - phaseAfterHandlers', () => {
 
     expect(result.completed).toBe(true);
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('specify');
-    expect(deps.gateChecker.checkGate).toHaveBeenCalled();
+    expect(deps.gateChecker.checkGates).toHaveBeenCalled();
   });
 });

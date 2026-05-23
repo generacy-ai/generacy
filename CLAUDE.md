@@ -323,3 +323,15 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/orchestrator/src/worker/phase-loop.ts` — MODIFIED in #690: `PhaseLoopDeps` gains optional `phaseAfterHandlers?: PhaseAfterHandler[]`. Handlers invoked sequentially after `commitPushAndEnsurePr()` + `PHASES_REQUIRING_CHANGES` check + `labelManager.onPhaseComplete()`, before gate check. Fail-fast: first handler that throws stops remaining handlers and blocks the phase. Handlers do NOT run at implement increment boundaries or retry paths — only normal phase completion.
 - `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #690: Passes `phaseAfterHandlers` (empty array initially) to `PhaseLoopDeps`. Registration point for future handlers.
 - Blocks #691 (multi-repo fan-out handler registers through this hook).
+
+## Multi-Repo Workflow Support — Phase 3 (#692)
+
+- Review-phase coordination for multi-repo workflows. Three components: ready-for-review sync, `on-sibling-review` gate condition, and multi-gate-per-phase support.
+- `packages/orchestrator/src/worker/types.ts` — MODIFIED in #692: `GateDefinition.condition` union gains `'on-sibling-review'`. `WorkerContext` gains optional `linkedPRs?: LinkedPR[]` (imported from `@generacy-ai/workflow-engine`).
+- `packages/orchestrator/src/worker/config.ts` — MODIFIED in #692: `GateDefinitionSchema` condition enum gains `'on-sibling-review'`. Default `speckit-feature` gates gain `{ phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' }`.
+- `packages/orchestrator/src/worker/gate-checker.ts` — MODIFIED in #692: New `checkGates()` method returns `GateDefinition[]` (all matching gates for a phase via `.filter()`). Original `checkGate()` preserved (returns first match).
+- `packages/orchestrator/src/worker/phase-loop.ts` — MODIFIED in #692: Gate evaluation refactored to iterate all gates from `checkGates()`. For `on-sibling-review` condition: calls `checkSiblingReviews()` on `context.linkedPRs`. When gate activates, flips all sibling drafts to ready-for-review before pausing.
+- `packages/orchestrator/src/worker/pr-manager.ts` — MODIFIED in #692: `markReadyForReview()` extended to iterate `linkedPRs`, parse each URL for owner/repo, call `gh pr ready` per sibling (idempotent, best-effort).
+- `packages/orchestrator/src/worker/sibling-review-checker.ts` — NEW in #692: `checkSiblingReviews(linkedPRs, github, logger)` → `SiblingReviewResult`. Queries `reviewDecision` via `gh pr view --json reviewDecision` per linked PR. Returns `{ allApproved, statuses[] }`. Empty `linkedPRs` → immediately `allApproved: true`.
+- `packages/orchestrator/src/worker/linked-pr-url-parser.ts` — NEW in #692: `parsePRUrl(url)` → `ParsedPRUrl | null`. Regex extracts owner/repo/number from GitHub PR URL.
+- `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #692: Loads `linkedPRs` from workflow state store after phase-after handlers, threads to `WorkerContext.linkedPRs`.

@@ -1,5 +1,5 @@
 import type { QueueItem } from '../types/index.js';
-import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 
 /**
  * Workflow phases in execution order
@@ -102,7 +102,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review';
 }
 
 /**
@@ -253,6 +253,8 @@ export interface WorkerContext {
   prUrl?: string;
   /** Sibling repository working directories (repo name → absolute path) */
   siblingWorkdirs?: Record<string, string>;
+  /** PRs opened in sibling repos during cross-repo fan-out (from WorkflowState) */
+  linkedPRs?: LinkedPR[];
 }
 
 /**

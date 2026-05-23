@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, findWorkspaceConfigPath } from '@generacy-ai/config';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
-import type { LaunchFunctionRequest, LaunchFunctionHandle } from '@generacy-ai/workflow-engine';
+import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
@@ -26,6 +28,38 @@ import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
 import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
+
+/**
+ * Load linkedPRs from workflow state files in the checkout directory.
+ * Reads `.generacy/workflow-state-*.json` files and returns the first
+ * non-empty linkedPRs array found. Best-effort: returns empty on any error.
+ */
+async function loadLinkedPRsFromState(checkoutPath: string, logger: Logger): Promise<LinkedPR[]> {
+  const stateDir = path.join(checkoutPath, '.generacy');
+  try {
+    const files = await fs.readdir(stateDir);
+    for (const file of files) {
+      if (file.startsWith('workflow-state-') && file.endsWith('.json')) {
+        try {
+          const content = await fs.readFile(path.join(stateDir, file), 'utf-8');
+          const data = JSON.parse(content) as { linkedPRs?: LinkedPR[] };
+          if (Array.isArray(data.linkedPRs) && data.linkedPRs.length > 0) {
+            logger.info(
+              { linkedPRCount: data.linkedPRs.length, stateFile: file },
+              'Loaded linkedPRs from workflow state',
+            );
+            return data.linkedPRs;
+          }
+        } catch {
+          // Skip malformed state files
+        }
+      }
+    }
+  } catch {
+    // No state directory or read error — fine, no linkedPRs
+  }
+  return [];
+}
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -446,7 +480,17 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
-        phaseAfterHandlers: [],
+        phaseAfterHandlers: [
+          // Reload linkedPRs from workflow state after each phase.
+          // The sibling fan-out handler (Phase 2) writes linkedPRs to the state file;
+          // this handler picks them up so gate evaluation can access context.linkedPRs.
+          async () => {
+            const linkedPRs = await loadLinkedPRsFromState(context.checkoutPath, workerLogger);
+            if (linkedPRs.length > 0) {
+              context.linkedPRs = linkedPRs;
+            }
+          },
+        ],
       }, phaseSequence);
 
       // 9. Handle completion
@@ -487,7 +531,7 @@ export class ClaudeCliWorker {
           // Non-epic workflows: standard completion flow
           await labelManager.onWorkflowComplete();
           workerLogger.info('Marking PR as ready for review');
-          await prManager.markReadyForReview();
+          await prManager.markReadyForReview(context.linkedPRs);
           workerLogger.info('Workflow completed successfully — all phases done');
 
           this.sseEmitter?.({
