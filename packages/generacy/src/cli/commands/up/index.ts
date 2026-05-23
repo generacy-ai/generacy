@@ -26,7 +26,7 @@ export function upCommand(): Command {
       // it. Runs before getClusterContext() so the strict ClusterYamlSchema
       // gate doesn't crash on edge values (workers: 0, malformed, missing).
       const generacyDir = findGeneracyDir();
-      reconcileWorkerCount(generacyDir, logger);
+      await reconcileWorkerCount(generacyDir, logger);
 
       const ctx = getClusterContext();
 

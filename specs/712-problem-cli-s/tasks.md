@@ -12,12 +12,12 @@ All tasks belong to **US1** — "Fix `reconcileWorkerCount` so cloud-UI scaling 
 
 ## Phase 1: Core Implementation
 
-- [ ] **T001 [US1]** Update `DeriveResult` type and add `readCanonicalOnly` helper in `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts`
+- [X] **T001 [US1]** Update `DeriveResult` type and add `readCanonicalOnly` helper in `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts`
   - Extend `DeriveResult.source` enum to `'cluster.yaml' | 'cluster.local.yaml' | 'clamped' | 'default'` (per `data-model.md` and Decision 4).
   - Extract the current inline canonical-only read body (existsSync + readFileSync + parseYaml + `RawClusterYamlSchema` + numeric/clamping branches) into a private `readCanonicalOnly(generacyDir): DeriveResult` helper. No behavior change in this helper — it is the degraded-read fallback path.
   - Keep `atomicWriteSync`, `applyWorkerCountToEnv`, `syncEnvWorkerCount`, `SyncEnvResult` untouched in this task.
 
-- [ ] **T002 [US1]** Convert `deriveWorkerCount` to async + merged-config read in `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts`
+- [X] **T002 [US1]** Convert `deriveWorkerCount` to async + merged-config read in `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts`
   - Add `import { readMergedClusterConfig } from '@generacy-ai/config';`.
   - Change signature to `export async function deriveWorkerCount(generacyDir: string, _logger: Logger): Promise<DeriveResult>`.
   - Implement the contract in `contracts/derive-worker-count.md` § Behavior:
@@ -29,7 +29,7 @@ All tasks belong to **US1** — "Fix `reconcileWorkerCount` so cloud-UI scaling 
   - Numeric clamping rules unchanged from current implementation (integer ≤ 0 → `'clamped'`; non-integer / wrong type → `'default'`).
   - Function still never throws; all errors fold into the result.
 
-- [ ] **T003 [US1]** Remove the `cluster.yaml` write-back branch and make `reconcileWorkerCount` async in `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts`
+- [X] **T003 [US1]** Remove the `cluster.yaml` write-back branch and make `reconcileWorkerCount` async in `packages/generacy/src/cli/commands/cluster/worker-count-deriver.ts`
   - Change signature to `export async function reconcileWorkerCount(generacyDir: string, logger: Logger): Promise<{ workerCount: number; envWrote: boolean }>`.
   - Replace `const derived = deriveWorkerCount(...)` with `const derived = await deriveWorkerCount(...)`.
   - Delete lines 157–182 (the `if (derived.source !== 'cluster.yaml') { ... atomicWriteSync(yamlPath, ...) }` block) entirely. No replacement — no self-heal under any branch.
@@ -40,24 +40,24 @@ All tasks belong to **US1** — "Fix `reconcileWorkerCount` so cloud-UI scaling 
 
 ## Phase 2: Caller Updates
 
-- [ ] **T004 [P] [US1]** Await `reconcileWorkerCount` in `packages/generacy/src/cli/commands/up/index.ts:29`
+- [X] **T004 [P] [US1]** Await `reconcileWorkerCount` in `packages/generacy/src/cli/commands/up/index.ts:29`
   - Change `reconcileWorkerCount(generacyDir, logger)` → `await reconcileWorkerCount(generacyDir, logger)`.
   - Caller is already inside an `async` Commander action handler — no other changes needed.
 
-- [ ] **T005 [P] [US1]** Await `reconcileWorkerCount` in `packages/generacy/src/cli/commands/update/index.ts:93`
+- [X] **T005 [P] [US1]** Await `reconcileWorkerCount` in `packages/generacy/src/cli/commands/update/index.ts:93`
   - Change `reconcileWorkerCount(generacyDir, logger)` → `await reconcileWorkerCount(generacyDir, logger)`.
   - Caller is already inside an `async` Commander action handler — no other changes needed.
 
 ## Phase 3: Tests
 
-- [ ] **T006 [US1]** Update existing tests for async signature in `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts`
+- [X] **T006 [US1]** Update existing tests for async signature in `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts`
   - All existing `describe('deriveWorkerCount', ...)` and `describe('reconcileWorkerCount', ...)` cases: await the calls and switch the test function to `async`.
   - Delete or rewrite the two existing tests that assert self-heal:
     - `'idempotency: running twice on malformed yaml self-heals on first call, no-op on second'` (lines ~260–282) — rewrite to assert `cluster.yaml` is **byte-identical** after both calls (no self-heal); `.env` still gets `WORKER_COUNT=1`.
     - `'cluster.yaml self-heal preserves other keys'` (lines ~284–297) — rewrite as `'cluster.yaml is never rewritten even when workers is malformed'`: assert `readFileSync(yamlPath, 'utf-8') === yamlBefore` after `reconcileWorkerCount`.
   - The `'deriveWorkerCount on unreadable cluster.yaml'` describe block: keep, but expect `source === 'default'` via the degraded-read fallback (canonical also unreadable).
 
-- [ ] **T007 [US1]** Add the 8-row merged-config matrix tests in `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts`
+- [X] **T007 [US1]** Add the 8-row merged-config matrix tests in `packages/generacy/src/cli/commands/cluster/__tests__/worker-count-deriver.test.ts`
   - New `describe('deriveWorkerCount — merged cluster config (#712)', ...)` block. One `it` per row of the matrix in `data-model.md` § "Behavioral matrix":
     1. canonical valid (`workers: 3`), local absent → `workerCount=3, source='cluster.yaml', warnings=[]`.
     2. canonical valid (3), local valid (5) → `workerCount=5, source='cluster.local.yaml', warnings=[]`.

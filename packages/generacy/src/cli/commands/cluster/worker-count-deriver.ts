@@ -1,13 +1,14 @@
-import { existsSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { Logger } from 'pino';
+import { readMergedClusterConfig } from '@generacy-ai/config';
 
 export interface DeriveResult {
   workerCount: number;
-  source: 'cluster.yaml' | 'clamped' | 'default';
+  source: 'cluster.yaml' | 'cluster.local.yaml' | 'clamped' | 'default';
   warnings: string[];
 }
 
@@ -29,7 +30,68 @@ function atomicWriteSync(targetPath: string, content: string): void {
   renameSync(tmpPath, targetPath);
 }
 
-export function deriveWorkerCount(generacyDir: string, _logger: Logger): DeriveResult {
+function classifyWorkers(
+  raw: unknown,
+  sourceName: 'cluster.yaml' | 'cluster.local.yaml',
+): DeriveResult {
+  if (raw === undefined) {
+    return {
+      workerCount: 1,
+      source: 'default',
+      warnings: [`${sourceName} has no workers field; using default 1`],
+    };
+  }
+  if (raw === null) {
+    return {
+      workerCount: 1,
+      source: 'default',
+      warnings: [`${sourceName} workers field is malformed (got: null); using default 1`],
+    };
+  }
+  if (typeof raw === 'number' && Number.isInteger(raw)) {
+    if (raw > 0) {
+      return { workerCount: raw, source: sourceName, warnings: [] };
+    }
+    return {
+      workerCount: 1,
+      source: 'clamped',
+      warnings: [`${sourceName} has workers: ${raw}; clamping to 1`],
+    };
+  }
+  const displayValue =
+    typeof raw === 'string'
+      ? `"${raw}"`
+      : Array.isArray(raw)
+        ? 'array'
+        : typeof raw === 'object'
+          ? 'object'
+          : String(raw);
+  return {
+    workerCount: 1,
+    source: 'default',
+    warnings: [`${sourceName} workers field is malformed (got: ${displayValue}); using default 1`],
+  };
+}
+
+function readLooseWorkers(filePath: string): { exists: boolean; workers: unknown } {
+  if (!existsSync(filePath)) return { exists: false, workers: undefined };
+  let content: string;
+  try {
+    content = readFileSync(filePath, 'utf-8');
+  } catch {
+    return { exists: true, workers: undefined };
+  }
+  let raw: unknown;
+  try {
+    raw = parseYaml(content);
+  } catch {
+    return { exists: true, workers: undefined };
+  }
+  const parsed = RawClusterYamlSchema.safeParse(raw ?? {});
+  return { exists: true, workers: parsed.success ? parsed.data.workers : undefined };
+}
+
+function readCanonicalOnly(generacyDir: string): DeriveResult {
   const yamlPath = join(generacyDir, 'cluster.yaml');
   if (!existsSync(yamlPath)) {
     return {
@@ -65,40 +127,61 @@ export function deriveWorkerCount(generacyDir: string, _logger: Logger): DeriveR
 
   const parsed = RawClusterYamlSchema.safeParse(raw ?? {});
   const workers: unknown = parsed.success ? parsed.data.workers : undefined;
+  return classifyWorkers(workers, 'cluster.yaml');
+}
 
-  if (workers === undefined || workers === null) {
-    const reason =
-      workers === null
-        ? `cluster.yaml workers field is malformed (got: null); using default 1`
-        : `cluster.yaml has no workers field; using default 1`;
-    return { workerCount: 1, source: 'default', warnings: [reason] };
-  }
+export async function deriveWorkerCount(
+  generacyDir: string,
+  _logger: Logger,
+): Promise<DeriveResult> {
+  const canonicalPath = join(generacyDir, 'cluster.yaml');
+  const localPath = join(generacyDir, 'cluster.local.yaml');
 
-  if (typeof workers === 'number' && Number.isInteger(workers)) {
-    if (workers > 0) {
-      return { workerCount: workers, source: 'cluster.yaml', warnings: [] };
+  try {
+    const { canonical, local } = await readMergedClusterConfig(generacyDir);
+
+    if (typeof local.workers === 'number') {
+      const warnings: string[] = [];
+      if (!existsSync(canonicalPath)) {
+        warnings.push(
+          `cluster.yaml not found at ${canonicalPath}; using cluster.local.yaml value (workers: ${local.workers}). Run 'npx generacy init' to restore the template config.`,
+        );
+      }
+      return { workerCount: local.workers, source: 'cluster.local.yaml', warnings };
+    }
+
+    if (typeof canonical.workers === 'number') {
+      return { workerCount: canonical.workers, source: 'cluster.yaml', warnings: [] };
+    }
+
+    if (!existsSync(canonicalPath)) {
+      return {
+        workerCount: 1,
+        source: 'default',
+        warnings: [`cluster.yaml not found at ${canonicalPath}; using default 1`],
+      };
     }
     return {
       workerCount: 1,
-      source: 'clamped',
-      warnings: [`cluster.yaml has workers: ${workers}; clamping to 1`],
+      source: 'default',
+      warnings: [`cluster.yaml has no workers field; using default 1`],
     };
+  } catch {
+    const localLoose = readLooseWorkers(localPath);
+    const warnings: string[] = [];
+    if (localLoose.exists) {
+      warnings.push('cluster.local.yaml unreadable; using cluster.yaml value');
+    }
+    if (
+      typeof localLoose.workers === 'number' &&
+      Number.isInteger(localLoose.workers) &&
+      localLoose.workers > 0
+    ) {
+      return { workerCount: localLoose.workers, source: 'cluster.local.yaml', warnings };
+    }
+    const canonicalResult = readCanonicalOnly(generacyDir);
+    return { ...canonicalResult, warnings: [...warnings, ...canonicalResult.warnings] };
   }
-
-  const displayValue =
-    typeof workers === 'string'
-      ? `"${workers}"`
-      : Array.isArray(workers)
-        ? 'array'
-        : typeof workers === 'object'
-          ? 'object'
-          : String(workers);
-
-  return {
-    workerCount: 1,
-    source: 'default',
-    warnings: [`cluster.yaml workers field is malformed (got: ${displayValue}); using default 1`],
-  };
 }
 
 export function syncEnvWorkerCount(
@@ -145,46 +228,23 @@ export function applyWorkerCountToEnv(existing: string, workerCount: number): st
   return existing.endsWith('\n') ? `${existing}${line}\n` : `${existing}\n${line}\n`;
 }
 
-export function reconcileWorkerCount(
+export async function reconcileWorkerCount(
   generacyDir: string,
   logger: Logger,
-): { workerCount: number; envWrote: boolean } {
-  const derived = deriveWorkerCount(generacyDir, logger);
+): Promise<{ workerCount: number; envWrote: boolean }> {
+  const derived = await deriveWorkerCount(generacyDir, logger);
   for (const warning of derived.warnings) {
     logger.warn(warning);
-  }
-
-  if (derived.source !== 'cluster.yaml') {
-    const yamlPath = join(generacyDir, 'cluster.yaml');
-    try {
-      let doc: Record<string, unknown> = {};
-      if (existsSync(yamlPath)) {
-        try {
-          const stat = statSync(yamlPath);
-          if (stat.isFile()) {
-            const content = readFileSync(yamlPath, 'utf-8');
-            const parsed = parseYaml(content);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-              doc = parsed as Record<string, unknown>;
-            }
-          }
-        } catch {
-          doc = {};
-        }
-      }
-      doc.workers = derived.workerCount;
-      atomicWriteSync(yamlPath, stringifyYaml(doc));
-      logger.info(`Reconciled cluster.yaml workers to ${derived.workerCount}`);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(`Failed to rewrite cluster.yaml workers: ${msg}; cluster.yaml is the source of truth`);
-    }
   }
 
   const sync = syncEnvWorkerCount(generacyDir, derived.workerCount, logger);
 
   if (sync.wrote) {
-    logger.info(`Reconciled WORKER_COUNT from cluster.yaml: ${derived.workerCount}`);
+    if (derived.source === 'cluster.local.yaml') {
+      logger.info(`Reconciled WORKER_COUNT from cluster.local.yaml: ${derived.workerCount}`);
+    } else {
+      logger.info(`Reconciled WORKER_COUNT from cluster.yaml: ${derived.workerCount}`);
+    }
   }
 
   return { workerCount: derived.workerCount, envWrote: sync.wrote };
