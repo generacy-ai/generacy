@@ -204,6 +204,9 @@ export type {
   ExecutionEventListener,
 } from './types/index.js';
 
+// Store implementations
+export { FilesystemWorkflowStore } from './store/index.js';
+
 // Logger utilities
 export { ConsoleLogger, NoopLogger, createLogger } from './types/logger.js';
 export { parseActionType } from './types/action.js';

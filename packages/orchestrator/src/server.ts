@@ -248,7 +248,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
-    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter });
+    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter, tokenProvider: wizardCredsTokenProvider });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
       redisClient,

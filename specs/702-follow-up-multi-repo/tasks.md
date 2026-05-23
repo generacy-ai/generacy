@@ -10,14 +10,14 @@
 
 ## Phase 1: Core Implementation
 
-- [ ] T001 [US1] Register `siblingFanoutHandler` in `phaseAfterHandlers` array in `packages/orchestrator/src/worker/claude-cli-worker.ts` — import `siblingFanoutHandler` and `SiblingFanoutContext` from `@generacy-ai/workflow-engine`, create adapter closure mapping `PhaseAfterContext` fields to `SiblingFanoutContext`, insert as first element before existing linkedPRs reader handler
-- [ ] T002 [US1] Update misleading comment on existing linkedPRs reader handler in `claude-cli-worker.ts` to reflect that the writer is now wired (drop "Phase 2 writes" framing)
-- [ ] T003 [P] [US2] Append auto-PR sentence to `buildSiblingPromptBlock()` in `packages/orchestrator/src/worker/sibling-prompt.ts` — add "Changes you make in sibling repos will be automatically committed and a draft PR opened, linked to this issue." after repo list
+- [X] T001 [US1] Register `siblingFanoutHandler` in `phaseAfterHandlers` array in `packages/orchestrator/src/worker/claude-cli-worker.ts` — import `siblingFanoutHandler` and `SiblingFanoutContext` from `@generacy-ai/workflow-engine`, create adapter closure mapping `PhaseAfterContext` fields to `SiblingFanoutContext`, insert as first element before existing linkedPRs reader handler
+- [X] T002 [US1] Update misleading comment on existing linkedPRs reader handler in `claude-cli-worker.ts` to reflect that the writer is now wired (drop "Phase 2 writes" framing)
+- [X] T003 [P] [US2] Append auto-PR sentence to `buildSiblingPromptBlock()` in `packages/orchestrator/src/worker/sibling-prompt.ts` — add "Changes you make in sibling repos will be automatically committed and a draft PR opened, linked to this issue." after repo list
 
 ## Phase 2: Tests & Verification
 
-- [ ] T004 [US2] Update snapshot/assertions in `packages/orchestrator/src/worker/__tests__/sibling-prompt.test.ts` to include the new auto-PR sentence
-- [ ] T005 Run `pnpm test` across affected packages (`orchestrator`, `workflow-engine`) to verify zero regressions
+- [X] T004 [US2] Update snapshot/assertions in `packages/orchestrator/src/worker/__tests__/sibling-prompt.test.ts` to include the new auto-PR sentence
+- [X] T005 Run `pnpm test` across affected packages (`orchestrator`, `workflow-engine`) to verify zero regressions
 
 ## Dependencies & Execution Order
 
