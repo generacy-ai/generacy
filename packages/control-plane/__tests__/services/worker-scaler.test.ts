@@ -11,7 +11,7 @@ import {
   assignContainerNumbers,
   cloneInspectToCreate,
   scaleWorkers,
-  updateClusterYaml,
+  updateClusterLocalYaml,
   PartialScaleError,
   type WorkerReplica,
 } from '../../src/services/worker-scaler.js';
@@ -342,7 +342,7 @@ describe('scaleWorkers (orchestration)', () => {
     client = new FakeDockerEngineClient();
     mockFetch = vi.fn().mockResolvedValue({ ok: true });
     vi.stubGlobal('fetch', mockFetch);
-    // Seed a cluster.yaml so updateClusterYaml works against an existing file.
+    // Seed cluster.yaml (template-tracked, must NOT be mutated by scaler).
     writeFileSync(join(tempDir, 'cluster.yaml'), 'channel: stable\nworkers: 1\n');
   });
 
@@ -384,9 +384,12 @@ describe('scaleWorkers (orchestration)', () => {
       // No connectNetwork (single-network source).
       expect(client.callsTo('connectNetwork')).toHaveLength(0);
 
-      // cluster.yaml updated.
-      const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-      expect(yaml).toContain('workers: 3');
+      // cluster.local.yaml updated (runtime state).
+      const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+      expect(localYaml).toContain('workers: 3');
+      // cluster.yaml (template) unchanged.
+      const canonicalYaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
+      expect(canonicalYaml).toBe('channel: stable\nworkers: 1\n');
       // metadata refresh fired.
       expect(mockFetch).toHaveBeenCalled();
     });
@@ -424,11 +427,14 @@ describe('scaleWorkers (orchestration)', () => {
       expect(stops[0]!.args[0]).toBe(replicas[2]!.id); // #3
       expect(stops[1]!.args[0]).toBe(replicas[1]!.id); // #2
 
-      const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-      expect(yaml).toContain('workers: 1');
+      const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+      expect(localYaml).toContain('workers: 1');
+      // cluster.yaml unchanged.
+      const canonicalYaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
+      expect(canonicalYaml).toBe('channel: stable\nworkers: 1\n');
     });
 
-    it('no-op: no Engine mutations, no cluster.yaml write, no metadata refresh', async () => {
+    it('no-op: no Engine mutations, no cluster.local.yaml write, no metadata refresh', async () => {
       const replicas = [makeReplica(1), makeReplica(2)];
       client.listResult = replicasToSummaries(replicas);
 
@@ -449,6 +455,8 @@ describe('scaleWorkers (orchestration)', () => {
       // cluster.yaml unchanged.
       const after = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
       expect(after).toBe(before);
+      // cluster.local.yaml not created on no-op.
+      expect(existsSync(join(tempDir, 'cluster.local.yaml'))).toBe(false);
       // No metadata refresh.
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -510,9 +518,12 @@ describe('scaleWorkers (orchestration)', () => {
         actual: 3, // 1 existing + 2 successful creates (calls 1 and 2 succeed; #3 fails)
       });
 
-      // cluster.yaml reflects actualCount = 3.
-      const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-      expect(yaml).toContain('workers: 3');
+      // cluster.local.yaml reflects actualCount = 3.
+      const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+      expect(localYaml).toContain('workers: 3');
+      // cluster.yaml (template) unchanged.
+      const canonicalYaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
+      expect(canonicalYaml).toBe('channel: stable\nworkers: 1\n');
       // Metadata refresh fired (partial counts as progress).
       expect(mockFetch).toHaveBeenCalled();
     });
@@ -550,6 +561,8 @@ describe('scaleWorkers (orchestration)', () => {
       // cluster.yaml unchanged.
       const yamlAfter = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
       expect(yamlAfter).toBe(yamlBefore);
+      // cluster.local.yaml not created on full failure.
+      expect(existsSync(join(tempDir, 'cluster.local.yaml'))).toBe(false);
       // No metadata refresh.
       expect(mockFetch).not.toHaveBeenCalled();
     });
@@ -687,10 +700,10 @@ describe('scaleWorkers (orchestration)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Preserved helper: updateClusterYaml smoke tests (kept from prior version)
+// Preserved helper: updateClusterLocalYaml smoke tests
 // ---------------------------------------------------------------------------
 
-describe('updateClusterYaml', () => {
+describe('updateClusterLocalYaml', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -701,25 +714,24 @@ describe('updateClusterYaml', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('updates existing workers field', async () => {
-    const yamlPath = join(tempDir, 'cluster.yaml');
-    writeFileSync(yamlPath, 'channel: stable\nworkers: 1\nvariant: cluster-base\n');
+  it('updates existing workers field, preserving other keys', async () => {
+    const localYamlPath = join(tempDir, 'cluster.local.yaml');
+    writeFileSync(localYamlPath, 'workers: 1\notherField: keepMe\n');
 
-    await updateClusterYaml(yamlPath, 5);
+    await updateClusterLocalYaml(localYamlPath, 5);
 
-    const content = readFileSync(yamlPath, 'utf-8');
+    const content = readFileSync(localYamlPath, 'utf-8');
     expect(content).toContain('workers: 5');
-    expect(content).toContain('channel: stable');
-    expect(content).toContain('variant: cluster-base');
+    expect(content).toContain('otherField: keepMe');
   });
 
-  it('creates cluster.yaml when it does not exist', async () => {
-    const yamlPath = join(tempDir, 'cluster.yaml');
-    expect(existsSync(yamlPath)).toBe(false);
+  it('creates cluster.local.yaml when it does not exist', async () => {
+    const localYamlPath = join(tempDir, 'cluster.local.yaml');
+    expect(existsSync(localYamlPath)).toBe(false);
 
-    await updateClusterYaml(yamlPath, 2);
+    await updateClusterLocalYaml(localYamlPath, 2);
 
-    const content = readFileSync(yamlPath, 'utf-8');
+    const content = readFileSync(localYamlPath, 'utf-8');
     expect(content).toContain('workers: 2');
   });
 });
@@ -793,12 +805,12 @@ describe('scaleWorkers .env sync (#708)', () => {
     // Warning emitted.
     const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(warnMessages.some((m) => /WORKER_COUNT sync to .env skipped: file not found/.test(m))).toBe(true);
-    // cluster.yaml still updated.
-    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 2');
+    // cluster.local.yaml still updated (runtime state, per #709).
+    const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+    expect(localYaml).toContain('workers: 2');
   });
 
-  it('scale to N when env-write throws → scale result unchanged, warning logged, cluster.yaml still updated', async () => {
+  it('scale to N when env-write throws → scale result unchanged, warning logged, cluster.local.yaml still updated', async () => {
     // Make .env a directory so stat() succeeds (skipping the ENOENT branch) but
     // readFile() throws EISDIR — exercises the catch-all warning path.
     const envPath = join(tempDir, '.env');
@@ -811,20 +823,20 @@ describe('scaleWorkers .env sync (#708)', () => {
     const result = await scaleWorkers({ count: 2, engineClient: client as never });
 
     expect(result.actualCount).toBe(2);
-    // cluster.yaml still updated (write happened before the .env failure).
-    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 2');
+    // cluster.local.yaml still updated (write happened before the .env failure).
+    const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+    expect(localYaml).toContain('workers: 2');
     // Warning logged (not the ENOENT-skip path — the generic failure path).
     const warnMessages = warnSpy.mock.calls.map((c) => String(c[0]));
     expect(
       warnMessages.some((m) =>
-        /WORKER_COUNT sync to .env failed:.*cluster\.yaml is the source of truth/.test(m),
+        /WORKER_COUNT sync to .env failed:.*cluster\.local\.yaml is the source of truth/.test(m),
       ),
     ).toBe(true);
     expect(warnMessages.every((m) => !/sync to .env skipped: file not found/.test(m))).toBe(true);
   });
 
-  it('write order: cluster.yaml stays updated when .env write throws after a successful updateClusterYaml', async () => {
+  it('write order: cluster.local.yaml stays updated when .env write throws after a successful updateClusterLocalYaml', async () => {
     // Same setup as the throw test — confirms ordering invariant explicitly.
     const envPath = join(tempDir, '.env');
     mkdirSync(envPath);
@@ -835,8 +847,8 @@ describe('scaleWorkers .env sync (#708)', () => {
 
     await scaleWorkers({ count: 4, engineClient: client as never });
 
-    const yaml = readFileSync(join(tempDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 4');
+    const localYaml = readFileSync(join(tempDir, 'cluster.local.yaml'), 'utf-8');
+    expect(localYaml).toContain('workers: 4');
   });
 });
 

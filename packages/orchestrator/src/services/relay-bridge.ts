@@ -9,10 +9,10 @@
  * Follows the SmeeWebhookReceiver lifecycle pattern (start/stop with running flag).
  */
 
-import { readFileSync, existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import { parse as parseYaml } from 'yaml';
+import { readMergedClusterConfig } from '@generacy-ai/config';
 import type { FastifyInstance } from 'fastify';
 import type { SSESubscriptionManager } from '../sse/subscriptions.js';
 import type {
@@ -541,8 +541,8 @@ export class RelayBridge {
       // init-result.json may not exist yet — graceful degradation
     }
 
-    // Add cluster.yaml fields if available
-    const clusterData = this.readClusterYaml();
+    // Add merged cluster.yaml / cluster.local.yaml fields if available
+    const clusterData = await this.readClusterYaml();
     if (clusterData) {
       if (clusterData.workers !== undefined) {
         metadata.workers = clusterData.workers;
@@ -605,17 +605,14 @@ export class RelayBridge {
     }
   }
 
-  private readClusterYaml(): { workers?: number; channel?: 'preview' | 'stable' } | null {
+  private async readClusterYaml(): Promise<{ workers?: number; channel?: 'preview' | 'stable' } | null> {
     try {
-      const yamlPath = resolve(this.config.clusterYamlPath);
-      if (!existsSync(yamlPath)) return null;
-
-      const content = readFileSync(yamlPath, 'utf-8');
-      const parsed = parseYaml(content);
+      const generacyDir = dirname(resolve(this.config.clusterYamlPath));
+      const { merged } = await readMergedClusterConfig(generacyDir);
 
       return {
-        workers: typeof parsed?.workers === 'number' ? parsed.workers : undefined,
-        channel: parsed?.channel === 'preview' || parsed?.channel === 'stable' ? parsed.channel : undefined,
+        workers: typeof merged.workers === 'number' ? merged.workers : undefined,
+        channel: merged.channel === 'preview' || merged.channel === 'stable' ? merged.channel : undefined,
       };
     } catch {
       return null;
