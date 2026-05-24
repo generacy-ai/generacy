@@ -55,13 +55,13 @@ Sequential within this phase — T007 → T008 → T009/T010 → T011 → T012. 
 
 <!-- Phase boundary: Complete Phase 3 before writing the integration tests in T013 -->
 
-- [ ] T013 [US1, US2] Add or extend `packages/orchestrator/test/relay-bridge.test.ts` to cover the four scenarios from `plan.md` §"Project Structure":
+- [X] T013 [US1, US2] Add or extend `packages/orchestrator/test/relay-bridge.test.ts` to cover the four scenarios from `plan.md` §"Project Structure":
   1. **Running count** — stub `engineClient.listContainers` to return 2 running + 1 exited; assert `collectMetadata().workers === 2`.
   2. **Engine error omission** — stub `engineClient` to throw `DockerDaemonUnavailableError`; assert `metadata.workers` is `undefined` and the rest of the payload is sent.
   3. **NOT_COMPOSE_MANAGED omission** — stub `computeProjectName` to throw `ORCHESTRATOR_NOT_COMPOSE_MANAGED`; assert subscription is not opened in `start()` and `metadata.workers` is omitted from heartbeats.
   4. **Event-driven refresh** — stub `streamContainerEvents` to yield `{ Action: 'die' }`; assert `sendMetadata` is invoked within 100ms (per `contracts/docker-events-subscription.md` §"Conformance test cases" case 1).
   Also assert filter shape and cancellation behavior (cases 2 and 3 from the same contract section).
-- [ ] T014 [P] [US1] Add `packages/control-plane/test/worker-enumeration.test.ts` as a thin smoke test confirming `enumerateWorkers`, `computeProjectName`, and `WorkerReplica` are importable from both `./services/worker-enumeration.js` and `@generacy-ai/control-plane`. Existing `worker-scaler.test.ts` continues to cover behavior; do not duplicate.
+- [X] T014 [P] [US1] Add `packages/control-plane/test/worker-enumeration.test.ts` as a thin smoke test confirming `enumerateWorkers`, `computeProjectName`, and `WorkerReplica` are importable from both `./services/worker-enumeration.js` and `@generacy-ai/control-plane`. Existing `worker-scaler.test.ts` continues to cover behavior; do not duplicate.
 
 ## Phase 5: Manual Verification
 
