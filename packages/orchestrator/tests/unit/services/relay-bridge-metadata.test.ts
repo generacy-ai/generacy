@@ -23,15 +23,23 @@ vi.mock('../../../src/services/code-server-probe.js', () => ({
   probeCodeServerSocket: vi.fn(async () => false),
 }));
 
+vi.mock('../../../src/services/control-plane-probe.js', () => ({
+  probeControlPlaneSocket: vi.fn(async () => false),
+}));
+
 import { probeCodeServerSocket } from '../../../src/services/code-server-probe.js';
 import { RelayBridge } from '../../../src/services/relay-bridge.js';
 import type { ClusterRelayClient } from '../../../src/types/relay.js';
 import type { SSESubscriptionManager } from '../../../src/sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
+import type { DockerEngineClient } from '@generacy-ai/control-plane';
 
 const mockProbe = vi.mocked(probeCodeServerSocket);
 
-function createRelayBridge(clusterYamlPath = '/nonexistent/cluster.yaml'): RelayBridge {
+function createRelayBridge(
+  clusterYamlPath = '/nonexistent/cluster.yaml',
+  engineClient?: DockerEngineClient,
+): RelayBridge {
   const fakeClient = {
     connect: vi.fn(),
     disconnect: vi.fn(),
@@ -46,6 +54,20 @@ function createRelayBridge(clusterYamlPath = '/nonexistent/cluster.yaml'): Relay
     broadcast: vi.fn(),
   } as unknown as SSESubscriptionManager;
 
+  // Default engineClient: rejects inspectContainer so computeProjectName falls
+  // through to throwing ORCHESTRATOR_NOT_COMPOSE_MANAGED. collectMetadata then
+  // omits the `workers` field — matching #714 clarification C4.
+  const defaultEngineClient: DockerEngineClient = engineClient ?? ({
+    inspectContainer: vi.fn().mockRejectedValue(new Error('no inspect')),
+    listContainers: vi.fn().mockResolvedValue([]),
+    streamContainerEvents: vi.fn().mockReturnValue({
+      [Symbol.asyncIterator]: () => ({
+        next: () => Promise.resolve({ value: undefined, done: true }),
+        return: () => Promise.resolve({ value: undefined, done: true }),
+      }),
+    }),
+  } as unknown as DockerEngineClient);
+
   return new RelayBridge({
     client: fakeClient,
     server: fakeServer,
@@ -55,6 +77,7 @@ function createRelayBridge(clusterYamlPath = '/nonexistent/cluster.yaml'): Relay
       metadataIntervalMs: 60000,
       clusterYamlPath,
     } as any,
+    engineClient: defaultEngineClient,
   });
 }
 
@@ -86,7 +109,7 @@ describe('RelayBridge.collectMetadata — codeServerReady', () => {
   });
 });
 
-describe('RelayBridge.collectMetadata — cluster.yaml + cluster.local.yaml merge (#709)', () => {
+describe('RelayBridge.collectMetadata — cluster.yaml + cluster.local.yaml merge (#709, #714)', () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -98,7 +121,7 @@ describe('RelayBridge.collectMetadata — cluster.yaml + cluster.local.yaml merg
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('reads workers and channel from cluster.yaml when no local file exists', async () => {
+  it('reads channel from cluster.yaml; workers is omitted (sourced from engineClient, not YAML)', async () => {
     writeFileSync(
       join(tempDir, 'cluster.yaml'),
       'channel: stable\nworkers: 2\n',
@@ -107,11 +130,13 @@ describe('RelayBridge.collectMetadata — cluster.yaml + cluster.local.yaml merg
     const bridge = createRelayBridge(join(tempDir, 'cluster.yaml'));
     const metadata = await bridge.collectMetadata();
 
-    expect(metadata.workers).toBe(2);
+    // Per #714 C4, the declared `workers` value in cluster.yaml is *never*
+    // copied into metadata — the Engine API is the only source of truth.
+    expect(metadata.workers).toBeUndefined();
     expect(metadata.channel).toBe('stable');
   });
 
-  it('cluster.local.yaml workers overrides cluster.yaml workers in metadata', async () => {
+  it('reads channel from cluster.yaml; cluster.local.yaml workers no longer affects metadata', async () => {
     writeFileSync(
       join(tempDir, 'cluster.yaml'),
       'channel: stable\nworkers: 1\n',
@@ -121,7 +146,9 @@ describe('RelayBridge.collectMetadata — cluster.yaml + cluster.local.yaml merg
     const bridge = createRelayBridge(join(tempDir, 'cluster.yaml'));
     const metadata = await bridge.collectMetadata();
 
-    expect(metadata.workers).toBe(7);
+    // The local-override file is still read by the scaler, but the relay's
+    // workers field is now Engine-sourced regardless (#714).
+    expect(metadata.workers).toBeUndefined();
     expect(metadata.channel).toBe('stable');
   });
 

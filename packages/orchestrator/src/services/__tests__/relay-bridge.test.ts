@@ -4,10 +4,15 @@ vi.mock('../code-server-probe.js', () => ({
   probeCodeServerSocket: vi.fn(async () => false),
 }));
 
+vi.mock('../control-plane-probe.js', () => ({
+  probeControlPlaneSocket: vi.fn(async () => false),
+}));
+
 import { RelayBridge } from '../relay-bridge.js';
 import type { ClusterRelayClient, RelayMessage, RelayBridgeOptions } from '../../types/relay.js';
 import type { SSESubscriptionManager } from '../../sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
+import type { DockerEngineClient } from '@generacy-ai/control-plane';
 
 describe('RelayBridge', () => {
   let bridge: RelayBridge;
@@ -30,6 +35,7 @@ describe('RelayBridge', () => {
     warn: Mock;
     error: Mock;
   };
+  let mockEngineClient: DockerEngineClient;
   let mockConfig: RelayBridgeOptions['config'];
 
   // Capture registered event handlers from mock client
@@ -78,12 +84,29 @@ describe('RelayBridge', () => {
       clusterYamlPath: '.generacy/cluster.yaml',
     };
 
+    mockEngineClient = {
+      // computeProjectName tries inspectContainer first; reject so it falls
+      // through to the env-var check and ultimately throws
+      // ORCHESTRATOR_NOT_COMPOSE_MANAGED, which collectMetadata catches and
+      // omits the workers field. start() also short-circuits the event
+      // subscription on that error.
+      inspectContainer: vi.fn().mockRejectedValue(new Error('no inspect')),
+      listContainers: vi.fn().mockResolvedValue([]),
+      streamContainerEvents: vi.fn().mockReturnValue({
+        [Symbol.asyncIterator]: () => ({
+          next: () => Promise.resolve({ value: undefined, done: true }),
+          return: () => Promise.resolve({ value: undefined, done: true }),
+        }),
+      }),
+    } as unknown as DockerEngineClient;
+
     bridge = new RelayBridge({
       client: mockClient as unknown as ClusterRelayClient,
       server: mockServer as unknown as FastifyInstance,
       sseManager: mockSseManager as unknown as SSESubscriptionManager,
       logger: mockLogger,
       config: mockConfig,
+      engineClient: mockEngineClient,
     });
   });
 
