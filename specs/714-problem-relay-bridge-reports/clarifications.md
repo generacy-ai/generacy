@@ -10,7 +10,7 @@
 - B: `RelayBridge` lazily constructs its own `DockerEngineClient` on first `collectMetadata()` call and caches it as a private field for subsequent calls.
 - C: Have `RelayBridge` call control-plane over its existing Unix socket (e.g. a new `GET /workers` endpoint) so the orchestrator never opens the Docker socket itself.
 
-**Answer**: *Pending*
+**Answer**: **A — inject `DockerEngineClient` via `RelayBridgeOptions`.** Orchestrator constructs one client at boot in `server.ts` and injects it. Single shared instance across future Engine-using paths (per-worker liveness, container-event subscription per Q3, etc.) — no risk of multiple clients fighting over the same socket. Easier to test (mock client passes through options). B hides a server-wide resource lifecycle inside a single consumer; C adds a network hop and serialization boundary for data already on a Unix socket the orchestrator can reach directly.
 
 ---
 
@@ -22,7 +22,7 @@
 - B: Extract a small new shared package (e.g. `@generacy-ai/docker-engine` or move into an existing types-only package) holding `DockerEngineClient`, `enumerateWorkers`, `computeProjectName`, and shared types; both control-plane and orchestrator depend on it.
 - C: Leave the helpers in control-plane but re-export them from a leaf-style submodule path (e.g. `@generacy-ai/control-plane/worker-enumeration`) that has no transitive coupling back to orchestrator-only code.
 
-**Answer**: *Pending*
+**Answer**: **A — move helpers into `@generacy-ai/control-plane`'s public exports.** Orchestrator already depends on the package; adding exports is the smallest change with zero new workspace plumbing. The helpers don't depend on anything orchestrator-specific, so no circular-dep risk. B is premature extraction — two consumers don't justify a new workspace package and its build/version/release overhead. C solves a coupling problem that doesn't exist. Practical move: lift them from `packages/control-plane/src/services/worker-scaler.ts` into a new `packages/control-plane/src/services/worker-enumeration.ts`, keep worker-scaler importing from there, and add the named exports to `packages/control-plane/src/index.ts`.
 
 ---
 
@@ -34,7 +34,7 @@
 - B: Subscribe to Docker Engine events (`/events?filters=...service=worker`) in `RelayBridge` (or control-plane) and call `sendMetadata()` on `die`/`start`/`destroy` events. Keeps heartbeat at 60s but reacts immediately.
 - C: Relax the success criterion — accept up to ~60s latency for non-scaler-driven changes, and update SC-002 / US1's acceptance bullets to match.
 
-**Answer**: *Pending*
+**Answer**: **B — subscribe to Docker Engine events; fire `sendMetadata()` on container lifecycle events.** The 10s SLA was deliberate; relaxing it (C) gives up responsiveness without a real cost saving. A (drop interval to 10s) does 6× more relay chatter for the whole metadata payload — worker counts change rarely; the rest of the payload almost never changes between calls. Subscribe once at boot to `GET /events?filters={"label":["com.docker.compose.project=<name>","com.docker.compose.service=worker"],"type":["container"]}`; fire `sendMetadata()` on `die`/`start`/`destroy`/`create`. Keep the 60s heartbeat for the rest. Engine API events is a long-lived HTTP stream — needs reconnection on close/error; reuse RelayBridge's WebSocket reconnect pattern. Also a foundation for future per-worker liveness tracking.
 
 ---
 
@@ -46,4 +46,4 @@
 - B: Fall back to the declared YAML value (`readClusterYaml().workers`) — i.e. preserve today's behavior in failure cases only. Honest in the common case, degrades to declared-value behavior on failure.
 - C: Distinguish the two failure modes: omit on transient Engine errors (per FR-003); fall back to declared YAML on `ORCHESTRATOR_NOT_COMPOSE_MANAGED` (dev mode only).
 
-**Answer**: *Pending*
+**Answer**: **A — omit `metadata.workers` on Engine API or project-name lookup failure.** Strict honesty. Cloud UI's tile already handles absence of `workers` (`cluster?.workers?.total ?? 1` and similar). Showing nothing when we don't know is more honest than alternatives. C is tempting but the YAML value in dev-mode is misleading — a developer running `pnpm dev` typically has zero worker containers but a `cluster.yaml` declaring 3; showing 3 is worse than showing nothing. B regresses to the bug this issue exists to fix during failure windows. A also gives cloud UI a clear signal for surfacing "cluster metadata unavailable" / stale-state badges later — with B/C, the UI can't distinguish honest-zero from we-don't-know.

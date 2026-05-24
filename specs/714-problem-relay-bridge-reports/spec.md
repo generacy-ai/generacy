@@ -1,103 +1,155 @@
-# Feature Specification: Report Actual Running Worker Count in Relay Metadata
+# Feature Specification: ## Problem
+
+The relay-bridge reports \`metadata
 
 **Branch**: `714-problem-relay-bridge-reports` | **Date**: 2026-05-24 | **Status**: Draft
-**Issue**: [#714](https://github.com/generacy-ai/generacy/issues/714)
 
 ## Summary
 
-The orchestrator's relay-bridge currently reports `metadata.workers` based on the **declared** value in `cluster.yaml` / `cluster.local.yaml` rather than the **actual** running worker container count. The cloud UI's "Workers: N (X busy, Y idle)" tile therefore lies whenever the declared and actual counts diverge — which happens on every Flow B launch (template ships `workers: 3`, CLI scaffolder writes `WORKER_COUNT=1`), on any worker crash, and on any manual `docker stop`.
-
-Fix: enumerate worker containers via the Engine API (reusing `computeProjectName` and `enumerateWorkers` from `worker-scaler.ts`, added in [#706](https://github.com/generacy-ai/generacy/issues/706)) inside `relay-bridge.ts`'s `collectMetadata()` and report the count of `state === 'running'` replicas as `metadata.workers`.
-
 ## Problem
 
-[`packages/orchestrator/src/services/relay-bridge.ts:608-620`](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/services/relay-bridge.ts#L608-L620) reads `merged.workers` from `readMergedClusterConfig(generacyDir)` and forwards it as `metadata.workers`. The cloud's relay-server maps it to `regUpdate.workers = { total: m.workers, busy: 0, idle: m.workers }` in Firestore, so the UI tile's `total` is the declared YAML value all the way through.
+The relay-bridge reports \`metadata.workers\` based on the **declared** value in \`cluster.yaml\` / \`cluster.local.yaml\` rather than the **actual** running worker container count. This makes the cloud UI's \"Workers: N (X busy, Y idle)\" tile inaccurate any time the two values diverge.
 
-**Reproduction** (Flow B project):
+Confirmed on a fresh project created via cloud UI → \`npx generacy launch\` (Flow B):
 
-```
-$ docker ps --filter "label=com.docker.compose.project=microservices-test-1" \
+\`\`\`
+$ docker ps --filter "label=com.docker.compose.project=microservices-test-1" \\
             --filter "label=com.docker.compose.service=worker" --format '{{.Names}}'
 microservices-test-1-worker-1
 # 1 worker actually running
 
 $ cat /workspaces/microservices-test-1/.generacy/cluster.yaml
 workers: 3
+# template default; not what's actually running
 
 # Cloud UI displays: "3 workers (0 busy, 3 idle)"   ❌ should be 1
-```
+\`\`\`
 
-**Divergence sources**:
-- Template default: `cluster.yaml` ships with `workers: 3` (cluster-{base,microservices}).
-- CLI scaffolder default: `packages/generacy/src/cli/commands/launch/scaffolder.ts:75` writes `WORKER_COUNT=1` in `.env`.
-- Crash: worker container exits, declared still says N.
-- Manual ops: `docker stop` on a worker.
-- Future cloud-deployed scaling drift.
+Why the divergence:
 
-The Cluster Metadata tile is meant to show cluster **state**, not declared **intent**. The Cluster Config tab already surfaces the declared YAML value via `getClusterConfig`.
+- Template's \`cluster.yaml\` ships with \`workers: 3\` (cluster-{base,microservices} default).
+- The CLI's \`npx generacy launch\` host-side scaffolder writes its own \`.env\` with \`WORKER_COUNT=1\` (a different default — see \`packages/generacy/src/cli/commands/launch/scaffolder.ts:75\`).
+- Host's compose uses host's \`.env\` → 1 worker actually runs.
+- Orchestrator's relay-bridge reads \`cluster.yaml\` (declared: 3) and reports that as \`metadata.workers\`.
+
+Even ignoring the template-default mismatch (filed separately at [generacy-cloud#694](https://github.com/generacy-ai/generacy-cloud/issues/694)), this divergence will happen any time:
+
+- A worker container crashes (declared still says N, actual is N−1).
+- The user manually \`docker stop\`s a worker.
+- Future cloud-deployed scaling lands and the orchestrator-managed actual count drifts from the YAML.
+
+The UI is supposed to show the user the *state* of their cluster, not its declared *intent*.
+
+## Root cause
+
+[\`relay-bridge.ts:608-620\`](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/services/relay-bridge.ts#L608-L620):
+
+\`\`\`ts
+private async readClusterYaml() {
+  const { merged } = await readMergedClusterConfig(generacyDir);
+  return {
+    workers: typeof merged.workers === 'number' ? merged.workers : undefined,
+    ...
+  };
+}
+\`\`\`
+
+The result of this is passed into the metadata payload's \`workers\` field. The cloud's relay-server then writes \`regUpdate.workers = { total: m.workers, busy: 0, idle: m.workers }\` to Firestore.
+
+So the \`total\` displayed in the UI is the declared YAML value all the way through.
+
+## Fix
+
+Enumerate worker containers via the Engine API (the same DockerEngineClient added by [#706](https://github.com/generacy-ai/generacy/issues/706) for worker-scale) and report the actual count. The orchestrator already has Docker socket access on every variant (cluster-base via host socket DooD, cluster-microservices DinD also has the socket).
+
+\`\`\`ts
+// In relay-bridge.ts collectMetadata():
+const project = await computeProjectName(this.engineClient);  // already exists
+const replicas = await enumerateWorkers(this.engineClient, project);  // already exists
+
+const runningCount = replicas.filter(r => r.state === 'running').length;
+const exitedCount  = replicas.length - runningCount;
+
+metadata.workers = runningCount;  // truth, not declaration
+// Optional: also expose exited for observability
+\`\`\`
+
+\`computeProjectName\` and \`enumerateWorkers\` are already exported from \`packages/control-plane/src/services/worker-scaler.ts\` — they can move into the engine-client package or be re-exported. Either way, no new dependencies.
+
+For the cloud-side payload shape, the existing field is \`metadata.workers: number\`, and the relay-server maps it to \`{ total, busy, idle }\`. After the fix:
+
+- \`total\` = actual running container count.
+- \`busy\` / \`idle\` — still \`0\` / \`total\` until real per-worker liveness tracking lands (separate concern, not regressed by this issue).
+
+### What about the declared value?
+
+The Cluster Config tab's YAML view shows the declared value already (via \`getClusterConfig\` reading \`.generacy/cluster.yaml\` through the relay). That's the right place for it. The Cluster Metadata tile at the top of the page is for **state**, not **declaration**, and should show actual.
+
+If product wants both surfaced together, the metadata payload could carry \`workers: number\` (actual) plus \`declaredWorkers: number\` (from YAML) — but that's a UI-design call and out of scope for this fix. The immediate bug is \"the tile lies\"; reporting actual is the minimum fix.
+
+## Acceptance
+
+- On a cluster with N running worker containers, \`metadata.workers\` equals N regardless of what \`cluster.yaml\` says.
+- Manually stopping a worker (\`docker stop <name>\`) updates the metadata payload on the next refresh; the UI tile drops to N−1 within ~10s.
+- After a successful worker-scale operation, the new count matches the new running container count (already the case via the existing \`refresh-metadata\` trigger; this fix just makes the source value honest).
+
+## Related
+
+- [generacy-cloud#694](https://github.com/generacy-ai/generacy-cloud/issues/694) — fixes the template-defaults side (cluster.yaml ships with the user's tier-appropriate value). Both are needed for new Free-tier projects to land in a sensible \"Using 1 of 1 workers\" state out of the box.
+- [#706](https://github.com/generacy-ai/generacy/issues/706) — added the Engine API client and \`enumerateWorkers\` helper this fix reuses.
+
+## Clarifications (resolved 2026-05-24)
+
+These decisions are resolved and binding on the implementation. See `clarifications.md` for the full reasoning.
+
+- **C1 — Engine client provisioning**: `RelayBridge` receives a `DockerEngineClient` via `RelayBridgeOptions`. The orchestrator constructs one client at boot in `server.ts` and injects it; `RelayBridge` reuses it across calls.
+- **C2 — Helper location**: Move `enumerateWorkers`, `computeProjectName`, and `WorkerReplica` from `packages/control-plane/src/services/worker-scaler.ts` into a new `packages/control-plane/src/services/worker-enumeration.ts`. Keep `worker-scaler.ts` importing from there. Export the helpers from `packages/control-plane/src/index.ts` so orchestrator can import them from `@generacy-ai/control-plane`.
+- **C3 — Responsiveness target (~10s)**: Subscribe to Docker Engine events at boot — `GET /events?filters={"label":["com.docker.compose.project=<name>","com.docker.compose.service=worker"],"type":["container"]}` — and call `RelayBridge.sendMetadata()` on `die` / `start` / `destroy` / `create` events. Keep the 60s heartbeat interval (`metadataIntervalMs`) unchanged for the rest of the metadata payload. The event stream must reconnect on close/error (reuse RelayBridge's WebSocket reconnect pattern).
+- **C4 — Failure behavior**: If `computeProjectName()` or `enumerateWorkers()` fails (Engine unreachable, `ORCHESTRATOR_NOT_COMPOSE_MANAGED`, transient errors, etc.), **omit** `metadata.workers` from the payload. Do NOT fall back to the YAML-declared value. The cloud UI already handles the absent-field case.
+
+### Implied scope additions
+
+- A new `packages/control-plane/src/services/worker-enumeration.ts` module (extraction; no behavioral change in control-plane).
+- A new long-lived Docker Engine event subscription in `RelayBridge` (or a small helper it owns), with reconnect/backoff. Subscribed filter scoped to the current compose project + `service=worker` label.
+- `RelayBridgeOptions.engineClient: DockerEngineClient` field added; orchestrator's `server.ts` constructs the client and passes it in.
+
+### Out of scope (deferred)
+
+- Per-worker liveness / `busy` / `idle` tracking — the cloud's `{ total, busy, idle }` mapping continues to set `busy = 0`, `idle = total` until a separate per-worker liveness mechanism lands.
+- Surfacing both actual and declared counts side-by-side in the UI — a product/UI decision tracked elsewhere.
+- Lowering `metadataIntervalMs` below 60s.
 
 ## User Stories
 
-### US1: Accurate Worker Count in Cloud UI
+### US1: [Primary User Story]
 
-**As a** Generacy user viewing the Cluster Metadata tile in the cloud UI,
-**I want** the "Workers" count to reflect how many worker containers are actually running,
-**So that** I can tell at a glance whether my cluster is healthy and how much capacity it actually has.
-
-**Acceptance Criteria**:
-- [ ] On a cluster with N running worker containers, the tile shows N regardless of what `cluster.yaml` declares.
-- [ ] After `docker stop`ing a worker, the tile reflects the lower count within ~10s (next metadata refresh).
-- [ ] After a successful worker-scale operation, the count matches the new running container count.
-
-### US2: Honest Telemetry for Debugging
-
-**As a** developer or operator debugging a cluster,
-**I want** `metadata.workers` in relay messages to mean "actual" not "declared",
-**So that** I can correlate the UI state with what the host's Docker engine actually reports without having to know which value lies.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `metadata.workers` field in relay handshake/heartbeat payloads matches `docker ps --filter "label=com.docker.compose.service=worker" --filter "status=running"` count.
-- [ ] When the Engine API call fails, the field is `undefined` (omitted) rather than a stale or fabricated number.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `collectMetadata()` in `relay-bridge.ts` enumerates worker containers via `enumerateWorkers(engineClient, project)` and reports the count of replicas with `state === 'running'` as `metadata.workers`. | P0 | Replaces current `readClusterYaml().workers` source for this field. |
-| FR-002 | `metadata.workers` reflects actual running count on every metadata emission path (initial handshake, periodic heartbeat, `refresh-metadata` trigger, post code-server status change). | P0 | All callers of `collectMetadata()` / `sendMetadata()` benefit transparently. |
-| FR-003 | On Engine API failure (Docker unreachable, network error, etc.), `metadata.workers` is omitted from the payload rather than set to a stale or zero value. | P1 | Match existing `controlPlaneReady` / `codeServerReady` failure semantics: graceful undefined. |
-| FR-004 | `computeProjectName` and `enumerateWorkers` are accessible to `relay-bridge.ts` without circular dependency from `@generacy-ai/orchestrator` → `@generacy-ai/control-plane`. | P0 | Either move helpers into the engine-client package or re-export from a shared location. |
-| FR-005 | The relay-bridge's existing `engineClient` instance (already used by other metadata paths) is reused for the worker enumeration — no new Docker socket connection. | P1 | Avoid resource churn. |
-| FR-006 | The declared YAML `workers` value remains available to the cloud UI through the existing `getClusterConfig` relay endpoint reading `.generacy/cluster.yaml`. | P0 | No regression in Cluster Config tab. |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Tile accuracy on fresh Flow B project (`workers: 3` declared, `WORKER_COUNT=1` in `.env`) | Tile shows `1`, not `3` | Manual verification in cloud UI after `npx generacy launch` |
-| SC-002 | Tile responsiveness to manual stop | Tile drops from N to N−1 within 10s of `docker stop <worker>` | Manual verification; relay metadata heartbeat interval |
-| SC-003 | Post-scale accuracy | After scaling 1→3 via worker-scaler, tile shows `3` | Existing `refresh-metadata` trigger after scale; verify in UI |
-| SC-004 | No regression in declared-value surface | Cluster Config tab still shows `workers: 3` when YAML says so | Manual verification |
-| SC-005 | Engine API failure handling | When Docker socket unreachable, payload contains no `workers` field rather than a wrong number | Inject failure (e.g. wrong socket path); inspect emitted payload |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The orchestrator process has Docker socket access on all supported variants (confirmed: cluster-base uses host-socket DooD, cluster-microservices DinD also exposes the socket).
-- The compose project name resolution via `computeProjectName(engineClient)` returns the correct project for both Flow A and Flow B clusters (already battle-tested by #706's worker-scaler).
-- The `worker` service label (`com.docker.compose.service=worker`) is stable across cluster-base and cluster-microservices variants.
-- Cloud-side payload shape `metadata.workers: number` is unchanged — only the source of the value changes. Cloud relay-server's `regUpdate.workers = { total: m.workers, busy: 0, idle: m.workers }` mapping stays intact.
+- [Assumption 1]
 
 ## Out of Scope
 
-- **Per-worker liveness tracking** (real `busy` / `idle` split). Cloud still receives `busy: 0, idle: total` until a separate effort lands.
-- **Exposing both declared and actual values** in the same metadata payload (e.g. `workers` + `declaredWorkers`). UI-design call deferred; this fix is the minimum truthful payload.
-- **Template default mismatch** (`cluster.yaml` ships with `workers: 3` vs CLI's `WORKER_COUNT=1`). Tracked at [generacy-cloud#694](https://github.com/generacy-ai/generacy-cloud/issues/694).
-- **Exited / failed worker count as a separate field** (`exitedWorkers`). The fix snippet mentions this as optional observability; not in scope unless cloud UI asks for it.
-
-## Related
-
-- [#706](https://github.com/generacy-ai/generacy/issues/706) — added the `DockerEngineClient`, `computeProjectName`, and `enumerateWorkers` helpers this fix reuses.
-- [generacy-cloud#694](https://github.com/generacy-ai/generacy-cloud/issues/694) — fixes the template-defaults side so new Free-tier projects ship with `workers: 1`.
+- [Exclusion 1]
 
 ---
 
