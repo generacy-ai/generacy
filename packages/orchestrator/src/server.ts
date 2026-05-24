@@ -49,7 +49,7 @@ import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
 import { PostActivationRetryService } from './services/post-activation-retry.js';
-import { TunnelHandler, getCodeServerManager } from '@generacy-ai/control-plane';
+import { TunnelHandler, getCodeServerManager, DockerEngineClient } from '@generacy-ai/control-plane';
 import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 import { setupInternalRefreshMetadataRoute } from './routes/internal-refresh-metadata.js';
 
@@ -774,12 +774,19 @@ async function initializeRelayBridge(
       setRelayClient(relayClient);
     }
 
+    // Single Docker Engine client shared across all relay-driven Engine paths
+    // (worker enumeration in collectMetadata, container lifecycle event
+    // subscription in start()). Picks up DOCKER_HOST from env or falls back
+    // to /var/run/docker-host.sock.
+    const engineClient = new DockerEngineClient();
+
     relayBridge = new RelayBridge({
       client: relayClient,
       server,
       sseManager: getSSESubscriptionManager(),
       logger: server.log,
       config: config.relay,
+      engineClient,
     });
 
     const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);

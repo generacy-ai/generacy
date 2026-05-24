@@ -126,6 +126,22 @@ export interface NetworkConnectBody {
   EndpointConfig?: NetworkEndpointCreate;
 }
 
+/**
+ * Narrowed shape of a Docker Engine `/events` line. Only the fields we read.
+ * Stable across Engine API v1.41+.
+ */
+export interface EngineEvent {
+  Type: 'container';
+  Action: string;
+  id?: string;
+  Actor?: {
+    ID?: string;
+    Attributes?: Record<string, string>;
+  };
+  time?: number;
+  timeNano?: number;
+}
+
 export class DockerEngineError extends Error {
   override readonly name = 'DockerEngineError';
   readonly statusCode: number;

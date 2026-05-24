@@ -13,6 +13,11 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { readMergedClusterConfig } from '@generacy-ai/config';
+import {
+  type DockerEngineClient,
+  computeProjectName,
+  enumerateWorkers,
+} from '@generacy-ai/control-plane';
 import type { FastifyInstance } from 'fastify';
 import type { SSESubscriptionManager } from '../sse/subscriptions.js';
 import type {
@@ -40,12 +45,18 @@ export interface TunnelHandlerLike {
   cleanup(): void;
 }
 
+const WORKER_EVENT_BACKOFF_INITIAL_MS = 5_000;
+const WORKER_EVENT_BACKOFF_MAX_MS = 60_000;
+const WORKER_EVENT_RESET_BACKOFF_AFTER_MS = 30_000;
+const WORKER_EVENT_ACTIONS = new Set(['create', 'start', 'die', 'destroy']);
+
 export class RelayBridge {
   private readonly client: ClusterRelayClient;
   private readonly server: FastifyInstance;
   private readonly sseManager: SSESubscriptionManager;
   private readonly logger: RelayBridgeOptions['logger'];
   private readonly config: RelayBridgeOptions['config'];
+  private readonly engineClient: DockerEngineClient;
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;
   private statusReporter: StatusReporter | null = null;
@@ -54,6 +65,14 @@ export class RelayBridge {
   private running = false;
   private metadataTimer: NodeJS.Timeout | null = null;
   private originalBroadcast: SSESubscriptionManager['broadcast'] | null = null;
+
+  // Worker event subscription state
+  private workerEventAbort: AbortController | null = null;
+  private workerEventReconnectTimer: NodeJS.Timeout | null = null;
+  private workerEventBackoffMs: number = WORKER_EVENT_BACKOFF_INITIAL_MS;
+  private cachedProjectName: string | null = null;
+  private workerEventSubscriptionSkipped = false;
+  private workerCountOmissionWarned = false;
 
   private readonly messageHandler: (msg: RelayMessage) => void;
   private readonly connectedHandler: () => void;
@@ -66,6 +85,7 @@ export class RelayBridge {
     this.sseManager = options.sseManager;
     this.logger = options.logger;
     this.config = options.config;
+    this.engineClient = options.engineClient;
 
     // Bind handlers once so they can be removed with off()
     this.messageHandler = (msg: RelayMessage) => this.handleMessage(msg);
@@ -99,6 +119,11 @@ export class RelayBridge {
         'Relay connection failed, continuing in local-only mode',
       );
     }
+
+    // Subscribe to Docker Engine container lifecycle events so the workers
+    // tile in the cloud UI updates within ~10s of a `docker stop` (#714).
+    // Fire-and-forget — the loop owns its own reconnect/backoff.
+    this.startWorkerEventSubscription();
   }
 
   /**
@@ -111,6 +136,13 @@ export class RelayBridge {
 
     // Clear metadata timer
     this.clearMetadataTimer();
+
+    // Stop the worker event subscription and any pending reconnect.
+    if (this.workerEventAbort) {
+      this.workerEventAbort.abort();
+      this.workerEventAbort = null;
+    }
+    this.clearWorkerEventReconnectTimer();
 
     // Restore original broadcast method
     this.removeEventForwarding();
@@ -487,6 +519,145 @@ export class RelayBridge {
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Worker Event Subscription (Docker Engine /events)
+  // ---------------------------------------------------------------------------
+
+  private startWorkerEventSubscription(): void {
+    if (this.workerEventSubscriptionSkipped) return;
+    if (this.workerEventAbort) return; // already running
+
+    const controller = new AbortController();
+    this.workerEventAbort = controller;
+
+    void this.runWorkerEventLoop(controller);
+  }
+
+  private async runWorkerEventLoop(controller: AbortController): Promise<void> {
+    let project: string;
+    try {
+      project = await this.resolveProjectName();
+    } catch (err) {
+      if (err instanceof Error && err.message === 'ORCHESTRATOR_NOT_COMPOSE_MANAGED') {
+        this.logger.info(
+          'Orchestrator is not compose-managed; skipping worker event subscription',
+        );
+        this.workerEventSubscriptionSkipped = true;
+        this.workerEventAbort = null;
+        return;
+      }
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Failed to resolve compose project name; worker event subscription will retry on reconnect',
+      );
+      this.scheduleWorkerEventReconnect(controller);
+      return;
+    }
+
+    while (!controller.signal.aborted) {
+      const streamOpenedAt = Date.now();
+      let receivedAny = false;
+      try {
+        const stream = this.engineClient.streamContainerEvents({
+          filters: {
+            label: [
+              `com.docker.compose.project=${project}`,
+              'com.docker.compose.service=worker',
+            ],
+            type: ['container'],
+          },
+          signal: controller.signal,
+        });
+        for await (const event of stream) {
+          if (controller.signal.aborted) break;
+          receivedAny = true;
+          // Reset backoff once a stream is healthy.
+          this.workerEventBackoffMs = WORKER_EVENT_BACKOFF_INITIAL_MS;
+          if (event.Type === 'container' && WORKER_EVENT_ACTIONS.has(event.Action)) {
+            this.sendMetadata().catch((sendErr) => {
+              this.logger.warn(
+                { err: sendErr instanceof Error ? sendErr.message : String(sendErr) },
+                'Error sending event-triggered metadata refresh',
+              );
+            });
+          }
+        }
+        if (controller.signal.aborted) break;
+        // Stream closed cleanly (daemon restart etc.) — reconnect.
+        this.logger.info('Docker Engine /events stream ended; reconnecting');
+      } catch (err) {
+        if (controller.signal.aborted) break;
+        const isAbort =
+          err instanceof Error &&
+          (err.name === 'AbortError' || err.message === 'aborted');
+        if (isAbort) break;
+        this.logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'Docker Engine /events subscription error; will reconnect with backoff',
+        );
+      }
+
+      if (controller.signal.aborted) break;
+
+      // Reset backoff if the stream stayed open long enough or received any event.
+      const streamLifetimeMs = Date.now() - streamOpenedAt;
+      if (receivedAny || streamLifetimeMs >= WORKER_EVENT_RESET_BACKOFF_AFTER_MS) {
+        this.workerEventBackoffMs = WORKER_EVENT_BACKOFF_INITIAL_MS;
+      }
+
+      const waited = await this.waitForBackoff(controller);
+      if (!waited) break;
+      this.workerEventBackoffMs = Math.min(
+        this.workerEventBackoffMs * 2,
+        WORKER_EVENT_BACKOFF_MAX_MS,
+      );
+    }
+
+    this.workerEventAbort = null;
+  }
+
+  private waitForBackoff(controller: AbortController): Promise<boolean> {
+    return new Promise<boolean>((resolveWait) => {
+      if (controller.signal.aborted) {
+        resolveWait(false);
+        return;
+      }
+      this.clearWorkerEventReconnectTimer();
+      const timer = setTimeout(() => {
+        controller.signal.removeEventListener('abort', onAbort);
+        this.workerEventReconnectTimer = null;
+        resolveWait(true);
+      }, this.workerEventBackoffMs);
+      this.workerEventReconnectTimer = timer;
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        this.workerEventReconnectTimer = null;
+        resolveWait(false);
+      };
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  private scheduleWorkerEventReconnect(controller: AbortController): void {
+    if (controller.signal.aborted) return;
+    this.clearWorkerEventReconnectTimer();
+    this.workerEventReconnectTimer = setTimeout(() => {
+      this.workerEventReconnectTimer = null;
+      void this.runWorkerEventLoop(controller);
+    }, this.workerEventBackoffMs);
+    this.workerEventBackoffMs = Math.min(
+      this.workerEventBackoffMs * 2,
+      WORKER_EVENT_BACKOFF_MAX_MS,
+    );
+  }
+
+  private clearWorkerEventReconnectTimer(): void {
+    if (this.workerEventReconnectTimer) {
+      clearTimeout(this.workerEventReconnectTimer);
+      this.workerEventReconnectTimer = null;
+    }
+  }
+
   async sendMetadata(): Promise<void> {
     try {
       const metadata = await this.collectMetadata();
@@ -541,18 +712,42 @@ export class RelayBridge {
       // init-result.json may not exist yet — graceful degradation
     }
 
-    // Add merged cluster.yaml / cluster.local.yaml fields if available
+    // Add merged cluster.yaml / cluster.local.yaml fields if available.
+    // Only `channel` is still YAML-sourced; `workers` is enumerated below.
     const clusterData = await this.readClusterYaml();
-    if (clusterData) {
-      if (clusterData.workers !== undefined) {
-        metadata.workers = clusterData.workers;
+    if (clusterData && clusterData.channel !== undefined) {
+      metadata.channel = clusterData.channel;
+    }
+
+    // Workers: enumerate actual running containers from the Docker Engine API.
+    // Omit on any failure (no fallback to YAML) per #714 clarification C4.
+    try {
+      const project = await this.resolveProjectName();
+      const replicas = await enumerateWorkers(this.engineClient, project);
+      metadata.workers = replicas.filter((r) => r.state === 'running').length;
+    } catch (err) {
+      if (!this.workerCountOmissionWarned) {
+        this.logger.warn(
+          { err: err instanceof Error ? err.message : String(err) },
+          'Worker enumeration failed; omitting workers field from relay metadata',
+        );
+        this.workerCountOmissionWarned = true;
       }
-      if (clusterData.channel !== undefined) {
-        metadata.channel = clusterData.channel;
-      }
+      // Field intentionally left undefined.
     }
 
     return metadata;
+  }
+
+  /**
+   * Resolve and cache the compose project name. The value is stable for the
+   * life of the orchestrator process, so we compute it once.
+   */
+  private async resolveProjectName(): Promise<string> {
+    if (this.cachedProjectName) return this.cachedProjectName;
+    const project = await computeProjectName(this.engineClient);
+    this.cachedProjectName = project;
+    return project;
   }
 
   private getVersion(): string {

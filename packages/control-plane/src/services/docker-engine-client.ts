@@ -1,9 +1,10 @@
-import http from 'node:http';
+import http, { type IncomingMessage } from 'node:http';
 import {
   type ContainerSummary,
   type ContainerInspect,
   type ContainerCreateBody,
   type NetworkConnectBody,
+  type EngineEvent,
   DockerEngineError,
   DockerDaemonUnavailableError,
 } from './docker-engine-types.js';
@@ -28,6 +29,24 @@ export interface ListContainersOptions {
 export interface CreateContainerResponse {
   Id: string;
   Warnings?: string[];
+}
+
+export interface StreamContainerEventsOptions {
+  filters: {
+    label?: string[];
+    type?: (
+      | 'container'
+      | 'image'
+      | 'network'
+      | 'volume'
+      | 'service'
+      | 'node'
+      | 'secret'
+      | 'config'
+    )[];
+  };
+  /** Abort the stream. The async iterator returns on abort. */
+  signal?: AbortSignal;
 }
 
 export class DockerEngineClient {
@@ -108,6 +127,199 @@ export class DockerEngineClient {
     const path = `/networks/${encodeURIComponent(networkId)}/connect`;
     const res = await this.request('POST', path, JSON.stringify(body));
     this.assertOk(res, path);
+  }
+
+  /**
+   * Subscribe to the Docker Engine `/events` stream.
+   *
+   * Returns an async iterable that yields one `EngineEvent` per newline-delimited
+   * JSON line from the daemon. The stream is long-lived; consumers should
+   * implement their own reconnect/backoff. The iterator returns when:
+   * - the daemon closes the stream (e.g. its own restart),
+   * - the consumer breaks out of the `for await` loop, or
+   * - `opts.signal` aborts.
+   *
+   * Throws `DockerDaemonUnavailableError` if the initial socket connection is
+   * refused or the socket file is missing.
+   */
+  streamContainerEvents(opts: StreamContainerEventsOptions): AsyncIterable<EngineEvent> {
+    const socketPath = this.socketPath;
+    const filtersParam = encodeURIComponent(JSON.stringify(opts.filters));
+    const path = `/events?filters=${filtersParam}`;
+    const signal = opts.signal;
+
+    return {
+      [Symbol.asyncIterator](): AsyncIterator<EngineEvent> {
+        let res: IncomingMessage | null = null;
+        let buffer = '';
+        let ended = false;
+        const eventQueue: EngineEvent[] = [];
+        let pendingResolve: ((result: IteratorResult<EngineEvent>) => void) | null = null;
+        let pendingReject: ((err: unknown) => void) | null = null;
+        let initError: unknown = null;
+        let connected = false;
+
+        const settle = (): void => {
+          if (!pendingResolve && !pendingReject) return;
+          if (initError && !connected) {
+            const reject = pendingReject;
+            pendingResolve = null;
+            pendingReject = null;
+            reject?.(initError);
+            return;
+          }
+          if (eventQueue.length > 0) {
+            const value = eventQueue.shift()!;
+            const resolve = pendingResolve;
+            pendingResolve = null;
+            pendingReject = null;
+            resolve?.({ value, done: false });
+            return;
+          }
+          if (ended) {
+            const resolve = pendingResolve;
+            pendingResolve = null;
+            pendingReject = null;
+            resolve?.({ value: undefined, done: true });
+          }
+        };
+
+        const handleLine = (line: string): void => {
+          const trimmed = line.trim();
+          if (trimmed.length === 0) return;
+          try {
+            const parsed = JSON.parse(trimmed) as EngineEvent;
+            eventQueue.push(parsed);
+          } catch (err) {
+            console.warn(
+              `[docker-engine-client] skipping malformed /events line: ${trimmed.slice(0, 200)} (${err instanceof Error ? err.message : String(err)})`,
+            );
+          }
+        };
+
+        const req = http.request(
+          {
+            socketPath,
+            path,
+            method: 'GET',
+            headers: { Host: 'docker' },
+          },
+          (response) => {
+            res = response;
+            const statusCode = response.statusCode ?? 0;
+            if (statusCode < 200 || statusCode >= 300) {
+              // Consume body for the error message, then signal initError.
+              let body = '';
+              response.on('data', (chunk: Buffer) => {
+                body += chunk.toString();
+              });
+              response.on('end', () => {
+                initError = new DockerEngineError(statusCode, path, body || '<no body>');
+                settle();
+              });
+              return;
+            }
+            connected = true;
+            response.setEncoding('utf8');
+            response.on('data', (chunk: string) => {
+              buffer += chunk;
+              let idx = buffer.indexOf('\n');
+              while (idx !== -1) {
+                const line = buffer.slice(0, idx);
+                buffer = buffer.slice(idx + 1);
+                handleLine(line);
+                idx = buffer.indexOf('\n');
+              }
+              settle();
+            });
+            response.on('end', () => {
+              if (buffer.length > 0) {
+                handleLine(buffer);
+                buffer = '';
+              }
+              ended = true;
+              settle();
+            });
+            response.on('error', (err) => {
+              if (!ended) {
+                initError = err;
+                ended = true;
+                settle();
+              }
+            });
+          },
+        );
+
+        req.on('error', (err) => {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (!connected) {
+            if (code === 'ECONNREFUSED' || code === 'ENOENT') {
+              initError = new DockerDaemonUnavailableError(socketPath, err);
+            } else {
+              initError = err;
+            }
+          }
+          ended = true;
+          settle();
+        });
+
+        const abortHandler = (): void => {
+          ended = true;
+          try {
+            req.destroy();
+          } catch {
+            // ignore
+          }
+          if (res) {
+            try {
+              res.destroy();
+            } catch {
+              // ignore
+            }
+          }
+          settle();
+        };
+
+        if (signal) {
+          if (signal.aborted) {
+            abortHandler();
+          } else {
+            signal.addEventListener('abort', abortHandler, { once: true });
+          }
+        }
+
+        req.end();
+
+        return {
+          next(): Promise<IteratorResult<EngineEvent>> {
+            return new Promise<IteratorResult<EngineEvent>>((resolve, reject) => {
+              pendingResolve = resolve;
+              pendingReject = reject;
+              settle();
+            });
+          },
+          return(): Promise<IteratorResult<EngineEvent>> {
+            ended = true;
+            try {
+              req.destroy();
+            } catch {
+              // ignore
+            }
+            if (res) {
+              try {
+                res.destroy();
+              } catch {
+                // ignore
+              }
+            }
+            if (signal) {
+              signal.removeEventListener('abort', abortHandler);
+            }
+            return Promise.resolve({ value: undefined, done: true });
+          },
+        };
+      },
+    };
   }
 
   private buildQueryString(query: Record<string, string>): string {
