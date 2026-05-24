@@ -1,17 +1,23 @@
 import { readFile, stat, writeFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { hostname } from 'node:os';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { resolveGeneracyDir } from './project-dir-resolver.js';
 import { DockerEngineClient } from './docker-engine-client.js';
 import {
   type ContainerInspect,
   type ContainerCreateBody,
-  type ContainerState,
   type NetworkEndpointCreate,
   DockerEngineError,
 } from './docker-engine-types.js';
+import {
+  type WorkerReplica,
+  computeProjectName,
+  enumerateWorkers,
+} from './worker-enumeration.js';
+
+// Re-export so existing callers/tests can import these symbols from this module.
+export { computeProjectName, enumerateWorkers, type WorkerReplica };
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -58,14 +64,6 @@ export class PartialScaleError extends Error {
 // ---------------------------------------------------------------------------
 // Internal types
 // ---------------------------------------------------------------------------
-
-export interface WorkerReplica {
-  id: string;
-  number: number;
-  name: string;
-  state: ContainerState;
-  networkIds: string[];
-}
 
 export interface ScalePlan {
   toCreate: number[];
@@ -196,75 +194,6 @@ export function cloneInspectToCreate(
 // ---------------------------------------------------------------------------
 // Engine orchestration helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Discover the compose project name by inspecting the orchestrator's own
- * container. Falls back to COMPOSE_PROJECT_NAME env var. Throws if neither
- * resolves — happens when running outside compose (dev mode, raw docker run).
- */
-export async function computeProjectName(client: DockerEngineClient): Promise<string> {
-  const selfHostname = hostname();
-  try {
-    const inspect = await client.inspectContainer(selfHostname);
-    const project = inspect.Config.Labels?.['com.docker.compose.project'];
-    if (project) return project;
-  } catch {
-    // Hostname may not be the container ID (e.g. when overridden in compose).
-  }
-
-  const envProject = process.env['COMPOSE_PROJECT_NAME'];
-  if (envProject) return envProject;
-
-  throw new Error('ORCHESTRATOR_NOT_COMPOSE_MANAGED');
-}
-
-/**
- * Enumerate worker containers for the given compose project. Includes
- * stopped/exited replicas (FR-002, Q3=A). Containers with missing or
- * non-numeric `com.docker.compose.container-number` labels are skipped
- * with a warning — defensive against manually-added containers.
- */
-export async function enumerateWorkers(
-  client: DockerEngineClient,
-  project: string,
-): Promise<WorkerReplica[]> {
-  const summaries = await client.listContainers({
-    all: true,
-    filters: {
-      label: [
-        `com.docker.compose.project=${project}`,
-        'com.docker.compose.service=worker',
-      ],
-    },
-  });
-
-  const replicas: WorkerReplica[] = [];
-  for (const summary of summaries) {
-    const numberLabel = summary.Labels?.['com.docker.compose.container-number'];
-    const parsedNumber = numberLabel ? parseInt(numberLabel, 10) : NaN;
-    if (!Number.isInteger(parsedNumber) || parsedNumber < 1) {
-      console.warn(
-        `[worker-scaler] skipping container ${summary.Id} with missing/invalid container-number label: ${numberLabel ?? '<none>'}`,
-      );
-      continue;
-    }
-    const networkIds = summary.NetworkSettings?.Networks
-      ? Object.values(summary.NetworkSettings.Networks).map((n) => n.NetworkID)
-      : [];
-    // `Names` arrives with a leading '/' from Engine — strip for readability.
-    const rawName = summary.Names[0] ?? '';
-    const name = rawName.startsWith('/') ? rawName.slice(1) : rawName;
-    replicas.push({
-      id: summary.Id,
-      number: parsedNumber,
-      name,
-      state: summary.State,
-      networkIds,
-    });
-  }
-
-  return replicas;
-}
 
 interface ScaleUpResult {
   created: number[];

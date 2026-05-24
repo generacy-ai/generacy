@@ -12,22 +12,22 @@
 
 Pure-move refactor per clarification C2. No behavioral change in `worker-scaler.ts`. Must land before Phase 3 imports anything from the new module.
 
-- [ ] T001 [US1] Create `packages/control-plane/src/services/worker-enumeration.ts` containing the moved bodies of `WorkerReplica` (type), `computeProjectName(client)`, and `enumerateWorkers(client, project)`. Copy verbatim from `worker-scaler.ts`; preserve the `ORCHESTRATOR_NOT_COMPOSE_MANAGED` error message and the container-number label skip behavior described in `data-model.md` §"Existing types — extracted, not changed".
-- [ ] T002 [US1] In `packages/control-plane/src/services/worker-scaler.ts`, replace the local definitions of `WorkerReplica`, `computeProjectName`, and `enumerateWorkers` with re-imports from `./worker-enumeration.js`. Re-export them if any external caller in this package depended on them.
-- [ ] T003 [P] [US1] Export `WorkerReplica`, `computeProjectName`, and `enumerateWorkers` from `packages/control-plane/src/index.ts` so the orchestrator can import them via `@generacy-ai/control-plane`.
+- [X] T001 [US1] Create `packages/control-plane/src/services/worker-enumeration.ts` containing the moved bodies of `WorkerReplica` (type), `computeProjectName(client)`, and `enumerateWorkers(client, project)`. Copy verbatim from `worker-scaler.ts`; preserve the `ORCHESTRATOR_NOT_COMPOSE_MANAGED` error message and the container-number label skip behavior described in `data-model.md` §"Existing types — extracted, not changed".
+- [X] T002 [US1] In `packages/control-plane/src/services/worker-scaler.ts`, replace the local definitions of `WorkerReplica`, `computeProjectName`, and `enumerateWorkers` with re-imports from `./worker-enumeration.js`. Re-export them if any external caller in this package depended on them.
+- [X] T003 [P] [US1] Export `WorkerReplica`, `computeProjectName`, and `enumerateWorkers` from `packages/control-plane/src/index.ts` so the orchestrator can import them via `@generacy-ai/control-plane`.
 
 ## Phase 2: Engine Event Streaming (control-plane)
 
 Additive capability on the existing `DockerEngineClient`. Runs in parallel with Phase 1 since it touches different files.
 
-- [ ] T004 [P] [US2] In `packages/control-plane/src/services/docker-engine-types.ts`, add the `EngineEvent` interface per `data-model.md` §"New: `EngineEvent`" (fields: `Type: 'container'`, `Action: string`, `id?`, `Actor?`, `time?`, `timeNano?`).
-- [ ] T005 [US2] In `packages/control-plane/src/services/docker-engine-client.ts`, add the `StreamContainerEventsOptions` interface (`filters.label?`, `filters.type?`, `signal?: AbortSignal`) and the `streamContainerEvents(opts): AsyncIterable<EngineEvent>` method. Implementation must:
+- [X] T004 [P] [US2] In `packages/control-plane/src/services/docker-engine-types.ts`, add the `EngineEvent` interface per `data-model.md` §"New: `EngineEvent`" (fields: `Type: 'container'`, `Action: string`, `id?`, `Actor?`, `time?`, `timeNano?`).
+- [X] T005 [US2] In `packages/control-plane/src/services/docker-engine-client.ts`, add the `StreamContainerEventsOptions` interface (`filters.label?`, `filters.type?`, `signal?: AbortSignal`) and the `streamContainerEvents(opts): AsyncIterable<EngineEvent>` method. Implementation must:
   - Open `GET /events?filters=<urlencoded JSON>` on the configured Unix socket.
   - Parse newline-delimited JSON, yielding one `EngineEvent` per line; skip malformed lines with a single `console.warn`.
   - Resolve the iterator on stream end or `signal.abort()`.
   - Throw `DockerDaemonUnavailableError` if the initial connection is refused (`ECONNREFUSED` / `ENOENT`). No built-in reconnect — caller owns the loop.
   - Conform to all error-semantics rows in `contracts/docker-events-subscription.md`.
-- [ ] T006 [US2] Export `DockerEngineClient`, `EngineEvent`, and `StreamContainerEventsOptions` from `packages/control-plane/src/index.ts` (extend the same export block touched in T003).
+- [X] T006 [US2] Export `DockerEngineClient`, `EngineEvent`, and `StreamContainerEventsOptions` from `packages/control-plane/src/index.ts` (extend the same export block touched in T003).
 
 ## Phase 3: RelayBridge Wiring (orchestrator)
 
@@ -35,21 +35,21 @@ Additive capability on the existing `DockerEngineClient`. Runs in parallel with 
 
 Sequential within this phase — T007 → T008 → T009/T010 → T011 → T012. They all touch one or two files (`relay.ts`, `relay-bridge.ts`, `server.ts`).
 
-- [ ] T007 [US1] In `packages/orchestrator/src/types/relay.ts`, add the required `engineClient: DockerEngineClient` field to `RelayBridgeOptions` (import `DockerEngineClient` from `@generacy-ai/control-plane`). No optional — fail at compile time if not wired.
-- [ ] T008 [US1] In `packages/orchestrator/src/services/relay-bridge.ts`, accept `options.engineClient` in the constructor and store it on `this.engineClient`. Add the internal state fields from `data-model.md` §"Internal RelayBridge state additions": `workerEventAbort: AbortController | null`, `workerEventReconnectTimer: NodeJS.Timeout | null`, `workerEventBackoffMs: number = 5_000`, `cachedProjectName: string | null`.
-- [ ] T009 [US1] In `packages/orchestrator/src/services/relay-bridge.ts`'s `collectMetadata()`, replace the `metadata.workers = readClusterYaml().workers` branch with:
+- [X] T007 [US1] In `packages/orchestrator/src/types/relay.ts`, add the required `engineClient: DockerEngineClient` field to `RelayBridgeOptions` (import `DockerEngineClient` from `@generacy-ai/control-plane`). No optional — fail at compile time if not wired.
+- [X] T008 [US1] In `packages/orchestrator/src/services/relay-bridge.ts`, accept `options.engineClient` in the constructor and store it on `this.engineClient`. Add the internal state fields from `data-model.md` §"Internal RelayBridge state additions": `workerEventAbort: AbortController | null`, `workerEventReconnectTimer: NodeJS.Timeout | null`, `workerEventBackoffMs: number = 5_000`, `cachedProjectName: string | null`.
+- [X] T009 [US1] In `packages/orchestrator/src/services/relay-bridge.ts`'s `collectMetadata()`, replace the `metadata.workers = readClusterYaml().workers` branch with:
   - Call `enumerateWorkers(this.engineClient, await this.resolveProjectName())` (use `cachedProjectName` to avoid repeat `computeProjectName` calls).
   - Set `metadata.workers = replicas.filter(r => r.state === 'running').length`.
   - On any throw (including `DockerDaemonUnavailableError` and `ORCHESTRATOR_NOT_COMPOSE_MANAGED`), log warn once and **omit** the field per clarification C4. Do not fall back to YAML.
   - Keep `readClusterYaml()` for the `channel` field — only the `workers` source changes.
-- [ ] T010 [US2] In `packages/orchestrator/src/services/relay-bridge.ts`'s `start()`, after the existing setup, open the Engine event subscription:
+- [X] T010 [US2] In `packages/orchestrator/src/services/relay-bridge.ts`'s `start()`, after the existing setup, open the Engine event subscription:
   - Resolve project name via `computeProjectName(this.engineClient)`. If it throws `ORCHESTRATOR_NOT_COMPOSE_MANAGED`, skip the subscription entirely (running outside compose — no workers to watch). Log info.
   - Create an `AbortController`, store as `this.workerEventAbort`.
   - In an async loop: call `streamContainerEvents({ filters: { label: [\`com.docker.compose.project=\${project}\`, 'com.docker.compose.service=worker'], type: ['container'] }, signal: controller.signal })` and `for await` events. On each event with `Action ∈ { 'create', 'start', 'die', 'destroy' }`, call `this.sendMetadata()`.
   - On stream end or error (other than `AbortError`): log per `contracts/docker-events-subscription.md` §"Error semantics", wait `workerEventBackoffMs`, double (cap at 60_000), schedule reconnect via `workerEventReconnectTimer`. Reset backoff to 5_000 once the new stream stays open ≥30s or yields any event.
   - Suppress `AbortError`.
-- [ ] T011 [US2] In `packages/orchestrator/src/services/relay-bridge.ts`'s `stop()`, call `this.workerEventAbort?.abort()` and `clearTimeout(this.workerEventReconnectTimer)`. Confirm no further `sendMetadata()` calls fire after `stop()` resolves.
-- [ ] T012 [US1] In `packages/orchestrator/src/server.ts`'s `initializeRelayBridge()`, construct a single `new DockerEngineClient()` (default options pick up `DOCKER_HOST` or fall back to `/var/run/docker-host.sock`) and pass it into the `new RelayBridge({ ..., engineClient })` call. Keep the client reference at the same scope as the bridge so it lives as long as the relay does.
+- [X] T011 [US2] In `packages/orchestrator/src/services/relay-bridge.ts`'s `stop()`, call `this.workerEventAbort?.abort()` and `clearTimeout(this.workerEventReconnectTimer)`. Confirm no further `sendMetadata()` calls fire after `stop()` resolves.
+- [X] T012 [US1] In `packages/orchestrator/src/server.ts`'s `initializeRelayBridge()`, construct a single `new DockerEngineClient()` (default options pick up `DOCKER_HOST` or fall back to `/var/run/docker-host.sock`) and pass it into the `new RelayBridge({ ..., engineClient })` call. Keep the client reference at the same scope as the bridge so it lives as long as the relay does.
 
 ## Phase 4: Tests
 
