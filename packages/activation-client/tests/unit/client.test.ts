@@ -99,4 +99,30 @@ describe('pollDeviceCode', () => {
       pollDeviceCode('https://api.generacy.ai', 'dc-123', client),
     ).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
   });
+
+  it('omits workers from body when undefined', async () => {
+    const postSpy = vi.fn(async () => ({
+      status: 200,
+      data: { status: 'authorization_pending' },
+    })) as unknown as HttpClient['post'];
+    const client: HttpClient = { post: postSpy };
+    await pollDeviceCode('https://api.generacy.ai', 'dc-123', client);
+    expect(postSpy).toHaveBeenCalledTimes(1);
+    expect((postSpy as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toEqual({
+      device_code: 'dc-123',
+    });
+  });
+
+  it('includes workers in body when provided', async () => {
+    const postSpy = vi.fn(async () => ({
+      status: 200,
+      data: { status: 'authorization_pending' },
+    })) as unknown as HttpClient['post'];
+    const client: HttpClient = { post: postSpy };
+    await pollDeviceCode('https://api.generacy.ai', 'dc-123', client, 4);
+    expect((postSpy as ReturnType<typeof vi.fn>).mock.calls[0]?.[1]).toEqual({
+      device_code: 'dc-123',
+      workers: 4,
+    });
+  });
 });

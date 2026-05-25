@@ -210,6 +210,135 @@ describe('FilesystemWorkflowStore', () => {
   });
 });
 
+describe('FilesystemWorkflowStore linkedPRs', () => {
+  const testWorkdir = '/tmp/workflow-store-linkedpr-test';
+  let store: FilesystemWorkflowStore;
+
+  const createValidState = (overrides?: Partial<WorkflowState>): WorkflowState => ({
+    version: '1.0',
+    workflowId: 'test-workflow-lp',
+    workflowFile: 'workflows/test.yaml',
+    currentPhase: 'review',
+    currentStep: 'human_review',
+    inputs: {},
+    stepOutputs: {},
+    startedAt: '2024-01-15T10:20:00Z',
+    updatedAt: '2024-01-15T10:25:00Z',
+    ...overrides,
+  });
+
+  beforeEach(async () => {
+    try { await fs.rm(testWorkdir, { recursive: true, force: true }); } catch { /* */ }
+    await fs.mkdir(testWorkdir, { recursive: true });
+    store = new FilesystemWorkflowStore(testWorkdir);
+  });
+
+  afterEach(async () => {
+    try { await fs.rm(testWorkdir, { recursive: true, force: true }); } catch { /* */ }
+  });
+
+  it('should round-trip state with linkedPRs', async () => {
+    const state = createValidState({
+      linkedPRs: [
+        { repo: 'generacy-cloud', number: 42, branch: 'feat/x', url: 'https://github.com/org/repo/pull/42' },
+        { repo: 'cluster-base', number: 7, branch: 'feat/y', url: 'https://github.com/org/repo2/pull/7' },
+      ],
+    });
+    await store.save(state);
+    const loaded = await store.load(state.workflowId);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.linkedPRs).toHaveLength(2);
+    expect(loaded!.linkedPRs![0].repo).toBe('generacy-cloud');
+    expect(loaded!.linkedPRs![1].number).toBe(7);
+  });
+
+  it('should load state without linkedPRs (backward compat)', async () => {
+    const state = createValidState();
+    await store.save(state);
+    const loaded = await store.load(state.workflowId);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.linkedPRs).toBeUndefined();
+  });
+});
+
+describe('validateWorkflowState linkedPRs', () => {
+  it('should accept state without linkedPRs', () => {
+    const state = {
+      version: '1.0',
+      workflowId: 'test',
+      workflowFile: 'test.yaml',
+      currentPhase: 'review',
+      currentStep: 'step1',
+      inputs: {},
+      stepOutputs: {},
+      startedAt: '2024-01-15T10:00:00Z',
+      updatedAt: '2024-01-15T10:00:00Z',
+    };
+    const result = validateWorkflowState(state);
+    expect(result.valid).toBe(true);
+  });
+
+  it('should accept valid linkedPRs', () => {
+    const state = {
+      version: '1.0',
+      workflowId: 'test',
+      workflowFile: 'test.yaml',
+      currentPhase: 'review',
+      currentStep: 'step1',
+      inputs: {},
+      stepOutputs: {},
+      linkedPRs: [
+        { repo: 'cloud', number: 1, branch: 'main', url: 'https://example.com/pr/1' },
+      ],
+      startedAt: '2024-01-15T10:00:00Z',
+      updatedAt: '2024-01-15T10:00:00Z',
+    };
+    const result = validateWorkflowState(state);
+    expect(result.valid).toBe(true);
+  });
+
+  it('should reject non-array linkedPRs', () => {
+    const state = {
+      version: '1.0',
+      workflowId: 'test',
+      workflowFile: 'test.yaml',
+      currentPhase: 'review',
+      currentStep: 'step1',
+      inputs: {},
+      stepOutputs: {},
+      linkedPRs: 'not-an-array',
+      startedAt: '2024-01-15T10:00:00Z',
+      updatedAt: '2024-01-15T10:00:00Z',
+    };
+    const result = validateWorkflowState(state);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('linkedPRs must be an array');
+  });
+
+  it('should reject malformed linkedPRs entries', () => {
+    const state = {
+      version: '1.0',
+      workflowId: 'test',
+      workflowFile: 'test.yaml',
+      currentPhase: 'review',
+      currentStep: 'step1',
+      inputs: {},
+      stepOutputs: {},
+      linkedPRs: [
+        { repo: '', number: 'bad', branch: '', url: '' },
+      ],
+      startedAt: '2024-01-15T10:00:00Z',
+      updatedAt: '2024-01-15T10:00:00Z',
+    };
+    const result = validateWorkflowState(state);
+    expect(result.valid).toBe(false);
+    expect(result.errors).toContain('linkedPRs[0].repo must be a non-empty string');
+    expect(result.errors).toContain('linkedPRs[0].number must be a number');
+    expect(result.errors).toContain('linkedPRs[0].branch must be a non-empty string');
+    expect(result.errors).toContain('linkedPRs[0].url must be a non-empty string');
+  });
+});
+
 describe('validateWorkflowState', () => {
   it('should accept valid workflow state', () => {
     const state = {

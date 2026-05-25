@@ -11,6 +11,12 @@ export const DeviceCodeResponseSchema = z.object({
 });
 export type DeviceCodeResponse = z.infer<typeof DeviceCodeResponseSchema>;
 
+export const PollRequestSchema = z.object({
+  device_code: z.string().min(1),
+  workers: z.number().int().min(1).optional(),
+});
+export type PollRequest = z.infer<typeof PollRequestSchema>;
+
 export const PollResponseSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('authorization_pending') }),
   z.object({ status: z.literal('slow_down') }),

@@ -3,9 +3,10 @@ import { Command } from 'commander';
 import { parse } from 'yaml';
 import { getLogger } from '../../utils/logger.js';
 import { ensureDocker } from '../cluster/docker.js';
-import { getClusterContext } from '../cluster/context.js';
+import { findGeneracyDir, getClusterContext } from '../cluster/context.js';
 import { runCompose } from '../cluster/compose.js';
 import { upsertRegistryEntry } from '../cluster/registry.js';
+import { reconcileWorkerCount } from '../cluster/worker-count-deriver.js';
 
 /**
  * Returns true if any port entry uses the HOST:CONTAINER pattern (contains ':').
@@ -20,6 +21,13 @@ export function upCommand(): Command {
     .action(async () => {
       const logger = getLogger();
       ensureDocker();
+
+      // Reconcile WORKER_COUNT from cluster.yaml → .env before compose reads
+      // it. Runs before getClusterContext() so the strict ClusterYamlSchema
+      // gate doesn't crash on edge values (workers: 0, malformed, missing).
+      const generacyDir = findGeneracyDir();
+      await reconcileWorkerCount(generacyDir, logger);
+
       const ctx = getClusterContext();
 
       // Check for legacy hardcoded port bindings

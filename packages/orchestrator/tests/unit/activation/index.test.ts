@@ -76,6 +76,34 @@ describe('activate', () => {
         }),
       );
     });
+
+    it('forwards initialWorkers to pollForApproval (T016)', async () => {
+      vi.mocked(readKeyFile).mockResolvedValue(null);
+      vi.mocked(requestDeviceCode).mockResolvedValue({
+        device_code: 'dc-2',
+        user_code: 'EFGH-5678',
+        verification_uri: 'https://generacy.ai/activate',
+        interval: 5,
+        expires_in: 300,
+      });
+      vi.mocked(pollForApproval).mockResolvedValue({
+        status: 'approved',
+        cluster_api_key: 'key-2',
+        cluster_api_key_id: 'kid-2',
+        cluster_id: 'cl-2',
+        project_id: 'pj-2',
+        org_id: 'org-2',
+        cloud_url: 'https://api.generacy.ai',
+      });
+      vi.mocked(writeKeyFile).mockResolvedValue(undefined);
+      vi.mocked(writeClusterJson).mockResolvedValue(undefined);
+
+      await activate({ ...baseOptions, initialWorkers: 4 });
+
+      expect(pollForApproval).toHaveBeenCalledWith(
+        expect.objectContaining({ workers: 4 }),
+      );
+    });
   });
 
   describe('existing-key path', () => {

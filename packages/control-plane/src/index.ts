@@ -71,3 +71,22 @@ export {
 
 // Server
 export { ControlPlaneServer } from './server.js';
+
+// Docker Engine & worker enumeration (#714)
+export {
+  DockerEngineClient,
+  type DockerEngineClientOptions,
+  type ListContainersOptions,
+  type CreateContainerResponse,
+  type StreamContainerEventsOptions,
+} from './services/docker-engine-client.js';
+export {
+  type EngineEvent,
+  DockerEngineError,
+  DockerDaemonUnavailableError,
+} from './services/docker-engine-types.js';
+export {
+  type WorkerReplica,
+  computeProjectName,
+  enumerateWorkers,
+} from './services/worker-enumeration.js';

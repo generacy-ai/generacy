@@ -31,7 +31,7 @@ export class WorkspacePrepareAction extends BaseAction {
     const errors: ValidationError[] = [];
     const warnings: ValidationWarning[] = [];
 
-    const branch = this.getInput<string>(step, { inputs: {}, stepOutputs: new Map(), env: {}, workdir: '', signal: new AbortController().signal, logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }, workflow: { name: '', phases: [] }, phase: { name: '', steps: [] }, step }, 'branch');
+    const branch = this.getInput<string>(step, { inputs: {}, stepOutputs: new Map(), env: {}, workdir: '', siblingWorkdirs: {}, signal: new AbortController().signal, logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} }, workflow: { name: '', phases: [] }, phase: { name: '', steps: [] }, step }, 'branch');
 
     if (!branch) {
       errors.push({

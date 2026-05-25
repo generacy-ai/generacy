@@ -27,6 +27,7 @@ const mockGitHubClient = {
 function createMockContext(inputs: Record<string, unknown> = {}): ActionContext {
   return {
     workdir: '/test/workdir',
+    siblingWorkdirs: {},
     inputs,
     outputs: {},
     env: {},

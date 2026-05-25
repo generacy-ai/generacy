@@ -16,7 +16,7 @@ export async function collectMetadata(
   ]);
 
   return {
-    workerCount: metrics.workerCount,
+    workers: metrics.workers,
     activeWorkflows: metrics.activeWorkflows,
     channel: health.channel,
     orchestratorVersion: health.version,
@@ -57,7 +57,7 @@ async function fetchHealth(config: RelayConfig): Promise<HealthData> {
 }
 
 interface MetricsData {
-  workerCount: number;
+  workers: number;
   activeWorkflows: number;
 }
 
@@ -69,14 +69,14 @@ async function fetchMetrics(config: RelayConfig): Promise<MetricsData> {
     if (response.ok) {
       const data = await response.json() as Record<string, unknown>;
       return {
-        workerCount: Number(data['workerCount'] ?? 0),
+        workers: Number(data['workers'] ?? 0),
         activeWorkflows: Number(data['activeWorkflows'] ?? 0),
       };
     }
   } catch {
     // Orchestrator unreachable — use defaults
   }
-  return { workerCount: 0, activeWorkflows: 0 };
+  return { workers: 0, activeWorkflows: 0 };
 }
 
 /**

@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher } from '@generacy-ai/workflow-engine';
-import type { LaunchFunctionRequest, LaunchFunctionHandle } from '@generacy-ai/workflow-engine';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
+import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
@@ -25,6 +28,38 @@ import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
 import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
+
+/**
+ * Load linkedPRs from workflow state files in the checkout directory.
+ * Reads `.generacy/workflow-state-*.json` files and returns the first
+ * non-empty linkedPRs array found. Best-effort: returns empty on any error.
+ */
+async function loadLinkedPRsFromState(checkoutPath: string, logger: Logger): Promise<LinkedPR[]> {
+  const stateDir = path.join(checkoutPath, '.generacy');
+  try {
+    const files = await fs.readdir(stateDir);
+    for (const file of files) {
+      if (file.startsWith('workflow-state-') && file.endsWith('.json')) {
+        try {
+          const content = await fs.readFile(path.join(stateDir, file), 'utf-8');
+          const data = JSON.parse(content) as { linkedPRs?: LinkedPR[] };
+          if (Array.isArray(data.linkedPRs) && data.linkedPRs.length > 0) {
+            logger.info(
+              { linkedPRCount: data.linkedPRs.length, stateFile: file },
+              'Loaded linkedPRs from workflow state',
+            );
+            return data.linkedPRs;
+          }
+        } catch {
+          // Skip malformed state files
+        }
+      }
+    }
+  } catch {
+    // No state directory or read error — fine, no linkedPRs
+  }
+  return [];
+}
 
 /**
  * Default ProcessFactory that uses Node's child_process.spawn.
@@ -72,6 +107,8 @@ export interface ClaudeCliWorkerDeps {
   sseEmitter?: SSEEventEmitter;
   /** Callback for emitting job lifecycle events through the relay */
   jobEventEmitter?: JobEventEmitter;
+  /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
+  tokenProvider?: () => Promise<string | undefined>;
 }
 
 /**
@@ -93,6 +130,7 @@ export class ClaudeCliWorker {
   private readonly processFactory: ProcessFactory;
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
+  private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -105,6 +143,7 @@ export class ClaudeCliWorker {
     this.processFactory = deps.processFactory ?? defaultProcessFactory;
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
+    this.tokenProvider = deps.tokenProvider;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -297,6 +336,22 @@ export class ClaudeCliWorker {
         );
       }
 
+      // 5b. Resolve sibling workdirs from workspace config
+      let siblingWorkdirs: Record<string, string> = {};
+      const configPath = findWorkspaceConfigPath(checkoutPath);
+      if (configPath) {
+        const workspaceConfig = tryLoadWorkspaceConfig(configPath);
+        if (workspaceConfig) {
+          siblingWorkdirs = resolveSiblingWorkdirs(workspaceConfig, checkoutPath);
+          if (Object.keys(siblingWorkdirs).length > 0) {
+            workerLogger.info(
+              { siblingCount: Object.keys(siblingWorkdirs).length, siblings: Object.keys(siblingWorkdirs) },
+              'Resolved sibling workdirs from workspace config',
+            );
+          }
+        }
+      }
+
       // 6. Build WorkerContext
       const context: WorkerContext = {
         workerId,
@@ -309,6 +364,7 @@ export class ClaudeCliWorker {
         checkoutPath,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
+        siblingWorkdirs,
       };
 
       // Helper to build job event base payload
@@ -428,6 +484,35 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
+        phaseAfterHandlers: [
+          // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
+          async () => {
+            const siblings = context.siblingWorkdirs ?? {};
+            if (Object.keys(siblings).length === 0) return;
+            const store = new FilesystemWorkflowStore(context.checkoutPath);
+            const state = await store.load(workflowId);
+            if (!state) return;
+            const fanoutCtx: SiblingFanoutContext = {
+              primaryWorkdir: context.checkoutPath,
+              siblingWorkdirs: siblings,
+              issueNumber: item.issueNumber,
+              primaryRepoName: item.repo,
+              org: item.owner,
+              workflowStore: store,
+              workflowState: state,
+              logger: workerLogger,
+              tokenProvider: this.tokenProvider,
+            };
+            await siblingFanoutHandler(fanoutCtx);
+          },
+          // Reload linkedPRs from workflow state so gate evaluation can access context.linkedPRs.
+          async () => {
+            const linkedPRs = await loadLinkedPRsFromState(context.checkoutPath, workerLogger);
+            if (linkedPRs.length > 0) {
+              context.linkedPRs = linkedPRs;
+            }
+          },
+        ],
       }, phaseSequence);
 
       // 9. Handle completion
@@ -468,7 +553,7 @@ export class ClaudeCliWorker {
           // Non-epic workflows: standard completion flow
           await labelManager.onWorkflowComplete();
           workerLogger.info('Marking PR as ready for review');
-          await prManager.markReadyForReview();
+          await prManager.markReadyForReview(context.linkedPRs);
           workerLogger.info('Workflow completed successfully — all phases done');
 
           this.sseEmitter?.({

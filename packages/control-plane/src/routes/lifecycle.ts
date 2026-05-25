@@ -1,12 +1,14 @@
 import type http from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { type ActorContext, requireActor } from '../context.js';
-import { LifecycleActionSchema, ClonePeerReposBodySchema } from '../schemas.js';
+import { LifecycleActionSchema, ClonePeerReposBodySchema, WorkerScaleBodySchema } from '../schemas.js';
 import { ControlPlaneError } from '../errors.js';
 import { getCodeServerManager } from '../services/code-server-manager.js';
 import { getVsCodeTunnelManager } from '../services/vscode-tunnel-manager.js';
 import { readBody } from '../util/read-body.js';
 import { clonePeerRepos } from '../services/peer-repo-cloner.js';
+import { scaleWorkers, PartialScaleError } from '../services/worker-scaler.js';
+import { DockerDaemonUnavailableError } from '../services/docker-engine-types.js';
 import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
 import { getRelayPushEvent } from '../relay-events.js';
 
@@ -170,6 +172,74 @@ export async function handlePostLifecycle(
 
     res.writeHead(200);
     res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
+    return;
+  }
+
+  if (parsed.data === 'worker-scale') {
+    const raw = await readBody(req);
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      throw new ControlPlaneError('INVALID_REQUEST', 'Invalid JSON body');
+    }
+
+    const bodyResult = WorkerScaleBodySchema.safeParse(body);
+    if (!bodyResult.success) {
+      throw new ControlPlaneError('INVALID_REQUEST', 'Invalid worker-scale body', {
+        errors: bodyResult.error.issues.map((i) => i.message),
+      });
+    }
+
+    try {
+      const result = await scaleWorkers({ count: bodyResult.data.count });
+      res.writeHead(200);
+      res.end(JSON.stringify({
+        accepted: true,
+        action: 'worker-scale',
+        previousCount: result.previousCount,
+        requestedCount: result.requestedCount,
+        actualCount: result.actualCount,
+      }));
+    } catch (err) {
+      // Partial-failure: 200 OK with partial: true (best-effort succeeded somewhat —
+      // returning 5xx would mislead the cloud UI into showing a hard failure when
+      // the cluster did make progress). cluster.yaml already reflects actualCount.
+      if (err instanceof PartialScaleError || (err instanceof Error && err.name === 'PartialScaleError')) {
+        const partialErr = err as PartialScaleError;
+        res.writeHead(200);
+        res.end(JSON.stringify({
+          accepted: true,
+          action: 'worker-scale',
+          partial: true,
+          previousCount: partialErr.previousCount,
+          requestedCount: partialErr.requested,
+          actualCount: partialErr.actual,
+          error: {
+            code: 'PARTIAL_SCALE',
+            message: partialErr.message,
+          },
+        }));
+        return;
+      }
+      const message = err instanceof Error ? err.message : String(err);
+      // DockerDaemonUnavailableError sets message === 'DOCKER_DAEMON_UNAVAILABLE' for
+      // backward-compat string-match. instanceof preferred but message works too.
+      if (
+        err instanceof DockerDaemonUnavailableError ||
+        message === 'DOCKER_DAEMON_UNAVAILABLE'
+      ) {
+        const details = err instanceof DockerDaemonUnavailableError
+          ? { socketPath: err.socketPath }
+          : undefined;
+        throw new ControlPlaneError(
+          'DOCKER_DAEMON_UNAVAILABLE',
+          'Docker daemon is not reachable',
+          details,
+        );
+      }
+      throw new ControlPlaneError('INTERNAL_ERROR', `Worker scale failed: ${message}`);
+    }
     return;
   }
 

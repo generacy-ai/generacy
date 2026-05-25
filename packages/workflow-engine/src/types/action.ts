@@ -115,6 +115,9 @@ export interface ActionContext {
   env: Record<string, string>;
   /** Working directory for command execution */
   workdir: string;
+  /** Sibling repository working directories (repo name → absolute path).
+   *  Empty object when running in single-repo mode. */
+  siblingWorkdirs: Record<string, string>;
   /** Abort signal for cancellation */
   signal: AbortSignal;
   /** Logger for action execution */

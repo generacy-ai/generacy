@@ -89,6 +89,7 @@ describe('Speckit Workflow Integration', () => {
       stepOutputs: new Map(),
       env: {},
       workdir: '/repo',
+      siblingWorkdirs: {},
       signal: new AbortController().signal,
       logger: mockLogger,
     };

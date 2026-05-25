@@ -1,7 +1,7 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { PhaseLoop } from '../phase-loop.js';
 import type { PhaseLoopDeps } from '../phase-loop.js';
-import type { WorkerContext, Logger, PhaseResult, WorkflowPhase } from '../types.js';
+import type { WorkerContext, Logger, PhaseResult, WorkflowPhase, PhaseAfterContext } from '../types.js';
 import type { WorkerConfig } from '../config.js';
 
 // ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ function createMockDeps(): PhaseLoopDeps {
       updateStageComment: vi.fn().mockResolvedValue(undefined),
     } as any,
     gateChecker: {
-      checkGate: vi.fn().mockReturnValue(null),
+      checkGates: vi.fn().mockReturnValue([]),
     } as any,
     cliSpawner: {
       spawnPhase: vi.fn().mockResolvedValue(makeSuccessResult('implement')),
@@ -603,11 +603,11 @@ describe('PhaseLoop - job lifecycle events', () => {
     (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('clarify'));
 
     // Gate checker returns a gate for clarify
-    (deps.gateChecker.checkGate as any).mockReturnValue({
+    (deps.gateChecker.checkGates as any).mockReturnValue([{
       phase: 'clarify',
       gateLabel: 'waiting-for:clarification',
       condition: 'always',
-    });
+    }]);
 
     await phaseLoop.executeLoop(context, config, deps, ['clarify']);
 
@@ -637,5 +637,151 @@ describe('PhaseLoop - job lifecycle events', () => {
     const result = await phaseLoop.executeLoop(context, config, deps, ['specify']);
 
     expect(result.completed).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sibling-repo prompt injection
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - sibling workdir prompt injection', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('prepends sibling block to prompt when siblingWorkdirs is non-empty', async () => {
+    const context = createMockContext('specify');
+    context.siblingWorkdirs = {
+      agency: '/workspaces/agency',
+      'generacy-cloud': '/workspaces/generacy-cloud',
+    };
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['specify']);
+
+    const spawnCall = (deps.cliSpawner.spawnPhase as any).mock.calls[0];
+    const prompt: string = spawnCall[1].prompt;
+    expect(prompt).toContain('**Sibling repos available in this workspace.**');
+    expect(prompt).toContain('`agency` — `/workspaces/agency`');
+    expect(prompt).toContain('`generacy-cloud` — `/workspaces/generacy-cloud`');
+    expect(prompt).toContain(context.issueUrl);
+  });
+
+  it('passes original issueUrl when siblingWorkdirs is empty', async () => {
+    const context = createMockContext('specify');
+    context.siblingWorkdirs = {};
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['specify']);
+
+    const spawnCall = (deps.cliSpawner.spawnPhase as any).mock.calls[0];
+    expect(spawnCall[1].prompt).toBe(context.issueUrl);
+  });
+
+  it('passes original issueUrl when siblingWorkdirs is absent', async () => {
+    const context = createMockContext('specify');
+    // siblingWorkdirs is undefined (not set)
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+
+    await phaseLoop.executeLoop(context, createConfig(), deps, ['specify']);
+
+    const spawnCall = (deps.cliSpawner.spawnPhase as any).mock.calls[0];
+    expect(spawnCall[1].prompt).toBe(context.issueUrl);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// phase:after handlers
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - phaseAfterHandlers', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('invokes a no-op handler after commit/push and before gate check', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+    const callOrder: string[] = [];
+
+    (deps.labelManager.onPhaseComplete as any).mockImplementation(async () => {
+      callOrder.push('onPhaseComplete');
+    });
+
+    const handler = vi.fn().mockImplementation(async () => {
+      callOrder.push('handler');
+    });
+
+    (deps.gateChecker.checkGates as any).mockImplementation(() => {
+      callOrder.push('checkGate');
+      return [];
+    });
+
+    deps.phaseAfterHandlers = [handler];
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    // Verify ordering: onPhaseComplete → handler → checkGate
+    expect(callOrder).toEqual(['onPhaseComplete', 'handler', 'checkGate']);
+
+    // Verify handler receives correct context
+    const handlerArg: PhaseAfterContext = handler.mock.calls[0][0];
+    expect(handlerArg.phase).toBe('specify');
+    expect(handlerArg.commitResult).toEqual({ prUrl: null, hasChanges: true });
+    expect(handlerArg.checkoutPath).toBe(context.checkoutPath);
+  });
+
+  it('fails the phase when a handler throws (fail-fast, gate not checked)', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    const failingHandler = vi.fn().mockRejectedValue(new Error('handler-error'));
+    const secondHandler = vi.fn();
+
+    deps.phaseAfterHandlers = [failingHandler, secondHandler];
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await expect(
+      phaseLoop.executeLoop(context, config, deps, ['specify']),
+    ).rejects.toThrow('handler-error');
+
+    expect(failingHandler).toHaveBeenCalledTimes(1);
+    // Second handler should NOT have been called (fail-fast)
+    expect(secondHandler).not.toHaveBeenCalled();
+    // Gate should NOT have been checked
+    expect(deps.gateChecker.checkGates).not.toHaveBeenCalled();
+  });
+
+  it('produces identical behavior when zero handlers are registered', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    deps.phaseAfterHandlers = [];
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('specify'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    const result = await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    expect(result.completed).toBe(true);
+    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('specify');
+    expect(deps.gateChecker.checkGates).toHaveBeenCalled();
   });
 });

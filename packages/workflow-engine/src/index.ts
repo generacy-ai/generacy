@@ -100,6 +100,14 @@ export type { CreateFeatureInput, CreateFeatureOutput } from './actions/builtin/
 // Epic utilities (for direct invocation from orchestrator)
 export { findChildIssues, type EpicChildWithPr, type FindChildIssuesOptions } from './actions/epic/find-children.js';
 
+// Handlers (phase lifecycle hooks)
+export {
+  siblingFanoutHandler,
+  type SiblingFanoutContext,
+  type SiblingFanoutResult,
+  type SiblingOutcome,
+} from './handlers/index.js';
+
 // Interpolation
 export {
   ExecutionContext,
@@ -185,11 +193,19 @@ export type {
   RetryState,
   RetryResult,
 
+  // Store types
+  LinkedPR,
+  WorkflowState,
+  WorkflowStore,
+
   // Event types
   ExecutionEventType,
   ExecutionEvent,
   ExecutionEventListener,
 } from './types/index.js';
+
+// Store implementations
+export { FilesystemWorkflowStore } from './store/index.js';
 
 // Logger utilities
 export { ConsoleLogger, NoopLogger, createLogger } from './types/logger.js';

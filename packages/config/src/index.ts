@@ -12,6 +12,7 @@ export {
   getMonitoredRepos,
   getRepoNames,
   getRepoWorkdir,
+  resolveSiblingWorkdirs,
 } from './repos.js';
 
 export { parseRepoInput, parseRepoList } from './parse-repo-input.js';
@@ -29,3 +30,12 @@ export {
 export { convertTemplateConfig } from './convert-template.js';
 
 export { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadDefaultsRole, findWorkspaceConfigPath, scanForWorkspaceConfig } from './loader.js';
+
+export {
+  ClusterYamlSchema,
+  ClusterLocalYamlSchema,
+  type ClusterYamlData,
+  type ClusterLocalYamlData,
+} from './cluster-config-schema.js';
+
+export { readMergedClusterConfig, type MergedClusterConfig } from './cluster-config.js';

@@ -1,8 +1,7 @@
 import type http from 'node:http';
-import fs from 'node:fs/promises';
 import path from 'node:path';
-import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
+import { readMergedClusterConfig } from '@generacy-ai/config';
 import { type ActorContext, requireActor } from '../context.js';
 import { readBody } from '../util/read-body.js';
 import { getRelayPushEvent } from '../relay-events.js';
@@ -39,25 +38,16 @@ export function isPathDenied(absPath: string): boolean {
   return false;
 }
 
-/** Read and parse appConfig from cluster.yaml in the working tree. */
+/** Read and parse appConfig from the merged cluster.yaml + cluster.local.yaml view. */
 export async function readManifest(): Promise<AppConfig | null> {
   const generacyDir = await resolveGeneracyDir();
-  const yamlPath = path.join(generacyDir, 'cluster.yaml');
+  const { merged } = await readMergedClusterConfig(generacyDir);
 
-  let raw: string;
-  try {
-    raw = await fs.readFile(yamlPath, 'utf8');
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw err;
-  }
-
-  const parsed = parseYaml(raw);
-  if (!parsed || typeof parsed !== 'object' || !('appConfig' in parsed)) {
+  if (merged.appConfig === undefined || merged.appConfig === null) {
     return null;
   }
 
-  return AppConfigSchema.parse((parsed as Record<string, unknown>).appConfig);
+  return AppConfigSchema.parse(merged.appConfig);
 }
 
 // --- Store instances (injected from bin/control-plane.ts) ---

@@ -1,5 +1,5 @@
 import type { QueueItem } from '../types/index.js';
-import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 
 /**
  * Workflow phases in execution order
@@ -102,7 +102,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review';
 }
 
 /**
@@ -177,6 +177,8 @@ export interface CliSpawnOptions {
   signal: AbortSignal;
   /** Session ID from a previous phase to resume (keeps MCP servers warm, carries context) */
   resumeSessionId?: string;
+  /** Sibling repository working directories (repo name → absolute path) */
+  siblingWorkdirs?: Record<string, string>;
 }
 
 /**
@@ -249,6 +251,10 @@ export interface WorkerContext {
   description: string;
   /** PR URL — set after draft PR is created, updated by PrManager */
   prUrl?: string;
+  /** Sibling repository working directories (repo name → absolute path) */
+  siblingWorkdirs?: Record<string, string>;
+  /** PRs opened in sibling repos during cross-repo fan-out (from WorkflowState) */
+  linkedPRs?: LinkedPR[];
 }
 
 /**
@@ -265,6 +271,33 @@ export interface ProcessFactory {
 /**
  * Handle to a spawned child process
  */
+/**
+ * Result from commitPushAndEnsurePr() — whether the phase produced changes and the PR URL.
+ */
+export interface CommitResult {
+  /** PR URL if one was created or already exists */
+  prUrl?: string;
+  /** Whether the phase produced any git changes */
+  hasChanges: boolean;
+}
+
+/**
+ * Context provided to phase:after handlers.
+ * Includes the full WorkerContext plus the completed phase name and its commit result.
+ */
+export interface PhaseAfterContext extends WorkerContext {
+  /** The phase that just completed */
+  phase: WorkflowPhase;
+  /** Result from commitPushAndEnsurePr() for this phase */
+  commitResult: CommitResult;
+}
+
+/**
+ * Async function that runs after a phase completes (post-commit, pre-gate).
+ * Throwing stops subsequent handlers (fail-fast) and blocks the phase.
+ */
+export type PhaseAfterHandler = (context: PhaseAfterContext) => Promise<void>;
+
 export interface ChildProcessHandle {
   /** Process stdin stream (null when stdio[0] is 'ignore') */
   stdin: NodeJS.WritableStream | null;

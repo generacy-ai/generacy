@@ -8,6 +8,7 @@
 import type { SSESubscriptionManager } from '../sse/subscriptions.js';
 import type { FastifyInstance } from 'fastify';
 import type { EventMessage } from '@generacy-ai/cluster-relay';
+import type { DockerEngineClient } from '@generacy-ai/control-plane';
 import type {
   RelayLeaseRequest,
   RelayLeaseGranted,
@@ -245,8 +246,13 @@ export interface ClusterMetadataPayload {
   /** Git remote URLs from workspace repos */
   gitRemotes: GitRemoteInfo[];
 
-  /** Worker count from cluster.yaml (omitted if file missing) */
-  workerCount?: number;
+  /**
+   * Count of worker containers currently running for this compose project.
+   * Enumerated from the Docker Engine API on every metadata send.
+   * Omitted when the Engine API is unreachable, the orchestrator is not
+   * compose-managed, or project-name resolution fails.
+   */
+  workers?: number;
 
   /** Release channel from cluster.yaml (omitted if file missing) */
   channel?: 'preview' | 'stable';
@@ -329,4 +335,11 @@ export interface RelayBridgeOptions {
 
   /** Relay configuration */
   config: RelayConfig;
+
+  /**
+   * Docker Engine client for enumerating worker containers and subscribing
+   * to container lifecycle events. Constructed once at boot in server.ts and
+   * shared across all RelayBridge calls.
+   */
+  engineClient: DockerEngineClient;
 }

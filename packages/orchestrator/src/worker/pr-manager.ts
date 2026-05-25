@@ -1,5 +1,6 @@
-import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import type { GitHubClient, LinkedPR } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger } from './types.js';
+import { parsePRUrl } from './linked-pr-url-parser.js';
 
 /**
  * Manages draft PR creation and git commit/push operations between workflow phases.
@@ -183,10 +184,13 @@ export class PrManager {
    * Should be called after the workflow completes successfully (all phases done).
    * If no PR exists or the PR number is unknown, this is a no-op.
    *
+   * When linkedPRs are provided, also flips each sibling draft to ready-for-review
+   * via `gh pr ready`. Best-effort: logs warnings on failure, doesn't fail workflow.
+   *
    * The underlying GitHub API call is idempotent — calling it on a non-draft PR
    * has no effect.
    */
-  async markReadyForReview(): Promise<void> {
+  async markReadyForReview(linkedPRs?: LinkedPR[]): Promise<void> {
     if (!this.prNumber) {
       this.logger.debug('No PR number available — skipping markReadyForReview');
       return;
@@ -204,6 +208,39 @@ export class PrManager {
         { prNumber: this.prNumber, error: String(error) },
         'Failed to mark PR as ready for review (non-fatal)',
       );
+    }
+
+    // Flip sibling PRs to ready-for-review (idempotent, best-effort)
+    await this.markSiblingsReadyForReview(linkedPRs);
+  }
+
+  /**
+   * Mark all linked sibling PRs as ready for review.
+   * Best-effort: logs warnings on failure, doesn't fail the workflow.
+   * Idempotent — `gh pr ready` is a no-op on non-draft PRs.
+   */
+  async markSiblingsReadyForReview(linkedPRs?: LinkedPR[]): Promise<void> {
+    if (!linkedPRs || linkedPRs.length === 0) return;
+
+    for (const pr of linkedPRs) {
+      const parsed = parsePRUrl(pr.url);
+      if (!parsed) {
+        this.logger.warn({ url: pr.url }, 'Could not parse linked PR URL — skipping ready-for-review');
+        continue;
+      }
+
+      try {
+        await this.github.markPRReady(parsed.owner, parsed.repo, parsed.number);
+        this.logger.info(
+          { repo: `${parsed.owner}/${parsed.repo}`, number: parsed.number },
+          'Marked sibling PR as ready for review',
+        );
+      } catch (error) {
+        this.logger.warn(
+          { repo: `${parsed.owner}/${parsed.repo}`, number: parsed.number, error: String(error) },
+          'Failed to mark sibling PR as ready for review (non-fatal)',
+        );
+      }
     }
   }
 }

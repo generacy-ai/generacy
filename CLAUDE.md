@@ -303,3 +303,35 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
   - `packages/orchestrator/src/services/relay-bridge.ts` — MODIFIED in #624: `collectMetadata()` calls `probeControlPlaneSocket()`, reads `init-result.json` for relay metadata.
   - `packages/cluster-relay/src/metadata.ts` — MODIFIED in #624: Reads `controlPlaneReady` from orchestrator `/health` response.
   - `packages/orchestrator/src/server.ts` — MODIFIED in #624: After `server.listen()`, polls `probeControlPlaneSocket()` every 1s for `CONTROL_PLANE_WAIT_TIMEOUT` (default 15s). On timeout: pushes `error` status via relay with reason, waits ~30s grace window, then `process.exit(1)`.
+
+## Multi-Repo Workflow Support — Phase 1 (#687)
+
+- Foundational change: widens `ActionContext` and `ExecutionOptions` to carry `siblingWorkdirs: Record<string, string>` (repo name → absolute path) for cross-repo workflow support. Not user-visible on its own; consumers land in Phase 2.
+- `packages/config/src/repos.ts` — NEW function `resolveSiblingWorkdirs(config, primaryWorkdir, basePath?)`: Builds sibling map from `WorkspaceConfig.repos`. Derives base path from `dirname(primaryWorkdir)`. Excludes primary (path-match via `realpathSync`). Skips non-existent siblings. Returns `{}` if primary can't be identified (fail closed).
+- `packages/workflow-engine/src/types/action.ts` — MODIFIED in #687: `ActionContext` gains `siblingWorkdirs: Record<string, string>` (non-optional, defaults to `{}`).
+- `packages/workflow-engine/src/types/execution.ts` — MODIFIED in #687: `ExecutionOptions` gains optional `siblingWorkdirs?: Record<string, string>`.
+- `packages/workflow-engine/src/executor/index.ts` — MODIFIED in #687: `execute()` caches sibling map once per run; `createActionContext()` threads it to every step.
+- `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #687: Resolves sibling map from workspace config after checkout, passes via `CliSpawnOptions`.
+- `packages/orchestrator/src/worker/types.ts` — MODIFIED in #687: `CliSpawnOptions` gains `siblingWorkdirs?: Record<string, string>`.
+- `packages/orchestrator/src/worker/cli-spawner.ts` — MODIFIED in #687: Forwards `siblingWorkdirs` to `AgentLauncher.launch()`.
+- Architecture: Caller-injection pattern — orchestrator resolves map, workflow-engine stays decoupled from `@generacy-ai/config`.
+
+## Multi-Repo Workflow Support — Phase 2 (#690)
+
+- Generic `phase:after` extension hook for post-phase callbacks in the phase loop. Enables registering post-phase behavior (like multi-repo fan-out in Issue E / #691) without modifying phase-loop.ts directly.
+- `packages/orchestrator/src/worker/types.ts` — MODIFIED in #690: New types `PhaseAfterContext` (extends `WorkerContext` with `phase: WorkflowPhase` and `commitResult: CommitResult`), `CommitResult` (`{ prUrl?: string; hasChanges: boolean }`), `PhaseAfterHandler` (async function receiving `PhaseAfterContext`).
+- `packages/orchestrator/src/worker/phase-loop.ts` — MODIFIED in #690: `PhaseLoopDeps` gains optional `phaseAfterHandlers?: PhaseAfterHandler[]`. Handlers invoked sequentially after `commitPushAndEnsurePr()` + `PHASES_REQUIRING_CHANGES` check + `labelManager.onPhaseComplete()`, before gate check. Fail-fast: first handler that throws stops remaining handlers and blocks the phase. Handlers do NOT run at implement increment boundaries or retry paths — only normal phase completion.
+- `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #690: Passes `phaseAfterHandlers` (empty array initially) to `PhaseLoopDeps`. Registration point for future handlers.
+- Blocks #691 (multi-repo fan-out handler registers through this hook).
+
+## Multi-Repo Workflow Support — Phase 3 (#692)
+
+- Review-phase coordination for multi-repo workflows. Three components: ready-for-review sync, `on-sibling-review` gate condition, and multi-gate-per-phase support.
+- `packages/orchestrator/src/worker/types.ts` — MODIFIED in #692: `GateDefinition.condition` union gains `'on-sibling-review'`. `WorkerContext` gains optional `linkedPRs?: LinkedPR[]` (imported from `@generacy-ai/workflow-engine`).
+- `packages/orchestrator/src/worker/config.ts` — MODIFIED in #692: `GateDefinitionSchema` condition enum gains `'on-sibling-review'`. Default `speckit-feature` gates gain `{ phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' }`.
+- `packages/orchestrator/src/worker/gate-checker.ts` — MODIFIED in #692: New `checkGates()` method returns `GateDefinition[]` (all matching gates for a phase via `.filter()`). Original `checkGate()` preserved (returns first match).
+- `packages/orchestrator/src/worker/phase-loop.ts` — MODIFIED in #692: Gate evaluation refactored to iterate all gates from `checkGates()`. For `on-sibling-review` condition: calls `checkSiblingReviews()` on `context.linkedPRs`. When gate activates, flips all sibling drafts to ready-for-review before pausing.
+- `packages/orchestrator/src/worker/pr-manager.ts` — MODIFIED in #692: `markReadyForReview()` extended to iterate `linkedPRs`, parse each URL for owner/repo, call `gh pr ready` per sibling (idempotent, best-effort).
+- `packages/orchestrator/src/worker/sibling-review-checker.ts` — NEW in #692: `checkSiblingReviews(linkedPRs, github, logger)` → `SiblingReviewResult`. Queries `reviewDecision` via `gh pr view --json reviewDecision` per linked PR. Returns `{ allApproved, statuses[] }`. Empty `linkedPRs` → immediately `allApproved: true`.
+- `packages/orchestrator/src/worker/linked-pr-url-parser.ts` — NEW in #692: `parsePRUrl(url)` → `ParsedPRUrl | null`. Regex extracts owner/repo/number from GitHub PR URL.
+- `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #692: Loads `linkedPRs` from workflow state store after phase-after handlers, threads to `WorkerContext.linkedPRs`.

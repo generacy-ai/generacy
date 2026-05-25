@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { LabelManager } from './label-manager.js';
@@ -9,6 +9,8 @@ import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
+import { buildSiblingPromptBlock } from './sibling-prompt.js';
+import { checkSiblingReviews } from './sibling-review-checker.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -26,6 +28,8 @@ export interface PhaseLoopDeps {
   conversationLogger?: ConversationLogger;
   /** Optional callback for emitting job lifecycle events */
   jobEventEmitter?: JobEventEmitter;
+  /** Optional callbacks invoked after each phase completes, before gate check */
+  phaseAfterHandlers?: PhaseAfterHandler[];
 }
 
 /**
@@ -182,15 +186,20 @@ export class PhaseLoop {
           }
 
           // CLI phase — spawn Claude CLI (resume previous session if available)
+          const siblingBlock = buildSiblingPromptBlock(context.siblingWorkdirs ?? {});
+          const prompt = siblingBlock
+            ? `${siblingBlock}\n\n${context.issueUrl}`
+            : context.issueUrl;
           result = await cliSpawner.spawnPhase(
             phase as Exclude<typeof phase, 'validate'>,
             {
-              prompt: context.issueUrl,
+              prompt,
               cwd: context.checkoutPath,
               env: { CLAUDE_HEADLESS: 'true' },
               timeoutMs: config.phaseTimeoutMs,
               signal: context.signal,
               resumeSessionId: currentSessionId,
+              siblingWorkdirs: context.siblingWorkdirs,
             },
             outputCapture,
           );
@@ -387,19 +396,26 @@ export class PhaseLoop {
       // 5c. Mark phase as completed in labels
       await labelManager.onPhaseComplete(phase);
 
-      // 6. Check for review gates
-      const gate = gateChecker.checkGate(phase, context.item.workflowName, config);
+      // 5d. Invoke phase:after handlers (post-commit, pre-gate)
+      for (const handler of deps.phaseAfterHandlers ?? []) {
+        await handler({ ...context, phase, commitResult: { prUrl, hasChanges } });
+      }
 
-      // Evaluate whether the gate should activate based on its condition
-      let gateActive = false;
-      if (gate) {
+      // 6. Check for review gates (multi-gate: iterate all matching gates for this phase)
+      const gates = gateChecker.checkGates(phase, context.item.workflowName, config);
+
+      // Fetch current issue labels once (shared across all gate evaluations)
+      let currentLabels: string[] | undefined;
+
+      for (const gate of gates) {
+        // Evaluate whether the gate should activate based on its condition
+        let gateActive = false;
+
         if (gate.condition === 'always') {
           gateActive = true;
         } else if (gate.condition === 'on-questions') {
           // Defensive: integrate any GitHub answers into local clarifications.md
-          // before checking for pending questions. The Claude CLI clarify command
-          // should do this via manage_clarifications update_answer, but if it
-          // doesn't, this ensures answers aren't lost and the gate passes.
+          // before checking for pending questions.
           await integrateClarificationAnswers(context, this.logger);
           gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber);
           if (!gateActive) {
@@ -408,76 +424,97 @@ export class PhaseLoop {
               'Gate condition "on-questions" not met (no pending clarifications) — skipping',
             );
           }
+        } else if (gate.condition === 'on-sibling-review') {
+          const reviewResult = await checkSiblingReviews(context.linkedPRs, this.logger);
+          gateActive = !reviewResult.allApproved;
+          if (gateActive) {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel, statuses: reviewResult.statuses },
+              'Gate condition "on-sibling-review" active — not all siblings approved',
+            );
+            // Flip all siblings to ready-for-review before pausing
+            await prManager.markSiblingsReadyForReview(context.linkedPRs);
+          } else {
+            this.logger.info(
+              { phase, gateLabel: gate.gateLabel },
+              'Gate condition "on-sibling-review" satisfied — all siblings approved (or none linked)',
+            );
+          }
         }
-      }
 
-      if (gateActive && gate) {
+        if (!gateActive) continue;
+
         // Check if this gate is already satisfied (e.g., completed:clarification
         // was added before the workflow reached this point). The completed label
         // corresponds to the gate label suffix: waiting-for:X → completed:X.
         const gateSuffix = gate.gateLabel.replace(/^waiting-for:/, '');
         const completedLabel = `completed:${gateSuffix}`;
-        const currentIssue = await context.github.getIssue(context.item.owner, context.item.repo, context.item.issueNumber);
-        const currentLabels = currentIssue.labels.map((l) => typeof l === 'string' ? l : l.name);
+
+        if (!currentLabels) {
+          const currentIssue = await context.github.getIssue(context.item.owner, context.item.repo, context.item.issueNumber);
+          currentLabels = currentIssue.labels.map((l) => typeof l === 'string' ? l : l.name);
+        }
 
         if (currentLabels.includes(completedLabel)) {
           this.logger.info(
             { phase, gateLabel: gate.gateLabel, completedLabel },
             'Gate already satisfied — skipping pause',
           );
-        } else {
-          this.logger.info(
-            { phase, gateLabel: gate.gateLabel },
-            'Gate hit, pausing workflow',
-          );
-
-          // Emit job:paused before gate label management
-          jobEventEmitter?.('job:paused', {
-            jobId: context.jobId,
-            workflowName: context.item.workflowName,
-            owner: context.item.owner,
-            repo: context.item.repo,
-            issueNumber: context.item.issueNumber,
-            status: 'paused',
-            currentStep: phase,
-            gateLabel: gate.gateLabel,
-          });
-
-          await labelManager.onGateHit(phase, gate.gateLabel);
-
-          // Post clarification questions to the issue when clarify gate is hit
-          if (gate.gateLabel === 'waiting-for:clarification') {
-            try {
-              await postClarifications(context, this.logger);
-            } catch (error) {
-              this.logger.warn(
-                { error: error instanceof Error ? error.message : String(error) },
-                'Failed to post clarification questions — continuing gate flow',
-              );
-            }
-          }
-
-          // Update the result with gate info
-          result.gateHit = {
-            gateLabel: gate.gateLabel,
-            reason: `Review gate "${gate.gateLabel}" activated after phase "${phase}"`,
-          };
-
-          // Record completion time before gate pause
-          const ts = phaseTimestamps.get(phase);
-          if (ts) ts.completedAt = new Date().toISOString();
-
-          // Update stage comment showing gate hit
-          await stageCommentManager.updateStageComment({
-            stage,
-            status: 'in_progress',
-            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
-            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-            prUrl: context.prUrl,
-          });
-
-          return { results, completed: false, lastPhase: phase, gateHit: true };
+          continue;
         }
+
+        // Gate is active and not already satisfied — pause the workflow
+        this.logger.info(
+          { phase, gateLabel: gate.gateLabel },
+          'Gate hit, pausing workflow',
+        );
+
+        // Emit job:paused before gate label management
+        jobEventEmitter?.('job:paused', {
+          jobId: context.jobId,
+          workflowName: context.item.workflowName,
+          owner: context.item.owner,
+          repo: context.item.repo,
+          issueNumber: context.item.issueNumber,
+          status: 'paused',
+          currentStep: phase,
+          gateLabel: gate.gateLabel,
+        });
+
+        await labelManager.onGateHit(phase, gate.gateLabel);
+
+        // Post clarification questions to the issue when clarify gate is hit
+        if (gate.gateLabel === 'waiting-for:clarification') {
+          try {
+            await postClarifications(context, this.logger);
+          } catch (error) {
+            this.logger.warn(
+              { error: error instanceof Error ? error.message : String(error) },
+              'Failed to post clarification questions — continuing gate flow',
+            );
+          }
+        }
+
+        // Update the result with gate info
+        result.gateHit = {
+          gateLabel: gate.gateLabel,
+          reason: `Review gate "${gate.gateLabel}" activated after phase "${phase}"`,
+        };
+
+        // Record completion time before gate pause
+        const ts = phaseTimestamps.get(phase);
+        if (ts) ts.completedAt = new Date().toISOString();
+
+        // Update stage comment showing gate hit
+        await stageCommentManager.updateStageComment({
+          stage,
+          status: 'in_progress',
+          phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'complete'),
+          startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          prUrl: context.prUrl,
+        });
+
+        return { results, completed: false, lastPhase: phase, gateHit: true };
       }
 
       // 7. Record phase completion time

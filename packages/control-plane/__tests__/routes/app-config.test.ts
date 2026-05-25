@@ -143,6 +143,37 @@ describe('app-config routes', () => {
       const body = JSON.parse(res.end.mock.calls[0][0]);
       expect(body).toBeNull();
     });
+
+    it('returns canonical appConfig unchanged when cluster.local.yaml exists but lacks appConfig', async () => {
+      await fs.writeFile(
+        path.join(generacyDir, 'cluster.yaml'),
+        YAML.stringify({
+          channel: 'stable',
+          workers: 1,
+          appConfig: {
+            schemaVersion: '1',
+            env: [{ name: 'CANONICAL_VAR', secret: false }],
+            files: [{ id: 'canonical-file', mountPath: '/tmp/canonical.json' }],
+          },
+        }),
+      );
+      await fs.writeFile(
+        path.join(generacyDir, 'cluster.local.yaml'),
+        YAML.stringify({ workers: 5 }),
+      );
+
+      const res = createMockResponse();
+      await handleGetManifest(createEmptyReq(), res as any, stubActor, {});
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res.end.mock.calls[0][0]);
+      expect(body).toBeDefined();
+      expect(body.env).toHaveLength(1);
+      expect(body.env[0].name).toBe('CANONICAL_VAR');
+      expect(body.files).toHaveLength(1);
+      expect(body.files[0].id).toBe('canonical-file');
+      expect(body.schemaVersion).toBe('1');
+    });
   });
 
   describe('PUT /app-config/env', () => {

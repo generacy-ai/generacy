@@ -116,6 +116,9 @@ export interface ExecutionOptions {
   startStep?: string;
   /** Enable verbose output */
   verbose?: boolean;
+  /** Sibling repository working directories (repo name → absolute path).
+   *  Injected by the orchestrator from WorkspaceConfig.repos. */
+  siblingWorkdirs?: Record<string, string>;
 }
 
 /**
