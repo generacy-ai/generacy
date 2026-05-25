@@ -140,7 +140,7 @@ describe('launch integration', () => {
       const config = await fetchLaunchConfig(serverUrl, 'test-claim');
 
       const projectDir = join(tempDir, 'test-project');
-      scaffoldProject(projectDir, config);
+      scaffoldProject(projectDir, config, 1);
 
       // Verify all three files exist
       const generacyDir = join(projectDir, '.generacy');

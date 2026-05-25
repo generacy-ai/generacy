@@ -6,10 +6,12 @@ export type { ActivationErrorCode } from './errors.js';
 export {
   DeviceCodeResponseSchema,
   PollResponseSchema,
+  PollRequestSchema,
 } from './types.js';
 export type {
   DeviceCodeResponse,
   PollResponse,
+  PollRequest,
   ActivationResult,
   ActivationClientOptions,
   HttpClient,

@@ -33,4 +33,5 @@ export interface ActivationOptions {
   maxCycles?: number;
   maxRetries?: number;
   httpClient?: import('@generacy-ai/activation-client').HttpClient;
+  initialWorkers?: number;
 }

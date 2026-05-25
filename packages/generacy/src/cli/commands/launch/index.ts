@@ -11,7 +11,7 @@
  *   7. Auto-open browser with verification URL
  *   8. Register cluster in ~/.generacy/clusters.json
  */
-import { Command, Option } from 'commander';
+import { Command, Option, InvalidArgumentError } from 'commander';
 import * as p from '@clack/prompts';
 import { getLogger } from '../../utils/logger.js';
 import { execSafe } from '../../utils/exec.js';
@@ -28,6 +28,15 @@ import { resolveApiUrl } from '../../utils/cloud-url.js';
 import { sanitizeComposeProjectName } from '../cluster/scaffolder.js';
 import { clearStaleActivation } from './volume-cleanup.js';
 import { probeControlPlaneReady, forwardRegistryCredentials, cleanupScopedDockerConfig } from './credential-forward.js';
+import { resolveWorkerCount } from './worker-count-resolver.js';
+
+function parseWorkersFlag(value: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < 1 || String(parsed) !== value.trim()) {
+    throw new InvalidArgumentError('--workers must be a positive integer');
+  }
+  return parsed;
+}
 
 /**
  * Create the `launch` subcommand.
@@ -45,6 +54,7 @@ export function launchCommand(): Command {
     .addOption(
       new Option('--cloud-url <url>', '[deprecated] Use --api-url instead').hideHelp()
     )
+    .option('--workers <N>', 'Number of workers to run on this host', parseWorkersFlag)
     .action(async (_opts, cmd) => {
       await launchAction(cmd.opts() as LaunchOptions);
     });
@@ -127,9 +137,24 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
     ? resolveProjectDir(config.projectName, opts.dir)
     : await selectDirectory(resolveProjectDir(config.projectName), process.cwd());
 
+  // ── 5b. Resolve per-host worker count ───────────────────────────────
+  const isTTY = process.stdout.isTTY === true;
+  let workerCount: number;
+  try {
+    const resolution = await resolveWorkerCount(opts, config, isTTY);
+    for (const warning of resolution.warnings) {
+      p.log.warn(warning);
+    }
+    workerCount = resolution.workerCount;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    p.log.error(msg);
+    process.exit(1);
+  }
+
   // ── 6. Scaffold project directory ───────────────────────────────────
   try {
-    scaffoldProject(projectDir, config);
+    scaffoldProject(projectDir, config, workerCount);
     p.log.success('Project directory created');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);

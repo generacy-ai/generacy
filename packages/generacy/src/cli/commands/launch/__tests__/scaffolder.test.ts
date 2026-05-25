@@ -106,7 +106,7 @@ describe('scaffoldProject', () => {
 
   it('creates .generacy/ directory inside projectDir', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
     expect(existsSync(join(projectDir, '.generacy'))).toBe(true);
   });
 
@@ -116,7 +116,7 @@ describe('scaffoldProject', () => {
 
   it('writes cluster.yaml with only channel, workers, variant', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8');
     const parsed = parse(raw);
@@ -133,7 +133,7 @@ describe('scaffoldProject', () => {
 
   it('writes channel=preview to cluster.yaml when config.channel is preview', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, { ...mockConfig, channel: 'preview' });
+    scaffoldProject(projectDir, { ...mockConfig, channel: 'preview' }, 1);
 
     const parsed = parse(readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8'));
     expect(parsed.channel).toBe('preview');
@@ -142,7 +142,7 @@ describe('scaffoldProject', () => {
   it('defaults to channel=preview when config.channel is undefined', () => {
     const projectDir = join(tempDir, 'new-project');
     const { channel: _omitted, ...configWithoutChannel } = mockConfig;
-    scaffoldProject(projectDir, configWithoutChannel as LaunchConfig);
+    scaffoldProject(projectDir, configWithoutChannel as LaunchConfig, 1);
 
     const parsed = parse(readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8'));
     expect(parsed.channel).toBe('preview');
@@ -150,7 +150,7 @@ describe('scaffoldProject', () => {
 
   it('cluster.yaml output validates against ClusterYamlSchema', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'cluster.yaml'), 'utf-8');
     const parsed = parse(raw);
@@ -165,7 +165,7 @@ describe('scaffoldProject', () => {
 
   it('writes cluster.json with snake_case fields', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'cluster.json'), 'utf-8');
     const parsed = JSON.parse(raw);
@@ -178,7 +178,7 @@ describe('scaffoldProject', () => {
 
   it('cluster.json output validates against ClusterJsonSchema', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'cluster.json'), 'utf-8');
     const parsed = JSON.parse(raw);
@@ -189,7 +189,7 @@ describe('scaffoldProject', () => {
 
   it('cluster.json does not contain camelCase or extra fields', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'cluster.json'), 'utf-8');
     const parsed = JSON.parse(raw);
@@ -209,7 +209,7 @@ describe('scaffoldProject', () => {
 
   it('writes docker-compose.yml with multi-service structure', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'docker-compose.yml'), 'utf-8');
     const parsed = parse(raw);
@@ -222,7 +222,7 @@ describe('scaffoldProject', () => {
 
   it('uses bind mode for claude config in launch', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'docker-compose.yml'), 'utf-8');
     const parsed = parse(raw);
@@ -234,7 +234,7 @@ describe('scaffoldProject', () => {
 
   it('sets DEPLOYMENT_MODE=local for launch', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const raw = readFileSync(join(projectDir, '.generacy', 'docker-compose.yml'), 'utf-8');
     const parsed = parse(raw);
@@ -248,7 +248,7 @@ describe('scaffoldProject', () => {
 
   it('writes .env file with identity and project vars', () => {
     const projectDir = join(tempDir, 'new-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const envPath = join(projectDir, '.generacy', '.env');
     expect(existsSync(envPath)).toBe(true);
@@ -274,7 +274,7 @@ describe('scaffoldProject', () => {
         relayUrl: 'wss://api-staging.generacy.ai/relay?projectId=proj_abc123',
       },
     };
-    scaffoldProject(projectDir, configWithCloud);
+    scaffoldProject(projectDir, configWithCloud, 1);
 
     const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
     expect(content).toContain('GENERACY_API_URL=https://api-staging.generacy.ai');
@@ -284,7 +284,7 @@ describe('scaffoldProject', () => {
 
   it('backward compat when cloud absent — derives from cloudUrl', () => {
     const projectDir = join(tempDir, 'no-cloud-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
     expect(content).toContain('GENERACY_API_URL=https://api.generacy.ai');
@@ -296,7 +296,7 @@ describe('scaffoldProject', () => {
     scaffoldProject(projectDir, {
       ...mockConfig,
       repos: { ...mockConfig.repos, primaryBranch: 'develop' },
-    });
+    }, 1);
 
     const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
     expect(content).toContain('REPO_BRANCH=develop');
@@ -304,7 +304,7 @@ describe('scaffoldProject', () => {
 
   it('omits REPO_BRANCH entirely when cloud does not provide primaryBranch', () => {
     const projectDir = join(tempDir, 'no-branch-project');
-    scaffoldProject(projectDir, mockConfig);
+    scaffoldProject(projectDir, mockConfig, 1);
 
     const content = readFileSync(join(projectDir, '.generacy', '.env'), 'utf-8');
     expect(content).not.toContain('REPO_BRANCH=');
@@ -318,7 +318,7 @@ describe('scaffoldProject', () => {
     const projectDir = join(tempDir, 'existing-project');
     mkdirSync(join(projectDir, '.generacy'), { recursive: true });
 
-    expect(() => scaffoldProject(projectDir, mockConfig)).toThrow(
+    expect(() => scaffoldProject(projectDir, mockConfig, 1)).toThrow(
       /already contains a \.generacy\/ folder/,
     );
   });

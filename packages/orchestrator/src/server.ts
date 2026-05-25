@@ -660,11 +660,25 @@ async function activateInBackground(
   onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
 ): Promise<void> {
+  const initialWorkersRaw = process.env['GENERACY_INITIAL_WORKERS'];
+  let initialWorkers: number | undefined;
+  if (initialWorkersRaw != null && initialWorkersRaw !== '') {
+    const parsed = Number.parseInt(initialWorkersRaw, 10);
+    if (Number.isInteger(parsed) && parsed >= 1) {
+      initialWorkers = parsed;
+    } else {
+      server.log.warn(
+        `GENERACY_INITIAL_WORKERS="${initialWorkersRaw}" is not a positive integer; ignoring`,
+      );
+    }
+  }
+
   const activationResult = await activate({
     cloudUrl: config.activation.cloudUrl,
     keyFilePath: config.activation.keyFilePath,
     clusterJsonPath: config.activation.clusterJsonPath,
     logger: server.log as unknown as import('pino').Logger,
+    initialWorkers,
   });
 
   config.relay.apiKey = activationResult.apiKey;
