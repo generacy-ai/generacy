@@ -53,7 +53,7 @@ Coverage per plan.md §Testing. Vitest only; HTTP client mocked at the `HttpClie
 - [X] T013 [P] [US1] Create `packages/generacy/src/cli/commands/launch/__tests__/worker-count-resolver.test.ts` (NEW) — eight-row matrix from contracts/worker-count-resolver.md §Tests; mock `promptWorkerCount` via Vitest module mock for rows 4/5/8. Depends on T006. (contracts/worker-count-resolver.md §Tests)
 - [X] T014 [P] [US1] Extend `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts` — assert `scaffoldDockerCompose` output contains `GENERACY_INITIAL_WORKERS=${WORKER_COUNT}` for the orchestrator service; assert `scaffoldEnvFile` writes the supplied `workers` value into `WORKER_COUNT=…`. Depends on T010. (contracts/scaffolder-env-compose.md §Tests)
 - [X] T015 [P] [US1] Extend `packages/activation-client/tests/client.test.ts` — two new cases on `pollDeviceCode`: (a) omits `workers` from body when undefined; (b) includes `workers` in body when provided. Depends on T004. (contracts/activation-poll-body.md §Tests §client.test.ts)
-- [ ] T016 [P] [US1] Extend `packages/orchestrator/tests/unit/activation/index.test.ts` — assert `activate({ initialWorkers: 4 })` calls `pollForApproval` with `expect.objectContaining({ workers: 4 })`. Depends on T011. (contracts/activation-poll-body.md §Tests §index.test.ts)
+- [X] T016 [P] [US1] Extend `packages/orchestrator/tests/unit/activation/index.test.ts` — assert `activate({ initialWorkers: 4 })` calls `pollForApproval` with `expect.objectContaining({ workers: 4 })`. Depends on T011. (contracts/activation-poll-body.md §Tests §index.test.ts)
 
 ## Phase 7: Manual Verification & Polish
 
