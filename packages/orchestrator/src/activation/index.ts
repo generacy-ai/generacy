@@ -36,6 +36,7 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
     maxCycles = DEFAULT_MAX_CYCLES,
     maxRetries,
     httpClient: injectedClient,
+    initialWorkers,
   } = options;
 
   const httpClient = injectedClient ?? new NativeHttpClient();
@@ -82,6 +83,7 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
       expiresIn: deviceCode.expires_in,
       httpClient,
       logger,
+      workers: initialWorkers,
     });
 
     if (pollResult.status === 'approved') {

@@ -6,6 +6,7 @@ import {
   type HttpClient,
   type HttpResponse,
   type PollResponse,
+  type PollRequest,
   type ActivationLogger,
 } from './types.js';
 import { PollResponseSchema } from './types.js';
@@ -121,14 +122,21 @@ export async function initDeviceFlow(
 
 /**
  * Single-shot poll request (no retry).
+ *
+ * @param workers OPTIONAL — when set, included in the request body so the
+ *                cloud can set `targetWorkers` on the cluster doc once
+ *                the activation transitions to `approved`.
  */
 export async function pollDeviceCode(
   cloudUrl: string,
   deviceCode: string,
   httpClient: HttpClient,
+  workers?: number,
 ): Promise<PollResponse> {
   const url = `${cloudUrl}/api/clusters/device-code/poll`;
-  const response = await httpClient.post<unknown>(url, { device_code: deviceCode });
+  const body: PollRequest =
+    workers != null ? { device_code: deviceCode, workers } : { device_code: deviceCode };
+  const response = await httpClient.post<unknown>(url, body);
   const parsed = PollResponseSchema.safeParse(response.data);
   if (!parsed.success) {
     throw new ActivationError(

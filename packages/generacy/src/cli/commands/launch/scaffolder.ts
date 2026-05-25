@@ -49,7 +49,7 @@ export function resolveProjectDir(projectName: string, dirOverride?: string): st
  *
  * @throws If `.generacy/` already exists inside `projectDir`.
  */
-export function scaffoldProject(projectDir: string, config: LaunchConfig): void {
+export function scaffoldProject(projectDir: string, config: LaunchConfig, workers: number): void {
   mkdirSync(projectDir, { recursive: true });
 
   const generacyDir = join(projectDir, '.generacy');
@@ -72,7 +72,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
 
   scaffoldClusterYaml(generacyDir, {
     channel: config.channel ?? 'preview',
-    workers: 1,
+    workers,
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
   });
 
@@ -85,7 +85,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     variant: config.variant as 'cluster-base' | 'cluster-microservices',
     orgId: config.orgId,
     channel: config.channel ?? 'preview',
-    workers: 1,
+    workers,
     repoUrl: config.repos?.primary,
     claudeConfigMode: 'bind',
   });
@@ -99,7 +99,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig): void 
     repoUrl: config.repos?.primary,
     repoBranch: config.repos?.primaryBranch,
     channel: config.channel ?? 'preview',
-    workers: 1,
+    workers,
     cloud: config.cloud
       ? { apiUrl: config.cloud.apiUrl, relayUrl: config.cloud.relayUrl }
       : undefined,

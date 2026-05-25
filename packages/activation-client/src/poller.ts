@@ -11,6 +11,7 @@ export interface PollOptions {
   expiresIn: number; // seconds
   httpClient: HttpClient;
   logger: ActivationLogger;
+  workers?: number;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -22,7 +23,7 @@ function sleep(ms: number): Promise<void> {
  * Returns the final PollResponse (either 'approved' or 'expired').
  */
 export async function pollForApproval(options: PollOptions): Promise<PollResponse> {
-  const { cloudUrl, deviceCode, expiresIn, httpClient, logger } = options;
+  const { cloudUrl, deviceCode, expiresIn, httpClient, logger, workers } = options;
 
   let intervalMs = options.interval * 1000;
   const deadline = Date.now() + expiresIn * 1000;
@@ -34,7 +35,7 @@ export async function pollForApproval(options: PollOptions): Promise<PollRespons
       return { status: 'expired' };
     }
 
-    const response = await pollDeviceCode(cloudUrl, deviceCode, httpClient);
+    const response = await pollDeviceCode(cloudUrl, deviceCode, httpClient, workers);
 
     switch (response.status) {
       case 'approved':

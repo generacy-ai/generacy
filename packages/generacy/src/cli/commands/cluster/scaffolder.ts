@@ -186,6 +186,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           'REDIS_HOST=redis',
           `DEPLOYMENT_MODE=${deploymentMode}`,
           `CLUSTER_VARIANT=${variant}`,
+          'GENERACY_INITIAL_WORKERS=${WORKER_COUNT}',
         ],
         env_file: envFile,
         healthcheck: {

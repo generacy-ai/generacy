@@ -31,6 +31,37 @@ function formatPath(absPath: string): string {
 }
 
 /**
+ * Prompt the user for a worker count.
+ *
+ * @param tierCap         Upper bound (inclusive).
+ * @param defaultWorkers  Default value shown in the prompt.
+ */
+export async function promptWorkerCount(
+  tierCap: number,
+  defaultWorkers: number,
+): Promise<number> {
+  const value = await p.text({
+    message: `How many workers should run on this host? (1–${tierCap})`,
+    placeholder: String(defaultWorkers),
+    initialValue: String(defaultWorkers),
+    validate(input) {
+      const trimmed = input.trim();
+      if (!trimmed) return 'Please enter a number';
+      const parsed = Number(trimmed);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        return 'Must be a positive integer';
+      }
+      if (parsed > tierCap) {
+        return `Cannot exceed tier cap of ${tierCap}`;
+      }
+      return undefined;
+    },
+  });
+  exitIfCancelled(value);
+  return Number((value as string).trim());
+}
+
+/**
  * Prompt the user for a claim code if not provided via --claim flag.
  */
 export async function promptClaimCode(): Promise<string> {

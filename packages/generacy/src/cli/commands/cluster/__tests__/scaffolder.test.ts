@@ -295,6 +295,20 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.worker.environment).toContain('CLUSTER_VARIANT=cluster-base');
   });
 
+  it('includes GENERACY_INITIAL_WORKERS interpolated from WORKER_COUNT on orchestrator only', () => {
+    scaffoldDockerCompose(dir, baseInput);
+    const raw = readFileSync(join(dir, 'docker-compose.yml'), 'utf-8');
+    const parsed = parse(raw);
+
+    expect(parsed.services.orchestrator.environment).toContain(
+      'GENERACY_INITIAL_WORKERS=${WORKER_COUNT}',
+    );
+    expect(parsed.services.worker.environment).not.toContain(
+      'GENERACY_INITIAL_WORKERS=${WORKER_COUNT}',
+    );
+    expect(raw).toContain('GENERACY_INITIAL_WORKERS=${WORKER_COUNT}');
+  });
+
   it('includes worker deploy.replicas', () => {
     scaffoldDockerCompose(dir, baseInput);
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
@@ -483,6 +497,20 @@ describe('scaffoldEnvFile', () => {
 
     const content = readFileSync(join(dir, '.env'), 'utf-8');
     expect(content).toContain('REPO_BRANCH=main');
+  });
+
+  it('writes the supplied workers value into WORKER_COUNT=', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'demo',
+      workers: 4,
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).toContain('WORKER_COUNT=4');
   });
 
   it('uses default values when optionals are omitted', () => {
