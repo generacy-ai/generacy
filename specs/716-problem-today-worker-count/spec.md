@@ -57,11 +57,10 @@ Already uses \`readMergedClusterConfig\` (after #712) — picks up the new shape
 
 ### 5. Cloud relays the chosen value at activation time
 
-The CLI tells the cloud which workers count was chosen at launch so the cluster doc's `targetWorkers` field (from [generacy-cloud#696](https://github.com/generacy-ai/generacy-cloud/issues/696)) starts in sync with reality.
+Two questions for implementation, not blocking the design:
 
-**Mechanism**: activation-complete payload. The device-flow `approve`/`activate` call is extended to include `workers`; cloud sets `targetWorkers` once at activation. This keeps the contracts clean — `metadata.workers` (from #714) reports observed running count; `targetWorkers` is declared intent set once at activation and mutated thereafter by scale operations via the existing `PATCH /clusters/:clusterId/workers` flow. Routing both through the metadata-push pipeline would conflate the two semantics.
-
-**Cloud bootstrap UI**: CLI-side only for v1. The cloud's "Run on my computer" page does **not** prompt for workers; `launch-config` carries only the tier cap. The host is the single point of decision (the host knows its own capacity; the cloud does not), with the cloud providing the cap as the only constraint.
+- Does the CLI need to *tell* the cloud which workers count was chosen at launch? Yes, so the cloud's cluster doc \`targetWorkers\` field (from [generacy-cloud#696](https://github.com/generacy-ai/generacy-cloud/issues/696)) starts in sync with reality. Implementation: include \`workers\` in the activation-complete payload the cluster sends to cloud, or in the cluster's metadata push (which #714 just made richer).
+- Initial bootstrap UI flow: should the cloud's \"Run on my computer\" page also prompt for workers, then bake the value into the claim code / launch-config? Two paths exist (cloud-side or CLI-side prompt). I think CLI-side is cleaner — host knows itself best — but the cloud UI can pre-fill a non-binding default. Decide during clarify.
 
 ## Out of scope
 
@@ -78,27 +77,12 @@ The CLI tells the cloud which workers count was chosen at launch so the cluster 
 
 Both shipped together = the full new model.
 
-## Clarifications
-
-Resolved during the clarify phase (see [clarifications.md](./clarifications.md) for full reasoning):
-
-| # | Topic | Resolution |
-|---|-------|------------|
-| Q1 | Cloud relay mechanism | Activation-complete payload — extend the device-flow `approve`/`activate` call to include `workers`; cloud sets `targetWorkers` once at activation. `metadata.workers` remains observed state; subsequent target updates flow through the existing scale endpoint. |
-| Q2 | Cloud bootstrap UI scope | CLI-side only for v1. Cloud's "Run on my computer" page does not prompt for workers; `launch-config` carries only the tier cap. Host owns the decision. |
-| Q3 | Tier-cap source in launch-config | Optional with conservative CLI-baked fallback. `tierCap = launchConfig.tierCap ?? 8`. Log a warning when fallback is used. Remove the fallback once the cloud companion ships the field. |
-| Q4 | v1 default `suggestedFromHost` | Constant `2`. Final prompt default = `min(tierCap, 2)` (so `1` on Free, `2` everywhere else). Resource-aware logic stays out of scope as a follow-up. |
-| Q5 | Non-interactive launch with no `--workers` flag and no TTY | Default with prominent warning. Use `suggestedFromHost`; warning text: `No TTY detected and --workers not provided. Defaulting to <N> workers. For reproducible scripted launches, pass --workers=<N> explicitly.` |
-
 ## Acceptance
 
-- \`npx generacy launch --claim=<code>\` prompts the user for a worker count when a TTY is available, with the tier cap (or `8` fallback if absent from launch-config) as the upper bound and `min(tierCap, 2)` as the default.
-- \`npx generacy launch --claim=<code> --workers=N\` accepts the value non-interactively and rejects values exceeding tier cap with a clear error referencing the tier upgrade path.
-- When no TTY is available and `--workers=N` is absent, launch succeeds using `min(tierCap, 2)` and emits the no-TTY warning to stderr.
-- When `launch-config` does not expose a tier cap, the CLI uses a baked-in fallback of `8`, logs a warning, and otherwise behaves as if tier validation were available.
+- \`npx generacy launch --claim=<code>\` prompts the user for a worker count, with the tier cap as the upper bound and a sensible default.
+- \`npx generacy launch --claim=<code> --workers=N\` accepts the value non-interactively and rejects values exceeding tier cap with a clear error.
 - The chosen value writes to host \`.env\` (\`WORKER_COUNT=N\`) and is passed to the orchestrator container (\`GENERACY_INITIAL_WORKERS=N\`).
 - On first cluster boot, the orchestrator entrypoint creates \`.generacy/cluster.local.yaml\` with \`workers: N\` if absent.
-- The CLI includes the chosen `workers` count in the device-flow activation-complete payload; the cloud sets the cluster doc's `targetWorkers` field from it once at activation.
 - Existing projects with \`workers: N\` in committed \`cluster.yaml\` continue to work; first scale operation transparently migrates the value to \`cluster.local.yaml\` (no special migration step).
 - Orchestrator's metadata payload reports the right worker count regardless of whether the value lives in \`cluster.yaml\` (legacy), \`cluster.local.yaml\` (new), or both (transition).
 
