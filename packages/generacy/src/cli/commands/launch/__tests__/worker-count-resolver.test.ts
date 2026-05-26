@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 
 // Mock promptWorkerCount so the prompt-path rows don't hit real Clack.
 vi.mock('../prompts.js', async () => {
@@ -16,6 +19,12 @@ import {
   SUGGESTED_FROM_HOST,
 } from '../worker-count-resolver.js';
 import type { LaunchConfig } from '../types.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const RESOLVER_SOURCE = readFileSync(
+  resolve(__dirname, '../worker-count-resolver.ts'),
+  'utf-8',
+);
 
 const baseConfig: LaunchConfig = {
   projectId: 'pj',
@@ -60,16 +69,25 @@ describe('resolveWorkerCount', () => {
     expect(r.warnings[0]).toMatch(/tierCap fallback/);
   });
 
-  it('row 3: flag > cap — throws with upgrade reference', async () => {
+  it('row 3: flag > cap — throws shared tier-limit message', async () => {
     await expect(
       resolveWorkerCount({ workers: 100 }, withTierCap(4), true),
-    ).rejects.toThrow(/exceeds tier cap of 4/);
+    ).rejects.toThrow(
+      'Worker count of 100 exceeds your  plan limit of 4. Upgrade your plan or retry with --workers=4.',
+    );
   });
 
-  it('row 3 (fallback): flag > fallback cap — throws referencing CLI fallback', async () => {
+  it('row 3 (fallback): flag > fallback cap — throws shared tier-limit message (fallback context surfaced via warnings only)', async () => {
     await expect(
       resolveWorkerCount({ workers: 100 }, withTierCap(), true),
-    ).rejects.toThrow(/CLI fallback cap/);
+    ).rejects.toThrow(
+      `Worker count of 100 exceeds your  plan limit of ${CLI_FALLBACK_TIER_CAP}. Upgrade your plan or retry with --workers=${CLI_FALLBACK_TIER_CAP}.`,
+    );
+  });
+
+  it('resolver source contains no inline "tier cap" or "plan limit" interpolation', () => {
+    expect(RESOLVER_SOURCE).not.toMatch(/tier cap/);
+    expect(RESOLVER_SOURCE).not.toMatch(/plan limit/);
   });
 
   it('row 4: no flag, tierCap present, TTY — prompts; default = min(cap, 2)', async () => {

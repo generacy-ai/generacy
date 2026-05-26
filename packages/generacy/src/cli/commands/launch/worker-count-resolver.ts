@@ -7,6 +7,7 @@
  */
 import type { LaunchConfig, LaunchOptions } from './types.js';
 import { promptWorkerCount } from './prompts.js';
+import { formatTierLimitError } from '@generacy-ai/activation-client';
 
 export const CLI_FALLBACK_TIER_CAP = 8;
 export const SUGGESTED_FROM_HOST = 2;
@@ -45,11 +46,9 @@ export async function resolveWorkerCount(
       throw new Error(`--workers must be a positive integer; got: ${opts.workers}`);
     }
     if (opts.workers > tierCap) {
-      const suffix =
-        tierCapSource === 'fallback'
-          ? ' (CLI fallback cap; real cap will be available after the cloud companion ships).'
-          : '. Upgrade your tier or reduce --workers.';
-      throw new Error(`--workers=${opts.workers} exceeds tier cap of ${tierCap}${suffix}`);
+      throw new Error(
+        formatTierLimitError({ requested: opts.workers, cap: tierCap, tier: '' }),
+      );
     }
     return {
       workerCount: opts.workers,
