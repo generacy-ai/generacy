@@ -14,7 +14,7 @@
 - C: Deploy command only — the orchestrator boot loop is internal; users see errors via cloud UI, not container logs.
 - D: Add a launch-side surface too (e.g., orchestrator writes a sentinel file or emits a structured marker line that the `launch` CLI scans from `docker compose logs` and surfaces before its activation-URL timeout fires).
 
-**Answer**: *Pending*
+**Answer**: **A** — Both the orchestrator (`packages/orchestrator/src/activation/index.ts`) and the deploy command (`packages/generacy/src/cli/commands/deploy/activation.ts`). Orchestrator surfaces via its logger and the `ActivationError`/relay error-status path; deploy uses `console.error` + non-zero `process.exit`. The launch-side sentinel (D) is real UX value but out of scope — sibling generacy-cloud#699 has the CLI's `worker-count-resolver` reject `--workers > tierCap` before `docker compose` ever starts in the common case, so the residual where `launch` would need to scan logs is narrow. File as a follow-up if anyone reports hitting it.
 
 ---
 
@@ -27,7 +27,7 @@
 - B: Return a new discriminated `ActivationResult` shape (`{ kind: 'approved', ... } | { kind: 'tier-limit-exceeded', cap, requested, tier }`). Larger blast radius — touches `ActivationResult` consumers across orchestrator startup.
 - C: Throw a generic `ActivationError` (existing `ACTIVATION_FAILED` code or similar) with the message text only — no new error code. Simplest, but loses programmatic discriminability for the relay/wizard.
 
-**Answer**: *Pending*
+**Answer**: **A** — `throw new ActivationError(message, 'TIER_LIMIT_EXCEEDED')`. Matches the existing pattern (`DEVICE_CODE_EXPIRED` is the same shape one severity level higher). The existing try/catch around `activate()` in `server.ts` catches it and pushes an `error` status via the relay — same flow as the `CONTROL_PLANE_WAIT_TIMEOUT` path. Preserves programmatic discriminability for the relay/wizard without the blast radius of changing `ActivationResult` (B).
 
 ---
 
@@ -40,7 +40,7 @@
 - B: Title-case the first character (`"basic"` → `"Basic"`) on the cluster side.
 - C: Maintain a small mapping table on the cluster side (`basic` → `Basic`, `pro` → `Pro`, `enterprise` → `Enterprise`); fall back to verbatim for unknown values.
 
-**Answer**: *Pending*
+**Answer**: **B** — Title-case the first character on the cluster side (`tier.charAt(0).toUpperCase() + tier.slice(1)`). Produces `Basic`, `Standard`, `Professional`, `Enterprise` from the cloud's lowercase identifiers without the maintenance burden of a mapping table. Implementation lives inside the shared formatter from Q4 so callers don't repeat the casing logic.
 
 ---
 
@@ -53,7 +53,7 @@
 - B: Match `worker-count-resolver`'s existing wording style for consistency (e.g., `--workers=N exceeds your <tier> tier cap of M. Upgrade your tier or reduce --workers.`).
 - C: Extract a shared formatter (e.g., `formatTierLimitError({ requested, cap, tier })`) into a small util consumed by both `worker-count-resolver` and the new tier-limit-exceeded branch; pick one wording and apply everywhere.
 
-**Answer**: *Pending*
+**Answer**: **C** — Extract a shared `formatTierLimitError({ requested, cap, tier })` util and apply the spec's friendlier wording (`Worker count of <requested> exceeds your <Tier> plan limit of <cap>. Upgrade your plan or retry with --workers=<cap>.`) at both call sites. Both surfaces (pre-poll resolver gate in `worker-count-resolver.ts:47-52` and cloud-side poll reject) are the same conceptual error in the same workflow — divergent wording would be confusing. The formatter folds in Q3's title-casing as an implementation detail, and the existing inline string in `worker-count-resolver.ts` is refactored to call the new util in the same PR. Suggested location: a shared util reachable from both the CLI `launch` command and the orchestrator activation path (e.g., `packages/activation-client/src/format-tier-limit-error.ts`, exported from the package, since the orchestrator already consumes `@generacy-ai/activation-client`).
 
 ---
 
@@ -66,4 +66,4 @@
 - B: Poller logs `logger.warn('Activation rejected: tier limit exceeded (requested=N, cap=M, tier=T)')` before returning, in addition to the caller's user-facing message. (Two log lines, but a clear breadcrumb for support.)
 - C: Poller logs `logger.error(...)` and the caller is responsible only for `process.exit`/throw. (Inverts the current convention where the poller is silent on terminal states.)
 
-**Answer**: *Pending*
+**Answer**: **A** — Poller stays silent on terminal states; caller does the logging. Matches the existing convention (the poller returns `approved` and `expired` without logging). JSDoc on `pollForApproval` is updated to enumerate `'tier-limit-exceeded'` alongside `'approved'` and `'expired'` as terminal statuses. The orchestrator caller logs via its `ActivationLogger`; the deploy caller emits `console.error` before `process.exit(1)`. Avoids the double-log noise of B and the responsibility-inversion of C.
