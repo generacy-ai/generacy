@@ -35,9 +35,14 @@ describe('formatTierLimitError', () => {
   });
 
   it('handles empty tier (degenerate, degrades acceptably)', () => {
-    expect(formatTierLimitError({ requested: 2, cap: 1, tier: '' })).toBe(
-      'Worker count of 2 exceeds your  plan limit of 1. Upgrade your plan or retry with --workers=1.',
+    expect(formatTierLimitError({ requested: 5, cap: 2, tier: '' })).toBe(
+      'Worker count of 5 exceeds your plan limit of 2. Upgrade your plan or retry with --workers=2.',
     );
+  });
+
+  it('does not produce double spaces when tier is empty (regression for #728)', () => {
+    const result = formatTierLimitError({ requested: 5, cap: 2, tier: '' });
+    expect(result).not.toContain('  ');
   });
 
   it('is pure (identical input yields strict-equal output)', () => {
