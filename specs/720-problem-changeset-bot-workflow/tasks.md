@@ -10,9 +10,9 @@
 
 ## Phase 1: Workflow Rewrite
 
-- [ ] T001 [US1] In `.github/workflows/changeset-bot.yml`, extend `on.pull_request.branches` from `[develop]` to `[develop, main]` so the gate fires for hotfixes targeting `main` and for `develop → main` sync PRs.
-- [ ] T002 [US1] In `.github/workflows/changeset-bot.yml`, remove the now-unused setup steps: `pnpm/action-setup@v4`, `actions/setup-node@v4`, and `run: pnpm install --frozen-lockfile`. The new check uses only `git` + `grep` and does not need a Node toolchain (keeps job <30s per plan.md "Performance Goals").
-- [ ] T003 [US1] In `.github/workflows/changeset-bot.yml`, replace the `Check for changesets` step with the canonical algorithm from `specs/720-problem-changeset-bot-workflow/contracts/changeset-check.md` §"Algorithm (canonical)". Required behaviors:
+- [X] T001 [US1] In `.github/workflows/changeset-bot.yml`, extend `on.pull_request.branches` from `[develop]` to `[develop, main]` so the gate fires for hotfixes targeting `main` and for `develop → main` sync PRs.
+- [X] T002 [US1] In `.github/workflows/changeset-bot.yml`, remove the now-unused setup steps: `pnpm/action-setup@v4`, `actions/setup-node@v4`, and `run: pnpm install --frozen-lockfile`. The new check uses only `git` + `grep` and does not need a Node toolchain (keeps job <30s per plan.md "Performance Goals").
+- [X] T003 [US1] In `.github/workflows/changeset-bot.yml`, replace the `Check for changesets` step with the canonical algorithm from `specs/720-problem-changeset-bot-workflow/contracts/changeset-check.md` §"Algorithm (canonical)". Required behaviors:
   - Step name: `Check for changesets when publishable code changed`
   - `set -euo pipefail` at top.
   - Capture `BASE` / `HEAD` from `${{ github.event.pull_request.base.sha }}` / `head.sha`.
