@@ -51,4 +51,39 @@ describe('PollResponseSchema', () => {
     expect(PollResponseSchema.safeParse({ status: 'slow_down' }).success).toBe(true);
     expect(PollResponseSchema.safeParse({ status: 'expired' }).success).toBe(true);
   });
+
+  it('accepts tier-limit-exceeded response with cap, requested, tier', () => {
+    const input = {
+      status: 'tier-limit-exceeded',
+      cap: 5,
+      requested: 10,
+      tier: 'basic',
+    };
+    const result = PollResponseSchema.safeParse(input);
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual(input);
+    }
+  });
+
+  it('rejects tier-limit-exceeded response missing cap', () => {
+    const input = {
+      status: 'tier-limit-exceeded',
+      requested: 10,
+      tier: 'basic',
+    };
+    const result = PollResponseSchema.safeParse(input);
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects tier-limit-exceeded response with non-integer requested', () => {
+    const input = {
+      status: 'tier-limit-exceeded',
+      cap: 5,
+      requested: 0,
+      tier: 'basic',
+    };
+    const result = PollResponseSchema.safeParse(input);
+    expect(result.success).toBe(false);
+  });
 });

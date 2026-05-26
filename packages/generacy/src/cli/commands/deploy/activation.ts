@@ -3,6 +3,7 @@ import {
   pollForApproval,
   NativeHttpClient,
   ActivationError,
+  formatTierLimitError,
   type ActivationResult,
   type ActivationLogger,
 } from '@generacy-ai/activation-client';
@@ -64,6 +65,17 @@ export async function runActivation(options: ActivateOptions): Promise<Activatio
         httpClient,
         logger,
       });
+
+      if (pollResult.status === 'tier-limit-exceeded') {
+        console.error(
+          formatTierLimitError({
+            requested: pollResult.requested,
+            cap: pollResult.cap,
+            tier: pollResult.tier,
+          }),
+        );
+        process.exit(1);
+      }
 
       if (pollResult.status === 'approved') {
         logger.info('Device-flow activation approved');

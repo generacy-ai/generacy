@@ -3,6 +3,7 @@ import { NativeHttpClient, requestDeviceCode } from './client.js';
 import { pollForApproval } from './poller.js';
 import { readKeyFile, writeKeyFile, readClusterJson, writeClusterJson } from './persistence.js';
 import { ActivationError } from './errors.js';
+import { formatTierLimitError } from '@generacy-ai/activation-client';
 
 export type { ActivationOptions, ActivationResult } from './types.js';
 export { ActivationError } from './errors.js';
@@ -85,6 +86,17 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
       logger,
       workers: initialWorkers,
     });
+
+    if (pollResult.status === 'tier-limit-exceeded') {
+      throw new ActivationError(
+        formatTierLimitError({
+          requested: pollResult.requested,
+          cap: pollResult.cap,
+          tier: pollResult.tier,
+        }),
+        'TIER_LIMIT_EXCEEDED',
+      );
+    }
 
     if (pollResult.status === 'approved') {
       // Persist key and metadata

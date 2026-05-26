@@ -30,6 +30,12 @@ export const PollResponseSchema = z.discriminatedUnion('status', [
     org_id: z.string().min(1),
     cloud_url: z.string().url(),
   }),
+  z.object({
+    status: z.literal('tier-limit-exceeded'),
+    cap: z.number().int().min(0),
+    requested: z.number().int().min(1),
+    tier: z.string(),
+  }),
 ]);
 export type PollResponse = z.infer<typeof PollResponseSchema>;
 

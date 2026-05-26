@@ -122,4 +122,31 @@ describe('pollForApproval', () => {
     const result = await promise;
     expect(result.status).toBe('expired');
   });
+
+  it('returns tier-limit-exceeded immediately without re-poll or log', async () => {
+    const tierLimit: PollResponse = {
+      status: 'tier-limit-exceeded',
+      cap: 4,
+      requested: 8,
+      tier: 'basic',
+    };
+    const client = mockHttpClientWithResponses([tierLimit]);
+    const logger = mockLogger();
+
+    const promise = pollForApproval({
+      cloudUrl: 'https://api.generacy.ai',
+      deviceCode: 'dc-123',
+      interval: 1,
+      expiresIn: 60,
+      httpClient: client,
+      logger,
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    const result = await promise;
+    expect(result).toEqual(tierLimit);
+    expect(client.post).toHaveBeenCalledTimes(1);
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
 });

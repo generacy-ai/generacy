@@ -20,7 +20,8 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Poll for device code approval. Handles `slow_down` and `expired` statuses.
- * Returns the final PollResponse (either 'approved' or 'expired').
+ * Returns the final PollResponse — terminal statuses are `'approved'`,
+ * `'expired'`, and `'tier-limit-exceeded'`.
  */
 export async function pollForApproval(options: PollOptions): Promise<PollResponse> {
   const { cloudUrl, deviceCode, expiresIn, httpClient, logger, workers } = options;
@@ -41,6 +42,8 @@ export async function pollForApproval(options: PollOptions): Promise<PollRespons
       case 'approved':
         return response;
       case 'expired':
+        return response;
+      case 'tier-limit-exceeded':
         return response;
       case 'slow_down':
         intervalMs = Math.min(intervalMs + SLOW_DOWN_INCREMENT_MS, MAX_INTERVAL_MS);
