@@ -1,107 +1,130 @@
-# Feature Specification: Make Changeset Bot a Required, Blocking Check
+# Feature Specification: ## Problem
+
+The \`Changeset Bot\` workflow ([\`
 
 **Branch**: `720-problem-changeset-bot-workflow` | **Date**: 2026-05-26 | **Status**: Draft
-**Issue**: [#720](https://github.com/generacy-ai/generacy/issues/720)
-**Workflow**: speckit-bugfix
 
 ## Summary
 
-The `Changeset Bot` workflow ([`.github/workflows/changeset-bot.yml`](https://github.com/generacy-ai/generacy/blob/develop/.github/workflows/changeset-bot.yml)) currently emits a `::warning::` and exits 0 when a PR has no changeset. Because the check always passes, it cannot be configured as a required status check, and missing changesets routinely slip through. Convert the check into a hard failure (exit 1) when a PR modifies publishable-package source files (`packages/*/src/`) without including a changeset, then add it as a required status check on `develop`.
-
 ## Problem
 
-- The workflow's "Check for changesets" step prints `::warning::No changeset found …` but always exits 0.
-- The check appears in PR "Checks" as **passing** regardless of changeset presence, so it cannot meaningfully be required in branch protection.
-- **Impact**: ~10 feature PRs from #707 to #717 (the worker-scale architecture) landed without changesets. Every relevant `@generacy-ai/*` package stayed frozen on `stable` for ~6 days while `preview` advanced. The drift was only caught when an end user reported `npx -y @generacy-ai/generacy@stable launch …` did not prompt for workers, requiring [PR #719](https://github.com/generacy-ai/generacy/pull/719) as a bulk catch-up changeset.
-- This is the second recurrence; precedent: [`69989cd`](https://github.com/generacy-ai/generacy/commit/69989cd) on 2026-05-19 was also a bulk catch-up. With the check advisory-only, drift is structurally inevitable on any multi-PR feature batch.
+The \`Changeset Bot\` workflow ([\`.github/workflows/changeset-bot.yml\`](https://github.com/generacy-ai/generacy/blob/develop/.github/workflows/changeset-bot.yml)) currently emits a \`::warning::\` annotation when a PR doesn't include a changeset, but the job exits 0 regardless. The check shows up in the PR's "Checks" list as **passing**, so:
 
-## Fix Overview
+1. The warning is ignored in practice (it appears in the build log, not in the PR review UI by default).
+2. The check can't be set as a "required status check" in branch protection — because requiring a passing check that always passes accomplishes nothing.
 
-Replace the always-pass check with a path-scoped, blocking check:
+The downstream consequence: **~10 feature PRs from #707 to #717 (the entire worker-scale architecture) landed without changesets.** This left every relevant \`@generacy-ai/*\` package frozen on \`stable\` for ~6 days while preview got the new code. The drift was only caught by an end-user when \`npx -y @generacy-ai/generacy@stable launch …\` failed to prompt for workers — at which point I had to file [PR #719](https://github.com/generacy-ai/generacy/pull/719) to do a bulk catch-up changeset.
 
-1. Compute the diff between `base.sha` and `head.sha`.
-2. If no files match `^packages/[^/]+/src/`, exit 0 (no changeset required).
-3. Otherwise, search `.changeset/*.md` (excluding `README.md`). If empty, `::error::` + exit 1 with guidance pointing at `pnpm changeset`.
-4. Empty changesets (`pnpm changeset --empty`) satisfy the check for source changes that genuinely warrant no version bump.
-5. Manually add `Changeset Bot / Changeset Check` as a required status check on the `develop` branch protection rule.
+This is the second time this drift has happened in the repo's recent history (precedent: [\`69989cd\`](https://github.com/generacy-ai/generacy/commit/69989cd) on May 19 — also a bulk catch-up). The pattern is structural: with the workflow advisory-only, drift is inevitable on any multi-PR feature batch.
 
-### Why path-scoped, not blanket
+## Fix
 
-Spec-driven PRs typically include large `specs/<n>-*/` directories alongside code changes. A blanket "every PR needs a changeset" rule would force changesets onto pure docs / spec / CI / dependabot PRs. Scoping to `packages/*/src/` keeps the signal high while leaving the gate strict where it matters.
+Make the changeset check actually fail when a PR modifies a publishable package's source. The current check at lines 23-30 of the workflow:
+
+\`\`\`yaml
+- name: Check for changesets
+  run: |
+    CHANGESET_FILES=$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)
+    if [ -z "$CHANGESET_FILES" ]; then
+      echo "::warning::No changeset found. If this PR includes user-facing changes, run 'pnpm changeset' to add one."
+    else
+      echo "Changeset found — ready for release."
+    fi
+\`\`\`
+
+becomes:
+
+\`\`\`yaml
+- name: Check for changesets when publishable code changed
+  run: |
+    BASE="\${{ github.event.pull_request.base.sha }}"
+    HEAD="\${{ github.event.pull_request.head.sha }}"
+
+    # Are any changes in publishable package sources?
+    if ! git diff --name-only "\$BASE" "\$HEAD" | grep -qE '^packages/[^/]+/src/'; then
+      echo "No publishable-package source files changed; skipping changeset check."
+      exit 0
+    fi
+
+    CHANGESET_FILES=\$(find .changeset -name '*.md' ! -name 'README.md' 2>/dev/null | head -1)
+    if [ -z "\$CHANGESET_FILES" ]; then
+      echo "::error::This PR modifies packages/*/src/* but adds no changeset."
+      echo "Run \`pnpm changeset\` from the repo root to add one before merging."
+      echo "If this change genuinely doesn't need a version bump (e.g. comment-only,"
+      echo "test-only), add an empty changeset with \`pnpm changeset --empty\`."
+      exit 1
+    fi
+
+    echo "Changeset found — ready for release."
+\`\`\`
+
+Then in repo Settings → Branches → Branch protection rules for \`develop\`: add \`Changeset Bot / Changeset Check\` as a **required** status check.
+
+## Why path-scoped, not blanket
+
+Spec-driven PRs from the agent typically include large \`specs/<n>-*/\` directories alongside the code change. A blanket "every PR needs a changeset" rule would force changesets onto PRs that are pure docs / specs / CI / dependabot bumps. Scoping the gate to \`packages/*/src/\` keeps the check signal-rich: a PR with no source changes doesn't need a changeset and isn't blocked.
+
+The empty-changeset escape hatch (\`pnpm changeset --empty\`) covers the rare case where source changed but no version bump is appropriate (e.g. typo fix in a comment, refactor that doesn't touch the public API). \`changesets/cli\` already supports this and the existing release workflow handles empty changesets fine — they get consumed without bumping versions.
+
+## Files touched
+
+- \`.github/workflows/changeset-bot.yml\` — the diff above.
+- Repo Settings → Branches → \`develop\` branch protection — add the required status check (manual step, not a code change; called out in the PR description for whoever merges).
+
+## Acceptance
+
+- A PR that modifies \`packages/orchestrator/src/foo.ts\` without a changeset is **blocked** from merging into develop with a clear error pointing at \`pnpm changeset\`.
+- A PR that only modifies \`specs/*\`, \`docs/*\`, \`.github/*\`, \`README.md\`, or other non-publishable paths **passes** the check without needing a changeset.
+- A PR that intentionally has no version bump can use \`pnpm changeset --empty\` to satisfy the check.
+- The next batch of feature PRs ships with changesets per-PR, no bulk catch-up needed.
+
+## Out of scope
+
+- Forcing changeset content quality (auto-rejecting one-liner changesets, etc.). The check is presence-based; content quality stays a review concern.
+- Backfilling changesets for the PRs that landed without them (already handled by #719 via the bulk catch-up).
+- Applying the same gate on \`generacy-cloud\` — separate repo, may or may not have the same problem; worth checking but file separately if so.
+
+## Clarified Decisions (Batch 1 — 2026-05-26)
+
+These resolve the five clarification questions; see \`clarifications.md\` for rationale.
+
+- **Q1 → A — Diff-based changeset detection.** Replace the filesystem-presence check with `git diff base.sha..head.sha --diff-filter=A -- '.changeset/*.md'`. The changeset must be **added in this PR's diff**, not merely present on disk. This closes the cross-PR leak that caused the #707–#717 drift. (Workflow already has `fetch-depth: 0`.)
+- **Q2 → A — Test-only diffs skip the check.** When every entry in the diff under `packages/*/src/` matches one of `*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`, or contains `/__tests__/`, exit 0 with a "test-only" log line. If any non-test file is in scope, the changeset is required.
+- **Q3 → B — Gate `develop` and `main`.** Extend the workflow's `on.pull_request.branches` to `[develop, main]` and add `Changeset Bot / Changeset Check` as a required status check on **both** branch-protection rules. Standard `develop → main` sync PRs satisfy the check (added changesets). `changeset-release/main` bot PRs exit early via the path-scoped guard (they don't touch `packages/*/src/`).
+- **Q4 → A — No bot exemption.** Apply the gate uniformly regardless of `github.event.pull_request.user.type`. No current bots touch `packages/*/src/`; if a future code-touching bot needs an exemption, escalate to a safe-list (option C) at that time.
+- **Q5 → A — Skip drafts.** Preserve the existing `if: github.event.pull_request.draft == false` guard. The gate fires at "ready for review" — the same moment the author finalizes the PR.
 
 ## User Stories
 
-### US1: PR author modifying publishable code is blocked without a changeset
+### US1: [Primary User Story]
 
-**As a** contributor opening a PR that modifies `packages/*/src/*`,
-**I want** the Changeset Bot check to fail with a clear, actionable error when I forget to include a changeset,
-**So that** I cannot accidentally merge a code change that leaves the `stable` channel behind `preview`.
-
-**Acceptance Criteria**:
-- [ ] When the PR diff touches at least one file under `packages/*/src/` and `.changeset/` contains no non-README markdown file, the workflow exits with code 1.
-- [ ] The error message tells the author to run `pnpm changeset` and mentions the `--empty` escape hatch.
-- [ ] Branch protection on `develop` lists `Changeset Bot / Changeset Check` as a required status check, blocking merge until the check passes.
-
-### US2: PR author of a docs/spec/CI-only PR is not blocked
-
-**As a** contributor opening a PR that touches only `specs/`, `docs/`, `.github/`, `README.md`, or other non-publishable paths,
-**I want** the Changeset Bot check to pass automatically,
-**So that** I am not forced to add a noise changeset for a change that does not affect any published package.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] When the PR diff contains no files matching `^packages/[^/]+/src/`, the workflow exits 0 with a message indicating no changeset is required.
-- [ ] No `::error::` annotation is emitted in this case.
-
-### US3: PR author can intentionally opt out via an empty changeset
-
-**As a** contributor making a source change that should not bump any package version (comment-only fix, internal refactor, etc.),
-**I want** to satisfy the check by adding an empty changeset via `pnpm changeset --empty`,
-**So that** the gate stays strict without preventing legitimate no-op-version changes.
-
-**Acceptance Criteria**:
-- [ ] A PR that modifies `packages/*/src/*` and contains an empty changeset file under `.changeset/` exits 0.
-- [ ] The release workflow downstream consumes the empty changeset without producing a version bump (existing behavior; verified, not changed).
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
-| ID     | Requirement                                                                                                                                                  | Priority | Notes                                                                                  |
-|--------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------------------------------|
-| FR-001 | The "Check for changesets" step MUST compute the file diff between `pull_request.base.sha` and `pull_request.head.sha`.                                       | P1       | Requires `fetch-depth: 0` (already in workflow) so both SHAs are reachable.            |
-| FR-002 | If no diff file matches the regex `^packages/[^/]+/src/`, the step MUST exit 0 with a log line indicating the check was skipped.                              | P1       | Path scope keeps the gate signal-rich.                                                 |
-| FR-003 | If at least one diff file matches `^packages/[^/]+/src/` and `.changeset/` contains no `*.md` file other than `README.md`, the step MUST exit 1.              | P1       | This is the new blocking behavior.                                                     |
-| FR-004 | The failure message MUST be emitted as `::error::` and reference both `pnpm changeset` and the `pnpm changeset --empty` escape hatch.                          | P1       | Surfaces in the PR's Checks UI and review summary.                                     |
-| FR-005 | The success case (changeset present, source changed) MUST log `Changeset found — ready for release.` and exit 0.                                              | P2       | Preserves existing success log line.                                                   |
-| FR-006 | The `develop` branch protection rule MUST be updated (manually, via repo settings) to require `Changeset Bot / Changeset Check`.                              | P1       | Out-of-code action; PR description calls this out for the merger.                      |
-| FR-007 | The workflow MUST continue to trigger on `pull_request` events targeting `develop` (or any branch already configured).                                         | P2       | No regression in trigger surface.                                                      |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
-| ID     | Metric                                                                                                                                                       | Target               | Measurement                                                                                          |
-|--------|--------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------|------------------------------------------------------------------------------------------------------|
-| SC-001 | A PR modifying `packages/orchestrator/src/foo.ts` without a changeset cannot be merged into `develop`.                                                       | 100% blocked         | Open a test PR matching this shape; verify the Changeset Bot check fails and "Merge" is disabled.    |
-| SC-002 | A PR modifying only `specs/`, `docs/`, `.github/`, `README.md`, or other non-publishable paths passes the check without a changeset.                          | 100% pass            | Open a test PR matching this shape; verify the Changeset Bot check passes with the skip log line.    |
-| SC-003 | A PR with a `pnpm changeset --empty` file plus a `packages/*/src/` change passes the check and produces no version bump on release.                           | Pass + no bump       | Stage an empty changeset; verify check passes; verify next release-please run does not bump versions.|
-| SC-004 | The next multi-PR feature batch lands with one changeset per PR (or an intentional empty changeset).                                                          | Zero bulk catch-ups  | Inspect commit history of the next feature batch; no follow-up "bulk changeset" commits.             |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The existing `.github/workflows/changeset-bot.yml` runs on `pull_request` and the checkout step uses `fetch-depth: 0` so the base SHA is reachable for `git diff`. (Verify during implementation; add `fetch-depth: 0` if missing.)
-- The repository continues to use `@changesets/cli` with `pnpm changeset` and `pnpm changeset --empty`. No migration to a different release tool is planned.
-- Branch protection on `develop` is configured via GitHub repo settings by a maintainer with admin rights; this is a manual step outside the code change.
-- All currently in-flight PRs will rebase onto `develop` after this lands; the new check will apply on their next sync.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Enforcing changeset content quality (e.g. rejecting one-liner changesets, requiring a specific bump type). Content quality remains a human-review concern.
-- Backfilling changesets for PRs #707–#717 (already addressed by [#719](https://github.com/generacy-ai/generacy/pull/719)).
-- Applying the same gate to the `generacy-cloud` repository — separate repo, file separately if the same problem exists there.
-- Any change to release workflows downstream of the changeset check (release-please, publish jobs, channel routing).
-- Automating the branch-protection update via GitHub API or Terraform — manual UI step is acceptable for a one-off.
-
-## Files Touched
-
-- `.github/workflows/changeset-bot.yml` — replace the existing "Check for changesets" step with the path-scoped, exit-1-on-missing variant; ensure `actions/checkout` uses `fetch-depth: 0`.
-- Repo Settings → Branches → `develop` branch protection — add `Changeset Bot / Changeset Check` as a required status check (manual; call out in the PR description).
+- [Exclusion 1]
 
 ---
 
