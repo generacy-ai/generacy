@@ -17,7 +17,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Stable: use devcontainers/action (tag trigger or explicit stable mode)
       - name: Publish Features (stable)
