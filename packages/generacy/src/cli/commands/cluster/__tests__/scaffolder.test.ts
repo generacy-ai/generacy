@@ -1,5 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// Mock chownSync so the chown-failure test can drive it. Default is a no-op,
+// so the rest of the scaffolder tests are unaffected (their flows do not
+// depend on chownSync behavior).
+const { chownMock } = vi.hoisted(() => ({ chownMock: vi.fn() }));
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, chownSync: chownMock };
+});
+
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { parse } from 'yaml';
@@ -11,6 +21,7 @@ import {
   deriveRelayUrl,
   sanitizeComposeProjectName,
 } from '../scaffolder.js';
+import { getLogger } from '../../../utils/logger.js';
 
 describe('scaffoldClusterJson', () => {
   let dir: string;
@@ -276,13 +287,82 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.volumes).not.toHaveProperty('claude-config');
   });
 
-  it('volume mode uses claude-config named volume', () => {
+  // T001 [US2]: lock SC-002 — bind-mode YAML must be byte-identical after the
+  // volume-mode fix lands. Snapshot is written on first run and committed; any
+  // future change to the bind branch will trip this test.
+  it('bind mode emits byte-identical YAML (SC-002 regression guard)', () => {
+    scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'bind' });
+    const raw = readFileSync(join(dir, 'docker-compose.yml'), 'utf-8');
+    expect(raw).toMatchSnapshot();
+  });
+
+  // T002 [US1]: volume-mode contract per scaffolder-volume-mode.md Q2–Q5.
+  it('volume mode mounts ./claude.json on both orchestrator and worker (no named volume)', () => {
     scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'volume' });
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
-    expect(orchVolumes).toContain('claude-config:/home/node/.claude.json');
-    expect(parsed.volumes).toHaveProperty('claude-config');
+    const workerVolumes = parsed.services.worker.volumes as string[];
+
+    expect(orchVolumes).toContain('./claude.json:/home/node/.claude.json');
+    expect(workerVolumes).toContain('./claude.json:/home/node/.claude.json');
+    expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
+    expect(workerVolumes).not.toContain('claude-config:/home/node/.claude.json');
+    expect(parsed.volumes).not.toHaveProperty('claude-config');
+  });
+
+  // T003 [US1]: idempotency per contract Q6–Q8 / FR-002, FR-003.
+  it('volume mode creates claude.json with "{}\\n" when it does not exist', () => {
+    scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'volume' });
+    const path = join(dir, 'claude.json');
+    expect(existsSync(path)).toBe(true);
+    expect(readFileSync(path, 'utf-8')).toBe('{}\n');
+  });
+
+  it('volume mode preserves pre-existing claude.json bytes and mtime', async () => {
+    const path = join(dir, 'claude.json');
+    const original = '{"token":"sk-existing","other":42}\n';
+    writeFileSync(path, original, 'utf-8');
+    const before = statSync(path);
+    // Ensure a measurable delay so any rewrite would change mtime.
+    await new Promise((r) => setTimeout(r, 20));
+
+    scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'volume' });
+
+    const after = statSync(path);
+    expect(readFileSync(path, 'utf-8')).toBe(original);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+  });
+
+  // T004 [P] [US1]: chown failure path per FR-004, FR-008.
+  it('volume mode logs a warning and continues when chown fails with EPERM', () => {
+    const logger = getLogger();
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => logger);
+    chownMock.mockImplementationOnce(() => {
+      const err = new Error('operation not permitted') as NodeJS.ErrnoException;
+      err.code = 'EPERM';
+      throw err;
+    });
+
+    try {
+      expect(() =>
+        scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'volume' }),
+      ).not.toThrow();
+
+      const path = join(dir, 'claude.json');
+      expect(existsSync(path)).toBe(true);
+      expect(readFileSync(path, 'utf-8')).toBe('{}\n');
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const call = warnSpy.mock.calls[0]!;
+      // Logger may be called as warn(obj, msg) or warn(msg) — assert path appears somewhere.
+      const serialized = JSON.stringify(call);
+      expect(serialized).toContain('claude.json');
+      expect(serialized).toContain('EPERM');
+    } finally {
+      warnSpy.mockRestore();
+      chownMock.mockReset();
+    }
   });
 
   it('includes DEPLOYMENT_MODE and CLUSTER_VARIANT in environment', () => {

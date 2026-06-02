@@ -3,9 +3,10 @@
  *
  * Used by both `launch` and `deploy` commands to ensure consistent file formats.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
+import { getLogger } from '../../utils/logger.js';
 
 export interface ScaffoldClusterJsonInput {
   cluster_id: string;
@@ -121,11 +122,13 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   const claudeConfigMode = input.claudeConfigMode ?? 'bind';
   const variant = input.variant;
 
-  // Claude config volume: bind mount for local, named volume for cloud
+  // Claude config volume: host bind for local, compose-relative file bind for
+  // cloud/deploy. The `volume` branch used to mount a named volume onto a file
+  // path, which Docker rejects with "is not directory" — see #737.
   const claudeConfigVolume =
     claudeConfigMode === 'bind'
       ? '~/.claude.json:/home/node/.claude.json'
-      : 'claude-config:/home/node/.claude.json';
+      : './claude.json:/home/node/.claude.json';
 
   // Port binding: ephemeral for local, fixed for cloud
   const orchestratorPorts =
@@ -255,7 +258,6 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       'vscode-cli-state': null,
       'redis-data': null,
       'generacy-app-config-data': null,
-      ...(claudeConfigMode === 'volume' ? { 'claude-config': null } : {}),
     },
     networks: {
       'cluster-network': {
@@ -265,6 +267,28 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   };
 
   writeFileSync(join(dir, 'docker-compose.yml'), stringify(compose), 'utf-8');
+
+  if (claudeConfigMode === 'volume') {
+    const claudeJsonPath = join(dir, 'claude.json');
+    if (!existsSync(claudeJsonPath)) {
+      writeFileSync(claudeJsonPath, '{}\n', 'utf-8');
+      // 1000:1000 = the container's `node` user; best-effort, fails silently
+      // on non-root hosts where the scaffolder user lacks CAP_CHOWN.
+      try {
+        chownSync(claudeJsonPath, 1000, 1000);
+      } catch (err) {
+        const errno = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (errno === 'EPERM' || errno === 'EACCES') {
+          getLogger().warn(
+            { path: claudeJsonPath, code: errno },
+            'chown 1000:1000 on claude.json failed; continuing',
+          );
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
 }
 
 /**
