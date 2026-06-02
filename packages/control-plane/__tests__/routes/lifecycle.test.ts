@@ -20,7 +20,7 @@ vi.mock('../../src/util/read-body.js', () => ({
   readBody: vi.fn(async () => '{}'),
 }));
 vi.mock('../../src/services/wizard-env-writer.js', () => ({
-  writeWizardEnvFile: vi.fn(async () => ({ written: [], failed: [] })),
+  writeWizardEnvFile: vi.fn(async () => ({ written: [], failed: [], hasGitHubToken: false })),
 }));
 vi.mock('../../src/relay-events.js', () => ({
   getRelayPushEvent: vi.fn(() => undefined),
@@ -237,7 +237,7 @@ describe('handlePostLifecycle', () => {
       delete process.env.POST_ACTIVATION_TRIGGER;
       rmSync(tempDir, { recursive: true, force: true });
       vi.mocked(writeWizardEnvFile).mockReset();
-      vi.mocked(writeWizardEnvFile).mockResolvedValue({ written: [], failed: [] });
+      vi.mocked(writeWizardEnvFile).mockResolvedValue({ written: [], failed: [], hasGitHubToken: false });
     });
 
     it('returns 200 and writes sentinel file', async () => {
@@ -351,7 +351,11 @@ describe('handlePostLifecycle', () => {
       process.env.AGENCY_DIR = agencyDir;
       process.env.WIZARD_CREDS_PATH = envFilePath;
 
-      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({ written: ['github-main-org'], failed: [] });
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: ['github-main-org'],
+        failed: [],
+        hasGitHubToken: false,
+      });
 
       const req = {} as IncomingMessage;
       const res = createMockResponse();
@@ -368,7 +372,7 @@ describe('handlePostLifecycle', () => {
       const sentinelPath = join(tempDir, 'bootstrap-no-creds');
       process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
 
-      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({ written: [], failed: [] });
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({ written: [], failed: [], hasGitHubToken: false });
 
       const req = {} as IncomingMessage;
       const res = createMockResponse();
@@ -402,6 +406,7 @@ describe('handlePostLifecycle', () => {
       vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
         written: ['good-cred'],
         failed: ['bad-cred'],
+        hasGitHubToken: false,
       });
 
       const mockPushEvent = vi.fn();
@@ -440,12 +445,17 @@ describe('handlePostLifecycle', () => {
       delete process.env.WIZARD_CREDS_PATH;
       rmSync(tempDir, { recursive: true, force: true });
       vi.mocked(writeWizardEnvFile).mockReset();
-      vi.mocked(writeWizardEnvFile).mockResolvedValue({ written: [], failed: [] });
+      vi.mocked(writeWizardEnvFile).mockResolvedValue({ written: [], failed: [], hasGitHubToken: false });
     });
 
-    it('writes the same sentinel path bootstrap-complete uses', async () => {
+    it('writes the sentinel (same path bootstrap-complete uses) once the GitHub token is sealed', async () => {
       const sentinelPath = join(tempDir, 'prepare-workspace-sentinel');
       process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: ['github-app'],
+        failed: [],
+        hasGitHubToken: true,
+      });
 
       const req = {} as IncomingMessage;
       const res = createMockResponse();
@@ -456,6 +466,23 @@ describe('handlePostLifecycle', () => {
       const body = JSON.parse(res._body);
       expect(body).toEqual({ accepted: true, action: 'prepare-workspace', sentinel: sentinelPath });
       expect(existsSync(sentinelPath)).toBe(true);
+    });
+
+    it('defers the sentinel until the GitHub token is sealed (no token → no clone yet)', async () => {
+      const sentinelPath = join(tempDir, 'prepare-workspace-deferred');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+      // default mock: hasGitHubToken: false
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({ accepted: true, action: 'prepare-workspace', sentinel: null });
+      // No early clone — the one-shot post-activation hook must not fire before
+      // GH_TOKEN exists; bootstrap-complete fires the sentinel later.
+      expect(existsSync(sentinelPath)).toBe(false);
     });
 
     it('unseals whatever credentials are currently stored (partial is fine)', async () => {
@@ -514,7 +541,7 @@ describe('handlePostLifecycle', () => {
       expect(existsSync(sentinelPath)).toBe(true);
     });
 
-    it('unseal failure is non-fatal (sentinel still written)', async () => {
+    it('unseal failure is non-fatal and defers the sentinel (no token → no clone yet)', async () => {
       const sentinelPath = join(tempDir, 'prepare-workspace-unseal-fail');
       process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
 
@@ -525,8 +552,10 @@ describe('handlePostLifecycle', () => {
 
       await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'prepare-workspace' });
 
-      expect(existsSync(sentinelPath)).toBe(true);
+      // Still responds 200 (non-fatal), but with no GH_TOKEN the early clone is
+      // deferred to bootstrap-complete rather than firing a token-less clone.
       expect(res.writeHead).toHaveBeenCalledWith(200);
+      expect(existsSync(sentinelPath)).toBe(false);
     });
 
     it('partial unseal emits the same cluster.bootstrap relay warning', async () => {
@@ -536,6 +565,7 @@ describe('handlePostLifecycle', () => {
       vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
         written: ['good-cred'],
         failed: ['bad-cred'],
+        hasGitHubToken: false,
       });
 
       const mockPushEvent = vi.fn();

@@ -69,6 +69,7 @@ describe('writeWizardEnvFile', () => {
 
     expect(result.written).toEqual(['github-main-org', 'anthropic-api-key']);
     expect(result.failed).toEqual([]);
+    expect(result.hasGitHubToken).toBe(true);
 
     const envContent = await fs.readFile(envFilePath, 'utf8');
     expect(envContent).toContain('GH_TOKEN=ghp_abc123');
@@ -86,6 +87,7 @@ describe('writeWizardEnvFile', () => {
 
     expect(result.written).toEqual([]);
     expect(result.failed).toEqual([]);
+    expect(result.hasGitHubToken).toBe(false);
 
     const envContent = await fs.readFile(envFilePath, 'utf8');
     expect(envContent).toBe('');
@@ -96,6 +98,7 @@ describe('writeWizardEnvFile', () => {
 
     expect(result.written).toEqual([]);
     expect(result.failed).toEqual([]);
+    expect(result.hasGitHubToken).toBe(false);
 
     const envContent = await fs.readFile(envFilePath, 'utf8');
     expect(envContent).toBe('');
