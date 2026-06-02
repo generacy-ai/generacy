@@ -1,0 +1,115 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`scaffoldDockerCompose > bind mode emits byte-identical YAML (SC-002 regression guard) 1`] = `
+"name: todo-list-example
+services:
+  orchestrator:
+    image: ghcr.io/generacy-ai/cluster-base:1.5.0
+    command: /usr/local/bin/entrypoint-orchestrator.sh
+    restart: unless-stopped
+    ports:
+      - \${ORCHESTRATOR_PORT:-3100}
+    volumes:
+      - workspace:/workspaces
+      - ~/.claude.json:/home/node/.claude.json
+      - shared-packages:/shared-packages
+      - npm-cache:/home/node/.npm
+      - generacy-data:/var/lib/generacy
+      - /var/run/docker.sock:/var/run/docker-host.sock
+      - vscode-cli-state:/home/node/.vscode/cli
+      - generacy-app-config-data:/var/lib/generacy-app-config
+    tmpfs: &a1
+      - /run/generacy-credhelper:uid=1002
+      - /run/generacy-control-plane:uid=1000
+      - /run/generacy-app-config:mode=1750,uid=1000,gid=1000
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis
+      - DEPLOYMENT_MODE=local
+      - CLUSTER_VARIANT=cluster-base
+      - GENERACY_INITIAL_WORKERS=\${WORKER_COUNT}
+    env_file: &a2
+      - path: .env
+      - path: .env.local
+        required: false
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -f http://localhost:3100/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      redis:
+        condition: service_healthy
+    stop_grace_period: 30s
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - cluster-network
+  worker:
+    image: ghcr.io/generacy-ai/cluster-base:1.5.0
+    command: /usr/local/bin/entrypoint-worker.sh
+    restart: unless-stopped
+    deploy:
+      replicas: \${WORKER_COUNT:-1}
+    volumes:
+      - workspace:/workspaces
+      - ~/.claude.json:/home/node/.claude.json
+      - shared-packages:/shared-packages
+      - npm-cache:/home/node/.npm
+      - generacy-data:/var/lib/generacy
+      - generacy-app-config-data:/var/lib/generacy-app-config:ro
+    tmpfs: *a1
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis
+      - HEALTH_PORT=9001
+      - DEPLOYMENT_MODE=local
+      - CLUSTER_VARIANT=cluster-base
+    env_file: *a2
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -f http://localhost:9001/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    stop_grace_period: 30s
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    networks:
+      - cluster-network
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - redis-cli
+        - ping
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    volumes:
+      - redis-data:/data
+    networks:
+      - cluster-network
+volumes:
+  workspace: null
+  shared-packages: null
+  npm-cache: null
+  generacy-data: null
+  vscode-cli-state: null
+  redis-data: null
+  generacy-app-config-data: null
+networks:
+  cluster-network:
+    driver: bridge
+"
+`;

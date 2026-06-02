@@ -26,6 +26,16 @@ export function deployToRemote(
     writeRemoteDockerConfig(target, remotePath, registryCredentials);
   }
 
+  // Ensure claude.json exists on the VM owned by uid 1000:1000 before compose
+  // up. `deploy` always uses claudeConfigMode: 'volume', which binds
+  // ./claude.json into the container; if the SCP'd file is owned by the SSH
+  // user the orchestrator can't write to it. chown is best-effort — non-root
+  // SSH users silently fall through via `|| true`.
+  sshExec(
+    target,
+    `test -f "${remotePath}/claude.json" || install -o 1000 -g 1000 -m 0600 /dev/null "${remotePath}/claude.json"; chown 1000:1000 "${remotePath}/claude.json" 2>/dev/null || true`,
+  );
+
   // Pull images
   logger.info('Pulling Docker images on remote host...');
   try {

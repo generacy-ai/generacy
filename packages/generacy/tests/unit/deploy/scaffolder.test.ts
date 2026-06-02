@@ -110,13 +110,16 @@ describe('scaffoldBundle', () => {
       expect(content.services.orchestrator.environment).toContain('DEPLOYMENT_MODE=cloud');
     });
 
-    it('uses named volume for claude-config (not bind mount)', () => {
+    it('uses compose-relative ./claude.json bind for volume mode (no named volume)', () => {
       const dir = callScaffold();
       const content = parse(readFileSync(join(dir, '.generacy', 'docker-compose.yml'), 'utf-8'));
 
       const orchVolumes = content.services.orchestrator.volumes as string[];
-      expect(orchVolumes).toContain('claude-config:/home/node/.claude.json');
-      expect(content.volumes).toHaveProperty('claude-config');
+      const workerVolumes = content.services.worker.volumes as string[];
+      expect(orchVolumes).toContain('./claude.json:/home/node/.claude.json');
+      expect(workerVolumes).toContain('./claude.json:/home/node/.claude.json');
+      expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
+      expect(content.volumes).not.toHaveProperty('claude-config');
     });
 
     it('mounts docker socket at /var/run/docker-host.sock', () => {
