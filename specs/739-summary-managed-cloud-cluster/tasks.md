@@ -10,7 +10,7 @@
 
 ## Phase 1: Core Implementation — Orchestrator activation branch
 
-- [ ] T001 [US1] Add pre-approved device-code branch to `activate()` in `packages/orchestrator/src/activation/index.ts`. After the existing-key short-circuit (lines 47–59) and before the `for (cycle…)` loop:
+- [X] T001 [US1] Add pre-approved device-code branch to `activate()` in `packages/orchestrator/src/activation/index.ts`. After the existing-key short-circuit (lines 47–59) and before the `for (cycle…)` loop:
   - Read `process.env['GENERACY_PRE_APPROVED_DEVICE_CODE']`.
   - When set, emit `logger.info({ event: 'activation-start', mode: 'pre-approved' })` (FR-008).
   - Call `pollForApproval({ cloudUrl, deviceCode, interval: 5, expiresIn: 60, httpClient, logger, workers: initialWorkers })` (reuses transient retry from `packages/activation-client/src/poller.ts`).
@@ -22,9 +22,9 @@
 
 ## Phase 2: Core Implementation — CLI scaffolder threading
 
-- [ ] T002 [P] [US1] Extend `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts` (~lines 48–66): add `preApprovedDeviceCode: z.string().min(1).optional()` to the Zod object.
+- [X] T002 [P] [US1] Extend `LaunchConfigSchema` in `packages/generacy/src/cli/commands/launch/types.ts` (~lines 48–66): add `preApprovedDeviceCode: z.string().min(1).optional()` to the Zod object.
 
-- [ ] T003 [P] [US1] Extend `ScaffoldEnvInput` interface and `scaffoldEnvFile` body in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`:
+- [X] T003 [P] [US1] Extend `ScaffoldEnvInput` interface and `scaffoldEnvFile` body in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`:
   - Add `preApprovedDeviceCode?: string` to `ScaffoldEnvInput` (~line 39).
   - In `scaffoldEnvFile` body (~line 297), append after the `# Bootstrap mode` block:
     ```typescript
@@ -39,26 +39,26 @@
     ```
   - Treat empty string as absent (truthiness check, not `!== undefined`).
 
-- [ ] T004 [US1] Forward `preApprovedDeviceCode` through `packages/generacy/src/cli/commands/launch/scaffolder.ts` (~lines 93–106): in the `scaffoldEnvFile(...)` call, add `preApprovedDeviceCode: config.preApprovedDeviceCode`. Depends on T002 and T003.
+- [X] T004 [US1] Forward `preApprovedDeviceCode` through `packages/generacy/src/cli/commands/launch/scaffolder.ts` (~lines 93–106): in the `scaffoldEnvFile(...)` call, add `preApprovedDeviceCode: config.preApprovedDeviceCode`. Depends on T002 and T003.
 
-- [ ] T005 [US1] Forward `preApprovedDeviceCode` through `packages/generacy/src/cli/commands/deploy/scaffolder.ts` (~lines 59–69): in the `scaffoldEnvFile(...)` call, add `preApprovedDeviceCode: config.preApprovedDeviceCode`. Depends on T003 (and on T002 if `deploy` uses `LaunchConfig`).
+- [X] T005 [US1] Forward `preApprovedDeviceCode` through `packages/generacy/src/cli/commands/deploy/scaffolder.ts` (~lines 59–69): in the `scaffoldEnvFile(...)` call, add `preApprovedDeviceCode: config.preApprovedDeviceCode`. Depends on T003 (and on T002 if `deploy` uses `LaunchConfig`).
 
 ## Phase 3: Tests
 
-- [ ] T006 [P] [US1] Add orchestrator activation unit tests in `packages/orchestrator/tests/unit/activation/index.test.ts` mirroring existing patterns. Add `beforeEach` that `delete process.env['GENERACY_PRE_APPROVED_DEVICE_CODE']` to avoid cross-test bleed. Cover:
+- [X] T006 [P] [US1] Add orchestrator activation unit tests in `packages/orchestrator/tests/unit/activation/index.test.ts` mirroring existing patterns. Add `beforeEach` that `delete process.env['GENERACY_PRE_APPROVED_DEVICE_CODE']` to avoid cross-test bleed. Cover:
   - **Pre-approved happy path**: env var set, `pollForApproval` mock returns `approved`. Assert `requestDeviceCode` is NOT called; `writeKeyFile` + `writeClusterJson` called with poll-result values; `process.env.GENERACY_PRE_APPROVED_DEVICE_CODE` is `undefined` after `activate()` resolves; returned `ActivationResult` matches; `logger.info` called with `{ event: 'activation-start', mode: 'pre-approved' }`.
   - **Pre-approved terminal failure → interactive fallback**: env var set, `pollForApproval` returns `{ status: 'expired' }`. Assert `requestDeviceCode` IS then called; `logger.warn` records the fallback; `logger.info` called with `{ event: 'activation-start', mode: 'interactive' }`.
   - **Pre-approved transient retry**: env var set, `pollForApproval` mock internally handles `authorization_pending` / `slow_down` and then returns `approved`. Assert single `pollForApproval` call succeeds and `requestDeviceCode` is NOT triggered (transient retries live inside `pollForApproval`, not `activate()`).
   - **No pre-approved → unchanged interactive path**: env var unset; existing interactive-flow test still passes; `logger.info` called with `{ event: 'activation-start', mode: 'interactive' }`.
 
-- [ ] T007 [P] [US1] Add CLI scaffolder tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`:
+- [X] T007 [P] [US1] Add CLI scaffolder tests in `packages/generacy/src/cli/commands/cluster/__tests__/scaffolder.test.ts`:
   - **Env line emitted when set**: `scaffoldEnvFile({ ..., preApprovedDeviceCode: 'ABCD-1234' })` writes the `GENERACY_PRE_APPROVED_DEVICE_CODE=ABCD-1234` line (and the two preceding comment lines).
   - **Env line absent when unset**: `scaffoldEnvFile({ ... })` without the field writes no `PRE_APPROVED` line.
   - **Empty string treated as absent**: `scaffoldEnvFile({ ..., preApprovedDeviceCode: '' })` writes no `PRE_APPROVED` line.
 
 ## Phase 4: Verification
 
-- [ ] T008 [US1] Run the quickstart scenarios in `specs/739-summary-managed-cloud-cluster/quickstart.md`:
+- [X] T008 [US1] Run the quickstart scenarios in `specs/739-summary-managed-cloud-cluster/quickstart.md`:
   - Build affected packages: `pnpm --filter @generacy-ai/orchestrator build && pnpm --filter @generacy-ai/generacy build`.
   - Run unit tests: `pnpm --filter @generacy-ai/orchestrator test tests/unit/activation/index.test.ts` and `pnpm --filter @generacy-ai/generacy test src/cli/commands/cluster/__tests__/scaffolder.test.ts`.
   - Manually walk Scenarios 1–4 (pre-approved happy path, terminal-failure fallback, no-pre-approved interactive, restart-with-keyfile) and confirm the documented stdout JSON lines appear and the negative assertions hold (no `Cluster Activation Required` block on the happy path; device-code value never appears in logs).

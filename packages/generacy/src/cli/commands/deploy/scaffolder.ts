@@ -66,6 +66,7 @@ export function scaffoldBundle(
     repoBranch: config.repos?.primaryBranch,
     channel: 'stable',
     workers: 1,
+    preApprovedDeviceCode: config.preApprovedDeviceCode,
   });
 
   return tmpDir;
