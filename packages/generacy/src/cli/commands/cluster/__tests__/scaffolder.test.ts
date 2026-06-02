@@ -609,6 +609,53 @@ describe('scaffoldEnvFile', () => {
     expect(content).toContain('WORKER_COUNT=1');
     expect(content).toContain('ORCHESTRATOR_PORT=3100');
   });
+
+  it('emits GENERACY_PRE_APPROVED_DEVICE_CODE line when preApprovedDeviceCode is set', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+      preApprovedDeviceCode: 'ABCD-1234',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).toContain('GENERACY_PRE_APPROVED_DEVICE_CODE=ABCD-1234');
+    expect(content).toContain(
+      '# Cloud-supplied pre-approved RFC 8628 device code (single-use, short TTL).',
+    );
+    expect(content).toContain(
+      '# Consumed by orchestrator activate() on first boot; never logged.',
+    );
+  });
+
+  it('omits GENERACY_PRE_APPROVED_DEVICE_CODE line when preApprovedDeviceCode is unset', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).not.toContain('GENERACY_PRE_APPROVED_DEVICE_CODE');
+  });
+
+  it('treats empty string preApprovedDeviceCode as absent', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+      preApprovedDeviceCode: '',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).not.toContain('GENERACY_PRE_APPROVED_DEVICE_CODE');
+  });
 });
 
 describe('deriveRelayUrl', () => {

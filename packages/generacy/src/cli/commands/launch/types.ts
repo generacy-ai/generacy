@@ -63,6 +63,7 @@ export const LaunchConfigSchema = z.object({
   cloud: CloudUrlsSchema.optional(),
   registryCredentials: z.array(RegistryCredentialSchema).optional(),
   tierCap: z.number().int().min(1).optional(),
+  preApprovedDeviceCode: z.string().min(1).optional(),
 });
 
 /**

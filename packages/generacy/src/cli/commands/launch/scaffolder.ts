@@ -103,6 +103,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig, worker
     cloud: config.cloud
       ? { apiUrl: config.cloud.apiUrl, relayUrl: config.cloud.relayUrl }
       : undefined,
+    preApprovedDeviceCode: config.preApprovedDeviceCode,
   });
 
   preCreateClaudeJson();

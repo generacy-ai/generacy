@@ -48,6 +48,7 @@ export interface ScaffoldEnvInput {
   workers?: number;
   orchestratorPort?: number;
   cloud?: { apiUrl: string; relayUrl: string };
+  preApprovedDeviceCode?: string;
 }
 
 /**
@@ -332,6 +333,14 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
     '# `wizard` defers repo cloning until credentials arrive via the activation wizard',
     'GENERACY_BOOTSTRAP_MODE=wizard',
     '',
+    ...(input.preApprovedDeviceCode
+      ? [
+          '# Cloud-supplied pre-approved RFC 8628 device code (single-use, short TTL).',
+          '# Consumed by orchestrator activate() on first boot; never logged.',
+          `GENERACY_PRE_APPROVED_DEVICE_CODE=${input.preApprovedDeviceCode}`,
+          '',
+        ]
+      : []),
   ];
 
   writeFileSync(join(dir, '.env'), lines.join('\n'), 'utf-8');
