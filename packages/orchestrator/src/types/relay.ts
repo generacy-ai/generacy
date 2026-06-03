@@ -271,6 +271,12 @@ export interface ClusterMetadataPayload {
     stores: Record<string, 'ok' | 'fallback' | 'disabled'>;
     warnings: string[];
   };
+
+  /** User-facing cluster display name. Decoupled from tunnel name. */
+  displayName?: string;
+
+  /** Cluster UUID — explicit field for cloud-side rendering. */
+  clusterId?: string;
 }
 
 /**
@@ -335,6 +341,15 @@ export interface RelayBridgeOptions {
 
   /** Relay configuration */
   config: RelayConfig;
+
+  /**
+   * Cluster identity (display name + UUID). Threaded onto outgoing relay
+   * metadata so the cloud-side UI can render the user-facing name.
+   */
+  cluster?: {
+    id?: string;
+    displayName?: string;
+  };
 
   /**
    * Docker Engine client for enumerating worker containers and subscribing

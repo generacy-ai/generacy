@@ -43,6 +43,7 @@ export const ClusterJsonSchema = z.object({
   project_id: z.string().min(1),
   org_id: z.string().min(1),
   cloud_url: z.string().url(),
+  display_name: z.string().optional(),
   activated_at: z.string().datetime().optional(),
 });
 
@@ -57,6 +58,11 @@ export interface ClusterContext {
   clusterConfig: ClusterYaml;
   clusterIdentity: ClusterJson | null;
   projectName: string;
+  /**
+   * User-facing display name (from `cluster.json` `display_name`). Falls back
+   * to `cluster_id` when not present.
+   */
+  displayName: string | null;
 }
 
 // -- findGeneracyDir --
@@ -126,6 +132,9 @@ export function getClusterContext(cwd?: string): ClusterContext {
         );
       }
 
+      const displayName =
+        clusterIdentity?.display_name ?? clusterIdentity?.cluster_id ?? null;
+
       return {
         projectRoot: dir,
         generacyDir,
@@ -133,6 +142,7 @@ export function getClusterContext(cwd?: string): ClusterContext {
         clusterConfig,
         clusterIdentity,
         projectName,
+        displayName,
       };
     }
 

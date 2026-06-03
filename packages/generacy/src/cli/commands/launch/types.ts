@@ -13,6 +13,7 @@ export interface LaunchOptions {
   cloudUrl?: string;
   logLevel?: string;
   workers?: number;
+  name?: string;
 }
 
 /**

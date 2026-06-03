@@ -98,6 +98,18 @@ export async function handlePostLifecycle(
     return;
   }
 
+  if (parsed.data === 'vscode-tunnel-unregister') {
+    // Releases Microsoft tunnel-service name so the cluster name is reclaimable
+    // after `generacy destroy`. Failures surface via cluster.vscode-tunnel
+    // relay events (FR-010), not 5xx — the unregister() implementation is
+    // best-effort and never throws.
+    const tunnelManager = getVsCodeTunnelManager();
+    await tunnelManager.unregister();
+    res.writeHead(200);
+    res.end(JSON.stringify({ accepted: true, action: parsed.data }));
+    return;
+  }
+
   if (parsed.data === 'prepare-workspace') {
     // Subset of bootstrap-complete: unseal whatever credentials are currently
     // stored (typically just GitHub after the wizard's GitHubAppInstall step)

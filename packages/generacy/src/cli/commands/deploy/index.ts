@@ -13,6 +13,7 @@ import { RegistryEntrySchema, readRegistry, writeRegistry, type RegistryEntry } 
 import type { DeployOptions, DeployResult } from './types.js';
 import { DeployError } from './types.js';
 import { resolveApiUrl } from '../../utils/cloud-url.js';
+import { normalizeClusterName } from '../cluster/name-normalize.js';
 
 const DEFAULT_TIMEOUT_S = 300;
 
@@ -54,9 +55,22 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   // 6. Resolve remote path
   const remotePath = target.remotePath ?? `~/generacy-clusters/${activation.projectId}`;
 
+  // 6b. Resolve display name from --name (no default generator for deploy)
+  let displayName: string | undefined;
+  if (options.name) {
+    const normalized = normalizeClusterName(options.name);
+    if (!normalized) {
+      throw new DeployError(
+        `Invalid --name value: "${options.name}". After normalization the name is empty.`,
+        'INVALID_TARGET',
+      );
+    }
+    displayName = normalized;
+  }
+
   // 7. Scaffold bootstrap bundle
   logger.info('Generating bootstrap bundle...');
-  const bundleDir = scaffoldBundle(launchConfig, activation, cloudUrl);
+  const bundleDir = scaffoldBundle(launchConfig, activation, cloudUrl, displayName);
 
   // 8. Transfer and start (with registry credentials if present)
   const registryCredentials = launchConfig.registryCredentials;
@@ -99,6 +113,9 @@ async function handleDeploy(options: DeployOptions): Promise<DeployResult> {
   const entry: RegistryEntry = {
     clusterId: activation.clusterId,
     name: launchConfig.projectName,
+    displayName,
+    projectId: activation.projectId,
+    deploymentMode: 'cloud',
     path: remotePath,
     composePath: `${remotePath}/docker-compose.yml`,
     variant: launchConfig.variant as 'cluster-base' | 'cluster-microservices',
@@ -131,13 +148,14 @@ export function deployCommand(): Command {
     .description('Deploy a Generacy cluster to a remote VM via SSH')
     .argument('<target>', 'SSH target: ssh://[user@]host[:port][/path]')
     .option('--timeout <seconds>', 'Timeout for cluster registration in seconds', String(DEFAULT_TIMEOUT_S))
+    .option('--name <name>', 'Cluster display name (normalized; falls back to cluster id when omitted)')
     .addOption(
       new Option('--api-url <url>', 'Cloud API URL (overrides GENERACY_API_URL env var)')
     )
     .addOption(
       new Option('--cloud-url <url>', '[deprecated] Use --api-url instead').hideHelp()
     )
-    .action(async (target: string, opts: { timeout?: string; apiUrl?: string; cloudUrl?: string }) => {
+    .action(async (target: string, opts: { timeout?: string; apiUrl?: string; cloudUrl?: string; name?: string }) => {
       try {
         if (opts.cloudUrl && !opts.apiUrl) {
           console.warn('[deprecated] --cloud-url is deprecated, use --api-url instead');
@@ -146,6 +164,7 @@ export function deployCommand(): Command {
           target,
           timeout: opts.timeout ? parseInt(opts.timeout, 10) : DEFAULT_TIMEOUT_S,
           cloudUrl: opts.apiUrl ?? opts.cloudUrl,
+          name: opts.name,
         });
 
         console.log(`\nCluster deployed successfully!`);

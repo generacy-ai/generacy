@@ -56,6 +56,7 @@ export class RelayBridge {
   private readonly sseManager: SSESubscriptionManager;
   private readonly logger: RelayBridgeOptions['logger'];
   private readonly config: RelayBridgeOptions['config'];
+  private readonly cluster: RelayBridgeOptions['cluster'];
   private readonly engineClient: DockerEngineClient;
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;

@@ -13,6 +13,7 @@ export interface ScaffoldClusterJsonInput {
   project_id: string;
   org_id: string;
   cloud_url: string;
+  display_name?: string;
 }
 
 export interface ScaffoldClusterYamlInput {
@@ -38,6 +39,7 @@ export interface ScaffoldComposeInput {
 
 export interface ScaffoldEnvInput {
   clusterId: string;
+  clusterName?: string;
   projectId: string;
   orgId: string;
   cloudUrl: string;
@@ -91,12 +93,15 @@ export function deriveRelayUrl(cloudUrl: string, projectId: string): string {
  */
 export function scaffoldClusterJson(dir: string, input: ScaffoldClusterJsonInput): void {
   mkdirSync(dir, { recursive: true });
-  const content = {
+  const content: Record<string, string> = {
     cluster_id: input.cluster_id,
     project_id: input.project_id,
     org_id: input.org_id,
     cloud_url: input.cloud_url,
   };
+  if (input.display_name) {
+    content.display_name = input.display_name;
+  }
   writeFileSync(join(dir, 'cluster.json'), JSON.stringify(content, null, 2) + '\n', 'utf-8');
 }
 
@@ -310,6 +315,7 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
   const lines = [
     '# Identity (from cloud LaunchConfig — do not edit)',
     `GENERACY_CLUSTER_ID=${input.clusterId}`,
+    ...(input.clusterName ? [`GENERACY_CLUSTER_NAME=${input.clusterName}`] : []),
     `GENERACY_PROJECT_ID=${input.projectId}`,
     `GENERACY_ORG_ID=${input.orgId}`,
     `GENERACY_API_URL=${apiUrl}`,
