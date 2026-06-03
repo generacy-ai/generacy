@@ -70,6 +70,13 @@ describe('resolveClusterIdentity', () => {
     vi.clearAllMocks();
     execFileChildListeners = {};
     logger = createMockLogger();
+    // The gh-api fallback tests assume no ambient GH_USERNAME (the new
+    // wizard-account fallback would otherwise short-circuit them).
+    delete process.env['GH_USERNAME'];
+  });
+
+  afterEach(() => {
+    delete process.env['GH_USERNAME'];
   });
 
   it('returns config username when set (no gh call made)', async () => {
@@ -80,6 +87,30 @@ describe('resolveClusterIdentity', () => {
       { username: 'my-user', source: 'config' },
       expect.stringContaining('my-user'),
     );
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('falls back to GH_USERNAME (wizard-delivered account) when config not set', async () => {
+    process.env['GH_USERNAME'] = 'christrudelpw';
+
+    const result = await resolveClusterIdentity(undefined, logger);
+
+    expect(result).toBe('christrudelpw');
+    expect(logger.info).toHaveBeenCalledWith(
+      { username: 'christrudelpw', source: 'gh-username-env' },
+      expect.stringContaining('christrudelpw'),
+    );
+    // GH_USERNAME short-circuits before the gh api /user call (which can't
+    // resolve an identity from a GitHub App installation token anyway).
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+
+  it('prefers CLUSTER_GITHUB_USERNAME (config) over GH_USERNAME', async () => {
+    process.env['GH_USERNAME'] = 'wizard-account';
+
+    const result = await resolveClusterIdentity('explicit-config', logger);
+
+    expect(result).toBe('explicit-config');
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 
