@@ -10,7 +10,7 @@
 - B: #746 owns the end-to-end fix regardless of repo: do the in-repo work AND drive the companion PRs in `generacy-cloud` / workflows to merge before closing.
 - C: In-repo fix + companion issues opened, but leave #746 open until cloud-side companion PRs land.
 
-**Answer**: *Pending*
+**Answer**: **A** — Ship the in-repo fix only if the root cause is actually in `generacy`; otherwise deliver the diagnosis writeup + open companion issues in the owning repo (`generacy-cloud` cloud-deploy and/or the `publish-preview`/release workflow) and close #746 once the diagnosis is captured. Automation can't span repos, so #746 must not own cross-repo PRs (rules out B). Note: the in-repo `deriveTunnelName`/`loadOptionsFromEnv` already key on `GENERACY_CLUSTER_ID` (the UUID, from #744), so the fix is most likely **out-of-repo** (preview-package provenance, cloud-side computation, or a cached tunnel name) — making this a diagnosis-led issue.
 
 ### Q2: Existing-cluster migration
 **Context**: FR-007 conditionally requires a "re-derivation or migration path" only if hypothesis #3 (stale/cached tunnel registration) is the root cause. US1's acceptance criterion allows "existing clusters … continue to function (no forced re-registration breakage) OR a documented migration path exists." This leaves behavior for already-deployed cloud clusters with projectId-derived tunnel names undefined when the cause is NOT caching.
@@ -20,7 +20,7 @@
 - B: Auto-re-derive on next cluster restart / activation (idempotent — cluster re-registers under UUID-derived name on boot).
 - C: Provide an operator-triggered migration (CLI command or doc procedure) but don't auto-migrate.
 
-**Answer**: *Pending*
+**Answer**: **B** — Auto-re-derive on next restart/activation (idempotent). `loadOptionsFromEnv` runs at boot and derives the tunnel name from `GENERACY_CLUSTER_ID`, so once the corrected code/env is in effect a cluster naturally re-registers under the UUID-derived name on its next restart — no forced migration or manual step. #743 already persists the *actual* registered name back to the cloud doc, so the doc self-corrects. No separate migration tooling needed.
 
 ### Q3: #744 changeset release ownership
 **Context**: FR-006 (P1) requires `@generacy-ai/control-plane` `stable` to contain #744's `deriveTunnelName`. The #744 changeset (`.changeset/feat-744-multi-cluster-cli.md`) is currently pending/unreleased. Releasing it is a separate operational step (consume changeset → version bump → publish).
@@ -30,7 +30,7 @@
 - B: Out of scope for #746 — track as a separate release-engineering task; #746 closes once preview-channel deploys behave correctly (SC-001/SC-002 verified on preview).
 - C: Part of #746 only if root cause is in this repo; otherwise out of scope.
 
-**Answer**: *Pending*
+**Answer**: **B** — Out of scope for #746; track the #744 stable release as a normal release-engineering task. #746 verifies the fix on the **preview** channel (what staging deploys consume). The pending `.changeset/feat-744-multi-cluster-cli.md` will reach `stable` via the normal release cadence — closing #746 shouldn't block on it. ⚠️ Dependency to flag on the release task: prod/`stable`-channel cloud clusters won't get per-cluster tunnel naming until #744 is released.
 
 ### Q4: Verification environment for SC-001 / SC-002
 **Context**: SC-001 (UUID-derived `vscodeTunnelName`) and SC-002 (two-cluster uniqueness) require observation of the cloud cluster doc. The spec doesn't say whether verification must be done on a freshly-provisioned DigitalOcean Droplet or whether re-using an existing observed cluster (or test environment) is acceptable.
@@ -40,7 +40,7 @@
 - B: Static inspection is sufficient — confirm the env var is set to UUID on a fresh deploy template, confirm the published `@generacy-ai/control-plane` tarball contains UUID-keyed `deriveTunnelName`, and rely on existing unit tests for `deriveTunnelName`.
 - C: Deploy ONE fresh cloud cluster (covers SC-001), and reason about SC-002 by argument (uniqueness follows from per-UUID derivation + UUID uniqueness) without actually deploying a second sibling.
 
-**Answer**: *Pending*
+**Answer**: **C** — Deploy ONE fresh cloud cluster end-to-end to verify SC-001 (the actual deployed behavior that was broken). Static inspection alone (option B) is explicitly **insufficient here**: this bug is a code-vs-deploy mismatch — the in-repo code already looked correct, yet the deployed cluster's tunnel name was projectId-derived. So at least one real deploy is required to confirm the end-to-end fix. Reason about SC-002 (two clusters → distinct names) from UUID uniqueness once SC-001 is confirmed, rather than paying for a second Droplet.
 
 ### Q5: Source of `vscodeTunnelName` on cloud cluster doc
 **Context**: Assumption #3 in the spec states `vscodeTunnelName` is "populated by the cluster's first tunnel-registration event reported via the relay, not by cloud pre-computing it from projectId." If this assumption is false (cloud actually pre-computes it from `projectId`), the in-repo fix is moot and the fix must be cloud-side.
@@ -49,4 +49,4 @@
 - A: Yes — explicitly add an investigation step that traces the write path for `vscodeTunnelName` in the cloud cluster doc (`generacy-cloud` callers / relay handlers) and confirms whether it's reported-by-cluster vs computed-by-cloud, before writing any code in this repo.
 - B: No — proceed under the stated assumption; if it turns out to be false, re-scope at that point.
 
-**Answer**: *Pending*
+**Answer**: **A** — Yes, P0, gating any in-repo code change. Tracing where `vscodeTunnelName` is written (reported-by-cluster via the relay vs computed-by-cloud from `projectId`) determines which repo owns the fix: if cloud pre-computes it, the `generacy` change is moot and the work belongs in `generacy-cloud`. Given the in-repo `deriveTunnelName` already keys on the UUID, confirming the write path first prevents fixing the wrong layer (and directly resolves the three hypotheses in the issue body).
