@@ -56,6 +56,7 @@ export class RelayBridge {
   private readonly sseManager: SSESubscriptionManager;
   private readonly logger: RelayBridgeOptions['logger'];
   private readonly config: RelayBridgeOptions['config'];
+  private readonly cluster: RelayBridgeOptions['cluster'];
   private readonly engineClient: DockerEngineClient;
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;
@@ -85,6 +86,7 @@ export class RelayBridge {
     this.sseManager = options.sseManager;
     this.logger = options.logger;
     this.config = options.config;
+    this.cluster = options.cluster;
     this.engineClient = options.engineClient;
 
     // Bind handlers once so they can be removed with off()
@@ -690,6 +692,13 @@ export class RelayBridge {
       codeServerReady,
       controlPlaneReady,
     };
+
+    if (this.cluster?.displayName) {
+      metadata.displayName = this.cluster.displayName;
+    }
+    if (this.cluster?.id) {
+      metadata.clusterId = this.cluster.id;
+    }
 
     // Read init-result.json for control-plane store status
     try {

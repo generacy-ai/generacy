@@ -37,6 +37,7 @@ function createMockTunnelManager(overrides: Partial<VsCodeTunnelManager> = {}): 
       tunnelName: 'test-cluster',
     }),
     stop: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    unregister: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     getStatus: vi.fn().mockReturnValue('stopped'),
     shutdown: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     ...overrides,

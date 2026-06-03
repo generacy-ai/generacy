@@ -72,6 +72,39 @@ describe('scaffoldClusterJson', () => {
     expect(parsed).not.toHaveProperty('imageTag');
     expect(parsed).not.toHaveProperty('createdAt');
   });
+
+  it('persists display_name when provided (SC-001)', async () => {
+    // Integration: simulates `generacy launch --name "ACME Frontend"` — the
+    // launch command normalizes the user input via normalizeClusterName,
+    // threads it through scaffoldClusterJson + scaffoldEnvFile, and the
+    // resulting files surface the user-facing name.
+    const { normalizeClusterName } = await import('../name-normalize.js');
+    const displayName = normalizeClusterName('ACME Frontend');
+    expect(displayName).toBe('acme-frontend');
+
+    scaffoldClusterJson(dir, {
+      cluster_id: 'cid-1',
+      project_id: 'proj-1',
+      org_id: 'org-1',
+      cloud_url: 'https://api.generacy.ai',
+      display_name: displayName!,
+    });
+
+    scaffoldEnvFile(dir, {
+      clusterId: 'cid-1',
+      projectId: 'proj-1',
+      orgId: 'org-1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'ACME Frontend',
+      clusterName: displayName!,
+    });
+
+    const clusterJson = JSON.parse(readFileSync(join(dir, 'cluster.json'), 'utf-8'));
+    expect(clusterJson.display_name).toBe('acme-frontend');
+
+    const envContent = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(envContent).toContain('GENERACY_CLUSTER_NAME=acme-frontend');
+  });
 });
 
 describe('scaffoldClusterYaml', () => {

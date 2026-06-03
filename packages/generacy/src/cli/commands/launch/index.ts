@@ -29,6 +29,9 @@ import { sanitizeComposeProjectName } from '../cluster/scaffolder.js';
 import { clearStaleActivation } from './volume-cleanup.js';
 import { probeControlPlaneReady, forwardRegistryCredentials, cleanupScopedDockerConfig } from './credential-forward.js';
 import { resolveWorkerCount } from './worker-count-resolver.js';
+import { normalizeClusterName } from '../cluster/name-normalize.js';
+import { generateDefaultName } from '../cluster/default-name.js';
+import { readRegistry } from '../cluster/registry.js';
 
 function parseWorkersFlag(value: string): number {
   const parsed = Number.parseInt(value, 10);
@@ -48,6 +51,7 @@ export function launchCommand(): Command {
     .description('Bootstrap a new cluster from a cloud-issued claim code')
     .option('--claim <code>', 'Claim code from the Generacy cloud dashboard')
     .option('--dir <path>', 'Project directory (default: ~/Generacy/<projectName>)')
+    .option('--name <name>', 'Cluster display name (normalized; defaults to <project>-local-<n>)')
     .addOption(
       new Option('--api-url <url>', 'Cloud API URL (overrides GENERACY_API_URL env var)')
     )
@@ -152,9 +156,26 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
     process.exit(1);
   }
 
+  // ── 5c. Resolve display name (user-provided or generated) ───────────
+  let displayName: string;
+  if (opts.name) {
+    const normalized = normalizeClusterName(opts.name);
+    if (!normalized) {
+      p.log.error(
+        `Invalid --name value: "${opts.name}". After normalization the name is empty. ` +
+          'Provide a name with at least one ASCII letter or digit.',
+      );
+      process.exit(1);
+    }
+    displayName = normalized;
+  } else {
+    displayName = generateDefaultName(config.projectId, config.projectName, readRegistry());
+  }
+  logger.debug({ displayName }, 'Resolved cluster display name');
+
   // ── 6. Scaffold project directory ───────────────────────────────────
   try {
-    scaffoldProject(projectDir, config, workerCount);
+    scaffoldProject(projectDir, config, workerCount, displayName);
     p.log.success('Project directory created');
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -250,6 +271,9 @@ async function launchAction(opts: LaunchOptions): Promise<void> {
     registerCluster({
       clusterId: config.clusterId,
       name: config.projectName,
+      displayName,
+      projectId: config.projectId,
+      deploymentMode: 'local',
       path: projectDir,
       composePath,
       variant: (config.variant as 'cluster-base' | 'cluster-microservices') ?? 'cluster-base',

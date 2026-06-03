@@ -15,7 +15,7 @@ export async function collectMetadata(
     parseGitRemotes(),
   ]);
 
-  return {
+  const metadata: ClusterMetadata = {
     workers: metrics.workers,
     activeWorkflows: metrics.activeWorkflows,
     channel: health.channel,
@@ -25,6 +25,15 @@ export async function collectMetadata(
     codeServerReady: health.codeServerReady,
     controlPlaneReady: health.controlPlaneReady,
   };
+
+  if (health.displayName) {
+    metadata.displayName = health.displayName;
+  }
+  if (health.clusterId) {
+    metadata.clusterId = health.clusterId;
+  }
+
+  return metadata;
 }
 
 interface HealthData {
@@ -33,6 +42,8 @@ interface HealthData {
   uptime: number;
   codeServerReady: boolean;
   controlPlaneReady: boolean;
+  displayName?: string;
+  clusterId?: string;
 }
 
 async function fetchHealth(config: RelayConfig): Promise<HealthData> {
@@ -42,13 +53,20 @@ async function fetchHealth(config: RelayConfig): Promise<HealthData> {
     });
     if (response.ok) {
       const data = await response.json() as Record<string, unknown>;
-      return {
+      const result: HealthData = {
         version: String(data['version'] ?? '0.0.0'),
         channel: (data['channel'] === 'preview' ? 'preview' : 'stable') as 'preview' | 'stable',
         uptime: Number(data['uptime'] ?? 0),
         codeServerReady: data['codeServerReady'] === true,
         controlPlaneReady: data['controlPlaneReady'] === true,
       };
+      if (typeof data['displayName'] === 'string') {
+        result.displayName = data['displayName'];
+      }
+      if (typeof data['clusterId'] === 'string') {
+        result.clusterId = data['clusterId'];
+      }
+      return result;
     }
   } catch {
     // Orchestrator unreachable — use defaults

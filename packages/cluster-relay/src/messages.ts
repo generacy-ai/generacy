@@ -116,6 +116,8 @@ export interface ClusterMetadata {
   uptime: number;
   codeServerReady?: boolean;
   controlPlaneReady?: boolean;
+  displayName?: string;
+  clusterId?: string;
 }
 
 // --- Zod Schemas ---
@@ -145,6 +147,8 @@ const ClusterMetadataSchema = z.object({
   orchestratorVersion: z.string(),
   gitRemotes: z.array(GitRemoteSchema),
   uptime: z.number(),
+  displayName: z.string().optional(),
+  clusterId: z.string().optional(),
 });
 
 const ApiRequestMessageSchema = z.object({

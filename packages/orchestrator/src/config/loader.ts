@@ -281,6 +281,21 @@ function loadFromEnv(): Record<string, unknown> {
     }
   }
 
+  // Cluster identity config (sourced from .generacy/.env on container start)
+  const clusterId = process.env['GENERACY_CLUSTER_ID'];
+  const clusterDisplayName = process.env['GENERACY_CLUSTER_NAME'];
+  if (clusterId || clusterDisplayName) {
+    if (!config.cluster) {
+      config.cluster = {};
+    }
+    if (clusterId) {
+      (config.cluster as Record<string, unknown>).id = clusterId;
+    }
+    if (clusterDisplayName) {
+      (config.cluster as Record<string, unknown>).displayName = clusterDisplayName;
+    }
+  }
+
   // Webhook setup config
   if (process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`] || process.env['WEBHOOK_SETUP_ENABLED']) {
     const value = process.env['WEBHOOK_SETUP_ENABLED'] ?? process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`];

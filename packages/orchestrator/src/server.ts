@@ -395,6 +395,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           redis: async () => redisClient ? 'ok' : 'error',
           dispatcher: async () => workerDispatcher ? 'ok' : 'error',
         },
+        cluster: {
+          id: config.cluster?.id,
+          displayName: config.cluster?.displayName,
+        },
       });
       await setupDispatchRoutes(server, queueAdapter);
     } else {
@@ -417,6 +421,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         agentRegistry,
         integrationRegistry,
         sessionService,
+        healthCheckOptions: {
+          cluster: {
+            id: config.cluster?.id,
+            displayName: config.cluster?.displayName,
+          },
+        },
       });
 
       // Register webhook routes inside an encapsulated plugin so the custom
@@ -800,6 +810,10 @@ async function initializeRelayBridge(
       sseManager: getSSESubscriptionManager(),
       logger: server.log,
       config: config.relay,
+      cluster: {
+        id: config.cluster?.id,
+        displayName: config.cluster?.displayName,
+      },
       engineClient,
     });
 

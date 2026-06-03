@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/lifecycle-action.v2.json",
+  "title": "LifecycleAction",
+  "description": "Lifecycle action enum accepted at POST /lifecycle/:action on the control-plane socket.",
+  "type": "string",
+  "enum": [
+    "bootstrap-complete",
+    "clone-peer-repos",
+    "code-server-start",
+    "code-server-stop",
+    "prepare-workspace",
+    "stop",
+    "vscode-tunnel-start",
+    "vscode-tunnel-stop",
+    "vscode-tunnel-unregister",
+    "worker-scale"
+  ]
+}
