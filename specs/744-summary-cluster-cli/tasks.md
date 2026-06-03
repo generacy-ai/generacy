@@ -2,7 +2,7 @@
 
 **Input**: Design documents from `/specs/744-summary-cluster-cli/`
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, contracts/
-**Status**: Complete
+**Status**: Implementation complete
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -48,24 +48,24 @@
 
 ## Phase 7: Orchestrator config + metadata
 
-- [ ] T021 [US3] Update `packages/orchestrator/src/config/loader.ts` to read optional `GENERACY_CLUSTER_NAME` env var into the orchestrator config.
-- [ ] T022 [US3] Update `packages/orchestrator/src/services/relay-bridge.ts` `collectMetadata()` to populate `displayName` (from config) and `clusterId` (from config) on the outgoing `ClusterMetadataPayload`. Depends on T004, T021.
-- [ ] T023 [US3] Update `packages/cluster-relay/src/metadata.ts` `collectMetadata` (handshake/reconnect path) to forward `displayName` and `clusterId` when present in the orchestrator `/health` response or upstream metadata source. Depends on T003.
+- [X] T021 [US3] Update `packages/orchestrator/src/config/loader.ts` to read optional `GENERACY_CLUSTER_NAME` env var into the orchestrator config.
+- [X] T022 [US3] Update `packages/orchestrator/src/services/relay-bridge.ts` `collectMetadata()` to populate `displayName` (from config) and `clusterId` (from config) on the outgoing `ClusterMetadataPayload`. Depends on T004, T021.
+- [X] T023 [US3] Update `packages/cluster-relay/src/metadata.ts` `collectMetadata` (handshake/reconnect path) to forward `displayName` and `clusterId` when present in the orchestrator `/health` response or upstream metadata source. Depends on T003.
 
 ## Phase 8: CLI lifecycle teardown (stop/down/destroy)
 
-- [ ] T024 [US4] Add `lifecycleAction(ctx, action, body?)` helper to `packages/generacy/src/cli/commands/cluster/compose.ts`. Wraps `docker compose exec orchestrator curl --unix-socket /run/generacy-control-plane/control.sock -X POST http://x/lifecycle/<action>`. Returns `{ok, status, body}`. 10s timeout. Swallows non-2xx and logs warning (best-effort).
-- [ ] T025 [US4] Update `packages/generacy/src/cli/commands/stop/index.ts` to call `lifecycleAction(ctx, 'vscode-tunnel-stop')` before `docker compose stop`. Depends on T024.
-- [ ] T026 [US4] Update `packages/generacy/src/cli/commands/down/index.ts` to call `lifecycleAction(ctx, 'vscode-tunnel-stop')` before `docker compose down` (preserve `--volumes` passthrough). Depends on T024.
-- [ ] T027 [US4] Update `packages/generacy/src/cli/commands/destroy/index.ts` to call `lifecycleAction(ctx, 'vscode-tunnel-unregister')` before `docker compose down -v`. Depends on T024, T020.
+- [X] T024 [US4] Add `lifecycleAction(ctx, action, body?)` helper to `packages/generacy/src/cli/commands/cluster/compose.ts`. Wraps `docker compose exec orchestrator curl --unix-socket /run/generacy-control-plane/control.sock -X POST http://x/lifecycle/<action>`. Returns `{ok, status, body}`. 10s timeout. Swallows non-2xx and logs warning (best-effort).
+- [X] T025 [US4] Update `packages/generacy/src/cli/commands/stop/index.ts` to call `lifecycleAction(ctx, 'vscode-tunnel-stop')` before `docker compose stop`. Depends on T024.
+- [X] T026 [US4] Update `packages/generacy/src/cli/commands/down/index.ts` to call `lifecycleAction(ctx, 'vscode-tunnel-stop')` before `docker compose down` (preserve `--volumes` passthrough). Depends on T024.
+- [X] T027 [US4] Update `packages/generacy/src/cli/commands/destroy/index.ts` to call `lifecycleAction(ctx, 'vscode-tunnel-unregister')` before `docker compose down -v`. Depends on T024, T020.
 
 ## Phase 9: Integration tests + property tests
 
-- [ ] T028 [P] [US2] Property test on `deriveTunnelName` in `packages/control-plane/src/services/__tests__/vscode-tunnel-manager.test.ts`: random UUID inputs always satisfy `/^[a-z][a-z0-9-]{0,19}$/` (SC-004). Add unit test for collision-error emission path (T019).
-- [ ] T029 [P] [US1] Integration test for `generacy launch` scaffold: runs scaffolder with `--name "ACME Frontend"`, asserts `.generacy/cluster.json` contains `display_name: "acme-frontend"`, `.generacy/.env` contains `GENERACY_CLUSTER_NAME=acme-frontend` (SC-001).
-- [ ] T030 [P] [US1] Integration test for default-name sequence: ten registry entries with the same `projectId` and `deploymentMode='local'` produce ten distinct names `-local-1`…`-local-10` (SC-002).
-- [ ] T031 [P] [US1] Integration test interleaving `deploymentMode='local'` and `'cloud'` entries under one `projectId`: local sequence and cloud sequence remain independent and contiguous (SC-008).
-- [ ] T032 [P] [US5] Unit test asserting `normalizeClusterName` produces identical output for the same input across `launch` and `deploy` code paths (SC-007).
+- [X] T028 [P] [US2] Property test on `deriveTunnelName` in `packages/control-plane/src/services/__tests__/vscode-tunnel-manager.test.ts`: random UUID inputs always satisfy `/^[a-z][a-z0-9-]{0,19}$/` (SC-004). Add unit test for collision-error emission path (T019).
+- [X] T029 [P] [US1] Integration test for `generacy launch` scaffold: runs scaffolder with `--name "ACME Frontend"`, asserts `.generacy/cluster.json` contains `display_name: "acme-frontend"`, `.generacy/.env` contains `GENERACY_CLUSTER_NAME=acme-frontend` (SC-001).
+- [X] T030 [P] [US1] Integration test for default-name sequence: ten registry entries with the same `projectId` and `deploymentMode='local'` produce ten distinct names `-local-1`…`-local-10` (SC-002).
+- [X] T031 [P] [US1] Integration test interleaving `deploymentMode='local'` and `'cloud'` entries under one `projectId`: local sequence and cloud sequence remain independent and contiguous (SC-008).
+- [X] T032 [P] [US5] Unit test asserting `normalizeClusterName` produces identical output for the same input across `launch` and `deploy` code paths (SC-007).
 
 ## Dependencies & Execution Order
 

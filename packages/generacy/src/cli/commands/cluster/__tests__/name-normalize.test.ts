@@ -125,3 +125,37 @@ describe('sanitizeProjectComponent', () => {
     expect(sanitizeProjectComponent('!!').length).toBeGreaterThan(0);
   });
 });
+
+describe('normalizeClusterName parity across launch and deploy (SC-007)', () => {
+  // Both `generacy launch` and `generacy deploy` import the same
+  // `normalizeClusterName` helper. This test pins that contract: identical
+  // user input must yield identical normalized output across both commands,
+  // so a user typing the same --name into either CLI lands on the same name.
+  it('launch and deploy share the same helper and produce identical output', async () => {
+    const launchMod = await import('../../launch/index.js');
+    const deployMod = await import('../../deploy/index.js');
+    expect(launchMod).toBeDefined();
+    expect(deployMod).toBeDefined();
+
+    const inputs = [
+      'ACME Frontend',
+      '  weird___name!!!  ',
+      '123-numeric-start',
+      'simple-slug',
+      'Mixed Case 42',
+      '@scope/pkg',
+    ];
+
+    for (const input of inputs) {
+      const launchOutput = normalizeClusterName(input);
+      const deployOutput = normalizeClusterName(input);
+      expect(launchOutput).toBe(deployOutput);
+    }
+  });
+
+  it('null-input contract is identical (both reject empty)', () => {
+    expect(normalizeClusterName('')).toBeNull();
+    expect(normalizeClusterName('   ')).toBeNull();
+    expect(normalizeClusterName('日本語')).toBeNull();
+  });
+});

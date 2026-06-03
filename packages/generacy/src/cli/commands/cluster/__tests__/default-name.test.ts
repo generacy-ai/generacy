@@ -73,4 +73,76 @@ describe('generateDefaultName', () => {
     ];
     expect(generateDefaultName('proj-1', 'ACME Frontend', registry)).toBe('acme-frontend-local-1');
   });
+
+  it('produces ten distinct names for ten siblings under one local projectId (SC-002)', () => {
+    // Simulate adding ten clusters sequentially under the same project. Each
+    // call sees the registry growing with the previously-generated names.
+    const registry: Registry = [];
+    const names: string[] = [];
+    for (let i = 0; i < 10; i++) {
+      const name = generateDefaultName('proj-1', 'ACME Frontend', registry);
+      names.push(name);
+      registry.push(entry({
+        projectId: 'proj-1',
+        deploymentMode: 'local',
+        displayName: name,
+      }));
+    }
+    expect(names).toEqual([
+      'acme-frontend-local-1',
+      'acme-frontend-local-2',
+      'acme-frontend-local-3',
+      'acme-frontend-local-4',
+      'acme-frontend-local-5',
+      'acme-frontend-local-6',
+      'acme-frontend-local-7',
+      'acme-frontend-local-8',
+      'acme-frontend-local-9',
+      'acme-frontend-local-10',
+    ]);
+    expect(new Set(names).size).toBe(10);
+  });
+
+  it('local and cloud sequences are independent under one projectId (SC-008)', () => {
+    // Interleave local and cloud registrations under one project. The local
+    // counter must ignore cloud entries entirely, so each new local cluster
+    // continues the local sequence contiguously.
+    const registry: Registry = [];
+    const localNames: string[] = [];
+
+    const addLocal = (displayName: string): void => {
+      registry.push(entry({
+        projectId: 'proj-1',
+        deploymentMode: 'local',
+        displayName,
+      }));
+    };
+    const addCloud = (displayName: string): void => {
+      registry.push(entry({
+        projectId: 'proj-1',
+        deploymentMode: 'cloud',
+        displayName,
+      }));
+    };
+
+    // local-1
+    localNames.push(generateDefaultName('proj-1', 'ACME Frontend', registry));
+    addLocal(localNames[localNames.length - 1]!);
+    // cloud entry (ignored)
+    addCloud('acme-frontend-cloud-a');
+    // local-2 (still contiguous, not affected by cloud entry)
+    localNames.push(generateDefaultName('proj-1', 'ACME Frontend', registry));
+    addLocal(localNames[localNames.length - 1]!);
+    // more cloud entries
+    addCloud('acme-frontend-cloud-b');
+    addCloud('acme-frontend-cloud-c');
+    // local-3
+    localNames.push(generateDefaultName('proj-1', 'ACME Frontend', registry));
+
+    expect(localNames).toEqual([
+      'acme-frontend-local-1',
+      'acme-frontend-local-2',
+      'acme-frontend-local-3',
+    ]);
+  });
 });

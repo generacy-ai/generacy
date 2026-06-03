@@ -481,6 +481,53 @@ describe("VsCodeTunnelProcessManager", () => {
       });
     });
 
+    it("emits a tunnel-name collision error when actual differs from requested (FR-012)", async () => {
+      // Regression: when the requested --name was already taken, the actual
+      // tunnel name parsed from vscode.dev/tunnel/<x> differs. We must emit
+      // a clear error event so the cloud/UI can resolve the discrepancy
+      // (observational only — does NOT abort the tunnel).
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(
+        child,
+        "Open this link in your browser https://vscode.dev/tunnel/9ac46a6bef24/workspaces"
+      );
+
+      const collisionEvent = relayEvents.find(
+        (e) =>
+          e.payload.status === "error" &&
+          e.payload.error === "tunnel name collision"
+      );
+      expect(collisionEvent).toBeDefined();
+      expect(collisionEvent?.payload.tunnelName).toBe("9ac46a6bef24");
+      expect(collisionEvent?.payload.details).toContain("requested=test-cluster");
+      expect(collisionEvent?.payload.details).toContain("actual=9ac46a6bef24");
+    });
+
+    it("does NOT emit a collision error when actual matches requested", async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(
+        child,
+        "Open this link in your browser https://vscode.dev/tunnel/test-cluster/workspaces"
+      );
+
+      const collisionEvent = relayEvents.find(
+        (e) =>
+          e.payload.status === "error" &&
+          e.payload.error === "tunnel name collision"
+      );
+      expect(collisionEvent).toBeUndefined();
+    });
+
     it("emits disconnected event when connected process exits", async () => {
       const child = createMockChild();
       spawnMock.mockReturnValue(child);
@@ -821,6 +868,25 @@ describe("deriveTunnelName", () => {
     ];
     for (const id of inputs) {
       expect(deriveTunnelName(id)).toMatch(/^[a-z][a-z0-9-]{0,19}$/);
+    }
+  });
+
+  it("randomized UUIDs always satisfy the Microsoft tunnel-name regex (SC-004)", () => {
+    // Property: for any randomly-generated UUID, deriveTunnelName produces a
+    // string matching /^[a-z][a-z0-9-]{0,19}$/ (≤20 chars, letter-initial,
+    // lowercase hex + hyphens only).
+    const randHex = (n: number): string => {
+      let s = "";
+      for (let i = 0; i < n; i++) {
+        s += Math.floor(Math.random() * 16).toString(16);
+      }
+      return s;
+    };
+    for (let trial = 0; trial < 100; trial++) {
+      const uuid = `${randHex(8)}-${randHex(4)}-${randHex(4)}-${randHex(4)}-${randHex(12)}`;
+      const name = deriveTunnelName(uuid);
+      expect(name).toMatch(/^[a-z][a-z0-9-]{0,19}$/);
+      expect(name.length).toBeLessThanOrEqual(20);
     }
   });
 });

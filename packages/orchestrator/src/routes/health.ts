@@ -9,6 +9,15 @@ import { probeControlPlaneSocket } from '../services/control-plane-probe.js';
 export interface HealthCheckOptions {
   /** Custom health checks for services */
   checks?: Record<string, () => Promise<ServiceStatus>>;
+  /**
+   * Cluster identity (display name + UUID). When present, surfaced on the
+   * /health response so the cluster-relay metadata collector can forward
+   * them to the cloud.
+   */
+  cluster?: {
+    id?: string;
+    displayName?: string;
+  };
 }
 
 /**
@@ -26,6 +35,7 @@ export async function setupHealthRoutes(
   options: HealthCheckOptions = {}
 ): Promise<void> {
   const checks = { ...defaultChecks, ...options.checks };
+  const cluster = options.cluster;
 
   // GET /health - Health check endpoint
   server.get(
@@ -45,6 +55,9 @@ export async function setupHealthRoutes(
                 additionalProperties: { type: 'string', enum: ['ok', 'error'] },
               },
               codeServerReady: { type: 'boolean' },
+              controlPlaneReady: { type: 'boolean' },
+              displayName: { type: 'string' },
+              clusterId: { type: 'string' },
             },
           },
           503: {
@@ -57,6 +70,9 @@ export async function setupHealthRoutes(
                 additionalProperties: { type: 'string', enum: ['ok', 'error'] },
               },
               codeServerReady: { type: 'boolean' },
+              controlPlaneReady: { type: 'boolean' },
+              displayName: { type: 'string' },
+              clusterId: { type: 'string' },
             },
           },
         },
@@ -97,6 +113,13 @@ export async function setupHealthRoutes(
         codeServerReady,
         controlPlaneReady,
       };
+
+      if (cluster?.displayName) {
+        response.displayName = cluster.displayName;
+      }
+      if (cluster?.id) {
+        response.clusterId = cluster.id;
+      }
 
       const statusCode = overallStatus === 'error' ? 503 : 200;
       return reply.status(statusCode).send(response);

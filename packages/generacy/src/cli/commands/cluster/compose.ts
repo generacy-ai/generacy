@@ -69,3 +69,86 @@ export function runCompose(ctx: ClusterContext, subcommand: string[], options?: 
   }
   return execSafe(cmd);
 }
+
+export interface LifecycleActionResult {
+  ok: boolean;
+  status: number;
+  body: string;
+}
+
+/**
+ * Invoke a control-plane lifecycle action via the orchestrator container.
+ *
+ * Wraps `docker compose exec orchestrator curl --unix-socket ... -X POST
+ * http://x/lifecycle/<action>`. Best-effort: a 10s exec timeout caps the call;
+ * non-2xx and exec failures are swallowed and logged as warnings so CLI
+ * teardown is never blocked by a misbehaving control-plane.
+ */
+export function lifecycleAction(
+  ctx: ClusterContext,
+  action: string,
+  body?: unknown,
+): LifecycleActionResult {
+  const logger = getLogger();
+  const socketPath = '/run/generacy-control-plane/control.sock';
+  const url = `http://x/lifecycle/${action}`;
+
+  const curlArgs = [
+    '--silent',
+    '--show-error',
+    '--max-time', '10',
+    '--unix-socket', socketPath,
+    '-X', 'POST',
+    '-w', '\\n%{http_code}',
+  ];
+
+  if (body !== undefined) {
+    curlArgs.push('-H', 'Content-Type: application/json');
+    curlArgs.push('-d', JSON.stringify(body));
+  } else {
+    curlArgs.push('-H', 'Content-Length: 0');
+  }
+
+  curlArgs.push(url);
+
+  const subcommand = [
+    'exec',
+    '-T',
+    'orchestrator',
+    'curl',
+    ...curlArgs,
+  ];
+
+  const result = runCompose(ctx, subcommand);
+
+  if (!result.ok) {
+    logger.warn(
+      { action, stderr: result.stderr },
+      'Lifecycle action invocation failed (best-effort, continuing)',
+    );
+    return { ok: false, status: 0, body: result.stderr };
+  }
+
+  const output = result.stdout;
+  const lastNewline = output.lastIndexOf('\n');
+  let status = 0;
+  let responseBody = output;
+  if (lastNewline >= 0) {
+    const statusStr = output.slice(lastNewline + 1).trim();
+    const parsed = parseInt(statusStr, 10);
+    if (!isNaN(parsed)) {
+      status = parsed;
+      responseBody = output.slice(0, lastNewline);
+    }
+  }
+
+  const ok = status >= 200 && status < 300;
+  if (!ok) {
+    logger.warn(
+      { action, status, body: responseBody },
+      'Lifecycle action returned non-2xx (best-effort, continuing)',
+    );
+  }
+
+  return { ok, status, body: responseBody };
+}
