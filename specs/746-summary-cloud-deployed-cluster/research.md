@@ -129,3 +129,209 @@ A fourth possibility — cloud-side pre-computation of `vscodeTunnelName` from p
 - Issue #618 — the pre-#744 projectId-derived design, intentionally chosen for stability across activations of a single cluster.
 - generacy-cloud#792, generacy-cloud#795 — companion cloud-side per-cluster persistence (referenced by spec).
 - File: `packages/control-plane/src/services/vscode-tunnel-manager.ts:64–88` (verified UUID-keyed).
+
+---
+
+## Investigation Log — Layer A code (T001)
+
+**Date**: 2026-06-03. **Status**: Confirmed UUID-keyed.
+
+`packages/control-plane/src/services/vscode-tunnel-manager.ts` on branch `746-summary-cloud-deployed-cluster` (post-#744):
+
+- `deriveTunnelName(clusterId)` at lines **64–71**: strips hyphens, prefixes `g-`, slices first 18 chars, validates against `/^[a-z][a-z0-9-]{0,19}$/`. **Does NOT lowercase** its input.
+- `loadOptionsFromEnv` at lines **73–89**: reads `env["GENERACY_CLUSTER_ID"]` (line 81), throws if missing, returns `{ binPath, tunnelName: deriveTunnelName(id) }`.
+
+For `GENERACY_CLUSTER_ID = "325cdcb9-5b8e-45fc-a1bc-1ec8570d561d"`:
+- `compact = "325cdcb95b8e45fcab1c343e849f0bb90"`
+- `out = "g-325cdcb95b8e45fca1"` ← matches expected per spec.
+
+**Implication**: the regressing value `g-xr7fxq61pf57u2loto` **cannot** be produced by this code from the UUID input. Layer A code is innocent on the UUID path. Hypothesis #2 (in-repo code wrong) is **eliminated** unless the running tarball is pre-#744 (separately tested by T003).
+
+---
+
+## Investigation Log — Layer C (T006)
+
+**Date**: 2026-06-03. **Status**: Hypothesis #2 (Layer C — pre-#744 ref) ELIMINATED.
+
+`gh run list --workflow=publish-preview.yml --repo generacy-ai/generacy` confirms the workflow run that produced `0.0.0-preview-20260603190235`:
+
+- Run ID `26906597368`, started `2026-06-03T19:01:40Z`.
+- **headSha `6f74140a01d60b291723799f7ae1828b7113e4b4` — exactly #744's merge SHA on `develop`.**
+- Conclusion: `success`.
+- Build time (workflow start → published `0.0.0-preview-20260603190235` timestamp 19:02:35Z) ≈ 55s, consistent with a normal `pnpm install + build + changeset version --snapshot + publish` cycle.
+
+**Implication**: the published preview tarball at version `0.0.0-preview-20260603190235` provably contains #744's UUID-keyed `deriveTunnelName`. No earlier preview-published tarball can produce the observed lowercase regression value through the published code. **Hypothesis #2 (Layer C) is eliminated.**
+
+(`@generacy-ai/control-plane` is a workspace package in this repo — the publish workflow lives in `.github/workflows/publish-preview.yml`. There is no separate `generacy-ai/control-plane` repo; a 404 confirms this.)
+
+---
+
+## Investigation Log — Layer B cloud handler (T005)
+
+**Date**: 2026-06-03. **Status**: One write path, reads from event payload, NO cloud-side computation. One incidental concern noted (multi-cluster routing).
+
+Inspected `generacy-ai/generacy-cloud` (HEAD `cc1fd7d`, `fix(relay): route control-plane requests by clusterId, not projectId (#795)`).
+
+**Single write path** for `vscodeTunnelName` (`grep` across non-test code):
+
+`services/api/src/services/relay/message-handler.ts:486–512` — the `cluster.vscode-tunnel` EventMessage handler:
+
+```ts
+if (message.event === 'cluster.vscode-tunnel' && this.db) {
+  const tunnelData = (message.data ?? {}) as Record<string, unknown>;
+  const status = tunnelData.status as string | undefined;
+  if (status) {
+    const update: Record<string, unknown> = { vscodeTunnelStatus: status };
+    if (status === 'connected') {                          // ← gate
+      update.vscodeTunnelConfigured = true;
+      if (typeof tunnelData.tunnelName === 'string') {
+        update.vscodeTunnelName = tunnelData.tunnelName;   // ← read from event
+      }
+      ...
+    }
+    resolveClusterDocRef(this.db, orgId, projectId)        // ← lookup by projectId
+      .then((ref) => { if (ref) ref.update(update); })     // ← merge update
+      ...
+  }
+}
+```
+
+Properties:
+1. **No cloud-side computation** of `vscodeTunnelName` — the value is whatever the cluster sent in `data.tunnelName`. The pre-existing assumption (spec assumption #3) holds.
+2. **`vscodeTunnelName` only updates when `status === 'connected'`** (line 491). Starting/authorization_pending/disconnected/error status payloads do NOT touch this field. Implication: a doc value can persist arbitrarily long if the cluster never re-reaches `connected`.
+3. **`ref.update()` is merge-semantics** (Firestore: updates listed fields only, doesn't write-once-and-block). Not write-once.
+4. **NO seed of `vscodeTunnelName` from `projectId`** at any other call site — verified by `grep -rn 'vscodeTunnelName\s*[:=]'` across non-test, non-spec code. Only:
+   - schema definition (`packages/db/src/collections/clusters.ts:121`)
+   - read-back converter (`packages/db/src/collections/clusters.ts:220`)
+   - the handler above
+   - SSE read endpoint (`services/api/src/routes/events/cluster.ts:112`)
+   - web hooks (read-only)
+
+**`resolveClusterDocRef` (separate concern)** at `services/api/src/services/relay/cluster-doc-resolver.ts:21–55`:
+
+```ts
+const querySnapshot = await collection
+  .where('projectId', '==', projectId)
+  .where('status', 'in', ['connecting', 'connected', 'starting'])
+  .limit(1)
+  .get();
+```
+
+Looks up the cluster doc by **`projectId`**, not by `clusterId`. With `limit(1)`. The handler writes to whichever cluster matches the `projectId` filter first — **not necessarily the cluster that emitted the event**. This is a latent multi-cluster routing bug but does **not** explain the observed regression because:
+
+- Per `gh issue #746` evidence, only one cluster (`325cdcb9-...`) is in the project at observation time.
+- A `limit(1)` of `where projectId == X` returns the only matching doc, which IS `325cdcb9-...`.
+
+It will become relevant once #791/#792 multi-cluster is exercised — and is a candidate for a separate companion issue regardless of #746's outcome.
+
+**`compose-template.ts` env var rendering** (`services/api/src/services/cloud-deploy/compose-template.ts:206`):
+
+```
+GENERACY_CLUSTER_ID=${input.clusterId}
+```
+
+`clusterId` flows from `provisionDroplet → preApproveActivationCode → activateCluster`, where post-#792 (`services/api/src/services/cluster-activation.ts:386`) it is `randomUUID()`. So on a post-#792 deploy, `GENERACY_CLUSTER_ID` in `/opt/generacy/.env` is the UUID. **Hypothesis #1's cloud-deploy variant (env template literally embeds projectId) is eliminated** — the code path puts the UUID there.
+
+(Hypothesis #1's operational variant — env var on the running Droplet does not match the rendered template, e.g. manually edited, or set via a different path — remains untested without SSH probe T002.)
+
+---
+
+## Investigation Log — Timeline pins
+
+Confirmed merge / publish timestamps (UTC):
+
+| Time (UTC) | Event |
+|------------|-------|
+| 2026-06-03 19:01:40 | `publish-preview.yml` run #26906597368 starts on `6f74140` (#744 merge SHA). |
+| 2026-06-03 19:02:35 | `@generacy-ai/control-plane@0.0.0-preview-20260603190235` published (post-#744). |
+| 2026-06-03 19:19:43 | generacy-cloud#791 merges (`a7c0f90`) — touches `cluster-activation.ts` but does NOT change `clusterId` derivation (still legacy projectId-keyed at this point). |
+| 2026-06-03 20:53:32 | generacy-cloud#792 merges (`ea24968`) — flips `clusterId = randomUUID()` (`cluster-activation.ts:386`). |
+| 2026-06-03 21:51:34 | generacy-cloud#795 merges (`cc1fd7d`) — relay control-plane request routing fix. |
+
+The regressing cluster's doc key `325cdcb9-5b8e-45fc-a1bc-1ec8570d561d` is UUID-shaped (not projectId-shaped), so **the cluster was provisioned after 20:53:32 UTC** — which is also after the post-#744 preview tarball was already published and post-#744 was the current `preview` dist-tag. Therefore, at first boot the cluster would have installed `0.0.0-preview-20260603190235` (post-#744) and would have had `GENERACY_CLUSTER_ID=<UUID>` in the rendered `.env`.
+
+---
+
+## Investigation Log — Hypothesis #1 (env var)
+
+**Status**: Not yet probed on the live Droplet (T002 requires SSH access — not available from this workspace).
+
+**What's known from code-only inspection**:
+- The cloud-deploy template literally writes `GENERACY_CLUSTER_ID=${input.clusterId}` where `input.clusterId` is the UUID (timeline pin above). So the rendered `.env` should contain the UUID.
+- However, this only proves what was *written at deploy time*. The live Droplet's running env (env file + env-overrides + manual edits) must still be probed.
+
+**Probe still required** (T002 — operator action):
+```bash
+ssh <droplet>
+grep -E '^GENERACY_(CLUSTER_ID|PROJECT_ID)=' /opt/generacy/.env
+docker compose -f /opt/generacy/docker-compose.yml exec orchestrator printenv GENERACY_CLUSTER_ID
+```
+
+If both show UUID → hypothesis #1 fully eliminated. If either shows projectId → root cause pinned (and would imply something out of repo since rendered template puts UUID there).
+
+---
+
+## Investigation Log — Hypothesis #2 (tarball provenance)
+
+**Status**: Eliminated *for the published tarball*. Not yet probed *for the actually-installed bytes on the Droplet*.
+
+**What's known from code-only inspection**: see "Layer C (T006)" — the published tarball at version `0.0.0-preview-20260603190235` was built from `6f74140` (#744 merge SHA). The bytes in npm registry for that version are post-#744.
+
+**Probe still required** (T003 — operator action):
+```bash
+docker compose -f /opt/generacy/docker-compose.yml exec orchestrator \
+  node -e "console.log(require('@generacy-ai/control-plane/package.json').version)"
+docker compose -f /opt/generacy/docker-compose.yml exec orchestrator \
+  sh -c "grep -n 'GENERACY_CLUSTER_ID\|GENERACY_PROJECT_ID\|deriveTunnelName' \
+    node_modules/@generacy-ai/control-plane/dist/services/vscode-tunnel-manager.js"
+```
+
+If installed version is `0.0.0-preview-20260603190235` AND the dist file reads `GENERACY_CLUSTER_ID` (not `GENERACY_PROJECT_ID`) → hypothesis #2 fully eliminated.
+
+---
+
+## Investigation Log — Cluster request trace (T004 probe)
+
+**Status**: Not yet probed (requires Droplet log access).
+
+**Probe still required** (T004 — operator action):
+```bash
+docker compose -f /opt/generacy/docker-compose.yml logs orchestrator control-plane \
+  | grep -iE 'tunnel.*name|deriveTunnelName|code tunnel --name|vscode-tunnel'
+```
+
+What to look for in the log output:
+- `code tunnel --name <X>` invocation: that's the **requested** name.
+- `cluster.vscode-tunnel` event payload with `status: 'connected'` and `tunnelName: <Y>`: that's the **actual registered** name (per #743 — `actualTunnelName` parsed from the `vscode.dev/tunnel/<...>` URL).
+
+The interesting cases:
+- Requested = `g-325cdcb95b8e45fca1` AND actual = `g-325cdcb95b8e45fca1` → cluster process is correct; doc is wrong due to either (a) a `connected` event never landed cloud-side, or (b) the doc was last written by a pre-#744 cluster process and never overwritten. Hypothesis #3 territory.
+- Requested = `g-xr7fxq61pf57u2loto` directly → in-process code is using projectId despite installed tarball being post-#744 (running process predates package update). Restart fixes it.
+- Requested = `g-325cdcb95b8e45fca1` but actual = `g-xr7fxq61pf57u2loto` → Microsoft tunnel service returned a pre-existing tunnel under the same auth (interesting cache/auth-binding behavior). Document under FR-007.
+
+---
+
+## Diagnosis (T007) — partial
+
+Pinned to the extent possible without live Droplet access:
+
+**Eliminated**:
+- ✗ Layer A code is wrong (T001 ✓).
+- ✗ Layer C published tarball is pre-#744 (T006 ✓).
+- ✗ Cloud-deploy compose-template embeds projectId in `GENERACY_CLUSTER_ID` (T005 partial — code reading ✓).
+- ✗ Cloud-side computes `vscodeTunnelName` from `projectId` (T005 ✓ — handler reads from event payload only).
+- ✗ Cloud-side seeds `vscodeTunnelName` at activation time (T005 ✓ — no such seed call site exists).
+
+**Still possible (requires live probe to discriminate)**:
+1. **Running orchestrator process is pre-#744 even though installed tarball is post-#744** — entrypoint installs `@preview` on every boot, but the running Node process holds whatever code was loaded at *its* boot time. If the cluster booted from a pre-#744 preview tarball at some point and was never restarted (only the on-disk tarball was refreshed), the running code is older than `package.json` suggests. Restart fixes. **T003 + T004 combined would expose this.** (Note: per the timeline pin, this requires the cluster's first boot to predate 19:02:35 UTC — but the UUID-shape doc key requires provisioning after 20:53 UTC, contradicting this. So this hypothesis is *only* viable if the cluster was provisioned post-#792 with a pre-#744 tarball, which the timeline forbids unless a `@preview` dist-tag rollback occurred. **Currently the lowest-probability remaining hypothesis.**)
+2. **`GENERACY_CLUSTER_ID` env on the live Droplet is `Xr7fxq61PF57U2lOtoKe` despite the deploy template writing the UUID** — could result from a manual edit, a different override path (e.g. `.env.local`), or a bug in env propagation. **T002 + T003 (`docker compose exec orchestrator printenv GENERACY_CLUSTER_ID`) discriminates directly.** If so: companion issue in `generacy-cloud` is unlikely (the template code is correct); rather, an operational forensic on the specific Droplet.
+3. **Microsoft tunnel service returned a pre-existing tunnel registration** under the post-#744 auth, with `actualTunnelName = g-xr7fxq61pf57u2loto`. This is the most surprising hypothesis but consistent with the lowercase-projectId-shape value not being producible by post-#744 code. **T004 (request vs actual name in logs) discriminates.** If so: FR-007 territory — document the condition, and (likely) the cluster needs to `code tunnel unregister --name g-xr7fxq61pf57u2loto` before re-registering. The existing `unregister()` method in `vscode-tunnel-manager.ts:284` covers this, but it's only invoked on `generacy destroy`, not at restart.
+4. **The cloud doc value is stale from a pre-#744 era write that the post-#744 cluster has never overwritten** — i.e., no `connected` event has landed cloud-side since the cluster started speaking #744. Per Layer B finding, `vscodeTunnelName` only updates on `status === 'connected'`. If the post-#744 cluster's tunnel keeps failing to reach `connected`, the cloud doc value would persist indefinitely. **T004 (does `cluster.vscode-tunnel: connected` ever fire?) discriminates.** Note this would also require a pre-#744 cluster to have ever existed for this projectId/UUID combo, which the UUID-shape doc-key timeline complicates. **T014 (restart self-correction test) is the natural escalation.**
+
+**Layer pinned by elimination**: not Layer A, not Layer C. Either Layer B (`generacy-cloud` — operational forensics on the specific Droplet) or stale cache on Layer A's runtime (FR-007). **Cannot pin to a single Layer without the three live-Droplet probes (T002/T003/T004).** The decision gate (T008) is therefore **blocked on operator action**.
+
+---
+
+## Companion Issues
+
+(None filed yet — pending T008 decision after T002/T003/T004 complete.)
