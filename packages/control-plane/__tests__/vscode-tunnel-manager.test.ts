@@ -450,6 +450,37 @@ describe("VsCodeTunnelProcessManager", () => {
       });
     });
 
+    it("reports the ACTUAL tunnel name from the URL when the requested name was taken", async () => {
+      // Regression: when the requested --name is already taken (stale
+      // registration from a prior Droplet for the same project), `code tunnel`
+      // falls back to a random name. We must report that actual name (parsed
+      // from the connection URL) so the cloud/UI deep-links to the live tunnel,
+      // not the dead one.
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      const startResult = await mgr.start();
+      expect(startResult.tunnelName).toBe("test-cluster"); // requested name pre-connect
+
+      pushLine(
+        child,
+        "Open this link in your browser https://vscode.dev/tunnel/9ac46a6bef24/workspaces"
+      );
+
+      const connectedEvent = relayEvents.find(
+        (e) => e.payload.status === "connected"
+      );
+      expect(connectedEvent).toEqual({
+        channel: "cluster.vscode-tunnel",
+        payload: {
+          status: "connected",
+          tunnelName: "9ac46a6bef24",
+          tunnelUrl: "https://vscode.dev/tunnel/9ac46a6bef24/workspaces",
+        },
+      });
+    });
+
     it("emits disconnected event when connected process exits", async () => {
       const child = createMockChild();
       spawnMock.mockReturnValue(child);
