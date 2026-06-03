@@ -89,9 +89,21 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
   private deviceCode: string | null = null;
   private verificationUri: string | null = null;
   private tunnelUrl: string | null = null;
+  // The name `code tunnel` actually registered. It can differ from the
+  // requested `opts.tunnelName`: if that name is already taken (e.g. a stale
+  // registration left behind by a previously-deleted Droplet for the same
+  // project — the name is derived from the stable project id, see #618), the
+  // CLI silently falls back to a random name. We must report THIS name so the
+  // cloud/UI deep-links to the tunnel that's actually running, not the dead one.
+  private actualTunnelName: string | null = null;
   private stopping = false;
 
   constructor(private readonly opts: VsCodeTunnelManagerOptions) {}
+
+  /** Extract the registered tunnel name from a `https://vscode.dev/tunnel/<name>/…` URL. */
+  private tunnelNameFromUrl(url: string | null): string | null {
+    return url?.match(/vscode\.dev\/tunnel\/([\w-]+)/)?.[1] ?? null;
+  }
 
   getStatus(): VsCodeTunnelStatus {
     return this.status;
@@ -110,11 +122,14 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       } else if (this.status === "connected") {
         emitTunnelEvent({
           status: "connected",
-          tunnelName: this.opts.tunnelName,
+          tunnelName: this.actualTunnelName ?? this.opts.tunnelName,
           tunnelUrl: this.tunnelUrl ?? undefined,
         });
       }
-      return { status: this.status, tunnelName: this.opts.tunnelName };
+      return {
+        status: this.status,
+        tunnelName: this.actualTunnelName ?? this.opts.tunnelName,
+      };
     }
 
     this.status = "starting";
@@ -144,6 +159,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       this.deviceCode = null;
       this.verificationUri = null;
       this.tunnelUrl = null;
+      this.actualTunnelName = null;
 
       if (stopInitiated) {
         this.status = "stopped";
@@ -282,9 +298,12 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       this.verificationUri = null;
       const urlMatch = line.match(TUNNEL_URL_PATTERN);
       this.tunnelUrl = urlMatch?.[1] ?? null;
+      // Prefer the name parsed from the actual tunnel URL — `code tunnel` may
+      // have fallen back to a random name when the requested name was taken.
+      this.actualTunnelName = this.tunnelNameFromUrl(this.tunnelUrl);
       emitTunnelEvent({
         status: "connected",
-        tunnelName: this.opts.tunnelName,
+        tunnelName: this.actualTunnelName ?? this.opts.tunnelName,
         tunnelUrl: this.tunnelUrl ?? undefined,
       });
     }
