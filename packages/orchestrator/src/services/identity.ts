@@ -45,7 +45,23 @@ export async function resolveClusterIdentity(
     return configUsername;
   }
 
-  // 2. Fallback: gh api /user
+  // 2. Wizard-delivered GitHub account (GH_USERNAME). This is the human account
+  //    the GitHub App installation belongs to (e.g. the account selected during
+  //    cluster setup). The `gh api /user` fallback below can't resolve an
+  //    identity from a GitHub App installation token (`<app>[bot]` tokens can't
+  //    call /user), so without this, cloud/wizard clusters fall through to
+  //    "filtering disabled" and process every issue instead of only those
+  //    assigned to the selected account.
+  const ghUsername = process.env['GH_USERNAME'];
+  if (ghUsername) {
+    logger.info(
+      { username: ghUsername, source: 'gh-username-env' },
+      `Cluster identity resolved: ${ghUsername} (from GH_USERNAME)`,
+    );
+    return ghUsername;
+  }
+
+  // 3. Fallback: gh api /user
   try {
     const login = await ghApiUser();
     logger.info(
@@ -79,7 +95,7 @@ export async function resolveClusterIdentity(
     }
   }
 
-  // 3. Both failed — filtering disabled
+  // 4. All sources failed — filtering disabled
   logger.warn('Assignee filtering disabled: no cluster identity configured. All issues will be processed.');
   return undefined;
 }
