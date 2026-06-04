@@ -12,9 +12,10 @@ services:
     volumes:
       - workspace:/workspaces
       - ~/.claude.json:/home/node/.claude.json
-      - shared-packages:/shared-packages
+      - claude-config:/home/node/.claude
       - npm-cache:/home/node/.npm
       - generacy-data:/var/lib/generacy
+      - shared-packages:/shared-packages
       - /var/run/docker.sock:/var/run/docker-host.sock
       - vscode-cli-state:/home/node/.vscode/cli
       - generacy-app-config-data:/var/lib/generacy-app-config
@@ -55,11 +56,11 @@ services:
     deploy:
       replicas: \${WORKER_COUNT:-1}
     volumes:
-      - workspace:/workspaces
       - ~/.claude.json:/home/node/.claude.json
-      - shared-packages:/shared-packages
+      - claude-config:/home/node/.claude
       - npm-cache:/home/node/.npm
       - generacy-data:/var/lib/generacy
+      - shared-packages:/shared-packages:ro
       - generacy-app-config-data:/var/lib/generacy-app-config:ro
     tmpfs: *a1
     environment:
@@ -102,6 +103,7 @@ services:
       - cluster-network
 volumes:
   workspace: null
+  claude-config: null
   shared-packages: null
   npm-cache: null
   generacy-data: null

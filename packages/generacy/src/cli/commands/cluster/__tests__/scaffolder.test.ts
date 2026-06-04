@@ -311,13 +311,23 @@ describe('scaffoldDockerCompose', () => {
     expect(parsed.services.worker).not.toHaveProperty('ports');
   });
 
-  it('bind mode uses ~/.claude.json bind mount (no claude-config volume)', () => {
+  it('bind mode binds ~/.claude.json and shares the claude-config dir volume', () => {
     scaffoldDockerCompose(dir, { ...baseInput, claudeConfigMode: 'bind' });
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
+    const workerVolumes = parsed.services.worker.volumes as string[];
+    // ~/.claude.json is bind-mounted (account metadata file).
     expect(orchVolumes).toContain('~/.claude.json:/home/node/.claude.json');
-    expect(parsed.volumes).not.toHaveProperty('claude-config');
+    // The .claude DIRECTORY is a shared named volume so workers inherit the
+    // orchestrator's Claude auth + speckit commands + conversations.
+    expect(orchVolumes).toContain('claude-config:/home/node/.claude');
+    expect(workerVolumes).toContain('claude-config:/home/node/.claude');
+    expect(parsed.volumes).toHaveProperty('claude-config');
+    // #737 guard: never mount the named volume onto the .claude.json FILE path
+    // (Docker rejects "is not directory").
+    expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
+    expect(workerVolumes).not.toContain('claude-config:/home/node/.claude.json');
   });
 
   // T001 [US2]: lock SC-002 — bind-mode YAML must be byte-identical after the
@@ -339,9 +349,13 @@ describe('scaffoldDockerCompose', () => {
 
     expect(orchVolumes).toContain('./claude.json:/home/node/.claude.json');
     expect(workerVolumes).toContain('./claude.json:/home/node/.claude.json');
+    // #737 guard: the named volume must never mount onto the .claude.json FILE.
     expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
     expect(workerVolumes).not.toContain('claude-config:/home/node/.claude.json');
-    expect(parsed.volumes).not.toHaveProperty('claude-config');
+    // …but the .claude DIRECTORY is still a shared named volume on both.
+    expect(orchVolumes).toContain('claude-config:/home/node/.claude');
+    expect(workerVolumes).toContain('claude-config:/home/node/.claude');
+    expect(parsed.volumes).toHaveProperty('claude-config');
   });
 
   // T003 [US1]: idempotency per contract Q6–Q8 / FR-002, FR-003.
@@ -451,12 +465,24 @@ describe('scaffoldDockerCompose', () => {
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     expect(parsed.volumes).toHaveProperty('workspace');
+    expect(parsed.volumes).toHaveProperty('claude-config');
     expect(parsed.volumes).toHaveProperty('shared-packages');
     expect(parsed.volumes).toHaveProperty('npm-cache');
     expect(parsed.volumes).toHaveProperty('generacy-data');
     expect(parsed.volumes).toHaveProperty('redis-data');
     expect(parsed.volumes).toHaveProperty('vscode-cli-state');
     expect(parsed.volumes).toHaveProperty('generacy-app-config-data');
+  });
+
+  it('mounts workspace on the orchestrator only — workers do not share it', () => {
+    // Workers must not share the orchestrator's working tree (concurrent
+    // checkouts would clobber it); their per-job checkouts are container-local.
+    scaffoldDockerCompose(dir, baseInput);
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    expect(parsed.services.orchestrator.volumes).toContain('workspace:/workspaces');
+    const workerVolumes = parsed.services.worker.volumes as string[];
+    expect(workerVolumes.some((v) => v.startsWith('workspace:'))).toBe(false);
   });
 
   it('mounts shared-packages at /shared-packages (cluster-base entrypoint contract)', () => {
@@ -470,7 +496,8 @@ describe('scaffoldDockerCompose', () => {
     const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
 
     expect(parsed.services.orchestrator.volumes).toContain('shared-packages:/shared-packages');
-    expect(parsed.services.worker.volumes).toContain('shared-packages:/shared-packages');
+    // Worker consumes the orchestrator's build output read-only.
+    expect(parsed.services.worker.volumes).toContain('shared-packages:/shared-packages:ro');
   });
 
   it('sanitizes project name', () => {
