@@ -1,5 +1,56 @@
 # @generacy-ai/control-plane
 
+## 0.4.0
+
+### Minor Changes
+
+- 6f74140: feat: per-cluster tunnel name + identity for multi-cluster support (#744)
+
+  Adds cluster/CLI/orchestrator-side support for multiple, user-named clusters
+  per project.
+
+  - `deriveTunnelName` is now keyed on the per-cluster UUID (not the projectId),
+    so each cluster in a project gets a distinct, ≤20-char, lowercase,
+    letter-initial tunnel name. The constraint is documented next to the helper.
+  - `generacy launch --name <name>` (and the scaffolder) accept an optional human
+    cluster name; when omitted, a default `<sanitized-project>-local-<n>` is
+    generated. The name is fixed at creation and persisted into the scaffolded
+    cluster identity.
+  - The orchestrator cluster identity now carries the cluster UUID and display
+    name, surfacing the name in registration so the cloud can show it, while the
+    short derived tunnel name stays decoupled from the display name.
+  - Deleting/stopping a cluster now unregisters/turns off its dev tunnel so the
+    name is freed for reuse.
+
+### Patch Changes
+
+- 967718e: fix(control-plane): defer the post-activation sentinel until the GitHub token is sealed
+
+  `prepare-workspace` wrote the post-activation sentinel unconditionally, even
+  when `writeWizardEnvFile` had not yet produced a `GH_TOKEN`. Because the
+  post-activation watcher is one-shot, this fired the deferred repo clone before
+  the GitHub token existed — the clone of a private repo authenticated with
+  nothing, produced no workspace, and never re-ran when the token landed via
+  `bootstrap-complete`. `writeWizardEnvFile` now reports `hasGitHubToken`, and
+  `prepare-workspace` only writes the sentinel once the token is present
+  (otherwise it defers to `bootstrap-complete`, which fires with the full
+  credential set).
+
+- 30ce711: fix(control-plane): report the actual VS Code tunnel name, not the requested one
+
+  The tunnel name is derived from the stable project id (#618), so deleting and
+  redeploying a cluster for the same project makes the new Droplet request a name
+  that's still registered to the (now-destroyed) previous Droplet. `code tunnel`
+  reports "name already taken" and silently falls back to a random name — but the
+  manager kept emitting the requested name, so the cloud persisted the wrong
+  `vscodeTunnelName` and vscode.dev deep-linked to the dead tunnel ("Timeout
+  connecting to relay").
+
+  `VsCodeTunnelProcessManager` now parses the actual registered name from the
+  `https://vscode.dev/tunnel/<name>/…` connection URL and reports that (falling
+  back to the requested name only if no URL was seen), so the cloud/UI always
+  points at the tunnel that's actually running.
+
 ## 0.3.0
 
 ### Minor Changes
