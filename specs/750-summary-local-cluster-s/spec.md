@@ -1,14 +1,14 @@
-# Feature Specification: Local Cluster Identity Alignment with Cloud Cluster-Doc ID
+# Feature Specification: ## Summary
+
+A **local cluster's runtime identity (`GENERACY_CLUSTER_ID`) does not match its cloud cluster-doc id
 
 **Branch**: `750-summary-local-cluster-s` | **Date**: 2026-06-04 | **Status**: Draft
-**Issue**: [#750](https://github.com/generacy-ai/generacy/issues/750)
-**Type**: Bug fix
+
+## Summary
 
 ## Summary
 
 A **local cluster's runtime identity (`GENERACY_CLUSTER_ID`) does not match its cloud cluster-doc id.** The cluster relays/authenticates as the cloud doc id (via that doc's API key) but self-identifies as a *different* UUID for tunnel-name derivation, orchestrator identity, and worker enumeration — an identity split.
-
-The `generacy deploy` command already correctly adopts the cloud-returned `cluster_id` (see `cli/commands/deploy/activation.ts:85` and `cli/commands/deploy/scaffolder.ts:33`). The local launch path scaffolds with a locally-minted or pre-existing id and never reconciles it with the cloud-minted doc id. This fix brings the local launch path in line with the deploy path.
 
 ## Evidence (observed on staging)
 
@@ -19,81 +19,118 @@ Project `Xr7fxq61PF57U2lOtoKe`, local cluster `todo-list-example1-local-1`:
   - Relay log: `[relay] coexist: cluster=a356d8f5-… joining project=Xr7fxq61PF57U2lOtoKe`
 - No doc exists under `clusters/6c23c4c4-…` (404), and it has no `api_keys` — so this is an **identity split, not a duplicate doc**.
 
+## Why `deploy` is fine but this isn't
+
+`generacy deploy` already adopts the **cloud-returned** id:
+- `cli/commands/deploy/activation.ts:85` → `clusterId: pollResult.cluster_id`
+- `cli/commands/deploy/scaffolder.ts:33` → `cluster_id: activation.clusterId`
+
+So the remote/SSH path scaffolds with the cloud-minted `cluster_id`. The **local launch path** (web "Add cluster → local" → the launch command) appears to scaffold with a locally-minted / pre-existing id (`6c23c4c4`) and never reconcile it with the cloud-minted doc id (`a356d8f5`).
+
+(Couldn't fully root-cause the exact mint site — the local containers were torn down before I could read `.generacy/cluster.json` / the compose env source. Candidate sites: the launch command's clusterId generation, and/or the web "Add cluster → local" pre-creating a doc whose id isn't fed back into the scaffold.)
+
+## Impact
+
+- `deriveTunnelName` keys on `GENERACY_CLUSTER_ID` → the local cluster registers tunnel `g-6c23c4c4…`, persisted (via #743) onto the `a356d8f5` doc. Still unique, so **no tunnel-name collision** — but the doc id ≠ the tunnel-source id.
+- Anything correlating the cluster's self-reported identity (`6c23c4c4`) with its cloud doc id (`a356d8f5`) will mismatch — e.g. orchestrator identity / assignee filtering (#742), worker enumeration, future per-cluster reporting.
+- Confusing to debug (two ids for one cluster).
+
+## Root cause (clarified)
+
+The mismatch originates **cloud-side** — the two cloud endpoints disagree:
+
+- `buildLaunchConfig` returns `claim.clusterId` (`services/api/src/services/launch-config.ts:121`) → the scaffolder writes this to `GENERACY_CLUSTER_ID` (observed `6c23c4c4-…`).
+- Device-code activation mints a **fresh `randomUUID()`** (`services/api/src/services/cluster-activation.ts:385-386`, "#792: generate fresh UUID (was hardcoded `clusterId = projectId`)") → this becomes the actual cluster doc + API key (observed `a356d8f5-…`, the only doc that exists; `clusters/6c23c4c4-…` is a 404 with no api_keys).
+
+The client launch scaffolder is correct (it uses `config.clusterId` from `LaunchConfig`). The fix must align the two cloud endpoints.
+
+## Proposed fix
+
+**Two-track fix, ships in parallel:**
+
+1. **Cloud companion** (separate `generacy-ai/generacy-cloud` issue): Device-code activation must **reuse** the claim/`LaunchConfig.clusterId` instead of minting a fresh UUID. The claim's `clusterId` becomes canonical — that same id is used to create the cluster doc + API key during activation. Result: `LaunchConfig.clusterId == pollResult.cluster_id == cluster-doc id`.
+
+2. **This issue (client-side)**:
+   - Verify the launch path uses `config.clusterId` end-to-end (no client-side overrides).
+   - Ship divergence **detection** at orchestrator startup: when `process.env.GENERACY_CLUSTER_ID` ≠ persisted `/var/lib/generacy/cluster.json.cluster_id`, emit a relay event (`cluster.identity-split`) and continue. The cloud UI surfaces a remediation banner ("destroy and re-launch this cluster") for already-split clusters.
+   - **No in-container `.env` rewrite or activation-time reconciliation** — the host `.env` and already-spawned workers can't reliably be updated, and once the cloud companion lands, divergence won't arise on fresh launches.
+
+This aligns with #744 Q3 (cloud-minted clusterId).
+
+## Acceptance criteria
+
+- [ ] A freshly-launched local cluster's `GENERACY_CLUSTER_ID` equals its cloud cluster-doc id (post cloud companion landing).
+- [ ] `deriveTunnelName`, orchestrator identity, and worker enumeration all use the same id the cloud doc is keyed by.
+- [ ] No orphan id (no self-minted id that never becomes a doc).
+- [ ] Orchestrator startup emits `cluster.identity-split` relay event when `process.env.GENERACY_CLUSTER_ID` ≠ persisted `cluster.json.cluster_id`, then continues running.
+- [ ] No automatic rewrite of host `.env`, `cluster.json`, or in-process env at activation/startup.
+
+## Notes
+
+- Distinct from generacy-ai/generacy-cloud#801 (sibling stuck `connecting` due to projectId-keyed doc resolution) — that one is why this local cluster was stuck; this issue is the separate identity mismatch.
+- Lower urgency than #801, but worth closing before relying on per-cluster identity in production.
+
+Relates: #744 (cluster-id minting), generacy-ai/generacy-cloud#792 / #796 / #801, #742 (cluster identity).
+
+
 ## User Stories
 
-### US1: Operator debugging a local cluster sees one identity
+### US1: Local cluster has a single identity
 
-**As a** Generacy operator/developer investigating a misbehaving local cluster,
-**I want** the cluster's runtime `GENERACY_CLUSTER_ID` to match the cloud cluster-doc id,
-**So that** I can correlate logs, tunnel names, relay traffic, and Firestore docs by a single identifier without cross-referencing two UUIDs.
-
-**Acceptance Criteria**:
-- [ ] When inspecting a local cluster's orchestrator env, the `GENERACY_CLUSTER_ID` value matches the id used as the Firestore cluster-doc key.
-- [ ] The tunnel name registered with Microsoft (`g-<prefix>`) is derived from the same id present in the cloud doc.
-- [ ] Relay handshake logs (`cluster=<id>`) and orchestrator env id are identical.
-
-### US2: New local cluster scaffolds with cloud-minted id
-
-**As a** user running the web "Add cluster → local" flow (which invokes the launch command),
-**I want** the launch path to adopt the cloud-returned `cluster_id`,
-**So that** my freshly-created local cluster has a single, canonical identity from the moment it boots.
+**As a** Generacy operator/developer running a local cluster,
+**I want** my local cluster's `GENERACY_CLUSTER_ID` to equal the cloud cluster-doc id it relays as,
+**So that** tunnel-name derivation, orchestrator identity, worker enumeration, and per-cluster reporting all correlate to the same id without surprises when debugging.
 
 **Acceptance Criteria**:
-- [ ] After `generacy launch` completes, `.generacy/cluster.json` contains `cluster_id` equal to the cloud-minted id.
-- [ ] The `docker-compose.yml` (or `.env`) sets `GENERACY_CLUSTER_ID` to the same id.
-- [ ] No locally-generated UUID is persisted that does not correspond to a cloud cluster doc.
+- [ ] Freshly-launched local cluster shows the same UUID in `GENERACY_CLUSTER_ID`, `cluster.json.cluster_id`, the cloud cluster-doc path, and the relay handshake identity (post cloud companion).
+- [ ] No 404 cluster-doc lookups for the orchestrator's self-reported id.
 
-### US3: Worker enumeration and assignee filtering work end-to-end on local clusters
+### US2: Existing mismatched clusters surface a clear remediation path
 
-**As a** developer relying on per-cluster features (orchestrator assignee filtering #742, worker enumeration, per-cluster reporting),
-**I want** the local cluster's self-reported identity to match the doc id those features key on,
-**So that** these features work correctly on local clusters, not just `deploy`-provisioned remote clusters.
+**As a** Generacy operator with a pre-existing local cluster that was launched before the fix,
+**I want** the orchestrator to detect the identity split and surface it,
+**So that** I receive a UI prompt to destroy and re-launch the cluster rather than discovering the mismatch through obscure correlation failures.
 
 **Acceptance Criteria**:
-- [ ] Assignee filtering by cluster id (#742) succeeds on local clusters.
-- [ ] Any feature querying Firestore by `clusters/<GENERACY_CLUSTER_ID>` resolves correctly.
+- [ ] Orchestrator startup emits `cluster.identity-split` relay event when env id ≠ persisted cluster.json id.
+- [ ] Orchestrator continues running (does not exit) after emitting the event.
+- [ ] No automatic mutation of host `.env`, `cluster.json`, or process env.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The local launch path MUST persist the cloud-returned `cluster_id` (not a locally-minted UUID) into `.generacy/cluster.json`. | P1 | Mirrors deploy: `cli/commands/deploy/activation.ts:85`, `cli/commands/deploy/scaffolder.ts:33`. |
-| FR-002 | The generated `docker-compose.yml` and/or `.env` MUST export `GENERACY_CLUSTER_ID` set to the cloud-returned `cluster_id`. | P1 | Consumed by orchestrator, tunnel-name derivation, relay metadata. |
-| FR-003 | The cloud-returned `cluster_id` MUST be the single source of truth for the local launch path — no shadow/orphan id may be minted client-side. | P1 | Prevents identity split. |
-| FR-004 | If the web "Add cluster → local" flow pre-creates a cluster doc, that doc's id MUST be fed into the launch command (e.g. via claim code → `LaunchConfig.clusterId`). | P1 | Verify cloud `buildLaunchConfig` returns the doc id. |
-| FR-005 | Existing local clusters with mismatched ids MUST NOT be silently rewritten. Reconciliation/migration is out of scope for this fix. | P2 | Fresh clusters only. |
-| FR-006 | The fix MUST NOT regress the `generacy deploy` path, which already adopts the cloud-returned id correctly. | P1 | Regression check. |
+| FR-001 | The launch CLI scaffolder MUST write `LaunchConfig.clusterId` (cloud-returned claim id) to `.env`'s `GENERACY_CLUSTER_ID` and `.generacy/cluster.json.cluster_id`. No client-side UUID minting or override. | P1 | Already implemented at `packages/generacy/src/cli/commands/launch/scaffolder.ts:71-114`; this FR is a verification gate. |
+| FR-002 | The orchestrator at startup MUST compare `process.env.GENERACY_CLUSTER_ID` against the persisted `/var/lib/generacy/cluster.json.cluster_id`. On mismatch, emit a relay event on channel `cluster.identity-split` with both ids and continue running. | P1 | Detection only — no remediation. Event consumed by cloud UI. |
+| FR-003 | The orchestrator MUST NOT rewrite host `.env`, the host-side `cluster.json`, or in-process `GENERACY_CLUSTER_ID` to reconcile an identity split. | P1 | Host `.env` is unreachable from inside the container; mid-process env mutation does not propagate to already-spawned workers. Reconciliation is unsafe. |
+| FR-004 | The fix MUST NOT silently overwrite mismatched ids on existing local clusters. Remediation is destroy + re-launch (user-driven via cloud UI banner). | P1 | FR-005 from original spec retained. |
+| FR-005 | The orchestrator's `cluster.identity-split` event MUST be emitted at most once per orchestrator process lifetime (not on every restart loop iteration / not flapping). | P2 | Prevent log/event spam; one event per boot. |
+| FR-006 | A companion `generacy-ai/generacy-cloud` issue MUST be filed to make device-code activation reuse the claim's `clusterId` (canonical source) instead of minting a fresh `randomUUID()`. | P1 | This issue ships detection independently; the cloud companion delivers prevention. Tracked as a related/dependent issue, not a blocker. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Identity match on fresh local cluster | 100% | After `generacy launch`, `GENERACY_CLUSTER_ID` from orchestrator env equals Firestore cluster-doc id. |
-| SC-002 | No orphan ids | 0 | No client-minted UUIDs exist that lack a corresponding cloud cluster doc. |
-| SC-003 | Tunnel-name source id matches doc id | 100% | `deriveTunnelName(GENERACY_CLUSTER_ID)` uses the same id keying the cluster doc. |
-| SC-004 | Deploy path regression | 0 regressions | `generacy deploy` continues to scaffold with cloud-returned id (unchanged behavior). |
+| SC-001 | Identity consistency on fresh launch | 100% | Launch a new local cluster post-fix (with cloud companion landed); verify `GENERACY_CLUSTER_ID` matches the cloud cluster-doc id and relay handshake identity. |
+| SC-002 | Mismatch detection on existing split cluster | Event emitted within 5s of orchestrator start | Boot an orchestrator with a deliberately-mismatched env id; observe one `cluster.identity-split` event on the relay; confirm orchestrator stays up. |
+| SC-003 | No silent state mutation | Zero writes | After mismatch detection, `.env`, `cluster.json`, and `process.env.GENERACY_CLUSTER_ID` byte-equal their pre-detection values. |
+| SC-004 | No event spam | ≤1 event per orchestrator process | Run orchestrator for ≥5 minutes with persistent mismatch; only one `cluster.identity-split` event observed. |
 
 ## Assumptions
 
-- The cloud-side `buildLaunchConfig` (or equivalent) already returns the canonical `cluster_id` from the cloud cluster doc — or can be made to do so as part of this fix.
-- The web "Add cluster → local" flow that pre-creates the cluster doc passes the resulting id forward (via claim code or `LaunchConfig`) to the launch command.
-- The fix is scoped to the launch path scaffolder; orchestrator-side identity reading from `GENERACY_CLUSTER_ID` env var stays unchanged.
-- generacy-cloud#801 (sibling stuck `connecting`) is being handled separately and does not block this work.
+- Cloud-side `buildLaunchConfig` already returns `claim.clusterId` correctly (verified at `services/api/src/services/launch-config.ts:121`). This issue does not introduce that behavior; it relies on it.
+- The orchestrator's relay client is available at startup (post-activation) to emit the `cluster.identity-split` event. If activation has not yet completed, detection may run after activation.
+- Cloud UI consumes `cluster.identity-split` and renders a remediation banner (tracked via the cloud companion issue).
+- "Destroy and re-launch" is an acceptable user-facing remediation for already-split clusters (no in-place migration is offered).
 
 ## Out of Scope
 
-- Migration/reconciliation of existing mismatched local clusters (fresh clusters only).
-- Changes to `generacy deploy` (already correct).
-- The sibling-cluster `connecting` issue (generacy-cloud#801).
-- Cloud-side cluster-doc id minting strategy beyond ensuring it is returned to the launch path.
-- Tunnel-name collision handling (#743 already covers the actual-vs-requested name reporting).
-
-## Related Issues
-
-- **#744** — Cluster-id minting (Q3: cloud-minted clusterId). This fix aligns with that direction.
-- **#742** — Orchestrator identity / assignee filtering (broken by the identity split).
-- **#743** — Tunnel name actual-vs-requested reporting (independent, but adjacent).
-- **generacy-cloud#792 / #796 / #801** — Related cloud-side cluster identity/connection issues.
+- Cloud-side cluster-doc id minting strategy beyond requiring that activation reuse the claim's `clusterId` (the cloud companion issue covers implementation).
+- In-place migration / reconciliation of existing mismatched clusters (FR-004).
+- Activation-time `.env` rewrite or mid-process env mutation (FR-003).
+- UI rendering of the identity-split banner (cloud-side).
+- Telemetry/metrics for split-cluster frequency (could be a follow-up).
+- Lifecycle of the `deploy` (SSH) path — it already adopts `pollResult.cluster_id` and is not affected.
 
 ---
 
