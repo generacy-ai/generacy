@@ -10,11 +10,11 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 [P] [US2] Add `'cluster.identity-split'` to the `ALLOWED_CHANNELS` tuple in `packages/orchestrator/src/routes/internal-relay-events.ts` (documents the channel even though emission is in-process; keeps the allowlist authoritative for future cross-process emitters).
+- [X] T001 [P] [US2] Add `'cluster.identity-split'` to the `ALLOWED_CHANNELS` tuple in `packages/orchestrator/src/routes/internal-relay-events.ts` (documents the channel even though emission is in-process; keeps the allowlist authoritative for future cross-process emitters).
 
 ## Phase 2: Core Implementation
 
-- [ ] T002 [US2] Create `packages/orchestrator/src/services/identity-split-detector.ts` with:
+- [X] T002 [US2] Create `packages/orchestrator/src/services/identity-split-detector.ts` with:
   - `IdentitySplitEvent` interface — `{ env_cluster_id, cluster_json_cluster_id, detected_at }` (snake_case, matches data-model.md §Output).
   - `DetectionOutcome` discriminated union — `no-env | no-cluster-json | match | mismatch` (per data-model.md §DetectionOutcome).
   - `DetectIdentitySplitOptions` interface — `{ clusterJsonPath, env?, sendRelayEvent?, logger }`.
@@ -23,13 +23,13 @@
   - `export function resetIdentitySplitDetectionState()` test helper (resets `hasEmitted` to `false`).
   - NEVER mutate `process.env`, `.env`, or `cluster.json` (FR-003).
 
-- [ ] T003 [US2] Wire `detectIdentitySplit` into the existing-key startup path in `packages/orchestrator/src/server.ts` (~line 357, after `initializeRelayBridge()` returns and `relayClientRef` is set). Pass `clusterJsonPath` (use the same `/var/lib/generacy/cluster.json` path constant used by `activate()`), `logger`, and a `sendRelayEvent` closure that calls `relayClientRef.send({ type: 'event', event: 'cluster.identity-split', data: payload, timestamp: new Date().toISOString() })` — mirror the wire envelope from `routes/internal-relay-events.ts` (#600 fix shape).
+- [X] T003 [US2] Wire `detectIdentitySplit` into the existing-key startup path in `packages/orchestrator/src/server.ts` (~line 357, after `initializeRelayBridge()` returns and `relayClientRef` is set). Pass `clusterJsonPath` (use the same `/var/lib/generacy/cluster.json` path constant used by `activate()`), `logger`, and a `sendRelayEvent` closure that calls `relayClientRef.send({ type: 'event', event: 'cluster.identity-split', data: payload, timestamp: new Date().toISOString() })` — mirror the wire envelope from `routes/internal-relay-events.ts` (#600 fix shape).
 
-- [ ] T004 [US2] Wire `detectIdentitySplit` into the background-activation (wizard-mode) startup path in `packages/orchestrator/src/server.ts` (~line 720, inside `activateInBackground` after `await relayBridge.start()` succeeds). Same call shape as T003. Both call sites converge on "relay bridge has started → run detector once" (research.md §D6).
+- [X] T004 [US2] Wire `detectIdentitySplit` into the background-activation (wizard-mode) startup path in `packages/orchestrator/src/server.ts` (~line 720, inside `activateInBackground` after `await relayBridge.start()` succeeds). Same call shape as T003. Both call sites converge on "relay bridge has started → run detector once" (research.md §D6).
 
 ## Phase 3: Tests
 
-- [ ] T005 [US2] Create `packages/orchestrator/src/__tests__/identity-split-detector.test.ts` covering each `DetectionOutcome` branch:
+- [X] T005 [US2] Create `packages/orchestrator/src/__tests__/identity-split-detector.test.ts` covering each `DetectionOutcome` branch:
   - `match` → outcome `match`, no `sendRelayEvent` call.
   - `mismatch`, first call → outcome `mismatch` with `emitted: true`, exactly one `sendRelayEvent` call with payload shape per contracts/cluster-identity-split-event.md.
   - `mismatch`, second call after `resetIdentitySplitDetectionState()` NOT called → outcome `mismatch` with `emitted: false`, still only one total `sendRelayEvent` call (FR-005).
@@ -38,7 +38,7 @@
   - `sendRelayEvent` throws → swallowed; no exception propagates; logger.error called; `hasEmitted` still flipped (single attempt counts, per quickstart.md table).
   - Use `resetIdentitySplitDetectionState()` in `beforeEach` for test isolation.
 
-- [ ] T006 [P] [US1] In `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts`, add (or confirm) an assertion that `scaffoldEnvFile` writes the input `config.clusterId` byte-for-byte to the `GENERACY_CLUSTER_ID` line of the generated `.env` (FR-001 verification gate). No new behavior — this test locks in the current correct behavior at `packages/generacy/src/cli/commands/launch/scaffolder.ts:71-114` so a future regression to client-side UUID minting fails fast.
+- [X] T006 [P] [US1] In `packages/generacy/src/cli/commands/launch/__tests__/scaffolder.test.ts`, add (or confirm) an assertion that `scaffoldEnvFile` writes the input `config.clusterId` byte-for-byte to the `GENERACY_CLUSTER_ID` line of the generated `.env` (FR-001 verification gate). No new behavior — this test locks in the current correct behavior at `packages/generacy/src/cli/commands/launch/scaffolder.ts:71-114` so a future regression to client-side UUID minting fails fast.
 
 ## Phase 4: Follow-up
 

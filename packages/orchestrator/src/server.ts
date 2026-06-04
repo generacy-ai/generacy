@@ -49,6 +49,7 @@ import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
 import { PostActivationRetryService } from './services/post-activation-retry.js';
+import { detectIdentitySplit } from './services/identity-split-detector.js';
 import { TunnelHandler, getCodeServerManager, DockerEngineClient } from '@generacy-ai/control-plane';
 import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 import { setupInternalRefreshMetadataRoute } from './routes/internal-refresh-metadata.js';
@@ -357,6 +358,23 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
     relayBridge = result.relayBridge;
     relayBridgeRef = result.relayBridge;
+
+    // Detect identity split (env GENERACY_CLUSTER_ID vs persisted cluster.json.cluster_id).
+    // Best-effort: drops event if relay client unavailable. Once per process lifetime (#750).
+    detectIdentitySplit({
+      clusterJsonPath: config.activation.clusterJsonPath,
+      logger: server.log,
+      sendRelayEvent: relayClientRef
+        ? (channel, payload) => relayClientRef!.send({
+            type: 'event',
+            event: channel,
+            data: payload,
+            timestamp: new Date().toISOString(),
+          } as unknown as import('./types/relay.js').RelayMessage)
+        : undefined,
+    }).catch((err) => {
+      server.log.error({ err }, 'Identity-split detection failed (non-fatal)');
+    });
 
     // Check if post-activation needs to be retried (activated but completion flag absent)
     const retryService = new PostActivationRetryService({
@@ -723,6 +741,23 @@ async function activateInBackground(
   if (relayBridge) {
     await relayBridge.start();
   }
+
+  // Detect identity split after relay bridge has started (wizard-mode path, #750).
+  // Same call shape as the existing-key path; once-per-process guard lives in the detector.
+  detectIdentitySplit({
+    clusterJsonPath: config.activation.clusterJsonPath,
+    logger: server.log,
+    sendRelayEvent: localRelayClient
+      ? (channel, payload) => localRelayClient!.send({
+          type: 'event',
+          event: channel,
+          data: payload,
+          timestamp: new Date().toISOString(),
+        } as unknown as import('./types/relay.js').RelayMessage)
+      : undefined,
+  }).catch((err) => {
+    server.log.error({ err }, 'Identity-split detection failed (non-fatal)');
+  });
 
   // Check if post-activation needs to be retried (wizard-mode: activation just completed
   // but post-activation may have failed on a prior container lifecycle)
