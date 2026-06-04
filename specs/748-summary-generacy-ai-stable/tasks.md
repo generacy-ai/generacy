@@ -16,11 +16,11 @@
 
 ## Phase 1: Pre-flight Checks
 
-- [ ] T001 [US1] Confirm there are exactly 16 `.md` files in `.changeset/` (excluding `README.md` and `config.json`). Command: `ls .changeset/*.md | grep -v README.md | wc -l` → must equal `16`. If not 16, STOP and re-clarify scope (Q1 may need re-answering). (FR-001, SC-001 baseline)
-- [ ] T002 [P] [US1] Confirm `@stable` is currently stuck at `0.3.0`. Command: `npm view @generacy-ai/control-plane@stable version` → must equal `0.3.0`. (data-model.md §RegistryState "Before")
-- [ ] T003 [P] [US1] Confirm `@preview` is current (sanity baseline — preview is unaffected by this cut). Command: `npm view @generacy-ai/control-plane@preview version` → recent timestamped preview version.
-- [ ] T004 [P] [US1] Confirm repo `NPM_TOKEN` is valid by inspecting the most recent successful `release.yml` run. If the last `Publish to npm` step succeeded, the token is good. Otherwise rotate the secret in repo settings before proceeding. (contracts/release-workflow.md §Required secrets)
-- [ ] T005 [P] [US1] Confirm local tooling is installed: `pnpm`, `gh`, `git`, `node` (≥22), and the `generacy` CLI (needed for T020/T021 throwaway cluster verification). (quickstart.md §Prerequisites)
+- [X] T001 [US1] Confirm there are exactly 16 `.md` files in `.changeset/` (excluding `README.md` and `config.json`). Command: `ls .changeset/*.md | grep -v README.md | wc -l` → must equal `16`. If not 16, STOP and re-clarify scope (Q1 may need re-answering). (FR-001, SC-001 baseline)
+- [X] T002 [P] [US1] Confirm `@stable` is currently stuck at `0.3.0`. Command: `npm view @generacy-ai/control-plane@stable version` → must equal `0.3.0`. (data-model.md §RegistryState "Before")
+- [X] T003 [P] [US1] Confirm `@preview` is current (sanity baseline — preview is unaffected by this cut). Command: `npm view @generacy-ai/control-plane@preview version` → recent timestamped preview version.
+- [X] T004 [P] [US1] Confirm repo `NPM_TOKEN` is valid by inspecting the most recent successful `release.yml` run. If the last `Publish to npm` step succeeded, the token is good. Otherwise rotate the secret in repo settings before proceeding. (contracts/release-workflow.md §Required secrets)
+- [X] T005 [P] [US1] Confirm local tooling is installed: `pnpm`, `gh`, `git`, `node` (≥22), and the `generacy` CLI (needed for T020/T021 throwaway cluster verification). (quickstart.md §Prerequisites)
 
 ---
 
