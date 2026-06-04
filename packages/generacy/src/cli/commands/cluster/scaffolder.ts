@@ -142,31 +142,45 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       ? ['${ORCHESTRATOR_PORT:-3100}:3100']
       : ['${ORCHESTRATOR_PORT:-3100}'];
 
-  // Shared volumes for orchestrator and worker.
+  // Volumes mounted on both orchestrator and worker. Mirrors the canonical
+  // cluster-base devcontainer compose.
   //
-  // shared-packages MUST mount at /shared-packages — that's where the
-  // cluster-base entrypoint scripts (`entrypoint-orchestrator.sh`) run
-  // `npm install --prefix /shared-packages`, and the worker's entrypoint
-  // resolves `/shared-packages/node_modules/.bin/generacy` to spawn the
-  // worker process. Mounting it anywhere else means the orchestrator's
-  // install writes to its own overlay filesystem (not the volume), the
-  // worker's resolve looks at its own overlay (empty), and the worker
-  // exits with "Cannot find module '/shared-packages/node_modules/.bin/generacy'".
-  // Matches the canonical cluster-base devcontainer compose.
-  const sharedVolumes = [
-    'workspace:/workspaces',
+  // claude-config (/home/node/.claude) is a SHARED named volume so the
+  // orchestrator's post-activation Claude setup — auth (`.credentials.json`),
+  // speckit slash commands, and conversation history — is visible to every
+  // worker. Without it, workers spawn an unauthenticated Claude CLI with no
+  // speckit commands; each phase exits "Not logged in" in <1s and the phase
+  // runner commits an empty phase, producing PRs with commits but no artifacts.
+  // (~/.claude.json is the separate account-metadata file; both are mounted.)
+  const commonVolumes = [
     claudeConfigVolume,
-    'shared-packages:/shared-packages',
+    'claude-config:/home/node/.claude',
     'npm-cache:/home/node/.npm',
     'generacy-data:/var/lib/generacy',
   ];
 
-  // Orchestrator gets docker socket
+  // shared-packages MUST mount at /shared-packages — that's where the
+  // cluster-base entrypoint scripts (`entrypoint-orchestrator.sh`) run
+  // `npm install --prefix /shared-packages`, and the worker's entrypoint
+  // resolves `/shared-packages/node_modules/.bin/generacy` to spawn the
+  // worker process. Orchestrator builds here (RW); workers consume read-only.
+  //
+  // The orchestrator owns the `workspace` volume (RW). Workers do NOT mount it
+  // at all — their per-job checkouts are container-local — so concurrent
+  // workers and the orchestrator can't clobber a shared working tree.
   const orchestratorVolumes = [
-    ...sharedVolumes,
+    'workspace:/workspaces',
+    ...commonVolumes,
+    'shared-packages:/shared-packages',
     '/var/run/docker.sock:/var/run/docker-host.sock',
     'vscode-cli-state:/home/node/.vscode/cli',
     'generacy-app-config-data:/var/lib/generacy-app-config',
+  ];
+
+  const workerVolumes = [
+    ...commonVolumes,
+    'shared-packages:/shared-packages:ro',
+    'generacy-app-config-data:/var/lib/generacy-app-config:ro',
   ];
 
   const tmpfsMounts = [
@@ -219,7 +233,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
         deploy: {
           replicas: '${WORKER_COUNT:-1}',
         },
-        volumes: [...sharedVolumes, 'generacy-app-config-data:/var/lib/generacy-app-config:ro'],
+        volumes: workerVolumes,
         tmpfs: tmpfsMounts,
         environment: [
           'REDIS_URL=redis://redis:6379',
@@ -258,6 +272,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
     },
     volumes: {
       workspace: null,
+      'claude-config': null,
       'shared-packages': null,
       'npm-cache': null,
       'generacy-data': null,
