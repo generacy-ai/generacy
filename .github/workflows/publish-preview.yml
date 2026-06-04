@@ -8,6 +8,12 @@ on:
   push:
     branches: [develop]
   workflow_dispatch:
+    inputs:
+      force_rollback:
+        description: 'Skip staleness guard for deliberate rollback. Logs a warning. Use only during incident response.'
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}
@@ -23,6 +29,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Full history so `git merge-base --is-ancestor` in the staleness
+          # check (T005) can walk back to the currently-published @preview SHA.
+          fetch-depth: 0
+
+      - name: Resolve origin/develop HEAD
+        # PRIMARY race defense (D6 / FR-002): `actions/checkout` pins the
+        # event-time ref. If a PR merges between event-queue and job-start,
+        # that ref is already stale. Resolving origin/develop at build time
+        # ensures every subsequent step (install, build, version, stamp,
+        # publish) operates on the post-merge HEAD.
+        run: |
+          git fetch origin develop
+          git checkout origin/develop
+          echo "Resolved HEAD: $(git rev-parse HEAD)"
+
+      - name: Check preview staleness
+        # Refuse to publish if the resolved HEAD is a strict ancestor of the
+        # currently-published @preview gitHead. Fail-fast: no retry, no
+        # self-redispatch (FR-006). Skipped on workflow_dispatch when the
+        # operator sets force_rollback=true (D5).
+        if: github.event.inputs.force_rollback != 'true'
+        run: node scripts/check-preview-staleness.mjs
+
+      - name: Log rollback override warning
+        # Auditable record that an operator deliberately skipped the
+        # staleness guard. Only fires on workflow_dispatch (push events
+        # cannot supply inputs, so this condition is always false there).
+        if: github.event.inputs.force_rollback == 'true'
+        run: |
+          candidate=$(git rev-parse HEAD)
+          current=$(npm view @generacy-ai/generacy@preview gitHead 2>/dev/null || echo '<none>')
+          echo "WARNING: force_rollback=true — skipping staleness check."
+          echo "  candidate    = ${candidate}"
+          echo "  current      = ${current}"
+          echo "  This is an auditable, deliberate backward publish."
 
       - uses: pnpm/action-setup@v4
 
@@ -65,6 +107,13 @@ jobs:
 
       - name: Version (snapshot)
         run: pnpm changeset version --snapshot preview
+
+      - name: Stamp source SHA
+        # Must run AFTER `Version (snapshot)` (which rewrites `version`) and
+        # BEFORE the verify+publish steps (so they see the final manifest
+        # with `gitHead` + `generacy.sourceSha` populated and the `-<sha7>`
+        # suffix appended to `version`).
+        run: node scripts/stamp-source-sha.mjs
 
       - name: Verify no workspace protocol leaks in packed tarballs
         run: node scripts/verify-pack-no-workspace-deps.js
