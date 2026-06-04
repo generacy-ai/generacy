@@ -23,6 +23,7 @@ export function scaffoldBundle(
   config: LaunchConfig,
   activation: ActivationResult,
   cloudUrl: string,
+  displayName?: string,
 ): string {
   const tmpDir = mkdtempSync(join(tmpdir(), 'generacy-deploy-'));
   const generacyDir = join(tmpDir, '.generacy');
@@ -33,6 +34,7 @@ export function scaffoldBundle(
     project_id: activation.projectId,
     org_id: activation.orgId,
     cloud_url: cloudUrl,
+    display_name: displayName,
   });
 
   scaffoldClusterYaml(generacyDir, {
@@ -58,6 +60,7 @@ export function scaffoldBundle(
 
   scaffoldEnvFile(generacyDir, {
     clusterId: activation.clusterId,
+    clusterName: displayName,
     projectId: activation.projectId,
     orgId: activation.orgId,
     cloudUrl,
@@ -66,6 +69,7 @@ export function scaffoldBundle(
     repoBranch: config.repos?.primaryBranch,
     channel: 'stable',
     workers: 1,
+    preApprovedDeviceCode: config.preApprovedDeviceCode,
   });
 
   return tmpDir;

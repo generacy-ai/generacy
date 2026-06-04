@@ -58,7 +58,63 @@ export async function activate(options: ActivationOptions): Promise<ActivationRe
     };
   }
 
+  // Pre-approved device-code branch: when the cloud has already approved a
+  // device code and baked it into the cluster's .env, redeem it directly
+  // (skip requestDeviceCode). Terminal failures fall through to the
+  // interactive flow rather than crash-looping.
+  const preApprovedDeviceCode = process.env['GENERACY_PRE_APPROVED_DEVICE_CODE'];
+  if (preApprovedDeviceCode) {
+    logger.info({ event: 'activation-start', mode: 'pre-approved' });
+
+    const pollResult = await pollForApproval({
+      cloudUrl,
+      deviceCode: preApprovedDeviceCode,
+      interval: 5,
+      expiresIn: 60,
+      httpClient,
+      logger,
+      workers: initialWorkers,
+    });
+
+    if (pollResult.status === 'approved') {
+      await writeKeyFile(keyFilePath, pollResult.cluster_api_key);
+      await writeClusterJson(clusterJsonPath, {
+        cluster_id: pollResult.cluster_id,
+        project_id: pollResult.project_id,
+        org_id: pollResult.org_id,
+        cloud_url: pollResult.cloud_url,
+        activated_at: new Date().toISOString(),
+      });
+      delete process.env['GENERACY_PRE_APPROVED_DEVICE_CODE'];
+      logger.info('Cluster activated via pre-approved device code');
+      return {
+        apiKey: pollResult.cluster_api_key,
+        clusterApiKeyId: pollResult.cluster_api_key_id,
+        clusterId: pollResult.cluster_id,
+        projectId: pollResult.project_id,
+        orgId: pollResult.org_id,
+        cloudUrl: pollResult.cloud_url,
+      };
+    }
+
+    if (pollResult.status === 'tier-limit-exceeded') {
+      throw new ActivationError(
+        formatTierLimitError({
+          requested: pollResult.requested,
+          cap: pollResult.cap,
+          tier: pollResult.tier,
+        }),
+        'TIER_LIMIT_EXCEEDED',
+      );
+    }
+
+    logger.warn(
+      'Pre-approved device code redemption failed (terminal); falling back to interactive flow',
+    );
+  }
+
   // Run device-code flow
+  logger.info({ event: 'activation-start', mode: 'interactive' });
   for (let cycle = 1; cycle <= maxCycles; cycle++) {
     logger.info(`Requesting device code (cycle ${cycle}/${maxCycles})`);
 

@@ -98,6 +98,18 @@ export async function handlePostLifecycle(
     return;
   }
 
+  if (parsed.data === 'vscode-tunnel-unregister') {
+    // Releases Microsoft tunnel-service name so the cluster name is reclaimable
+    // after `generacy destroy`. Failures surface via cluster.vscode-tunnel
+    // relay events (FR-010), not 5xx — the unregister() implementation is
+    // best-effort and never throws.
+    const tunnelManager = getVsCodeTunnelManager();
+    await tunnelManager.unregister();
+    res.writeHead(200);
+    res.end(JSON.stringify({ accepted: true, action: parsed.data }));
+    return;
+  }
+
   if (parsed.data === 'prepare-workspace') {
     // Subset of bootstrap-complete: unseal whatever credentials are currently
     // stored (typically just GitHub after the wizard's GitHubAppInstall step)
@@ -107,14 +119,17 @@ export async function handlePostLifecycle(
     //
     // Idempotent w.r.t. bootstrap-complete: both use the same sentinel path
     // and the same writeWizardEnvFile call (which writes whatever is sealed
-    // at the moment), so calling bootstrap-complete after prepare-workspace
-    // re-writes the env file with the now-full credential set without
-    // disturbing the already-clone (the post-activation watcher only fires
-    // its hook on the first sentinel appearance).
+    // at the moment). The sentinel is only written once the GitHub token is
+    // actually sealed — otherwise the one-shot post-activation watcher fires
+    // the deferred clone before GH_TOKEN exists, clones nothing, and never
+    // re-runs when the token lands. When the token isn't ready yet we skip the
+    // sentinel; bootstrap-complete (end of wizard, full credentials) fires it.
     const agencyDir = process.env.AGENCY_DIR ?? '/workspaces/.agency';
     const envFilePath = process.env.WIZARD_CREDS_PATH ?? '/var/lib/generacy/wizard-credentials.env';
+    let hasGitHubToken = false;
     try {
       const envResult = await writeWizardEnvFile({ agencyDir, envFilePath });
+      hasGitHubToken = envResult.hasGitHubToken;
       if (envResult.failed.length > 0) {
         const pushEvent = getRelayPushEvent();
         pushEvent?.('cluster.bootstrap', {
@@ -128,10 +143,25 @@ export async function handlePostLifecycle(
     }
 
     const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
-    await writeFile(sentinel, '', { flag: 'w' });
+    if (hasGitHubToken) {
+      await writeFile(sentinel, '', { flag: 'w' });
+    } else {
+      // GitHub token not sealed yet — defer the clone to bootstrap-complete so
+      // the one-shot post-activation hook runs with a usable GH_TOKEN.
+      getRelayPushEvent()?.('cluster.bootstrap', {
+        status: 'awaiting-credentials',
+        reason: 'github-token-not-sealed',
+      });
+    }
 
     res.writeHead(200);
-    res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
+    res.end(
+      JSON.stringify({
+        accepted: true,
+        action: parsed.data,
+        sentinel: hasGitHubToken ? sentinel : null,
+      }),
+    );
     return;
   }
 

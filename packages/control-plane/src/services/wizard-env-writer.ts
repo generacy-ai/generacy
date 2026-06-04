@@ -16,6 +16,13 @@ export interface WriteWizardEnvFileResult {
   written: string[];
   /** Credential IDs that failed to unseal */
   failed: string[];
+  /**
+   * True when a usable `GH_TOKEN` was emitted to the env file. Callers gate the
+   * early post-activation clone on this — without a GitHub token the deferred
+   * clone of a private repo can't authenticate, so firing the (one-shot)
+   * post-activation sentinel before the token is sealed clones nothing.
+   */
+  hasGitHubToken: boolean;
 }
 
 interface EnvEntry {
@@ -82,7 +89,7 @@ export async function writeWizardEnvFile(
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       // No credentials.yaml — write empty env file, no error
       await fs.writeFile(envFilePath, '', { mode: 0o600 });
-      return { written: [], failed: [] };
+      return { written: [], failed: [], hasGitHubToken: false };
     }
     throw err;
   }
@@ -90,7 +97,7 @@ export async function writeWizardEnvFile(
   const credentialIds = Object.keys(credentialsMap);
   if (credentialIds.length === 0) {
     await fs.writeFile(envFilePath, '', { mode: 0o600 });
-    return { written: [], failed: [] };
+    return { written: [], failed: [], hasGitHubToken: false };
   }
 
   const backend = getCredentialBackend();
@@ -119,5 +126,7 @@ export async function writeWizardEnvFile(
   // Write env file (mode 0600) — partial file on partial failure
   await fs.writeFile(envFilePath, formatEnvFile(entries), { mode: 0o600 });
 
-  return { written, failed };
+  const hasGitHubToken = entries.some((e) => e.key === 'GH_TOKEN' && e.value.length > 0);
+
+  return { written, failed, hasGitHubToken };
 }

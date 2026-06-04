@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { getLogger } from '../../utils/logger.js';
 import { ensureDocker } from '../cluster/docker.js';
 import { getClusterContext } from '../cluster/context.js';
-import { runCompose } from '../cluster/compose.js';
+import { lifecycleAction, runCompose } from '../cluster/compose.js';
 import { removeRegistryEntry } from '../cluster/registry.js';
 
 export function destroyCommand(): Command {
@@ -25,6 +25,11 @@ export function destroyCommand(): Command {
           return;
         }
       }
+
+      // Best-effort: unregister the VS Code tunnel name with Microsoft's
+      // tunnel service so the cluster's tunnel name is fully reclaimable
+      // (FR-010). Failures surface via relay event, not as CLI errors.
+      lifecycleAction(ctx, 'vscode-tunnel-unregister');
 
       const result = runCompose(ctx, ['down', '-v']);
       if (!result.ok) {

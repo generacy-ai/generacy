@@ -220,6 +220,19 @@ export const ActivationConfigSchema = z.object({
 export type ActivationConfig = z.infer<typeof ActivationConfigSchema>;
 
 /**
+ * Cluster identity configuration. Sourced from `.generacy/.env` (env vars
+ * written by `generacy launch` / `generacy deploy`). Threaded into outgoing
+ * relay metadata so the cloud-side UI can render the user-facing name.
+ */
+export const ClusterConfigSchema = z.object({
+  /** Cluster UUID (GENERACY_CLUSTER_ID) */
+  id: z.string().optional(),
+  /** Normalized display name (GENERACY_CLUSTER_NAME) */
+  displayName: z.string().optional(),
+});
+export type ClusterConfig = z.infer<typeof ClusterConfigSchema>;
+
+/**
  * Smee.io webhook proxy configuration
  */
 export const SmeeConfigSchema = z.object({
@@ -276,6 +289,7 @@ export const OrchestratorConfigSchema = z.object({
   relay: RelayConfigSchema.default({}),
   activation: ActivationConfigSchema.default({}),
   lease: LeaseConfigSchema.default({}),
+  cluster: ClusterConfigSchema.default({}),
   smee: SmeeConfigSchema.default({}),
   webhookSetup: WebhookSetupConfigSchema.default({}),
   labelMonitor: z.boolean().default(false),

@@ -7,6 +7,7 @@ const ALLOWED_CHANNELS = [
   'cluster.audit',
   'cluster.credentials',
   'cluster.bootstrap',
+  'cluster.identity-split',
 ] as const;
 
 export const RelayEventRequestSchema = z.object({

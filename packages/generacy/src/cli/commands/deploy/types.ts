@@ -9,6 +9,7 @@ export interface DeployOptions {
   target: string;
   timeout?: number;
   cloudUrl?: string;
+  name?: string;
 }
 
 export interface DeployResult {

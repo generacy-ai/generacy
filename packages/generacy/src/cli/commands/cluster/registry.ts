@@ -8,6 +8,9 @@ import type { ClusterContext } from './context.js';
 export const RegistryEntrySchema = z.object({
   clusterId: z.string().nullable(),
   name: z.string(),
+  displayName: z.string().optional(),
+  projectId: z.string().optional(),
+  deploymentMode: z.enum(['local', 'cloud']).optional(),
   path: z.string(),
   composePath: z.string(),
   variant: z.enum(['cluster-base', 'cluster-microservices']).default('cluster-base'),

@@ -450,6 +450,84 @@ describe("VsCodeTunnelProcessManager", () => {
       });
     });
 
+    it("reports the ACTUAL tunnel name from the URL when the requested name was taken", async () => {
+      // Regression: when the requested --name is already taken (stale
+      // registration from a prior Droplet for the same project), `code tunnel`
+      // falls back to a random name. We must report that actual name (parsed
+      // from the connection URL) so the cloud/UI deep-links to the live tunnel,
+      // not the dead one.
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      const startResult = await mgr.start();
+      expect(startResult.tunnelName).toBe("test-cluster"); // requested name pre-connect
+
+      pushLine(
+        child,
+        "Open this link in your browser https://vscode.dev/tunnel/9ac46a6bef24/workspaces"
+      );
+
+      const connectedEvent = relayEvents.find(
+        (e) => e.payload.status === "connected"
+      );
+      expect(connectedEvent).toEqual({
+        channel: "cluster.vscode-tunnel",
+        payload: {
+          status: "connected",
+          tunnelName: "9ac46a6bef24",
+          tunnelUrl: "https://vscode.dev/tunnel/9ac46a6bef24/workspaces",
+        },
+      });
+    });
+
+    it("emits a tunnel-name collision error when actual differs from requested (FR-012)", async () => {
+      // Regression: when the requested --name was already taken, the actual
+      // tunnel name parsed from vscode.dev/tunnel/<x> differs. We must emit
+      // a clear error event so the cloud/UI can resolve the discrepancy
+      // (observational only — does NOT abort the tunnel).
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(
+        child,
+        "Open this link in your browser https://vscode.dev/tunnel/9ac46a6bef24/workspaces"
+      );
+
+      const collisionEvent = relayEvents.find(
+        (e) =>
+          e.payload.status === "error" &&
+          e.payload.error === "tunnel name collision"
+      );
+      expect(collisionEvent).toBeDefined();
+      expect(collisionEvent?.payload.tunnelName).toBe("9ac46a6bef24");
+      expect(collisionEvent?.payload.details).toContain("requested=test-cluster");
+      expect(collisionEvent?.payload.details).toContain("actual=9ac46a6bef24");
+    });
+
+    it("does NOT emit a collision error when actual matches requested", async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(
+        child,
+        "Open this link in your browser https://vscode.dev/tunnel/test-cluster/workspaces"
+      );
+
+      const collisionEvent = relayEvents.find(
+        (e) =>
+          e.payload.status === "error" &&
+          e.payload.error === "tunnel name collision"
+      );
+      expect(collisionEvent).toBeUndefined();
+    });
+
     it("emits disconnected event when connected process exits", async () => {
       const child = createMockChild();
       spawnMock.mockReturnValue(child);
@@ -778,66 +856,83 @@ describe("deriveTunnelName", () => {
     expect(result).toBe("g-9e5c8a0d755e40b3b0");
     expect(result.length).toBeLessThanOrEqual(20);
   });
+
+  it("output always matches /^[a-z][a-z0-9-]{0,19}$/ for valid UUIDs", () => {
+    // Property: any UUID-shaped input that consists of lowercase hex + hyphens
+    // satisfies the Microsoft tunnel-name constraint.
+    const inputs = [
+      "9e5c8a0d-755e-40b3-b0c3-43e849f0bb90",
+      "00000000-0000-0000-0000-000000000000",
+      "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      "abcdef01-2345-6789-abcd-ef0123456789",
+    ];
+    for (const id of inputs) {
+      expect(deriveTunnelName(id)).toMatch(/^[a-z][a-z0-9-]{0,19}$/);
+    }
+  });
+
+  it("randomized UUIDs always satisfy the Microsoft tunnel-name regex (SC-004)", () => {
+    // Property: for any randomly-generated UUID, deriveTunnelName produces a
+    // string matching /^[a-z][a-z0-9-]{0,19}$/ (≤20 chars, letter-initial,
+    // lowercase hex + hyphens only).
+    const randHex = (n: number): string => {
+      let s = "";
+      for (let i = 0; i < n; i++) {
+        s += Math.floor(Math.random() * 16).toString(16);
+      }
+      return s;
+    };
+    for (let trial = 0; trial < 100; trial++) {
+      const uuid = `${randHex(8)}-${randHex(4)}-${randHex(4)}-${randHex(4)}-${randHex(12)}`;
+      const name = deriveTunnelName(uuid);
+      expect(name).toMatch(/^[a-z][a-z0-9-]{0,19}$/);
+      expect(name.length).toBeLessThanOrEqual(20);
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
 // loadOptionsFromEnv
 // ---------------------------------------------------------------------------
 describe("loadOptionsFromEnv", () => {
-  it("returns options with derived tunnel name from GENERACY_PROJECT_ID", () => {
+  it("returns options with derived tunnel name from GENERACY_CLUSTER_ID", () => {
     const opts = loadOptionsFromEnv({
-      GENERACY_PROJECT_ID: "9e5c8a0d-755e-40b3-b0c3-43e849f0bb90",
+      GENERACY_CLUSTER_ID: "9e5c8a0d-755e-40b3-b0c3-43e849f0bb90",
       VSCODE_CLI_BIN: "/opt/vscode/code",
     });
     expect(opts.tunnelName).toBe("g-9e5c8a0d755e40b3b0");
     expect(opts.binPath).toBe("/opt/vscode/code");
   });
 
-  it("derives a stable tunnel name from a Firestore-id-shaped project id (no hyphens)", () => {
-    // Firestore auto-IDs are 20 chars with no hyphens — compact === input,
-    // first 18 chars after the `g-` prefix gives a 20-char tunnel name within
-    // Microsoft's per-name limit.
-    const opts = loadOptionsFromEnv({
-      GENERACY_PROJECT_ID: "tv4pdbNtzAYN611vkMst",
-    });
-    expect(opts.tunnelName).toBe("g-tv4pdbNtzAYN611vkM");
-    expect(opts.tunnelName.length).toBeLessThanOrEqual(20);
-  });
-
   it("uses default bin path when VSCODE_CLI_BIN is not set", () => {
     const opts = loadOptionsFromEnv({
-      GENERACY_PROJECT_ID: "my-project",
+      GENERACY_CLUSTER_ID: "9e5c8a0d-755e-40b3-b0c3-43e849f0bb90",
     });
     expect(opts.binPath).toBe(DEFAULT_VSCODE_CLI_BIN);
   });
 
-  it("produces the same tunnel name across multiple calls (stability across activations)", () => {
-    const env = { GENERACY_PROJECT_ID: "tv4pdbNtzAYN611vkMst" };
+  it("produces the same tunnel name across multiple calls for the same cluster", () => {
+    const env = { GENERACY_CLUSTER_ID: "9e5c8a0d-755e-40b3-b0c3-43e849f0bb90" };
     expect(loadOptionsFromEnv(env).tunnelName).toBe(
       loadOptionsFromEnv(env).tunnelName
     );
   });
 
-  it("ignores GENERACY_CLUSTER_ID even when set (project id is the source of truth)", () => {
-    const opts = loadOptionsFromEnv({
-      GENERACY_PROJECT_ID: "stable-project-id",
-      GENERACY_CLUSTER_ID: "9e5c8a0d-755e-40b3-b0c3-43e849f0bb90",
+  it("derives different tunnel names for sibling clusters under one project", () => {
+    // Multi-cluster regression: two clusters under the same project must
+    // produce different tunnel names (#744 FR-001/FR-002).
+    const a = loadOptionsFromEnv({
+      GENERACY_CLUSTER_ID: "11111111-1111-1111-1111-111111111111",
     });
-    // Tunnel name derived from project id, not cluster id
-    expect(opts.tunnelName).toBe(deriveTunnelName("stable-project-id"));
+    const b = loadOptionsFromEnv({
+      GENERACY_CLUSTER_ID: "22222222-2222-2222-2222-222222222222",
+    });
+    expect(a.tunnelName).not.toBe(b.tunnelName);
   });
 
-  it("throws when GENERACY_PROJECT_ID is not set", () => {
+  it("throws when GENERACY_CLUSTER_ID is not set", () => {
     expect(() => loadOptionsFromEnv({})).toThrow(
-      "GENERACY_PROJECT_ID is required"
+      "GENERACY_CLUSTER_ID is required"
     );
-  });
-
-  it("throws when only GENERACY_CLUSTER_ID is set without GENERACY_PROJECT_ID", () => {
-    // Defensive: a misconfigured env (cluster id but no project id) must fail
-    // loudly rather than fall back to the old behavior.
-    expect(() =>
-      loadOptionsFromEnv({ GENERACY_CLUSTER_ID: "some-uuid" })
-    ).toThrow("GENERACY_PROJECT_ID is required");
   });
 });

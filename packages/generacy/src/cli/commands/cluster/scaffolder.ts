@@ -3,15 +3,17 @@
  *
  * Used by both `launch` and `deploy` commands to ensure consistent file formats.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stringify } from 'yaml';
+import { getLogger } from '../../utils/logger.js';
 
 export interface ScaffoldClusterJsonInput {
   cluster_id: string;
   project_id: string;
   org_id: string;
   cloud_url: string;
+  display_name?: string;
 }
 
 export interface ScaffoldClusterYamlInput {
@@ -37,6 +39,7 @@ export interface ScaffoldComposeInput {
 
 export interface ScaffoldEnvInput {
   clusterId: string;
+  clusterName?: string;
   projectId: string;
   orgId: string;
   cloudUrl: string;
@@ -47,6 +50,7 @@ export interface ScaffoldEnvInput {
   workers?: number;
   orchestratorPort?: number;
   cloud?: { apiUrl: string; relayUrl: string };
+  preApprovedDeviceCode?: string;
 }
 
 /**
@@ -89,12 +93,15 @@ export function deriveRelayUrl(cloudUrl: string, projectId: string): string {
  */
 export function scaffoldClusterJson(dir: string, input: ScaffoldClusterJsonInput): void {
   mkdirSync(dir, { recursive: true });
-  const content = {
+  const content: Record<string, string> = {
     cluster_id: input.cluster_id,
     project_id: input.project_id,
     org_id: input.org_id,
     cloud_url: input.cloud_url,
   };
+  if (input.display_name) {
+    content.display_name = input.display_name;
+  }
   writeFileSync(join(dir, 'cluster.json'), JSON.stringify(content, null, 2) + '\n', 'utf-8');
 }
 
@@ -121,11 +128,13 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   const claudeConfigMode = input.claudeConfigMode ?? 'bind';
   const variant = input.variant;
 
-  // Claude config volume: bind mount for local, named volume for cloud
+  // Claude config volume: host bind for local, compose-relative file bind for
+  // cloud/deploy. The `volume` branch used to mount a named volume onto a file
+  // path, which Docker rejects with "is not directory" — see #737.
   const claudeConfigVolume =
     claudeConfigMode === 'bind'
       ? '~/.claude.json:/home/node/.claude.json'
-      : 'claude-config:/home/node/.claude.json';
+      : './claude.json:/home/node/.claude.json';
 
   // Port binding: ephemeral for local, fixed for cloud
   const orchestratorPorts =
@@ -255,7 +264,6 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
       'vscode-cli-state': null,
       'redis-data': null,
       'generacy-app-config-data': null,
-      ...(claudeConfigMode === 'volume' ? { 'claude-config': null } : {}),
     },
     networks: {
       'cluster-network': {
@@ -265,6 +273,28 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
   };
 
   writeFileSync(join(dir, 'docker-compose.yml'), stringify(compose), 'utf-8');
+
+  if (claudeConfigMode === 'volume') {
+    const claudeJsonPath = join(dir, 'claude.json');
+    if (!existsSync(claudeJsonPath)) {
+      writeFileSync(claudeJsonPath, '{}\n', 'utf-8');
+      // 1000:1000 = the container's `node` user; best-effort, fails silently
+      // on non-root hosts where the scaffolder user lacks CAP_CHOWN.
+      try {
+        chownSync(claudeJsonPath, 1000, 1000);
+      } catch (err) {
+        const errno = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (errno === 'EPERM' || errno === 'EACCES') {
+          getLogger().warn(
+            { path: claudeJsonPath, code: errno },
+            'chown 1000:1000 on claude.json failed; continuing',
+          );
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
 }
 
 /**
@@ -285,6 +315,7 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
   const lines = [
     '# Identity (from cloud LaunchConfig — do not edit)',
     `GENERACY_CLUSTER_ID=${input.clusterId}`,
+    ...(input.clusterName ? [`GENERACY_CLUSTER_NAME=${input.clusterName}`] : []),
     `GENERACY_PROJECT_ID=${input.projectId}`,
     `GENERACY_ORG_ID=${input.orgId}`,
     `GENERACY_API_URL=${apiUrl}`,
@@ -308,6 +339,14 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
     '# `wizard` defers repo cloning until credentials arrive via the activation wizard',
     'GENERACY_BOOTSTRAP_MODE=wizard',
     '',
+    ...(input.preApprovedDeviceCode
+      ? [
+          '# Cloud-supplied pre-approved RFC 8628 device code (single-use, short TTL).',
+          '# Consumed by orchestrator activate() on first boot; never logged.',
+          `GENERACY_PRE_APPROVED_DEVICE_CODE=${input.preApprovedDeviceCode}`,
+          '',
+        ]
+      : []),
   ];
 
   writeFileSync(join(dir, '.env'), lines.join('\n'), 'utf-8');

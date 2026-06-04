@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/registry-entry.v2.json",
+  "title": "RegistryEntry",
+  "description": "One entry in ~/.generacy/clusters.json. Backward-compatible with v1 — new fields are optional.",
+  "type": "object",
+  "required": ["clusterId", "name", "path", "composePath", "cloudUrl", "lastSeen", "createdAt"],
+  "properties": {
+    "clusterId": {
+      "type": ["string", "null"],
+      "description": "Cloud-minted UUID. Nullable for entries created before activation completed."
+    },
+    "name": {
+      "type": "string",
+      "description": "Legacy field — retained for backward compat. New writers also set displayName."
+    },
+    "displayName": {
+      "type": "string",
+      "description": "Normalized cluster display name. Source of truth for the cluster's human identity.",
+      "pattern": "^[a-z][a-z0-9-]{0,62}$"
+    },
+    "projectId": {
+      "type": "string",
+      "description": "Cloud-minted project ID. Required for new writes; absent in older entries."
+    },
+    "deploymentMode": {
+      "type": "string",
+      "enum": ["local", "cloud"],
+      "description": "Local (docker on this host) vs. cloud (SSH-deployed). Missing values treated as 'local'."
+    },
+    "path": {
+      "type": "string"
+    },
+    "composePath": {
+      "type": "string"
+    },
+    "variant": {
+      "type": "string",
+      "enum": ["cluster-base", "cluster-microservices"]
+    },
+    "channel": {
+      "type": "string",
+      "enum": ["stable", "preview"]
+    },
+    "cloudUrl": {
+      "type": ["string", "null"]
+    },
+    "lastSeen": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "managementEndpoint": {
+      "type": "string"
+    }
+  }
+}

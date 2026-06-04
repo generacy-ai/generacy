@@ -29,6 +29,7 @@ const mockLogger = { info: vi.fn(), warn: vi.fn() } as unknown as import('pino')
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env['GENERACY_PRE_APPROVED_DEVICE_CODE'];
 });
 
 describe('activate', () => {
@@ -103,6 +104,155 @@ describe('activate', () => {
       expect(pollForApproval).toHaveBeenCalledWith(
         expect.objectContaining({ workers: 4 }),
       );
+    });
+  });
+
+  describe('pre-approved device-code path', () => {
+    it('happy path: skips requestDeviceCode and persists key from pollForApproval', async () => {
+      process.env['GENERACY_PRE_APPROVED_DEVICE_CODE'] = 'pre-approved-dc-1';
+      vi.mocked(readKeyFile).mockResolvedValue(null);
+      vi.mocked(pollForApproval).mockResolvedValue({
+        status: 'approved',
+        cluster_api_key: 'pre-key-1',
+        cluster_api_key_id: 'pre-kid-1',
+        cluster_id: 'pre-cl-1',
+        project_id: 'pre-pj-1',
+        org_id: 'pre-org-1',
+        cloud_url: 'https://api.generacy.ai',
+      });
+      vi.mocked(writeKeyFile).mockResolvedValue(undefined);
+      vi.mocked(writeClusterJson).mockResolvedValue(undefined);
+
+      const result = await activate(baseOptions);
+
+      expect(requestDeviceCode).not.toHaveBeenCalled();
+      expect(pollForApproval).toHaveBeenCalledWith(
+        expect.objectContaining({ deviceCode: 'pre-approved-dc-1' }),
+      );
+      expect(writeKeyFile).toHaveBeenCalledWith(baseOptions.keyFilePath, 'pre-key-1');
+      expect(writeClusterJson).toHaveBeenCalledWith(
+        baseOptions.clusterJsonPath,
+        expect.objectContaining({
+          cluster_id: 'pre-cl-1',
+          project_id: 'pre-pj-1',
+          org_id: 'pre-org-1',
+          cloud_url: 'https://api.generacy.ai',
+        }),
+      );
+      expect(process.env['GENERACY_PRE_APPROVED_DEVICE_CODE']).toBeUndefined();
+      expect(result).toEqual({
+        apiKey: 'pre-key-1',
+        clusterApiKeyId: 'pre-kid-1',
+        clusterId: 'pre-cl-1',
+        projectId: 'pre-pj-1',
+        orgId: 'pre-org-1',
+        cloudUrl: 'https://api.generacy.ai',
+      });
+      expect(mockLogger.info).toHaveBeenCalledWith({
+        event: 'activation-start',
+        mode: 'pre-approved',
+      });
+    });
+
+    it('terminal failure falls back to interactive flow', async () => {
+      process.env['GENERACY_PRE_APPROVED_DEVICE_CODE'] = 'pre-approved-expired';
+      vi.mocked(readKeyFile).mockResolvedValue(null);
+      // First call (pre-approved branch) returns expired; second call
+      // (interactive branch) returns approved.
+      vi.mocked(pollForApproval)
+        .mockResolvedValueOnce({ status: 'expired' })
+        .mockResolvedValueOnce({
+          status: 'approved',
+          cluster_api_key: 'fallback-key',
+          cluster_api_key_id: 'fallback-kid',
+          cluster_id: 'fallback-cl',
+          project_id: 'fallback-pj',
+          org_id: 'fallback-org',
+          cloud_url: 'https://api.generacy.ai',
+        });
+      vi.mocked(requestDeviceCode).mockResolvedValue({
+        device_code: 'interactive-dc',
+        user_code: 'WXYZ-9999',
+        verification_uri: 'https://generacy.ai/activate',
+        interval: 5,
+        expires_in: 300,
+      });
+      vi.mocked(writeKeyFile).mockResolvedValue(undefined);
+      vi.mocked(writeClusterJson).mockResolvedValue(undefined);
+
+      const result = await activate(baseOptions);
+
+      expect(requestDeviceCode).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Pre-approved device code redemption failed'),
+      );
+      expect(mockLogger.info).toHaveBeenCalledWith({
+        event: 'activation-start',
+        mode: 'pre-approved',
+      });
+      expect(mockLogger.info).toHaveBeenCalledWith({
+        event: 'activation-start',
+        mode: 'interactive',
+      });
+      expect(result.apiKey).toBe('fallback-key');
+    });
+
+    it('transient retries happen inside pollForApproval (single call)', async () => {
+      process.env['GENERACY_PRE_APPROVED_DEVICE_CODE'] = 'pre-approved-transient';
+      vi.mocked(readKeyFile).mockResolvedValue(null);
+      // pollForApproval mock already abstracts away authorization_pending /
+      // slow_down — we just assert the outer code calls it exactly once and
+      // does not double-trigger requestDeviceCode.
+      vi.mocked(pollForApproval).mockResolvedValue({
+        status: 'approved',
+        cluster_api_key: 'transient-key',
+        cluster_api_key_id: 'transient-kid',
+        cluster_id: 'transient-cl',
+        project_id: 'transient-pj',
+        org_id: 'transient-org',
+        cloud_url: 'https://api.generacy.ai',
+      });
+      vi.mocked(writeKeyFile).mockResolvedValue(undefined);
+      vi.mocked(writeClusterJson).mockResolvedValue(undefined);
+
+      await activate(baseOptions);
+
+      expect(pollForApproval).toHaveBeenCalledTimes(1);
+      expect(requestDeviceCode).not.toHaveBeenCalled();
+    });
+
+    it('no pre-approved env var → unchanged interactive path with structured log', async () => {
+      // env var deliberately unset (cleared in beforeEach)
+      vi.mocked(readKeyFile).mockResolvedValue(null);
+      vi.mocked(requestDeviceCode).mockResolvedValue({
+        device_code: 'dc-baseline',
+        user_code: 'WXYZ-0000',
+        verification_uri: 'https://generacy.ai/activate',
+        interval: 5,
+        expires_in: 300,
+      });
+      vi.mocked(pollForApproval).mockResolvedValue({
+        status: 'approved',
+        cluster_api_key: 'baseline-key',
+        cluster_api_key_id: 'baseline-kid',
+        cluster_id: 'baseline-cl',
+        project_id: 'baseline-pj',
+        org_id: 'baseline-org',
+        cloud_url: 'https://api.generacy.ai',
+      });
+      vi.mocked(writeKeyFile).mockResolvedValue(undefined);
+      vi.mocked(writeClusterJson).mockResolvedValue(undefined);
+
+      await activate(baseOptions);
+
+      expect(mockLogger.info).toHaveBeenCalledWith({
+        event: 'activation-start',
+        mode: 'interactive',
+      });
+      expect(mockLogger.info).not.toHaveBeenCalledWith({
+        event: 'activation-start',
+        mode: 'pre-approved',
+      });
     });
   });
 

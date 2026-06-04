@@ -49,7 +49,12 @@ export function resolveProjectDir(projectName: string, dirOverride?: string): st
  *
  * @throws If `.generacy/` already exists inside `projectDir`.
  */
-export function scaffoldProject(projectDir: string, config: LaunchConfig, workers: number): void {
+export function scaffoldProject(
+  projectDir: string,
+  config: LaunchConfig,
+  workers: number,
+  displayName?: string,
+): void {
   mkdirSync(projectDir, { recursive: true });
 
   const generacyDir = join(projectDir, '.generacy');
@@ -68,6 +73,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig, worker
     project_id: config.projectId,
     org_id: config.orgId,
     cloud_url: config.cloudUrl,
+    display_name: displayName,
   });
 
   scaffoldClusterYaml(generacyDir, {
@@ -92,6 +98,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig, worker
 
   scaffoldEnvFile(generacyDir, {
     clusterId: config.clusterId,
+    clusterName: displayName,
     projectId: config.projectId,
     orgId: config.orgId,
     cloudUrl: config.cloudUrl,
@@ -103,6 +110,7 @@ export function scaffoldProject(projectDir: string, config: LaunchConfig, worker
     cloud: config.cloud
       ? { apiUrl: config.cloud.apiUrl, relayUrl: config.cloud.relayUrl }
       : undefined,
+    preApprovedDeviceCode: config.preApprovedDeviceCode,
   });
 
   preCreateClaudeJson();
