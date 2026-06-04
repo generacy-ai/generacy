@@ -1,5 +1,71 @@
 # Changelog
 
+## 0.3.0
+
+### Minor Changes
+
+- c8bdfa0: Add pre-approved device-code activation for managed cloud clusters.
+
+  The cloud can now bake a single-use, short-TTL RFC 8628 device code into a
+  cluster's `.env` (`GENERACY_PRE_APPROVED_DEVICE_CODE`), threaded through the
+  launch/deploy/cluster scaffolders via a new optional `preApprovedDeviceCode`
+  config field. On first boot, the orchestrator's `activate()` redeems the
+  pre-approved code directly — skipping `requestDeviceCode` — and falls back to
+  the interactive device-code flow on terminal failure rather than crash-looping.
+
+- 6f74140: feat: per-cluster tunnel name + identity for multi-cluster support (#744)
+
+  Adds cluster/CLI/orchestrator-side support for multiple, user-named clusters
+  per project.
+
+  - `deriveTunnelName` is now keyed on the per-cluster UUID (not the projectId),
+    so each cluster in a project gets a distinct, ≤20-char, lowercase,
+    letter-initial tunnel name. The constraint is documented next to the helper.
+  - `generacy launch --name <name>` (and the scaffolder) accept an optional human
+    cluster name; when omitted, a default `<sanitized-project>-local-<n>` is
+    generated. The name is fixed at creation and persisted into the scaffolded
+    cluster identity.
+  - The orchestrator cluster identity now carries the cluster UUID and display
+    name, surfacing the name in registration so the cloud can show it, while the
+    short derived tunnel name stays decoupled from the display name.
+  - Deleting/stopping a cluster now unregisters/turns off its dev tunnel so the
+    name is freed for reuse.
+
+- dc03887: feat(orchestrator): detect cluster identity split and emit relay event (#750)
+
+  Adds an identity-split detector that compares `process.env.GENERACY_CLUSTER_ID`
+  against the persisted `cluster.json.cluster_id` during server startup. On
+  mismatch it emits a single `cluster.identity-split` relay event per orchestrator
+  process lifetime — surfacing clusters whose injected env identity has diverged
+  from their persisted identity.
+
+  The detector is best-effort and non-fatal: it never mutates env, `.env`, or
+  `cluster.json`, and drops the event if no relay client is available. The new
+  `cluster.identity-split` channel is added to the internal relay-events allowlist,
+  and detection runs on both the existing-key and wizard-mode activation paths.
+
+### Patch Changes
+
+- cca7963: fix(orchestrator): fall back to GH_USERNAME for cluster identity (assignee filtering)
+
+  The label-monitor resolves the cluster's GitHub identity to filter issues by
+  assignee. It checked `CLUSTER_GITHUB_USERNAME`, then `gh api /user`, then gave
+  up ("filtering disabled, all issues processed"). On cloud/wizard clusters the
+  credential is a GitHub App installation token (`<app>[bot]`), which can't call
+  `/user`, so identity resolution failed and the cluster processed every issue
+  instead of only those assigned to the selected account.
+
+  `resolveClusterIdentity` now falls back to `GH_USERNAME` — the human account
+  the installation belongs to, already delivered to the cluster by the wizard —
+  between the explicit config var and the `gh api /user` attempt. `CLUSTER_GITHUB_USERNAME`
+  still takes precedence.
+
+- Updated dependencies [6f74140]
+- Updated dependencies [967718e]
+- Updated dependencies [30ce711]
+  - @generacy-ai/control-plane@0.4.0
+  - @generacy-ai/cluster-relay@0.3.0
+
 ## 0.2.1
 
 ### Patch Changes

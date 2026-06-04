@@ -1,5 +1,40 @@
 # @generacy-ai/generacy
 
+## 0.3.0
+
+### Minor Changes
+
+- c8bdfa0: Add pre-approved device-code activation for managed cloud clusters.
+
+  The cloud can now bake a single-use, short-TTL RFC 8628 device code into a
+  cluster's `.env` (`GENERACY_PRE_APPROVED_DEVICE_CODE`), threaded through the
+  launch/deploy/cluster scaffolders via a new optional `preApprovedDeviceCode`
+  config field. On first boot, the orchestrator's `activate()` redeems the
+  pre-approved code directly — skipping `requestDeviceCode` — and falls back to
+  the interactive device-code flow on terminal failure rather than crash-looping.
+
+- 6f74140: feat: per-cluster tunnel name + identity for multi-cluster support (#744)
+
+  Adds cluster/CLI/orchestrator-side support for multiple, user-named clusters
+  per project.
+
+  - `deriveTunnelName` is now keyed on the per-cluster UUID (not the projectId),
+    so each cluster in a project gets a distinct, ≤20-char, lowercase,
+    letter-initial tunnel name. The constraint is documented next to the helper.
+  - `generacy launch --name <name>` (and the scaffolder) accept an optional human
+    cluster name; when omitted, a default `<sanitized-project>-local-<n>` is
+    generated. The name is fixed at creation and persisted into the scaffolded
+    cluster identity.
+  - The orchestrator cluster identity now carries the cluster UUID and display
+    name, surfacing the name in registration so the cloud can show it, while the
+    short derived tunnel name stays decoupled from the display name.
+  - Deleting/stopping a cluster now unregisters/turns off its dev tunnel so the
+    name is freed for reuse.
+
+### Patch Changes
+
+- e429d7f: Fix docker-compose scaffolding for `claudeConfigMode: 'volume'` (deploy/cloud). Previously a named volume was mounted onto the `/home/node/.claude.json` file path, which Docker rejects with "is not a directory". The scaffolder now writes a `claude.json` file next to the compose file and binds it (`./claude.json:/home/node/.claude.json`), chowning it to `1000:1000` (best-effort). `deploy` likewise ensures `claude.json` exists on the remote VM owned by `1000:1000` before `compose up`.
+
 ## 0.2.2
 
 ### Patch Changes
