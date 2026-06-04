@@ -246,6 +246,29 @@ describe('scaffoldProject', () => {
   // .env file
   // -------------------------------------------------------------------------
 
+  // FR-001 verification gate (#750): the launch scaffolder MUST write the
+  // cloud-returned LaunchConfig.clusterId byte-for-byte to GENERACY_CLUSTER_ID.
+  // No client-side UUID minting or override. A regression to client-minted
+  // ids would resurrect the identity-split bug observed on staging.
+  it('writes GENERACY_CLUSTER_ID byte-for-byte from LaunchConfig.clusterId (FR-001)', () => {
+    const projectDir = join(tempDir, 'fr-001-gate');
+    const exactClusterId = 'a356d8f5-cca3-4f4a-9070-4fd8084b0468';
+    scaffoldProject(
+      projectDir,
+      { ...mockConfig, clusterId: exactClusterId },
+      1,
+    );
+
+    const content = readFileSync(
+      join(projectDir, '.generacy', '.env'),
+      'utf-8',
+    );
+
+    // Match the exact line, not a substring — ensures no transformation/wrapping.
+    const lines = content.split('\n');
+    expect(lines).toContain(`GENERACY_CLUSTER_ID=${exactClusterId}`);
+  });
+
   it('writes .env file with identity and project vars', () => {
     const projectDir = join(tempDir, 'new-project');
     scaffoldProject(projectDir, mockConfig, 1);
