@@ -28,6 +28,11 @@ import { RelayBridge } from './services/relay-bridge.js';
 import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
 import { createWizardCredsTokenProvider } from './services/wizard-creds-token-provider.js';
+import { GitHubAuthHealthService } from './services/github-auth-health.js';
+import {
+  CredentialExpiryWatcher,
+  readCredentialDescriptors,
+} from './services/credential-expiry-watcher.js';
 import { setupWebhookRoutes } from './routes/webhooks.js';
 import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
@@ -155,6 +160,47 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   const wizardCredsTokenProvider = !isWorkerMode
     ? createWizardCredsTokenProvider('/var/lib/generacy/wizard-credentials.env', server.log)
     : undefined;
+
+  // Resolve agency dir (matches credhelper-daemon convention). Used by the
+  // GitHub auth health service to read credentials.yaml at startup and by the
+  // expiry watcher's 60s tick. Safe to compute regardless of mode.
+  const agencyDir =
+    process.env['CREDHELPER_AGENCY_DIR'] ?? `${process.cwd()}/.agency`;
+
+  // GitHub auth health service — single owner of `githubAuth` state. The
+  // emitEvent closure captures relayClientRef declared below; safe because the
+  // service does not emit until monitors call recordResult/maybeRequestRefresh,
+  // which happens after server.listen() and (in wizard mode) after activation.
+  let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  const githubAuthHealth = !isWorkerMode
+    ? new GitHubAuthHealthService({
+        emitEvent: (payload) => {
+          const client = relayClientRef;
+          if (!client || !client.isConnected) return;
+          client.send({
+            type: 'event',
+            event: 'cluster.credentials',
+            data: payload,
+            timestamp: new Date().toISOString(),
+          } as unknown as import('./types/relay.js').RelayMessage);
+        },
+        logger: server.log,
+      })
+    : null;
+
+  // Resolve the github-app credentialId once at startup so monitors can pass
+  // it through `health.recordResult(credentialId, ...)`. The expiry watcher
+  // refreshes this map on YAML mtime change. When no github-app credential is
+  // configured, the value stays undefined and monitors call a no-op variant.
+  let githubAppCredentialId: string | undefined;
+  if (!isWorkerMode && githubAuthHealth) {
+    const initialDescriptors = await readCredentialDescriptors(agencyDir);
+    const ghapp = initialDescriptors.find((d) => d.type === 'github-app');
+    githubAppCredentialId = ghapp?.credentialId;
+    if (initialDescriptors.length > 0) {
+      githubAuthHealth.setCredentials(initialDescriptors);
+    }
+  }
 
   // Sync labels for watched repositories (skip in worker mode)
   if (!isWorkerMode && config.repositories.length > 0) {
@@ -287,6 +333,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       config.repositories,
       clusterGithubUsername,
       wizardCredsTokenProvider,
+      githubAuthHealth ?? undefined,
+      githubAppCredentialId,
     );
 
     // Create SmeeWebhookReceiver if Smee channel URL is configured
@@ -313,8 +361,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         config.repositories,
         clusterGithubUsername,
         wizardCredsTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
       );
     }
+  }
+
+  // Proactive credential expiry watcher (60s timer). Reads .agency/credentials.yaml
+  // and asks the auth-health service to request a refresh when <5 min remain.
+  // No-op when no credentials.yaml is present (wizard never sealed a credential).
+  let credentialExpiryWatcher: CredentialExpiryWatcher | null = null;
+  if (!isWorkerMode && githubAuthHealth) {
+    credentialExpiryWatcher = new CredentialExpiryWatcher({
+      agencyDir,
+      health: githubAuthHealth,
+      logger: server.log,
+    });
   }
 
   // Initialize relay bridge (full mode only, when API key is configured)
@@ -323,7 +385,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Register internal relay events route BEFORE server.listen() (deferred binding pattern).
   // The getter resolves to null until activation completes; the route returns 503 in that window.
-  let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  // (`relayClientRef` is declared above so the GitHubAuthHealthService's emit closure can capture it.)
   let relayBridgeRef: RelayBridge | null = null;
   if (!isWorkerMode) {
     const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
@@ -417,6 +479,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           id: config.cluster?.id,
           displayName: config.cluster?.displayName,
         },
+        githubAuth: () => githubAuthHealth?.snapshot(),
       });
       await setupDispatchRoutes(server, queueAdapter);
     } else {
@@ -444,6 +507,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             id: config.cluster?.id,
             displayName: config.cluster?.displayName,
           },
+          githubAuth: () => githubAuthHealth?.snapshot(),
         },
       });
 
@@ -544,6 +608,10 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      if (credentialExpiryWatcher) {
+        credentialExpiryWatcher.start();
+      }
+
       if (config.webhookSetup.enabled && config.smee.channelUrl) {
         const webhookSetupService = new WebhookSetupService(server.log, wizardCredsTokenProvider);
         webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
@@ -594,6 +662,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (prFeedbackMonitorService) {
             prFeedbackMonitorService.stopPolling();
+          }
+          if (credentialExpiryWatcher) {
+            await credentialExpiryWatcher.stop();
           }
           closeAllSSEConnections();
         }

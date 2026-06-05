@@ -58,6 +58,16 @@ const mockGitHub = {
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
   createGitHubClient: vi.fn(() => mockGitHub),
+  GhAuthError: class GhAuthError extends Error {
+    constructor(
+      public readonly statusCode: number,
+      public readonly stderr: string,
+      message?: string,
+    ) {
+      super(message ?? `gh CLI auth error (HTTP ${statusCode})`);
+      this.name = 'GhAuthError';
+    }
+  },
 }));
 
 // ==========================================================================

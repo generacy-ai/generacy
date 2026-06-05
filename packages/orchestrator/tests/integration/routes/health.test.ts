@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestServer } from '../../../src/server.js';
 import { setupHealthRoutes } from '../../../src/routes/health.js';
+import { GitHubAuthHealthService } from '../../../src/services/github-auth-health.js';
+import { GitHubAuthSnapshotSchema } from '../../../src/types/github-auth.js';
 import type { FastifyInstance } from 'fastify';
 
 describe('Health Routes', () => {
@@ -115,5 +117,67 @@ describe('Health Routes with failing services', () => {
       const body = JSON.parse(response.payload);
       expect(body.status).toBe('not ready');
     });
+  });
+});
+
+describe('Health Routes /health.githubAuth (#762)', () => {
+  function newService() {
+    return new GitHubAuthHealthService({
+      emitEvent: () => undefined,
+      logger: { info: () => undefined, warn: () => undefined, debug: () => undefined },
+    });
+  }
+
+  async function makeServer(getter: () => ReturnType<GitHubAuthHealthService['snapshot']> | undefined) {
+    const s = await createTestServer();
+    await setupHealthRoutes(s, { githubAuth: getter });
+    await s.ready();
+    return s;
+  }
+
+  it('renders unknown snapshot conformant to contract', async () => {
+    const svc = newService();
+    const s = await makeServer(() => svc.snapshot());
+    const response = await s.inject({ method: 'GET', url: '/health' });
+    const body = JSON.parse(response.payload);
+    expect(body.githubAuth).toEqual({ status: 'unknown', consecutiveFailures: 0 });
+    expect(GitHubAuthSnapshotSchema.safeParse(body.githubAuth).success).toBe(true);
+    await s.close();
+  });
+
+  it('renders ok snapshot conformant to contract', async () => {
+    const svc = newService();
+    svc.setCredentials([{ credentialId: 'primary', type: 'github-app' }]);
+    svc.recordResult('primary', { ok: true });
+    const s = await makeServer(() => svc.snapshot());
+    const response = await s.inject({ method: 'GET', url: '/health' });
+    const body = JSON.parse(response.payload);
+    expect(body.githubAuth.status).toBe('ok');
+    expect(body.githubAuth.credentialId).toBe('primary');
+    expect(GitHubAuthSnapshotSchema.safeParse(body.githubAuth).success).toBe(true);
+    await s.close();
+  });
+
+  it('renders failing snapshot conformant to contract', async () => {
+    const svc = newService();
+    svc.setCredentials([{ credentialId: 'primary', type: 'github-app' }]);
+    svc.recordResult('primary', { ok: false, statusCode: 401 });
+    const s = await makeServer(() => svc.snapshot());
+    const response = await s.inject({ method: 'GET', url: '/health' });
+    const body = JSON.parse(response.payload);
+    expect(body.githubAuth.status).toBe('failing');
+    expect(body.githubAuth.consecutiveFailures).toBeGreaterThanOrEqual(1);
+    expect(GitHubAuthSnapshotSchema.safeParse(body.githubAuth).success).toBe(true);
+    await s.close();
+  });
+
+  it('omits githubAuth field when no getter configured', async () => {
+    const s = await createTestServer();
+    await setupHealthRoutes(s, {});
+    await s.ready();
+    const response = await s.inject({ method: 'GET', url: '/health' });
+    const body = JSON.parse(response.payload);
+    expect(body.githubAuth).toBeUndefined();
+    await s.close();
   });
 });
