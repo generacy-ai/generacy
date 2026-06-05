@@ -1,89 +1,107 @@
-# Feature Specification: JIT gh-CLI token provider — eliminate static `GH_TOKEN` for GitHub API
+# Feature Specification: ## Severity
 
-**Branch**: `773-severity-high-issue-processing` | **Date**: 2026-06-05 | **Status**: Draft | **Issue**: [#773](https://github.com/generacy-ai/generacy/issues/773)
+**High
+
+**Branch**: `773-severity-high-issue-processing` | **Date**: 2026-06-05 | **Status**: Draft
 
 ## Summary
 
-Complete the JIT (just-in-time) credential migration started in #766 / generacy-cloud#817 / #819 by routing **every `gh` CLI call** through a freshly-minted installation token instead of the static `GH_TOKEN` read from `wizard-credentials.env`. Today, `git` operations succeed (JIT helper) while `gh` API calls 401 after ~1 hour because the wizard-delivered installation token expires and is never re-minted. Workers stall, the orchestrator's #762 backstop emits `GitHub authentication failing — investigate credential refresh chain`, and issue processing halts until manual intervention.
+## Severity
 
-The fix: introduce a JIT `tokenProvider` that fetches a fresh installation token on demand via the existing control-plane `POST /git-token` endpoint (control-plane socket for the orchestrator, proxy socket for workers — the same resolution the `git-credential-generacy` bin already does), with a short in-process cache. Wire it into the four gh-CLI consumers (worker GitHub client, label monitor, label sync service, PR-feedback handler) in place of `createWizardCredsTokenProvider`.
+**High.** Issue processing works for ~1 hour after activation, then **every GitHub API call 401s** and all workers fail. The JIT git-credential work (#766/#817/#819) fixed `git` auth but missed the `gh` CLI path, which is the **majority** of GitHub interactions (reading issues, posting stage comments, managing labels, creating/updating PRs, repo metadata).
+
+## Symptom (verified live, prod cluster)
+
+After ~1h, workers fail with:
+```
+GhAuthError: gh authentication failed (HTTP 401): Bad credentials
+  at GhCliGitHubClient.executeGh (.../workflow-engine/.../gh-cli.js)
+  at GhCliGitHubClient.getIssue / getIssueComments / repo view
+```
+…and the orchestrator's #762 backstop logs `GitHub authentication failing — investigate credential refresh chain`. On the same worker at the same time, **`git clone` succeeds** (JIT helper) while **`gh api` 401s** (static token). The worker's `GH_TOKEN` (`ghs_…`) returns `Bad credentials` — it's the expired 1-hour installation token.
+
+## Root cause
+
+Two GitHub auth paths; only `git` was migrated to JIT:
+
+| Path | Token source | Status |
+|---|---|---|
+| `git` clone/push | JIT credential helper (`git-credential-generacy` → control-plane `/git-token` → cloud pull) | ✅ fresh per op |
+| `gh` CLI — **all GitHub API** | static `GH_TOKEN` from `wizard-credentials.env` | ❌ 401 after ~1h |
+
+`gh` does not consult git credential helpers — it authenticates from `GH_TOKEN`/`gh auth`. The orchestrator wires the **static** provider for every GitHub-API client:
+
+- `server.ts:161` — `createWizardCredsTokenProvider('/var/lib/generacy/wizard-credentials.env', …)` reads the static `GH_TOKEN` (the wizard-delivered 1-hour installation token; `wizard-creds-token-provider.ts` only re-reads the file, never re-mints).
+- `server.ts:298` — `new ClaudeCliWorker(…, { tokenProvider: wizardCredsTokenProvider })`. This callsite is inside `if (isWorkerMode)` (server.ts:263) so it runs in the **worker process** — this is the path that produced the 401s in the original report (`WorkerDispatcher.runWorker → ClaudeCliWorker.handle → GhCliGitHubClient.getIssue`).
+- `server.ts:207` — `LabelSyncService(…, wizardCredsTokenProvider)`; plus the label monitor and PR-feedback handler use the same. These three run in the **orchestrator process**.
+
+So the bulk of the workflow's GitHub traffic rides a token that dies after an hour — exactly the 1-hour-expiry failure the JIT work was meant to eliminate.
+
+## Fix
+
+Replace `createWizardCredsTokenProvider` with a **JIT token provider** for the gh-CLI clients: fetch a fresh installation token on demand via the control-plane `/git-token` endpoint (the same path the git credential helper uses — `#819` already serves it; `cloud-pull-client.ts` already implements the call), with a short in-process cache + pre-expiry refresh. Wire it into the worker `ClaudeCliWorker` GitHub client, label monitor, label sync, and PR-feedback handler (the `tokenProvider` these pass to `executeGh` sets `GH_TOKEN` for the `gh` subprocess, so a fresh value per call = fresh `gh` auth).
+
+- **Workers** (`ClaudeCliWorker` at server.ts:298, inside `if (isWorkerMode)`) reach the token endpoint through the **proxy socket** (`/run/generacy-git-token/control.sock` — env `GIT_TOKEN_SOCKET_PATH`); the **orchestrator** (label monitor, label sync, PR feedback) via the control-plane socket directly (`/run/generacy-control-plane/control.sock` — env `CONTROL_PLANE_SOCKET_PATH`). Same socket resolution `git-credential-generacy` already does — factor it out and reuse.
+- **Shared socket client** lives in `packages/control-plane` (the package that owns `/git-token`): a `JitGitTokenClient` (request/response/error contract — the thing that drifts when `/git-token` evolves) imported by both `git-credential-generacy` and the new orchestrator/worker provider. The **in-process cache** lives in the orchestrator/worker-side wrapper, not in the shared client — `git-credential-generacy` is a short-lived CLI that mints once and exits, so caching there is pointless. (Clarification Q2.)
+- **Failure semantics**: when the provider cannot resolve a fresh token (socket unreachable, `/git-token` 4xx/5xx, malformed response), it throws a typed `JitTokenError` (`gh` is never invoked, no 401 round-trip) **and** records `{ ok: false, statusCode: 503 }` to `AuthHealthSink` so the #762 backstop's `auth-failed`/`refresh-requested` flow fires immediately. Never return `undefined` — that falls back to ambient `GH_TOKEN` (the expired static token) and silently reproduces the bug. (Clarification Q3.)
+- **Static-provider retirement**: once all callsites move to the JIT provider, delete `wizard-creds-token-provider.ts` and its tests in this PR. Leave `wizard-env-writer.ts` emitting `GH_TOKEN` to `wizard-credentials.env` — other paths (shell-level `gh`, setup scripts) may still read the ambient env, and `executeGh` overrides `GH_TOKEN` from the provider anyway, so the lingering env line is harmless. Retiring it deserves its own audit and belongs in a follow-up issue. (Clarification Q1.)
+- No cloud or cluster-base change needed — the `/git-token` endpoint and proxy already exist.
+
+## Acceptance criteria
+
+- [ ] All gh-CLI GitHub API calls (`ClaudeCliWorker` in the worker process; label monitor, label sync, PR-feedback handler in the orchestrator process) obtain fresh installation tokens via the JIT path — not the static `wizard-credentials.env` `GH_TOKEN`.
+- [ ] A cluster processes issues continuously for **many hours** with zero `gh` 401s and no manual credential refresh.
+- [ ] Both orchestrator and worker gh paths are covered. Provider auto-resolves the correct socket per container: workers via `GIT_TOKEN_SOCKET_PATH` (default `/run/generacy-git-token/control.sock`), orchestrator via `CONTROL_PLANE_SOCKET_PATH` (default `/run/generacy-control-plane/control.sock`).
+- [ ] Shared `JitGitTokenClient` lives in `packages/control-plane` and is imported by both `git-credential-generacy` and the orchestrator/worker provider. The in-process cache is owned by the orchestrator/worker wrapper only.
+- [ ] When `/git-token` is unreachable, the provider throws a typed `JitTokenError` and reports `{ ok: false, statusCode: 503 }` to `AuthHealthSink` so the #762 backstop fires immediately. The provider never returns `undefined`.
+- [ ] `wizard-creds-token-provider.ts` and its tests are deleted; the four wiring sites (`server.ts:161`, `server.ts:207`, `server.ts:298`, plus the label monitor / PR-feedback handler factories) no longer reference it. `wizard-env-writer.ts` still emits `GH_TOKEN` to `wizard-credentials.env` (retirement of that line is a follow-up).
+
+## Related
+
+- Completes the JIT migration started in #766 / generacy-ai/generacy-cloud#817 / #819 (which covered only `git`).
+- The #762 cluster-side backstop is what surfaces this (the loud `investigate credential refresh chain` warning) — working as designed.
+- Once this lands, the static `GH_TOKEN` in `wizard-credentials.env` is no longer the source of truth for gh auth (it can remain for any non-gh use, or be retired separately).
+
+## Clarifications
+
+Decisions captured in `clarifications.md` (Batch 1, 2026-06-05). Full context + options preserved there; summary below.
+
+- **Q1 — wizard-creds retirement scope (B):** delete `wizard-creds-token-provider.ts` and its tests in this PR; keep `wizard-env-writer.ts` emitting `GH_TOKEN` (retiring the env line is a separate audit/follow-up).
+- **Q2 — JIT provider location (B):** shared `JitGitTokenClient` in `packages/control-plane` (the package that owns `/git-token`), imported by both `git-credential-generacy` and the new orchestrator/worker provider. Caching lives in the orchestrator/worker wrapper, not the shared client.
+- **Q3 — failure-mode semantics (B):** provider throws a typed `JitTokenError` AND reports `{ ok: false, statusCode: 503 }` to `AuthHealthSink` so the #762 backstop's `auth-failed`/`refresh-requested` flow fires without waiting for a `gh` 401. Never return `undefined` (would silently revert to the expired static `GH_TOKEN`).
+- **Q4 — provider scope vs FR-002 worker-socket clause (B, dual-mode) — with premise correction:** the earlier framing that all four wiring sites are orchestrator-process and worker gh is out-of-scope was **wrong**. `server.ts:298` (`ClaudeCliWorker`) is inside `if (isWorkerMode)` and runs in the **worker process** — it is the path that produced the original 401s. The provider must resolve **both** sockets: workers via `/run/generacy-git-token/control.sock` (proxy), orchestrator via `/run/generacy-control-plane/control.sock` (direct). Detect via env vars (`GIT_TOKEN_SOCKET_PATH` / `CONTROL_PLANE_SOCKET_PATH`), same resolution `git-credential-generacy` already does.
 
 ## User Stories
 
-### US1: Continuous issue processing without manual credential refresh
+### US1: [Primary User Story]
 
-**As a** Generacy operator running a cluster on a long-lived project,
-**I want** the cluster's GitHub API traffic (issue reads, label updates, PR creation, stage comments) to keep working indefinitely after activation,
-**So that** I do not need to babysit a credential refresh chain or restart workers every hour.
-
-**Acceptance Criteria**:
-- [ ] A cluster that has been running for >1 hour continues to read issues, post stage comments, manage labels, and create/update PRs via `gh` with **zero 401s**.
-- [ ] The orchestrator's #762 `auth-failed` / `investigate credential refresh chain` log does NOT fire under normal operation.
-- [ ] No operator action (restart, re-bootstrap, manual token paste) is required for multi-hour or multi-day cluster uptime.
-
-### US2: Single source of truth for GitHub auth
-
-**As a** Generacy engineer debugging an auth incident,
-**I want** every cluster-side GitHub interaction (both `git` and `gh`) to mint tokens through the same JIT path (`/git-token` → cloud pull),
-**So that** when auth fails, there is exactly one chain to investigate and one place to add observability.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `gh` API calls and `git` operations share the same token source (control-plane `/git-token`).
-- [ ] The static `GH_TOKEN` from `wizard-credentials.env` is no longer read by any gh-CLI client wiring.
-- [ ] Existing structured logs (`event: git-token-get`, `event: git-token-cloud-pull`) cover the gh-CLI traffic too — no new chain to monitor.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Introduce a JIT token provider (`createJitGitHubTokenProvider` or similar) that returns a fresh installation token from the control-plane `/git-token` endpoint. | P1 | Replaces `createWizardCredsTokenProvider` for gh-CLI consumers. |
-| FR-002 | The provider MUST resolve the correct upstream socket based on container context: orchestrator → control-plane socket (`/run/generacy-control-plane/control.sock`); workers → proxy socket (`/run/generacy-git-token/control.sock`). | P1 | Factor out / reuse the resolution already present in `git-credential-generacy` bin. |
-| FR-003 | The provider MUST cache the token in-process and serve from cache while `expiresAt - now > 5 min`, then refresh synchronously on the next call. | P1 | Match `GitTokenManager` semantics (#766). |
-| FR-004 | Concurrent callers MUST share a single in-flight refresh Promise (no thundering herd against the upstream socket). | P1 | Match `GitTokenManager` semantics (#766). |
-| FR-005 | Wire the JIT provider into `ClaudeCliWorker` (`server.ts:298`) in place of `wizardCredsTokenProvider`. | P1 | Worker GitHub-client path. |
-| FR-006 | Wire the JIT provider into `LabelMonitorService` constructor in place of `wizardCredsTokenProvider`. | P1 | Orchestrator label-monitor poll path. |
-| FR-007 | Wire the JIT provider into `LabelSyncService` (`server.ts:207`) in place of `wizardCredsTokenProvider`. | P1 | Orchestrator label-sync path. |
-| FR-008 | Wire the JIT provider into `PrFeedbackMonitorService` / `PrFeedbackHandler` in place of `wizardCredsTokenProvider`. | P1 | PR-feedback path. |
-| FR-009 | On upstream failure (socket unreachable, 4xx/5xx from `/git-token`), the provider MUST surface a typed error that callers can distinguish from a successful resolution of `undefined`. | P2 | Avoid silent fallback to no-token. Callers already handle `GhAuthError`. |
-| FR-010 | The provider MUST NOT log token values. Structured logs MUST follow the existing `git-token-*` event shape. | P1 | No regression on secret hygiene. |
-| FR-011 | `createWizardCredsTokenProvider` MAY remain in the codebase if used by non-gh paths, but MUST NOT be wired into any gh-CLI client. | P2 | Clarification needed on whether it can be deleted entirely — see [NEEDS CLARIFICATION 1]. |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `gh` 401 rate on a steady-state cluster | 0 per hour (after first successful token mint) | Cluster logs / orchestrator `auth-failed` events over a 24h window. |
-| SC-002 | Continuous operating window without manual refresh | ≥ 24 hours (target ≥ 7 days) | Live cluster run on a real project; observe issue processing continues past the 1h installation-token boundary. |
-| SC-003 | Zero references to `createWizardCredsTokenProvider` in gh-CLI client wiring | 0 occurrences in `server.ts` for gh-CLI consumers | grep / code review at PR time. |
-| SC-004 | `/git-token` upstream call volume per worker | Roughly `(workflow GitHub-API calls) / (cache window minutes / refresh-window minutes)`; cache hit rate ≥ 90% in steady state | Structured logs on the control-plane socket. |
-| SC-005 | Time from cloud installation-token rotation to next gh-CLI call using new token | ≤ refresh-window (5 min) + one in-flight gh call | Inject a token rotation, observe next gh call uses the rotated token. |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The control-plane `POST /git-token` endpoint (#766) and the worker-side proxy socket (#768) are deployed in every variant where issue processing runs. Clusters that pre-date these PRs are out of scope (they cannot work today either).
-- The cloud `/installation-token` pull endpoint (generacy-cloud#817) is the single source of truth for fresh installation tokens; this work does NOT introduce a parallel token-minting path.
-- A `tokenProvider` returning a fresh value per call is sufficient to refresh `gh` auth: `GhCliGitHubClient.executeGh` already passes the resolved value as `GH_TOKEN` in the `gh` subprocess env, so each invocation gets the current token.
-- The 5-minute pre-expiry refresh window inherited from `GitTokenManager` (#766) is acceptable for gh-CLI traffic. (No evidence today that gh-CLI needs a different window than `git`.)
-- The default `github-app` credential ID resolution that #766 / #762 already perform at orchestrator startup is reusable; no new credential-selection logic is required.
-- Per-credential multi-token support is **not** required for v1 (single-credential cache is sufficient — same scope as #766).
+- [Assumption 1]
 
 ## Out of Scope
 
-- Retiring the static `GH_TOKEN` from `wizard-credentials.env` for **non-gh** consumers (anything outside the four wiring sites listed in FR-005–FR-008). That is a follow-up cleanup.
-- Cloud-side changes — no modification to the `/installation-token` endpoint or its callers in generacy-cloud.
-- Cluster-base changes — `entrypoint-orchestrator.sh`, socket mounts, and proxy bin launch already exist (#768 / cluster-base#61).
-- Adding new structured telemetry beyond what `GitTokenManager` already emits.
-- Worker-process gh paths that already use credhelper session env (e.g., `pr-feedback-handler.ts` worker spawn) — those paths pass `undefined` for `tokenProvider` today and continue to do so per #620.
-- Multi-credential token caching (the v1 cache key is a single credential ID; `Map<credentialId, ...>` upgrade is deferred unless a real second credential lands).
-- Changes to the `GhCliGitHubClient` itself — the `tokenProvider` contract added in #620 is sufficient; only the wiring at construction sites changes.
-
-## Clarifications
-
-### Open questions
-
-- **[NEEDS CLARIFICATION 1]** Should `createWizardCredsTokenProvider` and the `wizard-credentials.env` `GH_TOKEN` line be removed entirely once gh-CLI is migrated, or kept for any other consumer? (Issue body says "it can remain for any non-gh use, or be retired separately" — confirming retirement is out of scope here.)
-- **[NEEDS CLARIFICATION 2]** Should the JIT provider live in `packages/orchestrator/src/services/` (alongside `wizard-creds-token-provider.ts`) or be exported from a shared package so the `git-credential-generacy` bin and the orchestrator share one implementation? The bin currently inlines its own socket-talking logic.
-- **[NEEDS CLARIFICATION 3]** Failure-mode semantics when `/git-token` is unreachable mid-poll (e.g., control-plane restart): is a typed throw from the provider acceptable (callers see `GhAuthError`-shaped failure and the #762 backstop reports it), or should the provider expose a `getStatus()` for the existing `AuthHealthSink` to read independently of a call?
+- [Exclusion 1]
 
 ---
 
