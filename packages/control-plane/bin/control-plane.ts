@@ -13,6 +13,11 @@ import { AppConfigFileStore } from '../src/services/app-config-file-store.js';
 import { AppConfigSecretEnvStore } from '../src/services/app-config-secret-env-store.js';
 import { setAppConfigStores, readManifest } from '../src/routes/app-config.js';
 import type { InitResult } from '../src/types/init-result.js';
+import YAML from 'yaml';
+import { createClusterApiKeyReader } from '../src/services/cluster-api-key.js';
+import { createCloudPullClient } from '../src/services/cloud-pull-client.js';
+import { createGitTokenManager } from '../src/services/git-token-manager.js';
+import { setGitTokenManager } from '../src/routes/git-token.js';
 
 const DEFAULT_SOCKET_PATH = '/run/generacy-control-plane/control.sock';
 
