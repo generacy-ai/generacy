@@ -53,8 +53,6 @@ async function main(): Promise<void> {
     fail(`chmod failed: ${listenSocketPath}: ${code}`);
   }
 
-  logProxyInit({ listenSocket: listenSocketPath, upstreamSocket: upstreamSocketPath });
-
   let shuttingDown = false;
   const shutdown = (): void => {
     if (shuttingDown) return;
@@ -67,8 +65,13 @@ async function main(): Promise<void> {
         .finally(() => process.exit(0));
     });
   };
+  // Register signal handlers before announcing readiness: a consumer that acts
+  // on the init line (e.g. sends SIGTERM) must not hit the default-terminate
+  // window between logging and handler registration.
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+
+  logProxyInit({ listenSocket: listenSocketPath, upstreamSocket: upstreamSocketPath });
 }
 
 main().catch((err: unknown) => {
