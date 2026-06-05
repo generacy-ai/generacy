@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GitHubAuthSnapshotSchema } from './github-auth.js';
 
 // ============================================================================
 // Workflow Types
@@ -214,6 +215,7 @@ export const HealthResponseSchema = z.object({
   controlPlaneReady: z.boolean().optional(),
   displayName: z.string().optional(),
   clusterId: z.string().optional(),
+  githubAuth: GitHubAuthSnapshotSchema.optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 

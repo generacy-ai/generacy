@@ -73,14 +73,14 @@
   - `recordResult(credentialId, result)` — implements the state-machine transitions in data-model.md §`GitHubAuthStatus` (emit on transitions only; 401 path may call `maybeRequestRefresh(id, 'auth-401')`)
   - `maybeRequestRefresh(credentialId, reason)` — 60s per-credential rate limit, structured `warn` log on emit and `debug` log on suppress
   - `snapshot()` — single-credential selection rule (failing > ok > unknown, lexicographic tiebreak), maps internal epoch-ms to ISO strings
-- [ ] T021 [US1] Wire `GitHubAuthHealthService` instance into `packages/orchestrator/src/server.ts`:
+- [X] T021 [US1] Wire `GitHubAuthHealthService` instance into `packages/orchestrator/src/server.ts`:
   - construct it after the relay client ref is available, with `emitEvent: payload => relayClientRef?.send({ type:'event', event:'cluster.credentials', data: payload, timestamp: new Date().toISOString() })` (silent drop when ref is null, matching D2 in research.md)
   - pass the service to `LabelMonitorService` and `PrFeedbackMonitorService` constructors so the T011/T012 callbacks become real `health.recordResult(...)` calls (replace the default no-op)
   - export an accessor so `/health` route can call `snapshot()`
-- [ ] T022 [US1] Modify `packages/orchestrator/src/routes/health.ts`:
+- [X] T022 [US1] Modify `packages/orchestrator/src/routes/health.ts`:
   - read `GitHubAuthHealthService.snapshot()` and include it as `githubAuth` on the response body
   - update both the 200 and 503 response Fastify schemas to declare `githubAuth` with only `status` and `consecutiveFailures` required (per research.md D7); other sub-fields optional
-- [ ] T023 [US1] Resolve `credentialId` for monitor callsites (per research.md D5): at orchestrator startup, parse `<agencyDir>/credentials.yaml` once, derive the first `type: 'github-app'` credential ID, and inject it (via constructor or DI option) into the monitor services so each `health.recordResult(...)` call has a real id. If no github-app credential exists, monitors call no-op variant and health stays `unknown` (FR backwards-compatibility default).
+- [X] T023 [US1] Resolve `credentialId` for monitor callsites (per research.md D5): at orchestrator startup, parse `<agencyDir>/credentials.yaml` once, derive the first `type: 'github-app'` credential ID, and inject it (via constructor or DI option) into the monitor services so each `health.recordResult(...)` call has a real id. If no github-app credential exists, monitors call no-op variant and health stays `unknown` (FR backwards-compatibility default).
 
 ### Tests for US1
 
@@ -104,13 +104,13 @@
 
 ### Implementation for US2
 
-- [ ] T030 [US2] Create `packages/orchestrator/src/services/credential-expiry-watcher.ts` implementing `CredentialExpiryWatcher` per data-model.md §`CredentialExpiryWatcher`:
+- [X] T030 [US2] Create `packages/orchestrator/src/services/credential-expiry-watcher.ts` implementing `CredentialExpiryWatcher` per data-model.md §`CredentialExpiryWatcher`:
   - constructor `{ agencyDir, health, logger, tickIntervalMs=60_000, nearExpiryWindowMs=5*60_000, now? }`
   - `start()` sets `setInterval`; `stop()` clears and awaits any in-flight tick
   - each tick: `stat()` `<agencyDir>/credentials.yaml`; on `ENOENT` no-op; on mtime change `YAML.parse` and call `health.setCredentials([...])`; iterate and call `health.maybeRequestRefresh(id, 'near-expiry')` for any credential where `(expiresAtMs - now) <= nearExpiryWindowMs`
   - all errors caught and logged at `warn`; never throws out of the timer (D9)
   - share YAML reader pattern with `packages/control-plane/src/services/wizard-env-writer.ts:78-96` (don't duplicate Zod schemas — import from T002 types)
-- [ ] T031 [US2] Wire `CredentialExpiryWatcher` into `packages/orchestrator/src/server.ts`:
+- [X] T031 [US2] Wire `CredentialExpiryWatcher` into `packages/orchestrator/src/server.ts`:
   - construct after `GitHubAuthHealthService` (T021), before `server.listen()` returns
   - resolve `agencyDir` from existing env/config the same way `wizard-creds-token-provider.ts` does
   - call `.start()` after relay client ref is wired
@@ -118,7 +118,7 @@
 
 ### Tests for US2
 
-- [ ] T032 [P] [US2] Add `packages/orchestrator/tests/unit/services/credential-expiry-watcher.test.ts`:
+- [X] T032 [P] [US2] Add `packages/orchestrator/tests/unit/services/credential-expiry-watcher.test.ts`:
   - mock filesystem (in-memory or `memfs`) and `health` (spy on `setCredentials`, `maybeRequestRefresh`)
   - tick with no file: no calls; one warn log only on first miss
   - tick with file whose `expiresAt` is 4 min away: `maybeRequestRefresh(id, 'near-expiry')` called once
@@ -132,9 +132,9 @@
 
 ## Phase 6: Integration — End-to-End Wiring
 
-- [ ] T040 Smoke-test event shape against `contracts/cluster-credentials-event.schema.json`: in `tests/unit/services/github-auth-health.test.ts` (or a new contract test file), parse each emitted payload through the Zod schema (re-derived from the JSON Schema or hand-mirrored in T002). Fail the test if the discriminator, required fields, or types drift.
-- [ ] T041 Smoke-test `/health` response shape against `contracts/github-auth-health.schema.json`: in `tests/integration/health.test.ts` (or extend an existing health test), assert the response body satisfies the schema for at least three states (`unknown`, `ok`, `failing`).
-- [ ] T042 Verify the relay channel `'cluster.credentials'` is in the allowlist used by `setupInternalRelayEventsRoute` (per research.md D2 reference): check `packages/orchestrator/src/routes/internal-relay-events.ts` `ALLOWED_CHANNELS` (or equivalent) lists it. If missing, add. (Most likely already present — verify only.)
+- [X] T040 Smoke-test event shape against `contracts/cluster-credentials-event.schema.json`: in `tests/unit/services/github-auth-health.test.ts` (or a new contract test file), parse each emitted payload through the Zod schema (re-derived from the JSON Schema or hand-mirrored in T002). Fail the test if the discriminator, required fields, or types drift.
+- [X] T041 Smoke-test `/health` response shape against `contracts/github-auth-health.schema.json`: in `tests/integration/health.test.ts` (or extend an existing health test), assert the response body satisfies the schema for at least three states (`unknown`, `ok`, `failing`).
+- [X] T042 Verify the relay channel `'cluster.credentials'` is in the allowlist used by `setupInternalRelayEventsRoute` (per research.md D2 reference): check `packages/orchestrator/src/routes/internal-relay-events.ts` `ALLOWED_CHANNELS` (or equivalent) lists it. If missing, add. (Most likely already present — verify only.)
 
 ---
 
