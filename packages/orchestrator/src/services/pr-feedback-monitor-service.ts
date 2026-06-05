@@ -1,4 +1,4 @@
-import type { GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import { GhAuthError, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
 import type {
   MonitorState,
   QueueAdapter,
@@ -10,6 +10,7 @@ import type {
 import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import { PrLinker, type PrLinkInput } from '../worker/pr-linker.js';
 import type { Logger } from '../worker/types.js';
+import type { AuthHealthSink } from './label-monitor-service.js';
 
 export interface PrFeedbackMonitorOptions {
   repositories: RepositoryConfig[];
@@ -43,6 +44,8 @@ export class PrFeedbackMonitorService {
   private readonly options: PrFeedbackMonitorOptions;
   private readonly prLinker: PrLinker;
   private readonly clusterGithubUsername: string | undefined;
+  private readonly authHealth: AuthHealthSink;
+  private readonly githubAppCredentialId: string | undefined;
   private abortController: AbortController | null = null;
 
   private state: MonitorState;
@@ -56,6 +59,8 @@ export class PrFeedbackMonitorService {
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
     tokenProvider?: () => Promise<string | undefined>,
+    authHealth?: AuthHealthSink,
+    githubAppCredentialId?: string,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -63,6 +68,8 @@ export class PrFeedbackMonitorService {
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
     this.clusterGithubUsername = clusterGithubUsername;
+    this.authHealth = authHealth ?? { recordResult: () => undefined };
+    this.githubAppCredentialId = githubAppCredentialId;
     this.options = {
       repositories,
       pollIntervalMs: config.pollIntervalMs,
@@ -315,7 +322,21 @@ export class PrFeedbackMonitorService {
     let openPRs;
     try {
       openPRs = await client.listOpenPullRequests(owner, repo);
+      if (this.githubAppCredentialId) {
+        this.authHealth.recordResult(this.githubAppCredentialId, { ok: true });
+      }
     } catch (error) {
+      if (error instanceof GhAuthError) {
+        const credentialId = this.githubAppCredentialId;
+        if (credentialId) {
+          this.authHealth.recordResult(credentialId, { ok: false, statusCode: 401 });
+        }
+        this.logger.warn(
+          { credentialId, statusCode: 401, owner, repo },
+          'GitHub authentication failing — investigate credential refresh chain',
+        );
+        return;
+      }
       if (this.isRateLimitError(error)) {
         this.logger.warn(
           { owner, repo },
@@ -348,6 +369,17 @@ export class PrFeedbackMonitorService {
       try {
         await this.processPrReviewEvent(event);
       } catch (error) {
+        if (error instanceof GhAuthError) {
+          const credentialId = this.githubAppCredentialId;
+          if (credentialId) {
+            this.authHealth.recordResult(credentialId, { ok: false, statusCode: 401 });
+          }
+          this.logger.warn(
+            { credentialId, statusCode: 401, owner, repo, prNumber: pr.number },
+            'GitHub authentication failing — investigate credential refresh chain',
+          );
+          return;
+        }
         if (this.isRateLimitError(error)) {
           this.logger.warn(
             { owner, repo, prNumber: pr.number },

@@ -59,6 +59,20 @@ This document captures the technology and pattern decisions that drive the plan.
 
 **Open verification item** (from spec.md Assumptions, line 86): the exact stderr format. Action: pre-implementation, run `GH_TOKEN=fake gh repo view ...` once and confirm the stderr substring; add a fixture-based test covering both the modern `HTTP 401` line and the alternate `gh: ... (HTTP 401)` form if present.
 
+**Reference** (T001 verification, gh 2.92.0):
+
+- GraphQL path (`gh repo view <repo> --json …`, `gh pr view`, `gh issue list --label … --json …`): stderr substring is
+  ```
+  HTTP 401: Bad credentials (https://api.github.com/graphql)
+  Try authenticating with:  gh auth login
+  ```
+- REST path (`gh api repos/...`): stderr substring is
+  ```
+  gh: Bad credentials (HTTP 401)
+  ```
+
+Both formats match `/HTTP\s+(\d{3})/i`, so a single regex covers both. The T013 fixture must include both.
+
 ---
 
 ## D4: State key — per-credential, not per-monitor

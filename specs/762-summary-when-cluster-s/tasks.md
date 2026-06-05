@@ -12,20 +12,20 @@
 
 ## Phase 1: Setup & Verification
 
-- [ ] T001 Verify `gh` CLI stderr format for 401 (open item from research.md D3): run `GH_TOKEN=fake gh repo view <any-private-or-public-repo>` locally and record the exact stderr substring(s) (`HTTP 401: Bad credentials`, `(HTTP 401)`, etc.) into a short note in `specs/762-summary-when-cluster-s/research.md` D3 "Reference" subsection so the regex fixture in T010 covers reality.
+- [X] T001 Verify `gh` CLI stderr format for 401 (open item from research.md D3): run `GH_TOKEN=fake gh repo view <any-private-or-public-repo>` locally and record the exact stderr substring(s) (`HTTP 401: Bad credentials`, `(HTTP 401)`, etc.) into a short note in `specs/762-summary-when-cluster-s/research.md` D3 "Reference" subsection so the regex fixture in T010 covers reality.
 
 ---
 
 ## Phase 2: Foundation — Shared Types & Schemas
 
-- [ ] T002 Create `packages/orchestrator/src/types/github-auth.ts` containing:
+- [X] T002 Create `packages/orchestrator/src/types/github-auth.ts` containing:
   - `GitHubAuthStatus` type (`'ok' | 'failing' | 'unknown'`)
   - `GitHubAuthSnapshot` interface (per data-model.md §`GitHubAuthSnapshot`)
   - `PerCredentialState` internal interface
   - `CredentialDescriptor` interface
   - `CredentialsEventPayload` discriminated union (`refresh-requested` / `auth-failed` / `auth-recovered`)
   - Zod schemas matching `contracts/cluster-credentials-event.schema.json` and `contracts/github-auth-health.schema.json` (parse-time validation in tests; runtime emit is type-checked only)
-- [ ] T003 [P] Add `GhAuthError` class to `packages/workflow-engine/src/actions/github/client/gh-cli.ts` (exported alongside the existing client) per data-model.md §`GhAuthError`. Do not yet throw it; T010 wires the throw site.
+- [X] T003 [P] Add `GhAuthError` class to `packages/workflow-engine/src/actions/github/client/gh-cli.ts` (exported alongside the existing client) per data-model.md §`GhAuthError`. Do not yet throw it; T010 wires the throw site.
 
 ---
 
@@ -37,22 +37,22 @@
 
 ### Implementation for US3
 
-- [ ] T010 [US3] Implement `parseGhStatusCode(stderr: string): number | undefined` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts` matching `/HTTP\s+(\d{3})/i`. In `executeGh()` (or the existing stderr-handling chokepoint near `gh-cli.ts:47-50`), throw `new GhAuthError(401, stderr, …)` when `parseGhStatusCode(stderr) === 401`. Keep all other error paths unchanged so non-401 callers see today's behavior.
-- [ ] T011 [US3] Modify `packages/orchestrator/src/services/label-monitor-service.ts:489` (`pollRepo()` catch branch): catch `GhAuthError` distinctly **before** the generic catch. On the auth branch, log one structured `warn` line (`{ credentialId, statusCode: 401 } "GitHub authentication failing — investigate credential refresh chain"`) and notify the health service (wired in T021 — for now expose a callback/dependency on `GitHubAuthHealthService` injected via constructor, default no-op). Re-raise/return so the existing retry loop continues unchanged.
-- [ ] T012 [US3] Mirror T011 in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` `pollRepo()` (same catch ordering, same structured log, same callback hook).
+- [X] T010 [US3] Implement `parseGhStatusCode(stderr: string): number | undefined` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts` matching `/HTTP\s+(\d{3})/i`. In `executeGh()` (or the existing stderr-handling chokepoint near `gh-cli.ts:47-50`), throw `new GhAuthError(401, stderr, …)` when `parseGhStatusCode(stderr) === 401`. Keep all other error paths unchanged so non-401 callers see today's behavior.
+- [X] T011 [US3] Modify `packages/orchestrator/src/services/label-monitor-service.ts:489` (`pollRepo()` catch branch): catch `GhAuthError` distinctly **before** the generic catch. On the auth branch, log one structured `warn` line (`{ credentialId, statusCode: 401 } "GitHub authentication failing — investigate credential refresh chain"`) and notify the health service (wired in T021 — for now expose a callback/dependency on `GitHubAuthHealthService` injected via constructor, default no-op). Re-raise/return so the existing retry loop continues unchanged.
+- [X] T012 [US3] Mirror T011 in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` `pollRepo()` (same catch ordering, same structured log, same callback hook).
 
 ### Tests for US3
 
-- [ ] T013 [P] [US3] Add `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.401-parsing.test.ts` (or co-located equivalent next to `gh-cli.ts`):
+- [X] T013 [P] [US3] Add `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.401-parsing.test.ts` (or co-located equivalent next to `gh-cli.ts`):
   - fixtures: `HTTP 401: Bad credentials`, `gh: ... (HTTP 401)`, multi-line stderr with the line not first, empty stderr, non-401 (`HTTP 500`)
   - asserts `parseGhStatusCode` return values
   - asserts `executeGh` throws `GhAuthError` only when stderr indicates 401
-- [ ] T014 [P] [US3] Add `packages/orchestrator/tests/unit/services/label-monitor-service.401.test.ts`:
+- [X] T014 [P] [US3] Add `packages/orchestrator/tests/unit/services/label-monitor-service.401.test.ts`:
   - stub `GhCliGitHubClient` to throw `GhAuthError(401, ...)`
   - assert exactly one structured warn log (`statusCode: 401`)
   - assert the injected health-service callback is invoked with `{ ok: false, statusCode: 401 }`
   - assert no generic `"Error polling repository"` log on the 401 path
-- [ ] T015 [P] [US3] Add `packages/orchestrator/tests/unit/services/pr-feedback-monitor-service.401.test.ts` mirroring T014 for the PR feedback monitor.
+- [X] T015 [P] [US3] Add `packages/orchestrator/tests/unit/services/pr-feedback-monitor-service.401.test.ts` mirroring T014 for the PR feedback monitor.
 
 **Checkpoint**: US3 is independently deliverable — the 401 path is observable in logs even without US1/US2. Tests pass in isolation.
 
@@ -66,7 +66,7 @@
 
 ### Implementation for US1
 
-- [ ] T020 [US1] Create `packages/orchestrator/src/services/github-auth-health.ts` implementing `GitHubAuthHealthService` per data-model.md §`GitHubAuthHealthService` contract:
+- [X] T020 [US1] Create `packages/orchestrator/src/services/github-auth-health.ts` implementing `GitHubAuthHealthService` per data-model.md §`GitHubAuthHealthService` contract:
   - constructor options `{ emitEvent, logger, now?, minRefreshIntervalMs? }`
   - internal `Map<credentialId, PerCredentialState>`
   - `setCredentials(descriptors)` — idempotent add/remove
@@ -84,7 +84,7 @@
 
 ### Tests for US1
 
-- [ ] T024 [P] [US1] Add `packages/orchestrator/tests/unit/services/github-auth-health.test.ts`:
+- [X] T024 [P] [US1] Add `packages/orchestrator/tests/unit/services/github-auth-health.test.ts`:
   - state-machine matrix from data-model.md §`GitHubAuthStatus`: `unknown→ok`, `unknown→failing`, `ok→failing`, `failing→ok` (with `auth-recovered`), `failing→failing` (no emit, counter increments)
   - `recordResult({ok:false, statusCode:500})` does not transition
   - `setCredentials([])` clears entries (no leftover `failing`)

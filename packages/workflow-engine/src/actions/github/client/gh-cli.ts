@@ -24,6 +24,32 @@ import type {
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
 
 /**
+ * Thrown by `executeGh()` when the gh CLI's stderr signals HTTP 401.
+ * Callers (label/PR-feedback monitors) catch this to drive auth-health state.
+ */
+export class GhAuthError extends Error {
+  constructor(
+    public readonly statusCode: 401,
+    public readonly stderr: string,
+    message?: string,
+  ) {
+    super(message ?? `gh authentication failed (HTTP ${statusCode}): ${stderr}`);
+    this.name = 'GhAuthError';
+  }
+}
+
+/**
+ * Extract the first HTTP status code from gh CLI stderr.
+ * gh 2.x emits either `HTTP 401: Bad credentials` (GraphQL path) or
+ * `gh: ... (HTTP 401)` (REST path) — both match `/HTTP\s+(\d{3})/i`.
+ */
+export function parseGhStatusCode(stderr: string): number | undefined {
+  const match = stderr.match(/HTTP\s+(\d{3})/i);
+  if (!match) return undefined;
+  return Number.parseInt(match[1]!, 10);
+}
+
+/**
  * GitHubClient implementation using gh CLI and git commands
  */
 export class GhCliGitHubClient implements GitHubClient {
@@ -46,7 +72,11 @@ export class GhCliGitHubClient implements GitHubClient {
 
   private async executeGh(args: string[]) {
     const env = await this.resolveTokenEnv();
-    return executeCommand('gh', args, { cwd: this.workdir, env });
+    const result = await executeCommand('gh', args, { cwd: this.workdir, env });
+    if (result.exitCode !== 0 && parseGhStatusCode(result.stderr) === 401) {
+      throw new GhAuthError(401, result.stderr);
+    }
+    return result;
   }
 
   // ==========================================================================

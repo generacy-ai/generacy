@@ -1,4 +1,4 @@
-import { WORKFLOW_LABELS, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import { WORKFLOW_LABELS, GhAuthError, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
 import type {
   LabelEvent,
   MonitorState,
@@ -8,6 +8,18 @@ import type {
 } from '../types/index.js';
 import type { RepositoryConfig, MonitorConfig } from '../config/schema.js';
 import { filterByAssignee } from './identity.js';
+
+/**
+ * Minimal sink for monitor → health-service callbacks. The real service
+ * (T020) implements `recordResult`; the constructor default is a no-op so
+ * the 401 catch branch lands without depending on US1.
+ */
+export interface AuthHealthSink {
+  recordResult(
+    credentialId: string,
+    result: { ok: true } | { ok: false; statusCode?: number },
+  ): void;
+}
 
 /**
  * Known process:* and completed:* label names derived from WORKFLOW_LABELS.
@@ -57,6 +69,8 @@ export class LabelMonitorService {
   private readonly queueAdapter: QueueAdapter;
   private readonly options: LabelMonitorOptions;
   private readonly clusterGithubUsername: string | undefined;
+  private readonly authHealth: AuthHealthSink;
+  private readonly githubAppCredentialId: string | undefined;
   private abortController: AbortController | null = null;
   private pollCycleCount = 0;
 
@@ -78,6 +92,8 @@ export class LabelMonitorService {
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
     tokenProvider?: () => Promise<string | undefined>,
+    authHealth?: AuthHealthSink,
+    githubAppCredentialId?: string,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -85,6 +101,8 @@ export class LabelMonitorService {
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
     this.clusterGithubUsername = clusterGithubUsername;
+    this.authHealth = authHealth ?? { recordResult: () => undefined };
+    this.githubAppCredentialId = githubAppCredentialId;
     this.options = {
       repositories,
       pollIntervalMs: config.pollIntervalMs,
@@ -486,7 +504,21 @@ export class LabelMonitorService {
           }
         }
       }
+      if (this.githubAppCredentialId) {
+        this.authHealth.recordResult(this.githubAppCredentialId, { ok: true });
+      }
     } catch (error) {
+      if (error instanceof GhAuthError) {
+        const credentialId = this.githubAppCredentialId;
+        if (credentialId) {
+          this.authHealth.recordResult(credentialId, { ok: false, statusCode: 401 });
+        }
+        this.logger.warn(
+          { credentialId, statusCode: 401, owner, repo },
+          'GitHub authentication failing — investigate credential refresh chain',
+        );
+        return;
+      }
       this.logger.error(
         { err: error, owner, repo },
         'Error polling repository',

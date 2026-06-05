@@ -86,7 +86,7 @@ export { CircularExtendsError } from './errors/circular-extends.js';
 export { WorkflowOverrideError } from './errors/workflow-override.js';
 
 // GitHub client
-export { createGitHubClient, GhCliGitHubClient } from './actions/github/client/index.js';
+export { createGitHubClient, GhCliGitHubClient, GhAuthError, parseGhStatusCode } from './actions/github/client/index.js';
 export type { GitHubClient, GitHubClientFactory } from './actions/github/client/index.js';
 
 // Label definitions (shared)
