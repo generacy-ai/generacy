@@ -158,6 +158,24 @@ export const ErrorResponseSchema = z.object({
 });
 export type ErrorResponse = z.infer<typeof ErrorResponseSchema>;
 
+// Git token (JIT git credential helper — #766)
+export const GitTokenRequestSchema = z.object({
+  credentialId: z.string().min(1).optional(),
+});
+export type GitTokenRequest = z.infer<typeof GitTokenRequestSchema>;
+
+export const GitTokenResponseSchema = z.object({
+  token: z.string().min(1),
+  expiresAt: z.string().datetime({ offset: false }),
+});
+export type GitTokenResponseShape = z.infer<typeof GitTokenResponseSchema>;
+
+export const CloudPullResponseSchema = z.object({
+  token: z.string().min(1),
+  expiresAt: z.string().datetime({ offset: false }),
+});
+export type CloudPullResponseShape = z.infer<typeof CloudPullResponseSchema>;
+
 // App Config schemas
 export const AppConfigEnvEntrySchema = z.object({
   name: z.string().min(1),

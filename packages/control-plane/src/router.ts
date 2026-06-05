@@ -7,6 +7,7 @@ import { handleGetCredential, handleGetCredentialValue, handlePutCredential } fr
 import { handlePostLifecycle } from './routes/lifecycle.js';
 import { handlePostAuditBatch } from './routes/audit.js';
 import { handlePostStatus } from './routes/status.js';
+import { handlePostGitToken } from './routes/git-token.js';
 import {
   handleGetManifest,
   handleGetValues,
@@ -64,6 +65,12 @@ const routes: Route[] = [
     pattern: /^\/internal\/status$/,
     paramNames: [],
     handler: handlePostStatus,
+  },
+  {
+    method: 'POST',
+    pattern: /^\/git-token$/,
+    paramNames: [],
+    handler: handlePostGitToken,
   },
   {
     method: 'GET',
