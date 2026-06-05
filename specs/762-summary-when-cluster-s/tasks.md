@@ -140,11 +140,11 @@
 
 ## Phase 7: Polish & Documentation
 
-- [ ] T050 [P] Run `pnpm --filter @generacy-ai/orchestrator test` and `pnpm --filter @generacy-ai/workflow-engine test` — full suites green.
-- [ ] T051 [P] Run `pnpm --filter @generacy-ai/orchestrator build` and `pnpm --filter @generacy-ai/workflow-engine build` — typecheck/build green.
-- [ ] T052 [P] Manually run the quickstart Synthetic auth-failure validation (quickstart.md §"Synthetic auth-failure validation") against a local cluster: confirm SC-001 (<2 min to detect), SC-002 (default-level log distinguishable), SC-004 (≤1 refresh event per 60s).
-- [ ] T053 [P] Update `CLAUDE.md` (top-level) with a short Cluster-Side GH_TOKEN Backstop entry (file paths + one-line behavior) following the existing style of "Control-Plane Daemon Crash Resilience (#624)" etc. Only add WHY/WHAT that won't be obvious from reading the code six months from now.
-- [ ] T054 File the companion cloud ticket (per Q2 / research.md D2 reference): GitHub issue against `generacy-ai/generacy-cloud` for the `action: 'refresh-requested'` consumer (so SC-003 end-to-end auto-recovery has a tracked counterpart). Link both directions.
+- [X] T050 [P] Run `pnpm --filter @generacy-ai/orchestrator test` and `pnpm --filter @generacy-ai/workflow-engine test` — full suites green. (workflow-engine 735/735 pass; orchestrator: all 47 #762-added tests pass; remaining 18 failures are pre-existing on develop, unrelated to this PR. Fixed pre-existing test mock at `pr-feedback-integration.test.ts` to export `GhAuthError` from the mocked `@generacy-ai/workflow-engine`.)
+- [X] T051 [P] Run `pnpm --filter @generacy-ai/orchestrator build` and `pnpm --filter @generacy-ai/workflow-engine build` — typecheck/build green.
+- [ ] T052 [P] [manual] Manually run the quickstart Synthetic auth-failure validation (quickstart.md §"Synthetic auth-failure validation") against a local cluster: confirm SC-001 (<2 min to detect), SC-002 (default-level log distinguishable), SC-004 (≤1 refresh event per 60s).
+- [X] T053 [P] Update `CLAUDE.md` (top-level) with a short Cluster-Side GH_TOKEN Backstop entry (file paths + one-line behavior) following the existing style of "Control-Plane Daemon Crash Resilience (#624)" etc. Only add WHY/WHAT that won't be obvious from reading the code six months from now.
+- [ ] T054 [manual] File the companion cloud ticket (per Q2 / research.md D2 reference): GitHub issue against `generacy-ai/generacy-cloud` for the `action: 'refresh-requested'` consumer (so SC-003 end-to-end auto-recovery has a tracked counterpart). Link both directions.
 
 ---
 
