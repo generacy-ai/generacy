@@ -62,7 +62,7 @@ Land alongside Phase 2 so the privilege boundary is exercised before the bin ent
 
 ## Phase 5: Smoke test (real Unix socket)
 
-- [ ] T013 [US1] Create `packages/control-plane/__tests__/bin/git-token-proxy/lifecycle.smoke.test.ts`. POSIX-only — gate the whole describe with `describe.skipIf(process.platform === 'win32')`. Depends on T012.
+- [X] T013 [US1] Create `packages/control-plane/__tests__/bin/git-token-proxy/lifecycle.smoke.test.ts`. POSIX-only — gate the whole describe with `describe.skipIf(process.platform === 'win32')`. Depends on T012.
   - Spawn the built bin with `GIT_TOKEN_PROXY_SOCKET` and `CONTROL_PLANE_SOCKET_PATH` pointing at paths under `os.tmpdir()`. Start a tiny `http.createServer` on `CONTROL_PLANE_SOCKET_PATH` as fake upstream.
   - Wait for the `git-token-proxy-init` JSON line on the child's stdout (proves bind + chmod succeeded).
   - Assert `(fs.statSync(listenSocket).mode & 0o777) === 0o660` (validation rule #7 and contract requirement).
@@ -72,9 +72,9 @@ Land alongside Phase 2 so the privilege boundary is exercised before the bin ent
 
 ## Phase 6: Wire-up and verification
 
-- [ ] T014 [US1] Run `pnpm -F @generacy-ai/control-plane build` and confirm `packages/control-plane/dist/bin/git-token-proxy.js` exists with a Node shebang (or that the bin is executed via `node …` in the cluster-base launcher — the dist file is the integration point for the companion cluster-base PR).
-- [ ] T015 [US1] Run `pnpm -F @generacy-ai/control-plane test` and confirm all five new test files pass (4 pure-function + 1 smoke). No regressions in `git-credential-generacy.test.ts` or other existing control-plane tests.
-- [ ] T016 [P] [US1] Walk through quickstart.md §"Run the bin locally (out-of-cluster)" steps 1–7 against the freshly built bin and confirm each numbered curl produces the documented response (200 passthrough, 404 on wrong method/path/trailing-slash, 413 on > 64 KiB body, 502 `CONTROL_SOCKET_UNREACHABLE` when upstream stopped, socket file gone after Ctrl-C). This is the manual acceptance gate; not a CI task.
+- [X] T014 [US1] Run `pnpm -F @generacy-ai/control-plane build` and confirm `packages/control-plane/dist/bin/git-token-proxy.js` exists with a Node shebang (or that the bin is executed via `node …` in the cluster-base launcher — the dist file is the integration point for the companion cluster-base PR).
+- [X] T015 [US1] Run `pnpm -F @generacy-ai/control-plane test` and confirm all five new test files pass (4 pure-function + 1 smoke). No regressions in `git-credential-generacy.test.ts` or other existing control-plane tests.
+- [X] T016 [P] [US1] Walk through quickstart.md §"Run the bin locally (out-of-cluster)" steps 1–7 against the freshly built bin and confirm each numbered curl produces the documented response (200 passthrough, 404 on wrong method/path/trailing-slash, 413 on > 64 KiB body, 502 `CONTROL_SOCKET_UNREACHABLE` when upstream stopped, socket file gone after Ctrl-C). This is the manual acceptance gate; not a CI task.
 
 ## Dependencies & Execution Order
 

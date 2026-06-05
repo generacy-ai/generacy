@@ -34,29 +34,35 @@ function makeRes(): ResponseCapture {
     ended: false,
   };
   const chunks: Buffer[] = [];
-  const writeable = new PassThrough();
-  writeable.on('data', (b: Buffer) => chunks.push(b));
-  const res = writeable as unknown as http.ServerResponse & {
-    headersSent: boolean;
-    writableEnded: boolean;
-  };
-  res.headersSent = false;
-  res.writableEnded = false;
+  const state = { headersSent: false, writableEnded: false };
+  const res = new EventEmitter() as unknown as http.ServerResponse;
+  Object.defineProperty(res, 'headersSent', {
+    get: () => state.headersSent,
+    configurable: true,
+  });
+  Object.defineProperty(res, 'writableEnded', {
+    get: () => state.writableEnded,
+    configurable: true,
+  });
   res.writeHead = ((status: number, headers?: http.OutgoingHttpHeaders) => {
     captured.statusCode = status;
     captured.headers = headers;
-    res.headersSent = true;
+    state.headersSent = true;
     return res;
   }) as http.ServerResponse['writeHead'];
-  const origEnd = writeable.end.bind(writeable);
+  res.write = ((chunk: unknown) => {
+    if (typeof chunk === 'string' || chunk instanceof Buffer) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    }
+    return true;
+  }) as http.ServerResponse['write'];
   res.end = ((chunk?: unknown) => {
     if (typeof chunk === 'string' || chunk instanceof Buffer) {
       chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
     }
     captured.ended = true;
-    res.writableEnded = true;
+    state.writableEnded = true;
     captured.body = Buffer.concat(chunks).toString('utf8');
-    origEnd();
     return res;
   }) as http.ServerResponse['end'];
   captured.res = res;
