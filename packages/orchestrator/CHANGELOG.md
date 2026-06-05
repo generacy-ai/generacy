@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.1
+
+### Patch Changes
+
+- Updated dependencies [6b59696]
+- Updated dependencies [474f3e3]
+  - @generacy-ai/control-plane@0.6.0
+
 ## 0.4.0
 
 ### Minor Changes
