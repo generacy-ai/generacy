@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/contracts/github-auth-health.schema.json",
+  "title": "GitHubAuthHealthField",
+  "description": "Shape of the `githubAuth` field added to the orchestrator `/health` response by issue #762.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "consecutiveFailures"],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["ok", "failing", "unknown"],
+      "description": "Per-credential authentication health. `unknown` = no monitor call recorded yet; `ok` = last call succeeded; `failing` = at least one HTTP 401 since the last success."
+    },
+    "consecutiveFailures": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Count of consecutive HTTP 401 results since the last success for this credential. 0 when status is `ok` or `unknown`."
+    },
+    "lastSuccessAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Timestamp of the last successful GitHub call using this credential. Omitted when status is `unknown` and never present without a prior success."
+    },
+    "credentialId": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[A-Za-z0-9_-]+$",
+      "description": "Identifier of the credential whose health is being reported. Omitted only when no credentials are known."
+    },
+    "expiresAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Mirror of `expiresAt` from `.agency/credentials.yaml` for the surfaced credential. Optional; absent when the credential YAML did not include an expiry."
+    }
+  },
+  "examples": [
+    { "status": "unknown", "consecutiveFailures": 0 },
+    {
+      "status": "ok",
+      "consecutiveFailures": 0,
+      "lastSuccessAt": "2026-06-05T02:00:00.000Z",
+      "credentialId": "primary-github-app",
+      "expiresAt": "2026-06-05T03:00:00.000Z"
+    },
+    {
+      "status": "failing",
+      "consecutiveFailures": 4,
+      "lastSuccessAt": "2026-06-05T01:30:00.000Z",
+      "credentialId": "primary-github-app",
+      "expiresAt": "2026-06-05T02:30:00.000Z"
+    }
+  ]
+}
