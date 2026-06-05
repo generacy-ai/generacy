@@ -15,6 +15,7 @@ services:
       - claude-config:/home/node/.claude
       - npm-cache:/home/node/.npm
       - generacy-data:/var/lib/generacy
+      - git-token-proxy:/run/generacy-git-token
       - shared-packages:/shared-packages
       - /var/run/docker.sock:/var/run/docker-host.sock
       - vscode-cli-state:/home/node/.vscode/cli
@@ -60,6 +61,7 @@ services:
       - claude-config:/home/node/.claude
       - npm-cache:/home/node/.npm
       - generacy-data:/var/lib/generacy
+      - git-token-proxy:/run/generacy-git-token
       - shared-packages:/shared-packages:ro
       - generacy-app-config-data:/var/lib/generacy-app-config:ro
     tmpfs: *a1
@@ -104,6 +106,7 @@ services:
 volumes:
   workspace: null
   claude-config: null
+  git-token-proxy: null
   shared-packages: null
   npm-cache: null
   generacy-data: null
