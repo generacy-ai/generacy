@@ -24,9 +24,9 @@ Operators currently must hand-set the `CLUSTER_GITHUB_USERNAME` override on ever
 
 ## Scope (this repo)
 
-- **`packages/control-plane/src/services/wizard-env-writer.ts`** — extract `gitIdentityLogin` from the **top level** of the github-app credential JSON (alongside existing `token` / `accountLogin`, per Q2/A). Use it to drive `GH_USERNAME` and the local-part of `GH_EMAIL` when present and non-empty after trimming; **fall back to `accountLogin`** otherwise. Empty-string and whitespace-only `gitIdentityLogin` are treated as missing (trim before length check, per Q3/C), matching existing `accountLogin` handling.
-- **`packages/orchestrator/src/services/identity.ts`** — fix the misleading comment (it claims `GH_USERNAME` is "the human account the installation belongs to" — false for org installs); now it's the operator-selected acting account. **No change to resolution order** (per Q4/A): `CLUSTER_GITHUB_USERNAME` (`configUsername`) still wins over `GH_USERNAME` as the manual escape hatch.
-- Update `wizard-env-writer.test.ts` accordingly: cover the new top-level field, trim/empty-string fallback, and missing-field fallback.
+- **`packages/control-plane/src/services/wizard-env-writer.ts`** — emit `GH_USERNAME`/`GH_EMAIL` from the credential's new `gitIdentityLogin` field when present; **fall back to `accountLogin`** for credentials sealed before the field existed (backward compat).
+- **`packages/orchestrator/src/services/identity.ts`** — fix the misleading comment (it claims `GH_USERNAME` is "the human account the installation belongs to" — false for org installs); now it's the operator-selected acting account. Optional defense-in-depth: when the only resolvable identity looks like an org account, log an actionable warning instead of silently filtering everything out.
+- Update `wizard-env-writer.test.ts` accordingly.
 
 ## Acceptance criteria
 
@@ -42,58 +42,35 @@ Operators currently must hand-set the `CLUSTER_GITHUB_USERNAME` override on ever
 
 ## User Stories
 
-### US1: Org-installation operator gets correct cluster identity
+### US1: [Primary User Story]
 
-**As an** operator running a cluster against an org-owned repo via an org-level GitHub App installation,
-**I want** the cluster's `GH_USERNAME` / `GH_EMAIL` to come from the acting account I selected at activation (e.g. `pw-dev-bot`),
-**So that** commits are attributed correctly and the label-monitor's assignee filter actually matches my open issues — without me having to hand-set `CLUSTER_GITHUB_USERNAME`.
-
-**Acceptance Criteria**:
-- [ ] On a fresh org-cluster activation where the producer (#812) seals `gitIdentityLogin: "pw-dev-bot"` into the github-app credential, `wizard-env-writer.ts` emits `GH_USERNAME=pw-dev-bot` and `GH_EMAIL=pw-dev-bot@users.noreply.github.com` to `wizard-credentials.env`.
-- [ ] The cluster's label monitor matches issues assigned to `pw-dev-bot` (no zero-results silent-drop).
-- [ ] Operators do not need to set `CLUSTER_GITHUB_USERNAME` for this case.
-
-### US2: Legacy clusters continue working unchanged
-
-**As an** operator with an existing cluster whose github-app credential was sealed **before** `gitIdentityLogin` existed,
-**I want** my cluster to keep deriving identity from `accountLogin` exactly as it does today,
-**So that** the rollout of the producer-side change does not break clusters whose credentials haven't yet been re-sealed.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] When `gitIdentityLogin` is absent, empty, or whitespace-only, `GH_USERNAME` / `GH_EMAIL` derive from `accountLogin` (current behavior).
-- [ ] An operator who has set `CLUSTER_GITHUB_USERNAME` continues to see that value win — resolution order in `resolveClusterIdentity` is unchanged.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `wizard-env-writer.ts` MUST read `gitIdentityLogin` from the top level of the parsed github-app credential JSON (same nesting level as `token` and `accountLogin`). | P1 | Q2/A |
-| FR-002 | When `gitIdentityLogin` is a non-empty string after `.trim()`, the writer MUST use its trimmed value as `GH_USERNAME` and as the local-part of `GH_EMAIL` (`<login>@users.noreply.github.com`). | P1 | Q3/C |
-| FR-003 | When `gitIdentityLogin` is missing, not a string, empty, or whitespace-only after `.trim()`, the writer MUST fall back to `accountLogin` using the existing trim-and-length-check logic. | P1 | Q3/C; back-compat for pre-#812 credentials |
-| FR-004 | `identity.ts`'s comment describing `GH_USERNAME` MUST be updated to state it is the operator-selected acting account, not "the human account the installation belongs to". | P2 | Documentation-only fix; no logic change |
-| FR-005 | `identity.ts`'s resolution order MUST remain unchanged: `CLUSTER_GITHUB_USERNAME` (`configUsername`) wins over `GH_USERNAME`. | P1 | Q4/A — env var stays an explicit escape hatch |
-| FR-006 | ~~When the only resolvable identity matches a known-org pattern with no other identity source, log an actionable warning.~~ | — | **Deferred** per Q1/A. Out of scope for this PR; the useful variant ("warn when resolved identity matches no open-issue assignee") will be folded into the cluster-side backstop in #762. |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Org-cluster activations with a sealed `gitIdentityLogin` produce the correct user-account `GH_USERNAME` with no `CLUSTER_GITHUB_USERNAME` override. | 100% of post-#812 activations | Inspect `wizard-credentials.env` on a freshly-activated org cluster after #812 ships; expect `GH_USERNAME=<picked acting account>`. |
-| SC-002 | Pre-#812 credentials (no `gitIdentityLogin` field) continue to produce the legacy `accountLogin`-based identity. | No regression on existing clusters | `wizard-env-writer.test.ts` covers absent-field, empty-string, whitespace-only, and non-string cases; all assert fallback to `accountLogin`. |
-| SC-003 | `CLUSTER_GITHUB_USERNAME` escape hatch still overrides every other source. | Order unchanged | `identity.test.ts` (or equivalent) asserts `configUsername` wins over `GH_USERNAME` even when `GH_USERNAME` came from `gitIdentityLogin`. |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The producer (generacy-cloud#812) seals `gitIdentityLogin` at the **top level** of the github-app credential JSON, in the shape `{ ...installationData, token, expiresAt, gitIdentityLogin }`. This consumer reads it via `parsed.gitIdentityLogin` and does not require any nested-object support.
-- `accountLogin` continues to be emitted by the producer's credential-refresh path (it is still needed for non-identity uses), so the fallback branch remains live indefinitely — not just for legacy credentials.
-- `GH_EMAIL` continues to use the `@users.noreply.github.com` pattern; only the local-part changes from `accountLogin` to the chosen identity. Custom-domain commit emails are not in scope.
+- [Assumption 1]
 
 ## Out of Scope
 
-- **FR-006 (org-pattern warning in `identity.ts`).** Deferred per Q1/A. Detecting User vs Organization from a login string is non-trivial (`gh api /users/<login>` or heuristic) and the new field reduces the failure mode this warning was meant to surface. A reframed version ("no open-issue assignee matches resolved identity") is being folded into #762's cluster-side backstop.
-- **Producer-side changes.** The "Act as" account picker at activation, the credential-sealing logic, and any cloud UI lives in generacy-cloud#812 and is consumed-only here.
-- **`CLUSTER_GITHUB_USERNAME` deprecation.** The env-var override remains a supported escape hatch with unchanged precedence (Q4/A); removing or warning on it is a separate decision.
-- **Cache invalidation on credential refresh.** Re-reading credentials after a cloud-pushed refresh is already handled by `handlePutCredential` (#614) and is not modified by this change.
+- [Exclusion 1]
 
 ---
 
