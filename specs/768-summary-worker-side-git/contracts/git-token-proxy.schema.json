@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/control-plane/git-token-proxy.json",
+  "title": "Worker → git-token-proxy (Unix socket)",
+  "description": "Wire contract for the worker-side proxy hosted at `/run/generacy-git-token/control.sock` (override via env GIT_TOKEN_PROXY_SOCKET). The proxy exposes exactly one route — POST /git-token — and forwards it to the control-plane Unix socket at /run/generacy-control-plane/control.sock (override via env CONTROL_PLANE_SOCKET_PATH). Every other path/method returns 404 with an empty body and never contacts upstream. On success, the proxy passes through the upstream status and body verbatim (see contracts/control-plane-git-token.schema.json from #766 for that shape). On request body > 64 KiB → 413. On upstream transport failure (ECONNREFUSED, ENOENT, ECONNRESET, EPIPE, response timeout >= 30s) → 502 with code CONTROL_SOCKET_UNREACHABLE.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/AllowedRequest" },
+    { "$ref": "#/$defs/SuccessResponse" },
+    { "$ref": "#/$defs/PayloadTooLargeResponse" },
+    { "$ref": "#/$defs/UpstreamUnreachableResponse" },
+    { "$ref": "#/$defs/NotFoundResponse" }
+  ],
+  "$defs": {
+    "AllowedRequest": {
+      "title": "AllowedRequest",
+      "description": "The only request shape forwarded upstream. Method MUST be POST and path MUST be exactly /git-token (trailing slash NOT allowed; query string allowed but ignored by the upstream).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path"],
+      "properties": {
+        "method": { "const": "POST" },
+        "path": {
+          "type": "string",
+          "pattern": "^/git-token(\\?.*)?$",
+          "description": "Exact path match after URL parsing. /git-token/ and /git-tokens are rejected (404)."
+        },
+        "headers": {
+          "type": "object",
+          "description": "Only Content-Type and Content-Length are forwarded upstream. All other headers (Host, Authorization, Accept, cookies, X-*, etc.) are stripped before the upstream HTTP request is issued.",
+          "properties": {
+            "content-type": { "type": "string", "examples": ["application/json"] },
+            "content-length": { "type": "string", "description": "Integer-as-string; the upstream value is recomputed by the proxy from the buffered body length, not copied from the inbound request." }
+          }
+        },
+        "body": {
+          "type": "object",
+          "description": "Opaque to the proxy. Forwarded to upstream as raw bytes after size-cap enforcement. See contracts/control-plane-git-token.schema.json#/$defs/Request from #766 for the upstream-defined shape."
+        }
+      }
+    },
+    "SuccessResponse": {
+      "title": "SuccessResponse",
+      "description": "Passthrough of any 2xx response from upstream. Status code, headers, and body are forwarded unchanged. See contracts/control-plane-git-token.schema.json#/$defs/SuccessResponse from #766 for the upstream shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "body"],
+      "properties": {
+        "status": { "type": "integer", "minimum": 200, "maximum": 299 },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["token", "expiresAt"],
+          "properties": {
+            "token": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Opaque GitHub installation token. NEVER log this value. The proxy MUST NOT inspect or transform this field."
+            },
+            "expiresAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        }
+      }
+    },
+    "PayloadTooLargeResponse": {
+      "title": "PayloadTooLargeResponse",
+      "description": "HTTP 413 application/json. Triggered when the inbound request body exceeds 64 KiB. The proxy does NOT contact upstream in this case.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "body"],
+      "properties": {
+        "status": { "const": 413 },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["error", "code"],
+          "properties": {
+            "error": { "type": "string", "examples": ["request body exceeds 64 KiB"] },
+            "code": { "const": "PAYLOAD_TOO_LARGE" }
+          }
+        }
+      }
+    },
+    "UpstreamUnreachableResponse": {
+      "title": "UpstreamUnreachableResponse",
+      "description": "HTTP 502 application/json. Triggered when the upstream socket cannot be reached (ENOENT, ECONNREFUSED), the upstream connection is reset (ECONNRESET, EPIPE), or the upstream response timeout (30s) fires. Single error code for all transport-level failures; the per-request stdout log line distinguishes which one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "body"],
+      "properties": {
+        "status": { "const": 502 },
+        "body": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["error", "code"],
+          "properties": {
+            "error": { "type": "string", "examples": ["control-plane upstream unreachable"] },
+            "code": { "const": "CONTROL_SOCKET_UNREACHABLE" }
+          }
+        }
+      }
+    },
+    "NotFoundResponse": {
+      "title": "NotFoundResponse",
+      "description": "HTTP 404 with empty body. Returned for ANY request the route allow-list rejects: wrong method (GET / PUT / DELETE / OPTIONS / etc. on /git-token), wrong path (anything other than exact /git-token), or trailing-slash variant (/git-token/). The proxy MUST NOT contact upstream in this case.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": { "const": 404 },
+        "body": {
+          "type": "string",
+          "maxLength": 0,
+          "description": "Empty body. No JSON, no error code — workers should treat 404 as 'this socket does not expose that route' and not retry."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "method": "POST",
+      "path": "/git-token",
+      "headers": { "content-type": "application/json", "content-length": "2" },
+      "body": {}
+    },
+    {
+      "status": 200,
+      "body": {
+        "token": "ghs_examplexxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "expiresAt": "2026-06-05T16:34:12.000Z"
+      }
+    },
+    {
+      "status": 413,
+      "body": {
+        "error": "request body exceeds 64 KiB",
+        "code": "PAYLOAD_TOO_LARGE"
+      }
+    },
+    {
+      "status": 502,
+      "body": {
+        "error": "control-plane upstream unreachable",
+        "code": "CONTROL_SOCKET_UNREACHABLE"
+      }
+    },
+    {
+      "status": 404
+    }
+  ]
+}
