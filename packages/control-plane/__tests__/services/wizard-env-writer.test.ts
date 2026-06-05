@@ -237,6 +237,84 @@ describe('mapCredentialToEnvEntries', () => {
     expect(entries).toEqual([{ key: 'GH_TOKEN', value: 'ghs_abc' }]);
   });
 
+  it('github-app with gitIdentityLogin prefers it over accountLogin for GH_USERNAME and GH_EMAIL', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"Painworth","gitIdentityLogin":"pw-dev-bot"}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'pw-dev-bot' },
+      { key: 'GH_EMAIL', value: 'pw-dev-bot@users.noreply.github.com' },
+    ]);
+  });
+
+  it('github-app with empty string gitIdentityLogin falls back to accountLogin', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"Painworth","gitIdentityLogin":""}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'Painworth' },
+      { key: 'GH_EMAIL', value: 'Painworth@users.noreply.github.com' },
+    ]);
+  });
+
+  it('github-app with whitespace-only gitIdentityLogin falls back to accountLogin', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"Painworth","gitIdentityLogin":"   "}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'Painworth' },
+      { key: 'GH_EMAIL', value: 'Painworth@users.noreply.github.com' },
+    ]);
+  });
+
+  it('github-app with null gitIdentityLogin (non-string) falls back to accountLogin', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"Painworth","gitIdentityLogin":null}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'Painworth' },
+      { key: 'GH_EMAIL', value: 'Painworth@users.noreply.github.com' },
+    ]);
+  });
+
+  it('github-app with absent gitIdentityLogin (legacy credential) falls back to accountLogin', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"Painworth"}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'Painworth' },
+      { key: 'GH_EMAIL', value: 'Painworth@users.noreply.github.com' },
+    ]);
+  });
+
+  it('github-app trims leading/trailing whitespace from gitIdentityLogin before length check', () => {
+    const entries = mapCredentialToEnvEntries(
+      'github-main-org',
+      'github-app',
+      '{"installationId":1,"token":"ghs_abc","accountLogin":"Painworth","gitIdentityLogin":"  pw-dev-bot  "}',
+    );
+    expect(entries).toEqual([
+      { key: 'GH_TOKEN', value: 'ghs_abc' },
+      { key: 'GH_USERNAME', value: 'pw-dev-bot' },
+      { key: 'GH_EMAIL', value: 'pw-dev-bot@users.noreply.github.com' },
+    ]);
+  });
+
   it('github-app with missing token field returns empty', () => {
     const entries = mapCredentialToEnvEntries(
       'github-main-org',
