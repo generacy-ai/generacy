@@ -61,13 +61,13 @@
 
 ## Phase 6: Wiring in the long-lived process
 
-- [ ] T017 [FN] Modify `packages/control-plane/bin/control-plane.ts` to instantiate (in order): `clusterApiKeyReader = createClusterApiKeyReader()`, `cloudPullClient = createCloudPullClient({ apiKeyReader: clusterApiKeyReader })`, `gitTokenManager = createGitTokenManager({ cloudPullClient })`. Inject the manager into the route module before `server.start()`. Resolve the default `github-app` credential ID once at startup from `.agency/credentials.yaml` (mirror the pattern added in #762 `server.ts` for `githubAppCredentialId`); fall back to `'github-app'` literal when unresolved. Log structured `{ event: 'git-token-init', defaultCredentialId, apiUrlConfigured: boolean }` for diagnosability.
+- [X] T017 [FN] Modify `packages/control-plane/bin/control-plane.ts` to instantiate (in order): `clusterApiKeyReader = createClusterApiKeyReader()`, `cloudPullClient = createCloudPullClient({ apiKeyReader: clusterApiKeyReader })`, `gitTokenManager = createGitTokenManager({ cloudPullClient })`. Inject the manager into the route module before `server.start()`. Resolve the default `github-app` credential ID once at startup from `.agency/credentials.yaml` (mirror the pattern added in #762 `server.ts` for `githubAppCredentialId`); fall back to `'github-app'` literal when unresolved. Log structured `{ event: 'git-token-init', defaultCredentialId, apiUrlConfigured: boolean }` for diagnosability.
 
 ---
 
 ## Phase 7: Integration test (end-to-end against fake cloud + real binary)
 
-- [ ] T018 [US1] [US2] Add `packages/control-plane/__tests__/integration/git-token-e2e.test.ts`: stand up a fake cloud HTTPS server, write a temp `cluster-api-key` file, boot the control-plane HTTP server bound to a temp Unix socket, then exercise:
+- [X] T018 [US1] [US2] Add `packages/control-plane/__tests__/integration/git-token-e2e.test.ts`: stand up a fake cloud HTTPS server, write a temp `cluster-api-key` file, boot the control-plane HTTP server bound to a temp Unix socket, then exercise:
   1. Real `git-credential-generacy get` against the live socket → success path, exit 0, expected stdout (validates SC-001 plumbing end-to-end).
   2. Two concurrent `git-credential-generacy get` invocations → fake cloud invoked exactly once (validates FR-009 across process boundary).
   3. Cloud server takes >5min jump (mock clock or short refresh window via DI) → second `get` triggers refresh (validates FR-004).
@@ -77,10 +77,10 @@
 
 ## Phase 8: Polish
 
-- [ ] T019 [P] [FN] Audit every log statement in the new files for "never log the token" invariant (data-model.md §Validation rule 1). Add a small lint or test-time assertion if convenient (e.g., a vitest `expect(stdoutCapture).not.toContain(testToken)` in T010 and T018).
-- [ ] T020 [P] [FN] Update `packages/control-plane/README.md` (or the package's existing doc) with one paragraph describing the new endpoint and the `git-credential-generacy` bin, linking back to `specs/766-summary-implement-git/quickstart.md`. *(Skip entirely if no such README exists — do not create new docs.)*
-- [ ] T021 [P] [FN] Update root `CLAUDE.md` "Cluster-side JIT Git Credential Helper" section to flip the language from PLANNED to LANDED once the implementation is in (preserve the existing entry's structure — paths, env vars, error codes).
-- [ ] T022 [FN] Run `pnpm -F @generacy-ai/control-plane build && pnpm -F @generacy-ai/control-plane test` and confirm the new bin compiles to `dist/bin/git-credential-generacy.js` (per quickstart.md §Build) and all unit + integration tests pass.
+- [X] T019 [P] [FN] Audit every log statement in the new files for "never log the token" invariant (data-model.md §Validation rule 1). Add a small lint or test-time assertion if convenient (e.g., a vitest `expect(stdoutCapture).not.toContain(testToken)` in T010 and T018).
+- [X] T020 [P] [FN] Update `packages/control-plane/README.md` (or the package's existing doc) with one paragraph describing the new endpoint and the `git-credential-generacy` bin, linking back to `specs/766-summary-implement-git/quickstart.md`. *(Skip entirely if no such README exists — do not create new docs.)*
+- [X] T021 [P] [FN] Update root `CLAUDE.md` "Cluster-side JIT Git Credential Helper" section to flip the language from PLANNED to LANDED once the implementation is in (preserve the existing entry's structure — paths, env vars, error codes).
+- [X] T022 [FN] Run `pnpm -F @generacy-ai/control-plane build && pnpm -F @generacy-ai/control-plane test` and confirm the new bin compiles to `dist/bin/git-credential-generacy.js` (per quickstart.md §Build) and all unit + integration tests pass.
 
 ---
 

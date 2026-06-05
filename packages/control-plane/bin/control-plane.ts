@@ -97,11 +97,45 @@ async function writeInitResult(initResult: InitResult): Promise<void> {
   }
 }
 
+async function resolveDefaultGithubAppCredentialId(agencyDir: string): Promise<string> {
+  const yamlPath = path.join(agencyDir, 'credentials.yaml');
+  try {
+    const raw = await fs.readFile(yamlPath, 'utf8');
+    const parsed = YAML.parse(raw) as { credentials?: Record<string, { type?: string }> } | null;
+    if (parsed?.credentials && typeof parsed.credentials === 'object') {
+      for (const [id, entry] of Object.entries(parsed.credentials)) {
+        if (entry && typeof entry === 'object' && entry.type === 'github-app') {
+          return id;
+        }
+      }
+    }
+  } catch {
+    // Fall through to literal default below.
+  }
+  return 'github-app';
+}
+
 credentialBackend
   .init()
   .then(async () => {
     setCredentialBackend(credentialBackend);
     console.log('[control-plane] Credential backend initialized');
+
+    // Wire JIT git credential helper services (#766). Cluster API key reader
+    // reads /var/lib/generacy/cluster-api-key (mtime-cached); cloud pull client
+    // talks to generacy-cloud#817; git-token manager fronts both with an
+    // in-memory token cache + concurrent-call dedup.
+    const agencyDir = process.env['CREDHELPER_AGENCY_DIR'] ?? '.agency';
+    const defaultGithubAppCredentialId = await resolveDefaultGithubAppCredentialId(agencyDir);
+    const clusterApiKeyReader = createClusterApiKeyReader();
+    const cloudPullClient = createCloudPullClient({ apiKeyReader: clusterApiKeyReader });
+    const gitTokenManager = createGitTokenManager({ cloudPullClient });
+    setGitTokenManager(gitTokenManager, defaultGithubAppCredentialId);
+    console.log(JSON.stringify({
+      event: 'git-token-init',
+      defaultCredentialId: defaultGithubAppCredentialId,
+      apiUrlConfigured: Boolean(process.env['GENERACY_API_URL']),
+    }));
 
     // Initialize app-config stores individually with structured error handling
     const initResult: InitResult = { stores: {}, warnings: [] };
