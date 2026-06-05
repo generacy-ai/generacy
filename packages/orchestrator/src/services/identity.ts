@@ -45,13 +45,14 @@ export async function resolveClusterIdentity(
     return configUsername;
   }
 
-  // 2. Wizard-delivered GitHub account (GH_USERNAME). This is the human account
-  //    the GitHub App installation belongs to (e.g. the account selected during
-  //    cluster setup). The `gh api /user` fallback below can't resolve an
+  // 2. Wizard-delivered GitHub account (GH_USERNAME). This is the operator-
+  //    selected acting account threaded through the github-app credential's
+  //    `gitIdentityLogin` field (with `accountLogin` fallback for pre-#812
+  //    credentials). The `gh api /user` fallback below can't resolve an
   //    identity from a GitHub App installation token (`<app>[bot]` tokens can't
   //    call /user), so without this, cloud/wizard clusters fall through to
   //    "filtering disabled" and process every issue instead of only those
-  //    assigned to the selected account.
+  //    assigned to the selected acting account.
   const ghUsername = process.env['GH_USERNAME'];
   if (ghUsername) {
     logger.info(
