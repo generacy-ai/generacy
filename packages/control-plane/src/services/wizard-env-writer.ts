@@ -43,12 +43,26 @@ export function mapCredentialToEnvEntries(
 ): EnvEntry[] {
   if (type === 'github-app') {
     try {
-      const parsed = JSON.parse(value) as { token?: unknown; accountLogin?: unknown };
+      const parsed = JSON.parse(value) as {
+        token?: unknown;
+        accountLogin?: unknown;
+        gitIdentityLogin?: unknown;
+      };
       if (typeof parsed.token === 'string' && parsed.token.length > 0) {
         const entries: EnvEntry[] = [{ key: 'GH_TOKEN', value: parsed.token }];
-        if (typeof parsed.accountLogin === 'string' && parsed.accountLogin.length > 0) {
-          entries.push({ key: 'GH_USERNAME', value: parsed.accountLogin });
-          entries.push({ key: 'GH_EMAIL', value: `${parsed.accountLogin}@users.noreply.github.com` });
+        let identity: string | undefined;
+        if (typeof parsed.gitIdentityLogin === 'string') {
+          const trimmed = parsed.gitIdentityLogin.trim();
+          if (trimmed.length > 0) {
+            identity = trimmed;
+          }
+        }
+        if (!identity && typeof parsed.accountLogin === 'string' && parsed.accountLogin.length > 0) {
+          identity = parsed.accountLogin;
+        }
+        if (identity) {
+          entries.push({ key: 'GH_USERNAME', value: identity });
+          entries.push({ key: 'GH_EMAIL', value: `${identity}@users.noreply.github.com` });
         }
         return entries;
       }
