@@ -15,7 +15,7 @@ export type {
   LabelDefinition,
 } from './interface.js';
 
-export { GhCliGitHubClient } from './gh-cli.js';
+export { GhCliGitHubClient, GhAuthError, parseGhStatusCode } from './gh-cli.js';
 
 // Default factory using gh CLI
 import { GhCliGitHubClient } from './gh-cli.js';

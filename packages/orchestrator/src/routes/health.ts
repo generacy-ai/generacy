@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { HealthResponse, HealthStatus, ServiceStatus } from '../types/index.js';
+import type { GitHubAuthSnapshot } from '../types/github-auth.js';
 import { probeCodeServerSocket } from '../services/code-server-probe.js';
 import { probeControlPlaneSocket } from '../services/control-plane-probe.js';
 
@@ -18,7 +19,25 @@ export interface HealthCheckOptions {
     id?: string;
     displayName?: string;
   };
+  /**
+   * Getter returning the current `GitHubAuthHealthService.snapshot()` for the
+   * `githubAuth` field. Returns `undefined` when the service is not wired
+   * (worker mode, or wizard activation has not completed).
+   */
+  githubAuth?: () => GitHubAuthSnapshot | undefined;
 }
+
+const GITHUB_AUTH_SCHEMA = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: ['ok', 'failing', 'unknown'] },
+    consecutiveFailures: { type: 'integer', minimum: 0 },
+    lastSuccessAt: { type: 'string', format: 'date-time' },
+    credentialId: { type: 'string' },
+    expiresAt: { type: 'string', format: 'date-time' },
+  },
+  required: ['status', 'consecutiveFailures'],
+} as const;
 
 /**
  * Default health checks
@@ -36,6 +55,7 @@ export async function setupHealthRoutes(
 ): Promise<void> {
   const checks = { ...defaultChecks, ...options.checks };
   const cluster = options.cluster;
+  const githubAuthGetter = options.githubAuth;
 
   // GET /health - Health check endpoint
   server.get(
@@ -58,6 +78,7 @@ export async function setupHealthRoutes(
               controlPlaneReady: { type: 'boolean' },
               displayName: { type: 'string' },
               clusterId: { type: 'string' },
+              githubAuth: GITHUB_AUTH_SCHEMA,
             },
           },
           503: {
@@ -73,6 +94,7 @@ export async function setupHealthRoutes(
               controlPlaneReady: { type: 'boolean' },
               displayName: { type: 'string' },
               clusterId: { type: 'string' },
+              githubAuth: GITHUB_AUTH_SCHEMA,
             },
           },
         },
@@ -119,6 +141,12 @@ export async function setupHealthRoutes(
       }
       if (cluster?.id) {
         response.clusterId = cluster.id;
+      }
+      if (githubAuthGetter) {
+        const snapshot = githubAuthGetter();
+        if (snapshot) {
+          response.githubAuth = snapshot;
+        }
       }
 
       const statusCode = overallStatus === 'error' ? 503 : 200;
