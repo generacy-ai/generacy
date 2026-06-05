@@ -157,6 +157,12 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
     'claude-config:/home/node/.claude',
     'npm-cache:/home/node/.npm',
     'generacy-data:/var/lib/generacy',
+    // Shared socket dir for the git-token proxy: the orchestrator binds
+    // /run/generacy-git-token/control.sock and workers connect to it for JIT
+    // git tokens (generacy-ai/cluster-base#61). Must be a shared volume (not a
+    // per-container tmpfs) or workers get CONTROL_SOCKET_UNREACHABLE; rw on
+    // both — connecting to a Unix socket requires write access.
+    'git-token-proxy:/run/generacy-git-token',
   ];
 
   // shared-packages MUST mount at /shared-packages — that's where the
@@ -273,6 +279,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
     volumes: {
       workspace: null,
       'claude-config': null,
+      'git-token-proxy': null,
       'shared-packages': null,
       'npm-cache': null,
       'generacy-data': null,

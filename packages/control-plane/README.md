@@ -20,8 +20,13 @@ Socket is created with mode `0660` (owner + group read/write).
 | GET | `/roles/:id` | Returns stub role config |
 | PUT | `/roles/:id` | Accepts role update, returns `{ ok: true }` |
 | POST | `/lifecycle/:action` | Triggers lifecycle action (`clone-peer-repos`, `code-server-start`, `code-server-stop`) |
+| POST | `/git-token` | Returns a fresh GitHub installation token + `expiresAt` for git ops (#766) |
 
 All routes are stubs in this phase. Real wiring to credhelper daemon and orchestrator lands in later phases.
+
+## `git-credential-generacy` bin
+
+Companion CLI bin shipped from this package. Speaks the git credential-helper line protocol — on `get` it connects to the control socket, POSTs `/git-token`, and prints `username=x-access-token\npassword=<token>\n` to stdout. `store` and `erase` are no-ops. Failures surface as `generacy-git-helper: <CODE>: <message>` on stderr with distinct exit codes per failure mode (2–9). See [`specs/766-summary-implement-git/quickstart.md`](../../specs/766-summary-implement-git/quickstart.md) for the protocol details and integration steps.
 
 ## Actor Headers
 

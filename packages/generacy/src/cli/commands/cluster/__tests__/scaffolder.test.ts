@@ -485,6 +485,20 @@ describe('scaffoldDockerCompose', () => {
     expect(workerVolumes.some((v) => v.startsWith('workspace:'))).toBe(false);
   });
 
+  it('shares the git-token-proxy socket volume on both orchestrator and worker', () => {
+    // The orchestrator binds /run/generacy-git-token/control.sock and workers
+    // connect to it for JIT git tokens (cluster-base#61). It must be a shared
+    // named volume on BOTH services (rw — Unix socket connect needs write) or
+    // workers get CONTROL_SOCKET_UNREACHABLE and can't authenticate git.
+    scaffoldDockerCompose(dir, baseInput);
+    const parsed = parse(readFileSync(join(dir, 'docker-compose.yml'), 'utf-8'));
+
+    const mount = 'git-token-proxy:/run/generacy-git-token';
+    expect(parsed.services.orchestrator.volumes).toContain(mount);
+    expect(parsed.services.worker.volumes).toContain(mount);
+    expect(parsed.volumes).toHaveProperty('git-token-proxy');
+  });
+
   it('mounts shared-packages at /shared-packages (cluster-base entrypoint contract)', () => {
     // The cluster-base entrypoint scripts (`entrypoint-orchestrator.sh`,
     // `entrypoint-worker.sh`) run `npm install --prefix /shared-packages`

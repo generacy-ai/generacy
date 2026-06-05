@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cloud/installation-token-pull.json",
+  "title": "Cloud on-demand installation-token pull (generacy-cloud#817 — client view)",
+  "description": "Client-side view of the cloud endpoint this consumer calls. Source-of-truth for the wire format lives in generacy-cloud#817; this schema is what packages/control-plane validates. Drift between this schema and the actual endpoint manifests as a CLOUD_RESPONSE_INVALID error (intentional — fail-loud).",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/Request" },
+    { "$ref": "#/$defs/SuccessResponse" }
+  ],
+  "$defs": {
+    "Request": {
+      "title": "CloudPullRequest",
+      "description": "Cloud endpoint TBD on #817 (assumed POST /api/clusters/git-installation-token or similar). Authenticated via `Authorization: Bearer <cluster-api-key>` header read from /var/lib/generacy/cluster-api-key.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["credentialId"],
+      "properties": {
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The cluster-side credential ID. Cloud uses this together with the authenticated cluster identity to find the right GitHub App installation."
+        }
+      }
+    },
+    "SuccessResponse": {
+      "title": "CloudPullResponse",
+      "description": "Expected 200 application/json body. Anything else → CLOUD_RESPONSE_INVALID.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["token", "expiresAt"],
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Fresh GitHub installation token. Caller treats this as opaque."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC-3339 / ISO-8601 UTC. GitHub installation tokens are capped at 1h from issuance."
+        }
+      }
+    }
+  },
+  "request_headers": {
+    "Authorization": "Bearer <cluster-api-key>",
+    "Content-Type": "application/json",
+    "Accept": "application/json"
+  },
+  "client_error_mapping": {
+    "description": "How packages/control-plane/src/services/cloud-pull-client.ts maps HTTP outcomes to GitHelperErrorCode.",
+    "mappings": [
+      { "condition": "network/DNS error or ECONNREFUSED before any response", "code": "CLOUD_UNREACHABLE" },
+      { "condition": "HTTP 401 or 403", "code": "CLOUD_AUTH_REJECTED" },
+      { "condition": "HTTP 4xx (other)", "code": "CLOUD_REQUEST_INVALID" },
+      { "condition": "HTTP 5xx", "code": "CLOUD_UPSTREAM_ERROR" },
+      { "condition": "2xx but body fails this schema or expiresAt is in the past", "code": "CLOUD_RESPONSE_INVALID" }
+    ]
+  },
+  "open_items": [
+    "Exact path on the cloud is TBD on generacy-cloud#817; the client is structured so the URL is a single constant to update.",
+    "Authorization header format assumed `Bearer <key>`; align with cloud team during integration.",
+    "If cloud returns a username alongside the token, the client ignores it — username is always the constant `x-access-token` (FR-012, Q5)."
+  ]
+}

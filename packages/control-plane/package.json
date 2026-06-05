@@ -12,7 +12,9 @@
     }
   },
   "bin": {
-    "control-plane": "./dist/bin/control-plane.js"
+    "control-plane": "./dist/bin/control-plane.js",
+    "git-credential-generacy": "./dist/bin/git-credential-generacy.js",
+    "git-token-proxy": "./dist/bin/git-token-proxy.js"
   },
   "scripts": {
     "build": "tsc",

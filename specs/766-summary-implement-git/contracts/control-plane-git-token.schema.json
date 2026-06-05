@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/control-plane/git-token.json",
+  "title": "POST /git-token (control socket)",
+  "description": "Request/response contract for the control-plane endpoint that the git-credential-generacy CLI wrapper calls over the Unix socket at /run/generacy-control-plane/control.sock. Returns a fresh GitHub installation token, served from in-memory cache when valid or freshly fetched from the cloud on-demand pull endpoint (generacy-cloud#817). Pre-expiry refresh fires when expiresAt - now <= 5 minutes.",
+  "type": "object",
+  "oneOf": [
+    { "$ref": "#/$defs/Request" },
+    { "$ref": "#/$defs/SuccessResponse" },
+    { "$ref": "#/$defs/ErrorResponse" }
+  ],
+  "$defs": {
+    "Request": {
+      "title": "GitTokenRequest",
+      "description": "POST body (Content-Type: application/json). `credentialId` defaults to the single configured github-app credential when omitted.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "credentialId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Credential ID from `.agency/credentials.yaml`. Optional in v1 (single github-app credential is implied)."
+        }
+      }
+    },
+    "SuccessResponse": {
+      "title": "GitTokenSuccessResponse",
+      "description": "HTTP 200 application/json. The wrapper translates `token` into the password line of the git credential-helper output.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["token", "expiresAt"],
+      "properties": {
+        "token": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Opaque GitHub installation token. NEVER log this value."
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO-8601 UTC timestamp. Always > now() on success; CLOUD_RESPONSE_INVALID otherwise."
+        }
+      }
+    },
+    "ErrorResponse": {
+      "title": "GitTokenErrorResponse",
+      "description": "HTTP 4xx/5xx application/json. Shape matches packages/control-plane/src/errors.ts.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["error", "code"],
+      "properties": {
+        "error": {
+          "type": "string",
+          "description": "Human-readable error message."
+        },
+        "code": {
+          "type": "string",
+          "enum": [
+            "CLUSTER_API_KEY_MISSING",
+            "CLOUD_UNREACHABLE",
+            "CLOUD_AUTH_REJECTED",
+            "CLOUD_REQUEST_INVALID",
+            "CLOUD_UPSTREAM_ERROR",
+            "CLOUD_RESPONSE_INVALID",
+            "CREDENTIAL_NOT_CONFIGURED"
+          ],
+          "description": "Stable machine-readable error code. The CLI wrapper maps these to stderr messages."
+        },
+        "details": {
+          "type": "object",
+          "description": "Optional context (e.g., upstream HTTP status). May omit sensitive material; never includes the token."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "credentialId": "github-app"
+    },
+    {
+      "token": "ghs_examplexxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expiresAt": "2026-06-05T16:34:12.000Z"
+    },
+    {
+      "error": "Cloud pull endpoint unreachable",
+      "code": "CLOUD_UNREACHABLE",
+      "details": { "cause": "ECONNREFUSED" }
+    }
+  ]
+}
