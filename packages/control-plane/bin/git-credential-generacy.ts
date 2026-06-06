@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 
-import http from 'node:http';
+import {
+  createJitGitTokenClient,
+  JitTokenError,
+  type JitTokenErrorCode,
+} from '../src/services/jit-git-token-client.js';
 
 const DEFAULT_SOCKET_PATH = '/run/generacy-control-plane/control.sock';
 
@@ -21,6 +25,7 @@ const EXIT_CODE_BY_CODE: Record<string, number> = {
   CLOUD_UPSTREAM_ERROR: 7,
   CLOUD_RESPONSE_INVALID: 8,
   CREDENTIAL_NOT_CONFIGURED: 9,
+  RESPONSE_PARSE_ERROR: 8,
   INTERNAL_ERROR: 1,
 };
 
@@ -35,7 +40,6 @@ function readStdin(): Promise<string> {
     process.stdin.on('data', (c: Buffer) => chunks.push(c));
     process.stdin.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
     process.stdin.on('error', reject);
-    // If stdin is closed before any data, 'end' fires naturally.
   });
 }
 
@@ -58,36 +62,16 @@ function parseInput(raw: string): InputAttrs {
   return attrs;
 }
 
-interface SocketResponse {
-  status: number;
-  body: string;
+function resolveSocketPath(): string {
+  return (
+    process.env['GIT_TOKEN_SOCKET_PATH'] ??
+    process.env['CONTROL_PLANE_SOCKET_PATH'] ??
+    DEFAULT_SOCKET_PATH
+  );
 }
 
-function postToControlSocket(socketPath: string): Promise<SocketResponse> {
-  return new Promise((resolve, reject) => {
-    const req = http.request(
-      {
-        socketPath,
-        path: '/git-token',
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'content-length': '2',
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (c: Buffer) => chunks.push(c));
-        res.on('end', () => {
-          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') });
-        });
-        res.on('error', reject);
-      },
-    );
-    req.on('error', reject);
-    req.write('{}');
-    req.end();
-  });
+function mapJitErrorToExit(code: JitTokenErrorCode): number {
+  return EXIT_CODE_BY_CODE[code] ?? EXIT_CODE_BY_CODE.INTERNAL_ERROR!;
 }
 
 async function runGet(socketPath: string, input: InputAttrs): Promise<void> {
@@ -96,62 +80,35 @@ async function runGet(socketPath: string, input: InputAttrs): Promise<void> {
     process.exit(0);
   }
 
-  let response: SocketResponse;
+  const client = createJitGitTokenClient({ socketPath });
+
+  let token: string;
   try {
-    response = await postToControlSocket(socketPath);
+    const response = await client.fetch();
+    token = response.token;
   } catch (err) {
-    const cause = (err as NodeJS.ErrnoException).code ?? (err as Error).message;
+    if (err instanceof JitTokenError) {
+      exitErr({
+        code: err.code,
+        message: err.message,
+        exitCode: mapJitErrorToExit(err.code),
+      });
+    }
     exitErr({
-      code: 'CONTROL_SOCKET_UNREACHABLE',
-      message: `control socket at ${socketPath} unreachable (${cause})`,
-      exitCode: EXIT_CODE_BY_CODE.CONTROL_SOCKET_UNREACHABLE!,
+      code: 'INTERNAL_ERROR',
+      message: err instanceof Error ? err.message : String(err),
+      exitCode: EXIT_CODE_BY_CODE.INTERNAL_ERROR!,
     });
   }
 
-  if (response.status >= 200 && response.status < 300) {
-    let parsed: { token?: unknown; expiresAt?: unknown };
-    try {
-      parsed = JSON.parse(response.body) as typeof parsed;
-    } catch {
-      exitErr({
-        code: 'CLOUD_RESPONSE_INVALID',
-        message: 'control-plane returned a non-JSON body on success',
-        exitCode: EXIT_CODE_BY_CODE.CLOUD_RESPONSE_INVALID!,
-      });
-    }
-    if (typeof parsed.token !== 'string' || parsed.token.length === 0) {
-      exitErr({
-        code: 'CLOUD_RESPONSE_INVALID',
-        message: 'control-plane response missing token',
-        exitCode: EXIT_CODE_BY_CODE.CLOUD_RESPONSE_INVALID!,
-      });
-    }
-    const out: string[] = [];
-    if (input.protocol) out.push(`protocol=${input.protocol}`);
-    if (input.host) out.push(`host=${input.host}`);
-    out.push('username=x-access-token');
-    out.push(`password=${parsed.token}`);
-    out.push(''); // trailing blank line
-    process.stdout.write(out.join('\n'));
-    process.exit(0);
-  }
-
-  // Non-2xx — extract code/message from error body if possible.
-  let code = 'INTERNAL_ERROR';
-  let message = `control-plane returned HTTP ${response.status}`;
-  try {
-    const errBody = JSON.parse(response.body) as { code?: unknown; error?: unknown };
-    if (typeof errBody.code === 'string' && errBody.code in EXIT_CODE_BY_CODE) {
-      code = errBody.code;
-    }
-    if (typeof errBody.error === 'string') {
-      message = errBody.error;
-    }
-  } catch {
-    // Fall through to defaults.
-  }
-  const exitCode = EXIT_CODE_BY_CODE[code] ?? EXIT_CODE_BY_CODE.INTERNAL_ERROR!;
-  exitErr({ code, message, exitCode });
+  const out: string[] = [];
+  if (input.protocol) out.push(`protocol=${input.protocol}`);
+  if (input.host) out.push(`host=${input.host}`);
+  out.push('username=x-access-token');
+  out.push(`password=${token}`);
+  out.push(''); // trailing blank line
+  process.stdout.write(out.join('\n'));
+  process.exit(0);
 }
 
 async function main(): Promise<void> {
@@ -171,7 +128,7 @@ async function main(): Promise<void> {
   }
 
   const input = parseInput(raw);
-  const socketPath = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? DEFAULT_SOCKET_PATH;
+  const socketPath = resolveSocketPath();
   await runGet(socketPath, input);
 }
 

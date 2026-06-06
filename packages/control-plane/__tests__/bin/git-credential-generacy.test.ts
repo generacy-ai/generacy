@@ -219,4 +219,45 @@ describe('git-credential-generacy CLI wrapper', () => {
     expect(result.stderr).not.toContain(secret);
     expect(result.stdout).toBe('');
   });
+
+  it('GIT_TOKEN_SOCKET_PATH takes precedence over CONTROL_PLANE_SOCKET_PATH', async () => {
+    // Start the real server on socketPath; point CONTROL_PLANE_SOCKET_PATH at a missing path
+    // and GIT_TOKEN_SOCKET_PATH at the real one. Helper must use GIT_TOKEN_SOCKET_PATH.
+    server = await startSocketServer(socketPath);
+    server.setResponse(200, { token: 'ghs_from_git_token', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+
+    const result = await runHelper('get', GET_INPUT, {
+      GIT_TOKEN_SOCKET_PATH: socketPath,
+      CONTROL_PLANE_SOCKET_PATH: path.join(tmpDir, 'does-not-exist.sock'),
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('password=ghs_from_git_token');
+  });
+
+  it('falls back to CONTROL_PLANE_SOCKET_PATH when GIT_TOKEN_SOCKET_PATH is absent', async () => {
+    server = await startSocketServer(socketPath);
+    server.setResponse(200, { token: 'ghs_from_ctrl_plane', expiresAt: new Date(Date.now() + 60_000).toISOString() });
+
+    const result = await runHelper('get', GET_INPUT, { CONTROL_PLANE_SOCKET_PATH: socketPath });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('password=ghs_from_ctrl_plane');
+  });
+
+  it('RESPONSE_PARSE_ERROR from shared client maps to exit 8', async () => {
+    // 200 with malformed JSON body — JitGitTokenClient throws RESPONSE_PARSE_ERROR;
+    // bin maps it to exit code 8 (same as CLOUD_RESPONSE_INVALID).
+    server = await startSocketServer(socketPath);
+    server.setHandler((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end('not-json');
+    });
+
+    const result = await runHelper('get', GET_INPUT, { CONTROL_PLANE_SOCKET_PATH: socketPath });
+
+    expect(result.exitCode).toBe(8);
+    expect(result.stderr).toMatch(/generacy-git-helper: RESPONSE_PARSE_ERROR/);
+    expect(result.stdout).toBe('');
+  });
 });
