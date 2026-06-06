@@ -44,7 +44,7 @@
 
 ## Phase 6: Validation
 
-- [ ] T013 [US1] Run `pnpm -r typecheck` and `pnpm -r test` from repo root. Confirm: zero TS errors, all existing tests still pass, new tests from T003/T005/T007 pass. Specifically: orchestrator `gh-cli.ts` typechecks against the tightened `() => Promise<string>` provider signature (passes because it's assignable to `() => Promise<string | undefined>`).
+- [X] T013 [US1] Run `pnpm -r typecheck` and `pnpm -r test` from repo root. Confirm: zero TS errors, all existing tests still pass, new tests from T003/T005/T007 pass. Specifically: orchestrator `gh-cli.ts` typechecks against the tightened `() => Promise<string>` provider signature (passes because it's assignable to `() => Promise<string | undefined>`).
 
 - [ ] T014 [US1] Manual soak verification per quickstart.md §"How to verify the fix" → §Manual: launch a cluster, complete wizard, run `while true; do gh api rate_limit | jq '.rate.remaining'; sleep 60; done` from inside an orchestrator container for >1h. Expect zero 401s.
 
