@@ -31,6 +31,7 @@ import {
   createJitGithubTokenProvider,
   resolveSocketPath,
 } from './services/jit-github-token-provider.js';
+import { clusterApiKeyExists } from './services/cluster-api-key-probe.js';
 import { GitHubAuthHealthService } from './services/github-auth-health.js';
 import {
   CredentialExpiryWatcher,
@@ -211,10 +212,16 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // JIT GitHub token provider — replaces the static wizard-creds-token-provider.
   // Resolves a fresh installation token per `gh` invocation via the control-plane
   // /git-token route. Constructed in both orchestrator and worker modes because
-  // ClaudeCliWorker (worker mode) also needs it. When no github-app credential is
-  // configured, leaves the provider undefined so callers fall through to ambient
-  // `GH_TOKEN` (existing behavior for unconfigured clusters).
-  const githubTokenProvider = githubAppCredentialId
+  // ClaudeCliWorker (worker mode) also needs it.
+  //
+  // Gating: built when the cluster-api-key file exists — same precondition the
+  // working `git-credential-generacy` path relies on. Wizard-bootstrapped clusters
+  // (no `github-app` descriptor in `.agency/credentials.yaml`) still get a
+  // credential-less provider; `client.fetch()` is called with no argument and the
+  // control-plane resolves the installation server-side from cluster identity.
+  // Truly-unconfigured / offline clusters (no api-key file) keep the legacy
+  // fallback — provider stays `undefined` and callers inherit ambient `GH_TOKEN`.
+  const githubTokenProvider = clusterApiKeyExists()
     ? createJitGithubTokenProvider({
         client: createJitGitTokenClient({ socketPath: resolveSocketPath() }),
         credentialId: githubAppCredentialId,

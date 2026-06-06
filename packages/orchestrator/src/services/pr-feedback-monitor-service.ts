@@ -1,4 +1,5 @@
 import { GhAuthError, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import { JitTokenError } from '@generacy-ai/control-plane';
 import type {
   MonitorState,
   QueueAdapter,
@@ -326,6 +327,16 @@ export class PrFeedbackMonitorService {
         this.authHealth.recordResult(this.githubAppCredentialId, { ok: true });
       }
     } catch (error) {
+      if (error instanceof JitTokenError) {
+        // JIT token fetch failed — provider already evicted cache and recorded
+        // the failure. Skip this poll cycle so we never spawn `gh` with an
+        // empty/ambient token. The next cycle will retry.
+        this.logger.warn(
+          { code: error.code, message: error.message, owner, repo },
+          'JIT GitHub token refresh failed — skipping PR-feedback monitor cycle',
+        );
+        return;
+      }
       if (error instanceof GhAuthError) {
         const credentialId = this.githubAppCredentialId;
         if (credentialId) {
@@ -369,6 +380,13 @@ export class PrFeedbackMonitorService {
       try {
         await this.processPrReviewEvent(event);
       } catch (error) {
+        if (error instanceof JitTokenError) {
+          this.logger.warn(
+            { code: error.code, message: error.message, owner, repo, prNumber: pr.number },
+            'JIT GitHub token refresh failed — stopping PR-feedback monitor cycle',
+          );
+          return;
+        }
         if (error instanceof GhAuthError) {
           const credentialId = this.githubAppCredentialId;
           if (credentialId) {
