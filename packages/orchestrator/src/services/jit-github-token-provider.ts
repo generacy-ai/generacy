@@ -13,7 +13,13 @@ interface Logger {
 
 export interface JitGithubTokenProviderOptions {
   client: JitGitTokenClient;
-  credentialId: string;
+  /**
+   * GitHub-app credentialId from `.agency/credentials.yaml`. When omitted,
+   * the provider operates credential-less: it calls `client.fetch()` (the
+   * control-plane resolves the installation from cluster identity) and
+   * uses the `WIZARD_SENTINEL_KEY` for cache + authHealth keying.
+   */
+  credentialId?: string;
   authHealth?: AuthHealthSink;
   refreshWindowMs?: number;
   now?: () => Date;
@@ -28,6 +34,22 @@ interface TokenCacheEntry {
 
 const DEFAULT_REFRESH_WINDOW_MS = 5 * 60_000;
 const DEFAULT_SOCKET_PATH = '/run/generacy-control-plane/control.sock';
+
+/**
+ * Reserved-prefix sentinel used as the cache and AuthHealth key when the
+ * JIT gh provider is built credential-less (no `github-app` descriptor in
+ * `.agency/credentials.yaml`). Cannot collide with real descriptor ids,
+ * which are GitHub installation/credential identifiers.
+ *
+ * Visible in:
+ *   - structured logs from `createJitGithubTokenProvider` and `GitHubAuthHealthService`
+ *   - `cluster.credentials` relay payloads (`refresh-requested` / `auth-failed` /
+ *     `auth-recovered`) emitted on the credential-less path
+ *
+ * Cloud-side: no consumer today. Future consumers should treat any
+ * credentialId starting with `__` as synthetic.
+ */
+export const WIZARD_SENTINEL_KEY = '__wizard__';
 
 export function resolveSocketPath(env: NodeJS.ProcessEnv = process.env): string {
   return (
@@ -49,24 +71,26 @@ export function createJitGithubTokenProvider(
     logger,
   } = options;
 
+  const effectiveKey = credentialId ?? WIZARD_SENTINEL_KEY;
   const cache = new Map<string, TokenCacheEntry>();
 
   return async () => {
     const currentTime = now();
-    const cached = cache.get(credentialId);
+    const cached = cache.get(effectiveKey);
 
     if (cached && cached.expiresAt.getTime() - currentTime.getTime() > refreshWindowMs) {
       return cached.token;
     }
 
     try {
+      // Pass-through: undefined → client sends '{}'; defined → client sends { credentialId }.
       const response = await client.fetch(credentialId);
       const entry: TokenCacheEntry = {
         token: response.token,
         expiresAt: response.expiresAt,
         fetchedAt: now(),
       };
-      cache.set(credentialId, entry);
+      cache.set(effectiveKey, entry);
       return entry.token;
     } catch (rawErr) {
       const err =
@@ -78,16 +102,16 @@ export function createJitGithubTokenProvider(
             );
 
       // Discard any stale cached entry — never serve a token after a refresh failure.
-      cache.delete(credentialId);
+      cache.delete(effectiveKey);
 
       try {
-        authHealth?.recordResult(credentialId, { ok: false, statusCode: 503 });
+        authHealth?.recordResult(effectiveKey, { ok: false, statusCode: 503 });
       } catch {
         // Sink errors must not mask the original failure.
       }
 
       logger.warn(
-        { code: err.code, message: err.message, credentialId },
+        { code: err.code, message: err.message, credentialId: effectiveKey },
         'JIT GitHub token refresh failed',
       );
 

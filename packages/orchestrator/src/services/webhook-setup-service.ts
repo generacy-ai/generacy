@@ -9,6 +9,7 @@
  * detection via Smee instead of relying on 15-minute polling fallback.
  */
 import { executeCommand } from '@generacy-ai/workflow-engine';
+import { JitTokenError } from '@generacy-ai/control-plane';
 
 /**
  * Logger interface matching Pino/Fastify logger shape.
@@ -144,10 +145,18 @@ export class WebhookSetupService {
     this._tokenProvider = tokenProvider;
   }
 
+  /**
+   * Invariant: when a tokenProvider is configured, the env override ALWAYS
+   * carries a `GH_TOKEN` key — never `undefined`. Prevents the `gh` subprocess
+   * from inheriting the orchestrator's ambient `GH_TOKEN`. If the provider
+   * throws (e.g., `JitTokenError`), the throw propagates to the per-repo
+   * try/catch in `_ensureWebhookForRepo`, which logs and continues.
+   * See `specs/777-severity-high-773-not/contracts/gh-cli-env-override.md`.
+   */
   private async resolveTokenEnv(): Promise<Record<string, string> | undefined> {
     if (!this._tokenProvider) return undefined;
     const token = await this._tokenProvider();
-    return token ? { GH_TOKEN: token } : undefined;
+    return { GH_TOKEN: token ?? '' };
   }
 
   /**
@@ -364,7 +373,12 @@ export class WebhookSetupService {
       const errorMessage = String(error);
 
       // Determine appropriate log level and message based on error type
-      if (errorMessage.includes('403') || errorMessage.includes('404')) {
+      if (error instanceof JitTokenError) {
+        this._logger.warn(
+          { owner, repo, code: error.code, message: error.message },
+          'JIT GitHub token refresh failed — skipping webhook setup for repository'
+        );
+      } else if (errorMessage.includes('403') || errorMessage.includes('404')) {
         this._logger.warn(
           { owner, repo, error: errorMessage },
           'Insufficient permissions to manage webhooks (admin:repo_hook required)'
@@ -469,6 +483,13 @@ export class WebhookSetupService {
       // Return as GitHubWebhook array (minimal validation - trust GitHub API)
       return parsed as GitHubWebhook[];
     } catch (error) {
+      if (error instanceof JitTokenError) {
+        this._logger.warn(
+          { owner, repo, code: error.code, message: error.message },
+          'JIT GitHub token refresh failed — skipping webhook listing for repository'
+        );
+        return [];
+      }
       // Handle parse errors and other exceptions gracefully
       this._logger.warn(
         { owner, repo, error: String(error) },

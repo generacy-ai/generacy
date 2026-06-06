@@ -27,6 +27,7 @@ import { createAgentLauncher } from '../launcher/launcher-setup.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
 import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
+import { JitTokenError } from '@generacy-ai/control-plane';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
 
 /**
@@ -608,10 +609,17 @@ export class ClaudeCliWorker {
         // work (e.g. markReadyForReview, SSE emission). Log at warn level and
         // do NOT re-throw, so WorkerDispatcher calls queue.complete() instead
         // of queue.release().
-        workerLogger.warn(
-          { error: String(error) },
-          'Post-completion step failed (all phases completed successfully)',
-        );
+        if (error instanceof JitTokenError) {
+          workerLogger.warn(
+            { code: error.code, message: error.message },
+            'JIT GitHub token refresh failed during post-completion step (all phases completed successfully)',
+          );
+        } else {
+          workerLogger.warn(
+            { error: String(error) },
+            'Post-completion step failed (all phases completed successfully)',
+          );
+        }
       } else {
         workerLogger.error(
           { error: String(error) },

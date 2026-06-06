@@ -1,4 +1,5 @@
 import { WORKFLOW_LABELS, GhAuthError, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import { JitTokenError } from '@generacy-ai/control-plane';
 import type {
   LabelEvent,
   MonitorState,
@@ -508,6 +509,17 @@ export class LabelMonitorService {
         this.authHealth.recordResult(this.githubAppCredentialId, { ok: true });
       }
     } catch (error) {
+      if (error instanceof JitTokenError) {
+        // JIT token fetch failed (control-plane unreachable / cloud-pull error).
+        // The provider has already evicted the cache and recorded the failure;
+        // here we skip the rest of this poll cycle so we never spawn `gh` with
+        // an empty/ambient token. The next cycle will retry.
+        this.logger.warn(
+          { code: error.code, message: error.message, owner, repo },
+          'JIT GitHub token refresh failed — skipping label monitor cycle',
+        );
+        return;
+      }
       if (error instanceof GhAuthError) {
         const credentialId = this.githubAppCredentialId;
         if (credentialId) {
