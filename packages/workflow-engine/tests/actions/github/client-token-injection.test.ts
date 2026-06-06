@@ -166,7 +166,7 @@ describe('GhCliGitHubClient token injection', () => {
   });
 
   describe('when tokenProvider returns undefined (resolution failed)', () => {
-    it('passes env: undefined to executeCommand', async () => {
+    it('passes env: { GH_TOKEN: "" } to executeCommand', async () => {
       const tokenProvider = vi.fn().mockResolvedValue(undefined);
       const client = new GhCliGitHubClient('/test/workdir', tokenProvider);
 
@@ -175,17 +175,19 @@ describe('GhCliGitHubClient token injection', () => {
       await client.getRepoInfo();
 
       expect(tokenProvider).toHaveBeenCalledOnce();
+      // Invariant: provider present ⇒ GH_TOKEN is always set (never undefined),
+      // so the gh subprocess can't inherit the expired ambient GH_TOKEN.
       expect(mockExecuteCommand).toHaveBeenCalledWith(
         'gh',
         expect.any(Array),
         expect.objectContaining({
           cwd: '/test/workdir',
-          env: undefined,
+          env: { GH_TOKEN: '' },
         }),
       );
     });
 
-    it('passes env: undefined for PR listing when token resolution fails', async () => {
+    it('passes env: { GH_TOKEN: "" } for PR listing when token resolution fails', async () => {
       const tokenProvider = vi.fn().mockResolvedValue(undefined);
       const client = new GhCliGitHubClient('/test/workdir', tokenProvider);
 
@@ -198,7 +200,7 @@ describe('GhCliGitHubClient token injection', () => {
         'gh',
         expect.any(Array),
         expect.objectContaining({
-          env: undefined,
+          env: { GH_TOKEN: '' },
         }),
       );
     });
