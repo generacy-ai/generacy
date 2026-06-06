@@ -7,6 +7,7 @@ import {
 import {
   createJitGithubTokenProvider,
   resolveSocketPath,
+  WIZARD_SENTINEL_KEY,
 } from '../../../src/services/jit-github-token-provider.js';
 
 function makeLogger() {
@@ -336,6 +337,128 @@ describe('createJitGithubTokenProvider', () => {
     expect(value).toBeDefined();
     expect(typeof value).toBe('string');
     expect(value.length).toBeGreaterThan(0);
+  });
+
+  // ---------------------------------------------------------------
+  // Credential-less path (wizard-bootstrapped clusters) — #777
+  // ---------------------------------------------------------------
+
+  it('creates provider when credentialId omitted', () => {
+    const client = makeMockClient();
+    const provider = createJitGithubTokenProvider({
+      client,
+      logger: makeLogger(),
+    });
+    expect(typeof provider).toBe('function');
+  });
+
+  it('uses WIZARD_SENTINEL_KEY as cache key when credentialId omitted', async () => {
+    const client = makeMockClient();
+    const provider = createJitGithubTokenProvider({
+      client,
+      logger: makeLogger(),
+    });
+
+    await provider();
+    await provider();
+
+    // Second call within the cache window should hit the cache (sentinel key
+    // used consistently for set+get).
+    expect(client.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls client.fetch() with no argument when credentialId omitted', async () => {
+    const client = makeMockClient();
+    const provider = createJitGithubTokenProvider({
+      client,
+      logger: makeLogger(),
+    });
+
+    await provider();
+
+    expect(client.fetch).toHaveBeenCalledTimes(1);
+    expect(client.fetch).toHaveBeenCalledWith(undefined);
+  });
+
+  it('records authHealth under WIZARD_SENTINEL_KEY on failure', async () => {
+    const client = makeMockClient({
+      fetchImpl: async () => {
+        throw new JitTokenError('CLOUD_AUTH_REJECTED', 'rejected');
+      },
+    });
+    const authHealth = makeAuthHealth();
+    const provider = createJitGithubTokenProvider({
+      client,
+      authHealth,
+      logger: makeLogger(),
+    });
+
+    await expect(provider()).rejects.toBeInstanceOf(JitTokenError);
+    expect(authHealth.recordResult).toHaveBeenCalledTimes(1);
+    expect(authHealth.recordResult).toHaveBeenCalledWith(WIZARD_SENTINEL_KEY, {
+      ok: false,
+      statusCode: 503,
+    });
+  });
+
+  it('propagates JitTokenError unchanged in credential-less path', async () => {
+    const client = makeMockClient({
+      fetchImpl: async () => {
+        throw new JitTokenError('CLOUD_UNREACHABLE', 'down');
+      },
+    });
+    const provider = createJitGithubTokenProvider({
+      client,
+      logger: makeLogger(),
+    });
+
+    await expect(provider()).rejects.toMatchObject({
+      name: 'JitTokenError',
+      code: 'CLOUD_UNREACHABLE',
+      message: 'down',
+    });
+  });
+
+  it('passes credentialId to client.fetch when defined', async () => {
+    const client = makeMockClient();
+    const provider = createJitGithubTokenProvider({
+      client,
+      credentialId: 'foo',
+      logger: makeLogger(),
+    });
+
+    await provider();
+
+    expect(client.fetch).toHaveBeenCalledWith('foo');
+  });
+
+  it('uses descriptor credentialId as cache key when defined (sentinel not used)', async () => {
+    const client = makeMockClient({
+      fetchImpl: async () => {
+        throw new JitTokenError('CLOUD_AUTH_REJECTED', 'rejected');
+      },
+    });
+    const authHealth = makeAuthHealth();
+    const provider = createJitGithubTokenProvider({
+      client,
+      credentialId: 'foo',
+      authHealth,
+      logger: makeLogger(),
+    });
+
+    await expect(provider()).rejects.toBeInstanceOf(JitTokenError);
+    expect(authHealth.recordResult).toHaveBeenCalledWith('foo', {
+      ok: false,
+      statusCode: 503,
+    });
+    expect(authHealth.recordResult).not.toHaveBeenCalledWith(
+      WIZARD_SENTINEL_KEY,
+      expect.anything(),
+    );
+  });
+
+  it('WIZARD_SENTINEL_KEY constant is "__wizard__"', () => {
+    expect(WIZARD_SENTINEL_KEY).toBe('__wizard__');
   });
 });
 

@@ -64,10 +64,24 @@ export class GhCliGitHubClient implements GitHubClient {
     this.tokenProvider = tokenProvider;
   }
 
+  /**
+   * Resolve the env override passed to the `gh` subprocess.
+   *
+   * Invariant: provider present ⇒ `GH_TOKEN` is always set, never `undefined`.
+   * This prevents the `gh` subprocess from inheriting the orchestrator's
+   * ambient `GH_TOKEN` (which, on wizard clusters, is the expired static
+   * token from `wizard-credentials.env`). When the provider throws
+   * `JitTokenError`, the throw propagates and the caller's loop-boundary
+   * catch records the failure and skips the gh call — no subprocess is
+   * spawned. See `specs/777-severity-high-773-not/contracts/gh-cli-env-override.md`.
+   *
+   * No provider ⇒ returns `undefined` so the subprocess inherits ambient env
+   * (legacy behavior for truly-unconfigured clusters).
+   */
   private async resolveTokenEnv(): Promise<Record<string, string> | undefined> {
     if (!this.tokenProvider) return undefined;
     const token = await this.tokenProvider();
-    return token ? { GH_TOKEN: token } : undefined;
+    return { GH_TOKEN: token ?? '' };
   }
 
   private async executeGh(args: string[]) {
