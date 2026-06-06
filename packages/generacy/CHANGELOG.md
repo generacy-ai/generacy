@@ -1,5 +1,12 @@
 # @generacy-ai/generacy
 
+## 0.3.4
+
+### Patch Changes
+
+- Updated dependencies [8d152d0]
+  - @generacy-ai/workflow-engine@0.2.1
+
 ## 0.3.3
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/workflow-engine",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Workflow execution engine for Generacy - shared between CLI and VS Code extension",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
