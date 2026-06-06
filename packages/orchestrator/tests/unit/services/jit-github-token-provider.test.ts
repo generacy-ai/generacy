@@ -79,7 +79,7 @@ describe('createJitGithubTokenProvider', () => {
 
   it('call within 5 min of expiry → refetches', async () => {
     const baseNow = new Date('2026-06-05T12:00:00Z');
-    let current = baseNow;
+    const current = baseNow;
     const client = makeMockClient({
       fetchImpl: async () => ({
         token: `ghs_${current.toISOString()}`,
@@ -248,7 +248,7 @@ describe('createJitGithubTokenProvider', () => {
   });
 
   it('custom refreshWindowMs is honored', async () => {
-    let current = new Date('2026-06-05T12:00:00Z');
+    const current = new Date('2026-06-05T12:00:00Z');
     const client = makeMockClient({
       fetchImpl: async () => ({
         token: 'ghs_x',
