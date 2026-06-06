@@ -27,7 +27,10 @@ import { SmeeWebhookReceiver } from './services/smee-receiver.js';
 import { RelayBridge } from './services/relay-bridge.js';
 import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
-import { createWizardCredsTokenProvider } from './services/wizard-creds-token-provider.js';
+import {
+  createJitGithubTokenProvider,
+  resolveSocketPath,
+} from './services/jit-github-token-provider.js';
 import { GitHubAuthHealthService } from './services/github-auth-health.js';
 import {
   CredentialExpiryWatcher,
@@ -55,7 +58,12 @@ import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
 import { PostActivationRetryService } from './services/post-activation-retry.js';
 import { detectIdentitySplit } from './services/identity-split-detector.js';
-import { TunnelHandler, getCodeServerManager, DockerEngineClient } from '@generacy-ai/control-plane';
+import {
+  TunnelHandler,
+  getCodeServerManager,
+  DockerEngineClient,
+  createJitGitTokenClient,
+} from '@generacy-ai/control-plane';
 import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 import { setupInternalRefreshMetadataRoute } from './routes/internal-refresh-metadata.js';
 
@@ -156,11 +164,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   const isWorkerMode = config.mode === 'worker';
 
-  // Create wizard-creds token provider for orchestrator-process GitHub calls
-  const wizardCredsTokenProvider = !isWorkerMode
-    ? createWizardCredsTokenProvider('/var/lib/generacy/wizard-credentials.env', server.log)
-    : undefined;
-
   // Resolve agency dir (matches credhelper-daemon convention). Used by the
   // GitHub auth health service to read credentials.yaml at startup and by the
   // expiry watcher's 60s tick. Safe to compute regardless of mode.
@@ -189,22 +192,40 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     : null;
 
   // Resolve the github-app credentialId once at startup so monitors can pass
-  // it through `health.recordResult(credentialId, ...)`. The expiry watcher
-  // refreshes this map on YAML mtime change. When no github-app credential is
-  // configured, the value stays undefined and monitors call a no-op variant.
+  // it through `health.recordResult(credentialId, ...)` and so the JIT token
+  // provider has a credentialId to fetch under. The expiry watcher refreshes
+  // this map on YAML mtime change. When no github-app credential is configured,
+  // the value stays undefined and monitors call a no-op variant. Resolved in
+  // BOTH modes — ClaudeCliWorker (worker mode) needs the credentialId for its
+  // JIT token provider.
   let githubAppCredentialId: string | undefined;
-  if (!isWorkerMode && githubAuthHealth) {
+  {
     const initialDescriptors = await readCredentialDescriptors(agencyDir);
     const ghapp = initialDescriptors.find((d) => d.type === 'github-app');
     githubAppCredentialId = ghapp?.credentialId;
-    if (initialDescriptors.length > 0) {
+    if (githubAuthHealth && initialDescriptors.length > 0) {
       githubAuthHealth.setCredentials(initialDescriptors);
     }
   }
 
+  // JIT GitHub token provider — replaces the static wizard-creds-token-provider.
+  // Resolves a fresh installation token per `gh` invocation via the control-plane
+  // /git-token route. Constructed in both orchestrator and worker modes because
+  // ClaudeCliWorker (worker mode) also needs it. When no github-app credential is
+  // configured, leaves the provider undefined so callers fall through to ambient
+  // `GH_TOKEN` (existing behavior for unconfigured clusters).
+  const githubTokenProvider = githubAppCredentialId
+    ? createJitGithubTokenProvider({
+        client: createJitGitTokenClient({ socketPath: resolveSocketPath() }),
+        credentialId: githubAppCredentialId,
+        authHealth: githubAuthHealth ?? undefined,
+        logger: server.log,
+      })
+    : undefined;
+
   // Sync labels for watched repositories (skip in worker mode)
   if (!isWorkerMode && config.repositories.length > 0) {
-    const labelSyncService = new LabelSyncService(server.log, createGitHubClient, wizardCredsTokenProvider);
+    const labelSyncService = new LabelSyncService(server.log, createGitHubClient, githubTokenProvider);
     try {
       const syncResult = await labelSyncService.syncAll(config.repositories);
       server.log.info(
@@ -295,7 +316,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
-    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter, tokenProvider: wizardCredsTokenProvider });
+    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter, tokenProvider: githubTokenProvider });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
       redisClient,
@@ -332,7 +353,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       monitorConfig,
       config.repositories,
       clusterGithubUsername,
-      wizardCredsTokenProvider,
+      githubTokenProvider,
       githubAuthHealth ?? undefined,
       githubAppCredentialId,
     );
@@ -360,7 +381,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         config.prMonitor,
         config.repositories,
         clusterGithubUsername,
-        wizardCredsTokenProvider,
+        githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
       );
@@ -613,7 +634,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
 
       if (config.webhookSetup.enabled && config.smee.channelUrl) {
-        const webhookSetupService = new WebhookSetupService(server.log, wizardCredsTokenProvider);
+        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider);
         webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });
