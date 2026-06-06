@@ -15,7 +15,7 @@
 - B: A reserved-prefix string such as `'__wizard__'` or `'__synthetic__'` (clearly distinguishes the credential-less path from any real descriptor id at a glance in logs/relay payloads)
 - C: Repo owner / cluster id derived (e.g. `clusterId` from `cluster.json`) — gives per-cluster cardinality but introduces variability and possible PII in relay events
 
-**Answer**: *Pending*
+**Answer**: **B** — Reserved-prefix sentinel (e.g. `'__wizard__'`). Both A and B avoid the two stated risks (no PII, no collision — real ids are GitHub installation/credential identifiers). The tiebreaker is observability: a reserved sentinel is self-documenting in logs and relay payloads ("this is the credential-less path") and is trivially recognizable if the cloud ever special-cases synthetic ids (see Q3). `'default'` (A) is acceptable and matches the FR example, but reads like it could be a real fallback value; prefer the explicit sentinel. Use the *same* constant for both the cache key and `authHealth.recordResult(...)` keying.
 
 ---
 
@@ -27,7 +27,7 @@
 - B: Probe the control-plane socket at startup (`fs.existsSync(socketPath)` or a TCP-style connect) and only construct if reachable; if unreachable, leave provider `undefined` (preserves today's "no provider → ambient fallback" only for the unrechable case, which the assumption section says is rare)
 - C: Gate on the presence of `/var/lib/generacy/cluster-api-key` (the precondition `git-credential-generacy` actually relies on), without probing the socket
 
-**Answer**: *Pending*
+**Answer**: **C** — Gate on `/var/lib/generacy/cluster-api-key` presence. This is the precondition `git-credential-generacy` actually relies on, and it correctly distinguishes the two cases: a cloud-connected cluster (api-key present → use JIT, even with no `github-app` descriptor — the bug case) vs a genuinely unconfigured/offline cluster (no api-key → `/git-token` has nothing to pull from → keep the ambient `GH_TOKEN` fallback). Avoid **B** (socket `existsSync` probe): the control-plane socket can bind *after* the orchestrator resolves descriptors, so a probe risks a permanently-`undefined` provider on a startup race — i.e. it reintroduces the exact silent-fallback bug we're fixing (this is the #59 startup-race class). Avoid **A** (always construct): it breaks truly-unconfigured clusters by making every `gh` call throw. With C, when the api-key is present the provider is always built; a not-yet-ready socket just makes the first `fetch()` throw (fail-loud, retried next poll) — never a silent fallback.
 
 ---
 
@@ -39,7 +39,7 @@
 - B: Suppress relay event emission entirely in the credential-less path (don't call `authHealth.recordResult` / `maybeRequestRefresh` at all when there is no descriptor) — accept that wizard clusters get no GitHub-auth health relay signal until a descriptor is synthesized
 - C: Emit events but document this as a known cloud-side gap to be addressed by a separate follow-up issue; do not block #777 on the cloud-side change
 
-**Answer**: *Pending*
+**Answer**: **A** — Cloud no-ops unknown ids; no cloud-side change needed (verified). generacy-cloud currently has **no consumer** for `refresh-requested`/`auth-failed` (the #762 cloud-side refresh handler was deferred per #762 Q2=B), so these events are fire-and-forget telemetry today regardless of the key. More importantly, the credential-less path **does not depend** on a cloud push-refresh: the JIT provider re-fetches inline via `/git-token` (which re-pulls from cloud) on its own. And the token endpoint resolves the installation from cluster identity (cluster-api-key), not the `credentialId` — proven by the working credential-less `git` path. So the synthetic id never needs a matching row. Keep emitting (local `AuthHealthSink`/`/health` signal stays useful); do **not** suppress (B) and do **not** block #777 on any cloud change. If a future cloud consumer is added, the reserved-prefix sentinel from Q1 makes it trivial to recognize-and-ignore.
 
 ---
 
@@ -51,7 +51,7 @@
 - B: Worker mode is in-process (same Node process as orchestrator) and literally shares the orchestrator's provider instance — confirm by inspecting `ClaudeCliWorker` lifecycle
 - C: Worker mode is out of scope for this fix; only orchestrator-mode `gh` callers are addressed, and a follow-up issue covers worker mode
 
-**Answer**: *Pending*
+**Answer**: **A** — Worker process builds its own provider; independent cache. Confirmed by inspection: workers run as separate processes (`server.ts` `if (isWorkerMode)` constructs `ClaudeCliWorker` in the worker process), and `githubTokenProvider` is built at the same site in both modes. A provider is a closure over a `JitGitTokenClient` + cache `Map` — it cannot cross a process boundary, so **B is factually impossible** here. Each worker constructs its own credential-less provider with an independent cache but identical fetch/cache/fail-loud behavior. **C (worker out of scope) is wrong** — workers are the *primary* failure surface (they run the speckit phases); leaving them out would not fix the reported breakage.
 
 ---
 
@@ -63,6 +63,6 @@
 - B: Callers catch the throw, log, and skip the `gh` call (do not spawn) — same observable outcome as A but with localized error handling so one credential failure doesn't crash unrelated monitors.
 - C: Callers spawn `gh` with `GH_TOKEN` explicitly unset in the env override (e.g. `{ GH_TOKEN: '' }`) so the ambient value can't leak through — `gh` fails loudly with its own "no auth" error rather than a delayed 401.
 
-**Answer**: *Pending*
+**Answer**: **B** — Provider throws; callers catch + log + skip the `gh` call (never spawn `gh` with the ambient token). The decisive requirement (FR-008): a token-fetch failure must never silently fall through to the ambient/expired `GH_TOKEN`. Since post-fix there is always a `tokenProvider` (per Q2, when api-key present), `GhCliGitHubClient.getEnv()` either returns `{ GH_TOKEN: fresh }` (overriding ambient) or throws — so on the success path ambient is overridden and on the failure path `gh` is never spawned. Prefer **B** over pure-propagate **A** because the label monitor, PR-feedback monitor, and worker share this provider; one credential blip should not crash an entire monitor poll loop — catch at the loop boundary, log, and skip the cycle (the `AuthHealthSink.recordResult({ ok:false, 503 })` from #773 already supplies the loud signal). Recommend **also** adopting C's hardening as defense-in-depth: when the provider is present, set `GH_TOKEN: ''` in the `gh` env override so an ambient value can never leak even through an unforeseen caller path. Net: fail-loud, observable, no silent static-token fallback, and resilient monitors.
 
 ---

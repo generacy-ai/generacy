@@ -1,93 +1,112 @@
-# Feature Specification: JIT gh token provider must work without a `github-app` credential descriptor
+# Feature Specification: ## Severity
+
+**High — #773 does not actually fix the reported failure on real clusters
 
 **Branch**: `777-severity-high-773-not` | **Date**: 2026-06-06 | **Status**: Draft
-**GitHub Issue**: [#777](https://github.com/generacy-ai/generacy/issues/777) | **Severity**: High (production regression)
-**Workflow**: `speckit-bugfix`
 
 ## Summary
 
-#773 introduced a Just-In-Time (JIT) GitHub token provider so that `gh` CLI calls in the orchestrator and worker would refresh tokens on demand via the control-plane `POST /git-token` endpoint, replacing the static 1-hour `GH_TOKEN` written to `/var/lib/generacy/wizard-credentials.env`. In production, the fix is a no-op: the provider is gated on the presence of a `github-app` credential descriptor in `.agency/credentials.yaml`, but wizard-bootstrapped clusters (all current production clusters) never have such a descriptor. They carry only the raw `GH_TOKEN`/`GH_USERNAME`/`GH_EMAIL` env values seeded by the wizard. Without the descriptor, `githubAppCredentialId` is `undefined`, the provider is never created, and every `gh` call inherits the ambient (expired-after-1h) `GH_TOKEN`. After roughly one hour the cluster begins 401-ing on every `gh` operation (label sync, label monitor, PR feedback monitor, worker `gh` calls) — exactly the failure mode #773 was meant to retire.
+## Severity
 
-The control-plane `/git-token` endpoint itself works credential-less: `git-credential-generacy` (the git helper for HTTPS clones) calls `JitGitTokenClient.fetch()` with no argument and the control plane resolves the installation server-side from the cluster API key. The `git` path therefore continues to function. The fix is to drop the gating on a `github-app` descriptor, build the gh JIT provider whenever the control-plane socket is reachable, and call `fetch()` credential-less when no descriptor is present.
+**High — #773 does not actually fix the reported failure on real clusters.** The JIT gh-token provider is gated on a `github-app` credential descriptor that wizard-bootstrapped clusters (all current clusters) never have, so the provider is always `undefined` and every `gh` call falls back to the ambient `GH_TOKEN` — the same static 1-hour token #773 was meant to retire. Processing works for ~1h after activation, then all `gh` calls 401 again (label sync, monitor, PR feedback, workers).
+
+## Evidence (live prod cluster, ai-lawfirm, after #773 deploy)
+
+- #773 **is** deployed: `services/jit-github-token-provider.js` present; `server.js` wires `JitGitTokenClient`; no `wizardCredsTokenProvider` left.
+- `POST /git-token` returns a **valid, working** token: `gh api repos/Painworth/ai-lawfirm` succeeds with it (expiry ~36 min out, cached/deduped correctly).
+- Yet the orchestrator's own `gh` calls 401 with `Bad credentials`, using the **ambient `GH_TOKEN` (`ghs_l4ZJ…`)** — which I confirmed is the expired wizard token (`/var/lib/generacy/wizard-credentials.env` `GH_TOKEN` → 401).
+- `git clone` over https **works** (helper bin calls `client.fetch()` credential-less).
+
+## Root cause
+
+`packages/orchestrator/src/server.ts`:
+```ts
+const initialDescriptors = await readCredentialDescriptors(agencyDir);
+const ghapp = initialDescriptors.find(d => d.type === 'github-app');
+githubAppCredentialId = ghapp?.credentialId;            // undefined on wizard clusters
+…
+const githubTokenProvider = githubAppCredentialId
+  ? createJitGithubTokenProvider({ … credentialId: githubAppCredentialId … })
+  : undefined;                                           // → callers fall through to ambient GH_TOKEN
+```
+Wizard-bootstrapped clusters carry only a raw GitHub token credential (`GH_TOKEN`/`GH_USERNAME`/`GH_EMAIL`), **no `github-app` descriptor**, so `githubAppCredentialId` is `undefined`, the provider is never created, and `GhCliGitHubClient.getEnv()` returns `undefined` → `gh` inherits the ambient (expired) `GH_TOKEN`.
+
+The **git** path doesn't hit this because `git-credential-generacy` calls `client.fetch()` with no argument, and the JIT client already handles that:
+```ts
+// control-plane jit-git-token-client.js
+async fetch(credentialId) {
+  const body = credentialId === undefined ? '{}' : JSON.stringify({ credentialId });
+  …
+}
+```
+The control-plane resolves the installation server-side from the cluster-api-key — no descriptor needed. So the gh provider's dependency on a `github-app` `credentialId` is over-specification; the underlying `/git-token` path works credential-less (proven by the working git clone and a direct `{}` probe).
+
+## Fix
+
+Stop gating the gh JIT provider on a `github-app` descriptor. Build it whenever the control-plane `/git-token` path is available (cluster-api-key / cloud pull configured — the same precondition the git helper relies on), and call `fetch()` **credential-less** (pass `credentialId` only when a descriptor actually exists). Make `credentialId` optional in `createJitGithubTokenProvider`:
+
+- Cache key + `authHealth.recordResult(...)` keying fall back to a reserved-prefix sentinel (`'__wizard__'`) when no descriptor is present (see Clarifications Q1).
+- Both orchestrator and worker modes (worker `ClaudeCliWorker` builds its own provider with an independent cache — see Clarifications Q4).
+
+## Clarifications
+
+Resolved decisions from clarification batch 1 (see [clarifications.md](clarifications.md) for full rationale):
+
+- **Synthetic key (Q1)**: Use a reserved-prefix sentinel (`'__wizard__'`) — *not* `'default'` — for both the cache key and `authHealth.recordResult(...)` keying when no `github-app` descriptor exists. Self-documenting in logs/relay payloads; cannot collide with real installation/credential ids; trivial for future cloud consumers to recognize-and-ignore.
+- **Construction precondition (Q2)**: Gate provider construction on the presence of `/var/lib/generacy/cluster-api-key` — *not* a control-plane socket probe and *not* unconditional. This matches the precondition `git-credential-generacy` already relies on, distinguishes a cloud-connected wizard cluster (build provider) from a genuinely unconfigured/offline cluster (keep ambient fallback), and avoids the startup-race class where the socket binds after descriptors are resolved.
+- **Cloud-side compatibility (Q3)**: No cloud-side change required. generacy-cloud currently has no consumer for `refresh-requested`/`auth-failed` events (#762 cloud handler deferred); they are fire-and-forget telemetry. The credential-less path does not depend on cloud push-refresh — JIT re-fetches inline via `/git-token`, which resolves the installation server-side from cluster identity (not from `credentialId`). Continue emitting events with the synthetic id.
+- **Worker mode (Q4)**: Each worker process constructs its own credential-less `createJitGithubTokenProvider` at startup with an independent cache. Providers are closures over a client + `Map` and cannot cross a process boundary, so cross-process sharing is impossible. Worker mode is **in scope** — workers are the primary failure surface for the reported breakage.
+- **Fail-loud behavior (Q5)**: When the JIT provider throws `JitTokenError`, callers (label monitor, PR-feedback monitor, worker) catch at the loop boundary, log, and **skip the `gh` call** for that cycle. The throw must never silently fall through to spawning `gh` with the ambient/expired `GH_TOKEN`. As defense-in-depth, when the provider is present, set `GH_TOKEN: ''` in the `gh` env override so the ambient value cannot leak through an unforeseen caller path. `AuthHealthSink.recordResult({ ok: false, statusCode: 503 })` supplies the observable signal.
+
+## Acceptance criteria
+
+- [ ] A wizard-bootstrapped cluster (no `github-app` descriptor) builds the JIT gh provider and refreshes `gh` tokens via `/git-token`.
+- [ ] Such a cluster runs **many hours** with zero `gh` 401s and no ambient-token fallback.
+- [ ] Regression test: provider is created and fetches credential-less when `initialDescriptors` contains no `github-app` entry, and the api-key file exists.
+- [ ] Negative test: when `/var/lib/generacy/cluster-api-key` is *absent* (truly unconfigured/offline cluster), the provider is NOT created and the legacy fallback path applies.
+- [ ] When a `github-app` descriptor *does* exist, behavior is unchanged (credentialId still passed; sentinel not used).
+- [ ] Cache key and `authHealth` keying use the reserved-prefix sentinel (`'__wizard__'`) consistently in the credential-less path.
+- [ ] `gh` callers that hit `JitTokenError` log, skip the call, and do NOT spawn `gh` with the ambient `GH_TOKEN`.
+- [ ] When the provider is present, the `gh` env override explicitly sets `GH_TOKEN` (to the fresh value, or `''` on the throw-and-skip path) so ambient leakage is impossible.
+- [ ] Worker processes build their own credential-less provider at worker startup with identical fail-loud behavior to the orchestrator.
+
+## Related
+
+- Caused by the gating introduced in #773 (the rest of that PR — JIT client, caching, fail-loud, dual-socket — is correct and working).
+- Mirrors the credential-less precedent already shipped for `git-credential-generacy`.
+- #762 backstop is what surfaced it (the `investigate credential refresh chain` warnings are firing as designed).
 
 ## User Stories
 
-### US1: Wizard-bootstrapped clusters keep `gh` working indefinitely (Priority: P1)
+### US1: [Primary User Story]
 
-**As a** Generacy operator running a wizard-bootstrapped cluster (no `github-app` descriptor),
-**I want** the orchestrator and workers to obtain fresh GitHub tokens on demand from the control-plane,
-**So that** `gh` calls (label sync, label monitor, PR feedback monitor, webhook setup, worker actions) keep working for the full lifetime of the cluster instead of failing with 401 once the wizard's seeded `GH_TOKEN` expires (~1h after activation).
-
-**Acceptance Criteria**:
-- [ ] After deploying the fix to a wizard-bootstrapped cluster (with no `github-app` entry in `.agency/credentials.yaml`), the JIT gh provider is constructed at orchestrator startup.
-- [ ] The provider calls `JitGitTokenClient.fetch()` with no `credentialId` argument when no `github-app` descriptor exists.
-- [ ] All `gh` callers (`LabelMonitorService`, `PrFeedbackMonitorService`, `LabelSyncService`, `WebhookSetupService`, `ClaudeCliWorker` workers) receive a fresh token via the provider and do not fall through to the ambient `GH_TOKEN`.
-- [ ] A cluster that has been running for >2h with no manual credential refresh continues to perform `gh` operations without 401 errors.
-
-### US2: Clusters with a `github-app` descriptor keep working exactly as today (Priority: P1)
-
-**As a** Generacy operator running a cluster that *does* have a `github-app` credential descriptor (cloud-managed or future bootstrap modes),
-**I want** the existing behavior to be preserved bit-for-bit,
-**So that** the fix does not regress descriptor-based clusters that already work correctly under #773.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] When `initialDescriptors` contains a `github-app` entry, the provider is constructed with `credentialId = ghapp.credentialId` and `fetch(credentialId)` is called with that descriptor's id (existing behavior).
-- [ ] `authHealth.recordResult(credentialId, ...)` continues to key by the real `credentialId` when a descriptor exists, so the existing `cluster.credentials` `refresh-requested`/`auth-failed`/`auth-recovered` flow keeps working unchanged for descriptor-based clusters.
-
-### US3: Observable failures when the control-plane `/git-token` endpoint is unreachable (Priority: P2)
-
-**As a** Generacy operator,
-**I want** clear, observable failures when the JIT provider cannot reach the control-plane (instead of a silent fallback to a static expired token),
-**So that** I can act on real failures rather than chase mysterious 401s an hour after activation.
-
-**Acceptance Criteria**:
-- [ ] When `POST /git-token` is unreachable from a wizard-bootstrapped cluster, the provider throws `JitTokenError('CONTROL_SOCKET_UNREACHABLE')` (same code path as today's descriptor-present case).
-- [ ] The failure is logged once at `warn` level with the synthetic cache key (e.g. `'default'`) and surfaced to the `GitHubAuthHealthService` so existing `auth-failed` relay events fire.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `createJitGithubTokenProvider`'s `credentialId` option MUST be optional. When omitted, the provider MUST call `client.fetch()` with no argument (i.e. credential-less). | P1 | Mirrors `git-credential-generacy` precedent already shipped. |
-| FR-002 | `server.ts` MUST build the JIT gh provider whenever `createJitGitTokenClient` can be constructed (the control-plane socket precondition), regardless of whether a `github-app` descriptor is present in `.agency/credentials.yaml`. | P1 | Removes the `githubAppCredentialId ? … : undefined` ternary gate. |
-| FR-003 | When no `github-app` descriptor exists, the provider's internal cache key and `authHealth.recordResult(...)` keying MUST use a stable synthetic constant (e.g. `'default'`). When a descriptor *does* exist, both MUST continue to use the real `credentialId`. | P1 | Keeps `GitHubAuthHealthService` snapshots coherent without inventing fake descriptors. |
-| FR-004 | The same provider MUST be threaded to `ClaudeCliWorker` (worker mode) via the existing `tokenProvider` plumbing, so worker-mode `gh` calls also benefit. | P1 | Worker has the same gating today; one change fixes both. |
-| FR-005 | When a `github-app` descriptor *is* present, the provider's call signature MUST be unchanged from #773 (`fetch(credentialId)`), and observable side-effects (cache key, auth-health key, log fields) MUST be identical to current behavior. | P1 | Strict no-regression for descriptor-based clusters. |
-| FR-006 | The new code path MUST be exercised by a regression test that constructs the provider with no `credentialId`, stubs `JitGitTokenClient.fetch`, and asserts `fetch` is called with no argument and the returned token is cached + returned. | P1 | Locks in the wizard-cluster path. |
-| FR-007 | Existing failure semantics (`JitTokenError`, `authHealth` notification, cache eviction on failure) MUST apply to the credential-less path. | P2 | Failure paths re-used as-is. |
-| FR-008 | The change MUST NOT add any read of `GH_TOKEN` from `/var/lib/generacy/wizard-credentials.env` for `gh` purposes; the ambient env var stays only as the legacy fallback that the fix is eliminating. | P2 | Guards against accidentally re-introducing the original bug surface. |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Wizard-bootstrapped production cluster `gh` 401 rate | 0 over a 24h window after deploy | Inspect orchestrator logs (`label-monitor-service`, `pr-feedback-monitor-service`, `label-sync-service`, `webhook-setup-service`) for `Bad credentials` / `HTTP 401` lines following deploy of the fix on `ai-lawfirm` (or equivalent prod cluster). |
-| SC-002 | JIT provider construction on wizard cluster | Provider is non-null at orchestrator startup with no `github-app` descriptor | New unit test in `tests/unit/services/jit-github-token-provider.test.ts` covering the credential-less path; orchestrator startup log line `JIT GitHub token provider constructed (credential-less)` (or equivalent) observed in cluster startup. |
-| SC-003 | No regression for descriptor-based clusters | All existing `jit-github-token-provider.test.ts` and `label-monitor-service.401.test.ts` cases pass without modification of expected `fetch(credentialId)` argument. | `pnpm -F @generacy-ai/orchestrator test` green; diff review confirms no existing test's expected arguments were loosened. |
-| SC-004 | Time-to-first-failure on a fresh wizard cluster | >24h (i.e. unbounded by the 1h ambient token) | Manual smoke on a fresh wizard-bootstrapped cluster: leave it idle/active for >24h after activation; verify `gh` operations still succeed. Pre-fix baseline: ~1h. |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The control-plane `POST /git-token` endpoint accepts an empty JSON body `{}` and resolves the GitHub App installation server-side from the cluster API key. (Verified in `packages/control-plane/src/services/jit-git-token-client.ts:90-91` and proven in production by `git-credential-generacy`.)
-- All wizard-bootstrapped production clusters reachable today have a valid cluster API key at `/var/lib/generacy/cluster-api-key` and can reach the cloud's pull endpoint (i.e. the same precondition that makes `git clone` work today).
-- The `GitHubAuthHealthService` is tolerant of a synthetic credential id (`'default'`) as a key — it does not validate the key against `.agency/credentials.yaml`. (To be re-verified during /clarify or /plan.)
-- Worker-mode `ClaudeCliWorker` shares the same provider instance as orchestrator-mode (or constructs an equivalent one with identical semantics) so a single fix covers both.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Adding a `github-app` credential descriptor synthesis step to the wizard bootstrap (orthogonal — and explicitly out of scope per the issue's "credential-less" framing).
-- Cloud-side changes to `POST /git-token` (the endpoint already supports credential-less mode).
-- Refactoring `GitHubAuthHealthService` to model "no descriptor" as a distinct status (out of scope — the synthetic key reuses the existing per-credential state machine).
-- Changes to `wizard-env-writer.ts` / `wizard-credentials.env` — the file remains as-is for non-`gh` consumers (e.g. legacy bash scripts in cluster-base entrypoint).
-- Telemetry/logging changes beyond what is strictly needed to make the credential-less path observable.
-- Multi-installation / multi-org `github-app` scenarios — single-installation only, matching today's behavior.
-
-## Related
-
-- **#773** — introduced the JIT provider with the over-restrictive `github-app` descriptor gate. The rest of #773 (JIT client, caching, fail-loud, dual-socket forwarding) is correct and stays.
-- **#762** — cluster-side GH_TOKEN expiry detection / `GitHubAuthHealthService`. The `refresh-requested` warnings firing in production are what surfaced this regression — the backstop is working as designed.
-- **#766** — cluster-side JIT git credential helper. Establishes the credential-less precedent for the git path that this fix mirrors for the `gh` path.
-- **#768** — worker-side git-token proxy bin. Same `/git-token` route is reused; no proxy changes needed.
+- [Exclusion 1]
 
 ---
 
