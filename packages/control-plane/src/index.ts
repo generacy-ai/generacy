@@ -61,6 +61,15 @@ export {
   type RelayMessageSender,
 } from './services/tunnel-handler.js';
 
+export {
+  createJitGitTokenClient,
+  JitTokenError,
+  type JitGitTokenClient,
+  type JitGitTokenClientOptions,
+  type JitGitTokenResponse,
+  type JitTokenErrorCode,
+} from './services/jit-git-token-client.js';
+
 // Errors
 export {
   ControlPlaneError,
