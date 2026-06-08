@@ -1,6 +1,7 @@
 import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
+import { resolvePhaseTimeoutMs } from './config.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -190,13 +191,14 @@ export class PhaseLoop {
           const prompt = siblingBlock
             ? `${siblingBlock}\n\n${context.issueUrl}`
             : context.issueUrl;
+          const cliPhase = phase as Exclude<typeof phase, 'validate'>;
           result = await cliSpawner.spawnPhase(
-            phase as Exclude<typeof phase, 'validate'>,
+            cliPhase,
             {
               prompt,
               cwd: context.checkoutPath,
               env: { CLAUDE_HEADLESS: 'true' },
-              timeoutMs: config.phaseTimeoutMs,
+              timeoutMs: resolvePhaseTimeoutMs(config, cliPhase),
               signal: context.signal,
               resumeSessionId: currentSessionId,
               siblingWorkdirs: context.siblingWorkdirs,
