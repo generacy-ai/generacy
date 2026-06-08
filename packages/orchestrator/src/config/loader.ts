@@ -217,6 +217,33 @@ function loadFromEnv(): Record<string, unknown> {
     (config.worker as Record<string, unknown>).workspaceDir = workerWorkspaceDir;
   }
 
+  // Worker phase timeout: flat fallback applied to phases without a per-phase override
+  const phaseTimeoutMs = process.env['WORKER_PHASE_TIMEOUT_MS'] ?? process.env[`${ENV_PREFIX}WORKER_PHASE_TIMEOUT_MS`];
+  if (phaseTimeoutMs) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).phaseTimeoutMs = parseInt(phaseTimeoutMs, 10);
+  }
+
+  // Per-phase timeout overrides: WORKER_PHASE_TIMEOUT_<PHASE>_MS (e.g. WORKER_PHASE_TIMEOUT_PLAN_MS).
+  // `validate` is excluded — it runs a shell command on a separate timeout path.
+  const overridablePhases = ['specify', 'clarify', 'plan', 'tasks', 'implement'] as const;
+  for (const phase of overridablePhases) {
+    const suffix = `WORKER_PHASE_TIMEOUT_${phase.toUpperCase()}_MS`;
+    const value = process.env[suffix] ?? process.env[`${ENV_PREFIX}${suffix}`];
+    if (value) {
+      if (!config.worker) {
+        config.worker = {};
+      }
+      const worker = config.worker as Record<string, unknown>;
+      if (!worker.phaseTimeoutOverrides) {
+        worker.phaseTimeoutOverrides = {};
+      }
+      (worker.phaseTimeoutOverrides as Record<string, unknown>)[phase] = parseInt(value, 10);
+    }
+  }
+
   // Credential role: env var overrides config file
   const credentialRole = process.env['GENERACY_CREDENTIAL_ROLE']
     ?? (configPath ? tryLoadDefaultsRole(configPath) : null);
