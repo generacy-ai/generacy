@@ -3,13 +3,14 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, findWorkspaceConfigPath } from '@generacy-ai/config';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
+import { applyRepoValidateOverrides } from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
 import { LabelManager } from './label-manager.js';
 import { StageCommentManager } from './stage-comment-manager.js';
@@ -353,6 +354,23 @@ export class ClaudeCliWorker {
         }
       }
 
+      // 5c. Apply per-repo validate-command overrides from the target repo's
+      // .generacy/config.yaml. The orchestrator's global validate defaults are
+      // monorepo-shaped (`pnpm test && pnpm build`); repos with a different
+      // shape (e.g. a single-package Astro site with no `test` script) override
+      // them so the validate phase doesn't fail on a missing script.
+      const orchSettings = configPath ? tryLoadOrchestratorSettings(configPath) : null;
+      const effectiveConfig = applyRepoValidateOverrides(this.config, orchSettings);
+      if (effectiveConfig !== this.config) {
+        workerLogger.info(
+          {
+            validateCommand: effectiveConfig.validateCommand,
+            preValidateCommand: effectiveConfig.preValidateCommand,
+          },
+          'Applied per-repo validate-command override from .generacy/config.yaml',
+        );
+      }
+
       // 6. Build WorkerContext
       const context: WorkerContext = {
         workerId,
@@ -476,7 +494,7 @@ export class ClaudeCliWorker {
       // 8. Execute the phase loop
       const phaseSequence = getPhaseSequence(item.workflowName);
       const phaseLoop = new PhaseLoop(workerLogger);
-      const loopResult = await phaseLoop.executeLoop(context, this.config, {
+      const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
         gateChecker,

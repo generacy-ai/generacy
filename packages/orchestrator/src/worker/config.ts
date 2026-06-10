@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkflowPhase } from './types.js';
 
 /**
@@ -79,6 +80,41 @@ export const WorkerConfigSchema = z.object({
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
+
+/**
+ * Merge per-repo validate-command overrides onto the global worker config.
+ *
+ * The target repo's `.generacy/config.yaml` `orchestrator` block may set
+ * `validateCommand` / `preValidateCommand`. The global defaults are
+ * monorepo-shaped (`pnpm test && pnpm build`); single-package repos (e.g. an
+ * Astro site with only a `build` script) override them so the validate phase
+ * doesn't fail on a missing `test` script before it can reach the build.
+ *
+ * Only those two fields are overridable per-repo. An explicit empty
+ * `preValidateCommand` is preserved (it means "skip the install step"). Returns
+ * the original config object unchanged when there are no applicable overrides,
+ * so callers can cheaply detect "no override" via reference equality.
+ */
+export function applyRepoValidateOverrides(
+  config: WorkerConfig,
+  settings: OrchestratorSettings | null | undefined,
+): WorkerConfig {
+  if (
+    settings == null ||
+    (settings.validateCommand === undefined && settings.preValidateCommand === undefined)
+  ) {
+    return config;
+  }
+  return {
+    ...config,
+    ...(settings.validateCommand !== undefined
+      ? { validateCommand: settings.validateCommand }
+      : {}),
+    ...(settings.preValidateCommand !== undefined
+      ? { preValidateCommand: settings.preValidateCommand }
+      : {}),
+  };
+}
 
 /**
  * Resolve the wall-clock timeout (ms) for a CLI phase: the per-phase override

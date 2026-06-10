@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { WorkerConfigSchema, resolvePhaseTimeoutMs } from '../config.js';
+import { WorkerConfigSchema, resolvePhaseTimeoutMs, applyRepoValidateOverrides } from '../config.js';
 
 describe('WorkerConfigSchema - maxImplementRetries', () => {
   it('defaults to 2', () => {
@@ -70,5 +70,48 @@ describe('resolvePhaseTimeoutMs', () => {
     // Configs constructed directly (tests, callers) bypass Zod and omit the field.
     const config = { phaseTimeoutMs: 720_000 } as unknown as Parameters<typeof resolvePhaseTimeoutMs>[0];
     expect(resolvePhaseTimeoutMs(config, 'plan')).toBe(720_000);
+  });
+});
+
+describe('applyRepoValidateOverrides', () => {
+  const base = WorkerConfigSchema.parse({});
+
+  it('returns the same config object when settings are null/undefined', () => {
+    expect(applyRepoValidateOverrides(base, null)).toBe(base);
+    expect(applyRepoValidateOverrides(base, undefined)).toBe(base);
+  });
+
+  it('returns the same config object when no validate fields are set', () => {
+    expect(applyRepoValidateOverrides(base, { labelMonitor: true })).toBe(base);
+  });
+
+  it('overrides validateCommand only', () => {
+    const result = applyRepoValidateOverrides(base, { validateCommand: 'pnpm build' });
+    expect(result).not.toBe(base);
+    expect(result.validateCommand).toBe('pnpm build');
+    // preValidateCommand falls back to the global default
+    expect(result.preValidateCommand).toBe(base.preValidateCommand);
+  });
+
+  it('overrides both validate commands', () => {
+    const result = applyRepoValidateOverrides(base, {
+      validateCommand: 'pnpm build',
+      preValidateCommand: 'pnpm install',
+    });
+    expect(result.validateCommand).toBe('pnpm build');
+    expect(result.preValidateCommand).toBe('pnpm install');
+  });
+
+  it('preserves an explicit empty preValidateCommand (skip install)', () => {
+    const result = applyRepoValidateOverrides(base, { preValidateCommand: '' });
+    expect(result).not.toBe(base);
+    expect(result.preValidateCommand).toBe('');
+    expect(result.validateCommand).toBe(base.validateCommand);
+  });
+
+  it('does not mutate the input config', () => {
+    const snapshot = base.validateCommand;
+    applyRepoValidateOverrides(base, { validateCommand: 'pnpm build' });
+    expect(base.validateCommand).toBe(snapshot);
   });
 });
