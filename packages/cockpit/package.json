@@ -1,0 +1,50 @@
+{
+  "name": "@generacy-ai/cockpit",
+  "version": "0.1.0",
+  "description": "Foundation library for the Generacy Epic Cockpit: classifier, config loader, epic manifest, gh wrapper, and orchestrator client",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "author": "Generacy AI",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@generacy-ai/config": "workspace:*",
+    "@generacy-ai/workflow-engine": "workspace:*",
+    "yaml": "^2.4.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5",
+    "vitest": "^4.0.18"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/generacy-ai/generacy.git",
+    "directory": "packages/cockpit"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
