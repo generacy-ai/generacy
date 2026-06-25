@@ -30,10 +30,11 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 **So that** I can render progress consistently without re-implementing label semantics or duplicating the workflow-engine's label catalog.
 
 **Acceptance Criteria**:
-- [ ] `classify(labels: Set<string>): CockpitState` is exported from `@generacy-ai/cockpit`.
-- [ ] Every state defined in `WORKFLOW_LABELS` (including error states like `agent:error` and terminal states like `closed`/`done`) maps to a `CockpitState` value.
-- [ ] When multiple workflow labels co-exist on an issue, the classifier returns the highest-priority state with a documented precedence rule (terminal > error > waiting > active > pending).
-- [ ] Classifier is unit-tested with one case per state plus precedence edge cases.
+- [ ] `classify(labels: Iterable<string>): { state: CockpitState; sourceLabel: string }` is exported from `@generacy-ai/cockpit` (returns a struct, not a bare enum — the watcher needs the originating label to route gate-specific actions like `waiting-for:clarification` → `/cockpit:clarify` vs `waiting-for:implementation-review` → `/cockpit:review`).
+- [ ] `CockpitState` is a small curated enum: `pending | active | waiting | error | terminal | unknown`.
+- [ ] Every entry in `WORKFLOW_LABELS` (including error states like `agent:error` and terminal states like `closed`/`done`) maps to a non-`unknown` `state` with a populated `sourceLabel`.
+- [ ] When multiple workflow labels co-exist on an issue, the classifier applies the **authoritative** precedence rule `terminal > error > waiting > active > pending` (curated tier). Tie-breaks within a tier: within `waiting`, surface the earliest unsatisfied gate in pipeline order `spec-review → clarification → plan-review → tasks-review → implementation-review → manual-validation`; within any other tier, break ties by index in `WORKFLOW_LABELS`. `sourceLabel` reports the winning label.
+- [ ] Classifier is unit-tested with one case per state plus precedence and tie-break edge cases.
 
 ### US2: Cockpit consumer resolves an epic's child issue set
 
@@ -43,8 +44,9 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 
 **Acceptance Criteria**:
 - [ ] `resolveEpicIssues(epic: number, owner, repo): Promise<number[]>` is exported.
-- [ ] Resolver first attempts to read an epic manifest (location and shape defined in design — typically a YAML/JSON file in the epic-parent issue body or a known repo path).
-- [ ] If the manifest is missing or unreadable, the resolver falls back to querying `gh` for issues labeled `epic-child` referencing the epic, plus issues whose body references the epic-parent.
+- [ ] Manifest location is canonical: `.generacy/epics/<slug>.yaml` in the epic's primary (epic-parent's) repo. The manifest is a **repo path** (a file), not the issue body.
+- [ ] Resolver first scans `.generacy/epics/*.yaml`, matches `epic.issue == N`; the manifest's Zod-validated shape (owned by this package) is `epic: { repo, issue, slug, plan }`, `autonomy: {}`, `phases: [{ name, tier?, repos: [...], issues: ["owner/repo#n", ...] }]`. Reference manifest: `.generacy/epics/epic-cockpit.yaml` in tetrad-development.
+- [ ] If no manifest matches, the resolver falls back to querying `gh` for issues labeled `epic-child` referencing the epic, plus issues whose body references the epic-parent.
 - [ ] Manifest write helper supports appending a child issue without rewriting unrelated entries.
 - [ ] Both resolution paths are unit-tested with fixtures (no live `gh` calls).
 
@@ -56,9 +58,10 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 
 **Acceptance Criteria**:
 - [ ] `loadCockpitConfig()` reads `.generacy/config.yaml` via `@generacy-ai/config`'s loader.
-- [ ] When `cockpit:` block is absent or partial, defaults are filled in: owner derived from `gh auth status`, repo list defaulted to the `MONITORED_REPOS` env var (comma-separated), poll interval and other tunables given documented defaults.
+- [ ] When `cockpit:` block is absent or partial, defaults are filled in: owner derived from `gh auth status`, repo list defaulted to the `MONITORED_REPOS` env var (comma-separated). Entries in `MONITORED_REPOS` are `owner/repo` strings.
+- [ ] When both `cockpit.repos` and `MONITORED_REPOS` are unset, `loadCockpitConfig()` resolves with `repos: []` and emits a warn-level log (read-only mode still loads; commands needing repos error at use-time). Distinct from malformed config (bad YAML/types), which still throws with a useful message.
 - [ ] Config schema is exported as a Zod schema so consumers can validate or extend it.
-- [ ] Loader is unit-tested with: full config, partial config, missing config, and invalid config (must error with a useful message).
+- [ ] Loader is unit-tested with: full config, partial config, missing config (warn + empty repos), and invalid config (must error with a useful message).
 
 ### US4: Cockpit talks to the orchestrator when authenticated, degrades when not
 
@@ -67,8 +70,8 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 **So that** I can use the cockpit offline or in CI without provisioning a token.
 
 **Acceptance Criteria**:
-- [ ] `createOrchestratorClient(config)` returns a client that exposes a typed surface (e.g. `getJobs`, `getWorkers`).
-- [ ] When no API token is present, the factory returns a stub client whose methods return a typed "unavailable" result rather than throwing.
+- [ ] `createOrchestratorClient(config)` returns a client with the v1 surface: `isAvailable(): boolean`, `health()`, `getJobs()`, `getWorkers()`. (Real method coverage expands in G5.1 — orchestrator status tier.)
+- [ ] When no API token is present, the factory returns a stub whose `health` / `getJobs` / `getWorkers` return typed `{ available: false }` results (never throw) and `isAvailable()` → `false`.
 - [ ] All other exports of the package work identically with or without the orchestrator client being live.
 
 ---
@@ -78,15 +81,15 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Create `packages/cockpit/` as a TypeScript ESM pnpm workspace package (`@generacy-ai/cockpit`), Node >=22, `tsc` build, `vitest` test. | P1 | Mirror conventions of `@generacy-ai/credhelper` for layout. |
-| FR-002 | Export a `CockpitState` enum (or string-literal union) covering every state in `WORKFLOW_LABELS` plus explicit `error`, `terminal`, and `unknown` buckets. | P1 | Naming must be stable — it becomes the public API. |
-| FR-003 | Export `classify(labels: Iterable<string>): CockpitState` that imports `WORKFLOW_LABELS` from `@generacy-ai/workflow-engine` (no copy/paste of label data). | P1 | Pure function, no I/O. |
-| FR-004 | Define and document a precedence rule used by the classifier when multiple workflow labels are present. | P1 | Suggested: terminal > error > waiting > active > pending. |
-| FR-005 | Add a `cockpit:` block to `.generacy/config.yaml`'s schema (via `@generacy-ai/config`) and load it through a typed loader exported from `@generacy-ai/cockpit`. | P1 | Zod-validated. Defaults pulled from `gh auth status` and `MONITORED_REPOS`. |
-| FR-006 | Implement epic manifest read/write helpers (location and shape documented in plan artifacts). | P1 | Atomic writes. Idempotent. |
-| FR-007 | Implement `resolveEpicIssues(epic, owner, repo)` with manifest-first, label-fallback resolution. | P1 | Fallback uses `epic-child` + `epic-parent` labels. |
+| FR-002 | Export a curated `CockpitState` enum/string-literal union: `pending | active | waiting | error | terminal | unknown`. | P1 | Curated abstraction, not 1:1 with labels — the `sourceLabel` field on `classify()` output carries the originating `WORKFLOW_LABELS` entry. Naming must be stable. |
+| FR-003 | Export `classify(labels: Iterable<string>): { state: CockpitState; sourceLabel: string }` that imports `WORKFLOW_LABELS` from `@generacy-ai/workflow-engine` (no copy/paste of label data). | P1 | Pure function, no I/O. Returns a struct so the watcher can route gate-specific actions. |
+| FR-004 | Implement the **authoritative** precedence rule `terminal > error > waiting > active > pending` (curated tier). Tie-breaks within a tier: within `waiting`, surface the earliest unsatisfied gate in pipeline order `spec-review → clarification → plan-review → tasks-review → implementation-review → manual-validation`; within any other tier, break ties by index in `WORKFLOW_LABELS`. | P1 | Normative, not suggested. `sourceLabel` reports the winning label. |
+| FR-005 | Add a `cockpit:` block to `.generacy/config.yaml`'s schema (via `@generacy-ai/config`) and load it through a typed loader. `MONITORED_REPOS` entries are `owner/repo` strings. When both `cockpit.repos` and `MONITORED_REPOS` are unset, return `repos: []` with a warn-level log (absent config — graceful). Malformed config still throws. | P1 | Zod-validated. Defaults pulled from `gh auth status` and `MONITORED_REPOS`. |
+| FR-006 | Implement epic manifest read/write helpers. Canonical on-disk path: `.generacy/epics/<slug>.yaml` in the epic-parent's repo. Zod-validated shape owned by this package: `epic: { repo, issue, slug, plan }`, `autonomy: {}`, `phases: [{ name, tier?, repos: [...], issues: ["owner/repo#n", ...] }]`. | P1 | Atomic writes. Idempotent. Reference: `.generacy/epics/epic-cockpit.yaml` in tetrad-development. |
+| FR-007 | Implement `resolveEpicIssues(epic, owner, repo)` with manifest-first, label-fallback resolution: scan `.generacy/epics/*.yaml`, match `epic.issue == N`; fall back to `epic-child` / `epic-parent` label graph. | P1 | Manifest is a known repo path (file), not the issue body. |
 | FR-008 | Provide a thin wrapper over the `gh` CLI for: list issues by query, add/remove labels on an issue, read PR check-run summaries. | P1 | No new HTTP deps — `gh` is the authenticated transport. |
-| FR-009 | Implement an orchestrator API client using the existing `NativeHttpClient` pattern (e.g. `packages/activation-client`). | P1 | No `node-fetch`/`undici` adds. |
-| FR-010 | Orchestrator client must degrade to a "no-op / unavailable" stub when no API token is configured, instead of throwing at construction time. | P1 | Consumers can check `client.isAvailable()`. |
+| FR-009 | Implement an orchestrator API client using the existing `NativeHttpClient` pattern (e.g. `packages/activation-client`). v1 method surface: `isAvailable()`, `health()`, `getJobs()`, `getWorkers()`. | P1 | No `node-fetch`/`undici` adds. Exact endpoint mapping is a plan-phase detail. |
+| FR-010 | Orchestrator client must degrade gracefully when no API token is configured: factory returns a stub whose `health` / `getJobs` / `getWorkers` return typed `{ available: false }` results (never throw); `isAvailable()` → `false`. | P1 | No throw at construction. Real coverage expands in G5.1. |
 | FR-011 | Ship unit tests for: classifier (every state + precedence), config loader (4 scenarios in US3), epic manifest read/write, both branches of `resolveEpicIssues`, orchestrator client degraded mode. | P1 | Vitest. No live network. |
 | FR-012 | Export a single public API surface from `packages/cockpit/src/index.ts`. Internal modules stay internal. | P2 | |
 | FR-013 | Document the package's public API and the `cockpit:` config block in a `README.md` inside the package. | P2 | |
@@ -95,7 +98,7 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Classifier coverage of `WORKFLOW_LABELS` states. | 100% of states in `WORKFLOW_LABELS` map to a `CockpitState`. | Static check in a unit test that iterates `WORKFLOW_LABELS` and asserts every label produces a non-`unknown` state. |
+| SC-001 | Classifier coverage of `WORKFLOW_LABELS` states. | 100% of entries in `WORKFLOW_LABELS` map to a `(state, sourceLabel)` pair with non-`unknown` state and populated `sourceLabel`. | Static check in a unit test that iterates `WORKFLOW_LABELS` and asserts every label produces a non-`unknown` state + populated `sourceLabel`. |
 | SC-002 | Classifier behavior is unit-tested. | One test per state + precedence cases all green. | `pnpm --filter @generacy-ai/cockpit test` passes. |
 | SC-003 | Config loader produces working defaults on a clean machine. | Given an empty `.generacy/config.yaml`, `loadCockpitConfig()` resolves with `owner` from `gh auth status` and `repos` from `MONITORED_REPOS`. | Unit test with mocked `gh` + env. |
 | SC-004 | Epic-scoping resolves both ways. | Given a manifest, resolver returns manifest contents; given no manifest, resolver returns labeled issues. | Unit tests for both branches. |
@@ -109,7 +112,7 @@ This is the foundation issue for the Epic Cockpit epic — every other G0.x issu
 - `@generacy-ai/config` already exposes a loader for `.generacy/config.yaml` that the cockpit can extend with its `cockpit:` block.
 - The `gh` CLI is installed and authenticated in the environments where the cockpit runs (this is consistent with the rest of the repo's tooling).
 - The orchestrator HTTP API surface needed by cockpit consumers is either already defined or will be specified by a sibling G0.x issue — for this foundation issue the client only needs the *shape* and the degraded-mode behavior, not full method coverage.
-- The epic manifest's exact on-disk location and schema are documented in `docs/epic-cockpit-plan.md` (tetrad-development) — this spec defers the precise shape to the plan phase, which will resolve it.
+- The epic manifest's canonical on-disk location is `.generacy/epics/<slug>.yaml` in the epic-parent's repo; the Zod-validated schema is owned by this package (see FR-006). The reference manifest is committed at `.generacy/epics/epic-cockpit.yaml` in `tetrad-development`.
 
 ## Out of Scope
 
@@ -129,7 +132,7 @@ The issue notes this is the largest in the epic and can be split into three sub-
 2. **Manifest** — epic manifest read/write + `resolveEpicIssues` scoping.
 3. **gh + orchestrator client** — `gh` wrapper + degraded-mode orchestrator client.
 
-The plan phase should decide whether to land this as one PR or three.
+**Decision (clarification Q5 follow-up note)**: land this as a **single PR** — the three parts are small and tightly coupled; splitting adds a phase and integration friction for little gain.
 
 ---
 
