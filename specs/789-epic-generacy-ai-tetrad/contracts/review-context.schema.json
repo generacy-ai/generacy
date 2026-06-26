@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit/review-context.json",
+  "title": "ReviewContextPayload",
+  "description": "JSON written to stdout by `generacy cockpit review-context <issue>` (Q5).",
+  "type": "object",
+  "required": ["pr", "diff", "diffTruncated", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "pr": {
+      "type": "object",
+      "required": ["number", "title", "url", "base", "head", "body", "author", "state", "draft"],
+      "additionalProperties": false,
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "title":  { "type": "string" },
+        "url":    { "type": "string", "format": "uri" },
+        "base":   { "type": "string", "description": "Base branch (target of the PR)." },
+        "head":   { "type": "string", "description": "Head branch (source of the PR)." },
+        "body":   { "type": "string" },
+        "author": {
+          "oneOf": [{ "type": "string" }, { "type": "null" }],
+          "description": "GitHub login of the PR author; null if the author was deleted (ghosted)."
+        },
+        "state":  { "type": "string", "enum": ["OPEN", "CLOSED", "MERGED"] },
+        "draft":  { "type": "boolean" }
+      }
+    },
+    "diff": {
+      "type": "string",
+      "description": "Unified diff text. Truncated to 256 KiB at the engine boundary; check `diffTruncated`."
+    },
+    "diffTruncated": {
+      "type": "boolean",
+      "description": "True iff the diff was capped before being returned. Consumers may re-fetch via `gh pr diff` for the full text."
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "name":       { "type": "string", "minLength": 1 },
+          "state":      {
+            "type": "string",
+            "enum": ["SUCCESS", "FAILURE", "PENDING", "NEUTRAL", "SKIPPED", "CANCELLED"]
+          },
+          "conclusion": { "type": "string" },
+          "url":        { "type": "string", "format": "uri" }
+        }
+      }
+    }
+  }
+}

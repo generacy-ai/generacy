@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit/failing-check.json",
+  "title": "FailingCheckPayload",
+  "description": "JSON written to stdout by `generacy cockpit merge <issue>` on any red outcome (Q2).",
+  "type": "object",
+  "required": ["status", "reason", "pr", "failingChecks"],
+  "additionalProperties": false,
+  "properties": {
+    "status": {
+      "type": "string",
+      "const": "red",
+      "description": "Always the literal 'red' — the green path emits no stdout."
+    },
+    "reason": {
+      "type": "string",
+      "enum": ["checks-failing", "missing-label", "unresolved"],
+      "description": "Discriminator. Routes the consumer to the right next action (fixer, label, fail-loud)."
+    },
+    "pr": {
+      "description": "PR identifiers. Null only when reason='unresolved' AND the issue had no associated PR.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["number", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "number": { "type": "integer", "minimum": 1 },
+            "url":    { "type": "string", "format": "uri" }
+          }
+        },
+        { "type": "null" }
+      ]
+    },
+    "failingChecks": {
+      "type": "array",
+      "description": "Non-empty iff reason='checks-failing'. Empty for the other reasons.",
+      "items": {
+        "type": "object",
+        "required": ["name", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "name":  { "type": "string", "minLength": 1 },
+          "state": {
+            "type": "string",
+            "enum": ["FAILURE", "PENDING", "NEUTRAL", "SKIPPED", "CANCELLED", "MISSING"],
+            "description": "'MISSING' = check is required by branch protection but absent from the PR's check list."
+          },
+          "url":   { "type": "string", "format": "uri" }
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "reason": { "const": "checks-failing" } } },
+      "then": {
+        "properties": {
+          "pr": { "type": "object" },
+          "failingChecks": { "minItems": 1 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "missing-label" } } },
+      "then": {
+        "properties": {
+          "pr": { "type": "object" },
+          "failingChecks": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "unresolved" } } },
+      "then": {
+        "properties": {
+          "failingChecks": { "maxItems": 0 }
+        }
+      }
+    }
+  ]
+}
