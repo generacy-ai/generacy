@@ -12,6 +12,7 @@ export interface Issue {
   url: string;
   body: string;
   author?: { login: string };
+  createdAt: string;
 }
 
 export interface CheckRunSummary {
@@ -26,11 +27,23 @@ export interface ListIssuesOptions {
   repo?: string;
 }
 
+export interface PullRequestSummary {
+  number: number;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  mergedAt?: string;
+  closedAt?: string;
+  url: string;
+  isDraft: boolean;
+  labels: string[];
+}
+
 export interface GhWrapper {
   listIssues(query: string, options?: ListIssuesOptions): Promise<Issue[]>;
   addLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   removeLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   getPullRequestCheckRuns(repo: string, prNumber: number): Promise<CheckRunSummary[]>;
+  resolveIssueToPR(repo: string, issueNumber: number): Promise<number | null>;
+  getPullRequest(repo: string, prNumber: number): Promise<PullRequestSummary>;
 }
 
 const IssueRawSchema = z.object({
@@ -52,6 +65,7 @@ const IssueRawSchema = z.object({
     .passthrough()
     .nullable()
     .optional(),
+  createdAt: z.string().optional(),
 });
 
 const CheckRunRawSchema = z
@@ -117,7 +131,128 @@ function parseIssues(stdout: string): Issue[] {
     url: raw.url,
     body: raw.body ?? '',
     author: raw.author?.login != null ? { login: raw.author.login } : undefined,
+    createdAt: raw.createdAt ?? '',
   }));
+}
+
+const PullRequestRawSchema = z
+  .object({
+    number: z.number().int().optional(),
+    state: z.string(),
+    mergedAt: z.string().nullable().optional(),
+    closedAt: z.string().nullable().optional(),
+    url: z.string(),
+    isDraft: z.boolean().optional(),
+    labels: z
+      .array(
+        z.union([z.string(), z.object({ name: z.string() }).passthrough()]),
+      )
+      .default([]),
+  })
+  .passthrough();
+
+function normalizePrState(raw: string, mergedAt?: string | null): 'OPEN' | 'CLOSED' | 'MERGED' {
+  const upper = raw.toUpperCase();
+  if (upper === 'MERGED') return 'MERGED';
+  if (upper === 'CLOSED') {
+    return mergedAt != null && mergedAt.length > 0 ? 'MERGED' : 'CLOSED';
+  }
+  return 'OPEN';
+}
+
+function parsePullRequest(stdout: string, prNumber: number): PullRequestSummary {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(
+      `gh returned malformed JSON for getPullRequest: ${stdout.slice(0, 200)}`,
+    );
+  }
+  const result = PullRequestRawSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`gh pr view JSON shape mismatch: ${result.error.message}`);
+  }
+  const raw = result.data;
+  const mergedAt = raw.mergedAt ?? undefined;
+  const closedAt = raw.closedAt ?? undefined;
+  return {
+    number: raw.number ?? prNumber,
+    state: normalizePrState(raw.state, mergedAt),
+    ...(mergedAt != null ? { mergedAt } : {}),
+    ...(closedAt != null ? { closedAt } : {}),
+    url: raw.url,
+    isDraft: raw.isDraft ?? false,
+    labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+  };
+}
+
+const ResolveIssueToPrRawSchema = z
+  .object({
+    closedByPullRequestsReferences: z
+      .array(
+        z
+          .object({
+            number: z.number().int().optional(),
+            url: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    timelineItems: z
+      .array(
+        z
+          .object({
+            source: z
+              .object({
+                __typename: z.string().optional(),
+                number: z.number().int().optional(),
+                url: z.string().optional(),
+              })
+              .passthrough()
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+  })
+  .passthrough();
+
+function extractPrNumberFromUrl(url: string | undefined): number | null {
+  if (url == null) return null;
+  const m = url.match(/\/pull\/(\d+)(?:\b|$)/);
+  if (m == null) return null;
+  const n = Number.parseInt(m[1]!, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseResolveIssueToPr(stdout: string): number | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    throw new Error(
+      `gh returned malformed JSON for resolveIssueToPR: ${stdout.slice(0, 200)}`,
+    );
+  }
+  const result = ResolveIssueToPrRawSchema.safeParse(parsed);
+  if (!result.success) {
+    throw new Error(`gh issue view JSON shape mismatch: ${result.error.message}`);
+  }
+  const data = result.data;
+  for (const ref of data.closedByPullRequestsReferences ?? []) {
+    if (typeof ref.number === 'number') return ref.number;
+    const fromUrl = extractPrNumberFromUrl(ref.url);
+    if (fromUrl != null) return fromUrl;
+  }
+  for (const item of data.timelineItems ?? []) {
+    const src = item.source;
+    if (src == null) continue;
+    if (typeof src.number === 'number') return src.number;
+    const fromUrl = extractPrNumberFromUrl(src.url);
+    if (fromUrl != null) return fromUrl;
+  }
+  return null;
 }
 
 function parseCheckRuns(stdout: string): CheckRunSummary[] {
@@ -161,7 +296,7 @@ export class GhCliWrapper implements GhWrapper {
       'issues',
       query,
       '--json',
-      'number,title,state,labels,url,body,author',
+      'number,title,state,labels,url,body,author,createdAt',
       '--limit',
       String(limit),
     ];
@@ -206,6 +341,36 @@ export class GhCliWrapper implements GhWrapper {
     const result = await this.runner('gh', args);
     failIfNonZero(result, 'pr checks');
     return parseCheckRuns(result.stdout);
+  }
+
+  async resolveIssueToPR(repo: string, issueNumber: number): Promise<number | null> {
+    const args = [
+      'issue',
+      'view',
+      String(issueNumber),
+      '--repo',
+      repo,
+      '--json',
+      'closedByPullRequestsReferences,timelineItems',
+    ];
+    const result = await this.runner('gh', args);
+    failIfNonZero(result, 'issue view');
+    return parseResolveIssueToPr(result.stdout);
+  }
+
+  async getPullRequest(repo: string, prNumber: number): Promise<PullRequestSummary> {
+    const args = [
+      'pr',
+      'view',
+      String(prNumber),
+      '--repo',
+      repo,
+      '--json',
+      'number,state,mergedAt,closedAt,url,isDraft,labels',
+    ];
+    const result = await this.runner('gh', args);
+    failIfNonZero(result, 'pr view');
+    return parsePullRequest(result.stdout, prNumber);
   }
 }
 
