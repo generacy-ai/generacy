@@ -16,7 +16,7 @@
 - C: Skip the manifest entirely in v1; require each in-scope issue to carry a `phase:<name>` label and resolve by GitHub search (`repo:… is:issue is:open label:phase:<name> label:epic-child`). (Standalone; no G3.1 dependency.)
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — Enumerate from the manifest via G0.1's `readManifest`. Match the phase by its `P<n>` index (or full name) and use that phase's `issues` list. Hard error with a "run `cockpit manifest init` first" hint if no manifest is found. NOT option C: a `phase:<epic-phase>` label would collide with the orchestrator's own `phase:*` namespace (specify/clarify/…). The manifest reader landed in G0.1 (#786) and a manifest is already committed at `.generacy/epics/epic-cockpit.yaml`, so this works today even before G3.1's `init` lands.
 
 ---
 
@@ -29,7 +29,7 @@
 - C: Add a `--assignee <login>` CLI flag (required when the config field is unset); look up config first, then CLI flag, then error. (Per-invocation override with a config home for later.)
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **B + C** (not A's hard-error). Default the assignee to `gh api user --jq .login` (the cluster identity inside the orchestrator container), with a `--assignee <login>` CLI override. Do NOT add a required config field in this issue — that would modify the merged G0.1 `CockpitConfigSchema`; an optional `cockpit.clusterAccount` hook can come later only if the dev identity ever diverges from the cluster identity. Never error on "unset" — the `gh` login is the correct default.
 
 ---
 
@@ -42,7 +42,7 @@
 - C: Use the epic-primary repo recorded in the manifest's `epic.repo` field as the single in-scope repo; phase entries from other repos are shown in the preview as skipped. (Zero-config; couples to manifest's epic.repo.)
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A, with B's guard.** One repo per invocation. If the phase's `issues` span multiple repos and no `--repo <owner/repo>` is given, error (do NOT silently pick one); default to the sole repo when the phase is single-repo. Show the skipped cross-repo refs in the preview so they are visible-but-untouched. (Respects the per-repo-automation constraint.)
 
 ---
 
@@ -54,7 +54,7 @@
 - B: Fail-fast: on the first failure, halt; do not touch remaining issues; exit non-zero reporting which issues were already mutated, the one that failed, and which were skipped. (Stops on first sign of trouble — e.g., auth expiry — to avoid amplifying the problem.)
 - C: Best-effort within a single issue boundary (i.e., if assign succeeds but label fails on the *same* issue, still mark that issue as partial-failure, but move on to the next issue). Continue-on-failure across issues.
 
-**Answer**: *Pending*
+**Answer**: **A** — Best-effort. Process every issue, then exit non-zero with a structured per-issue summary (assign result + label result per issue). Idempotency (SC-003) makes a rerun trivial, so maximizing per-invocation progress is the better UX.
 
 ---
 
@@ -67,7 +67,16 @@
 - C: Treat any ineligible entry as a hard error: refuse to proceed until the manifest/labels are reconciled (the operator must run `cockpit manifest sync` from G3.1 or fix the labels first). (Strict; forces the manifest to be authoritative.)
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **B** — Include ineligible issues in the preview marked `[SKIP: closed]` / `[SKIP: no phase]`, but mutate only the eligible subset on confirm. Visible and non-blocking.
+
+---
+
+## Additional Directives (from the same answer comment)
+
+Two points not asked but pinned for correctness:
+
+- **Per-issue workflow label**: Derive the workflow label from each issue's `type:` label (`type:bug` → `process:speckit-bugfix`, otherwise `process:speckit-feature`) so a mixed phase queues correctly. This generalizes FR-005 beyond a hard-coded `process:speckit-feature`.
+- **Interactive flow split**: The CLI verb always previews first and mutates only on `--yes`/confirm. The `/cockpit:queue` slash command (#359) owns the interactive confirmation UX and calls this CLI verb with `--yes`.
 
 ---
 
