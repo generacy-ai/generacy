@@ -18,6 +18,16 @@ Depends on: G0.1 (#786 — @generacy-ai/cockpit engine foundation package)
 Part of the Epic Cockpit. Plan: docs/epic-cockpit-plan.md in tetrad-development (P1 / G1.3).
 
 
+## Clarifications
+
+### Batch 1 — 2026-06-26
+
+- **Q1 — Engine API surface**: Extend the cockpit engine's `GhCliWrapper` in this PR with `resolveIssueToPR(repo, issue)`, `getPullRequest(repo, pr)` (metadata + diff), and `mergePullRequest(repo, pr, { squash })`. SC-005 (no `gh` shell-outs outside the engine) is preserved. Coordinate `resolveIssueToPR` / `getPullRequest` with #787 — define once, reuse.
+- **Q2 — Failing-check JSON shape**: `{ status: "red", reason: "checks-failing" | "missing-label" | "unresolved", pr: { number, url }, failingChecks: [{ name, state, url? }] }`. The `reason` discriminator routes downstream callers (fixer vs. "not ready / missing `completed:validate`" vs. unresolved threads).
+- **Q3 — Required-check set**: Derive "required" from `develop`'s branch protection (`gh api repos/{owner}/{repo}/branches/develop/protection`); "missing" = a protected check absent on the PR. On 403 (token can't read branch protection), fall back to "every check present on the PR must be green" and emit a warning.
+- **Q4 — Pending-check behavior**: Fail-fast. Any pending / in-progress / queued check → exit red immediately with the failing-check JSON. No blocking poll in `cockpit merge`; `watch` (#787) is responsible for re-triggering once green.
+- **Q5 — `review-context` payload**: Single JSON object on stdout: `{ pr: { number, title, url, base, head, body, author, state, draft }, diff: "<unified diff text>", checks: [{ name, state, conclusion?, url? }] }`. Diff is a text blob with a max-bytes cap. `reviewComments` / `commits` deferred.
+
 ## User Stories
 
 ### US1: Safe one-shot squash-merge of a completed issue's PR
@@ -50,14 +60,14 @@ Part of the Epic Cockpit. Plan: docs/epic-cockpit-plan.md in tetrad-development 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
 | FR-001 | Add `cockpit merge <issue>` subcommand under `packages/generacy/src/cli/commands/cockpit/merge.ts`. | P1 | Wired via the existing cockpit command group registration. |
-| FR-002 | `merge` must look up the PR for `<issue>` via the cockpit engine API (issue→PR resolution from G0.1). | P1 | Reuse, do not duplicate, resolution logic. |
-| FR-003 | `merge` must verify the PR carries the `completed:validate` workflow label before doing anything else. | P1 | Label name comes from `WORKFLOW_LABELS` (workflow-engine), not a hardcoded string. |
-| FR-004 | `merge` must fetch PR check results and treat any non-success state (failure, pending, missing required) as red. | P1 | Use cockpit engine's `gh` PR-checks integration from G0.1. |
-| FR-005 | On red, `merge` must exit non-zero and write a JSON object to stdout enumerating each failing check (name, state, URL where available). | P1 | Stable JSON schema so downstream automation can parse. |
-| FR-006 | On green + `completed:validate`, `merge` must perform a squash-merge into `develop` and exit 0. | P1 | Use `gh pr merge --squash` (or equivalent client call). |
+| FR-002 | `merge` must look up the PR for `<issue>` via the cockpit engine API (issue→PR resolution from G0.1). | P1 | Per Q1: extend `GhCliWrapper` with `resolveIssueToPR(repo, issue)`. Coordinate with #787. |
+| FR-003 | `merge` must verify the PR carries the `completed:validate` workflow label before doing anything else. | P1 | Label name comes from `WORKFLOW_LABELS` (workflow-engine), not a hardcoded string. Missing label → red with `reason: "missing-label"` (Q2). |
+| FR-004 | `merge` must fetch PR check results and treat any non-success state (failure, pending, missing required) as red. Pending/in-progress/queued checks are red — fail-fast, no polling (Q4). | P1 | Required-check set derived from `develop`'s branch protection (Q3); on 403 fall back to "every check present must be green" + warn. |
+| FR-005 | On red, `merge` must exit non-zero and write a JSON object to stdout of the shape `{ status: "red", reason: "checks-failing" \| "missing-label" \| "unresolved", pr: { number, url }, failingChecks: [{ name, state, url? }] }` (Q2). | P1 | The `reason` discriminator routes downstream callers. |
+| FR-006 | On green + `completed:validate`, `merge` must perform a squash-merge into `develop` and exit 0. | P1 | Per Q1: extend `GhCliWrapper` with `mergePullRequest(repo, pr, { squash })`. |
 | FR-007 | `merge` must never perform a merge when the red path is taken — no override flag in this scope. | P1 | Safety property; covered by tests. |
 | FR-008 | Add `cockpit review-context <issue>` subcommand under `packages/generacy/src/cli/commands/cockpit/review-context.ts`. | P1 | Wired via the existing cockpit command group registration. |
-| FR-009 | `review-context` must emit a structured payload containing PR metadata, diff, and check results to stdout. | P1 | Format consumable by the review skill. |
+| FR-009 | `review-context` must emit a single JSON object to stdout of the shape `{ pr: { number, title, url, base, head, body, author, state, draft }, diff: "<unified diff text>", checks: [{ name, state, conclusion?, url? }] }`. `diff` is a text blob capped at a configurable max-bytes limit (Q5). | P1 | Per Q1: PR metadata + diff come from `GhCliWrapper.getPullRequest(repo, pr)`. `reviewComments` / `commits` deferred. |
 | FR-010 | Both commands must exit non-zero with a clear error message when the issue or PR cannot be resolved. | P1 | Don't silently emit empty output. |
 | FR-011 | Isolate all new files under `packages/generacy/src/cli/commands/cockpit/` per the epic's ownership rule. | P1 | Avoid touching other packages outside the engine API surface from G0.1. |
 
@@ -73,11 +83,12 @@ Part of the Epic Cockpit. Plan: docs/epic-cockpit-plan.md in tetrad-development 
 
 ## Assumptions
 
-- The cockpit engine package (#786, G0.1) is available and exposes: issue→PR resolution, label-state classification (`WORKFLOW_LABELS`), and PR-checks fetching.
+- The cockpit engine package (#786, G0.1) is available and exposes: label-state classification (`WORKFLOW_LABELS`) and PR-checks fetching. Issue→PR resolution, PR metadata/diff, and squash-merge are added to `GhCliWrapper` in this PR (Q1) and coordinated with #787.
 - `develop` is the merge target; this is not configurable in this scope.
-- `gh` CLI auth is already established in the environment running the command (per cockpit engine defaults from G0.1).
+- `gh` CLI auth is already established in the environment running the command (per cockpit engine defaults from G0.1). When the token cannot read `develop`'s branch protection (HTTP 403), `merge` falls back to "every check present on the PR must be green" with a warning (Q3).
 - The PR has a single associated issue (`<issue>`); multi-issue PRs are out of scope.
 - `completed:validate` is the canonical "ready to merge" label — gating on it is sufficient; we do not additionally check reviewer approval state here.
+- Pending/in-progress/queued checks are treated as red without polling. Re-triggering `merge` once checks turn green is the responsibility of `watch` (#787), not this verb (Q4).
 
 ## Out of Scope
 

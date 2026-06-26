@@ -10,7 +10,7 @@
 - B: Allow the CLI verbs to shell out to `gh pr view/diff/merge` directly; relax SC-005 to "no duplicated checks logic" only.
 - C: Hybrid — add `resolveIssueToPR()` and `getPullRequest()` to the engine, but `mergePullRequest()` shells out directly from the verb (treating mutating ops differently from reads).
 
-**Answer**: *Pending*
+**Answer**: A — Extend `GhCliWrapper` with `resolveIssueToPR(repo, issue)`, `getPullRequest(repo, pr)` (metadata + diff), and `mergePullRequest(repo, pr, { squash })`. Keeps SC-005 intact and matches G0.1's injectable-`CommandRunner` design. Coordinate `resolveIssueToPR`/`getPullRequest` with #787 (status needs them too) — define once, reuse.
 
 ### Q2: Failing-check JSON schema
 **Context**: FR-005 / SC-003 require a "stable JSON schema" on stdout when `merge` exits non-zero, but the exact shape is unspecified. Downstream automation needs to parse this deterministically.
@@ -20,7 +20,7 @@
 - B: Minimal object: `{ failingChecks: [{ name, state, url? }] }` — only the check list, no PR or status metadata.
 - C: Bare array of checks: `[{ name, state, url? }]` — most compact, but no room to express non-check red causes (e.g., label missing) in the same shape.
 
-**Answer**: *Pending*
+**Answer**: A — Object wrapper: `{ status: "red", reason: "checks-failing" | "missing-label" | "unresolved", pr: { number, url }, failingChecks: [{ name, state, url? }] }`. The `reason` discriminator is what lets `/cockpit:merge` route correctly (fixer subagent vs. "not ready / missing `completed:validate`" vs. unresolved threads).
 
 ### Q3: What "required" means for checks
 **Context**: FR-004 treats "failure, pending, missing required" as red. The definition of "required" is undefined — GitHub has branch-protection required checks, and PRs also have their own check runs. "Missing" only makes sense if there is an authoritative list of expected checks.
@@ -30,7 +30,7 @@
 - B: All checks present on the PR are treated as required; "missing" is not a separately detectable state — only `FAILURE`/`PENDING` cause red.
 - C: Configurable list under `.generacy/cockpit.yaml` (or similar); defaults to option B if unset.
 
-**Answer**: *Pending*
+**Answer**: A (with fallback) — Derive "required" from `develop`'s branch protection (`gh api repos/{owner}/{repo}/branches/develop/protection`); "missing" = a protected check absent on the PR. If the token can't read branch protection (403), fall back to B (every check present on the PR must be green) and warn. Merge safety needs the authoritative required-set.
 
 ### Q4: Behavior on pending checks
 **Context**: FR-004 calls pending checks red, but does not say whether the verb should wait for them to resolve. Behavior here changes whether `cockpit merge` is fail-fast or long-running.
@@ -40,7 +40,7 @@
 - B: Poll for a bounded time (e.g., 5 min, configurable via `--wait` flag) before declaring red.
 - C: Fail-fast in this scope (option A); add `cockpit wait <issue>` as a follow-up verb in a later issue.
 
-**Answer**: *Pending*
+**Answer**: A — Fail-fast: pending / in-progress / queued checks → exit red immediately with the failing-check JSON. No blocking poll — `watch`'s check-run roll-up (#787 Q3) is what waits for green and re-triggers `merge`, so a separate `cockpit wait` verb isn't needed.
 
 ### Q5: `review-context` payload shape & required fields
 **Context**: FR-009 / SC-004 require a "structured payload" with "PR metadata, diff, and check results" but do not specify format or exhaustive field list. The review skill is the consumer (out of scope here) so the contract needs to be pinned down now.
@@ -50,4 +50,4 @@
 - B: Same as A but `diff` is a structured per-file array: `files: [{ path, status, additions, deletions, patch }]` instead of a text blob.
 - C: Same as A plus optional fields: `reviewComments: [...]`, `commits: [...]`, `labels: [...]` — broader payload now, even though only diff+checks are explicitly required.
 
-**Answer**: *Pending*
+**Answer**: A — Single JSON object: `{ pr: { number, title, url, base, head, body, author, state, draft }, diff: "<unified diff text>", checks: [{ name, state, conclusion?, url? }] }`. Diff is a text blob with a max-bytes cap (what `/code-review` consumes directly). `reviewComments` / `commits` can be added later if `/cockpit:review` needs them.
