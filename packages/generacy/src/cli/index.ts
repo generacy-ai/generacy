@@ -24,6 +24,7 @@ import { deployCommand } from './commands/deploy/index.js';
 import { appConfigCommand } from './commands/app-config/index.js';
 import { registryLoginCommand } from './commands/registry-login/index.js';
 import { registryLogoutCommand } from './commands/registry-logout/index.js';
+import { cockpitCommand } from './commands/cockpit/index.js';
 import { createLogger, setLogger } from './utils/logger.js';
 import type { LogLevel } from './utils/logger.js';
 import { setupErrorHandlers } from './utils/error-handler.js';
@@ -76,6 +77,7 @@ export function createProgram(): Command {
   program.addCommand(appConfigCommand());
   program.addCommand(registryLoginCommand());
   program.addCommand(registryLogoutCommand());
+  program.addCommand(cockpitCommand());
 
   // Register v1.5 placeholder subcommands
   for (const cmd of placeholderCommands()) {

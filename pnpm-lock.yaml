@@ -216,6 +216,9 @@ importers:
       '@generacy-ai/activation-client':
         specifier: workspace:*
         version: link:../activation-client
+      '@generacy-ai/cockpit':
+        specifier: workspace:*
+        version: link:../cockpit
       '@generacy-ai/config':
         specifier: workspace:*
         version: link:../config
@@ -225,6 +228,9 @@ importers:
       '@generacy-ai/workflow-engine':
         specifier: workspace:*
         version: link:../workflow-engine
+      chalk:
+        specifier: ^5
+        version: 5.6.2
       commander:
         specifier: ^12.0.0
         version: 12.1.0

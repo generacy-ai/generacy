@@ -45,6 +45,7 @@ export {
   type Issue,
   type CheckRunSummary,
   type ListIssuesOptions,
+  type PullRequestSummary,
   type CommandRunner,
 } from './gh/wrapper.js';
 
