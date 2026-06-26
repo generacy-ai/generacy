@@ -12,9 +12,12 @@
  * Refusal (AD-4): if the active `waiting-for:*` ≠ requested gate, exits 3
  * without side effects. No `--force` in v1.
  */
-import { execFile } from 'node:child_process';
 import { Command, Option } from 'commander';
-import { loadCockpitConfig, type CommandRunner } from '@generacy-ai/cockpit';
+import {
+  loadCockpitConfig,
+  nodeChildProcessRunner,
+  type CommandRunner,
+} from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
 import { parseIssueRef, type IssueRef } from './issue-ref.js';
 import { GATES, listGates, type GateDefinition } from './gate-vocabulary.js';
@@ -96,7 +99,7 @@ export async function runAdvance(
     throw new CockpitExit(2, `Error: cockpit advance: ${(err as Error).message}`);
   }
 
-  const gh = deps.gh ?? createCockpitGh(deps.runner ?? defaultRunner());
+  const gh = deps.gh ?? createCockpitGh(deps.runner ?? nodeChildProcessRunner);
 
   let labels: string[];
   try {
@@ -168,32 +171,6 @@ export async function runAdvance(
     `advanced ${ref.nwo}#${ref.number}: ${gateDef.waitingLabel} → ${gateDef.completedLabel}` +
       (commentUrl ? ` (comment: ${commentUrl})` : ''),
   );
-}
-
-function defaultRunner(): CommandRunner {
-  return (cmd, args, opts) =>
-    new Promise((resolve) => {
-      execFile(
-        cmd,
-        args,
-        {
-          env: opts?.env != null ? { ...process.env, ...opts.env } : process.env,
-          cwd: opts?.cwd,
-          timeout: opts?.timeoutMs ?? 30_000,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-        (error, stdout, stderr) => {
-          const stdoutStr = typeof stdout === 'string' ? stdout : Buffer.from(stdout).toString('utf-8');
-          const stderrStr = typeof stderr === 'string' ? stderr : Buffer.from(stderr).toString('utf-8');
-          let exitCode = 0;
-          if (error) {
-            const e = error as NodeJS.ErrnoException & { code?: number | string };
-            exitCode = typeof e.code === 'number' ? e.code : 1;
-          }
-          resolve({ stdout: stdoutStr, stderr: stderrStr, exitCode });
-        },
-      );
-    });
 }
 
 export type { GateDefinition };

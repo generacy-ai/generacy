@@ -1,6 +1,6 @@
 // @generacy-ai/cockpit — public API surface.
-// Internal modules (state/label-map, gh/command-runner, orchestrator/http,
-// orchestrator/stub) are NOT exported.
+// Internal modules (state/label-map, orchestrator/http, orchestrator/stub) are
+// NOT exported.
 
 // State + classifier
 export { COCKPIT_STATES, type CockpitState, type ClassifyResult } from './types.js';
@@ -45,8 +45,14 @@ export {
   type Issue,
   type CheckRunSummary,
   type ListIssuesOptions,
+  type PullRequestSummary,
   type CommandRunner,
 } from './gh/wrapper.js';
+export {
+  nodeChildProcessRunner,
+  type CommandRunnerOptions,
+  type CommandResult,
+} from './gh/command-runner.js';
 
 // Orchestrator client
 export {

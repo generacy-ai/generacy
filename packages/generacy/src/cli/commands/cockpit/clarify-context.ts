@@ -5,12 +5,15 @@
  * Refuses (exit 3) if the issue is not in `waiting-for:clarification`.
  * Read-only against GitHub (AD-7).
  */
-import { execFile } from 'node:child_process';
 import { Command } from 'commander';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { loadCockpitConfig, type CommandRunner } from '@generacy-ai/cockpit';
+import {
+  loadCockpitConfig,
+  nodeChildProcessRunner,
+  type CommandRunner,
+} from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
 import { parseIssueRef, type IssueRef } from './issue-ref.js';
 import { createCockpitGh, type CockpitGh } from './gh-ext.js';
@@ -88,7 +91,7 @@ export async function runClarifyContext(
     throw new CockpitExit(2, `Error: cockpit clarify-context: ${(err as Error).message}`);
   }
 
-  const runner = deps.runner ?? defaultRunner();
+  const runner = deps.runner ?? nodeChildProcessRunner;
   const gh = deps.gh ?? createCockpitGh(runner);
 
   let labels: string[];
@@ -218,30 +221,4 @@ function defaultGetBranch(runner: CommandRunner): () => Promise<string> {
     if (res.exitCode !== 0) return '';
     return res.stdout.trim();
   };
-}
-
-function defaultRunner(): CommandRunner {
-  return (cmd, args, opts) =>
-    new Promise((resolve) => {
-      execFile(
-        cmd,
-        args,
-        {
-          env: opts?.env != null ? { ...process.env, ...opts.env } : process.env,
-          cwd: opts?.cwd,
-          timeout: opts?.timeoutMs ?? 30_000,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-        (error, stdout, stderr) => {
-          const stdoutStr = typeof stdout === 'string' ? stdout : Buffer.from(stdout).toString('utf-8');
-          const stderrStr = typeof stderr === 'string' ? stderr : Buffer.from(stderr).toString('utf-8');
-          let exitCode = 0;
-          if (error) {
-            const e = error as NodeJS.ErrnoException & { code?: number | string };
-            exitCode = typeof e.code === 'number' ? e.code : 1;
-          }
-          resolve({ stdout: stdoutStr, stderr: stderrStr, exitCode });
-        },
-      );
-    });
 }

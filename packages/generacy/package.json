@@ -44,6 +44,7 @@
     "@generacy-ai/config": "workspace:*",
     "@generacy-ai/orchestrator-types": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
+    "chalk": "^5",
     "commander": "^12.0.0",
     "diff": "^7",
     "dotenv": "^16.4.0",

@@ -1,0 +1,13 @@
+[
+  { "labels": ["workflow:speckit-feature"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "phase:specify"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "waiting-for:spec-review"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "phase:clarify"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "waiting-for:clarification-review"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "phase:plan"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "waiting-for:plan-review"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "phase:implement"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "waiting-for:implementation-review"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "completed:implementation-review"], "state": "OPEN" },
+  { "labels": ["workflow:speckit-feature", "completed:implementation-review"], "state": "CLOSED" }
+]
