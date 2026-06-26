@@ -10,7 +10,7 @@
 - B: Lenient on heading level (`##`/`###`/`####` all accepted) and checkbox optional (`- owner/repo#n` works); phase id pattern is `P\d+` followed by any separator (`—`/`-`/`:`/whitespace) then a name; prose between items is silently skipped.
 - C: Same as B, but also accept bare `owner/repo#n` without a title and treat each phase block's bullet list as the issue list (any non-bullet content ends the phase).
 
-**Answer**: *Pending*
+**Answer**: **B** — Lenient grammar. Accept `##`/`###`/`####` headings; optional checkbox (`- owner/repo#n` works); phase id `P\d+` followed by any separator (`—`/`-`/`:`/whitespace) then a name; surrounding prose between items is silently skipped. (Strict parsing would break on the first hand-edited epic body.)
 
 ### Q2: Phase identity for `sync`
 **Context**: Phases have no stable ID — only `name` (and optional `tier`). When `sync` re-reads the epic body it must match each parsed phase back to an entry in the on-disk manifest to diff its `issues[]`. The matching rule determines what happens when a phase is renamed in the body.
@@ -20,7 +20,7 @@
 - B: Match by the `P<n>` index parsed from the heading (e.g. `P3`), independent of the display name; the manifest's `name` is then updated in place if the body's name changed.
 - C: Normalized `name` match (lowercased, whitespace-collapsed); rename within normalization is treated as same phase.
 
-**Answer**: *Pending*
+**Answer**: **B** — Match phases by the `P\d+` index parsed from the heading/name, independent of display name. Update the manifest's `name` in place when the body's display name changes. The index is the stable identity; the rest of the heading is cosmetic.
 
 ### Q3: `sync` behavior when phases (not issues) change
 **Context**: FR-008 / US2's acceptance criteria only describe issue-level diffs. The spec doesn't say what happens when the epic body adds a new phase heading the manifest doesn't have, or drops one the manifest still lists. This is the difference between `sync` being a true mirror vs. an issue-only reconciler.
@@ -30,7 +30,7 @@
 - B: Issue-only — leave the manifest's `phases[]` shape alone; only diff `issues[]` inside phases that exist in both. Print a warning for unmatched phases and exit 0.
 - C: Strict — exit non-zero with a structured error directing the user to re-run `init` (or `init --force`) when phase shape diverges.
 
-**Answer**: *Pending*
+**Answer**: **A** — Mirror: add new phases (parse `tier` from the "→ vN" marker in the heading; leave `autonomy` untouched) and remove vanished phases entirely, counted in the `+N -M` summary. The epic body is the source of truth.
 
 ### Q4: `epic.plan` format and missing-Plan behavior
 **Context**: FR-007 says `epic.plan` is recorded from a "Plan: ..." line in the epic body and "normalized to a repo-relative path". The reference in #790's body is `Plan: docs/epic-cockpit-plan.md in tetrad-development (P3 / G3.1)`. The schema (`epic.plan: z.string().min(1)`) requires a non-empty string, so missing-Plan must either error or be substituted.
@@ -40,7 +40,7 @@
 - B: Cross-repo qualified ref — `generacy-ai/tetrad-development:docs/epic-cockpit-plan.md` when the body says `in tetrad-development` (owner inferred from the epic ref). Missing Plan line → error.
 - C: Same as A (bare path, stripped), but missing Plan line is non-fatal and `epic.plan` defaults to an empty-but-valid placeholder (e.g. the epic ref itself, like `generacy-ai/tetrad-development#85`).
 
-**Answer**: *Pending*
+**Answer**: **A** — Persist the bare repo-relative path (`docs/epic-cockpit-plan.md`); strip the `in <repo>` and trailing `(...)`. No cross-repo qualifier — the plan lives in the epic's own repo. Missing `Plan:` line → non-zero exit with an actionable "add a Plan: line to the epic body" error message.
 
 ### Q5: Slug collision and `--force` / `--slug` semantics
 **Context**: FR-006 says slug conflicts "surface as an error unless `--force` or `--slug` is provided" but does not pin down what each flag does independently or together. Misreading this changes whether `init --force` clobbers an unrelated epic's manifest.
@@ -50,4 +50,4 @@
 - B: `--force` auto-appends a numeric suffix (`-2`, `-3`, …) until a free filename is found; never overwrites. `--slug <s>` overrides derivation; conflicts on the chosen slug still error.
 - C: `--force` overwrites whatever the derived slug points at. `--slug <s>` is for renaming the canonical slug only — using `--slug` on a name that already exists is itself an error (forces the user to `--force`).
 
-**Answer**: *Pending*
+**Answer**: **A** — `--force` overwrites the existing file at the derived `<slug>.yaml`. `--slug <s>` uses `<s>` instead of the derived slug; if `<s>.yaml` already exists, it still errors unless `--force` is also passed. Overwrite only happens when explicitly requested.
