@@ -17,40 +17,6 @@ Depends on: G0.1 (see the epic checklist for issue numbers)
 ---
 Part of the Epic Cockpit. Plan: docs/epic-cockpit-plan.md in tetrad-development (P1 / G1.1).
 
-## Clarifications
-
-### Batch 1 — 2026-06-26
-
-- **Q1 → D — Epic scoping:** `--epic <owner/repo#N>` is an *optional* flag on
-  both `watch` and `status`. Present → scope via `resolveEpicIssues` (manifest-first,
-  per #786). Omitted → enumerate all open issues/PRs across `cockpit.repos`
-  (grouped in `status` output; not used as a filter in `watch`).
-- **Q2 → D — `watch` event shape:** One NDJSON line per transition with fields
-  `{ ts: ISO8601 string, repo: "owner/name", kind: "issue"|"pr", number: int,
-  from: CockpitState|null, to: CockpitState|null, sourceLabel: string|null,
-  url: string, event: "label-change"|"issue-closed"|"pr-merged"|"pr-closed",
-  labels: string[] }`. `CockpitState` is the curated tier from #786;
-  `sourceLabel` is `ClassifyResult.sourceLabel` (or `null` for non-label
-  transitions); `labels` is the full label set at transition time.
-- **Q3 → C — PR transitions:** Emit on (a) label change via `classify()`,
-  (b) lifecycle (open→closed→merged), and (c) check-run **roll-up** flips
-  (PENDING→SUCCESS/FAILURE). Per-check granularity excluded. draft↔ready flips
-  are *not* emitted (already implied by `waiting-for:implementation-review`).
-- **Q4 → C — `status` rendering:** Plain text, `padEnd`-aligned, plus `chalk`
-  colors gated on TTY (auto-disabled when stdout is piped or `--json` is set).
-  Color map: error=red, waiting=yellow, active=cyan, terminal=green. No
-  `cli-table3` dependency. Tests assert the non-TTY plain path via string
-  equality.
-- **Q5 → B — Pagination:** Paginate to completeness on both verbs (loop until
-  `gh` returns < page size). Silent truncation would violate "exactly one
-  line per transition" (SC-002). Emit a single stderr warning if a single
-  poll cycle exceeds a defensive safety cap.
-
-**Cross-issue:** `resolveIssueToPR` / `getPullRequest` are shared with #789 —
-defined once in the `@generacy-ai/cockpit` engine (G0.1) and reused; whichever
-PR lands first owns the addition. The `status` footer uses the #786
-orchestrator client surface (`getJobs` → queue depth, `getWorkers` → worker
-count).
 
 ## User Stories
 
