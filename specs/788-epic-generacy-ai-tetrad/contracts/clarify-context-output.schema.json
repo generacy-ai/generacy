@@ -82,9 +82,9 @@
         "prDiffSummary": {
           "oneOf": [
             { "type": "null" },
-            { "type": "string", "maxLength": 4106 }
+            { "type": "string", "maxLength": 4108 }
           ],
-          "description": "PR unified diff truncated to 4096 bytes with optional `…[truncated]` suffix. Null when no PR."
+          "description": "PR unified diff truncated to 4096 chars with optional `…[truncated]` suffix (12 chars). Max 4108 chars total. Null when no PR."
         }
       }
     }

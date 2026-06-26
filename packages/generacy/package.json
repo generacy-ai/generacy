@@ -40,6 +40,7 @@
   "dependencies": {
     "@clack/prompts": "^0.9",
     "@generacy-ai/activation-client": "workspace:*",
+    "@generacy-ai/cockpit": "workspace:*",
     "@generacy-ai/config": "workspace:*",
     "@generacy-ai/orchestrator-types": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
