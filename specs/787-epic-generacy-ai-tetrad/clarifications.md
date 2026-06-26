@@ -24,7 +24,11 @@ include?
 - D: `--epic` flag *optional* on both verbs; when omitted, behave as option C
   (all repos), when present, scope to that single epic.
 
-**Answer**: *Pending*
+**Answer**: **D.** `--epic <owner/repo#N>` is optional on both verbs. When
+present, scope to that epic via `resolveEpicIssues` (manifest-first, per #786).
+When omitted, enumerate all open issues/PRs across `cockpit.repos` (grouped in
+`status` output, not filtered). `/cockpit:watch` will pass `--epic` resolved
+from the manifest. (Explicit scoping beats auto-discovering manifests.)
 
 ### Q2: `watch` event JSON shape
 **Context**: FR-005 lists fields (`ts`, `repo`, `kind`, `number`, `from`, `to`,
@@ -49,7 +53,12 @@ non-label transitions (issue OPEN→CLOSED, PR open→closed→merged) represent
   issue/PR at the time of transition (`labels: string[]`) so consumers can
   see context without a follow-up query.
 
-**Answer**: *Pending*
+**Answer**: **D.** `ts` = ISO 8601 string; `from`/`to` = `CockpitState | null`
+(the curated tier from #786); `sourceLabel` = the foundation's
+`ClassifyResult.sourceLabel`, or `null` for non-label transitions. Include an
+`event` discriminator (`"label-change" | "issue-closed" | "pr-merged" |
+"pr-closed"`) **and** the full `labels: string[]` set, so the reactive
+consumer has context without a follow-up query.
 
 ### Q3: PR transition triggers
 **Context**: `classify()` is label-based, but PRs have non-label state that an
@@ -73,7 +82,10 @@ on the stream?
 - D: **Labels + everything signal-bearing.** A, B, C plus draft↔ready
   flip emitted as its own transition.
 
-**Answer**: *Pending*
+**Answer**: **C.** Labels + lifecycle (open→closed→merged) + **check-run
+roll-up** flips (PENDING→SUCCESS/FAILURE). The roll-up is how the watcher
+learns "PR went green → offer merge" / "checks failed → fixer." Exclude the
+draft↔ready flip (already implied by `waiting-for:implementation-review`).
 
 ### Q4: `status` human-readable rendering
 **Context**: FR-013 says "human-readable table by default." The codebase
@@ -96,7 +108,10 @@ on output.
   format ("`#NNN  phase:plan  active  PR #M ✓3/0`") with no library and no
   color. Iterate on layout once an operator has used it.
 
-**Answer**: *Pending*
+**Answer**: **C.** Plain text, `padEnd`-aligned, **plus `chalk` colors gated
+on TTY** (auto-disabled when piped or `--json`). Colors map to the state tiers
+(error red, waiting yellow, active cyan, terminal green); no `cli-table3`.
+Tests assert the non-TTY plain path (string equality).
 
 ### Q5: Repo enumeration scale and pagination
 **Context**: `GhCliWrapper.listIssues` defaults to `--limit 100`. SC-001 only
@@ -121,4 +136,17 @@ limits do they advertise?
   `watch`/`status` exit non-zero with "epic exceeds v1 scale limit; split
   the epic." Forces a config response rather than silent truncation.
 
-**Answer**: *Pending*
+**Answer**: **B.** Paginate to completeness — the "exactly one line per
+transition" guarantee (SC-002) makes silent truncation a violation, and an
+unscoped `watch` over a busy repo can exceed 100 open issues. With `--epic`
+scoping (Q1) the common-case cost is ~nil; add a defensive stderr warning if
+a single poll exceeds a large safety cap.
+
+---
+
+## Cross-issue note
+
+`resolveIssueToPR` / `getPullRequest` are shared with #789 — define them once
+in the `@generacy-ai/cockpit` engine (G0.1) and reuse; whichever PR lands
+first owns the addition. The `status` footer should use the #786 orchestrator
+client surface (`getJobs` → queue depth, `getWorkers` → worker count).
