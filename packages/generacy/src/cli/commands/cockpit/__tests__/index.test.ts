@@ -8,6 +8,7 @@ describe('cockpit command tree', () => {
     expect(names).toEqual([
       'advance',
       'clarify-context',
+      'manifest',
       'merge',
       'review-context',
       'state',
