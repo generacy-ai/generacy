@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GhCliWrapper } from '../gh/wrapper.js';
+import {
+  GhCliWrapper,
+  DIFF_BYTE_CAP,
+  DIFF_TRUNCATION_MARKER,
+} from '../gh/wrapper.js';
 import type { CommandRunner, CommandResult } from '../gh/command-runner.js';
 
 function stubRunner(result: Partial<CommandResult> = {}): {
@@ -13,6 +17,23 @@ function stubRunner(result: Partial<CommandResult> = {}): {
       stdout: result.stdout ?? '[]',
       stderr: result.stderr ?? '',
       exitCode: result.exitCode ?? 0,
+    };
+  });
+  return { runner, calls };
+}
+
+function queuedRunner(
+  queue: Array<Partial<CommandResult>>,
+): { runner: CommandRunner; calls: Array<{ cmd: string; args: string[] }> } {
+  const calls: Array<{ cmd: string; args: string[] }> = [];
+  let i = 0;
+  const runner: CommandRunner = vi.fn(async (cmd, args) => {
+    calls.push({ cmd, args });
+    const next = queue[i++] ?? {};
+    return {
+      stdout: next.stdout ?? '',
+      stderr: next.stderr ?? '',
+      exitCode: next.exitCode ?? 0,
     };
   });
   return { runner, calls };
@@ -234,6 +255,100 @@ describe('GhCliWrapper', () => {
     });
   });
 
+  describe('resolveIssueToPRRef', () => {
+    it('returns the first PR from gh pr list search', async () => {
+      const { runner, calls } = queuedRunner([
+        {
+          stdout: JSON.stringify([
+            {
+              number: 42,
+              url: 'https://github.com/o/r/pull/42',
+              state: 'OPEN',
+              isDraft: false,
+              headRefName: 'feature/x',
+            },
+          ]),
+        },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 7);
+      expect(ref).toEqual({
+        number: 42,
+        url: 'https://github.com/o/r/pull/42',
+        state: 'OPEN',
+        draft: false,
+        headRefName: 'feature/x',
+      });
+      const args = calls[0]?.args ?? [];
+      expect(args.slice(0, 4)).toEqual(['pr', 'list', '--repo', 'o/r']);
+      expect(args).toContain('--search');
+      expect(args).toContain('linked:7');
+      expect(args).toContain('--state');
+      expect(args).toContain('open');
+      expect(args).toContain('--limit');
+      expect(args).toContain('1');
+    });
+
+    it('falls back to issue view closedByPullRequestsReferences', async () => {
+      const { runner, calls } = queuedRunner([
+        { stdout: '[]' },
+        {
+          stdout: JSON.stringify({
+            closedByPullRequestsReferences: [
+              {
+                number: 99,
+                url: 'https://github.com/o/r/pull/99',
+                state: 'MERGED',
+                isDraft: false,
+                headRefName: 'feature/y',
+              },
+            ],
+          }),
+        },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 11);
+      expect(ref).toEqual({
+        number: 99,
+        url: 'https://github.com/o/r/pull/99',
+        state: 'MERGED',
+        draft: false,
+        headRefName: 'feature/y',
+      });
+      expect(calls).toHaveLength(2);
+      const args = calls[1]?.args ?? [];
+      expect(args.slice(0, 5)).toEqual(['issue', 'view', '11', '--repo', 'o/r']);
+    });
+
+    it('returns null when neither path yields a PR', async () => {
+      const { runner } = queuedRunner([
+        { stdout: '[]' },
+        { stdout: JSON.stringify({ closedByPullRequestsReferences: [] }) },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 1);
+      expect(ref).toBeNull();
+    });
+
+    it('normalizes lowercase state to uppercase', async () => {
+      const { runner } = queuedRunner([
+        {
+          stdout: JSON.stringify([
+            {
+              number: 1,
+              url: 'u',
+              state: 'open',
+              headRefName: 'h',
+            },
+          ]),
+        },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 1);
+      expect(ref?.state).toBe('OPEN');
+    });
+  });
+
   describe('getPullRequest', () => {
     it('parses state/mergedAt/closedAt/isDraft/labels', async () => {
       const { runner, calls } = stubRunner({
@@ -303,6 +418,215 @@ describe('GhCliWrapper', () => {
       const { runner } = stubRunner({ stdout: '{not valid' });
       const wrapper = new GhCliWrapper(runner);
       await expect(wrapper.getPullRequest('o/r', 1)).rejects.toThrow(/malformed JSON/);
+    });
+  });
+
+  describe('getPullRequestDetail', () => {
+    it('returns full metadata + sub-cap diff', async () => {
+      const diffText = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n';
+      const { runner, calls } = queuedRunner([
+        {
+          stdout: JSON.stringify({
+            number: 5,
+            title: 'My PR',
+            url: 'https://github.com/o/r/pull/5',
+            baseRefName: 'develop',
+            headRefName: 'feature/z',
+            body: 'PR body text',
+            author: { login: 'alice' },
+            state: 'OPEN',
+            isDraft: false,
+            labels: [{ name: 'completed:validate' }, 'phase:plan'],
+          }),
+        },
+        { stdout: diffText },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const pr = await wrapper.getPullRequestDetail('o/r', 5);
+      expect(pr).toEqual({
+        number: 5,
+        title: 'My PR',
+        url: 'https://github.com/o/r/pull/5',
+        base: 'develop',
+        head: 'feature/z',
+        body: 'PR body text',
+        author: { login: 'alice' },
+        state: 'OPEN',
+        draft: false,
+        labels: ['completed:validate', 'phase:plan'],
+        diff: diffText,
+        diffTruncated: false,
+      });
+      const viewArgs = calls[0]?.args ?? [];
+      expect(viewArgs.slice(0, 5)).toEqual(['pr', 'view', '5', '--repo', 'o/r']);
+      expect(viewArgs).toContain('--json');
+      const diffArgs = calls[1]?.args ?? [];
+      expect(diffArgs.slice(0, 5)).toEqual(['pr', 'diff', '5', '--repo', 'o/r']);
+    });
+
+    it('truncates over-cap diff with marker', async () => {
+      const big = 'a'.repeat(DIFF_BYTE_CAP + 1024);
+      const { runner } = queuedRunner([
+        {
+          stdout: JSON.stringify({
+            number: 1,
+            title: 't',
+            url: 'u',
+            baseRefName: 'develop',
+            headRefName: 'h',
+            body: null,
+            author: null,
+            state: 'OPEN',
+            isDraft: false,
+            labels: [],
+          }),
+        },
+        { stdout: big },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const pr = await wrapper.getPullRequestDetail('o/r', 1);
+      expect(pr.diffTruncated).toBe(true);
+      expect(pr.diff.endsWith(DIFF_TRUNCATION_MARKER)).toBe(true);
+      const diffBuf = Buffer.from(pr.diff, 'utf-8');
+      expect(diffBuf.byteLength).toBeLessThanOrEqual(
+        DIFF_BYTE_CAP + Buffer.byteLength(DIFF_TRUNCATION_MARKER, 'utf-8'),
+      );
+      expect(pr.author).toBeNull();
+      expect(pr.body).toBe('');
+    });
+
+    it('normalizes MERGED state from gh pr view', async () => {
+      const { runner } = queuedRunner([
+        {
+          stdout: JSON.stringify({
+            number: 1,
+            title: 't',
+            url: 'u',
+            baseRefName: 'develop',
+            headRefName: 'h',
+            body: '',
+            author: { login: 'a' },
+            state: 'merged',
+            isDraft: false,
+            labels: [],
+          }),
+        },
+        { stdout: '' },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const pr = await wrapper.getPullRequestDetail('o/r', 1);
+      expect(pr.state).toBe('MERGED');
+    });
+  });
+
+  describe('mergePullRequest', () => {
+    it('squash-merges and returns commit sha from follow-up view', async () => {
+      const { runner, calls } = queuedRunner([
+        { stdout: 'merged' },
+        {
+          stdout: JSON.stringify({
+            mergeCommit: { oid: 'abc123def456' },
+          }),
+        },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.mergePullRequest('o/r', 5, { squash: true });
+      expect(result).toEqual({ merged: true, commitSha: 'abc123def456' });
+      const mergeArgs = calls[0]?.args ?? [];
+      expect(mergeArgs.slice(0, 5)).toEqual(['pr', 'merge', '5', '--repo', 'o/r']);
+      expect(mergeArgs).toContain('--squash');
+      expect(mergeArgs).toContain('--delete-branch=false');
+    });
+
+    it('throws on non-zero exit from gh pr merge', async () => {
+      const { runner } = queuedRunner([
+        { exitCode: 1, stderr: 'merge conflict' },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      await expect(
+        wrapper.mergePullRequest('o/r', 5, { squash: true }),
+      ).rejects.toThrow(/merge conflict/);
+    });
+
+    it('returns merged:true without sha when follow-up view fails', async () => {
+      const { runner } = queuedRunner([
+        { stdout: 'merged' },
+        { exitCode: 1, stderr: 'boom' },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.mergePullRequest('o/r', 5, { squash: true });
+      expect(result).toEqual({ merged: true });
+    });
+  });
+
+  describe('getRequiredCheckNames', () => {
+    it('returns branch-protection names on 200 success', async () => {
+      const { runner, calls } = queuedRunner([
+        {
+          stdout: JSON.stringify({
+            required_status_checks: {
+              contexts: ['ci/lint', 'ci/test'],
+            },
+          }),
+        },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.getRequiredCheckNames('o/r', 'develop');
+      expect(result).toEqual({
+        source: 'branch-protection',
+        names: ['ci/lint', 'ci/test'],
+      });
+      const args = calls[0]?.args ?? [];
+      expect(args.slice(0, 2)).toEqual(['api', 'repos/o/r/branches/develop/protection']);
+    });
+
+    it('falls back on 403', async () => {
+      const { runner } = queuedRunner([
+        { exitCode: 1, stderr: 'HTTP 403: Resource not accessible' },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.getRequiredCheckNames('o/r', 'develop');
+      expect(result).toEqual({ source: 'fallback-pr-checks', names: null });
+    });
+
+    it('falls back on 404 (no protection configured)', async () => {
+      const { runner } = queuedRunner([
+        { exitCode: 1, stderr: 'HTTP 404: Branch not protected' },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.getRequiredCheckNames('o/r', 'develop');
+      expect(result).toEqual({ source: 'fallback-pr-checks', names: null });
+    });
+
+    it('throws on non-403/404 errors', async () => {
+      const { runner } = queuedRunner([
+        { exitCode: 1, stderr: 'HTTP 500: Internal Server Error' },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      await expect(
+        wrapper.getRequiredCheckNames('o/r', 'develop'),
+      ).rejects.toThrow(/HTTP 500/);
+    });
+
+    it('throws when repo is malformed', async () => {
+      const { runner } = stubRunner();
+      const wrapper = new GhCliWrapper(runner);
+      await expect(
+        wrapper.getRequiredCheckNames('badrepo', 'develop'),
+      ).rejects.toThrow(/owner\/name/);
+    });
+
+    it('returns empty contexts list when none configured', async () => {
+      const { runner } = queuedRunner([
+        {
+          stdout: JSON.stringify({
+            required_status_checks: { contexts: [] },
+          }),
+        },
+      ]);
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.getRequiredCheckNames('o/r', 'develop');
+      expect(result).toEqual({ source: 'branch-protection', names: [] });
     });
   });
 

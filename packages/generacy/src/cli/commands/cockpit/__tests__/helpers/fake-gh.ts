@@ -3,7 +3,11 @@ import type {
   GhWrapper,
   Issue,
   ListIssuesOptions,
+  MergeResult,
+  PullRequestDetail,
+  PullRequestRef,
   PullRequestSummary,
+  RequiredChecksResult,
 } from '@generacy-ai/cockpit';
 
 export interface FakeGhConfig {
@@ -75,6 +79,30 @@ export class FakeGh implements GhWrapper {
       isDraft: false,
       labels: [],
     };
+  }
+
+  async resolveIssueToPRRef(repo: string, issue: number): Promise<PullRequestRef | null> {
+    this.calls.push({ method: 'resolveIssueToPRRef', args: [repo, issue] });
+    throw new Error('resolveIssueToPRRef not stubbed in FakeGh (watch/status sensor)');
+  }
+
+  async getPullRequestDetail(repo: string, prNumber: number): Promise<PullRequestDetail> {
+    this.calls.push({ method: 'getPullRequestDetail', args: [repo, prNumber] });
+    throw new Error('getPullRequestDetail not stubbed in FakeGh (watch/status sensor)');
+  }
+
+  async mergePullRequest(
+    repo: string,
+    prNumber: number,
+    _opts: { squash: true },
+  ): Promise<MergeResult> {
+    this.calls.push({ method: 'mergePullRequest', args: [repo, prNumber] });
+    throw new Error('mergePullRequest is forbidden in FakeGh (watch/status sensor)');
+  }
+
+  async getRequiredCheckNames(repo: string, branch: string): Promise<RequiredChecksResult> {
+    this.calls.push({ method: 'getRequiredCheckNames', args: [repo, branch] });
+    throw new Error('getRequiredCheckNames not stubbed in FakeGh (watch/status sensor)');
   }
 }
 

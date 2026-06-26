@@ -9,6 +9,10 @@
  *   - state           — classify one issue and print its curated cockpit tier
  *   - advance         — manually advance a waiting gate (flip waiting-for → completed)
  *   - clarify-context — gather JSON context for the open clarification request
+ *
+ * Epic merge/review verbs:
+ *   - merge           — merge a PR once its required checks are green
+ *   - review-context  — gather JSON context (diff, failing checks) for a PR review
  */
 import { Command } from 'commander';
 import { watchCommand } from './watch.js';
@@ -16,6 +20,8 @@ import { statusCommand } from './status.js';
 import { stateCommand } from './state.js';
 import { advanceCommand } from './advance.js';
 import { clarifyContextCommand } from './clarify-context.js';
+import { cockpitMergeCommand } from './merge.js';
+import { cockpitReviewContextCommand } from './review-context.js';
 
 export function cockpitCommand(): Command {
   const command = new Command('cockpit');
@@ -26,6 +32,8 @@ export function cockpitCommand(): Command {
   command.addCommand(stateCommand());
   command.addCommand(advanceCommand());
   command.addCommand(clarifyContextCommand());
+  command.addCommand(cockpitMergeCommand());
+  command.addCommand(cockpitReviewContextCommand());
 
   return command;
 }
