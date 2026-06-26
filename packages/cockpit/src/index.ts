@@ -41,10 +41,16 @@ export {
 // gh wrapper
 export {
   GhCliWrapper,
+  DIFF_BYTE_CAP,
+  DIFF_TRUNCATION_MARKER,
   type GhWrapper,
   type Issue,
   type CheckRunSummary,
   type ListIssuesOptions,
+  type PullRequestRef,
+  type PullRequestDetail,
+  type MergeResult,
+  type RequiredChecksResult,
   type CommandRunner,
 } from './gh/wrapper.js';
 
