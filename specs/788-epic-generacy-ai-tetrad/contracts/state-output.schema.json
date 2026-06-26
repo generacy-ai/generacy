@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/specs/788/state-output.schema.json",
+  "title": "ClassifyStateOutput",
+  "description": "JSON payload emitted by `generacy cockpit state <issue> --json` (FR-002).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issue", "state", "sourceLabel"],
+  "properties": {
+    "issue": {
+      "type": "string",
+      "description": "Echo of input issue ref in \"owner/repo#n\" form.",
+      "pattern": "^[^/\\s]+/[^/\\s#]+#[1-9][0-9]*$"
+    },
+    "state": {
+      "type": "string",
+      "description": "Curated cockpit tier from @generacy-ai/cockpit classify().",
+      "enum": ["pending", "active", "waiting", "error", "terminal", "unknown"]
+    },
+    "sourceLabel": {
+      "type": "string",
+      "description": "Label that drove the classification; empty string when state is 'unknown'."
+    }
+  }
+}

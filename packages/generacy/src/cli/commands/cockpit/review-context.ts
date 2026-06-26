@@ -25,14 +25,14 @@ export async function runReviewContext(
 ): Promise<RunReviewContextResult> {
   const { gh, issue, repo, logger } = input;
 
-  const prRef = await gh.resolveIssueToPR(repo, issue);
+  const prRef = await gh.resolveIssueToPRRef(repo, issue);
   if (prRef == null) {
     logger.error({ issue, repo }, 'No PR resolved for issue');
     return { exitCode: 1, stdout: '' };
   }
 
   const [pr, checks] = await Promise.all([
-    gh.getPullRequest(repo, prRef.number),
+    gh.getPullRequestDetail(repo, prRef.number),
     gh.getPullRequestCheckRuns(repo, prRef.number),
   ]);
 
@@ -57,7 +57,7 @@ export function cockpitReviewContextCommand(): Command {
         throw new Error(`Invalid issue number: ${issueArg}`);
       }
       const logger = getLogger();
-      const ctx = resolveContext({ issue, repo: opts.repo });
+      const ctx = await resolveContext({ issue, repo: opts.repo });
       const result = await runReviewContext({
         gh: ctx.gh,
         issue: ctx.issue,

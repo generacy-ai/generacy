@@ -62,7 +62,7 @@ describe('GhCliWrapper', () => {
       const args = calls[0]?.args ?? [];
       expect(args.slice(0, 3)).toEqual(['search', 'issues', 'repo:o/r is:issue']);
       expect(args).toContain('--json');
-      expect(args).toContain('number,title,state,labels,url,body,author');
+      expect(args).toContain('number,title,state,labels,url,body,author,createdAt');
       expect(args).toContain('--limit');
       expect(args).toContain('50');
       expect(issues).toHaveLength(1);
@@ -199,6 +199,63 @@ describe('GhCliWrapper', () => {
   });
 
   describe('resolveIssueToPR', () => {
+    it('returns the first linked PR number from closedByPullRequestsReferences', async () => {
+      const { runner, calls } = stubRunner({
+        stdout: JSON.stringify({
+          closedByPullRequestsReferences: [
+            { number: 42, url: 'https://github.com/o/r/pull/42' },
+          ],
+          timelineItems: [],
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const n = await wrapper.resolveIssueToPR('o/r', 7);
+      expect(n).toBe(42);
+      const args = calls[0]?.args ?? [];
+      expect(args.slice(0, 5)).toEqual(['issue', 'view', '7', '--repo', 'o/r']);
+      expect(args).toContain('--json');
+      expect(args).toContain('closedByPullRequestsReferences,timelineItems');
+    });
+
+    it('falls back to timelineItems source when references is empty', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify({
+          closedByPullRequestsReferences: [],
+          timelineItems: [
+            { source: { __typename: 'PullRequest', number: 99, url: 'https://github.com/o/r/pull/99' } },
+          ],
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      expect(await wrapper.resolveIssueToPR('o/r', 7)).toBe(99);
+    });
+
+    it('extracts PR number from URL when number absent', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify({
+          closedByPullRequestsReferences: [{ url: 'https://github.com/o/r/pull/123' }],
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      expect(await wrapper.resolveIssueToPR('o/r', 7)).toBe(123);
+    });
+
+    it('returns null when no linked PR exists', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify({ closedByPullRequestsReferences: [], timelineItems: [] }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      expect(await wrapper.resolveIssueToPR('o/r', 7)).toBeNull();
+    });
+
+    it('throws on malformed JSON', async () => {
+      const { runner } = stubRunner({ stdout: 'not json' });
+      const wrapper = new GhCliWrapper(runner);
+      await expect(wrapper.resolveIssueToPR('o/r', 7)).rejects.toThrow(/malformed JSON/);
+    });
+  });
+
+  describe('resolveIssueToPRRef', () => {
     it('returns the first PR from gh pr list search', async () => {
       const { runner, calls } = queuedRunner([
         {
@@ -214,7 +271,7 @@ describe('GhCliWrapper', () => {
         },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPR('o/r', 7);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 7);
       expect(ref).toEqual({
         number: 42,
         url: 'https://github.com/o/r/pull/42',
@@ -250,7 +307,7 @@ describe('GhCliWrapper', () => {
         },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPR('o/r', 11);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 11);
       expect(ref).toEqual({
         number: 99,
         url: 'https://github.com/o/r/pull/99',
@@ -269,7 +326,7 @@ describe('GhCliWrapper', () => {
         { stdout: JSON.stringify({ closedByPullRequestsReferences: [] }) },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPR('o/r', 1);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 1);
       expect(ref).toBeNull();
     });
 
@@ -287,12 +344,84 @@ describe('GhCliWrapper', () => {
         },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPR('o/r', 1);
+      const ref = await wrapper.resolveIssueToPRRef('o/r', 1);
       expect(ref?.state).toBe('OPEN');
     });
   });
 
   describe('getPullRequest', () => {
+    it('parses state/mergedAt/closedAt/isDraft/labels', async () => {
+      const { runner, calls } = stubRunner({
+        stdout: JSON.stringify({
+          number: 42,
+          state: 'MERGED',
+          mergedAt: '2026-06-26T10:00:00Z',
+          closedAt: '2026-06-26T10:00:00Z',
+          url: 'https://github.com/o/r/pull/42',
+          isDraft: false,
+          labels: [{ name: 'phase:plan' }, 'bug'],
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const pr = await wrapper.getPullRequest('o/r', 42);
+      const args = calls[0]?.args ?? [];
+      expect(args.slice(0, 5)).toEqual(['pr', 'view', '42', '--repo', 'o/r']);
+      expect(args).toContain('--json');
+      expect(args).toContain('number,state,mergedAt,closedAt,url,isDraft,labels');
+      expect(pr).toEqual({
+        number: 42,
+        state: 'MERGED',
+        mergedAt: '2026-06-26T10:00:00Z',
+        closedAt: '2026-06-26T10:00:00Z',
+        url: 'https://github.com/o/r/pull/42',
+        isDraft: false,
+        labels: ['phase:plan', 'bug'],
+      });
+    });
+
+    it('coerces CLOSED with mergedAt to MERGED', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify({
+          number: 1,
+          state: 'CLOSED',
+          mergedAt: '2026-01-01T00:00:00Z',
+          url: 'https://github.com/o/r/pull/1',
+          isDraft: false,
+          labels: [],
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const pr = await wrapper.getPullRequest('o/r', 1);
+      expect(pr.state).toBe('MERGED');
+    });
+
+    it('keeps CLOSED when mergedAt is null', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify({
+          number: 1,
+          state: 'CLOSED',
+          mergedAt: null,
+          closedAt: '2026-01-01T00:00:00Z',
+          url: 'https://github.com/o/r/pull/1',
+          isDraft: false,
+          labels: [],
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const pr = await wrapper.getPullRequest('o/r', 1);
+      expect(pr.state).toBe('CLOSED');
+      expect(pr.mergedAt).toBeUndefined();
+      expect(pr.closedAt).toBe('2026-01-01T00:00:00Z');
+    });
+
+    it('throws on malformed JSON', async () => {
+      const { runner } = stubRunner({ stdout: '{not valid' });
+      const wrapper = new GhCliWrapper(runner);
+      await expect(wrapper.getPullRequest('o/r', 1)).rejects.toThrow(/malformed JSON/);
+    });
+  });
+
+  describe('getPullRequestDetail', () => {
     it('returns full metadata + sub-cap diff', async () => {
       const diffText = '--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n';
       const { runner, calls } = queuedRunner([
@@ -313,7 +442,7 @@ describe('GhCliWrapper', () => {
         { stdout: diffText },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const pr = await wrapper.getPullRequest('o/r', 5);
+      const pr = await wrapper.getPullRequestDetail('o/r', 5);
       expect(pr).toEqual({
         number: 5,
         title: 'My PR',
@@ -355,7 +484,7 @@ describe('GhCliWrapper', () => {
         { stdout: big },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const pr = await wrapper.getPullRequest('o/r', 1);
+      const pr = await wrapper.getPullRequestDetail('o/r', 1);
       expect(pr.diffTruncated).toBe(true);
       expect(pr.diff.endsWith(DIFF_TRUNCATION_MARKER)).toBe(true);
       const diffBuf = Buffer.from(pr.diff, 'utf-8');
@@ -385,7 +514,7 @@ describe('GhCliWrapper', () => {
         { stdout: '' },
       ]);
       const wrapper = new GhCliWrapper(runner);
-      const pr = await wrapper.getPullRequest('o/r', 1);
+      const pr = await wrapper.getPullRequestDetail('o/r', 1);
       expect(pr.state).toBe('MERGED');
     });
   });
@@ -498,6 +627,38 @@ describe('GhCliWrapper', () => {
       const wrapper = new GhCliWrapper(runner);
       const result = await wrapper.getRequiredCheckNames('o/r', 'develop');
       expect(result).toEqual({ source: 'branch-protection', names: [] });
+    });
+  });
+
+  describe('Issue.createdAt round-trips through the zod parser', () => {
+    it('preserves createdAt from raw payload', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          {
+            number: 1,
+            title: 'A',
+            state: 'OPEN',
+            labels: [],
+            url: 'https://github.com/o/r/issues/1',
+            body: '',
+            createdAt: '2026-06-26T08:00:00Z',
+          },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.createdAt).toBe('2026-06-26T08:00:00Z');
+    });
+
+    it('defaults createdAt to empty string when absent', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          { number: 1, title: 'A', state: 'OPEN', labels: [], url: 'u', body: '' },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.createdAt).toBe('');
     });
   });
 });

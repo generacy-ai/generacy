@@ -33,12 +33,16 @@ function fakeGh(overrides: FakeOverrides = {}): GhWrapper {
     addLabels: vi.fn(async () => {}),
     removeLabels: vi.fn(async () => {}),
     getPullRequestCheckRuns: vi.fn(async () => overrides.getPullRequestCheckRuns ?? []),
-    resolveIssueToPR: vi.fn(async () =>
+    resolveIssueToPR: vi.fn(async () => null),
+    getPullRequest: vi.fn(async () => {
+      throw new Error('getPullRequest (summary) not used by runReviewContext');
+    }),
+    resolveIssueToPRRef: vi.fn(async () =>
       overrides.resolveIssueToPR === undefined
         ? null
         : overrides.resolveIssueToPR,
     ),
-    getPullRequest: vi.fn(async () => {
+    getPullRequestDetail: vi.fn(async () => {
       if (!overrides.getPullRequest) {
         throw new Error('getPullRequest not stubbed');
       }

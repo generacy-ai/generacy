@@ -1,5 +1,8 @@
-import { execSync } from 'node:child_process';
-import { GhCliWrapper, type GhWrapper } from '@generacy-ai/cockpit';
+import {
+  GhCliWrapper,
+  nodeChildProcessRunner,
+  type GhWrapper,
+} from '@generacy-ai/cockpit';
 
 export interface ResolveContextInput {
   issue: number;
@@ -12,11 +15,18 @@ export interface ResolvedContext {
   gh: GhWrapper;
 }
 
-function inferRepoFromGitOrigin(): string {
-  const url = execSync('git remote get-url origin', {
-    encoding: 'utf-8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-  }).trim();
+async function inferRepoFromGitOrigin(): Promise<string> {
+  const result = await nodeChildProcessRunner('git', [
+    'remote',
+    'get-url',
+    'origin',
+  ]);
+  if (result.exitCode !== 0) {
+    throw new Error(
+      `Could not infer owner/repo: 'git remote get-url origin' failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+    );
+  }
+  const url = result.stdout.trim();
   const match =
     /github\.com[/:]([^/]+)\/([^/.]+?)(?:\.git)?\/?$/.exec(url);
   if (!match || !match[1] || !match[2]) {
@@ -27,8 +37,10 @@ function inferRepoFromGitOrigin(): string {
   return `${match[1]}/${match[2]}`;
 }
 
-export function resolveContext(input: ResolveContextInput): ResolvedContext {
-  const repo = input.repo ?? inferRepoFromGitOrigin();
+export async function resolveContext(
+  input: ResolveContextInput,
+): Promise<ResolvedContext> {
+  const repo = input.repo ?? (await inferRepoFromGitOrigin());
   return {
     repo,
     issue: input.issue,

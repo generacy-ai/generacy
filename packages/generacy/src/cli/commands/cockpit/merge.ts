@@ -26,7 +26,7 @@ export interface RunMergeResult {
 export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
   const { gh, issue, repo, logger } = input;
 
-  const prRef = await gh.resolveIssueToPR(repo, issue);
+  const prRef = await gh.resolveIssueToPRRef(repo, issue);
   if (prRef == null) {
     logger.error({ issue, repo }, 'No PR resolved for issue');
     return {
@@ -52,7 +52,7 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
     };
   }
 
-  const pr = await gh.getPullRequest(repo, prRef.number);
+  const pr = await gh.getPullRequestDetail(repo, prRef.number);
   if (!pr.labels.includes(COMPLETED_VALIDATE_LABEL)) {
     logger.error(
       { pr: pr.number, missingLabel: COMPLETED_VALIDATE_LABEL },
@@ -117,7 +117,7 @@ export function cockpitMergeCommand(): Command {
         throw new Error(`Invalid issue number: ${issueArg}`);
       }
       const logger = getLogger();
-      const ctx = resolveContext({ issue, repo: opts.repo });
+      const ctx = await resolveContext({ issue, repo: opts.repo });
       const result = await runMerge({
         gh: ctx.gh,
         issue: ctx.issue,

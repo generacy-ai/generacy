@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://generacy.ai/schemas/cockpit-event.schema.json",
+  "title": "CockpitEvent",
+  "description": "One NDJSON line emitted by `generacy cockpit watch` per detected issue/PR transition. See spec.md Q2 for field semantics.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["ts", "repo", "kind", "number", "from", "to", "sourceLabel", "url", "event", "labels"],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 timestamp at which the watcher detected the transition (not the GitHub event timestamp)."
+    },
+    "repo": {
+      "type": "string",
+      "pattern": "^[^/]+/[^/]+$",
+      "description": "Repository identifier as 'owner/name'."
+    },
+    "kind": {
+      "type": "string",
+      "enum": ["issue", "pr"],
+      "description": "Whether the subject is a GitHub issue or pull request."
+    },
+    "number": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Issue or PR number on GitHub."
+    },
+    "from": {
+      "oneOf": [
+        { "type": "string", "enum": ["pending", "active", "waiting", "error", "terminal", "unknown"] },
+        { "type": "null" }
+      ],
+      "description": "Curated CockpitState before the transition. Null if no prior state was known (rare; only on first observation that closes out)."
+    },
+    "to": {
+      "oneOf": [
+        { "type": "string", "enum": ["pending", "active", "waiting", "error", "terminal", "unknown"] },
+        { "type": "null" }
+      ],
+      "description": "Curated CockpitState after the transition. Null if the subject was deleted/removed."
+    },
+    "sourceLabel": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "null" }
+      ],
+      "description": "The label that drove the new state, or null for non-label events (issue-closed, pr-merged, pr-closed, pr-checks)."
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Full https URL of the issue or PR on github.com."
+    },
+    "event": {
+      "type": "string",
+      "enum": ["label-change", "issue-closed", "pr-merged", "pr-closed", "pr-checks"],
+      "description": "Discriminator for consumers that branch on event type."
+    },
+    "labels": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Full label set on the subject at transition time."
+    }
+  }
+}
