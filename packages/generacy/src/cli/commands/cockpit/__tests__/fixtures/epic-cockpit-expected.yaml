@@ -1,0 +1,24 @@
+epic:
+  repo: generacy-ai/tetrad-development
+  issue: 85
+  slug: cockpit
+  plan: docs/epic-cockpit-plan.md
+autonomy: {}
+phases:
+  - name: P0 — Foundation
+    tier: v1
+    repos: []
+    issues:
+      - generacy-ai/generacy#786
+      - generacy-ai/generacy#787
+  - name: P3 — Manifest
+    tier: v2
+    repos: []
+    issues:
+      - generacy-ai/generacy#790
+      - generacy-ai/generacy#791
+  - name: P4 — Hardening
+    tier: v3
+    repos: []
+    issues:
+      - generacy-ai/generacy#792
