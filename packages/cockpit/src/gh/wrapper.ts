@@ -421,10 +421,15 @@ export class GhCliWrapper implements GhWrapper {
 
   async listIssues(query: string, options: ListIssuesOptions = {}): Promise<Issue[]> {
     const limit = options.limit ?? 100;
+    // `gh search issues` expects each query term/qualifier as its own argument.
+    // Passing the whole query as a single arg makes gh fold trailing qualifiers
+    // into the first one's quoted value (e.g. `repo:"o/r is:open"`), producing an
+    // invalid query. Tokenize on whitespace, keeping "quoted phrases" intact.
+    const terms = query.match(/"[^"]*"|\S+/g) ?? [];
     const args = [
       'search',
       'issues',
-      query,
+      ...terms,
       '--json',
       'number,title,state,labels,url,body,author,createdAt',
       '--limit',
