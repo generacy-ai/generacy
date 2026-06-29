@@ -5,18 +5,70 @@ import type { GhWrapper } from '../gh/wrapper.js';
 import { GhCliWrapper } from '../gh/wrapper.js';
 import { readManifest } from './io.js';
 
+/**
+ * Repo-qualified reference to a GitHub issue or PR.
+ *
+ * - `repo` is the full `owner/repo` form (matches what `gh --repo` accepts).
+ * - `number` is the issue or PR number (positive integer).
+ *
+ * Equality / dedup: by tuple `(repo, number)`.
+ * Sort: ascending lexicographic by `repo`, then ascending by `number`.
+ */
+export interface IssueRef {
+  repo: string;
+  number: number;
+}
+
 export interface ResolveEpicIssuesOptions {
   manifestRoot?: string;
   gh?: GhWrapper;
   cwd?: string;
   logger?: { warn: (msg: string) => void };
+  /**
+   * Repos to iterate in the no-manifest fallback. Caller passes
+   * `CockpitConfig.repos`. The function unions this with the epic's own repo
+   * and deduplicates.
+   *
+   * When omitted (library used outside the CLI), the function searches only
+   * the epic's own repo AND emits a structured warning via `logger.warn`
+   * naming the limitation (FR-005).
+   */
+  repos?: string[];
 }
 
-function parseIssueRefNumber(ref: string, ownerRepo: string): number | null {
-  const prefix = `${ownerRepo}#`;
-  if (!ref.startsWith(prefix)) return null;
-  const n = Number.parseInt(ref.slice(prefix.length), 10);
-  return Number.isFinite(n) ? n : null;
+const ISSUE_REF_REGEX = /^([^/]+\/[^/]+)#(\d+)$/;
+
+function parseIssueRef(ref: string): IssueRef | null {
+  const m = ISSUE_REF_REGEX.exec(ref);
+  if (m == null) return null;
+  const n = Number.parseInt(m[2]!, 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return { repo: m[1]!, number: n };
+}
+
+function sortAndDedupIssueRefs(refs: Iterable<IssueRef>): IssueRef[] {
+  const seen = new Map<string, IssueRef>();
+  for (const ref of refs) {
+    const key = `${ref.repo}#${ref.number}`;
+    if (!seen.has(key)) seen.set(key, ref);
+  }
+  return [...seen.values()].sort((a, b) => {
+    if (a.repo < b.repo) return -1;
+    if (a.repo > b.repo) return 1;
+    return a.number - b.number;
+  });
+}
+
+function uniqueStrings(values: Iterable<string>): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of values) {
+    if (!seen.has(v)) {
+      seen.add(v);
+      out.push(v);
+    }
+  }
+  return out;
 }
 
 async function readManifestFiles(
@@ -41,20 +93,23 @@ async function readManifestFiles(
 }
 
 /**
- * Resolve the set of child issue numbers belonging to a given epic.
+ * Resolve the set of child issue refs belonging to a given epic.
  *
- * Resolution order (plan.md §D5):
- *   1. Glob `.generacy/epics/*.yaml`; if any manifest matches epic+repo, return the
- *      union of `phases[*].issues` filtered to `owner/repo#n` entries.
- *   2. Otherwise fall back to two `gh search` queries (epic-child label + body
- *      reference); merge + dedupe and return numbers.
+ * Resolution order:
+ *   1. Glob `.generacy/epics/*.yaml`; if any manifest matches epic+repo, return
+ *      every `phases[*].issues` entry as an `IssueRef` (cross-repo entries
+ *      preserved).
+ *   2. Otherwise fall back to `gh search` across `repos ∪ {epicRepo}`. Per
+ *      repo, run both the `label:epic-child` and `in:body` queries.
+ *
+ * Output is sorted ascending by `(repo, number)` and deduped by the same key.
  */
 export async function resolveEpicIssues(
   epic: number,
   owner: string,
   repo: string,
   options: ResolveEpicIssuesOptions = {},
-): Promise<number[]> {
+): Promise<IssueRef[]> {
   const cwd = options.cwd ?? process.cwd();
   const manifestRoot = options.manifestRoot ?? join(cwd, '.generacy', 'epics');
   const ownerRepo = `${owner}/${repo}`;
@@ -65,28 +120,38 @@ export async function resolveEpicIssues(
     if (m == null) continue;
     if (m.epic.issue !== epic) continue;
     if (m.epic.repo !== ownerRepo) continue;
-    const found = new Set<number>();
+    const refs: IssueRef[] = [];
     for (const phase of m.phases) {
       for (const ref of phase.issues) {
-        const n = parseIssueRefNumber(ref, ownerRepo);
-        if (n != null) found.add(n);
+        const parsed = parseIssueRef(ref);
+        if (parsed != null) refs.push(parsed);
       }
     }
-    return [...found].sort((a, b) => a - b);
+    return sortAndDedupIssueRefs(refs);
   }
 
-  // No matching manifest — fall back to gh search.
+  // No matching manifest — fall back to gh search across the configured repos.
   const gh = options.gh ?? new GhCliWrapper();
-  const childLabelQuery = `repo:${ownerRepo} is:issue label:epic-child #${epic}`;
-  const bodyRefQuery = `repo:${ownerRepo} is:issue ${ownerRepo}#${epic} in:body`;
 
-  const [labelHits, bodyHits] = await Promise.all([
-    gh.listIssues(childLabelQuery),
-    gh.listIssues(bodyRefQuery),
-  ]);
+  if (options.repos == null || options.repos.length === 0) {
+    options.logger?.warn(
+      `cockpit: resolveEpicIssues called without configured repos; searching epic repo only (${ownerRepo}). Cross-repo children will not be discovered.`,
+    );
+  }
 
-  const merged = new Set<number>();
-  for (const issue of labelHits) merged.add(issue.number);
-  for (const issue of bodyHits) merged.add(issue.number);
-  return [...merged].sort((a, b) => a - b);
+  const repoSet = uniqueStrings([...(options.repos ?? []), ownerRepo]);
+
+  const merged: IssueRef[] = [];
+  for (const R of repoSet) {
+    const childLabelQuery = `repo:${R} is:issue label:epic-child ${ownerRepo}#${epic}`;
+    const bodyRefQuery = `repo:${R} is:issue ${ownerRepo}#${epic} in:body`;
+    const [labelHits, bodyHits] = await Promise.all([
+      gh.listIssues(childLabelQuery),
+      gh.listIssues(bodyRefQuery),
+    ]);
+    for (const issue of labelHits) merged.push({ repo: R, number: issue.number });
+    for (const issue of bodyHits) merged.push({ repo: R, number: issue.number });
+  }
+
+  return sortAndDedupIssueRefs(merged);
 }

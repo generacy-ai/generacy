@@ -1,11 +1,12 @@
 import type {
   CockpitConfig,
   GhWrapper,
+  IssueRef,
 } from '@generacy-ai/cockpit';
 import { resolveEpicIssues } from '@generacy-ai/cockpit';
 
 export type Scope =
-  | { kind: 'epic'; owner: string; repo: string; ownerRepo: string; issues: number[] }
+  | { kind: 'epic'; owner: string; repo: string; ownerRepo: string; issues: IssueRef[] }
   | { kind: 'repos'; repos: string[] };
 
 const EPIC_REGEX = /^([^/]+)\/([^/]+)#(\d+)$/;
@@ -30,6 +31,7 @@ export async function resolveScope(opts: ResolveScopeOptions): Promise<Scope> {
     const issueNumber = Number.parseInt(m[3]!, 10);
     const issues = await resolveEpicIssues(issueNumber, owner, repo, {
       gh: opts.gh,
+      repos: opts.config.repos,
       ...(opts.cwd != null ? { cwd: opts.cwd } : {}),
       ...(opts.logger != null ? { logger: opts.logger } : {}),
     });
