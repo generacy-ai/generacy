@@ -12,7 +12,7 @@
 - B: `Array<string>` of `owner/repo#n` (matches manifest wire format, callers must parse)
 - C: `Array<{ owner: string; repo: string; number: number }>` (split owner/repo)
 
-**Answer**: *Pending*
+**Answer**: **A** — `Array<{ repo: string; number: number }>`, where `repo` is the full `owner/repo`. Maps 1:1 onto the gh wrapper API (`--repo owner/repo`, `addLabels(repo, number)`) so callers don't parse, and full `owner/repo` (not bare names) is the exact discipline whose absence caused this bug. (B forces every caller to parse; C splits owner/repo that gh wants joined.)
 
 ---
 
@@ -24,7 +24,7 @@
 - B: Use as fallback scope hint — when `phases[].issues` is empty for a phase, search `phases[].repos` for `epic-child` label / body refs to the epic.
 - C: Always union — for every phase, also search `phases[].repos` and union with the listed `issues`.
 
-**Answer**: *Pending*
+**Answer**: **A** — Keep `phases[].repos` informational; resolution stays `phases[].issues`-only. `issues[]` is the authoritative explicit child set; `repos[]` is human-readable documentation (derivable from `issues[]`). Unioning a repo-search (C) would pull in unlisted issues; fallback-on-empty (B) adds a second source that can disagree with `issues[]`.
 
 ---
 
@@ -36,7 +36,7 @@
 - B: Strictly `cockpit.repos` — epic's own repo only searched if it's listed there. No implicit add.
 - C: `cockpit.repos` if non-empty, else epic's own repo (matches FR-005 wording literally; FR-004 stays as "iterate `cockpit.repos`" without implicit add).
 
-**Answer**: *Pending*
+**Answer**: **A** — Search `cockpit.repos ∪ the epic's own repo` (deduped). Defensive against an under-configured cockpit that omitted the epic's home repo; in practice `cockpit.repos` defaults to all of `MONITORED_REPOS`, so this is just a safety net.
 
 ---
 
@@ -48,7 +48,7 @@
 - B: Body-only, full epic ref — drop label query in fallback (label alone is ambiguous when searching across repos); per repo R only `repo:R is:issue <epicOwner/epicRepo>#<epicN> in:body`.
 - C: Both queries, short form — per repo R: keep `#<epicN>` short form (`label:epic-child #<epicN>` and `#<epicN> in:body`). Risk: `#N` matches unrelated issues with the same number in other repos.
 
-**Answer**: *Pending*
+**Answer**: **A** — Both queries, fully-qualified epic ref, per repo R: `repo:R is:issue label:epic-child <epicOwner/epicRepo>#<epicN>` and `repo:R is:issue <epicOwner/epicRepo>#<epicN> in:body`, deduped. The full ref is the correctness fix — C's short `#N` form would match unrelated issues #N in other repos. Both queries maximize recall in this best-effort fallback (filed children carry `…/tetrad-development#85` in their bodies).
 
 ---
 
@@ -60,4 +60,6 @@
 - B: Major — honor breaking-change semantics; update FR-007 to "bump major".
 - C: Patch — treat as bugfix to a contract that never correctly supported cross-repo; minimal bump.
 
-**Answer**: *Pending*
+**Answer**: **A** — `minor` (0.1.0 → 0.2.0). The return-type change is breaking, but the package is pre-1.0 and all consumers (`status.ts` / `watch.ts`) are updated in the same PR, so pre-1.0 minor is the right convention; FR-007 stays as written.
+
+*Implementer note (from answerer): with the manifest data fix (generacy-ai/tetrad-development#86) in, the manifest path is the precise one and this fallback rarely fires — but the fix should still make the fallback cross-repo-correct (Q3/Q4) for epics without a manifest.*
