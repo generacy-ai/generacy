@@ -1,4 +1,5 @@
 import type { OrchestratorClient } from '@generacy-ai/cockpit';
+import type { FirstFailureWarner } from './orchestrator-warn.js';
 
 export interface FooterData {
   available: boolean;
@@ -18,10 +19,16 @@ function timeout<T>(ms: number, value: T): Promise<T> {
 /**
  * Race the orchestrator client's `getJobs()` + `getWorkers()` against a timeout.
  * Never throws. Always returns a FooterData; on any failure → `{ available: false, reason }`.
+ *
+ * If `onFirstFailure` is provided, it is invoked once per failure (the warner
+ * itself dedupes across calls). It is NOT invoked when the failure reason is
+ * `'no-token'` — that state is already explicit in the rendered output and is
+ * not a runtime failure.
  */
 export async function getFooter(
   client: OrchestratorClient,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  onFirstFailure?: FirstFailureWarner,
 ): Promise<FooterData> {
   try {
     const sentinel = Symbol('timeout');
@@ -31,18 +38,25 @@ export async function getFooter(
     ]);
     const [jobsResult, workersResult] = races;
     if (jobsResult === sentinel || workersResult === sentinel) {
+      onFirstFailure?.('timeout');
       return { available: false, reason: 'timeout' };
     }
     if (!jobsResult.available) {
+      if (jobsResult.reason !== 'no-token') {
+        onFirstFailure?.(jobsResult.reason);
+      }
       return { available: false, reason: jobsResult.reason };
     }
     if (!workersResult.available) {
+      if (workersResult.reason !== 'no-token') {
+        onFirstFailure?.(workersResult.reason);
+      }
       return { available: false, reason: workersResult.reason };
     }
     return {
       available: true,
       jobs: jobsResult.jobs.length,
-      workers: workersResult.workers.length,
+      workers: workersResult.count,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -52,7 +66,7 @@ export async function getFooter(
 
 export function renderFooter(footer: FooterData): string {
   if (footer.available) {
-    return `orchestrator: ${footer.jobs ?? 0} jobs, ${footer.workers ?? 0} workers`;
+    return `orchestrator: ${footer.jobs ?? 0} jobs, ${footer.workers ?? 0} active workers`;
   }
   if (footer.reason === 'no-token') {
     return 'orchestrator: (no token; set ORCHESTRATOR_API_TOKEN to enable)';

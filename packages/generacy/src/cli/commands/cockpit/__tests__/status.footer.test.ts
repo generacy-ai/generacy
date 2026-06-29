@@ -5,6 +5,10 @@ import type {
   WorkersResult,
 } from '@generacy-ai/cockpit';
 import { getFooter, renderFooter } from '../shared/orchestrator-footer.js';
+import {
+  createFirstFailureWarner,
+  type FirstFailureWarner,
+} from '../shared/orchestrator-warn.js';
 
 function client(opts: {
   jobs?: JobsResult;
@@ -25,16 +29,24 @@ function client(opts: {
       if (opts.delayMs != null) {
         await new Promise((r) => setTimeout(r, opts.delayMs));
       }
-      return opts.workers ?? { available: true, workers: [] };
+      return opts.workers ?? { available: true, count: 0 };
     },
   };
+}
+
+function captureSink(): { writes: string[]; warner: FirstFailureWarner } {
+  const writes: string[] = [];
+  const warner = createFirstFailureWarner({
+    write: (msg) => writes.push(msg),
+  });
+  return { writes, warner };
 }
 
 describe('getFooter', () => {
   it('returns counts when both available', async () => {
     const c = client({
       jobs: { available: true, jobs: [{ id: 'j1', status: 'queued' }, { id: 'j2', status: 'running' }] },
-      workers: { available: true, workers: [{ id: 'w1', status: 'idle' }] },
+      workers: { available: true, count: 1 },
     });
     const footer = await getFooter(c, 1000);
     expect(footer).toEqual({ available: true, jobs: 2, workers: 1 });
@@ -43,7 +55,7 @@ describe('getFooter', () => {
   it('returns unavailable + reason when jobs is unavailable', async () => {
     const c = client({
       jobs: { available: false, reason: 'no-token' },
-      workers: { available: true, workers: [] },
+      workers: { available: true, count: 0 },
     });
     const footer = await getFooter(c);
     expect(footer.available).toBe(false);
@@ -55,12 +67,57 @@ describe('getFooter', () => {
     const footer = await getFooter(c, 50);
     expect(footer).toEqual({ available: false, reason: 'timeout' });
   });
+
+  it('invokes onFirstFailure exactly once when jobs is unavailable with cloud-unreachable', async () => {
+    const c = client({
+      jobs: { available: false, reason: 'cloud-unreachable' },
+      workers: { available: true, count: 0 },
+    });
+    const { writes, warner } = captureSink();
+    const footer = await getFooter(c, 1000, warner);
+    expect(footer.available).toBe(false);
+    expect(footer.reason).toBe('cloud-unreachable');
+    expect(warner.hasFired()).toBe(true);
+    expect(writes).toEqual(['cockpit: orchestrator unavailable: cloud-unreachable\n']);
+  });
+
+  it('does NOT invoke onFirstFailure when reason is no-token', async () => {
+    const c = client({
+      jobs: { available: false, reason: 'no-token' },
+      workers: { available: true, count: 0 },
+    });
+    const { writes, warner } = captureSink();
+    await getFooter(c, 1000, warner);
+    expect(warner.hasFired()).toBe(false);
+    expect(writes).toEqual([]);
+  });
+
+  it('invokes onFirstFailure with "timeout" when the timeout branch fires', async () => {
+    const c = client({ delayMs: 200 });
+    const { writes, warner } = captureSink();
+    const footer = await getFooter(c, 50, warner);
+    expect(footer).toEqual({ available: false, reason: 'timeout' });
+    expect(warner.hasFired()).toBe(true);
+    expect(writes).toEqual(['cockpit: orchestrator unavailable: timeout\n']);
+  });
+
+  it('invokes onFirstFailure when workers is unavailable (and jobs is available)', async () => {
+    const c = client({
+      jobs: { available: true, jobs: [] },
+      workers: { available: false, reason: 'http-error' },
+    });
+    const { writes, warner } = captureSink();
+    const footer = await getFooter(c, 1000, warner);
+    expect(footer.available).toBe(false);
+    expect(footer.reason).toBe('http-error');
+    expect(writes).toEqual(['cockpit: orchestrator unavailable: http-error\n']);
+  });
 });
 
 describe('renderFooter', () => {
   it('renders the happy path with job + worker counts', () => {
     expect(renderFooter({ available: true, jobs: 3, workers: 2 })).toBe(
-      'orchestrator: 3 jobs, 2 workers',
+      'orchestrator: 3 jobs, 2 active workers',
     );
   });
 
