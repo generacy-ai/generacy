@@ -17,7 +17,7 @@ These questions resolve the ambiguities flagged in `spec.md` § _Open Questions 
 - B: Flag as stuck only after `gracePeriodMinutes` have elapsed since the issue gained `agent:in-progress` and no journal file exists. (requires watch to track label-acquisition time)
 - C: Flag as stuck immediately on first observation. `stuck=true`, `stuckReason='no-journal'`.
 
-**Answer**: *Pending*
+**Answer**: A — Never flag a missing-journal issue (`stuck=false`, `stuckReason=null`). With Q3=B the journal exists shortly after dispatch, so "missing" is transient; the primary signal is a stale journal. Avoids the stateful label-acquisition tracking B requires and the false-positives C causes. Crashed-before-first-write is an edge case the orchestrator's own error path covers; revisit if needed.
 
 ---
 
@@ -28,7 +28,7 @@ These questions resolve the ambiguities flagged in `spec.md` § _Open Questions 
 - A: No — `recovered` fires only on case (a) (journal advance). Case (b) is handled by the existing `label-change` event. Watch deduplicates so consumers never see double-fires. (proposed default)
 - B: Yes — `recovered` fires for both (a) and (b). Consumers get a uniform "stuck cleared" signal regardless of cause.
 
-**Answer**: *Pending*
+**Answer**: A — `recovered` fires only on journal-advance (case a); the existing `label-change` event covers "left agent:in-progress" (case b), deduped — no double-fires.
 
 ---
 
@@ -40,7 +40,7 @@ These questions resolve the ambiguities flagged in `spec.md` § _Open Questions 
 - B: `specs/{n}/conversation-log.jsonl` to match the current writer. Cockpit works today; the issue's wording is treated as aspirational.
 - C: Both — journal module accepts a configurable list of candidate paths and uses the most recently modified one. (most resilient; widest surface)
 
-**Answer**: *Pending*
+**Answer**: B (corrected from proposed default A) — Read `specs/{n}/conversation-log.jsonl`, the actual `ConversationLogger` write path (`packages/orchestrator/src/worker/conversation-logger.ts:32`), NOT the issue's `.agency/conversations/{n}/journal.jsonl`. Option A would read a nonexistent file → never flags → silent failure. (If a future writer migration is anticipated, C's candidate-list is the hedge — but B is correct today.)
 
 ---
 
@@ -51,7 +51,7 @@ These questions resolve the ambiguities flagged in `spec.md` § _Open Questions 
 - A: `'no-journal'` — same as missing-file. Operators only care that there is no liveness signal; the cause is in the stderr log line. (proposed default)
 - B: `'journal-error'` as a third distinct value. Operators can visually distinguish "never wrote a journal" from "wrote a journal we cannot read."
 
-**Answer**: *Pending*
+**Answer**: A — Fold unreadable/corrupt journals into `'no-journal'` (cause logged to stderr); keeps the reason vocabulary at two values (`stale` / `no-journal`).
 
 ---
 
@@ -62,7 +62,7 @@ These questions resolve the ambiguities flagged in `spec.md` § _Open Questions 
 - A: No — config-only for the first cut. Add the CLI flag in a follow-up if operators ask for it. (proposed default)
 - B: Yes — add `--stuck-threshold <minutes>` on both commands. Flag overrides config when set; config overrides default when set.
 
-**Answer**: *Pending*
+**Answer**: A — Config-only threshold for the first cut; defer a `--stuck-threshold` flag to a follow-up.
 
 ---
 
