@@ -10,6 +10,7 @@ describe('cockpit command tree', () => {
       'clarify-context',
       'manifest',
       'merge',
+      'queue',
       'review-context',
       'state',
       'status',

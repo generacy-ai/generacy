@@ -3,9 +3,10 @@
  * `GhCliWrapper` surface (which is shaped for the watcher's batch flows):
  *
  *   - fetchIssueLabels(repo, n)
- *   - fetchIssueState(repo, n)         — labels + state + closedAt
+ *   - fetchIssueState(repo, n)         — labels + state + closedAt + assignees + title
  *   - postIssueComment(repo, n, body)  — returns the comment URL
  *   - addLabel / removeLabel (single)  — thin wrappers
+ *   - addAssignees(repo, n, logins[])  — one --add-assignee per login
  *   - fetchIssueTimeline(repo, n)
  *   - fetchIssueComments(repo, n)
  *   - getCurrentUser()
@@ -32,6 +33,8 @@ const IssueStateSchema = z.object({
   state: z.string(),
   closedAt: z.string().nullable().optional(),
   labels: z.array(LabelSchema).default([]),
+  assignees: z.array(z.object({ login: z.string() }).passthrough()).default([]),
+  title: z.string().default(''),
 });
 
 const CommentSchema = z.object({
@@ -68,6 +71,8 @@ export interface IssueStateResult {
   state: 'OPEN' | 'CLOSED';
   closedAt: string | null;
   labels: string[];
+  assignees: string[];
+  title: string;
 }
 
 export interface IssueComment {
@@ -83,6 +88,7 @@ export interface CockpitGh {
   postIssueComment(repo: string, number: number, body: string): Promise<{ url: string }>;
   addLabel(repo: string, number: number, label: string): Promise<void>;
   removeLabel(repo: string, number: number, label: string): Promise<void>;
+  addAssignees(repo: string, number: number, logins: string[]): Promise<void>;
   fetchIssueTimeline(repo: string, number: number): Promise<unknown[]>;
   fetchIssueComments(repo: string, number: number): Promise<IssueComment[]>;
   getCurrentUser(): Promise<string>;
@@ -126,7 +132,7 @@ export function createCockpitGh(runner: CommandRunner): CockpitGh {
         '--repo',
         repo,
         '--json',
-        'state,closedAt,labels',
+        'state,closedAt,labels,assignees,title',
       ]);
       if (res.exitCode !== 0) fail('issue view (state)', res);
       const parsed = IssueStateSchema.safeParse(JSON.parse(res.stdout));
@@ -137,6 +143,8 @@ export function createCockpitGh(runner: CommandRunner): CockpitGh {
         state: parsed.data.state.toUpperCase() === 'CLOSED' ? 'CLOSED' : 'OPEN',
         closedAt: parsed.data.closedAt ?? null,
         labels: normalizeLabels(parsed.data.labels),
+        assignees: parsed.data.assignees.map((a) => a.login),
+        title: parsed.data.title,
       };
     },
 
@@ -179,6 +187,21 @@ export function createCockpitGh(runner: CommandRunner): CockpitGh {
         label,
       ]);
       if (res.exitCode !== 0) fail('issue edit (remove-label)', res);
+    },
+
+    async addAssignees(repo, number, logins) {
+      for (const login of logins) {
+        const res = await runner('gh', [
+          'issue',
+          'edit',
+          String(number),
+          '--repo',
+          repo,
+          '--add-assignee',
+          login,
+        ]);
+        if (res.exitCode !== 0) fail('issue edit (add-assignee)', res);
+      }
     },
 
     async fetchIssueTimeline(repo, number) {

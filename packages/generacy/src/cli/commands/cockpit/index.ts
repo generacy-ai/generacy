@@ -23,6 +23,7 @@ import { clarifyContextCommand } from './clarify-context.js';
 import { cockpitMergeCommand } from './merge.js';
 import { cockpitReviewContextCommand } from './review-context.js';
 import { manifestCommand } from './manifest.js';
+import { queueCommand } from './queue.js';
 
 export function cockpitCommand(): Command {
   const command = new Command('cockpit');
@@ -36,6 +37,7 @@ export function cockpitCommand(): Command {
   command.addCommand(cockpitMergeCommand());
   command.addCommand(cockpitReviewContextCommand());
   command.addCommand(manifestCommand());
+  command.addCommand(queueCommand());
 
   return command;
 }
