@@ -146,6 +146,7 @@ export async function loadCockpitConfig(
       baseUrl,
       ...(token != null ? { token } : {}),
     },
+    stuckThresholdMinutes: parsedCockpit.stuckThresholdMinutes,
   };
 
   return { config, source, warnings };

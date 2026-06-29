@@ -5,6 +5,7 @@ export type ChalkFn = (s: string) => string;
 
 export interface Colorizer {
   state(s: string, state: CockpitState): string;
+  stuck(s: string, stuck: boolean): string;
 }
 
 export const STATE_COLOR: Record<CockpitState, ChalkFn> = {
@@ -20,10 +21,16 @@ export const chalkColorizer: Colorizer = {
   state(s, state) {
     return STATE_COLOR[state](s);
   },
+  stuck(s, stuck) {
+    return stuck ? chalk.red(s) : s;
+  },
 };
 
 export const identityColorizer: Colorizer = {
   state(s) {
+    return s;
+  },
+  stuck(s) {
     return s;
   },
 };

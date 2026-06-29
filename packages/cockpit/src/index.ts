@@ -3,9 +3,19 @@
 // NOT exported.
 
 // State + classifier
-export { COCKPIT_STATES, type CockpitState, type ClassifyResult } from './types.js';
+export {
+  COCKPIT_STATES,
+  type CockpitState,
+  type ClassifyResult,
+  type StuckReason,
+  type JournalLivenessResult,
+  type ReadJournalLivenessOptions,
+} from './types.js';
 export { classify } from './state/classifier.js';
 export { TIER_RANK, WAITING_PIPELINE_ORDER } from './state/precedence.js';
+
+// Journal liveness sensor
+export { readJournalLiveness } from './journal.js';
 
 // Config
 export {

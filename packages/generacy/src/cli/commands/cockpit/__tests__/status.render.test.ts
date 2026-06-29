@@ -18,6 +18,8 @@ function row(overrides: Partial<StatusRow> = {}): StatusRow {
     prNumber: null,
     checks: 'none',
     url: 'https://github.com/o/r/issues/1',
+    stuck: false,
+    stuckReason: null,
     ...overrides,
   };
 }
@@ -63,6 +65,24 @@ describe('renderTable (plain non-TTY path)', () => {
   });
 });
 
+describe('renderTable stuck column', () => {
+  it('renders blank when row.stuck is false and STALE when true', () => {
+    const out = renderTable(
+      groupRows(
+        [
+          row({ number: 1, stuck: false, stuckReason: null }),
+          row({ number: 2, stuck: true, stuckReason: 'stale' }),
+        ],
+        { kind: 'repos', repos: ['o/r'] },
+      ),
+      { tty: false, json: false, colorizer: identityColorizer },
+    );
+    const lines = out.split('\n');
+    expect(lines[2]).toContain('STALE');
+    expect(lines[1]).not.toContain('STALE');
+  });
+});
+
 describe('renderJsonEnvelope', () => {
   it('returns a single-line JSON envelope', () => {
     const json = renderJsonEnvelope(
@@ -75,6 +95,17 @@ describe('renderJsonEnvelope', () => {
     expect(parsed.scope).toEqual({ kind: 'repos', repos: ['o/r'] });
     expect(parsed.rows).toHaveLength(1);
     expect(parsed.orchestrator).toEqual({ available: true, jobs: 3, workers: 1 });
+  });
+
+  it('passes stuck and stuckReason through to JSON rows', () => {
+    const json = renderJsonEnvelope(
+      { kind: 'repos', repos: ['o/r'] },
+      [row({ stuck: true, stuckReason: 'stale' })],
+      { available: false, reason: 'offline' },
+    );
+    const parsed = JSON.parse(json);
+    expect(parsed.rows[0].stuck).toBe(true);
+    expect(parsed.rows[0].stuckReason).toBe('stale');
   });
 
   it('encodes unavailable orchestrator with reason', () => {

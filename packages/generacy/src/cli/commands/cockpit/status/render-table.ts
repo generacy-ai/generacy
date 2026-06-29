@@ -7,6 +7,7 @@ import type { Scope } from '../shared/scoping.js';
 const COL_REPO = 20;
 const COL_NUMBER = 5;
 const COL_STATE = 8;
+const COL_STUCK = 5;
 const COL_SOURCE_LABEL = 30;
 const COL_PR_NUMBER = 5;
 const COL_CHECKS = 8;
@@ -22,11 +23,13 @@ function fmtRow(row: StatusRow, colorizer: Colorizer): string {
   const numCol = `#${String(row.number).padStart(COL_NUMBER)}`;
   const stateRaw = row.state.padEnd(COL_STATE);
   const stateCol = colorizer.state(stateRaw, row.state);
+  const stuckRaw = (row.stuck ? 'STALE' : '').padEnd(COL_STUCK);
+  const stuckCol = colorizer.stuck(stuckRaw, row.stuck);
   const sourceCol = row.sourceLabel.padEnd(COL_SOURCE_LABEL);
   const prCol = `PR ${row.prNumber == null ? '-'.padStart(COL_PR_NUMBER) : String(row.prNumber).padStart(COL_PR_NUMBER)}`;
   const checksCol = row.checks.padEnd(COL_CHECKS);
   const titleCol = truncate(row.title, COL_TITLE);
-  return `${repoCol}   ${numCol}   ${stateCol}   ${sourceCol}   ${prCol}   ${checksCol}   ${titleCol}`;
+  return `${repoCol}   ${numCol}   ${stateCol}   ${stuckCol}   ${sourceCol}   ${prCol}   ${checksCol}   ${titleCol}`;
 }
 
 export interface StatusEnvelope {
