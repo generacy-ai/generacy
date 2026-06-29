@@ -34,9 +34,12 @@ function isPullRequest(issue: Issue): boolean {
 
 function queryFor(scope: Scope, repo: string, issueNumbers?: number[]): string {
   if (scope.kind === 'epic') {
-    const refs = (issueNumbers ?? scope.issues).map((n) => String(n)).join(' ');
+    const numbers =
+      issueNumbers ??
+      scope.issues.filter((r) => r.repo === repo).map((r) => r.number);
+    const refs = numbers.map((n) => String(n)).join(' ');
     if (refs.length === 0) {
-      // No epic children; return a query that produces zero results.
+      // No epic children in this repo; return a query that produces zero results.
       return `repo:${repo} is:issue no:label cockpit-no-match-sentinel`;
     }
     return `repo:${repo} ${refs}`;
@@ -45,7 +48,20 @@ function queryFor(scope: Scope, repo: string, issueNumbers?: number[]): string {
 }
 
 function reposForScope(scope: Scope): string[] {
-  if (scope.kind === 'epic') return [scope.ownerRepo];
+  if (scope.kind === 'epic') {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const ref of scope.issues) {
+      if (!seen.has(ref.repo)) {
+        seen.add(ref.repo);
+        out.push(ref.repo);
+      }
+    }
+    // If the epic has no children resolved, fall back to the epic's own repo
+    // so we still issue a (zero-result) poll rather than producing nothing.
+    if (out.length === 0) return [scope.ownerRepo];
+    return out;
+  }
   return scope.repos;
 }
 

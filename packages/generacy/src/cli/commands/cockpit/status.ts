@@ -61,6 +61,7 @@ export function statusCommand(): Command {
             ...(reposOverride != null ? { reposOverride } : {}),
             config: loaded.config,
             gh,
+            logger: { warn: (msg) => process.stderr.write(`${msg}\n`) },
           });
         } catch (err) {
           process.stderr.write(`cockpit: ${err instanceof Error ? err.message : String(err)}\n`);
@@ -76,13 +77,29 @@ export function statusCommand(): Command {
         }
         const orchestrator = createOrchestratorClient(orchestratorOptions);
 
-        const repos = scope.kind === 'epic' ? [scope.ownerRepo] : scope.repos;
+        let repoBatches: Array<{ repo: string; query: string }>;
+        if (scope.kind === 'epic') {
+          const numbersByRepo = new Map<string, number[]>();
+          for (const ref of scope.issues) {
+            const list = numbersByRepo.get(ref.repo);
+            if (list != null) list.push(ref.number);
+            else numbersByRepo.set(ref.repo, [ref.number]);
+          }
+          repoBatches = [...numbersByRepo.entries()]
+            .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+            .map(([repo, numbers]) => ({
+              repo,
+              query: `repo:${repo} ${numbers.map((n) => String(n)).join(' ')}`,
+            }));
+        } else {
+          repoBatches = scope.repos.map((repo) => ({
+            repo,
+            query: `repo:${repo} is:open`,
+          }));
+        }
+
         const rows: StatusRow[] = [];
-        for (const repo of repos) {
-          const query =
-            scope.kind === 'epic'
-              ? `repo:${repo} ${scope.issues.map((n) => String(n)).join(' ')}`
-              : `repo:${repo} is:open`;
+        for (const { repo, query } of repoBatches) {
           let issues: Issue[] = [];
           try {
             issues = await listAllIssues(gh, query, {

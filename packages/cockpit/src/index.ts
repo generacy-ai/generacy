@@ -36,6 +36,7 @@ export {
 export {
   resolveEpicIssues,
   type ResolveEpicIssuesOptions,
+  type IssueRef,
 } from './manifest/scoping.js';
 
 // gh wrapper

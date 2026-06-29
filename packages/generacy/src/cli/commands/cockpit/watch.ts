@@ -70,6 +70,7 @@ export function watchCommand(): Command {
             ...(reposOverride != null ? { reposOverride } : {}),
             config: loaded.config,
             gh,
+            logger: { warn: (msg) => process.stderr.write(`${msg}\n`) },
           });
         } catch (err) {
           process.stderr.write(`cockpit: ${err instanceof Error ? err.message : String(err)}\n`);
