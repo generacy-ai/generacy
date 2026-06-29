@@ -60,7 +60,7 @@ describe('GhCliWrapper', () => {
       expect(calls).toHaveLength(1);
       expect(calls[0]?.cmd).toBe('gh');
       const args = calls[0]?.args ?? [];
-      expect(args.slice(0, 3)).toEqual(['search', 'issues', 'repo:o/r is:issue']);
+      expect(args.slice(0, 4)).toEqual(['search', 'issues', 'repo:o/r', 'is:issue']);
       expect(args).toContain('--json');
       expect(args).toContain('number,title,state,labels,url,body,author,createdAt');
       expect(args).toContain('--limit');
@@ -75,6 +75,36 @@ describe('GhCliWrapper', () => {
         body: 'body',
         author: { login: 'alice' },
       });
+    });
+
+    it('splits multi-qualifier queries into separate args (regression: no arg holds spaces)', async () => {
+      const { runner, calls } = stubRunner();
+      const wrapper = new GhCliWrapper(runner);
+      await wrapper.listIssues('repo:o/r is:issue label:epic-child #85');
+      const args = calls[0]?.args ?? [];
+      expect(args.slice(0, 6)).toEqual([
+        'search',
+        'issues',
+        'repo:o/r',
+        'is:issue',
+        'label:epic-child',
+        '#85',
+      ]);
+      // Previously the whole query was passed as one arg, so gh folded the
+      // trailing qualifiers into repo:"o/r is:issue ..." and rejected the query.
+      for (const arg of args) expect(arg).not.toMatch(/\s/);
+    });
+
+    it('keeps quoted phrases as a single arg', async () => {
+      const { runner, calls } = stubRunner();
+      const wrapper = new GhCliWrapper(runner);
+      await wrapper.listIssues('repo:o/r "exact phrase"');
+      expect(calls[0]?.args.slice(0, 4)).toEqual([
+        'search',
+        'issues',
+        'repo:o/r',
+        '"exact phrase"',
+      ]);
     });
 
     it('defaults limit to 100', async () => {
