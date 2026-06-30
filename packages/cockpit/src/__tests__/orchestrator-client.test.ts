@@ -110,16 +110,11 @@ describe('createOrchestratorClient', () => {
       ]);
     });
 
-    it('getWorkers 200 returns parsed WorkerSummary array', async () => {
+    it('getWorkers 200 returns { available: true, count } from { count } body', async () => {
       const { client: http } = stubHttp({
         '/dispatch/queue/workers': {
           status: 200,
-          data: {
-            workers: [
-              { id: 'w1', status: 'idle' },
-              { id: 'w2', status: 'busy', currentJobId: 'j1' },
-            ],
-          },
+          data: { count: 7 },
         },
       });
       const client = createOrchestratorClient({
@@ -127,11 +122,11 @@ describe('createOrchestratorClient', () => {
         httpClient: http,
       });
       const result = await client.getWorkers();
+      expect(result).toEqual({ available: true, count: 7 });
+      // Regression guard for always-0 bug: the value 7 must flow through.
       if (!result.available) throw new Error('expected available');
-      expect(result.workers).toEqual([
-        { id: 'w1', status: 'idle' },
-        { id: 'w2', status: 'busy', currentJobId: 'j1' },
-      ]);
+      expect(result.count).toBe(7);
+      expect(result.count).not.toBe(0);
     });
 
     it('attaches Authorization: Bearer header', async () => {

@@ -9,13 +9,7 @@ export interface JobSummary {
   workflowId?: string;
 }
 
-export interface WorkerSummary {
-  id: string;
-  status: string;
-  currentJobId?: string;
-}
-
-export type UnavailableReason = 'no-token' | 'cloud-unreachable' | 'http-error';
+export type UnavailableReason = 'no-token' | 'cloud-unreachable' | 'http-error' | 'timeout';
 
 export type HealthResult =
   | { available: false; reason: UnavailableReason; statusCode?: number }
@@ -27,7 +21,7 @@ export type JobsResult =
 
 export type WorkersResult =
   | { available: false; reason: UnavailableReason; statusCode?: number }
-  | { available: true; workers: WorkerSummary[] };
+  | { available: true; count: number };
 
 export interface OrchestratorClient {
   isAvailable(): boolean;
@@ -58,20 +52,6 @@ function normalizeJobs(raw: unknown): JobSummary[] {
     if (typeof id !== 'string' || typeof status !== 'string') return [];
     const workflowId = typeof obj['workflowId'] === 'string' ? (obj['workflowId'] as string) : undefined;
     return [{ id, status, ...(workflowId != null ? { workflowId } : {}) }];
-  });
-}
-
-function normalizeWorkers(raw: unknown): WorkerSummary[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.flatMap((item): WorkerSummary[] => {
-    if (item == null || typeof item !== 'object') return [];
-    const obj = item as Record<string, unknown>;
-    const id = obj['id'];
-    const status = obj['status'];
-    if (typeof id !== 'string' || typeof status !== 'string') return [];
-    const currentJobId =
-      typeof obj['currentJobId'] === 'string' ? (obj['currentJobId'] as string) : undefined;
-    return [{ id, status, ...(currentJobId != null ? { currentJobId } : {}) }];
   });
 }
 
@@ -147,8 +127,14 @@ function createLiveClient(
           ? { available: false, reason: result.reason, statusCode: result.status }
           : { available: false, reason: result.reason };
       }
-      const workers = normalizeWorkers(pickArrayField(result.data, 'workers', 'items'));
-      return { available: true, workers };
+      const data = result.data;
+      const count =
+        data != null &&
+        typeof data === 'object' &&
+        typeof (data as Record<string, unknown>)['count'] === 'number'
+          ? ((data as Record<string, unknown>)['count'] as number)
+          : 0;
+      return { available: true, count };
     },
   };
 }
