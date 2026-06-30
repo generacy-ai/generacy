@@ -70,6 +70,5 @@ export {
   type JobsResult,
   type WorkersResult,
   type JobSummary,
-  type WorkerSummary,
   type UnavailableReason,
 } from './orchestrator/client.js';

@@ -9,6 +9,8 @@ import { resolveScope } from './shared/scoping.js';
 import { listAllIssues } from './shared/pagination.js';
 import { classifyIssue } from './shared/classify-issue.js';
 import { getFooter, renderFooter } from './shared/orchestrator-footer.js';
+import { resolveOrchestratorToken } from './shared/orchestrator-token.js';
+import { createFirstFailureWarner } from './shared/orchestrator-warn.js';
 import { rollup } from './watch/check-rollup.js';
 import { buildStatusRow, type StatusRow } from './status/row.js';
 import { groupRows } from './status/group.js';
@@ -68,14 +70,21 @@ export function statusCommand(): Command {
           process.exit(1);
         }
 
+        const token = resolveOrchestratorToken({
+          envValue: process.env.ORCHESTRATOR_API_TOKEN,
+          configValue: loaded.config.orchestrator?.token,
+        });
         const orchestratorOptions: { baseUrl?: string; token?: string } = {};
         if (loaded.config.orchestrator?.baseUrl != null) {
           orchestratorOptions.baseUrl = loaded.config.orchestrator.baseUrl;
         }
-        if (loaded.config.orchestrator?.token != null) {
-          orchestratorOptions.token = loaded.config.orchestrator.token;
+        if (token != null) {
+          orchestratorOptions.token = token;
         }
         const orchestrator = createOrchestratorClient(orchestratorOptions);
+        const warner = createFirstFailureWarner({
+          write: (msg) => process.stderr.write(msg),
+        });
 
         let repoBatches: Array<{ repo: string; query: string }>;
         if (scope.kind === 'epic') {
@@ -146,7 +155,7 @@ export function statusCommand(): Command {
           }
         }
 
-        const footer = await getFooter(orchestrator);
+        const footer = await getFooter(orchestrator, 1500, warner);
 
         if (options.json === true) {
           const line = renderJsonEnvelope(scope, rows, footer, parseEpicIssueNumber(options.epic));
