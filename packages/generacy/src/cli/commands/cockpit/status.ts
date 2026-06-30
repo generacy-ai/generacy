@@ -3,6 +3,7 @@ import {
   GhCliWrapper,
   createOrchestratorClient,
   loadCockpitConfig,
+  readJournalLiveness,
   type Issue,
 } from '@generacy-ai/cockpit';
 import { resolveScope } from './shared/scoping.js';
@@ -142,6 +143,19 @@ export function statusCommand(): Command {
                 checks = 'none';
               }
             }
+            let liveness: { stuck: boolean; stuckReason: import('@generacy-ai/cockpit').StuckReason } | undefined;
+            if (
+              !isPr &&
+              classified.state === 'active' &&
+              classified.sourceLabel === 'agent:in-progress'
+            ) {
+              const result = await readJournalLiveness({
+                issueNumber: issue.number,
+                thresholdMinutes: loaded.config.stuckThresholdMinutes,
+                logger: { warn: (msg) => process.stderr.write(`${msg}\n`) },
+              });
+              liveness = { stuck: result.stuck, stuckReason: result.stuckReason };
+            }
             rows.push(
               buildStatusRow(
                 repo,
@@ -150,6 +164,7 @@ export function statusCommand(): Command {
                 isPr ? 'pr' : 'issue',
                 prNumber,
                 checks,
+                liveness,
               ),
             );
           }

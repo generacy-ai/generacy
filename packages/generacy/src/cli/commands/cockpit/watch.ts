@@ -136,6 +136,7 @@ export function watchCommand(): Command {
               gh,
               scope,
               safetyCap,
+              stuckThresholdMinutes: loaded.config.stuckThresholdMinutes,
               logger: { warn: (msg) => process.stderr.write(`${msg}\n`) },
             });
             for (const event of result.events) {

@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, copyFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, copyFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -151,5 +151,75 @@ describe('loadCockpitConfig', () => {
       'generacy-ai/generacy',
       'generacy-ai/generacy-extension',
     ]);
+  });
+
+  async function writeConfig(workspaceDir: string, body: string): Promise<void> {
+    const dotGeneracy = join(workspaceDir, '.generacy');
+    await mkdir(dotGeneracy, { recursive: true });
+    await writeFile(join(dotGeneracy, 'config.yaml'), body, 'utf-8');
+  }
+
+  describe('stuckThresholdMinutes', () => {
+    it('defaults to 15 when not set', async () => {
+      const result = await loadCockpitConfig({
+        cwd,
+        env: { MONITORED_REPOS: 'generacy-ai/foo' },
+        whoami: async () => null,
+      });
+      expect(result.config.stuckThresholdMinutes).toBe(15);
+    });
+
+    it('honors explicit cockpit.stuckThresholdMinutes from YAML', async () => {
+      await writeConfig(
+        cwd,
+        'cockpit:\n  repos: [generacy-ai/foo]\n  stuckThresholdMinutes: 42\n',
+      );
+      const result = await loadCockpitConfig({
+        cwd,
+        env: {},
+        whoami: async () => null,
+      });
+      expect(result.config.stuckThresholdMinutes).toBe(42);
+    });
+
+    it('Zod rejects zero', async () => {
+      await writeConfig(
+        cwd,
+        'cockpit:\n  repos: [generacy-ai/foo]\n  stuckThresholdMinutes: 0\n',
+      );
+      await expect(
+        loadCockpitConfig({ cwd, env: {}, whoami: async () => null }),
+      ).rejects.toThrow();
+    });
+
+    it('Zod rejects negative integers', async () => {
+      await writeConfig(
+        cwd,
+        'cockpit:\n  repos: [generacy-ai/foo]\n  stuckThresholdMinutes: -5\n',
+      );
+      await expect(
+        loadCockpitConfig({ cwd, env: {}, whoami: async () => null }),
+      ).rejects.toThrow();
+    });
+
+    it('Zod rejects floats', async () => {
+      await writeConfig(
+        cwd,
+        'cockpit:\n  repos: [generacy-ai/foo]\n  stuckThresholdMinutes: 1.5\n',
+      );
+      await expect(
+        loadCockpitConfig({ cwd, env: {}, whoami: async () => null }),
+      ).rejects.toThrow();
+    });
+
+    it('Zod rejects strings', async () => {
+      await writeConfig(
+        cwd,
+        'cockpit:\n  repos: [generacy-ai/foo]\n  stuckThresholdMinutes: "20"\n',
+      );
+      await expect(
+        loadCockpitConfig({ cwd, env: {}, whoami: async () => null }),
+      ).rejects.toThrow();
+    });
   });
 });

@@ -12,6 +12,7 @@ export const CockpitConfigSchema = z.object({
     })
     .optional()
     .default({}),
+  stuckThresholdMinutes: z.number().int().positive().default(15),
 });
 
 export type CockpitConfig = z.infer<typeof CockpitConfigSchema>;

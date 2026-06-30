@@ -1,4 +1,4 @@
-import type { Issue } from '@generacy-ai/cockpit';
+import type { Issue, StuckReason } from '@generacy-ai/cockpit';
 import type { ClassifiedIssue } from '../shared/classify-issue.js';
 
 export type SnapshotKey = string;
@@ -14,6 +14,8 @@ export interface IssueSnapshot {
   state: 'OPEN' | 'CLOSED';
   labels: string[];
   classified: ClassifiedIssue;
+  stuck: boolean;
+  stuckReason: StuckReason;
 }
 
 export interface PrSnapshot {
@@ -39,6 +41,7 @@ export function buildIssueSnapshot(
   repo: string,
   issue: Pick<Issue, 'number' | 'url' | 'state' | 'labels'>,
   classified: ClassifiedIssue,
+  liveness?: { stuck: boolean; stuckReason: StuckReason },
 ): IssueSnapshot {
   return {
     kind: 'issue',
@@ -48,6 +51,8 @@ export function buildIssueSnapshot(
     state: issue.state,
     labels: [...issue.labels],
     classified,
+    stuck: liveness?.stuck ?? false,
+    stuckReason: liveness?.stuckReason ?? null,
   };
 }
 
