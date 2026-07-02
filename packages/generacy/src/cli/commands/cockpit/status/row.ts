@@ -1,4 +1,4 @@
-import type { Issue, CockpitState, StuckReason } from '@generacy-ai/cockpit';
+import type { Issue, CockpitState } from '@generacy-ai/cockpit';
 import type { ClassifiedIssue } from '../shared/classify-issue.js';
 
 export interface StatusRow {
@@ -11,8 +11,6 @@ export interface StatusRow {
   prNumber: number | null;
   checks: 'pending' | 'success' | 'failure' | 'none';
   url: string;
-  stuck: boolean;
-  stuckReason: StuckReason;
 }
 
 export function buildStatusRow(
@@ -22,7 +20,6 @@ export function buildStatusRow(
   kind: 'issue' | 'pr',
   prNumber: number | null,
   checks: 'pending' | 'success' | 'failure' | 'none',
-  liveness?: { stuck: boolean; stuckReason: StuckReason },
 ): StatusRow {
   return {
     repo,
@@ -34,7 +31,5 @@ export function buildStatusRow(
     prNumber,
     checks,
     url: issue.url,
-    stuck: liveness?.stuck ?? false,
-    stuckReason: liveness?.stuckReason ?? null,
   };
 }

@@ -39,29 +39,3 @@ export async function writeManifest(path: string, manifest: EpicManifest): Promi
   await writeFile(tmp, yaml, 'utf-8');
   await rename(tmp, path);
 }
-
-/**
- * Append a child issue reference to a phase. Idempotent: if the reference is
- * already present, returns without writing. Throws if the manifest is missing
- * or the phase is not found.
- */
-export async function appendChildIssue(
-  path: string,
-  phaseName: string,
-  issueRef: string,
-): Promise<void> {
-  if (!/^[^/]+\/[^/]+#\d+$/.test(issueRef)) {
-    throw new Error(`invalid issueRef: ${issueRef} (expected owner/repo#n)`);
-  }
-  const manifest = await readManifest(path);
-  if (manifest == null) {
-    throw new Error(`manifest not found: ${path}`);
-  }
-  const phase = manifest.phases.find((p) => p.name === phaseName);
-  if (phase == null) {
-    throw new Error(`phase not found: ${phaseName}`);
-  }
-  if (phase.issues.includes(issueRef)) return;
-  phase.issues.push(issueRef);
-  await writeManifest(path, manifest);
-}

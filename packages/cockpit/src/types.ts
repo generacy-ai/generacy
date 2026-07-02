@@ -24,19 +24,3 @@ export interface ClassifyResult {
   state: CockpitState;
   sourceLabel: string;
 }
-
-export type StuckReason = 'stale' | 'no-journal' | null;
-
-export interface JournalLivenessResult {
-  stuck: boolean;
-  stuckReason: StuckReason;
-  lastEntryAt: string | null;
-}
-
-export interface ReadJournalLivenessOptions {
-  issueNumber: number;
-  thresholdMinutes: number;
-  cwd?: string;
-  now?: () => Date;
-  logger?: { warn: (msg: string) => void };
-}

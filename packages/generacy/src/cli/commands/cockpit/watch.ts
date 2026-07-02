@@ -1,18 +1,11 @@
 import { Command } from 'commander';
 import {
   GhCliWrapper,
-  createOrchestratorClient,
   loadCockpitConfig,
 } from '@generacy-ai/cockpit';
 import { resolveScope } from './shared/scoping.js';
-import { createFirstFailureWarner } from './shared/orchestrator-warn.js';
-import { resolveOrchestratorToken } from './shared/orchestrator-token.js';
 import { runOnePoll } from './watch/poll-loop.js';
 import { emit } from './watch/emit.js';
-import {
-  pollOrchestratorCounts,
-  type OrchestratorCountsState,
-} from './watch/orchestrator-counts.js';
 import type { SnapshotMap } from './watch/snapshot.js';
 
 interface WatchOptions {
@@ -90,28 +83,6 @@ export function watchCommand(): Command {
           `cockpit: watching ${reposLabel}; emitting on transition (interval=${interval}ms)\n`,
         );
 
-        // Orchestrator wiring: token precedence (env > config), one shared
-        // warner per CLI invocation, one shared client. State carried across
-        // ticks so we emit only on transitions.
-        const token = resolveOrchestratorToken({
-          envValue: process.env['ORCHESTRATOR_API_TOKEN'],
-          configValue: loaded.config.orchestrator?.token,
-        });
-        const orchestratorOptions: { baseUrl?: string; token?: string } = {};
-        if (loaded.config.orchestrator?.baseUrl != null) {
-          orchestratorOptions.baseUrl = loaded.config.orchestrator.baseUrl;
-        }
-        if (token != null) {
-          orchestratorOptions.token = token;
-        }
-        const orchestrator = createOrchestratorClient(orchestratorOptions);
-        const warner = createFirstFailureWarner({
-          write: (msg) => {
-            process.stderr.write(msg);
-          },
-        });
-        let prevOrchestrator: OrchestratorCountsState | null = null;
-
         const controller = new AbortController();
         let stopped = false;
         const onStop = (): void => {
@@ -123,20 +94,11 @@ export function watchCommand(): Command {
 
         let prev: SnapshotMap = new Map();
         while (!stopped) {
-          // Orchestrator poll runs in parallel with the GH poll. It never
-          // throws — failures become `unavailable` states — so a hung or down
-          // orchestrator can never knock the GH poll out of the loop (SC-005).
-          const ocPromise = pollOrchestratorCounts(
-            orchestrator,
-            prevOrchestrator,
-            warner,
-          );
           try {
             const result = await runOnePoll(prev, {
               gh,
               scope,
               safetyCap,
-              stuckThresholdMinutes: loaded.config.stuckThresholdMinutes,
               logger: { warn: (msg) => process.stderr.write(`${msg}\n`) },
             });
             for (const event of result.events) {
@@ -144,20 +106,10 @@ export function watchCommand(): Command {
             }
             prev = result.curr;
           } catch (err) {
-            // Drain the orchestrator promise before bailing so we don't leak
-            // an unhandled rejection. It already swallows its own errors.
-            await ocPromise.catch(() => undefined);
             process.stderr.write(
               `cockpit: poll error: ${err instanceof Error ? err.message : String(err)}\n`,
             );
             process.exit(3);
-          }
-          // GH events are written first, then the (single) orchestrator
-          // event — keeps NDJSON stream ordering predictable per tick.
-          const oc = await ocPromise;
-          prevOrchestrator = oc.curr;
-          if (oc.event !== null) {
-            process.stdout.write(`${JSON.stringify(oc.event)}\n`);
           }
           if (stopped) break;
           await sleep(interval, controller.signal);

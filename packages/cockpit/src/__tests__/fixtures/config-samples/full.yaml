@@ -3,6 +3,3 @@ cockpit:
   repos:
     - generacy-ai/generacy
     - generacy-ai/generacy-extension
-  orchestrator:
-    baseUrl: https://example.test
-    token: deadbeef

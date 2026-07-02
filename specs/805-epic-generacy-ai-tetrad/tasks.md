@@ -14,8 +14,8 @@ Absolute paths below are rooted at `/workspaces/generacy/`.
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify branch `805-epic-generacy-ai-tetrad` is checked out, working tree clean, and run `pnpm install` from the repo root.
-- [ ] T002 Baseline: run `pnpm --filter @generacy-ai/cockpit build && pnpm --filter @generacy-ai/generacy build` to confirm both packages typecheck **before** deletions begin. Record any pre-existing failures.
+- [X] T001 Verify branch `805-epic-generacy-ai-tetrad` is checked out, working tree clean, and run `pnpm install` from the repo root.
+- [X] T002 Baseline: run `pnpm --filter @generacy-ai/cockpit build && pnpm --filter @generacy-ai/generacy build` to confirm both packages typecheck **before** deletions begin. Record any pre-existing failures.
 
 ---
 
@@ -25,29 +25,29 @@ Delete-only tasks. Each is a single `rm` on an owned file — safe to run in par
 
 ### `packages/cockpit`
 
-- [ ] T003 [P] [US1] Delete `packages/cockpit/src/orchestrator/client.ts`.
-- [ ] T004 [P] [US1] Delete `packages/cockpit/src/orchestrator/http.ts`.
-- [ ] T005 [P] [US1] Delete `packages/cockpit/src/orchestrator/stub.ts`.
-- [ ] T006 [P] [US1] Delete the now-empty `packages/cockpit/src/orchestrator/` directory (after T003–T005).
-- [ ] T007 [P] [US1] Delete `packages/cockpit/src/journal.ts`.
-- [ ] T008 [P] [US1] Delete `packages/cockpit/src/__tests__/journal.test.ts`.
-- [ ] T009 [P] [US1] Delete `packages/cockpit/src/__tests__/orchestrator-client.test.ts`.
+- [X] T003 [P] [US1] Delete `packages/cockpit/src/orchestrator/client.ts`.
+- [X] T004 [P] [US1] Delete `packages/cockpit/src/orchestrator/http.ts`.
+- [X] T005 [P] [US1] Delete `packages/cockpit/src/orchestrator/stub.ts`.
+- [X] T006 [P] [US1] Delete the now-empty `packages/cockpit/src/orchestrator/` directory (after T003–T005).
+- [X] T007 [P] [US1] Delete `packages/cockpit/src/journal.ts`.
+- [X] T008 [P] [US1] Delete `packages/cockpit/src/__tests__/journal.test.ts`.
+- [X] T009 [P] [US1] Delete `packages/cockpit/src/__tests__/orchestrator-client.test.ts`.
 
 ### `packages/generacy` — CLI cockpit helpers
 
-- [ ] T010 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/shared/orchestrator-footer.ts`.
-- [ ] T011 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/shared/orchestrator-token.ts`.
-- [ ] T012 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/shared/orchestrator-warn.ts`.
-- [ ] T013 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/watch/orchestrator-counts.ts`.
+- [X] T010 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/shared/orchestrator-footer.ts`.
+- [X] T011 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/shared/orchestrator-token.ts`.
+- [X] T012 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/shared/orchestrator-warn.ts`.
+- [X] T013 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/watch/orchestrator-counts.ts`.
 
 ### `packages/generacy` — orchestrator-scoped tests
 
-- [ ] T014 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/orchestrator-token.test.ts`.
-- [ ] T015 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/orchestrator-warn.test.ts`.
-- [ ] T016 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/status.footer.test.ts`.
-- [ ] T017 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/status.token-precedence.test.ts`.
-- [ ] T018 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/watch.orchestrator-counts.test.ts`.
-- [ ] T019 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/watch.orchestrator-failure.test.ts`.
+- [X] T014 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/orchestrator-token.test.ts`.
+- [X] T015 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/orchestrator-warn.test.ts`.
+- [X] T016 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/status.footer.test.ts`.
+- [X] T017 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/status.token-precedence.test.ts`.
+- [X] T018 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/watch.orchestrator-counts.test.ts`.
+- [X] T019 [P] [US1] Delete `packages/generacy/src/cli/commands/cockpit/__tests__/watch.orchestrator-failure.test.ts`.
 
 ---
 
@@ -55,13 +55,13 @@ Delete-only tasks. Each is a single `rm` on an owned file — safe to run in par
 
 Sequential where files may share edits; parallel [P] where distinct.
 
-- [ ] T020 [US1] Edit `packages/cockpit/src/types.ts`: remove `StuckReason`, `JournalLivenessResult`, and `ReadJournalLivenessOptions` types (data-model.md §2). Leave `COCKPIT_STATES`, `CockpitState`, `ClassifyResult` untouched.
-- [ ] T021 [US1] Edit `packages/cockpit/src/index.ts`: remove exports `createOrchestratorClient`, `OrchestratorClient`, `CreateOrchestratorClientConfig`, `HealthResult`, `JobsResult`, `WorkersResult`, `JobSummary`, `UnavailableReason`, `readJournalLiveness`, `StuckReason`, `JournalLivenessResult`, `ReadJournalLivenessOptions`, `appendChildIssue`. Depends on T020.
-- [ ] T022 [P] [US1] Edit `packages/cockpit/src/config/schema.ts`: drop `orchestrator` object and `stuckThresholdMinutes` from `CockpitConfigSchema` (data-model.md §1). Do **not** add `.strict()`.
-- [ ] T023 [P] [US1] Edit `packages/cockpit/src/manifest/io.ts`: delete `appendChildIssue` function (and any helpers used only by it).
-- [ ] T024 [P] [US1] Edit `packages/cockpit/src/__tests__/config-loader.test.ts`: drop assertions on `orchestrator` and `stuckThresholdMinutes`.
-- [ ] T025 [P] [US1] Edit `packages/cockpit/src/__tests__/manifest-io.test.ts`: drop `appendChildIssue` cases.
-- [ ] T026 [P] [US1] Edit `packages/cockpit/src/__tests__/fixtures/config-samples/full.yaml`: strip `orchestrator:` block and `stuckThresholdMinutes:` key.
+- [X] T020 [US1] Edit `packages/cockpit/src/types.ts`: remove `StuckReason`, `JournalLivenessResult`, and `ReadJournalLivenessOptions` types (data-model.md §2). Leave `COCKPIT_STATES`, `CockpitState`, `ClassifyResult` untouched.
+- [X] T021 [US1] Edit `packages/cockpit/src/index.ts`: remove exports `createOrchestratorClient`, `OrchestratorClient`, `CreateOrchestratorClientConfig`, `HealthResult`, `JobsResult`, `WorkersResult`, `JobSummary`, `UnavailableReason`, `readJournalLiveness`, `StuckReason`, `JournalLivenessResult`, `ReadJournalLivenessOptions`, `appendChildIssue`. Depends on T020.
+- [X] T022 [P] [US1] Edit `packages/cockpit/src/config/schema.ts`: drop `orchestrator` object and `stuckThresholdMinutes` from `CockpitConfigSchema` (data-model.md §1). Do **not** add `.strict()`.
+- [X] T023 [P] [US1] Edit `packages/cockpit/src/manifest/io.ts`: delete `appendChildIssue` function (and any helpers used only by it).
+- [X] T024 [P] [US1] Edit `packages/cockpit/src/__tests__/config-loader.test.ts`: drop assertions on `orchestrator` and `stuckThresholdMinutes`.
+- [X] T025 [P] [US1] Edit `packages/cockpit/src/__tests__/manifest-io.test.ts`: drop `appendChildIssue` cases.
+- [X] T026 [P] [US1] Edit `packages/cockpit/src/__tests__/fixtures/config-samples/full.yaml`: strip `orchestrator:` block and `stuckThresholdMinutes:` key.
 
 ---
 
@@ -69,8 +69,8 @@ Sequential where files may share edits; parallel [P] where distinct.
 
 Sequential — both files import cascading helpers whose surfaces change in Phase 5.
 
-- [ ] T027 [US1] Edit `packages/generacy/src/cli/commands/cockpit/status.ts`: drop imports of `createOrchestratorClient`, `readJournalLiveness`, `StuckReason`, `getOrchestratorFooter`/`renderFooter`, orchestrator-token, orchestrator-warn; remove `liveness` computation and any footer wiring; ensure `renderJsonEnvelope` is called without the footer arg.
-- [ ] T028 [US1] Edit `packages/generacy/src/cli/commands/cockpit/watch.ts`: drop orchestrator client construction, `warner`, `prevOrchestrator`, `pollOrchestratorCounts` call, and the orchestrator-counts stdout write; drop related imports; drop `stuckThresholdMinutes` and `readLiveness` from `PollDeps` wiring.
+- [X] T027 [US1] Edit `packages/generacy/src/cli/commands/cockpit/status.ts`: drop imports of `createOrchestratorClient`, `readJournalLiveness`, `StuckReason`, `getOrchestratorFooter`/`renderFooter`, orchestrator-token, orchestrator-warn; remove `liveness` computation and any footer wiring; ensure `renderJsonEnvelope` is called without the footer arg.
+- [X] T028 [US1] Edit `packages/generacy/src/cli/commands/cockpit/watch.ts`: drop orchestrator client construction, `warner`, `prevOrchestrator`, `pollOrchestratorCounts` call, and the orchestrator-counts stdout write; drop related imports; drop `stuckThresholdMinutes` and `readLiveness` from `PollDeps` wiring.
 
 ---
 
@@ -78,22 +78,22 @@ Sequential — both files import cascading helpers whose surfaces change in Phas
 
 Different files — most can run in parallel. T033 depends on T031 (import cleanup follows type change).
 
-- [ ] T029 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/status/render-table.ts`: drop `COL_STUCK` constant, `stuckCol` computation in `fmtRow`; remove `orchestrator` field from `StatusEnvelope`; drop `footer` param from `renderJsonEnvelope` (data-model.md §8).
-- [ ] T030 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/status/row.ts`: drop `stuck` and `stuckReason` fields from `StatusRow`; drop `liveness` param and fields from `buildStatusRow`; drop `StuckReason` import (data-model.md §3).
-- [ ] T031 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/status/color.ts`: drop `stuck()` method from `Colorizer` interface and both `chalkColorizer`/`identityColorizer` implementations (data-model.md §6).
-- [ ] T032 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/watch/snapshot.ts`: drop `stuck` and `stuckReason` from `IssueSnapshot`; drop `liveness` param and fields from `buildIssueSnapshot`; drop `StuckReason` import (data-model.md §4).
-- [ ] T033 [US2] Edit `packages/generacy/src/cli/commands/cockpit/watch/diff.ts`: narrow `CockpitEventDiscriminator` union to `'label-change' | 'issue-closed' | 'pr-merged' | 'pr-closed' | 'pr-checks'`; drop `stuckReason?` from `CockpitEvent`; delete stuck/recovered emission branches from `diffIssue`; drop `StuckReason` import (data-model.md §5, research.md R3).
-- [ ] T034 [P] [US1] Edit `packages/generacy/src/cli/commands/cockpit/watch/emit.ts`: verify Zod enum already excludes `stuck`/`recovered` (research.md R3 confirms `emit.ts:14`). No enum change required; only remove any residual `stuckReason` field from the emitted event type if present.
-- [ ] T035 [US1] Edit `packages/generacy/src/cli/commands/cockpit/watch/poll-loop.ts`: drop `stuckThresholdMinutes` and `readLiveness` from `PollDeps`; delete the liveness branch inside the issue path; drop `readJournalLiveness` and `StuckReason` imports (data-model.md §7).
+- [X] T029 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/status/render-table.ts`: drop `COL_STUCK` constant, `stuckCol` computation in `fmtRow`; remove `orchestrator` field from `StatusEnvelope`; drop `footer` param from `renderJsonEnvelope` (data-model.md §8).
+- [X] T030 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/status/row.ts`: drop `stuck` and `stuckReason` fields from `StatusRow`; drop `liveness` param and fields from `buildStatusRow`; drop `StuckReason` import (data-model.md §3).
+- [X] T031 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/status/color.ts`: drop `stuck()` method from `Colorizer` interface and both `chalkColorizer`/`identityColorizer` implementations (data-model.md §6).
+- [X] T032 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/watch/snapshot.ts`: drop `stuck` and `stuckReason` from `IssueSnapshot`; drop `liveness` param and fields from `buildIssueSnapshot`; drop `StuckReason` import (data-model.md §4).
+- [X] T033 [US2] Edit `packages/generacy/src/cli/commands/cockpit/watch/diff.ts`: narrow `CockpitEventDiscriminator` union to `'label-change' | 'issue-closed' | 'pr-merged' | 'pr-closed' | 'pr-checks'`; drop `stuckReason?` from `CockpitEvent`; delete stuck/recovered emission branches from `diffIssue`; drop `StuckReason` import (data-model.md §5, research.md R3).
+- [X] T034 [P] [US1] Edit `packages/generacy/src/cli/commands/cockpit/watch/emit.ts`: verify Zod enum already excludes `stuck`/`recovered` (research.md R3 confirms `emit.ts:14`). No enum change required; only remove any residual `stuckReason` field from the emitted event type if present.
+- [X] T035 [US1] Edit `packages/generacy/src/cli/commands/cockpit/watch/poll-loop.ts`: drop `stuckThresholdMinutes` and `readLiveness` from `PollDeps`; delete the liveness branch inside the issue path; drop `readJournalLiveness` and `StuckReason` imports (data-model.md §7).
 
 ---
 
 ## Phase 6: Trim Generacy CLI Tests
 
-- [ ] T036 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/__tests__/status.render.test.ts`: drop the stuck-column cases; adjust any column-count / header assertions to reflect the removed STALE column.
-- [ ] T037 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/__tests__/watch.diff.test.ts`: drop `stuck` and `recovered` event cases.
-- [ ] T038 [P] [US1] Edit `packages/generacy/src/cli/commands/cockpit/__tests__/watch.poll-loop.test.ts`: drop `stuckThresholdMinutes`/`readLiveness` cases.
-- [ ] T039 [P] [US1] Read `packages/generacy/src/cli/commands/cockpit/__tests__/watch.no-mutations.test.ts` and `watch.pagination.test.ts` (plan.md Risks). If they construct `IssueSnapshot` literals with `stuck: false` / `stuckReason: null`, or assert orchestrator-counts stdout lines, remove those bits. Otherwise no change.
+- [X] T036 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/__tests__/status.render.test.ts`: drop the stuck-column cases; adjust any column-count / header assertions to reflect the removed STALE column.
+- [X] T037 [P] [US2] Edit `packages/generacy/src/cli/commands/cockpit/__tests__/watch.diff.test.ts`: drop `stuck` and `recovered` event cases.
+- [X] T038 [P] [US1] Edit `packages/generacy/src/cli/commands/cockpit/__tests__/watch.poll-loop.test.ts`: drop `stuckThresholdMinutes`/`readLiveness` cases.
+- [X] T039 [P] [US1] Read `packages/generacy/src/cli/commands/cockpit/__tests__/watch.no-mutations.test.ts` and `watch.pagination.test.ts` (plan.md Risks). If they construct `IssueSnapshot` literals with `stuck: false` / `stuckReason: null`, or assert orchestrator-counts stdout lines, remove those bits. Otherwise no change.
 
 ---
 
@@ -101,17 +101,17 @@ Different files — most can run in parallel. T033 depends on T031 (import clean
 
 Sequential — each step validates the previous.
 
-- [ ] T040 Typecheck gate: run `pnpm --filter @generacy-ai/cockpit build && pnpm --filter @generacy-ai/generacy build`. Both must exit 0 (quickstart.md step 1).
-- [ ] T041 Dead-symbol grep: run
+- [X] T040 Typecheck gate: run `pnpm --filter @generacy-ai/cockpit build && pnpm --filter @generacy-ai/generacy build`. Both must exit 0 (quickstart.md step 1).
+- [X] T041 Dead-symbol grep: run
   ```
   git grep -nE 'readJournalLiveness|createOrchestratorClient|appendChildIssue|StuckReason|JournalLivenessResult|ReadJournalLivenessOptions|orchestrator-footer|orchestrator-token|orchestrator-warn|orchestrator-counts' -- 'packages/**/*.ts'
   ```
   Expected: zero matches under `packages/` (quickstart.md step 2). Matches in `specs/` / `dist/` do not count.
-- [ ] T042 Run test suites: `pnpm --filter @generacy-ai/cockpit test && pnpm --filter @generacy-ai/generacy test`. Both must pass green (quickstart.md step 3).
-- [ ] T043 Smoke `cockpit status`: `node packages/generacy/dist/cli/index.js cockpit status --repos generacy-ai/generacy`. Confirm no `STALE` column and no `orchestrator:` footer line (quickstart.md step 4).
-- [ ] T044 Smoke `cockpit status --json`: `node packages/generacy/dist/cli/index.js cockpit status --repos generacy-ai/generacy --json | jq '.rows[0], .orchestrator'`. Confirm row has no `stuck`/`stuckReason` keys and `.orchestrator` is `null` (quickstart.md step 5).
-- [ ] T045 Smoke `cockpit watch`: run `node packages/generacy/dist/cli/index.js cockpit watch --repos generacy-ai/generacy --interval 2000` for two ticks, Ctrl-C. Confirm no `orchestrator-counts` JSON lines and no `stuck`/`recovered` events (quickstart.md step 6).
-- [ ] T046 Final acceptance check against spec.md: no orchestrator/journal references remain outside git history; watch/status run with reduced output; typecheck green.
+- [X] T042 Run test suites: `pnpm --filter @generacy-ai/cockpit test && pnpm --filter @generacy-ai/generacy test`. Both must pass green (quickstart.md step 3).
+- [X] T043 Smoke `cockpit status`: `node packages/generacy/dist/cli/index.js cockpit status --repos generacy-ai/generacy`. Confirm no `STALE` column and no `orchestrator:` footer line (quickstart.md step 4).
+- [X] T044 Smoke `cockpit status --json`: `node packages/generacy/dist/cli/index.js cockpit status --repos generacy-ai/generacy --json | jq '.rows[0], .orchestrator'`. Confirm row has no `stuck`/`stuckReason` keys and `.orchestrator` is `null` (quickstart.md step 5).
+- [X] T045 Smoke `cockpit watch`: run `node packages/generacy/dist/cli/index.js cockpit watch --repos generacy-ai/generacy --interval 2000` for two ticks, Ctrl-C. Confirm no `orchestrator-counts` JSON lines and no `stuck`/`recovered` events (quickstart.md step 6).
+- [X] T046 Final acceptance check against spec.md: no orchestrator/journal references remain outside git history; watch/status run with reduced output; typecheck green.
 
 ---
 

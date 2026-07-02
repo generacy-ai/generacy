@@ -7,15 +7,9 @@ export {
   COCKPIT_STATES,
   type CockpitState,
   type ClassifyResult,
-  type StuckReason,
-  type JournalLivenessResult,
-  type ReadJournalLivenessOptions,
 } from './types.js';
 export { classify } from './state/classifier.js';
 export { TIER_RANK, WAITING_PIPELINE_ORDER } from './state/precedence.js';
-
-// Journal liveness sensor
-export { readJournalLiveness } from './journal.js';
 
 // Config
 export {
@@ -41,7 +35,6 @@ export {
 export {
   readManifest,
   writeManifest,
-  appendChildIssue,
 } from './manifest/io.js';
 export {
   resolveEpicIssues,
@@ -70,15 +63,3 @@ export {
   type CommandRunnerOptions,
   type CommandResult,
 } from './gh/command-runner.js';
-
-// Orchestrator client
-export {
-  createOrchestratorClient,
-  type OrchestratorClient,
-  type CreateOrchestratorClientConfig,
-  type HealthResult,
-  type JobsResult,
-  type WorkersResult,
-  type JobSummary,
-  type UnavailableReason,
-} from './orchestrator/client.js';

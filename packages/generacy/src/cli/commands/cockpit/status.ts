@@ -1,17 +1,12 @@
 import { Command } from 'commander';
 import {
   GhCliWrapper,
-  createOrchestratorClient,
   loadCockpitConfig,
-  readJournalLiveness,
   type Issue,
 } from '@generacy-ai/cockpit';
 import { resolveScope } from './shared/scoping.js';
 import { listAllIssues } from './shared/pagination.js';
 import { classifyIssue } from './shared/classify-issue.js';
-import { getFooter, renderFooter } from './shared/orchestrator-footer.js';
-import { resolveOrchestratorToken } from './shared/orchestrator-token.js';
-import { createFirstFailureWarner } from './shared/orchestrator-warn.js';
 import { rollup } from './watch/check-rollup.js';
 import { buildStatusRow, type StatusRow } from './status/row.js';
 import { groupRows } from './status/group.js';
@@ -71,22 +66,6 @@ export function statusCommand(): Command {
           process.exit(1);
         }
 
-        const token = resolveOrchestratorToken({
-          envValue: process.env.ORCHESTRATOR_API_TOKEN,
-          configValue: loaded.config.orchestrator?.token,
-        });
-        const orchestratorOptions: { baseUrl?: string; token?: string } = {};
-        if (loaded.config.orchestrator?.baseUrl != null) {
-          orchestratorOptions.baseUrl = loaded.config.orchestrator.baseUrl;
-        }
-        if (token != null) {
-          orchestratorOptions.token = token;
-        }
-        const orchestrator = createOrchestratorClient(orchestratorOptions);
-        const warner = createFirstFailureWarner({
-          write: (msg) => process.stderr.write(msg),
-        });
-
         let repoBatches: Array<{ repo: string; query: string }>;
         if (scope.kind === 'epic') {
           const numbersByRepo = new Map<string, number[]>();
@@ -143,19 +122,6 @@ export function statusCommand(): Command {
                 checks = 'none';
               }
             }
-            let liveness: { stuck: boolean; stuckReason: import('@generacy-ai/cockpit').StuckReason } | undefined;
-            if (
-              !isPr &&
-              classified.state === 'active' &&
-              classified.sourceLabel === 'agent:in-progress'
-            ) {
-              const result = await readJournalLiveness({
-                issueNumber: issue.number,
-                thresholdMinutes: loaded.config.stuckThresholdMinutes,
-                logger: { warn: (msg) => process.stderr.write(`${msg}\n`) },
-              });
-              liveness = { stuck: result.stuck, stuckReason: result.stuckReason };
-            }
             rows.push(
               buildStatusRow(
                 repo,
@@ -164,16 +130,13 @@ export function statusCommand(): Command {
                 isPr ? 'pr' : 'issue',
                 prNumber,
                 checks,
-                liveness,
               ),
             );
           }
         }
 
-        const footer = await getFooter(orchestrator, 1500, warner);
-
         if (options.json === true) {
-          const line = renderJsonEnvelope(scope, rows, footer, parseEpicIssueNumber(options.epic));
+          const line = renderJsonEnvelope(scope, rows, parseEpicIssueNumber(options.epic));
           process.stdout.write(`${line}\n`);
           process.exit(0);
         }
@@ -182,7 +145,7 @@ export function statusCommand(): Command {
         const tty = process.stdout.isTTY === true;
         const colorizer = tty ? chalkColorizer : identityColorizer;
         const table = renderTable(groups, { tty, json: false, colorizer });
-        process.stdout.write(`${table}\n${renderFooter(footer)}\n`);
+        process.stdout.write(`${table}\n`);
         process.exit(0);
       } catch (err) {
         process.stderr.write(
