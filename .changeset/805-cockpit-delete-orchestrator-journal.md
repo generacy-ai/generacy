@@ -16,3 +16,6 @@ and `CockpitEventSchema` (fixing the producer/schema drift), and removes
 On the CLI side (`@generacy-ai/generacy`), `generacy cockpit status` loses the
 orchestrator footer line and `generacy cockpit watch` loses the orchestrator
 counts line, along with the now-unused orchestrator token/warn/footer helpers.
+
+Also drops the `STALE` column from the status table renderer and removes the
+`stuckAt` / `lastJournalAt` fields from `StatusRow`.

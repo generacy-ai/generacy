@@ -1,7 +1,7 @@
 {
   "name": "@generacy-ai/cockpit",
   "version": "0.2.0",
-  "description": "Foundation library for the Generacy Epic Cockpit: classifier, config loader, epic manifest, gh wrapper, and orchestrator client",
+  "description": "Foundation library for the Generacy Epic Cockpit: classifier, config loader, epic manifest, gh wrapper",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",

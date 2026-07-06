@@ -10,31 +10,31 @@
 
 ## Phase 1: Release Metadata
 
-- [ ] T001 [P] [US1] Delete stale pending changeset `.changeset/792-cockpit-orchestrator-status.md` (FR-001). Verify with `test ! -f .changeset/792-cockpit-orchestrator-status.md`.
-- [ ] T002 [P] [US1] Delete stale pending changeset `.changeset/793-cockpit-journal-stuck-detection.md` (FR-001). Verify with `test ! -f .changeset/793-cockpit-journal-stuck-detection.md`.
-- [ ] T003 [US1] Append one prose line to `.changeset/805-cockpit-delete-orchestrator-journal.md` covering the `STALE` status column removal and stuck-metadata fields (`stuckAt`, `lastJournalAt`) removed from `StatusRow` (FR-002). Keep frontmatter (MINOR bump for both packages) unchanged. Verify with `grep -E 'STALE|stuckAt|lastJournalAt' .changeset/805-*.md`.
+- [X] T001 [P] [US1] Delete stale pending changeset `.changeset/792-cockpit-orchestrator-status.md` (FR-001). Verify with `test ! -f .changeset/792-cockpit-orchestrator-status.md`.
+- [X] T002 [P] [US1] Delete stale pending changeset `.changeset/793-cockpit-journal-stuck-detection.md` (FR-001). Verify with `test ! -f .changeset/793-cockpit-journal-stuck-detection.md`.
+- [X] T003 [US1] Append one prose line to `.changeset/805-cockpit-delete-orchestrator-journal.md` covering the `STALE` status column removal and stuck-metadata fields (`stuckAt`, `lastJournalAt`) removed from `StatusRow` (FR-002). Keep frontmatter (MINOR bump for both packages) unchanged. Verify with `grep -E 'STALE|stuckAt|lastJournalAt' .changeset/805-*.md`.
 
 ## Phase 2: Docs and Entry-Point Pruning
 
 <!-- Phase boundary: Phase 1 changesets can land first to prevent misrepresenting the release channel if `changeset version` runs mid-PR (see plan.md Risks). Phase 2 edits are independent and can run in parallel with each other. -->
 
-- [ ] T004 [P] [US1] Edit `packages/cockpit/README.md` line 5 — remove the trailing clause "without depending on the orchestrator runtime" (or the whole sentence if it becomes vestigial) so `grep -in orchestrator packages/cockpit/README.md` returns zero hits (FR-003, Q2). Do not touch other content.
-- [ ] T005 [P] [US1] Edit `packages/cockpit/package.json` `description` field — drop `", and orchestrator client"` so the value reads `"Foundation library for the Generacy Epic Cockpit: classifier, config loader, epic manifest, gh wrapper"` (FR-004). Verify with `grep -in 'orchestrator client' packages/cockpit/package.json` returns zero.
-- [ ] T006 [P] [US1] Edit `packages/cockpit/src/index.ts` header comment (lines 1–3) — remove `orchestrator/http` and `orchestrator/stub` references from the "Internal modules … are NOT exported" line; keep `state/label-map` reference (FR-005). Verify with `grep -in 'orchestrator' packages/cockpit/src/index.ts` returns zero.
+- [X] T004 [P] [US1] Edit `packages/cockpit/README.md` line 5 — remove the trailing clause "without depending on the orchestrator runtime" (or the whole sentence if it becomes vestigial) so `grep -in orchestrator packages/cockpit/README.md` returns zero hits (FR-003, Q2). Do not touch other content.
+- [X] T005 [P] [US1] Edit `packages/cockpit/package.json` `description` field — drop `", and orchestrator client"` so the value reads `"Foundation library for the Generacy Epic Cockpit: classifier, config loader, epic manifest, gh wrapper"` (FR-004). Verify with `grep -in 'orchestrator client' packages/cockpit/package.json` returns zero.
+- [X] T006 [P] [US1] Edit `packages/cockpit/src/index.ts` header comment (lines 1–3) — remove `orchestrator/http` and `orchestrator/stub` references from the "Internal modules … are NOT exported" line; keep `state/label-map` reference (FR-005). Verify with `grep -in 'orchestrator' packages/cockpit/src/index.ts` returns zero.
 
 ## Phase 3: Legacy-Config Tolerance Test
 
 <!-- Phase boundary: Fixture must exist before the test references it. T007 blocks T008. -->
 
-- [ ] T007 [US1] Create new fixture `packages/cockpit/src/__tests__/fixtures/config-samples/legacy-orchestrator-keys.yaml` with the exact nested shape from data-model.md §Entity 2 (`cockpit.owner: alice`, `cockpit.orchestrator.url`, `cockpit.orchestrator.token`, `cockpit.stuckThresholdMinutes: 30`) (FR-006). Nested placement under `cockpit:` is required — loader only forwards `doc['cockpit']` to the schema (Q3).
-- [ ] T008 [US1] Append one new `it()` block to `packages/cockpit/src/__tests__/config-loader.test.ts` (inside the existing `describe('loadCockpitConfig', …)`), titled `'strips legacy orchestrator/stuckThresholdMinutes keys nested under cockpit: (R4 strip mode)'` (FR-006, Q3). Use the existing `writeConfig()` helper. Assert: (1) `await` completes without throwing, (2) `result.config.owner === 'alice'`, (3) `(result.config as unknown as { orchestrator?: unknown }).orchestrator === undefined`, (4) `(result.config as unknown as { stuckThresholdMinutes?: unknown }).stuckThresholdMinutes === undefined`. See data-model.md §Entity 3 for the exact test shape.
+- [X] T007 [US1] Create new fixture `packages/cockpit/src/__tests__/fixtures/config-samples/legacy-orchestrator-keys.yaml` with the exact nested shape from data-model.md §Entity 2 (`cockpit.owner: alice`, `cockpit.orchestrator.url`, `cockpit.orchestrator.token`, `cockpit.stuckThresholdMinutes: 30`) (FR-006). Nested placement under `cockpit:` is required — loader only forwards `doc['cockpit']` to the schema (Q3).
+- [X] T008 [US1] Append one new `it()` block to `packages/cockpit/src/__tests__/config-loader.test.ts` (inside the existing `describe('loadCockpitConfig', …)`), titled `'strips legacy orchestrator/stuckThresholdMinutes keys nested under cockpit: (R4 strip mode)'` (FR-006, Q3). Use the existing `writeConfig()` helper. Assert: (1) `await` completes without throwing, (2) `result.config.owner === 'alice'`, (3) `(result.config as unknown as { orchestrator?: unknown }).orchestrator === undefined`, (4) `(result.config as unknown as { stuckThresholdMinutes?: unknown }).stuckThresholdMinutes === undefined`. See data-model.md §Entity 3 for the exact test shape.
 
 ## Phase 4: Verification
 
 <!-- Phase boundary: All edits must land before verification greps and test runs. -->
 
-- [ ] T009 [US1] Run `pnpm --filter @generacy-ai/cockpit test config-loader` and confirm the new case passes (SC-001 backing).
-- [ ] T010 [US1] Run the SC-001 aggregate grep from contracts/cleanup-map.md and confirm zero hits: `grep -RIn 'orchestrator\|ORCHESTRATOR_\|stuckThresholdMinutes\|StuckReason\|readJournalLiveness\|appendChildIssue' packages/cockpit/README.md packages/cockpit/package.json packages/cockpit/src/index.ts 2>/dev/null` (note: `.changeset/805-*.md` is intentionally excluded — it legitimately mentions the removed subsystems by name).
+- [X] T009 [US1] Run `pnpm --filter @generacy-ai/cockpit test config-loader` and confirm the new case passes (SC-001 backing).
+- [X] T010 [US1] Run the SC-001 aggregate grep from contracts/cleanup-map.md and confirm zero hits: `grep -RIn 'orchestrator\|ORCHESTRATOR_\|stuckThresholdMinutes\|StuckReason\|readJournalLiveness\|appendChildIssue' packages/cockpit/README.md packages/cockpit/package.json packages/cockpit/src/index.ts 2>/dev/null` (note: `.changeset/805-*.md` is intentionally excluded — it legitimately mentions the removed subsystems by name).
 
 ## Dependencies & Execution Order
 

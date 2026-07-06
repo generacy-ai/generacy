@@ -1,8 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadCockpitConfig } from '../config/loader.js';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
 
 async function writeConfig(workspaceDir: string, yaml: string): Promise<void> {
   const dotGeneracy = join(workspaceDir, '.generacy');
@@ -72,5 +75,25 @@ describe('loadCockpitConfig', () => {
     });
     expect(result.source).toBe('defaults');
     expect((result.config as unknown as { repos?: unknown }).repos).toBeUndefined();
+  });
+
+  it('strips legacy orchestrator/stuckThresholdMinutes keys nested under cockpit: (R4 strip mode)', async () => {
+    const fixture = await readFile(
+      join(HERE, 'fixtures', 'config-samples', 'legacy-orchestrator-keys.yaml'),
+      'utf-8',
+    );
+    await writeConfig(cwd, fixture);
+    const result = await loadCockpitConfig({
+      cwd,
+      whoami: async () => null,
+    });
+    expect(result.config.owner).toBe('alice');
+    expect(
+      (result.config as unknown as { orchestrator?: unknown }).orchestrator,
+    ).toBeUndefined();
+    expect(
+      (result.config as unknown as { stuckThresholdMinutes?: unknown })
+        .stuckThresholdMinutes,
+    ).toBeUndefined();
   });
 });
