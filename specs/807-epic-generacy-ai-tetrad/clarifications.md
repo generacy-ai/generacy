@@ -11,7 +11,7 @@
 - C: Only the artifact relevant to the current gate (spec-review → just `spec`; plan-review → just `plan`; tasks-review → just `tasks`), full-body per B.
 - D: All three artifacts (spec/plan/tasks) always emitted, per B — regardless of which review gate is active.
 
-**Answer**: *Pending*
+**Answer**: D — all three artifacts always, as `{path, body} | null`, paralleling the clarification bundle. One uniform shape for all three review gates (no per-gate branching), and reviewing a plan legitimately needs the spec alongside it.
 
 ### Q2: Gate classification — issue labels vs. PR labels
 **Context**: Today's split verbs handle gate discovery inconsistently. `clarify-context` reads only the issue's labels (`gh.fetchIssueLabels`) and refuses if `waiting-for:clarification` is not on the issue. `review-context` skips issue labels entirely and calls `gh.resolveIssueToPRRef` → operates on the linked PR. When `context` is unified around "the issue's current gate," the classifier has to decide whether to consult PR labels too.
@@ -21,7 +21,7 @@
 - B: Issue labels first; if no `waiting-for:*` found there, fall back to fetching the linked PR's labels. First match (in the precedence order defined by `WAITING_PIPELINE_ORDER`) wins.
 - C: Merge issue + linked-PR labels into one set and classify against the union, using existing `classify()` precedence to pick the source label. PR label wins ties.
 
-**Answer**: *Pending*
+**Answer**: A — issue labels only, exit 3 otherwise. The label protocol is issue-scoped: the orchestrator writes `waiting-for:*` on issues (observed on #805/#806/tetrad#87). A PR-label fallback reintroduces dual-source classification — one mechanism per job.
 
 ### Q3: "Merge-preflight equivalent" — concrete label name
 **Context**: FR-002(b) bundles PR metadata for `waiting-for:implementation-review` and the "merge-preflight equivalent" but never names the second label. `WAITING_PIPELINE_ORDER` (`packages/cockpit/src/state/precedence.ts:25-32`) lists `waiting-for:manual-validation` immediately after `waiting-for:implementation-review`, and `merge.ts` is the natural home for this gate. Implementers need the exact label(s) that trigger the PR bundle branch.
@@ -31,7 +31,7 @@
 - B: `waiting-for:manual-validation` plus any other pre-merge gate (`waiting-for:sibling-review`, `waiting-for:pr-feedback`, `waiting-for:address-pr-feedback`) — every PR-scoped waiting gate emits the PR bundle.
 - C: `waiting-for:implementation-review` only; there is no separate "merge-preflight equivalent" and the spec's phrasing was aspirational — treat merge-preflight as out of scope for `context`.
 
-**Answer**: *Pending*
+**Answer**: C — `waiting-for:implementation-review` only. `merge` re-fetches PR + checks itself immediately before acting (the state-drift invariant), so a context-emitted merge-preflight bundle would duplicate that mechanism; the spec phrase was aspirational. A `completed:validate` issue passed to `context` exits 3 with a message pointing at `cockpit merge`. `waiting-for:manual-validation` needs a deployed environment, not a PR bundle.
 
 ### Q4: Exit code when linked PR is missing for a PR-scoped gate
 **Context**: Today's `review-context` returns exit code 1 when `gh.resolveIssueToPRRef` returns null ("No PR resolved for issue"). Under the unified verb, exit codes are canonicalized as `0 success / 1 gh-IO / 2 usage / 3 gate refusal` (FR-004). A missing PR is not a gh-IO failure (gh responded successfully; the linkage just isn't there) nor a usage error nor precisely a gate refusal (the issue is legitimately at a PR-scoped gate — the PR just can't be found).
@@ -41,7 +41,7 @@
 - B: Exit 1 (gh-IO failure) — preserves today's `review-context` behavior even though gh itself did not fail.
 - C: Introduce a fifth exit code (e.g. 4) for "gate consistent but referent missing" — explicit signal for scripts/skills.
 
-**Answer**: *Pending*
+**Answer**: A — exit 3, diagnostic to stderr naming the gate label and the unresolved PR linkage. It's a state-consistency refusal ("label says review-ready but no PR is linked — re-check later"), not a gh-IO failure; don't grow the 4-code contract for one edge.
 
 ### Q5: `--repo` flag on `context`
 **Context**: The two verbs `context` replaces disagree on flag surface: `clarify-context` takes only `<issue>` and infers everything from the ref shape and cwd; `review-context` takes `<issue>` plus `--repo <repo>` and uses `resolveContext` (which is one of the modules being collapsed in FR-008). The collapsed resolver has to decide which surface `context` exposes.
@@ -51,4 +51,4 @@
 - B: Yes — keep `--repo` as a way to override cwd inference when the ref is a bare number (`generacy cockpit context 807 --repo owner/repo`). Matches `review-context`; extends `clarify-context`'s surface.
 - C: No flag on `context`, but the collapsed resolver still exposes an internal `repo` override for programmatic callers of `resolveContext` — CLI surface stays minimal while the shared module stays flexible.
 
-**Answer**: *Pending*
+**Answer**: A — no `--repo` flag. One ref grammar (`owner/repo#N`, full URL, bare number with cwd-origin inference); `--repo` is a second way to say the same thing. If the collapsed resolver module wants an internal repo parameter for programmatic callers, fine — just no CLI surface.
