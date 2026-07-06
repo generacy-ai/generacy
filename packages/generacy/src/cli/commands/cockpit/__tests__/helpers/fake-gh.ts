@@ -16,6 +16,13 @@ export interface FakeGhConfig {
   checksByPr?: Record<string, CheckRunSummary[]>;
   prByPr?: Record<string, PullRequestSummary>;
   resolveIssueToPRByIssue?: Record<string, number | null>;
+  /**
+   * Body strings keyed by `owner/repo#N`. `getIssue()` returns an Issue with
+   * this body. If the key is missing, an issue with an empty body is returned.
+   */
+  bodyByIssue?: Record<string, string>;
+  /** Callback form for `getIssue()`; overrides `bodyByIssue` when set. */
+  getIssueBy?: (repo: string, number: number) => Issue;
   strict?: boolean;
 }
 
@@ -39,6 +46,22 @@ export class FakeGh implements GhWrapper {
       return page;
     }
     return [];
+  }
+
+  async getIssue(repo: string, number: number): Promise<Issue> {
+    this.calls.push({ method: 'getIssue', args: [repo, number] });
+    if (this.config.getIssueBy != null) return this.config.getIssueBy(repo, number);
+    const key = `${repo}#${number}`;
+    const body = this.config.bodyByIssue?.[key] ?? '';
+    return {
+      number,
+      title: `Issue ${number}`,
+      state: 'OPEN',
+      labels: [],
+      url: `https://github.com/${repo}/issues/${number}`,
+      body,
+      createdAt: '',
+    };
   }
 
   async addLabels(repo: string, issue: number, labels: string[]): Promise<void> {

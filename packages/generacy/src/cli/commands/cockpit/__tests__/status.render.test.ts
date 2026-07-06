@@ -23,14 +23,14 @@ function row(overrides: Partial<StatusRow> = {}): StatusRow {
 }
 
 describe('renderTable (plain non-TTY path)', () => {
-  it('renders one line per row, prefixed by a group header', () => {
-    const groups = groupRows([row({ number: 1 }), row({ number: 2, title: 'Bye' })], {
-      kind: 'repos',
-      repos: ['o/r'],
-    });
+  it('renders one line per row prefixed by the epic group header', () => {
+    const groups = groupRows(
+      [row({ number: 1 }), row({ number: 2, title: 'Bye' })],
+      'o/r',
+    );
     const out = renderTable(groups, { tty: false, json: false, colorizer: identityColorizer });
     const lines = out.split('\n');
-    expect(lines[0]).toBe('o/r');
+    expect(lines[0]).toBe('epic o/r');
     expect(lines).toHaveLength(3);
     expect(lines[1]).toContain('#    1');
     expect(lines[1]).toContain('active');
@@ -43,46 +43,36 @@ describe('renderTable (plain non-TTY path)', () => {
   it('truncates long titles with `…`', () => {
     const long = 'x'.repeat(80);
     const out = renderTable(
-      groupRows([row({ title: long })], { kind: 'repos', repos: ['o/r'] }),
+      groupRows([row({ title: long })], 'o/r'),
       { tty: false, json: false, colorizer: identityColorizer },
     );
     expect(out).toContain('xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…');
     expect(out).not.toContain(long);
   });
 
-  it('groups by repo when scope.kind === "repos"', () => {
+  it('epic mode flattens rows under a single header sorted by number', () => {
     const groups = groupRows(
-      [row({ repo: 'a/b' }), row({ repo: 'x/y', number: 2 })],
-      { kind: 'repos', repos: ['a/b', 'x/y'] },
+      [row({ repo: 'a/b', number: 2 }), row({ repo: 'x/y', number: 1 })],
+      'o/epic',
     );
     const out = renderTable(groups, { tty: false, json: false, colorizer: identityColorizer });
     const lines = out.split('\n');
-    expect(lines[0]).toBe('a/b');
-    expect(lines[2]).toBe('');
-    expect(lines[3]).toBe('x/y');
+    expect(lines[0]).toBe('epic o/epic');
+    // Number 1 (x/y) sorts before number 2 (a/b) under epic grouping.
+    expect(lines[1]).toContain('#    1');
+    expect(lines[2]).toContain('#    2');
   });
 });
 
 describe('renderJsonEnvelope', () => {
-  it('returns a single-line JSON envelope', () => {
+  it('returns a single-line JSON envelope with epic scope', () => {
     const json = renderJsonEnvelope(
-      { kind: 'repos', repos: ['o/r'] },
+      { owner: 'o', repo: 'r', issue: 42 },
       [row()],
     );
     expect(json).not.toContain('\n');
     const parsed = JSON.parse(json);
-    expect(parsed.scope).toEqual({ kind: 'repos', repos: ['o/r'] });
+    expect(parsed.scope).toEqual({ kind: 'epic', owner: 'o', repo: 'r', issue: 42 });
     expect(parsed.rows).toHaveLength(1);
-    expect(parsed.orchestrator).toBeUndefined();
-  });
-
-  it('encodes epic scope when provided', () => {
-    const json = renderJsonEnvelope(
-      { kind: 'epic', owner: 'o', repo: 'r', ownerRepo: 'o/r', issues: [1, 2] },
-      [],
-      787,
-    );
-    const parsed = JSON.parse(json);
-    expect(parsed.scope).toEqual({ kind: 'epic', owner: 'o', repo: 'r', issue: 787 });
   });
 });

@@ -65,7 +65,7 @@ export async function runState(
 
   let ref: IssueRef;
   try {
-    ref = parseIssueRef(issue, { config: loaded.config });
+    ref = parseIssueRef(issue);
   } catch (err) {
     throw new CockpitExit(2, `Error: cockpit state: ${(err as Error).message}`);
   }

@@ -86,7 +86,7 @@ export async function runClarifyContext(
 
   let ref: IssueRef;
   try {
-    ref = parseIssueRef(issue, { config: loaded.config });
+    ref = parseIssueRef(issue);
   } catch (err) {
     throw new CockpitExit(2, `Error: cockpit clarify-context: ${(err as Error).message}`);
   }

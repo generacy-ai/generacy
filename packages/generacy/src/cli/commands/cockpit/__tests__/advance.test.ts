@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const baseLoad = vi.fn(async () => ({
-  config: { repos: ['generacy-ai/generacy'], orchestrator: {} },
+  config: {},
   source: 'defaults' as const,
   warnings: [],
 }));
@@ -49,7 +49,7 @@ describe('cockpit advance', () => {
     });
     const out: string[] = [];
     await runAdvance(
-      '1',
+      'generacy-ai/generacy#1',
       { gate: 'clarification' },
       { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
     );
@@ -74,7 +74,7 @@ describe('cockpit advance', () => {
     });
     const out: string[] = [];
     await runAdvance(
-      '1',
+      'generacy-ai/generacy#1',
       { gate: 'clarification' },
       { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
     );
@@ -89,7 +89,7 @@ describe('cockpit advance', () => {
     const out: string[] = [];
     await expect(
       runAdvance(
-        '1',
+        'generacy-ai/generacy#1',
         { gate: 'clarification' },
         { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
       ),
@@ -105,19 +105,19 @@ describe('cockpit advance', () => {
       fetchIssueLabels: vi.fn(async () => ({ labels: ['phase:plan'] })),
     });
     await expect(
-      runAdvance('1', { gate: 'clarification' }, { loadConfig: baseLoad, gh, now: fixedNow }),
+      runAdvance('generacy-ai/generacy#1', { gate: 'clarification' }, { loadConfig: baseLoad, gh, now: fixedNow }),
     ).rejects.toMatchObject({ name: 'CockpitExit', code: 3 });
   });
 
   it('unknown gate → exit 2 with valid gate list', async () => {
     await expect(
-      runAdvance('1', { gate: 'clarificaton' }, { loadConfig: baseLoad, gh: stubGh(), now: fixedNow }),
+      runAdvance('generacy-ai/generacy#1', { gate: 'clarificaton' }, { loadConfig: baseLoad, gh: stubGh(), now: fixedNow }),
     ).rejects.toThrow(/unknown gate "clarificaton"/);
   });
 
   it('missing --gate → exit 2', async () => {
     await expect(
-      runAdvance('1', {}, { loadConfig: baseLoad, gh: stubGh(), now: fixedNow }),
+      runAdvance('generacy-ai/generacy#1', {}, { loadConfig: baseLoad, gh: stubGh(), now: fixedNow }),
     ).rejects.toMatchObject({ code: 2 });
   });
 
@@ -148,7 +148,7 @@ describe('cockpit advance', () => {
 describe('cockpit advance — CockpitExit subclass plumbing', () => {
   it('CockpitExit thrown with code', async () => {
     try {
-      await runAdvance('1', { gate: 'no-such' }, { loadConfig: baseLoad, gh: stubGh() });
+      await runAdvance('generacy-ai/generacy#1', { gate: 'no-such' }, { loadConfig: baseLoad, gh: stubGh() });
       throw new Error('should have thrown');
     } catch (err) {
       expect(err).toBeInstanceOf(CockpitExit);

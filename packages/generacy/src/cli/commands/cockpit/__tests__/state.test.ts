@@ -1,10 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runState } from '../state.js';
-import { CockpitExit } from '../exit.js';
 import type { CockpitGh } from '../gh-ext.js';
 
 const baseLoad = vi.fn(async () => ({
-  config: { repos: ['generacy-ai/generacy'], orchestrator: {} },
+  config: {},
   source: 'defaults' as const,
   warnings: [],
 }));
@@ -30,7 +29,7 @@ describe('cockpit state', () => {
   it('prints text classification for "active" tier', async () => {
     const out: string[] = [];
     const gh = stubGh({ fetchIssueLabels: vi.fn(async () => ({ labels: ['phase:plan'] })) });
-    await runState('123', {}, {
+    await runState('generacy-ai/generacy#123', {}, {
       loadConfig: baseLoad,
       gh,
       stdout: (l) => out.push(l),
@@ -43,7 +42,7 @@ describe('cockpit state', () => {
     const gh = stubGh({
       fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
     });
-    await runState('123', { json: true }, {
+    await runState('generacy-ai/generacy#123', { json: true }, {
       loadConfig: baseLoad,
       gh,
       stdout: (l) => out.push(l),
@@ -68,7 +67,7 @@ describe('cockpit state', () => {
     for (const c of cases) {
       const out: string[] = [];
       const gh = stubGh({ fetchIssueLabels: vi.fn(async () => ({ labels: c.labels })) });
-      await runState('1', { json: true }, {
+      await runState('generacy-ai/generacy#1', { json: true }, {
         loadConfig: baseLoad,
         gh,
         stdout: (l) => out.push(l),
@@ -86,18 +85,13 @@ describe('cockpit state', () => {
       }),
     });
     await expect(
-      runState('1', {}, { loadConfig: baseLoad, gh, stdout: () => {} }),
+      runState('generacy-ai/generacy#1', {}, { loadConfig: baseLoad, gh, stdout: () => {} }),
     ).rejects.toMatchObject({ name: 'CockpitExit', code: 1 });
   });
 
-  it('throws CockpitExit(2) on ambiguous bare-number ref', async () => {
-    const manyRepos = vi.fn(async () => ({
-      config: { repos: ['o1/r1', 'o2/r2'], orchestrator: {} },
-      source: 'defaults' as const,
-      warnings: [],
-    }));
+  it('throws CockpitExit(2) on a bare-number ref (repos are not configured)', async () => {
     await expect(
-      runState('42', {}, { loadConfig: manyRepos, gh: stubGh(), stdout: () => {} }),
-    ).rejects.toBeInstanceOf(CockpitExit);
+      runState('42', {}, { loadConfig: baseLoad, gh: stubGh(), stdout: () => {} }),
+    ).rejects.toMatchObject({ name: 'CockpitExit', code: 2 });
   });
 });

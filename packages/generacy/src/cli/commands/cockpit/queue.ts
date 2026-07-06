@@ -1,62 +1,47 @@
 /**
- * `generacy cockpit queue <phase>` — assign every eligible issue in a phase
- * to the cluster account and apply its derived workflow label, confirm-gated.
+ * `generacy cockpit queue <epic-ref> <phase>` — enqueue every eligible ref
+ * listed under the matched `### <phase>` heading in the epic body.
  *
  * Pipeline:
- *   1. Glob `.generacy/epics/*.yaml`, readManifest each.
- *   2. resolvePhase(manifests, phaseArg) — match by tier OR name.
- *   3. groupAndPickTargetRepo(issueRefs, --repo) — single repo per invocation.
- *   4. Per ref: gh issue view → classifyRow → eligible or [SKIP: …].
- *   5. Print preview; if !--yes, prompt; on confirm, assign + label best-effort.
- *
- * See data-model.md and contracts/queue.md for the full contract.
+ *   1. resolveEpic(epicRef) → matchPhaseHeading(phase).
+ *   2. Per ref in the matched phase: gh issue view → classifyRow → eligible or [SKIP: …].
+ *   3. Print preview; if !--yes, prompt; on confirm, assign + label best-effort.
  */
 import { Command, Option } from 'commander';
 import * as p from '@clack/prompts';
-import { readdir } from 'node:fs/promises';
-import { join } from 'node:path';
 import {
-  loadCockpitConfig,
+  GhCliWrapper,
+  LoudResolverError,
   nodeChildProcessRunner,
-  readManifest,
+  resolveEpic,
+  matchPhaseHeading,
   type CommandRunner,
-  type EpicManifest,
-  type PhaseEntry,
+  type GhWrapper,
+  type IssueRef,
+  type ParsedPhase,
+  type ResolvedEpic,
 } from '@generacy-ai/cockpit';
 import { createCockpitGh, type CockpitGh, type IssueStateResult } from './gh-ext.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
 
-// ─── Types ────────────────────────────────────────────────────────────────
+const DEFAULT_LABEL = 'process:speckit-feature';
+
+const OWNER_REPO_REGEX = /^[^/]+\/[^/]+$/;
+const LOGIN_REGEX = /^[A-Za-z0-9-]+$/;
+// GitHub allows most characters in label names, but we validate the small
+// subset the workflow ever uses to guard against typos.
+const LABEL_REGEX = /^[A-Za-z0-9_:./-]{1,50}$/;
 
 export interface QueueOptions {
+  label?: string;
   repo?: string;
   assignee?: string;
   yes?: boolean;
 }
 
-export interface ResolvedPhase {
-  name: string;
-  tier: string | undefined;
-  issueRefs: string[];
-  manifestPath: string;
-}
-
-export type ResolvePhaseError =
-  | { kind: 'not-found'; phaseArg: string }
-  | {
-      kind: 'ambiguous';
-      phaseArg: string;
-      matches: Array<{ manifestPath: string; name: string; tier: string | undefined }>;
-    };
-
-export interface ParsedIssueRef {
-  repo: string;
-  number: number;
-}
-
 export type EligibilityStatus =
-  | { kind: 'eligible'; workflowLabel: 'process:speckit-feature' | 'process:speckit-bugfix' }
-  | { kind: 'skip'; reason: 'closed' | 'cross-repo' | 'no-phase' | 'not-found' };
+  | { kind: 'eligible'; workflowLabel: string }
+  | { kind: 'skip'; reason: 'closed' | 'cross-repo' | 'already-labeled' | 'not-found' };
 
 export type MutationOutcome =
   | { kind: 'ok' }
@@ -64,7 +49,7 @@ export type MutationOutcome =
   | { kind: 'error'; reason: string };
 
 export interface QueueRow {
-  ref: ParsedIssueRef;
+  ref: IssueRef;
   title: string;
   labels: string[];
   assignees: string[];
@@ -74,8 +59,10 @@ export interface QueueRow {
 }
 
 export interface QueueResult {
-  resolvedPhase: ResolvedPhase;
+  epic: ResolvedEpic;
+  phase: ParsedPhase;
   targetRepo: string;
+  workflowLabel: string;
   assignee: string;
   rows: QueueRow[];
   confirmed: boolean;
@@ -84,99 +71,25 @@ export interface QueueResult {
 
 export interface QueueCommandDeps {
   runner?: CommandRunner;
-  gh?: CockpitGh;
-  loadConfig?: typeof loadCockpitConfig;
+  gh?: GhWrapper;
+  cockpitGh?: CockpitGh;
   prompt?: (message: string) => Promise<boolean>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
-  manifestRoot?: string;
 }
 
-// ─── Pure helpers ─────────────────────────────────────────────────────────
-
-const ISSUE_REF_REGEX = /^([^/]+\/[^/]+)#(\d+)$/;
-const OWNER_REPO_REGEX = /^[^/]+\/[^/]+$/;
-const LOGIN_REGEX = /^[A-Za-z0-9-]+$/;
-
-export function parseRef(s: string): ParsedIssueRef {
-  const m = ISSUE_REF_REGEX.exec(s);
-  if (!m) throw new Error(`invalid issue ref: ${s} (expected owner/repo#n)`);
-  return { repo: m[1]!, number: Number(m[2]!) };
-}
-
-interface ManifestEntry {
-  path: string;
-  manifest: EpicManifest;
-}
-
-export function resolvePhase(
-  manifests: ManifestEntry[],
-  phaseArg: string,
-): ResolvedPhase | ResolvePhaseError {
-  const matches: Array<{ manifestPath: string; phase: PhaseEntry }> = [];
-  for (const entry of manifests) {
-    for (const phase of entry.manifest.phases) {
-      if (phase.tier === phaseArg || phase.name === phaseArg) {
-        matches.push({ manifestPath: entry.path, phase });
-      }
-    }
-  }
-  if (matches.length === 0) return { kind: 'not-found', phaseArg };
-  if (matches.length > 1) {
-    return {
-      kind: 'ambiguous',
-      phaseArg,
-      matches: matches.map((m) => ({
-        manifestPath: m.manifestPath,
-        name: m.phase.name,
-        tier: m.phase.tier,
-      })),
-    };
-  }
-  const sole = matches[0]!;
-  return {
-    name: sole.phase.name,
-    tier: sole.phase.tier,
-    issueRefs: [...sole.phase.issues],
-    manifestPath: sole.manifestPath,
-  };
-}
-
-export function groupAndPickTargetRepo(
-  issueRefs: string[],
-  repoFlag: string | undefined,
-):
-  | { kind: 'ok'; targetRepo: string; repos: string[] }
-  | { kind: 'multi-repo-no-flag'; repos: string[] }
-  | { kind: 'flag-not-in-repos'; repoFlag: string; repos: string[] } {
-  const repoSet = new Set<string>();
-  for (const ref of issueRefs) {
-    const parsed = parseRef(ref);
-    repoSet.add(parsed.repo);
-  }
-  const repos = [...repoSet].sort();
-  if (repoFlag != null) {
-    if (!repos.includes(repoFlag)) {
-      return { kind: 'flag-not-in-repos', repoFlag, repos };
-    }
-    return { kind: 'ok', targetRepo: repoFlag, repos };
-  }
-  if (repos.length === 1) return { kind: 'ok', targetRepo: repos[0]!, repos };
-  return { kind: 'multi-repo-no-flag', repos };
-}
-
-export function classifyRow(
-  ref: ParsedIssueRef,
+function classifyRow(
+  ref: IssueRef,
   targetRepo: string,
+  workflowLabel: string,
   viewResult: IssueStateResult | null,
 ): EligibilityStatus {
   if (ref.repo !== targetRepo) return { kind: 'skip', reason: 'cross-repo' };
   if (viewResult == null) return { kind: 'skip', reason: 'not-found' };
   if (viewResult.state === 'CLOSED') return { kind: 'skip', reason: 'closed' };
-  const workflowLabel: 'process:speckit-feature' | 'process:speckit-bugfix' =
-    viewResult.labels.includes('type:bug')
-      ? 'process:speckit-bugfix'
-      : 'process:speckit-feature';
+  if (viewResult.labels.includes(workflowLabel)) {
+    return { kind: 'skip', reason: 'already-labeled' };
+  }
   return { kind: 'eligible', workflowLabel };
 }
 
@@ -195,16 +108,17 @@ function sortRows(rows: QueueRow[]): { eligible: QueueRow[]; skipped: QueueRow[]
 }
 
 export function renderPreview(
-  resolvedPhase: ResolvedPhase,
+  epic: ResolvedEpic,
+  phase: ParsedPhase,
   targetRepo: string,
+  workflowLabel: string,
   assignee: string,
   rows: QueueRow[],
 ): string[] {
   const { eligible, skipped } = sortRows(rows);
   const lines: string[] = [];
-  const phaseLabel = `${resolvedPhase.name}${resolvedPhase.tier ? ` / ${resolvedPhase.tier}` : ''}`;
   lines.push(
-    `cockpit queue: phase ${resolvedPhase.tier ?? resolvedPhase.name} (${phaseLabel}) → ` +
+    `cockpit queue: epic ${epic.epic.repo}#${epic.epic.number} / phase '${phase.heading}' → ` +
       `${eligible.length} eligible, ${skipped.length} skipped in ${targetRepo}`,
   );
   for (const row of eligible) {
@@ -223,6 +137,13 @@ export function renderPreview(
   return lines;
 }
 
+function mutationField(o: MutationOutcome | undefined): string {
+  if (o == null) return 'skipped';
+  if (o.kind === 'ok') return 'ok';
+  if (o.kind === 'already') return 'already';
+  return `error: ${o.reason}`;
+}
+
 export function renderSummary(rows: QueueRow[]): string[] {
   const { eligible } = sortRows(rows);
   const lines: string[] = [];
@@ -239,41 +160,47 @@ export function renderSummary(rows: QueueRow[]): string[] {
   return lines;
 }
 
-function mutationField(o: MutationOutcome | undefined): string {
-  if (o == null) return 'skipped';
-  if (o.kind === 'ok') return 'ok';
-  if (o.kind === 'already') return 'already';
-  return `error: ${o.reason}`;
-}
-
-// ─── Orchestration ────────────────────────────────────────────────────────
-
 async function defaultPrompt(message: string): Promise<boolean> {
   const answer = await p.confirm({ message });
   if (p.isCancel(answer)) return false;
   return Boolean(answer);
 }
 
-async function listManifestPaths(manifestRoot: string): Promise<string[]> {
-  let entries: string[];
-  try {
-    entries = await readdir(manifestRoot);
-  } catch {
-    return [];
+function pickTargetRepo(
+  refs: IssueRef[],
+  repoFlag: string | undefined,
+): string | { kind: 'multi-repo-no-flag'; repos: string[] } | { kind: 'flag-not-in-repos'; repos: string[] } {
+  const seen = new Set<string>();
+  for (const r of refs) seen.add(r.repo);
+  const repos = [...seen].sort();
+  if (repoFlag != null) {
+    if (!repos.includes(repoFlag)) return { kind: 'flag-not-in-repos', repos };
+    return repoFlag;
   }
-  return entries.filter((e) => e.endsWith('.yaml')).sort().map((e) => join(manifestRoot, e));
+  if (repos.length === 1) return repos[0]!;
+  return { kind: 'multi-repo-no-flag', repos };
 }
 
 export async function runQueue(
+  epicRef: string | undefined,
   phaseArg: string | undefined,
   opts: QueueOptions,
   deps: QueueCommandDeps,
 ): Promise<QueueResult> {
   const print = deps.stdout ?? ((line: string) => process.stdout.write(`${line}\n`));
 
-  // ── CLI validation ──
+  if (epicRef == null || epicRef.trim() === '') {
+    throw new CockpitExit(2, 'Error: cockpit queue: missing required argument <epic-ref>');
+  }
   if (phaseArg == null || phaseArg.trim() === '') {
     throw new CockpitExit(2, 'Error: cockpit queue: missing required argument <phase>');
+  }
+  const workflowLabel = opts.label ?? DEFAULT_LABEL;
+  if (!LABEL_REGEX.test(workflowLabel)) {
+    throw new CockpitExit(
+      2,
+      `Error: cockpit queue: invalid --label "${workflowLabel}"`,
+    );
   }
   if (opts.repo != null && !OWNER_REPO_REGEX.test(opts.repo)) {
     throw new CockpitExit(
@@ -288,68 +215,47 @@ export async function runQueue(
     );
   }
 
-  // ── Config + manifests ──
-  await (deps.loadConfig ?? loadCockpitConfig)({});
+  const gh = deps.gh ?? new GhCliWrapper();
+  const cockpitGh = deps.cockpitGh ?? createCockpitGh(deps.runner ?? nodeChildProcessRunner);
 
-  const manifestRoot = deps.manifestRoot ?? join(process.cwd(), '.generacy', 'epics');
-  const manifestPaths = await listManifestPaths(manifestRoot);
-  if (manifestPaths.length === 0) {
-    throw new CockpitExit(
-      2,
-      "Error: cockpit queue: no .generacy/epics directory found. " +
-        "Run 'generacy cockpit manifest init' first.",
-    );
+  let epic: ResolvedEpic;
+  try {
+    epic = await resolveEpic({ epicRef, gh });
+  } catch (err) {
+    if (err instanceof LoudResolverError) {
+      throw new CockpitExit(2, `Error: cockpit queue: ${err.message}`);
+    }
+    throw err;
   }
 
-  const manifests: ManifestEntry[] = [];
-  for (const path of manifestPaths) {
-    const manifest = await readManifest(path);
-    if (manifest != null) manifests.push({ path, manifest });
+  let phase: ParsedPhase;
+  try {
+    phase = matchPhaseHeading(epic.parsed, phaseArg);
+  } catch (err) {
+    if (err instanceof LoudResolverError) {
+      throw new CockpitExit(2, `Error: cockpit queue: ${err.message}`);
+    }
+    throw err;
   }
 
-  // ── Phase resolution ──
-  const resolved = resolvePhase(manifests, phaseArg);
-  if ('kind' in resolved) {
-    if (resolved.kind === 'not-found') {
+  const target = pickTargetRepo(phase.refs, opts.repo);
+  if (typeof target !== 'string') {
+    if (target.kind === 'multi-repo-no-flag') {
       throw new CockpitExit(
         2,
-        `Error: cockpit queue: phase "${phaseArg}" not found in any manifest under ` +
-          ".generacy/epics/. Run 'generacy cockpit manifest init' first.",
+        `Error: cockpit queue: phase '${phase.heading}' spans repos [${target.repos.join(', ')}]. ` +
+          'Pass --repo <owner/repo> to scope this invocation.',
       );
     }
-    const list = resolved.matches.map((m) => m.manifestPath).join(', ');
     throw new CockpitExit(
       2,
-      `Error: cockpit queue: phase "${phaseArg}" matches multiple manifests: ${list}. ` +
-        'Disambiguate by running the verb from a more specific cwd.',
+      `Error: cockpit queue: --repo ${opts.repo} not in phase repos [${target.repos.join(', ')}].`,
     );
   }
-  const resolvedPhase: ResolvedPhase = resolved;
-
-  // ── Group + pick target repo ──
-  const grouping = groupAndPickTargetRepo(resolvedPhase.issueRefs, opts.repo);
-  if (grouping.kind === 'multi-repo-no-flag') {
-    throw new CockpitExit(
-      2,
-      `Error: cockpit queue: phase "${phaseArg}" spans repos [${grouping.repos.join(', ')}]. ` +
-        'Pass --repo <owner/repo> to scope this invocation.',
-    );
-  }
-  if (grouping.kind === 'flag-not-in-repos') {
-    throw new CockpitExit(
-      2,
-      `Error: cockpit queue: phase "${phaseArg}" has no issues in ${grouping.repoFlag}. ` +
-        `Phase repos: [${grouping.repos.join(', ')}].`,
-    );
-  }
-  const targetRepo = grouping.targetRepo;
-
-  // ── gh adapter + per-ref state fetch ──
-  const gh = deps.gh ?? createCockpitGh(deps.runner ?? nodeChildProcessRunner);
+  const targetRepo = target;
 
   const rows: QueueRow[] = [];
-  for (const refStr of resolvedPhase.issueRefs) {
-    const ref = parseRef(refStr);
+  for (const ref of phase.refs) {
     if (ref.repo !== targetRepo) {
       rows.push({
         ref,
@@ -362,11 +268,11 @@ export async function runQueue(
     }
     let view: IssueStateResult | null;
     try {
-      view = await gh.fetchIssueState(ref.repo, ref.number);
+      view = await cockpitGh.fetchIssueState(ref.repo, ref.number);
     } catch {
       view = null;
     }
-    const eligibility = classifyRow(ref, targetRepo, view);
+    const eligibility = classifyRow(ref, targetRepo, workflowLabel, view);
     rows.push({
       ref,
       title: view?.title ?? '',
@@ -376,13 +282,12 @@ export async function runQueue(
     });
   }
 
-  // ── Resolve assignee ──
   let assignee: string;
   if (opts.assignee != null) {
     assignee = opts.assignee;
   } else {
     try {
-      assignee = await gh.getCurrentUser();
+      assignee = await cockpitGh.getCurrentUser();
     } catch (err) {
       throw new CockpitExit(
         1,
@@ -391,16 +296,18 @@ export async function runQueue(
     }
   }
 
-  // ── Preview ──
-  for (const line of renderPreview(resolvedPhase, targetRepo, assignee, rows)) print(line);
+  for (const line of renderPreview(epic, phase, targetRepo, workflowLabel, assignee, rows)) {
+    print(line);
+  }
 
   const eligibleCount = rows.filter((r) => r.eligibility.kind === 'eligible').length;
-
   if (eligibleCount === 0) {
     print('cockpit queue: no eligible issues — nothing to do.');
     return {
-      resolvedPhase,
+      epic,
+      phase,
       targetRepo,
+      workflowLabel,
       assignee,
       rows,
       confirmed: false,
@@ -408,7 +315,6 @@ export async function runQueue(
     };
   }
 
-  // ── Confirm gate ──
   let confirmed = Boolean(opts.yes);
   if (!confirmed) {
     const prompt = deps.prompt ?? defaultPrompt;
@@ -417,8 +323,10 @@ export async function runQueue(
     if (!confirmed) {
       print('Cancelled. No mutations made.');
       return {
-        resolvedPhase,
+        epic,
+        phase,
         targetRepo,
+        workflowLabel,
         assignee,
         rows,
         confirmed: false,
@@ -427,7 +335,6 @@ export async function runQueue(
     }
   }
 
-  // ── Mutation loop (serial, best-effort) ──
   const { eligible } = sortRows(rows);
   for (const row of eligible) {
     if (row.eligibility.kind !== 'eligible') continue;
@@ -435,7 +342,7 @@ export async function runQueue(
       row.assignResult = { kind: 'already' };
     } else {
       try {
-        await gh.addAssignees(row.ref.repo, row.ref.number, [assignee]);
+        await cockpitGh.addAssignees(row.ref.repo, row.ref.number, [assignee]);
         row.assignResult = { kind: 'ok' };
       } catch (err) {
         row.assignResult = { kind: 'error', reason: (err as Error).message };
@@ -445,7 +352,7 @@ export async function runQueue(
       row.labelResult = { kind: 'already' };
     } else {
       try {
-        await gh.addLabel(row.ref.repo, row.ref.number, row.eligibility.workflowLabel);
+        await cockpitGh.addLabel(row.ref.repo, row.ref.number, row.eligibility.workflowLabel);
         row.labelResult = { kind: 'ok' };
       } catch (err) {
         row.labelResult = { kind: 'error', reason: (err as Error).message };
@@ -453,7 +360,6 @@ export async function runQueue(
     }
   }
 
-  // ── Summary + exit code ──
   for (const line of renderSummary(rows)) print(line);
 
   const anyError = rows.some(
@@ -463,8 +369,10 @@ export async function runQueue(
   );
 
   return {
-    resolvedPhase,
+    epic,
+    phase,
     targetRepo,
+    workflowLabel,
     assignee,
     rows,
     confirmed: true,
@@ -475,14 +383,16 @@ export async function runQueue(
 export function queueCommand(deps: QueueCommandDeps = {}): Command {
   const cmd = new Command('queue');
   cmd
-    .description('Queue every eligible issue in a phase to the cluster pipeline.')
-    .argument('[phase]', 'Phase identifier — matches phase.tier (e.g. P3) or phase.name.')
+    .description('Queue every eligible ref under a phase heading to the cluster pipeline.')
+    .argument('<epic-ref>', 'Epic ref (owner/repo#N).')
+    .argument('<phase>', 'Phase token — matched case-insensitively against the first token of a ### heading.')
+    .addOption(new Option('--label <name>', `Workflow label (default: ${DEFAULT_LABEL}).`))
     .addOption(new Option('--repo <owner/repo>', 'Restrict the invocation to a single repo.'))
     .addOption(new Option('--assignee <login>', 'Override the default cluster-account assignee.'))
     .addOption(new Option('--yes', 'Skip the interactive confirmation prompt.'))
-    .action(async (phaseArg: string | undefined, opts: QueueOptions) => {
+    .action(async (epicRef: string, phaseArg: string, opts: QueueOptions) => {
       try {
-        const result = await runQueue(phaseArg, opts, deps);
+        const result = await runQueue(epicRef, phaseArg, opts, deps);
         process.exit(result.exitCode);
       } catch (err) {
         if (isCockpitExit(err)) {
