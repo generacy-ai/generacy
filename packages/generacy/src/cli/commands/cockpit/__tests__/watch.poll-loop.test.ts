@@ -9,7 +9,8 @@ describe('runOnePoll', () => {
     });
     const { curr, events } = await runOnePoll(new Map(), {
       gh,
-      scope: { kind: 'repos', repos: ['o/r'] },
+      refs: [{ repo: 'o/r', number: 1 }],
+      epicOwnerRepo: 'o/r',
       now: () => '2026-06-26T00:00:00.000Z',
     });
     expect(events).toEqual([]);
@@ -28,11 +29,13 @@ describe('runOnePoll', () => {
     });
     const baseline = await runOnePoll(new Map(), {
       gh,
-      scope: { kind: 'repos', repos: ['o/r'] },
+      refs: [{ repo: 'o/r', number: 1 }],
+      epicOwnerRepo: 'o/r',
     });
     const next = await runOnePoll(baseline.curr, {
       gh,
-      scope: { kind: 'repos', repos: ['o/r'] },
+      refs: [{ repo: 'o/r', number: 1 }],
+      epicOwnerRepo: 'o/r',
     });
     expect(next.events).toHaveLength(1);
     expect(next.events[0]?.event).toBe('label-change');
@@ -49,7 +52,8 @@ describe('runOnePoll', () => {
     });
     const { curr } = await runOnePoll(new Map(), {
       gh,
-      scope: { kind: 'repos', repos: ['o/r'] },
+      refs: [{ repo: 'o/r', number: 11 }],
+      epicOwnerRepo: 'o/r',
     });
     const snap = [...curr.values()][0];
     expect(snap?.kind).toBe('pr');

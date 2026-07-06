@@ -23,24 +23,22 @@ export {
   type LoadCockpitConfigOptions,
 } from './config/loader.js';
 
-// Manifest
+// Resolver (single-source epic discovery)
+export { parseEpicBody } from './resolver/parse-epic-body.js';
+export { resolveEpic } from './resolver/resolve.js';
+export { matchPhaseHeading, firstToken } from './resolver/heading-match.js';
+export { parseRef } from './resolver/ref-shapes.js';
 export {
-  EpicManifestSchema,
-  EpicEntrySchema,
-  PhaseEntrySchema,
-  type EpicManifest,
-  type EpicEntry,
-  type PhaseEntry,
-} from './manifest/schema.js';
-export {
-  readManifest,
-  writeManifest,
-} from './manifest/io.js';
-export {
-  resolveEpicIssues,
-  type ResolveEpicIssuesOptions,
-  type IssueRef,
-} from './manifest/scoping.js';
+  LoudResolverError,
+  type LoudResolverErrorCode,
+} from './resolver/errors.js';
+export type {
+  IssueRef,
+  ParsedPhase,
+  ParsedEpicBody,
+  ResolvedEpic,
+  ResolveEpicOptions,
+} from './resolver/types.js';
 
 // gh wrapper
 export {

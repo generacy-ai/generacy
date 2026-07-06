@@ -75,6 +75,7 @@ export const DIFF_TRUNCATION_MARKER = '\n... [diff truncated at 256 KiB] ...\n';
 
 export interface GhWrapper {
   listIssues(query: string, options?: ListIssuesOptions): Promise<Issue[]>;
+  getIssue(repo: string, number: number): Promise<Issue>;
   addLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   removeLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   getPullRequestCheckRuns(repo: string, prNumber: number): Promise<CheckRunSummary[]>;
@@ -441,6 +442,43 @@ export class GhCliWrapper implements GhWrapper {
     const result = await this.runner('gh', args);
     failIfNonZero(result, 'search issues');
     return parseIssues(result.stdout);
+  }
+
+  async getIssue(repo: string, number: number): Promise<Issue> {
+    const args = [
+      'issue',
+      'view',
+      String(number),
+      '--repo',
+      repo,
+      '--json',
+      'number,title,state,labels,url,body,author,createdAt',
+    ];
+    const result = await this.runner('gh', args);
+    failIfNonZero(result, 'issue view');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for getIssue: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const shape = IssueRawSchema.safeParse(parsed);
+    if (!shape.success) {
+      throw new Error(`gh getIssue JSON shape mismatch: ${shape.error.message}`);
+    }
+    const raw = shape.data;
+    return {
+      number: raw.number,
+      title: raw.title,
+      state: normalizeIssueState(raw.state),
+      labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+      url: raw.url,
+      body: raw.body ?? '',
+      author: raw.author?.login != null ? { login: raw.author.login } : undefined,
+      createdAt: raw.createdAt ?? '',
+    };
   }
 
   async addLabels(repo: string, issue: number, labels: string[]): Promise<void> {

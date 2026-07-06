@@ -1,7 +1,6 @@
 import type { Colorizer } from './color.js';
 import type { RowGroup } from './group.js';
 import type { StatusRow } from './row.js';
-import type { Scope } from '../shared/scoping.js';
 
 const COL_REPO = 20;
 const COL_NUMBER = 5;
@@ -29,7 +28,7 @@ function fmtRow(row: StatusRow, colorizer: Colorizer): string {
 }
 
 export interface StatusEnvelope {
-  scope: { kind: 'epic'; owner: string; repo: string; issue: number } | { kind: 'repos'; repos: string[] };
+  scope: { kind: 'epic'; owner: string; repo: string; issue: number };
   rows: StatusRow[];
 }
 
@@ -53,21 +52,17 @@ export function renderTable(groups: RowGroup[], options: RenderOptions): string 
 }
 
 export function renderJsonEnvelope(
-  scope: Scope,
+  epic: { owner: string; repo: string; issue: number },
   rows: StatusRow[],
-  epicIssue?: number,
 ): string {
-  let scopeOut: StatusEnvelope['scope'];
-  if (scope.kind === 'epic') {
-    scopeOut = {
+  const envelope: StatusEnvelope = {
+    scope: {
       kind: 'epic',
-      owner: scope.owner,
-      repo: scope.repo,
-      issue: epicIssue ?? 0,
-    };
-  } else {
-    scopeOut = { kind: 'repos', repos: scope.repos };
-  }
-  const envelope: StatusEnvelope = { scope: scopeOut, rows };
+      owner: epic.owner,
+      repo: epic.repo,
+      issue: epic.issue,
+    },
+    rows,
+  };
   return JSON.stringify(envelope);
 }

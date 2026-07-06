@@ -9,10 +9,6 @@ import {
   type LoadedCockpitConfig,
 } from './schema.js';
 
-const OWNER_REPO_REGEX = /^[^/]+\/[^/]+$/;
-const MISSING_REPOS_WARN =
-  'cockpit: no repos configured (set cockpit.repos in .generacy/config.yaml or MONITORED_REPOS env)';
-
 export interface LoadCockpitConfigOptions {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
@@ -20,23 +16,7 @@ export interface LoadCockpitConfigOptions {
   logger?: { warn: (msg: string) => void };
 }
 
-function parseMonitoredReposEnv(raw: string): string[] {
-  const entries = raw
-    .split(',')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-  for (const entry of entries) {
-    if (!OWNER_REPO_REGEX.test(entry)) {
-      throw new Error(
-        `MONITORED_REPOS contains invalid entry "${entry}" — must be owner/repo`,
-      );
-    }
-  }
-  return entries;
-}
-
 async function parseGhWhoami(): Promise<string | null> {
-  // Lazy import — only runs when no explicit owner is configured.
   const { execFile } = await import('node:child_process');
   return new Promise<string | null>((resolve) => {
     execFile('gh', ['auth', 'status'], { timeout: 5_000 }, (error, stdout, stderr) => {
@@ -45,8 +25,6 @@ async function parseGhWhoami(): Promise<string | null> {
         resolve(null);
         return;
       }
-      // gh auth status prints "Logged in to github.com as <login>" (newer versions)
-      // or "Logged in to github.com account <login>" depending on version.
       const match =
         combined.match(/Logged in to [^\s]+ as ([A-Za-z0-9-]+)/) ??
         combined.match(/account ([A-Za-z0-9-]+)/);
@@ -63,12 +41,9 @@ export async function loadCockpitConfig(
   options: LoadCockpitConfigOptions = {},
 ): Promise<LoadedCockpitConfig> {
   const cwd = options.cwd ?? process.cwd();
-  const env = options.env ?? process.env;
   const whoami = options.whoami ?? parseGhWhoami;
-  const logger = options.logger ?? console;
   const warnings: string[] = [];
 
-  // 1. Locate workspace config file.
   const configPath = findWorkspaceConfigPath(cwd);
   let cockpitBlock: unknown = undefined;
   if (configPath != null && existsSync(configPath)) {
@@ -92,27 +67,9 @@ export async function loadCockpitConfig(
     }
   }
 
-  // 2. Validate the cockpit block (throws on malformed).
   const parsedCockpit = CockpitConfigSchema.parse(cockpitBlock ?? {});
+  const source: CockpitConfigSource = parsedCockpit.owner != null ? 'cockpit-block' : 'defaults';
 
-  // 3. Resolve repos.
-  let repos = parsedCockpit.repos;
-  let source: CockpitConfigSource;
-  if (repos.length > 0) {
-    source = 'cockpit-block';
-  } else {
-    const monitoredReposEnv = env['MONITORED_REPOS'];
-    if (monitoredReposEnv != null && monitoredReposEnv.trim().length > 0) {
-      repos = parseMonitoredReposEnv(monitoredReposEnv);
-      source = 'monitored-repos-env';
-    } else {
-      source = 'defaults';
-      warnings.push(MISSING_REPOS_WARN);
-      logger.warn(MISSING_REPOS_WARN);
-    }
-  }
-
-  // 4. Resolve owner.
   let owner: string | undefined = parsedCockpit.owner;
   if (owner == null) {
     try {
@@ -125,10 +82,7 @@ export async function loadCockpitConfig(
     }
   }
 
-  const config: CockpitConfig = {
-    owner,
-    repos,
-  };
+  const config: CockpitConfig = { owner };
 
   return { config, source, warnings };
 }
