@@ -8,7 +8,7 @@
  *     `createdAt >= labelEventTs`.
  *  4. Return `null` if no qualifying comment exists.
  */
-import type { CockpitGh, IssueComment } from './gh-ext.js';
+import type { GhWrapper, IssueComment } from '@generacy-ai/cockpit';
 
 const WAITING_CLARIFICATION = 'waiting-for:clarification';
 
@@ -19,7 +19,7 @@ interface TimelineLabelEvent {
 }
 
 export async function findClarificationComment(
-  gh: CockpitGh,
+  gh: GhWrapper,
   repo: string,
   number: number,
 ): Promise<IssueComment | null> {

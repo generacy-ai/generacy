@@ -70,6 +70,30 @@ export interface PullRequestSummary {
   labels: string[];
 }
 
+export interface IssueLabelsResult {
+  labels: string[];
+}
+
+export interface IssueStateResult {
+  state: 'OPEN' | 'CLOSED';
+  closedAt: string | null;
+  labels: string[];
+  assignees: string[];
+  title: string;
+}
+
+export interface IssueComment {
+  body: string;
+  author: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface OpenPrForBranch {
+  url: string;
+  number: number;
+}
+
 export const DIFF_BYTE_CAP = 256 * 1024;
 export const DIFF_TRUNCATION_MARKER = '\n... [diff truncated at 256 KiB] ...\n';
 
@@ -78,6 +102,8 @@ export interface GhWrapper {
   getIssue(repo: string, number: number): Promise<Issue>;
   addLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   removeLabels(repo: string, issue: number, labels: string[]): Promise<void>;
+  addLabel(repo: string, issue: number, label: string): Promise<void>;
+  removeLabel(repo: string, issue: number, label: string): Promise<void>;
   getPullRequestCheckRuns(repo: string, prNumber: number): Promise<CheckRunSummary[]>;
   resolveIssueToPR(repo: string, issueNumber: number): Promise<number | null>;
   getPullRequest(repo: string, prNumber: number): Promise<PullRequestSummary>;
@@ -92,6 +118,16 @@ export interface GhWrapper {
     repo: string,
     branch: string,
   ): Promise<RequiredChecksResult>;
+  fetchIssueLabels(repo: string, issue: number): Promise<IssueLabelsResult>;
+  fetchIssueState(repo: string, issue: number): Promise<IssueStateResult>;
+  postIssueComment(repo: string, issue: number, body: string): Promise<{ url: string }>;
+  addAssignees(repo: string, issue: number, logins: string[]): Promise<void>;
+  fetchIssueTimeline(repo: string, issue: number): Promise<unknown[]>;
+  fetchIssueComments(repo: string, issue: number): Promise<IssueComment[]>;
+  getCurrentUser(): Promise<string>;
+  findOpenPrForBranch(repo: string, branch: string): Promise<OpenPrForBranch | null>;
+  prDiffNames(repo: string, prNumber: number): Promise<string[]>;
+  prDiffPatch(repo: string, prNumber: number): Promise<string>;
 }
 
 const IssueRawSchema = z.object({
@@ -185,6 +221,53 @@ const BranchProtectionRawSchema = z
       .optional(),
   })
   .passthrough();
+
+const LabelLikeSchema = z.union([
+  z.string(),
+  z.object({ name: z.string() }).passthrough(),
+]);
+
+const IssueLabelsRawSchema = z.object({
+  labels: z.array(LabelLikeSchema).default([]),
+});
+
+const IssueStateRawSchema = z.object({
+  state: z.string(),
+  closedAt: z.string().nullable().optional(),
+  labels: z.array(LabelLikeSchema).default([]),
+  assignees: z.array(z.object({ login: z.string() }).passthrough()).default([]),
+  title: z.string().default(''),
+});
+
+const IssueCommentRawSchema = z.object({
+  id: z.union([z.string(), z.number()]).optional(),
+  body: z.string().default(''),
+  author: z
+    .object({ login: z.string() })
+    .passthrough()
+    .nullable()
+    .optional(),
+  createdAt: z.string(),
+  url: z.string().optional(),
+});
+
+const IssueCommentsRawSchema = z.object({
+  comments: z.array(IssueCommentRawSchema).default([]),
+});
+
+const TimelineEventRawSchema = z
+  .object({
+    event: z.string().optional(),
+    created_at: z.string().optional(),
+    label: z.object({ name: z.string() }).optional(),
+  })
+  .passthrough();
+
+const UserRawSchema = z.object({ login: z.string() });
+
+const OpenPrForBranchRawSchema = z.array(
+  z.object({ url: z.string(), number: z.number() }),
+);
 
 function normalizeIssueState(state: string): 'OPEN' | 'CLOSED' {
   return state.toUpperCase() === 'CLOSED' ? 'CLOSED' : 'OPEN';
@@ -501,6 +584,14 @@ export class GhCliWrapper implements GhWrapper {
     failIfNonZero(result, 'issue edit (remove-label)');
   }
 
+  async addLabel(repo: string, issue: number, label: string): Promise<void> {
+    return this.addLabels(repo, issue, [label]);
+  }
+
+  async removeLabel(repo: string, issue: number, label: string): Promise<void> {
+    return this.removeLabels(repo, issue, [label]);
+  }
+
   async getPullRequestCheckRuns(repo: string, prNumber: number): Promise<CheckRunSummary[]> {
     const args = [
       'pr',
@@ -787,6 +878,257 @@ export class GhCliWrapper implements GhWrapper {
       source: 'branch-protection',
       names: shape.data.required_status_checks?.contexts ?? [],
     };
+  }
+
+  async fetchIssueLabels(repo: string, issue: number): Promise<IssueLabelsResult> {
+    const result = await this.runner('gh', [
+      'issue',
+      'view',
+      String(issue),
+      '--repo',
+      repo,
+      '--json',
+      'labels',
+    ]);
+    failIfNonZero(result, 'issue view (labels)');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for fetchIssueLabels: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const shape = IssueLabelsRawSchema.safeParse(parsed);
+    if (!shape.success) {
+      throw new Error(
+        `gh fetchIssueLabels JSON shape mismatch: ${shape.error.message}`,
+      );
+    }
+    return { labels: extractLabelNames(shape.data.labels) };
+  }
+
+  async fetchIssueState(repo: string, issue: number): Promise<IssueStateResult> {
+    const result = await this.runner('gh', [
+      'issue',
+      'view',
+      String(issue),
+      '--repo',
+      repo,
+      '--json',
+      'state,closedAt,labels,assignees,title',
+    ]);
+    failIfNonZero(result, 'issue view (state)');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for fetchIssueState: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const shape = IssueStateRawSchema.safeParse(parsed);
+    if (!shape.success) {
+      throw new Error(
+        `gh fetchIssueState JSON shape mismatch: ${shape.error.message}`,
+      );
+    }
+    return {
+      state: normalizeIssueState(shape.data.state),
+      closedAt: shape.data.closedAt ?? null,
+      labels: extractLabelNames(shape.data.labels),
+      assignees: shape.data.assignees.map((a) => a.login),
+      title: shape.data.title,
+    };
+  }
+
+  async postIssueComment(
+    repo: string,
+    issue: number,
+    body: string,
+  ): Promise<{ url: string }> {
+    const result = await this.runner('gh', [
+      'issue',
+      'comment',
+      String(issue),
+      '--repo',
+      repo,
+      '--body',
+      body,
+    ]);
+    failIfNonZero(result, 'issue comment');
+    const url = result.stdout.trim().split(/\s+/).pop() ?? '';
+    return { url };
+  }
+
+  async addAssignees(
+    repo: string,
+    issue: number,
+    logins: string[],
+  ): Promise<void> {
+    for (const login of logins) {
+      const result = await this.runner('gh', [
+        'issue',
+        'edit',
+        String(issue),
+        '--repo',
+        repo,
+        '--add-assignee',
+        login,
+      ]);
+      failIfNonZero(result, 'issue edit (add-assignee)');
+    }
+  }
+
+  async fetchIssueTimeline(
+    repo: string,
+    issue: number,
+  ): Promise<unknown[]> {
+    const result = await this.runner('gh', [
+      'api',
+      `repos/${repo}/issues/${issue}/timeline`,
+      '--header',
+      'Accept: application/vnd.github+json',
+      '--paginate',
+    ]);
+    failIfNonZero(result, 'api issues timeline');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for fetchIssueTimeline: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error(
+        `gh api timeline returned non-array JSON: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    return z.array(TimelineEventRawSchema).parse(parsed);
+  }
+
+  async fetchIssueComments(
+    repo: string,
+    issue: number,
+  ): Promise<IssueComment[]> {
+    const result = await this.runner('gh', [
+      'issue',
+      'view',
+      String(issue),
+      '--repo',
+      repo,
+      '--json',
+      'comments',
+    ]);
+    failIfNonZero(result, 'issue view (comments)');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for fetchIssueComments: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const shape = IssueCommentsRawSchema.safeParse(parsed);
+    if (!shape.success) {
+      throw new Error(
+        `gh fetchIssueComments JSON shape mismatch: ${shape.error.message}`,
+      );
+    }
+    return shape.data.comments.map<IssueComment>((c) => ({
+      body: c.body,
+      author: c.author?.login ?? '',
+      createdAt: c.createdAt,
+      url: c.url ?? '',
+    }));
+  }
+
+  async getCurrentUser(): Promise<string> {
+    const result = await this.runner('gh', ['api', 'user']);
+    failIfNonZero(result, 'api user');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for getCurrentUser: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const shape = UserRawSchema.safeParse(parsed);
+    if (!shape.success) {
+      throw new Error(
+        `gh getCurrentUser JSON shape mismatch: ${shape.error.message}`,
+      );
+    }
+    return shape.data.login;
+  }
+
+  async findOpenPrForBranch(
+    repo: string,
+    branch: string,
+  ): Promise<OpenPrForBranch | null> {
+    const result = await this.runner('gh', [
+      'pr',
+      'list',
+      '--repo',
+      repo,
+      '--head',
+      branch,
+      '--state',
+      'open',
+      '--json',
+      'url,number',
+      '--limit',
+      '1',
+    ]);
+    failIfNonZero(result, 'pr list');
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for findOpenPrForBranch: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const shape = OpenPrForBranchRawSchema.safeParse(parsed);
+    if (!shape.success) {
+      throw new Error(
+        `gh findOpenPrForBranch JSON shape mismatch: ${shape.error.message}`,
+      );
+    }
+    if (shape.data.length === 0) return null;
+    const first = shape.data[0]!;
+    return { url: first.url, number: first.number };
+  }
+
+  async prDiffNames(repo: string, prNumber: number): Promise<string[]> {
+    const result = await this.runner('gh', [
+      'pr',
+      'diff',
+      String(prNumber),
+      '--repo',
+      repo,
+      '--name-only',
+    ]);
+    failIfNonZero(result, 'pr diff (name-only)');
+    return result.stdout
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  async prDiffPatch(repo: string, prNumber: number): Promise<string> {
+    const result = await this.runner('gh', [
+      'pr',
+      'diff',
+      String(prNumber),
+      '--repo',
+      repo,
+      '--patch',
+    ]);
+    failIfNonZero(result, 'pr diff (patch)');
+    return result.stdout;
   }
 }
 

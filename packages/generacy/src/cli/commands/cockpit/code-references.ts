@@ -12,8 +12,7 @@
  *
  * Returns `null` when not on a feature branch (i.e. branch matches the base).
  */
-import type { CommandRunner } from '@generacy-ai/cockpit';
-import type { CockpitGh } from './gh-ext.js';
+import type { CommandRunner, GhWrapper } from '@generacy-ai/cockpit';
 
 export interface CodeReferences {
   touchedFiles: string[];
@@ -32,7 +31,7 @@ const TRUNCATE_AT = 4096;
 
 export async function gatherCodeReferences(
   input: GatherCodeReferencesInput,
-  gh: CockpitGh,
+  gh: GhWrapper,
   runner: CommandRunner,
 ): Promise<CodeReferences | null> {
   if (input.branch === '' || input.branch === input.baseBranch) {

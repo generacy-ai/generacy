@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { runQueue } from '../queue.js';
 import { CockpitExit } from '../exit.js';
 import { FakeGh } from './helpers/fake-gh.js';
-import type { CockpitGh, IssueStateResult } from '../gh-ext.js';
+import type { GhWrapper, IssueStateResult } from '@generacy-ai/cockpit';
 
 interface IssueSeed {
   state?: 'OPEN' | 'CLOSED';
@@ -12,10 +12,10 @@ interface IssueSeed {
   notFound?: boolean;
 }
 
-function stubCockpitGh(
+function stubGhWrapper(
   states: Record<string, IssueSeed> = {},
-  overrides: Partial<CockpitGh> = {},
-): CockpitGh {
+  overrides: Partial<GhWrapper> = {},
+): GhWrapper {
   return {
     fetchIssueLabels: vi.fn(),
     fetchIssueState: vi.fn(async (repo: string, n: number): Promise<IssueStateResult> => {
@@ -40,7 +40,7 @@ function stubCockpitGh(
     prDiffNames: vi.fn(),
     prDiffPatch: vi.fn(),
     ...overrides,
-  } as CockpitGh;
+  } as GhWrapper;
 }
 
 function epicBody(phases: Array<{ heading: string; refs: string[] }>): string {
@@ -66,7 +66,7 @@ describe('runQueue', () => {
       { heading: 'S2 cohort', refs: ['owner/repo#201', 'owner/repo#202'] },
     ]);
     const gh = ghWithBody(body);
-    const cockpitGh = stubCockpitGh();
+    const cockpitGh = stubGhWrapper();
     const out: string[] = [];
 
     const result = await runQueue(
@@ -89,7 +89,7 @@ describe('runQueue', () => {
   it('--label overrides the default process:speckit-feature', async () => {
     const body = epicBody([{ heading: 'S1', refs: ['owner/repo#1'] }]);
     const gh = ghWithBody(body);
-    const cockpitGh = stubCockpitGh();
+    const cockpitGh = stubGhWrapper();
     const out: string[] = [];
 
     const result = await runQueue(
@@ -106,7 +106,7 @@ describe('runQueue', () => {
   it('skips closed refs at preview', async () => {
     const body = epicBody([{ heading: 'S1', refs: ['owner/repo#1', 'owner/repo#2'] }]);
     const gh = ghWithBody(body);
-    const cockpitGh = stubCockpitGh({
+    const cockpitGh = stubGhWrapper({
       'owner/repo#1': { state: 'CLOSED' },
     });
     const out: string[] = [];
@@ -126,7 +126,7 @@ describe('runQueue', () => {
   it('skips refs already carrying the workflow label', async () => {
     const body = epicBody([{ heading: 'S1', refs: ['owner/repo#1'] }]);
     const gh = ghWithBody(body);
-    const cockpitGh = stubCockpitGh({
+    const cockpitGh = stubGhWrapper({
       'owner/repo#1': { labels: ['process:speckit-feature'] },
     });
     const out: string[] = [];
@@ -150,7 +150,7 @@ describe('runQueue', () => {
       { heading: 'S1 beta', refs: ['owner/repo#2'] },
     ]);
     const gh = ghWithBody(body);
-    const cockpitGh = stubCockpitGh();
+    const cockpitGh = stubGhWrapper();
 
     await expect(
       runQueue('owner/epic#42', 's1', { yes: true }, { gh, cockpitGh }),
@@ -168,7 +168,7 @@ describe('runQueue', () => {
   it('unknown <phase> exits 2 with candidate headings', async () => {
     const body = epicBody([{ heading: 'S1', refs: ['owner/repo#1'] }]);
     const gh = ghWithBody(body);
-    const cockpitGh = stubCockpitGh();
+    const cockpitGh = stubGhWrapper();
 
     try {
       await runQueue('owner/epic#42', 's9', { yes: true }, { gh, cockpitGh });
@@ -183,7 +183,7 @@ describe('runQueue', () => {
 
   it('malformed <epic-ref> exits 2', async () => {
     const gh = new FakeGh({});
-    const cockpitGh = stubCockpitGh();
+    const cockpitGh = stubGhWrapper();
     try {
       await runQueue('not-a-ref', 's1', { yes: true }, { gh, cockpitGh });
       throw new Error('expected throw');

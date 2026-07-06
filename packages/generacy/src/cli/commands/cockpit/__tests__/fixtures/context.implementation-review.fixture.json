@@ -1,0 +1,32 @@
+{
+  "issue": "generacy-ai/generacy#807",
+  "labels": [
+    "waiting-for:implementation-review",
+    "phase:implement"
+  ],
+  "prRef": {
+    "number": 808,
+    "url": "https://github.com/generacy-ai/generacy/pull/808",
+    "state": "OPEN",
+    "draft": false,
+    "headRefName": "807-epic-generacy-ai-tetrad"
+  },
+  "prDetail": {
+    "number": 808,
+    "title": "Collapse cockpit CLI surface to rev 3 catalog",
+    "url": "https://github.com/generacy-ai/generacy/pull/808",
+    "base": "develop",
+    "head": "807-epic-generacy-ai-tetrad",
+    "body": "closes #807",
+    "author": { "login": "alice" },
+    "state": "OPEN",
+    "draft": false,
+    "labels": ["waiting-for:implementation-review"],
+    "diff": "diff --git a/x b/x\n+hi\n",
+    "diffTruncated": false
+  },
+  "checks": [
+    { "name": "ci/lint", "state": "SUCCESS" },
+    { "name": "ci/test", "state": "SUCCESS" }
+  ]
+}

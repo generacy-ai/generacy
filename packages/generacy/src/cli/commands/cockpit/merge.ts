@@ -2,7 +2,7 @@ import { Command } from 'commander';
 import type { Logger } from 'pino';
 import type { GhWrapper } from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
-import { resolveContext } from './shared/resolve-context.js';
+import { resolveIssueContext } from './resolver.js';
 import { classifyChecks } from './shared/required-checks.js';
 import {
   buildFailingCheckPayload,
@@ -112,15 +112,11 @@ export function cockpitMergeCommand(): Command {
     .argument('<issue>', 'GitHub issue number')
     .option('--repo <repo>', 'Owner/name (inferred from cwd if absent)')
     .action(async (issueArg: string, opts: { repo?: string }) => {
-      const issue = Number.parseInt(issueArg, 10);
-      if (!Number.isInteger(issue) || issue <= 0) {
-        throw new Error(`Invalid issue number: ${issueArg}`);
-      }
       const logger = getLogger();
-      const ctx = await resolveContext({ issue, repo: opts.repo });
+      const ctx = await resolveIssueContext({ issue: issueArg, repo: opts.repo });
       const result = await runMerge({
         gh: ctx.gh,
-        issue: ctx.issue,
+        issue: ctx.ref.number,
         repo: ctx.repo,
         logger,
       });

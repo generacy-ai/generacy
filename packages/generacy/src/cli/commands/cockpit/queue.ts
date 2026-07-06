@@ -18,10 +18,10 @@ import {
   type CommandRunner,
   type GhWrapper,
   type IssueRef,
+  type IssueStateResult,
   type ParsedPhase,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
-import { createCockpitGh, type CockpitGh, type IssueStateResult } from './gh-ext.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
 
 const DEFAULT_LABEL = 'process:speckit-feature';
@@ -72,7 +72,7 @@ export interface QueueResult {
 export interface QueueCommandDeps {
   runner?: CommandRunner;
   gh?: GhWrapper;
-  cockpitGh?: CockpitGh;
+  cockpitGh?: GhWrapper;
   prompt?: (message: string) => Promise<boolean>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -216,7 +216,7 @@ export async function runQueue(
   }
 
   const gh = deps.gh ?? new GhCliWrapper();
-  const cockpitGh = deps.cockpitGh ?? createCockpitGh(deps.runner ?? nodeChildProcessRunner);
+  const cockpitGh = deps.cockpitGh ?? new GhCliWrapper(deps.runner ?? nodeChildProcessRunner);
 
   let epic: ResolvedEpic;
   try {
