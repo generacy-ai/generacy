@@ -991,6 +991,379 @@ describe('setup build command', () => {
     });
   });
 
+  describe('Phase 4: cockpit command resolution and copy', () => {
+    describe('resolveCockpitCommandsDir', () => {
+      it('Tier-1a: resolves from agency source packages directory (workspace)', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['watch.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          { path: '/workspaces/agency/packages/claude-plugin-cockpit/commands' },
+          'Resolved cockpit commands from local workspace',
+        );
+      });
+
+      it('Tier-1b: resolves from generacy workspace node_modules', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/generacy/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['watch.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          {
+            path:
+              '/workspaces/generacy/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          },
+          'Resolved cockpit commands from local workspace',
+        );
+      });
+
+      it('Tier-1c: resolves from agency workspace node_modules', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/agency/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['watch.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          {
+            path:
+              '/workspaces/agency/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          },
+          'Resolved cockpit commands from local workspace',
+        );
+      });
+
+      it('Tier-2: resolves from shared packages volume', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/shared-packages/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['watch.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          {
+            path:
+              '/shared-packages/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          },
+          'Resolved cockpit commands from shared packages volume',
+        );
+      });
+
+      it('Tier-3: resolves from npm global root', async () => {
+        mockExecBehavior({
+          'npm root -g': { stdout: '/usr/lib/node_modules' },
+        });
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/usr/lib/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['watch.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          {
+            path: '/usr/lib/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          },
+          'Resolved cockpit commands from npm global',
+        );
+      });
+
+      it('returns null when package not found in any tier', async () => {
+        mockExecBehavior({
+          'npm root -g': { throw: true },
+        });
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          // Include spec-kit tier-1a so spec-kit does not error; cockpit still absent
+          '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue([]);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // Warn (not error) with cockpit-specific message
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.objectContaining({ checkedPaths: expect.any(Array) }),
+          '@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands',
+        );
+        // No cockpit-specific "resolved from ..." info logs
+        const cockpitResolvedLogs = mockLogger.info.mock.calls.filter(
+          (c) => typeof c[1] === 'string' && (c[1] as string).includes('Resolved cockpit'),
+        );
+        expect(cockpitResolvedLogs).toHaveLength(0);
+      });
+    });
+
+    describe('cockpit copy block', () => {
+      it('happy path: mkdir + copyFileSync per .md + logger.info with count/source/dest', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          // Only cockpit resolves; spec-kit absent
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['a.md', 'b.md', 'c.md', 'README.txt']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        expect(mockMkdirSync).toHaveBeenCalledWith(
+          '/home/testuser/.claude/commands/cockpit',
+          { recursive: true },
+        );
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands/a.md',
+          '/home/testuser/.claude/commands/cockpit/a.md',
+        );
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands/b.md',
+          '/home/testuser/.claude/commands/cockpit/b.md',
+        );
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands/c.md',
+          '/home/testuser/.claude/commands/cockpit/c.md',
+        );
+        // Exactly three .md copies (README.txt filtered out)
+        const cockpitCopies = mockCopyFileSync.mock.calls.filter(
+          (c) => (c[1] as string).startsWith('/home/testuser/.claude/commands/cockpit/'),
+        );
+        expect(cockpitCopies).toHaveLength(3);
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          {
+            count: 3,
+            source: '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+            dest: '/home/testuser/.claude/commands/cockpit',
+          },
+          'Copied cockpit command files',
+        );
+      });
+
+      it('non-.md filter: only README.txt in dir → 0 files copied, logger.info count 0', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue(['README.txt']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // No .md copies into cockpit dir
+        const cockpitCopies = mockCopyFileSync.mock.calls.filter(
+          (c) => (c[1] as string).startsWith('/home/testuser/.claude/commands/cockpit/'),
+        );
+        expect(cockpitCopies).toHaveLength(0);
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          expect.objectContaining({ count: 0 }),
+          'Copied cockpit command files',
+        );
+      });
+
+      it('absent branch: exactly one logger.warn with byte-exact message and 5-entry checkedPaths', async () => {
+        mockExecBehavior({
+          'npm root -g': { throw: true },
+        });
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          // Include spec-kit tier-1a so spec-kit does not error
+          '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue([]);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // Filter to cockpit warn calls only
+        const cockpitWarnCalls = mockLogger.warn.mock.calls.filter(
+          (c) =>
+            typeof c[1] === 'string' &&
+            (c[1] as string).includes('@generacy-ai/claude-plugin-cockpit'),
+        );
+        expect(cockpitWarnCalls).toHaveLength(1);
+        const [meta, msg] = cockpitWarnCalls[0];
+        expect(msg).toBe(
+          '@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands',
+        );
+        expect((meta as { checkedPaths: string[] }).checkedPaths).toEqual([
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+          '/workspaces/generacy/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          '/workspaces/agency/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          '/shared-packages/node_modules/@generacy-ai/claude-plugin-cockpit/commands',
+          '{npm root -g}/@generacy-ai/claude-plugin-cockpit/commands',
+        ]);
+      });
+
+      it('absent branch does not call logger.error', async () => {
+        mockExecBehavior({
+          'npm root -g': { throw: true },
+        });
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          // Include spec-kit tier-1a so spec-kit does not error either
+          '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+        ]);
+        mockReaddirSync.mockReturnValue([]);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // No error calls mention cockpit
+        const cockpitErrorCalls = mockLogger.error.mock.calls.filter(
+          (c) => typeof c[1] === 'string' && (c[1] as string).includes('cockpit'),
+        );
+        expect(cockpitErrorCalls).toHaveLength(0);
+      });
+    });
+
+    describe('coexistence and isolation with spec-kit', () => {
+      it('both resolvers succeed: no cross-overwrite between commands/*.md and commands/cockpit/*.md', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+        ]);
+        // Different file lists per source dir
+        mockReaddirSync.mockImplementation((path: string) => {
+          if (path.includes('claude-plugin-cockpit')) return ['watch.md', 'lens.md'];
+          if (path.includes('agency-plugin-spec-kit')) {
+            return ['specify.md', 'clarify.md', 'plan.md'];
+          }
+          return [];
+        });
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // Spec-kit copies to top-level ~/.claude/commands/*.md
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/agency-plugin-spec-kit/commands/specify.md',
+          '/home/testuser/.claude/commands/specify.md',
+        );
+        // Cockpit copies to ~/.claude/commands/cockpit/*.md
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands/watch.md',
+          '/home/testuser/.claude/commands/cockpit/watch.md',
+        );
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands/lens.md',
+          '/home/testuser/.claude/commands/cockpit/lens.md',
+        );
+        // No cockpit → top-level cross-overwrite
+        const crossOverwrite = mockCopyFileSync.mock.calls.filter((c) => {
+          const src = c[0] as string;
+          const dst = c[1] as string;
+          return (
+            src.includes('claude-plugin-cockpit') &&
+            /^\/home\/testuser\/\.claude\/commands\/[^/]+\.md$/.test(dst)
+          );
+        });
+        expect(crossOverwrite).toHaveLength(0);
+      });
+
+      it('cockpit absent + spec-kit present: MCP configuration still runs', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/commands',
+          // No cockpit paths at all
+        ]);
+        mockReaddirSync.mockReturnValue(['specify.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // MCP config wrote to ~/.claude.json
+        const claudeJsonCalls = mockWriteFileSync.mock.calls.filter(
+          (c) => (c[0] as string) === '/home/testuser/.claude.json',
+        );
+        expect(claudeJsonCalls.length).toBeGreaterThan(0);
+        // Cockpit warn fired
+        const cockpitWarnCalls = mockLogger.warn.mock.calls.filter(
+          (c) =>
+            typeof c[1] === 'string' &&
+            (c[1] as string).includes('@generacy-ai/claude-plugin-cockpit'),
+        );
+        expect(cockpitWarnCalls).toHaveLength(1);
+      });
+
+      it('cockpit present + spec-kit absent: cockpit copies and MCP still runs (FR-005)', async () => {
+        mockExecBehavior();
+        mockFileSystem([
+          '/workspaces/agency',
+          '/workspaces/latency',
+          '/workspaces/agency/packages/agency/dist/cli.js',
+          '/workspaces/agency/packages/agency-plugin-spec-kit/dist/index.js',
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands',
+          // No spec-kit paths
+        ]);
+        mockReaddirSync.mockReturnValue(['watch.md']);
+
+        await runBuildCommand(['--skip-cleanup', '--skip-generacy']);
+
+        // Cockpit did copy
+        expect(mockCopyFileSync).toHaveBeenCalledWith(
+          '/workspaces/agency/packages/claude-plugin-cockpit/commands/watch.md',
+          '/home/testuser/.claude/commands/cockpit/watch.md',
+        );
+        // MCP config still wrote to ~/.claude.json
+        const claudeJsonCalls = mockWriteFileSync.mock.calls.filter(
+          (c) => (c[0] as string) === '/home/testuser/.claude.json',
+        );
+        expect(claudeJsonCalls.length).toBeGreaterThan(0);
+      });
+    });
+  });
+
   describe('logging', () => {
     it('logs initial build process message', async () => {
       mockExecBehavior();
