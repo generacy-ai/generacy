@@ -1,115 +1,73 @@
-# Feature Specification: G-S4 — Cockpit residue sweep after G-S1 deletion
+# Feature Specification: Epic: generacy-ai/tetrad-development#85 | Phase: S4 | Tier: v1-simplification | Issue: G-S4
+
+Residue from the PR #808 implementation review (G-S1, merged): the code deletion was complete (no dangling imports), but the sweep missed release metadata, docs, and test surface
 
 **Branch**: `810-epic-generacy-ai-tetrad` | **Date**: 2026-07-06 | **Status**: Draft
-**Epic**: `generacy-ai/tetrad-development#85` | **Phase**: S4 | **Tier**: v1-simplification | **Issue**: G-S4
-**Source**: PR #808 review findings
 
 ## Summary
 
-PR #808 (G-S1) deleted the cockpit's orchestrator-client and journal-stuck detection subsystems cleanly at the code level — no dangling imports were left behind. But the sweep missed the *surrounding* artifacts that describe or exercise those subsystems: release-metadata (changesets), user-facing docs (README, package description), a source-file header comment, and a residual pattern in tests that still names the removed config keys and exported symbols. This feature closes those gaps so the next release's changelog describes the removals rather than announcing features that no longer exist, and so nothing outside git history and the plan doc still references the deleted subsystems.
+Epic: generacy-ai/tetrad-development#85 | Phase: S4 | Tier: v1-simplification | Issue: G-S4
 
-The scope is deliberately narrow and mechanical: delete, replace, or rewrite specific artifacts in `.changeset/`, `packages/cockpit/README.md`, `packages/cockpit/package.json`, `packages/cockpit/src/index.ts`, and a set of test files. One net-new test (legacy-config tolerance) guards the R4 promise (Zod strip mode) so a future tightening to `.strict()` cannot silently break users who still carry the removed keys.
+Residue from the PR #808 implementation review (G-S1, merged): the code deletion was complete (no dangling imports), but the sweep missed release metadata, docs, and test surface.
+
+1. Changesets (do before the next `changeset version` run): delete the stale pending .changeset/792-cockpit-orchestrator-status.md and .changeset/793-cockpit-journal-stuck-detection.md (they announce the exact features #808 deleted), and add one changeset recording the breaking removals (deleted exports createOrchestratorClient/StuckReason/JournalLivenessResult/ReadJournalLivenessOptions/appendChildIssue; removed config fields orchestrator.*/stuckThresholdMinutes; removed stuck/recovered watch events and the STALE status column).
+2. packages/cockpit/README.md: delete the orchestrator-client documentation (the "Talk to a running orchestrator" section, the two-mode client bullet, config.orchestrator keys in examples, the ORCHESTRATOR_URL/ORCHESTRATOR_API_TOKEN env table rows, and the "Degraded mode" section).
+3. packages/cockpit/package.json description: drop "and orchestrator client".
+4. packages/cockpit/src/index.ts header comment: remove the references to deleted orchestrator/http and orchestrator/stub modules.
+5. Add a legacy-config tolerance test: a fixture carrying the removed orchestrator:/stuckThresholdMinutes: keys must parse cleanly (guards the data-model R4 promise — Zod strip mode — against a future .strict()).
+6. Test residue, skip any file already rewritten by #806/#807: shared.scoping.test.ts:9 typed literal still carries the deleted orchestrator field (TS2353 if tests are ever typechecked); orchestrator: {} in mocked configs in state/advance/clarify-context/queue tests; status.render.test.ts tombstone assertion expect(parsed.orchestrator).toBeUndefined() should assert the envelope's actual keys instead.
+
+Owns (isolation): .changeset/** ; packages/cockpit/{README.md,package.json,src/index.ts,src/__tests__/**} ; listed CLI test files (post-#806/#807 versions)
+
+Acceptance: no reference to the deleted subsystems outside git history and the plan doc; next release's changelog describes the removal, not the removed features; a legacy-key config parses in a test.
+
+Depends on: G-S2, G-S3 (test files overlap their rewrites) (see the epic checklist for issue numbers)
+
+---
+Part of the Epic Cockpit. Plan: docs/epic-cockpit-plan.md in tetrad-development (S4 / G-S4). Source: PR #808 review findings.
+
 
 ## User Stories
 
-### US1: Maintainer cutting the next cockpit release
+### US1: [Primary User Story]
 
-**As a** cockpit maintainer preparing the next release,
-**I want** the pending changesets and the generated changelog to describe what actually changed,
-**So that** users read "these APIs and config keys were removed" instead of "these features were added" for functionality that no longer exists.
-
-**Acceptance Criteria**:
-- [ ] `.changeset/792-cockpit-orchestrator-status.md` is deleted.
-- [ ] `.changeset/793-cockpit-journal-stuck-detection.md` is deleted.
-- [ ] A new changeset entry records the breaking removals: exports `createOrchestratorClient`, `StuckReason`, `JournalLivenessResult`, `ReadJournalLivenessOptions`, `appendChildIssue`; config fields `orchestrator.*` and `stuckThresholdMinutes`; watch events `stuck` / `recovered`; the `STALE` status column.
-- [ ] Running `changeset version` in a clean checkout produces a changelog that mentions the removals and does not mention the deleted features.
-
-### US2: Developer reading the cockpit docs
-
-**As a** developer evaluating or using `@generacy-ai/cockpit`,
-**I want** the README, `package.json` description, and `src/index.ts` header to describe only what the package still does,
-**So that** I do not try to configure or call APIs that no longer exist.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `packages/cockpit/README.md` no longer contains the "Talk to a running orchestrator" section, the two-mode client bullet, `config.orchestrator` keys in examples, the `ORCHESTRATOR_URL` / `ORCHESTRATOR_API_TOKEN` env-table rows, or the "Degraded mode" section.
-- [ ] `packages/cockpit/package.json` `description` field no longer contains the phrase "and orchestrator client".
-- [ ] `packages/cockpit/src/index.ts` header comment no longer references the deleted `orchestrator/http` or `orchestrator/stub` modules.
-
-### US3: User upgrading with a legacy config file
-
-**As a** cockpit user whose config file still carries the removed `orchestrator:` and `stuckThresholdMinutes:` keys,
-**I want** my config to keep parsing without errors after upgrading,
-**So that** the upgrade path is a no-op for me — I can remove the dead keys on my own schedule.
-
-**Acceptance Criteria**:
-- [ ] A test fixture containing the removed `orchestrator:` block and `stuckThresholdMinutes:` key parses without throwing.
-- [ ] The test is written so it will fail if the schema is ever tightened from Zod strip mode to `.strict()`.
-
-### US4: Contributor running the cockpit test suite
-
-**As a** contributor running `pnpm test` or a future `tsc --noEmit` across cockpit tests,
-**I want** the test files to reference only symbols and config keys that still exist,
-**So that** the suite does not carry TS2353 errors (excess-property checks on typed literals) or assert against tombstones for keys that were never in the shape.
-
-**Acceptance Criteria**:
-- [ ] `shared.scoping.test.ts:9` typed-literal no longer carries the deleted `orchestrator` field.
-- [ ] `orchestrator: {}` no longer appears in mocked configs in the state / advance / clarify-context / queue CLI tests.
-- [ ] `status.render.test.ts` tombstone assertion `expect(parsed.orchestrator).toBeUndefined()` is replaced by an assertion against the envelope's actual current keys.
-- [ ] Any file already rewritten by PR #806 or PR #807 is left untouched (this issue's edits apply on top of those PRs).
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
-| ID     | Requirement                                                                                                                                                                                                                                    | Priority | Notes                                                                                             |
-|--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------------------------------------------------|
-| FR-001 | Delete `.changeset/792-cockpit-orchestrator-status.md` and `.changeset/793-cockpit-journal-stuck-detection.md`.                                                                                                                                 | P1       | Must land before the next `changeset version` run to keep the changelog honest.                   |
-| FR-002 | Add one new changeset recording the breaking removals from #808 (exports, config fields, watch events, and status column enumerated in the issue).                                                                                             | P1       | Semver bump: `major` (breaking removal of public API surface).                                    |
-| FR-003 | Remove the orchestrator-client sections from `packages/cockpit/README.md`: the "Talk to a running orchestrator" section, the two-mode client bullet, `config.orchestrator` keys in examples, the two env-table rows, and the "Degraded mode" section. | P1       | README must remain internally consistent (no orphaned references or dangling links).              |
-| FR-004 | Drop "and orchestrator client" from `packages/cockpit/package.json` `description`.                                                                                                                                                             | P1       | Keep the rest of the description intact.                                                          |
-| FR-005 | Remove references to the deleted `orchestrator/http` and `orchestrator/stub` modules from the `packages/cockpit/src/index.ts` header comment.                                                                                                  | P1       | Header should describe only currently exported modules.                                           |
-| FR-006 | Add a legacy-config tolerance test: a fixture carrying `orchestrator:` and `stuckThresholdMinutes:` keys must parse without error.                                                                                                             | P1       | Guards R4 (Zod strip mode) against a future `.strict()`. Test lives under `packages/cockpit/src/__tests__/**`. |
-| FR-007 | Remove the deleted `orchestrator` field from the typed literal at `shared.scoping.test.ts:9`.                                                                                                                                                  | P1       | Skip if PR #806 or #807 already rewrote this file.                                                |
-| FR-008 | Remove `orchestrator: {}` from mocked configs in the state / advance / clarify-context / queue CLI tests.                                                                                                                                       | P1       | Skip any file already rewritten by #806/#807.                                                     |
-| FR-009 | Replace the `status.render.test.ts` tombstone assertion `expect(parsed.orchestrator).toBeUndefined()` with an assertion against the envelope's current keys.                                                                                    | P2       | The tombstone asserts absence of a key that was never in the shape; assert the real shape instead. |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
-| ID     | Metric                                                                                                                                                     | Target                             | Measurement                                                                                          |
-|--------|------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------|------------------------------------------------------------------------------------------------------|
-| SC-001 | References to deleted subsystems (`createOrchestratorClient`, `orchestrator.*` config, `stuckThresholdMinutes`, `STALE` column, `stuck`/`recovered` events) outside git history and the epic plan doc. | 0                                  | `grep` sweep across the working tree (excluding `.git/` and `docs/epic-cockpit-plan.md`) after the change. |
-| SC-002 | Next release's changelog entry for `@generacy-ai/cockpit` describes the removals, not the removed features.                                                | Removal-only wording               | Run `changeset version` in a clean checkout and read the generated `CHANGELOG.md`.                    |
-| SC-003 | Legacy-key config parses in a test.                                                                                                                        | Test passes                        | Run `pnpm --filter @generacy-ai/cockpit test` including the new fixture.                              |
-| SC-004 | Cockpit test suite still passes after the sweep.                                                                                                           | 100% pass                          | `pnpm --filter @generacy-ai/cockpit test` exits 0.                                                    |
-| SC-005 | No TS2353 excess-property errors on the touched test literals.                                                                                             | 0 errors                           | If the suite is ever typechecked, `tsc --noEmit` over the touched test files exits clean.             |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- PR #806 and PR #807 have landed (or will land before this PR) — this issue's test edits apply on top of their rewrites, not before them.
-- The `.changeset/` directory follows the standard Changesets format: one Markdown file per pending release entry with a YAML front-matter block naming the affected packages and bump level.
-- The cockpit is under Zod strip mode today (R4 promise). The legacy-config tolerance test locks in that promise; it does not change it.
-- The `orchestrator/http` and `orchestrator/stub` module deletions from PR #808 are already merged and are the only reason those header-comment references are dead.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Any code change beyond docs, changesets, and test surface. All runtime code deletion happened in PR #808.
-- Re-introducing any form of orchestrator client, journal-stuck detection, or `STALE` status. The epic decision to remove them stands.
-- Broader test-file cleanup beyond the four specific residues named in the issue (`shared.scoping.test.ts`, the state/advance/clarify-context/queue mocks, `status.render.test.ts` tombstone).
-- Tightening the config schema from Zod `strip` to `.strict()`. The new test locks in `strip`; changing it is a separate decision.
-- Updates to `docs/epic-cockpit-plan.md` in the `tetrad-development` repo — the plan doc is the intentional exception to SC-001.
+- [Exclusion 1]
 
-## Dependencies
+## Clarifications
 
-- **G-S2**, **G-S3** — test-file overlap with their rewrites. Any file already touched by #806/#807 is skipped here (FR-007, FR-008 explicitly note this).
+### Batch 1 — 2026-07-06
 
-## Ownership / Isolation
-
-Files this feature is allowed to change (per the issue's Owns clause):
-
-- `.changeset/**`
-- `packages/cockpit/README.md`
-- `packages/cockpit/package.json`
-- `packages/cockpit/src/index.ts`
-- `packages/cockpit/src/__tests__/**`
-- The listed CLI test files, post-#806/#807 versions only.
+- **Q1 (Changeset reconciliation)**: Keep `.changeset/805-cockpit-delete-orchestrator-journal.md` as the authoritative removal changeset at **MINOR** bump (pre-1.0 convention — package is 0.2.0; a `major` bump would cut 1.0.0, which is not being declared; precedent set by #801/#802 scoping break at 0.1→0.2). Append one line to `805-*.md` covering the `STALE` status column and the stuck fields it currently omits. Do **not** add a second changeset. FR-001 stands unchanged: `.changeset/792-cockpit-orchestrator-status.md` and `.changeset/793-cockpit-journal-stuck-detection.md` must still be deleted.
+- **Q2 (README audit)**: Re-audit the current `packages/cockpit/README.md` — exactly one orchestrator reference remains (verified by grep). Remove it if stale; keep only if it legitimately describes the generacy orchestrator context. No other README edits.
+- **Q3 (Legacy-config test)**: Fixture nests the removed `orchestrator:` and `stuckThresholdMinutes:` keys under the `cockpit:` block (only nested placement exercises strip mode — the loader passes only `doc['cockpit']` to the schema). Test asserts (1) no throw, (2) `parsed.orchestrator === undefined`, (3) `parsed.stuckThresholdMinutes === undefined`. Locks strip behavior explicitly; unambiguously breaks under `.strict()`.
+- **Q4 (Test residue scope)**: CLI test files `state.test.ts`, `advance.test.ts`, `clarify-context.test.ts`, `queue.test.ts`, `status.render.test.ts` all exist in the current tree. Only `shared.scoping.test.ts` is gone (deleted by #806 with the manifest scoping it tested) — **FR-007 is moot**. Proceed with FR-001–FR-006 AND FR-009 (status.render.test.ts is not in #807's file ownership). **Skip FR-008** — the four state/advance/clarify-context/queue tests are owned by in-flight #807; verify orchestrator-mock removal at #807's implementation review rather than editing them here. No follow-up issue.
+- **Q5 (FR-009 assertion shape)**: Replace `expect(parsed.orchestrator).toBeUndefined()` with positive assertions on the envelope's load-bearing keys (tolerant of additive envelope changes), decidable now from the current `status.render.test.ts` envelope. Do it in this PR per Q4.
 
 ---
 
