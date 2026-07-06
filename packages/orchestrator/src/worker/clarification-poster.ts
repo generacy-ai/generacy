@@ -87,6 +87,30 @@ export function clarificationMarker(issueNumber: number): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Split a comment body into sections keyed by `### Q<n>:` headings.
+ * Each section spans from a heading to the next `### ` heading (or EOF).
+ * Returns an empty array if no `### Q<n>:` heading is present.
+ */
+function splitByQuestionHeading(body: string): string[] {
+  const headingPattern = /^### Q\d+:.*$/gm;
+  const headings = [...body.matchAll(headingPattern)];
+  if (headings.length === 0) return [];
+
+  const sections: string[] = [];
+  for (let i = 0; i < headings.length; i++) {
+    const start = headings[i]!.index!;
+    const headingLen = headings[i]![0].length;
+    const nextTopLevelHeading = body.slice(start + headingLen).search(/^### /m);
+    const end =
+      nextTopLevelHeading === -1
+        ? body.length
+        : start + headingLen + nextTopLevelHeading;
+    sections.push(body.slice(start, end));
+  }
+  return sections;
+}
+
+/**
  * Detect whether a comment body is a clarification *questions* comment
  * (posted by the bot) rather than a human *answers* comment.
  *
@@ -110,6 +134,17 @@ export function isQuestionComment(body: string): boolean {
   // Negative lookahead excludes answer headings like
   // "## Answers to Clarification Questions".
   if (/##\s+(?!Answers\b).*Clarification Questions/.test(body)) return true;
+  // FR-001: variant question-comment shape — any `### Q<n>:` heading section
+  // containing question-side markup that never appears in human answers.
+  for (const section of splitByQuestionHeading(body)) {
+    if (
+      section.includes('**Question**:') ||
+      section.includes('**Context**:') ||
+      section.includes('**Options**:')
+    ) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -298,6 +333,15 @@ function extractEmbeddedAnswer(text: string): string | undefined {
   return undefined;
 }
 
+interface ParsedAnswer {
+  /** The extracted answer text, post-trim + post-extractEmbeddedAnswer. */
+  answer: string;
+  /** The GitHub numeric id of the comment this answer was captured from. */
+  sourceCommentId: number;
+  /** true if the source comment body contains at least one `### Q<n>:` heading. */
+  sourceHadQuestionHeadings: boolean;
+}
+
 /**
  * Parse answers from GitHub issue comments.
  *
@@ -313,18 +357,19 @@ function extractEmbeddedAnswer(text: string): string | undefined {
  * `**Answer**` line rather than the topic name after `Q1:`.
  */
 function parseAnswersFromComments(
-  comments: Array<{ body: string }>,
+  comments: Array<{ id: number; body: string; created_at?: string }>,
   questionNumbers: number[],
-): Map<number, string> {
-  const answers = new Map<number, string>();
+  logger: Logger,
+): Map<number, ParsedAnswer> {
+  const answers = new Map<number, ParsedAnswer>();
 
   for (const comment of comments) {
-    // Match Q patterns with optional heading markers (### Q1:) and bold (**Q1**:).
-    // The lookahead also handles heading-prefixed Q patterns so that sections
-    // like `### Q1: ...` and `### Q2: ...` are properly delimited instead of
-    // Q1 consuming everything up to $ when headings are used.
+    const sourceHadQuestionHeadings = /(?:^|\n)###\s+Q\d+:/.test(comment.body);
+
+    // FR-005: anchor the `Q<n>:` opener at line start (^ or newline) so that
+    // mid-prose references like "as per Q1: yes" do not capture as answers.
     const regex =
-      /(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
+      /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
 
     let match: RegExpExecArray | null;
     while ((match = regex.exec(comment.body)) !== null) {
@@ -343,9 +388,29 @@ function parseAnswersFromComments(
         }
       }
 
+      // FR-002: defense-in-depth — if the captured answer contains
+      // question-side markup, treat it as a leaked bot question body, not an
+      // answer. Skip and warn so operators can spot near-misses.
+      if (answer.includes('**Question**:') || answer.includes('**Context**:')) {
+        logger.warn(
+          {
+            code: 'SKIPPED_SUSPICIOUS_ANSWER',
+            commentId: comment.id,
+            questionNumber,
+            excerpt: answer.slice(0, 120),
+          },
+          'Skipped suspicious clarification answer (contains question-side markup)',
+        );
+        continue;
+      }
+
       // Skip placeholder text that is not a real answer
       if (answer && answer !== '*Pending*' && questionNumbers.includes(questionNumber)) {
-        answers.set(questionNumber, answer);
+        answers.set(questionNumber, {
+          answer,
+          sourceCommentId: comment.id,
+          sourceHadQuestionHeadings,
+        });
       }
     }
   }
@@ -402,7 +467,7 @@ export async function integrateClarificationAnswers(
   const pendingNumbers = pendingQuestions.map((q) => q.number);
 
   // 3. Fetch GitHub issue comments and parse answers
-  let comments: Array<{ body: string }>;
+  let comments: Array<{ id: number; body: string; created_at?: string }>;
   try {
     comments = await github.getIssueComments(owner, repo, issueNumber);
   } catch (error) {
@@ -419,7 +484,7 @@ export async function integrateClarificationAnswers(
   // as an answer, causing the gate to incorrectly see all questions as answered.
   const answerComments = comments.filter((c) => !isQuestionComment(c.body));
 
-  const answers = parseAnswersFromComments(answerComments, pendingNumbers);
+  const answers = parseAnswersFromComments(answerComments, pendingNumbers, logger);
   if (answers.size === 0) {
     return { integrated: 0, reason: 'no-answers' };
   }
@@ -427,14 +492,32 @@ export async function integrateClarificationAnswers(
   // 4. Update the file content — replace *Pending* with actual answers
   //    for each matched question
   let updatedContent = content;
-  for (const [questionNum, answer] of answers) {
+  for (const [questionNum, parsed] of answers) {
     // Match the answer line within the correct question section.
     // The pattern finds ### Q{N}: ... **Answer**: *Pending* and replaces
     // the *Pending* part with the actual answer text.
     const pattern = new RegExp(
       `(### Q${questionNum}:[\\s\\S]*?\\*\\*Answer\\*\\*:\\s*)\\*Pending\\*`,
     );
-    updatedContent = updatedContent.replace(pattern, `$1${answer}`);
+    const previousContent = updatedContent;
+    updatedContent = updatedContent.replace(pattern, `$1${parsed.answer}`);
+
+    // FR-004: residual-race detector — if the transition actually happened
+    // (updatedContent changed) AND the source comment had `### Q<n>:` headings,
+    // warn. Both FR-001 and FR-002 let this comment through, so a matching
+    // structure here is a signal of an uncovered failure vector.
+    if (updatedContent !== previousContent && parsed.sourceHadQuestionHeadings) {
+      logger.warn(
+        {
+          code: 'TRANSITION_WITH_QUESTION_HEADINGS',
+          commentId: parsed.sourceCommentId,
+          issueNumber,
+          questionNumber: questionNum,
+          answer: parsed.answer.slice(0, 120),
+        },
+        'Integrated answer from a comment containing question headings — possible bot self-answer',
+      );
+    }
   }
 
   if (updatedContent === content) {
