@@ -1,0 +1,6 @@
+cockpit:
+  owner: alice
+  orchestrator:
+    url: https://example.invalid
+    token: not-a-real-token
+  stuckThresholdMinutes: 30
