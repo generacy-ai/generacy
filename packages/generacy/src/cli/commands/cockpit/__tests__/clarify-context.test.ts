@@ -7,7 +7,7 @@ import { CockpitExit } from '../exit.js';
 import type { CockpitGh } from '../gh-ext.js';
 
 const baseLoad = vi.fn(async () => ({
-  config: { repos: ['generacy-ai/generacy'], orchestrator: {} },
+  config: {},
   source: 'defaults' as const,
   warnings: [],
 }));
@@ -51,7 +51,7 @@ describe('cockpit clarify-context', () => {
     const root = makeCwdWithSpec('788-epic-generacy-ai-tetrad');
     try {
       const out: string[] = [];
-      const result = await runClarifyContext('123', {
+      const result = await runClarifyContext('generacy-ai/generacy#123', {
         loadConfig: baseLoad,
         gh: stubGh(),
         cwd: root,
@@ -77,7 +77,7 @@ describe('cockpit clarify-context', () => {
   it('refuses when issue is not in waiting-for:clarification (exit 3)', async () => {
     const gh = stubGh({ fetchIssueLabels: vi.fn(async () => ({ labels: ['phase:plan'] })) });
     await expect(
-      runClarifyContext('1', {
+      runClarifyContext('generacy-ai/generacy#1', {
         loadConfig: baseLoad,
         gh,
         cwd: '/tmp',
@@ -91,7 +91,7 @@ describe('cockpit clarify-context', () => {
     const root = mkdtempSync(join(tmpdir(), 'cockpit-test-'));
     try {
       const out: string[] = [];
-      await runClarifyContext('123', {
+      await runClarifyContext('generacy-ai/generacy#123', {
         loadConfig: baseLoad,
         gh: stubGh(),
         cwd: root,
@@ -118,7 +118,7 @@ describe('cockpit clarify-context', () => {
     writeFileSync(join(dir, 'spec.md'), 'fb-spec');
     try {
       const out: string[] = [];
-      await runClarifyContext('123', {
+      await runClarifyContext('generacy-ai/generacy#123', {
         loadConfig: baseLoad,
         gh: stubGh(),
         cwd: root,
@@ -138,7 +138,7 @@ describe('cockpit clarify-context', () => {
     try {
       const gh = stubGh({ findOpenPrForBranch: vi.fn(async () => null) });
       const out: string[] = [];
-      await runClarifyContext('123', {
+      await runClarifyContext('generacy-ai/generacy#123', {
         loadConfig: baseLoad,
         gh,
         cwd: root,
@@ -160,7 +160,7 @@ describe('cockpit clarify-context', () => {
     const root = makeCwdWithSpec('develop');
     try {
       const out: string[] = [];
-      await runClarifyContext('123', {
+      await runClarifyContext('generacy-ai/generacy#123', {
         loadConfig: baseLoad,
         gh: stubGh(),
         cwd: root,
@@ -179,7 +179,7 @@ describe('cockpit clarify-context', () => {
     const root = makeCwdWithSpec('788-epic-generacy-ai-tetrad');
     try {
       const captured: string[] = [];
-      await runClarifyContext('123', {
+      await runClarifyContext('generacy-ai/generacy#123', {
         loadConfig: baseLoad,
         gh: stubGh(),
         cwd: root,
@@ -199,7 +199,7 @@ describe('cockpit clarify-context — exits', () => {
   it('CockpitExit type matches', async () => {
     const gh = stubGh({ fetchIssueLabels: vi.fn(async () => ({ labels: [] })) });
     try {
-      await runClarifyContext('1', { loadConfig: baseLoad, gh, cwd: '/tmp' });
+      await runClarifyContext('generacy-ai/generacy#1', { loadConfig: baseLoad, gh, cwd: '/tmp' });
       throw new Error('should throw');
     } catch (err) {
       expect(err).toBeInstanceOf(CockpitExit);

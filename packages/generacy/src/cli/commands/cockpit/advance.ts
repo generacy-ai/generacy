@@ -94,7 +94,7 @@ export async function runAdvance(
 
   let ref: IssueRef;
   try {
-    ref = parseIssueRef(issue, { config: loaded.config });
+    ref = parseIssueRef(issue);
   } catch (err) {
     throw new CockpitExit(2, `Error: cockpit advance: ${(err as Error).message}`);
   }
