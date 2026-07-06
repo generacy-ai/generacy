@@ -14,7 +14,7 @@
 - C) Any body with at least one `### Q<n>:` heading, full stop (no bold-markup co-location required) — simplest but risks classifying long human prose that quotes questions as a question comment.
 - D) Only bodies that both (a) contain `### Q<n>:` AND (b) contain `**Question**:` anywhere in the body — cheap to implement, permissive on section boundaries.
 
-**Answer**: *Pending*
+**Answer**: **B** — a `### Q<n>:` heading whose section contains `**Question**:` OR `**Context**:` OR `**Options**:`. Evidence from the live failure (generacy-ai/agency#374): the bot's questions comment self-matched via its "How to answer" example block — literally `Q1: your answer here` at line start — and the captured "answer" text carries no markup, so FR-002's content-based skip would NOT have caught it. That makes `isQuestionComment` the primary defense, so pick the widest reliable rule. All three markers are question-side markup that never appears in answer comments (ours are plain `Q1: A — ...` lines); the marginal false-positive risk over A is nil, and A misses variant question comments that omit a literal `**Question**:`.
 
 ---
 
@@ -26,7 +26,7 @@
 - B) Fire only when a full pending→answered transition actually occurs from a comment that also has `### Q<n>:` headings (matches FR-004's wording literally). If FR-001/FR-002 succeed, this never fires — the warn becomes a residual-race detector.
 - C) Fire in *both* places: one "skipped-suspicious" warn (from FR-002) and one "transition-with-question-headings" warn (from FR-004). Two distinct log messages/codes so operators can differentiate.
 
-**Answer**: *Pending*
+**Answer**: **C** — both warns, distinct codes. The FR-002 skip warn surfaces near-misses (the defense working); the FR-004 transition warn is the residual detector for vectors the filters don't cover (the defense failing). They mean different things operationally — collapsing them loses exactly the signal SC-001 needs.
 
 ---
 
@@ -38,7 +38,7 @@
 - B) Defer FR-003 to a follow-up issue. Ship FR-001/FR-002 + FR-004 only. Re-evaluate if the SC-001 metric shows any residual skips after deployment.
 - C) Drop FR-003 entirely — the marker-based (FR-001) + content-based (FR-002) defenses cover the race window, and timestamp comparisons add fragility (git mtime resets, GitHub clock drift).
 
-**Answer**: *Pending*
+**Answer**: **C** — drop the timestamp check. mtime across `git checkout` is not dependable, GitHub-vs-cluster clock skew is real, and it defends against the same vector FR-001/FR-002 already close. If the SC-001 metric ever shows residual skips, diagnose the actual new vector then rather than pre-committing to a fragile timing heuristic. One mechanism per job.
 
 ---
 
@@ -50,7 +50,7 @@
 - B) Log a body-derived synthetic id (first 8 chars of a hash of the body) — no signature changes, still unique-enough to correlate with GitHub via search. Cheaper but requires operators to manually locate the comment.
 - C) Log just the comment index and a short excerpt of the body (first 80 chars) — no signature changes, no hash. Least precise but sufficient for pattern analysis.
 
-**Answer**: *Pending*
+**Answer**: **A** — plumb the real GitHub comment id (`{ id, body, created_at? }`). It's the only option that lets an operator jump straight to the offending comment; the type-widening is small, the tests get truthier fixtures, and the optional `created_at` field costs nothing if timing analysis is ever needed diagnostically.
 
 ---
 
@@ -62,4 +62,4 @@
 - B) Out of scope — the `isQuestionComment` upstream filter (FR-001) is the primary defense; leave the regex as-is. Track prose-quoting false matches separately if they occur in production.
 - C) Partially in scope — add anchoring only when the comment body contains any `### Q<n>:` heading (i.e., when the risk is highest). Human free-form comments continue to use the current permissive regex.
 
-**Answer**: *Pending*
+**Answer**: **A** — in scope. Line-start anchoring closes a second real vector independent of the bot's own comment: any human discussion comment containing "as per Q1: yes" mid-prose currently registers as an answer. Same root-cause class (over-permissive parsing), one-line change, one regression test. Not C — two parsing modes is two mechanisms for one job.
