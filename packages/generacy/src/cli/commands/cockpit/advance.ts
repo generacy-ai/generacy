@@ -14,20 +14,21 @@
  */
 import { Command, Option } from 'commander';
 import {
+  GhCliWrapper,
   loadCockpitConfig,
   nodeChildProcessRunner,
   type CommandRunner,
+  type GhWrapper,
 } from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
-import { parseIssueRef, type IssueRef } from './issue-ref.js';
+import { parseIssueRef, type IssueRef } from './resolver.js';
 import { GATES, listGates, type GateDefinition } from './gate-vocabulary.js';
 import { formatManualAdvanceComment } from './manual-advance-marker.js';
-import { createCockpitGh, type CockpitGh } from './gh-ext.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
 
 export interface AdvanceCommandDeps {
   runner?: CommandRunner;
-  gh?: CockpitGh;
+  gh?: GhWrapper;
   loadConfig?: typeof loadCockpitConfig;
   now?: () => Date;
   stdout?: (line: string) => void;
@@ -99,7 +100,7 @@ export async function runAdvance(
     throw new CockpitExit(2, `Error: cockpit advance: ${(err as Error).message}`);
   }
 
-  const gh = deps.gh ?? createCockpitGh(deps.runner ?? nodeChildProcessRunner);
+  const gh = deps.gh ?? new GhCliWrapper(deps.runner ?? nodeChildProcessRunner);
 
   let labels: string[];
   try {

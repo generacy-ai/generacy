@@ -1,0 +1,32 @@
+{
+  "issue": "generacy-ai/generacy#807",
+  "labels": [
+    "waiting-for:clarification",
+    "phase:clarify"
+  ],
+  "timeline": [
+    {
+      "event": "labeled",
+      "label": { "name": "waiting-for:clarification" },
+      "created_at": "2026-07-01T10:00:00Z"
+    }
+  ],
+  "comments": [
+    {
+      "body": "Please clarify: do we care about legacy state?",
+      "author": "reviewer",
+      "createdAt": "2026-07-01T11:00:00Z",
+      "url": "https://github.com/generacy-ai/generacy/issues/807#issuecomment-1"
+    }
+  ],
+  "prForBranch": {
+    "url": "https://github.com/generacy-ai/generacy/pull/808",
+    "number": 808
+  },
+  "prDiffNames": ["packages/generacy/src/cli/commands/cockpit/context.ts"],
+  "prDiffPatch": "diff --git a/packages/generacy/src/cli/commands/cockpit/context.ts b/packages/generacy/src/cli/commands/cockpit/context.ts\n+new file\n",
+  "specBody": "# Feature Specification: unified context verb",
+  "planBody": "# Implementation Plan: unified context verb",
+  "branch": "807-epic-generacy-ai-tetrad",
+  "baseBranch": "develop"
+}

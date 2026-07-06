@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit/807/implementation-review-bundle.json",
+  "title": "Cockpit `context` — implementation-review bundle",
+  "description": "Emitted on stdout as a single JSON line when `generacy cockpit context <issue>` classifies the issue as `waiting-for:implementation-review`. Diff is capped at 256 KiB (see `diffTruncated`).",
+  "type": "object",
+  "required": ["issue", "gate", "pr", "diff", "diffTruncated", "checks"],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+#\\d+$"
+    },
+    "gate": { "const": "waiting-for:implementation-review" },
+    "pr": {
+      "type": "object",
+      "required": ["number", "title", "url", "base", "head", "body", "author", "state", "draft"],
+      "additionalProperties": false,
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "title":  { "type": "string" },
+        "url":    { "type": "string", "format": "uri" },
+        "base":   { "type": "string" },
+        "head":   { "type": "string" },
+        "body":   { "type": "string" },
+        "author": { "oneOf": [ { "type": "null" }, { "type": "string" } ] },
+        "state":  { "enum": ["OPEN", "CLOSED", "MERGED"] },
+        "draft":  { "type": "boolean" }
+      }
+    },
+    "diff":          { "type": "string" },
+    "diffTruncated": { "type": "boolean" },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "state"],
+        "additionalProperties": false,
+        "properties": {
+          "name":       { "type": "string" },
+          "state":      { "enum": ["SUCCESS", "FAILURE", "PENDING", "NEUTRAL", "SKIPPED", "CANCELLED"] },
+          "conclusion": { "type": "string" },
+          "url":        { "type": "string", "format": "uri" }
+        }
+      }
+    }
+  }
+}

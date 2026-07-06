@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit/807/artifact-paths-bundle.json",
+  "title": "Cockpit `context` — artifact-paths bundle",
+  "description": "Emitted on stdout as a single JSON line when `generacy cockpit context <issue>` classifies the issue as `waiting-for:{spec,plan,tasks}-review`. All three artifacts always emitted regardless of which review gate is active (Q1 → D). Each is `{path, body}` when the file exists, otherwise `null`.",
+  "type": "object",
+  "required": ["issue", "gate", "artifacts"],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+#\\d+$"
+    },
+    "gate": {
+      "enum": ["waiting-for:spec-review", "waiting-for:plan-review", "waiting-for:tasks-review"]
+    },
+    "artifacts": {
+      "type": "object",
+      "required": ["spec", "plan", "tasks"],
+      "additionalProperties": false,
+      "properties": {
+        "spec":  { "$ref": "#/$defs/artifact" },
+        "plan":  { "$ref": "#/$defs/artifact" },
+        "tasks": { "$ref": "#/$defs/artifact" }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["path", "body"],
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string" },
+            "body": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

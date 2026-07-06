@@ -2,16 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { cockpitCommand } from '../index.js';
 
 describe('cockpit command tree', () => {
-  it('exposes the watch/status observability verbs, the single-issue verbs, and merge/review-context', () => {
+  it('exposes the watch/status observability verbs, the single-issue verbs, and merge', () => {
     const cmd = cockpitCommand();
     const names = cmd.commands.map((c) => c.name()).sort();
     expect(names).toEqual([
       'advance',
-      'clarify-context',
+      'context',
       'merge',
       'queue',
-      'review-context',
-      'state',
       'status',
       'watch',
     ]);

@@ -2,8 +2,12 @@ import type {
   CheckRunSummary,
   GhWrapper,
   Issue,
+  IssueComment,
+  IssueLabelsResult,
+  IssueStateResult,
   ListIssuesOptions,
   MergeResult,
+  OpenPrForBranch,
   PullRequestDetail,
   PullRequestRef,
   PullRequestSummary,
@@ -126,6 +130,81 @@ export class FakeGh implements GhWrapper {
   async getRequiredCheckNames(repo: string, branch: string): Promise<RequiredChecksResult> {
     this.calls.push({ method: 'getRequiredCheckNames', args: [repo, branch] });
     throw new Error('getRequiredCheckNames not stubbed in FakeGh (watch/status sensor)');
+  }
+
+  async addLabel(repo: string, issue: number, label: string): Promise<void> {
+    this.calls.push({ method: 'addLabel', args: [repo, issue, label] });
+    if (this.config.strict === true) {
+      throw new Error(`watch is a sensor — addLabel(${repo}, #${issue}, ${label}) is forbidden`);
+    }
+  }
+
+  async removeLabel(repo: string, issue: number, label: string): Promise<void> {
+    this.calls.push({ method: 'removeLabel', args: [repo, issue, label] });
+    if (this.config.strict === true) {
+      throw new Error(`watch is a sensor — removeLabel(${repo}, #${issue}, ${label}) is forbidden`);
+    }
+  }
+
+  async fetchIssueLabels(repo: string, issue: number): Promise<IssueLabelsResult> {
+    this.calls.push({ method: 'fetchIssueLabels', args: [repo, issue] });
+    throw new Error('fetchIssueLabels not stubbed in FakeGh');
+  }
+
+  async fetchIssueState(repo: string, issue: number): Promise<IssueStateResult> {
+    this.calls.push({ method: 'fetchIssueState', args: [repo, issue] });
+    throw new Error('fetchIssueState not stubbed in FakeGh');
+  }
+
+  async postIssueComment(
+    repo: string,
+    issue: number,
+    body: string,
+  ): Promise<{ url: string }> {
+    this.calls.push({ method: 'postIssueComment', args: [repo, issue, body] });
+    throw new Error('postIssueComment not stubbed in FakeGh');
+  }
+
+  async addAssignees(
+    repo: string,
+    issue: number,
+    logins: string[],
+  ): Promise<void> {
+    this.calls.push({ method: 'addAssignees', args: [repo, issue, logins] });
+    throw new Error('addAssignees not stubbed in FakeGh');
+  }
+
+  async fetchIssueTimeline(repo: string, issue: number): Promise<unknown[]> {
+    this.calls.push({ method: 'fetchIssueTimeline', args: [repo, issue] });
+    throw new Error('fetchIssueTimeline not stubbed in FakeGh');
+  }
+
+  async fetchIssueComments(repo: string, issue: number): Promise<IssueComment[]> {
+    this.calls.push({ method: 'fetchIssueComments', args: [repo, issue] });
+    throw new Error('fetchIssueComments not stubbed in FakeGh');
+  }
+
+  async getCurrentUser(): Promise<string> {
+    this.calls.push({ method: 'getCurrentUser', args: [] });
+    throw new Error('getCurrentUser not stubbed in FakeGh');
+  }
+
+  async findOpenPrForBranch(
+    repo: string,
+    branch: string,
+  ): Promise<OpenPrForBranch | null> {
+    this.calls.push({ method: 'findOpenPrForBranch', args: [repo, branch] });
+    throw new Error('findOpenPrForBranch not stubbed in FakeGh');
+  }
+
+  async prDiffNames(repo: string, prNumber: number): Promise<string[]> {
+    this.calls.push({ method: 'prDiffNames', args: [repo, prNumber] });
+    throw new Error('prDiffNames not stubbed in FakeGh');
+  }
+
+  async prDiffPatch(repo: string, prNumber: number): Promise<string> {
+    this.calls.push({ method: 'prDiffPatch', args: [repo, prNumber] });
+    throw new Error('prDiffPatch not stubbed in FakeGh');
   }
 }
 

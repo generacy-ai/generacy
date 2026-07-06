@@ -54,6 +54,10 @@ export {
   type MergeResult,
   type RequiredChecksResult,
   type CommandRunner,
+  type IssueLabelsResult,
+  type IssueStateResult,
+  type IssueComment,
+  type OpenPrForBranch,
 } from './gh/wrapper.js';
 export {
   nodeChildProcessRunner,

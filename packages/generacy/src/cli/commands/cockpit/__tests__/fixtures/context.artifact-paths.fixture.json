@@ -1,0 +1,38 @@
+{
+  "issue": "generacy-ai/generacy#807",
+  "matrix": [
+    {
+      "label": "all-three-present",
+      "labels": ["waiting-for:plan-review"],
+      "gate": "waiting-for:plan-review",
+      "files": {
+        "spec.md": "# spec body",
+        "plan.md": "# plan body",
+        "tasks.md": "# tasks body"
+      }
+    },
+    {
+      "label": "spec-only",
+      "labels": ["waiting-for:spec-review"],
+      "gate": "waiting-for:spec-review",
+      "files": {
+        "spec.md": "# spec body"
+      }
+    },
+    {
+      "label": "plan-and-tasks",
+      "labels": ["waiting-for:tasks-review"],
+      "gate": "waiting-for:tasks-review",
+      "files": {
+        "plan.md": "# plan body",
+        "tasks.md": "# tasks body"
+      }
+    },
+    {
+      "label": "none-present",
+      "labels": ["waiting-for:spec-review"],
+      "gate": "waiting-for:spec-review",
+      "files": {}
+    }
+  ]
+}

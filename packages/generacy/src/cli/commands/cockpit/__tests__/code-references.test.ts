@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { gatherCodeReferences } from '../code-references.js';
-import type { CockpitGh } from '../gh-ext.js';
-import type { CommandRunner } from '@generacy-ai/cockpit';
+import type { CommandRunner, GhWrapper } from '@generacy-ai/cockpit';
 
-function stubGh(overrides: Partial<CockpitGh>): CockpitGh {
+function stubGh(overrides: Partial<GhWrapper>): GhWrapper {
   return {
     fetchIssueLabels: vi.fn(),
     fetchIssueState: vi.fn(),
@@ -17,7 +16,7 @@ function stubGh(overrides: Partial<CockpitGh>): CockpitGh {
     prDiffNames: vi.fn(async () => []),
     prDiffPatch: vi.fn(async () => ''),
     ...overrides,
-  } as CockpitGh;
+  } as GhWrapper;
 }
 
 const okRunner: CommandRunner = async () => ({ stdout: '', stderr: '', exitCode: 0 });

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit/807/clarification-bundle.json",
+  "title": "Cockpit `context` — clarification bundle",
+  "description": "Emitted on stdout as a single JSON line when `generacy cockpit context <issue>` classifies the issue as `waiting-for:clarification`.",
+  "type": "object",
+  "required": ["issue", "gate", "clarificationComment", "spec", "plan", "codeReferences"],
+  "additionalProperties": false,
+  "properties": {
+    "issue": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+#\\d+$",
+      "description": "\"owner/repo#n\" form of the input ref."
+    },
+    "gate": { "const": "waiting-for:clarification" },
+    "clarificationComment": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["body", "author", "createdAt", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "body":      { "type": "string" },
+            "author":    { "type": "string" },
+            "createdAt": { "type": "string", "format": "date-time" },
+            "url":       { "type": "string", "format": "uri" }
+          }
+        }
+      ]
+    },
+    "spec":  { "$ref": "#/$defs/artifact" },
+    "plan":  { "$ref": "#/$defs/artifact" },
+    "codeReferences": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["prUrl", "touchedFiles", "diffPatch"],
+          "additionalProperties": false,
+          "properties": {
+            "prUrl":        { "type": "string", "format": "uri" },
+            "touchedFiles": { "type": "array", "items": { "type": "string" } },
+            "diffPatch":    { "type": "string" }
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["path", "body"],
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string" },
+            "body": { "type": "string" }
+          }
+        }
+      ]
+    }
+  }
+}

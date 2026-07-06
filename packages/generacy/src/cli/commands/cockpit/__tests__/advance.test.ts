@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runAdvance } from '../advance.js';
 import { CockpitExit } from '../exit.js';
-import type { CockpitGh } from '../gh-ext.js';
+import type { GhWrapper } from '@generacy-ai/cockpit';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -11,7 +11,7 @@ const baseLoad = vi.fn(async () => ({
   warnings: [],
 }));
 
-function stubGh(overrides: Partial<CockpitGh> = {}): CockpitGh {
+function stubGh(overrides: Partial<GhWrapper> = {}): GhWrapper {
   return {
     fetchIssueLabels: vi.fn(async () => ({ labels: [] })),
     fetchIssueState: vi.fn(),
@@ -25,7 +25,7 @@ function stubGh(overrides: Partial<CockpitGh> = {}): CockpitGh {
     prDiffNames: vi.fn(),
     prDiffPatch: vi.fn(),
     ...overrides,
-  } as CockpitGh;
+  } as GhWrapper;
 }
 
 const fixedNow = () => new Date('2026-06-26T12:00:00.000Z');

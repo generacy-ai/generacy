@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { findClarificationComment } from '../clarification-comment-finder.js';
-import type { CockpitGh } from '../gh-ext.js';
+import type { GhWrapper } from '@generacy-ai/cockpit';
 
-function stub(overrides: Partial<CockpitGh>): CockpitGh {
+function stub(overrides: Partial<GhWrapper>): GhWrapper {
   return {
     fetchIssueLabels: vi.fn(),
     fetchIssueState: vi.fn(),
@@ -16,7 +16,7 @@ function stub(overrides: Partial<CockpitGh>): CockpitGh {
     prDiffNames: vi.fn(),
     prDiffPatch: vi.fn(),
     ...overrides,
-  } as CockpitGh;
+  } as GhWrapper;
 }
 
 describe('findClarificationComment', () => {
