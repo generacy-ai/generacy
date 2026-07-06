@@ -2,7 +2,7 @@
 
 Delete the subsystems rev 2 shipped dark (plan rev 3, Findings)
 
-**Branch**: `805-epic-generacy-ai-tetrad` | **Date**: 2026-07-02 | **Status**: Draft
+**Branch**: `805-epic-generacy-ai-tetrad` | **Date**: 2026-07-06 | **Status**: Draft
 
 ## Summary
 
@@ -10,11 +10,9 @@ Epic: generacy-ai/tetrad-development#85 | Phase: S1 | Tier: v1-simplification | 
 
 Delete the subsystems rev 2 shipped dark (plan rev 3, Findings). Remove: the orchestrator API client (packages/cockpit/src/orchestrator/** — client, http, stub), its CLI consumers (commands/cockpit/watch/orchestrator-counts.ts, shared/orchestrator-footer.ts, and the orchestrator token/warn helpers), journal liveness (packages/cockpit/src/journal.ts + its call sites in status.ts and watch/poll-loop.ts), and confirmed-dead exports (appendChildIssue in manifest/io.ts; health/isAvailable go with the client). Drop stuck/recovered from the watch event model and CockpitEventSchema (watch/emit.ts), which also fixes the producer/schema drift. Remove orchestrator.* and stuckThresholdMinutes from the config schema. status loses the orchestrator footer line; watch loses the counts line.
 
-Additionally (per Q1 clarification): remove the now-dead `stuck` output surface entirely. Drop the STALE column from `packages/generacy/src/cli/commands/cockpit/status/render-table.ts`; remove `stuck`/`stuckReason` fields from `StatusRow` (`status/row.ts`), from status `--json` rows (and its `color.ts` helper), and from `IssueSnapshot` (`watch/snapshot.ts`, `watch/diff.ts`); delete the `StuckReason`, `JournalLivenessResult`, and `ReadJournalLivenessOptions` exports from `@generacy-ai/cockpit` (`packages/cockpit/src/types.ts`). Trim the corresponding tests (`status.render.test.ts` stuck-column cases and `watch.diff.test.ts` stuck/recovered cases). Rationale: an always-false column/field is exactly the dead-surface class this rev 3 issue exists to delete; no external consumers to protect (@generacy-ai/cockpit is pre-1.0, and the only `--json`/snapshot consumers are the `/cockpit:*` plugin commands, which are rewritten against the new shapes in S4 / generacy-ai/agency#372 after this lands).
+Owns (isolation): packages/cockpit/src/{orchestrator/**,journal.ts,config/schema.ts,manifest/io.ts} ; packages/generacy/src/cli/commands/cockpit/** (call-site cleanup only)
 
-Owns (isolation): packages/cockpit/src/{orchestrator/**,journal.ts,config/schema.ts,manifest/io.ts,types.ts} ; packages/generacy/src/cli/commands/cockpit/** (call-site cleanup only, including status/watch stuck-surface removal)
-
-Acceptance: no reference to orchestrator client, journal, journal-liveness types, or the removed exports remains outside git history; watch/status run and their tests pass with the reduced output (no STALE column, no `stuck`/`stuckReason` in `--json` or snapshots); package builds green in CI (typecheck step, not lint).
+Acceptance: no reference to orchestrator client, journal, or the removed exports remains outside git history; watch/status run and their tests pass with the reduced output; package builds green in CI (typecheck step, not lint).
 
 Depends on: none (first in the S chain) (see the epic checklist for issue numbers)
 
