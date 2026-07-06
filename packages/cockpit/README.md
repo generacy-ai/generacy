@@ -1,8 +1,7 @@
 # @generacy-ai/cockpit
 
 Foundation library for the Generacy **Epic Cockpit** — a set of pure,
-testable primitives any cockpit consumer (UI, CLI, or service) can import
-without depending on the orchestrator runtime.
+testable primitives any cockpit consumer (UI, CLI, or service) can import.
 
 ## What's inside
 

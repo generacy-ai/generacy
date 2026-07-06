@@ -1,6 +1,5 @@
 // @generacy-ai/cockpit — public API surface.
-// Internal modules (state/label-map, orchestrator/http, orchestrator/stub) are
-// NOT exported.
+// Internal modules (state/label-map) are NOT exported.
 
 // State + classifier
 export {
