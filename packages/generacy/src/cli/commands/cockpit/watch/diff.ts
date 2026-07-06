@@ -1,4 +1,4 @@
-import type { CockpitState, StuckReason } from '@generacy-ai/cockpit';
+import type { CockpitState } from '@generacy-ai/cockpit';
 import type {
   IssueSnapshot,
   PrSnapshot,
@@ -12,9 +12,7 @@ export type CockpitEventDiscriminator =
   | 'issue-closed'
   | 'pr-merged'
   | 'pr-closed'
-  | 'pr-checks'
-  | 'stuck'
-  | 'recovered';
+  | 'pr-checks';
 
 export interface CockpitEvent {
   ts: string;
@@ -27,7 +25,6 @@ export interface CockpitEvent {
   url: string;
   event: CockpitEventDiscriminator;
   labels: string[];
-  stuckReason?: StuckReason;
 }
 
 function nowIso(): string {
@@ -79,35 +76,6 @@ function diffIssue(
   }
   if (prev.state === 'OPEN' && curr.state === 'CLOSED') {
     out.push(makeEvent(curr, 'issue-closed', curr.classified.state, 'terminal', null, ts));
-  }
-  if (prev.stuck === false && curr.stuck === true) {
-    out.push({
-      ...makeEvent(
-        curr,
-        'stuck',
-        curr.classified.state,
-        curr.classified.state,
-        curr.classified.sourceLabel,
-        ts,
-      ),
-      stuckReason: curr.stuckReason,
-    });
-  } else if (
-    prev.stuck === true &&
-    curr.stuck === false &&
-    curr.classified.state === 'active' &&
-    curr.classified.sourceLabel === 'agent:in-progress'
-  ) {
-    out.push(
-      makeEvent(
-        curr,
-        'recovered',
-        curr.classified.state,
-        curr.classified.state,
-        curr.classified.sourceLabel,
-        ts,
-      ),
-    );
   }
 }
 

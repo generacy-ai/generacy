@@ -5,14 +5,6 @@ const OWNER_REPO_REGEX = /^[^/]+\/[^/]+$/;
 export const CockpitConfigSchema = z.object({
   owner: z.string().min(1).optional(),
   repos: z.array(z.string().regex(OWNER_REPO_REGEX, 'must be owner/repo')).default([]),
-  orchestrator: z
-    .object({
-      baseUrl: z.string().url().optional(),
-      token: z.string().min(1).optional(),
-    })
-    .optional()
-    .default({}),
-  stuckThresholdMinutes: z.number().int().positive().default(15),
 });
 
 export type CockpitConfig = z.infer<typeof CockpitConfigSchema>;

@@ -16,8 +16,6 @@ function row(overrides: Partial<StatusRow> = {}): StatusRow {
     prNumber: null,
     checks: 'none',
     url: 'https://github.com/o/r/issues/1',
-    stuck: false,
-    stuckReason: null,
     ...overrides,
   };
 }
@@ -25,23 +23,16 @@ function row(overrides: Partial<StatusRow> = {}): StatusRow {
 function sentinelColorizer(): {
   colorizer: Colorizer;
   calls: Array<{ s: string; state: CockpitState }>;
-  stuckCalls: Array<{ s: string; stuck: boolean }>;
 } {
   const calls: Array<{ s: string; state: CockpitState }> = [];
-  const stuckCalls: Array<{ s: string; stuck: boolean }> = [];
   return {
     colorizer: {
       state(s, state) {
         calls.push({ s, state });
         return `<${state}>${s}</${state}>`;
       },
-      stuck(s, stuck) {
-        stuckCalls.push({ s, stuck });
-        return stuck ? `<stuck>${s}</stuck>` : s;
-      },
     },
     calls,
-    stuckCalls,
   };
 }
 
@@ -78,22 +69,5 @@ describe('status color application', () => {
       'pending',
       'unknown',
     ]);
-  });
-
-  it('renders the stuck cell with the stuck colorizer on a stuck row', () => {
-    const { colorizer, stuckCalls } = sentinelColorizer();
-    const out = renderTable(
-      groupRows(
-        [
-          row({ number: 1, stuck: false, stuckReason: null }),
-          row({ number: 2, stuck: true, stuckReason: 'stale' }),
-        ],
-        { kind: 'repos', repos: ['o/r'] },
-      ),
-      { tty: true, json: false, colorizer },
-    );
-    expect(stuckCalls.map((c) => c.stuck)).toEqual([false, true]);
-    expect(out).toContain('<stuck>');
-    expect(out).toContain('STALE');
   });
 });

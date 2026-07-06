@@ -19,8 +19,6 @@ function issueSnap(opts: {
   labels?: string[];
   classifiedState?: 'pending' | 'active' | 'waiting' | 'error' | 'terminal' | 'unknown';
   sourceLabel?: string;
-  stuck?: boolean;
-  stuckReason?: 'stale' | 'no-journal' | null;
 }) {
   const number = opts.number ?? 1;
   return buildIssueSnapshot(
@@ -35,10 +33,6 @@ function issueSnap(opts: {
       state: opts.classifiedState ?? 'unknown',
       sourceLabel: opts.sourceLabel ?? '',
       labels: opts.labels ?? [],
-    },
-    {
-      stuck: opts.stuck ?? false,
-      stuckReason: opts.stuckReason ?? null,
     },
   );
 }
@@ -138,132 +132,6 @@ describe('computeTransitions', () => {
     const events = computeTransitions(prev, curr, ts);
     expect(events).toHaveLength(1);
     expect(events[0]?.event).toBe('pr-checks');
-  });
-
-  it('emits "stuck" when prev.stuck === false → curr.stuck === true', () => {
-    const prev = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: false,
-        stuckReason: null,
-      }),
-    ]);
-    const curr = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: true,
-        stuckReason: 'stale',
-      }),
-    ]);
-    const events = computeTransitions(prev, curr, ts);
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject<Partial<CockpitEvent>>({
-      event: 'stuck',
-      from: 'active',
-      to: 'active',
-      sourceLabel: 'agent:in-progress',
-      stuckReason: 'stale',
-    });
-  });
-
-  it('emits "recovered" when prev.stuck === true → curr.stuck === false while still active+agent:in-progress', () => {
-    const prev = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: true,
-        stuckReason: 'stale',
-      }),
-    ]);
-    const curr = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: false,
-        stuckReason: null,
-      }),
-    ]);
-    const events = computeTransitions(prev, curr, ts);
-    expect(events).toHaveLength(1);
-    expect(events[0]?.event).toBe('recovered');
-    expect(events[0]?.stuckReason).toBeUndefined();
-  });
-
-  it('does NOT emit "recovered" when the issue leaves agent:in-progress (label-change wins)', () => {
-    const prev = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: true,
-        stuckReason: 'stale',
-      }),
-    ]);
-    const curr = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'waiting',
-        sourceLabel: 'waiting-for:plan-review',
-        stuck: false,
-        stuckReason: null,
-      }),
-    ]);
-    const events = computeTransitions(prev, curr, ts);
-    expect(events.map((e) => e.event)).toEqual(['label-change']);
-  });
-
-  it('does not re-emit "stuck" when prev and curr are both stuck', () => {
-    const prev = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: true,
-        stuckReason: 'stale',
-      }),
-    ]);
-    const curr = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: true,
-        stuckReason: 'stale',
-      }),
-    ]);
-    const events = computeTransitions(prev, curr, ts);
-    expect(events).toEqual([]);
-  });
-
-  it('event ordering: label-change → lifecycle → pr-checks → stuck/recovered', () => {
-    const prev = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'pending',
-        sourceLabel: 'workflow:speckit-feature',
-        stuck: false,
-        stuckReason: null,
-        state: 'OPEN',
-      }),
-    ]);
-    const curr = map([
-      snapshotKey('o/r', 'issue', 1),
-      issueSnap({
-        classifiedState: 'active',
-        sourceLabel: 'agent:in-progress',
-        stuck: true,
-        stuckReason: 'stale',
-        state: 'CLOSED',
-      }),
-    ]);
-    const events = computeTransitions(prev, curr, ts);
-    expect(events.map((e) => e.event)).toEqual(['label-change', 'issue-closed', 'stuck']);
   });
 
   it('emits multiple events in precedence order: label-change → lifecycle → pr-checks', () => {

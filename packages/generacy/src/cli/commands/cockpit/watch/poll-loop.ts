@@ -1,5 +1,4 @@
-import type { CheckRunSummary, GhWrapper, Issue, StuckReason } from '@generacy-ai/cockpit';
-import { readJournalLiveness } from '@generacy-ai/cockpit';
+import type { CheckRunSummary, GhWrapper, Issue } from '@generacy-ai/cockpit';
 import { classifyIssue } from '../shared/classify-issue.js';
 import { listAllIssues } from '../shared/pagination.js';
 import type { Scope } from '../shared/scoping.js';
@@ -19,8 +18,6 @@ export interface PollDeps {
   scope: Scope;
   safetyCap?: number;
   pageSize?: number;
-  stuckThresholdMinutes?: number;
-  readLiveness?: (issueNumber: number, thresholdMinutes: number) => Promise<{ stuck: boolean; stuckReason: StuckReason }>;
   logger?: { warn: (msg: string) => void };
   now?: () => string;
 }
@@ -109,25 +106,7 @@ export async function runOnePoll(
         curr.set(key, snapshot);
       } else {
         const key = snapshotKey(repo, 'issue', issue.number);
-        let liveness: { stuck: boolean; stuckReason: StuckReason } | undefined;
-        if (
-          classified.state === 'active' &&
-          classified.sourceLabel === 'agent:in-progress' &&
-          deps.stuckThresholdMinutes != null
-        ) {
-          const threshold = deps.stuckThresholdMinutes;
-          if (deps.readLiveness != null) {
-            liveness = await deps.readLiveness(issue.number, threshold);
-          } else {
-            const result = await readJournalLiveness({
-              issueNumber: issue.number,
-              thresholdMinutes: threshold,
-              ...(deps.logger != null ? { logger: deps.logger } : {}),
-            });
-            liveness = { stuck: result.stuck, stuckReason: result.stuckReason };
-          }
-        }
-        snapshot = buildIssueSnapshot(repo, issue, classified, liveness);
+        snapshot = buildIssueSnapshot(repo, issue, classified);
         curr.set(key, snapshot);
       }
     }

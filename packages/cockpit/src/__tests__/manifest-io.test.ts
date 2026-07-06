@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readManifest, writeManifest, appendChildIssue } from '../manifest/io.js';
+import { readManifest, writeManifest } from '../manifest/io.js';
 import type { EpicManifest } from '../manifest/schema.js';
 
 const SAMPLE: EpicManifest = {
@@ -79,42 +79,4 @@ describe('manifest io', () => {
     await expect(readManifest(path)).rejects.toThrow();
   });
 
-  it('appendChildIssue adds a new entry to the target phase', async () => {
-    await writeManifest(path, SAMPLE);
-    await appendChildIssue(path, 'ui', 'generacy-ai/generacy-extension#42');
-    const reread = await readManifest(path);
-    const uiPhase = reread?.phases.find((p) => p.name === 'ui');
-    expect(uiPhase?.issues).toContain('generacy-ai/generacy-extension#42');
-    // foundation phase preserved verbatim
-    const foundation = reread?.phases.find((p) => p.name === 'foundation');
-    expect(foundation?.issues).toEqual(['generacy-ai/generacy#786']);
-  });
-
-  it('appendChildIssue is idempotent', async () => {
-    await writeManifest(path, SAMPLE);
-    await appendChildIssue(path, 'foundation', 'generacy-ai/generacy#786');
-    const reread = await readManifest(path);
-    const foundation = reread?.phases.find((p) => p.name === 'foundation');
-    expect(foundation?.issues).toEqual(['generacy-ai/generacy#786']);
-  });
-
-  it('appendChildIssue throws when manifest is missing', async () => {
-    await expect(
-      appendChildIssue(join(dir, 'absent.yaml'), 'ui', 'generacy-ai/generacy#1'),
-    ).rejects.toThrow(/manifest not found/);
-  });
-
-  it('appendChildIssue throws when phase is not found', async () => {
-    await writeManifest(path, SAMPLE);
-    await expect(
-      appendChildIssue(path, 'nonexistent', 'generacy-ai/generacy#1'),
-    ).rejects.toThrow(/phase not found/);
-  });
-
-  it('appendChildIssue rejects malformed issue refs', async () => {
-    await writeManifest(path, SAMPLE);
-    await expect(
-      appendChildIssue(path, 'ui', 'not-an-issue-ref'),
-    ).rejects.toThrow(/invalid issueRef/);
-  });
 });

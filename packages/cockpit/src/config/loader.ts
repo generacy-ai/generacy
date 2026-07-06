@@ -10,7 +10,6 @@ import {
 } from './schema.js';
 
 const OWNER_REPO_REGEX = /^[^/]+\/[^/]+$/;
-const DEFAULT_BASE_URL = 'http://127.0.0.1:3100';
 const MISSING_REPOS_WARN =
   'cockpit: no repos configured (set cockpit.repos in .generacy/config.yaml or MONITORED_REPOS env)';
 
@@ -126,27 +125,9 @@ export async function loadCockpitConfig(
     }
   }
 
-  // 5. Resolve orchestrator.
-  const orchestratorBlock = parsedCockpit.orchestrator ?? {};
-  const token =
-    orchestratorBlock.token ??
-    (env['ORCHESTRATOR_API_TOKEN'] != null && env['ORCHESTRATOR_API_TOKEN'].length > 0
-      ? env['ORCHESTRATOR_API_TOKEN']
-      : undefined);
-  const baseUrl =
-    orchestratorBlock.baseUrl ??
-    (env['ORCHESTRATOR_URL'] != null && env['ORCHESTRATOR_URL'].length > 0
-      ? env['ORCHESTRATOR_URL']
-      : DEFAULT_BASE_URL);
-
   const config: CockpitConfig = {
     owner,
     repos,
-    orchestrator: {
-      baseUrl,
-      ...(token != null ? { token } : {}),
-    },
-    stuckThresholdMinutes: parsedCockpit.stuckThresholdMinutes,
   };
 
   return { config, source, warnings };
