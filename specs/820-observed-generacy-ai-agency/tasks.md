@@ -12,17 +12,17 @@
 
 The new check needs one new `GitHubClient` method and one new `PrManager` accessor. These are prerequisites for the helper module in Phase 2.
 
-- [ ] T001 [US1] Extend `GitHubClient` interface with `getFilesChangedBetween(base: string, head: string): Promise<string[]>` in `packages/workflow-engine/src/actions/github/client/interface.ts` (per `data-model.md` §Extension to `GitHubClient` and `contracts/product-diff.md` §Module). JSDoc must state triple-dot / merge-base semantics. Empty result returns `[]`, never null/undefined.
+- [X] T001 [US1] Extend `GitHubClient` interface with `getFilesChangedBetween(base: string, head: string): Promise<string[]>` in `packages/workflow-engine/src/actions/github/client/interface.ts` (per `data-model.md` §Extension to `GitHubClient` and `contracts/product-diff.md` §Module). JSDoc must state triple-dot / merge-base semantics. Empty result returns `[]`, never null/undefined.
 
-- [ ] T002 [US1] Implement `GhCliGitHubClient.getFilesChangedBetween` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts` via `executeCommand('git', ['diff', '--name-only', `${base}...${head}`], { cwd: this.workdir })`. Split stdout on `\n`, filter falsy lines. On non-zero exit throw an `Error` with `{ base, head, stderr }` in the message — do NOT swallow (`plan.md` §Implementation step 3, `Failure Modes & Mitigations` row 1). Depends on T001. If a `tokenProvider` is configured on the client (see #762 pattern in `gh-cli.ts`), thread it through the same way the other `git`-shelling methods do; if not, no env override is needed.
+- [X] T002 [US1] Implement `GhCliGitHubClient.getFilesChangedBetween` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts` via `executeCommand('git', ['diff', '--name-only', `${base}...${head}`], { cwd: this.workdir })`. Split stdout on `\n`, filter falsy lines. On non-zero exit throw an `Error` with `{ base, head, stderr }` in the message — do NOT swallow (`plan.md` §Implementation step 3, `Failure Modes & Mitigations` row 1). Depends on T001. If a `tokenProvider` is configured on the client (see #762 pattern in `gh-cli.ts`), thread it through the same way the other `git`-shelling methods do; if not, no env override is needed.
 
-- [ ] T003 [P] [US1] Add `getPrNumber(): number | undefined` accessor to `PrManager` in `packages/orchestrator/src/worker/pr-manager.ts` (per `data-model.md` §Extension to `PrManager` and `contracts/product-diff.md` §`resolveBaseRef`). Returns cached `this.prNumber` set by `ensureDraftPr()` / `findPRForBranch()`; `undefined` before either has succeeded. Read-only getter — no side effects.
+- [X] T003 [P] [US1] Add `getPrNumber(): number | undefined` accessor to `PrManager` in `packages/orchestrator/src/worker/pr-manager.ts` (per `data-model.md` §Extension to `PrManager` and `contracts/product-diff.md` §`resolveBaseRef`). Returns cached `this.prNumber` set by `ensureDraftPr()` / `findPRForBranch()`; `undefined` before either has succeeded. Read-only getter — no side effects.
 
 ## Phase 2: New product-diff helper module
 
-- [ ] T004 [US1] Create `packages/orchestrator/src/worker/product-diff.ts` exporting `EXCLUDED_PATH_PREFIXES` (`['specs/'] as const`), `isProductFile(path, prefixes?)`, `resolveBaseRef(github, prManager, owner, repo)`, `computeProductDiff(github, baseRef)`, and `ProductDiffResult` interface. All signatures and algorithms per `contracts/product-diff.md` §Exports. `isProductFile` uses `String.prototype.startsWith` — no glob, no regex, no path normalization (per FR-002 and Clarification Q4). `computeProductDiff` returns freshly-allocated arrays and does not mutate inputs (contract §Invariants for Test Writers). Depends on T001, T003.
+- [X] T004 [US1] Create `packages/orchestrator/src/worker/product-diff.ts` exporting `EXCLUDED_PATH_PREFIXES` (`['specs/'] as const`), `isProductFile(path, prefixes?)`, `resolveBaseRef(github, prManager, owner, repo)`, `computeProductDiff(github, baseRef)`, and `ProductDiffResult` interface. All signatures and algorithms per `contracts/product-diff.md` §Exports. `isProductFile` uses `String.prototype.startsWith` — no glob, no regex, no path normalization (per FR-002 and Clarification Q4). `computeProductDiff` returns freshly-allocated arrays and does not mutate inputs (contract §Invariants for Test Writers). Depends on T001, T003.
 
-- [ ] T005 [P] [US1] Add unit tests in `packages/orchestrator/src/worker/__tests__/product-diff.test.ts` covering:
+- [X] T005 [P] [US1] Add unit tests in `packages/orchestrator/src/worker/__tests__/product-diff.test.ts` covering:
   - `isProductFile`: `specs/foo.md` → false, `specs/README.md` → false, `README.md` → true, `packages/orchestrator/src/worker/phase-loop.ts` → true, `''` → true (edge case documented in contract).
   - `resolveBaseRef`: (a) when `prManager.getPrNumber()` returns a number, calls `github.getPullRequest(owner, repo, num)` and returns `origin/<pr.base.ref>`; (b) when getter returns `undefined`, calls `github.getDefaultBranch()` and returns `origin/<default>`, and does NOT call `getPullRequest`.
   - `computeProductDiff`: mock `github.getFilesChangedBetween`; assert `changedFiles`/`productFiles` partition and `baseRef` echo. Cover the primary SC-001 case (`changedFiles = ['specs/foo.md']` → `productFiles.length === 0`), the mixed case (`['specs/foo.md', 'packages/x/y.ts']` → `productFiles = ['packages/x/y.ts']`), and the empty-diff case (`[]` → `productFiles.length === 0`).
@@ -30,7 +30,7 @@ The new check needs one new `GitHubClient` method and one new `PrManager` access
 
 ## Phase 3: Wire the check into the phase loop
 
-- [ ] T006 [US1][US2] Modify `packages/orchestrator/src/worker/phase-loop.ts`:
+- [X] T006 [US1][US2] Modify `packages/orchestrator/src/worker/phase-loop.ts`:
   1. Import `EXCLUDED_PATH_PREFIXES`, `computeProductDiff`, `resolveBaseRef` from `./product-diff.js`.
   2. Replace the block currently at lines 344–396 (the `if (PHASES_REQUIRING_CHANGES.has(phase) && !hasChanges)` guard plus the entire `hasPriorImplementation` fallback with its commit-message heuristics) with the shape shown in `plan.md` §Implementation step 4 and `contracts/product-diff.md` §Consumer Contract:
      - Guard shrinks to `if (PHASES_REQUIRING_CHANGES.has(phase))` — `hasChanges` shortcut is subsumed (FR-001, FR-004).
@@ -43,19 +43,19 @@ The new check needs one new `GitHubClient` method and one new `PrManager` access
 
 ## Phase 4: Integration tests
 
-- [ ] T007 [US1] Add an integration test in `packages/orchestrator/src/worker/__tests__/` (co-located with existing phase-loop tests; name it `phase-loop.product-diff.test.ts` or extend the nearest existing phase-loop integration file) reproducing agency#376 conditions per SC-001:
+- [X] T007 [US1] Add an integration test in `packages/orchestrator/src/worker/__tests__/` (co-located with existing phase-loop tests; name it `phase-loop.product-diff.test.ts` or extend the nearest existing phase-loop integration file) reproducing agency#376 conditions per SC-001:
   - Arrange: workspace/branch state where `implement` has committed only under `specs/**` (mock `GitHubClient.getFilesChangedBetween` to return `['specs/820/tasks.md', 'specs/820/plan.md']`, or fixture a git repo — pick whichever matches the existing phase-loop test style).
   - Act: drive the phase loop through `implement` completion.
   - Assert: `PhaseLoopResult.completed === false`, `lastPhase === 'implement'`, `results[results.length - 1].error.message` matches `/no product-code changes/`, and `labelManager.onError` was called with `'implement'`. Assert `validate` was NEVER invoked (this is the SC-001 guarantee).
   Depends on T006.
 
-- [ ] T008 [P] [US1] Add the SC-002 regression counterpart in the same file: mock `getFilesChangedBetween` to return `['packages/orchestrator/src/foo.ts']` (or `['specs/x/plan.md', 'packages/x/y.ts']` — mixed case). Assert the loop passes through the guard, reaches `validate`, and `labelManager.onError` is NOT called for the implement phase. Depends on T006.
+- [X] T008 [P] [US1] Add the SC-002 regression counterpart in the same file: mock `getFilesChangedBetween` to return `['packages/orchestrator/src/foo.ts']` (or `['specs/x/plan.md', 'packages/x/y.ts']` — mixed case). Assert the loop passes through the guard, reaches `validate`, and `labelManager.onError` is NOT called for the implement phase. Depends on T006.
 
 ## Phase 5: Polish
 
-- [ ] T009 [US2] Grep-audit: run `rg -n 'hasPriorImplementation|complete \\$\\{phase\\} phase|feat: complete T|partial implement progress' packages/orchestrator/src/worker/` and confirm zero hits (all commit-message heuristics removed per FR-004). If any reference remains — even in a comment or dead code path — remove it. Depends on T006.
+- [X] T009 [US2] Grep-audit: run `rg -n 'hasPriorImplementation|complete \\$\\{phase\\} phase|feat: complete T|partial implement progress' packages/orchestrator/src/worker/` and confirm zero hits (all commit-message heuristics removed per FR-004). If any reference remains — even in a comment or dead code path — remove it. Depends on T006.
 
-- [ ] T010 [P] [US1] Manual smoke: run `pnpm --filter @generacy-ai/orchestrator test -- product-diff` and `pnpm --filter @generacy-ai/orchestrator typecheck` locally; both must pass. If the workspace also runs `pnpm --filter @generacy-ai/workflow-engine typecheck`, run that too (T001/T002 touch its `interface.ts` / `gh-cli.ts`). Depends on T005, T007, T008.
+- [X] T010 [P] [US1] Manual smoke: run `pnpm --filter @generacy-ai/orchestrator test -- product-diff` and `pnpm --filter @generacy-ai/orchestrator typecheck` locally; both must pass. If the workspace also runs `pnpm --filter @generacy-ai/workflow-engine typecheck`, run that too (T001/T002 touch its `interface.ts` / `gh-cli.ts`). Depends on T005, T007, T008.
 
 ## Dependencies & Execution Order
 

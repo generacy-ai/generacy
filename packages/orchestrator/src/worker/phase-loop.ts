@@ -12,6 +12,7 @@ import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
+import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -347,35 +348,26 @@ export class PhaseLoop {
         context.prUrl = prUrl;
       }
 
-      // 5b. Fail phases that require file changes but produced none
-      if (PHASES_REQUIRING_CHANGES.has(phase) && !hasChanges) {
-        // Check if a previous run already produced implementation changes on this
-        // branch (e.g., issue was requeued). If the branch has prior commits for
-        // this phase, treat it as a soft pass rather than an error.
-        let hasPriorImplementation = false;
+      // 5b. Fail phases that require product-code changes but produced none.
+      // Compares the branch's cumulative diff against its PR base ref (or the
+      // default branch when no PR yet) and rejects when every changed file lives
+      // under EXCLUDED_PATH_PREFIXES. See specs/820-*.
+      if (PHASES_REQUIRING_CHANGES.has(phase)) {
+        let productFiles: string[];
+        let changedFiles: string[];
+        let baseRef: string;
         try {
-          const defaultBranch = await context.github.getDefaultBranch();
-          const branch = await context.github.getCurrentBranch();
-          const commits = await context.github.getCommitsBetween(`origin/${defaultBranch}`, branch);
-          hasPriorImplementation = commits.some(
-            (c) =>
-              c.message.includes(`complete ${phase} phase`) ||
-              c.message.includes('feat: complete T') ||
-              c.message.includes('partial implement progress'),
+          baseRef = await resolveBaseRef(
+            context.github,
+            prManager,
+            context.item.owner,
+            context.item.repo,
           );
-        } catch {
-          // If we can't check, fall through to the error path
-        }
-
-        if (hasPriorImplementation) {
-          this.logger.warn(
-            { phase },
-            'Phase produced no new changes but branch has prior implementation commits — continuing',
-          );
-        } else {
+          ({ productFiles, changedFiles } = await computeProductDiff(context.github, baseRef));
+        } catch (err) {
           this.logger.error(
-            { phase },
-            'Phase completed with exit code 0 but produced no file changes',
+            { phase, err: String(err) },
+            'product-diff computation threw — treating as detection failure',
           );
           await labelManager.onError(phase);
           await stageCommentManager.updateStageComment({
@@ -387,7 +379,31 @@ export class PhaseLoop {
           });
           result.success = false;
           result.error = {
-            message: `Phase "${phase}" succeeded but produced no file changes — expected code to be written`,
+            message: `Phase "${phase}" product-diff detection failed: ${String(err)}`,
+            stderr: '',
+            phase,
+          };
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
+
+        if (productFiles.length === 0) {
+          this.logger.error(
+            { phase, baseRef, changedFiles, excluded: EXCLUDED_PATH_PREFIXES },
+            'implement phase produced no product-code changes — all diff lives under excluded paths',
+          );
+          await labelManager.onError(phase);
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+          });
+          result.success = false;
+          result.error = {
+            message:
+              `Phase "${phase}" produced no product-code changes — all changed files are under excluded prefixes ` +
+              `[${EXCLUDED_PATH_PREFIXES.join(', ')}]. Implement must modify at least one non-excluded file.`,
             stderr: '',
             phase,
           };

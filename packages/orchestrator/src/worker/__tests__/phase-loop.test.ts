@@ -66,6 +66,7 @@ function createMockDeps(): PhaseLoopDeps {
     } as any,
     prManager: {
       commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
+      getPrNumber: vi.fn().mockReturnValue(undefined),
     } as any,
   };
 }
@@ -80,7 +81,12 @@ function createMockContext(startPhase: WorkflowPhase = 'validate'): WorkerContex
       workflowName: 'speckit-feature',
     } as any,
     startPhase,
-    github: {} as any,
+    // Default github mocks satisfy the implement product-diff check with a
+    // non-spec (product) file. Individual tests may override.
+    github: {
+      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
+    } as any,
     logger: mockLogger,
     signal: new AbortController().signal,
     checkoutPath: '/tmp/repo',
@@ -159,79 +165,6 @@ describe('PhaseLoop - pre-validate install', () => {
     expect(result.completed).toBe(false);
     expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
     expect(deps.labelManager.onError).toHaveBeenCalledWith('validate');
-  });
-});
-
-describe('PhaseLoop - implement phase requires changes', () => {
-  let phaseLoop: PhaseLoop;
-  let deps: PhaseLoopDeps;
-
-  beforeEach(() => {
-    phaseLoop = new PhaseLoop(mockLogger);
-    deps = createMockDeps();
-  });
-
-  it('fails implement phase when no changes and no prior implementation', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
-      getCommitsBetween: vi.fn().mockResolvedValue([
-        { sha: 'abc', message: 'chore(speckit): complete specify phase for #8' },
-      ]),
-    } as any;
-    const config = createConfig();
-
-    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
-    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
-
-    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
-
-    expect(result.completed).toBe(false);
-    expect(result.lastPhase).toBe('implement');
-    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
-  });
-
-  it('continues when no new changes but prior implementation commit exists on branch', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
-      getCommitsBetween: vi.fn().mockResolvedValue([
-        { sha: 'abc', message: 'chore(speckit): complete specify phase for #8' },
-        { sha: 'def', message: 'chore(speckit): complete implement phase for #8' },
-      ]),
-    } as any;
-    const config = createConfig();
-
-    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
-    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
-
-    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
-
-    expect(result.completed).toBe(true);
-    expect(deps.labelManager.onError).not.toHaveBeenCalled();
-    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
-  });
-
-  it('soft-passes when no new changes but prior WIP retry commit exists on branch', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
-      getCommitsBetween: vi.fn().mockResolvedValue([
-        { sha: 'abc', message: 'wip(speckit): partial implement progress for #8 (retry 1)' },
-      ]),
-    } as any;
-    const config = createConfig();
-
-    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
-    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
-
-    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
-
-    expect(result.completed).toBe(true);
-    expect(deps.labelManager.onError).not.toHaveBeenCalled();
   });
 });
 
