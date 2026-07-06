@@ -8,11 +8,11 @@ Extend `generacy setup build` Phase 4 to wire the cockpit slash commands the sam
 
 Epic: generacy-ai/tetrad-development#85 | Phase: S6 | Tier: v1-delivery | Issue: G-S5
 
-Extend `generacy setup build` Phase 4 to wire the cockpit slash commands the same way it wires spec-kit's. In packages/generacy/src/cli/commands/setup/build.ts (spec-kit block at ~348-355), add an equivalent block for @generacy-ai/claude-plugin-cockpit: same search-path pattern (generacyDir / agencyDir / SHARED_PACKAGES_DIR node_modules + `{npm root -g}`), source subdir commands/, target the /cockpit: command namespace (match however spec-kit commands acquire their /speckit: namespace). Package absent → the same non-fatal "not found — install it to enable cockpit commands" warning, not an error.
+Extend `generacy setup build` Phase 4 to wire the cockpit slash commands the same way it wires spec-kit's. In `packages/generacy/src/cli/commands/setup/build.ts` (spec-kit block at ~348-355), add an equivalent block for `@generacy-ai/claude-plugin-cockpit`: same search-path pattern (generacyDir / agencyDir / SHARED_PACKAGES_DIR node_modules + `{npm root -g}`), source subdir `commands/`, target the `/cockpit:` command namespace via Claude Code's subdirectory convention (commands/<ns>/<name>.md → /<ns>:<name>). Package absent → the same non-fatal "not found — install it to enable cockpit commands" warning, not an error.
 
-Owns (isolation): packages/generacy/src/cli/commands/setup/build.ts + its tests
+Owns (isolation): `packages/generacy/src/cli/commands/setup/build.ts` + its tests
 
-Acceptance: with @generacy-ai/claude-plugin-cockpit installed globally, `generacy setup build` copies the six cockpit commands and /cockpit:* resolves in a fresh Claude Code session; without it, setup build completes with only the warning.
+Acceptance: with `@generacy-ai/claude-plugin-cockpit` installed globally, `generacy setup build` copies the six cockpit commands and `/cockpit:*` resolves in a fresh Claude Code session; without it, setup build completes with only the warning.
 
 Depends on: A-S2 for the package name/layout (may merge in parallel; end-to-end verified in C-S1/T-S2) (see the epic checklist for issue numbers)
 
@@ -22,65 +22,57 @@ Part of the Epic Cockpit. Plan: docs/epic-cockpit-plan.md in tetrad-development 
 
 ## User Stories
 
-### US1: Developer bootstraps cockpit commands via `generacy setup build`
+### US1: Cockpit slash commands available after setup
 
-**As a** developer working on a Generacy epic,
-**I want** `generacy setup build` to wire `/cockpit:*` slash commands into Claude Code alongside `/speckit:*`,
-**So that** the cockpit developer-workflow commands (`breakdown`, `bug`, `clarify`, `file`, `merge`, `plan`, `queue`, `review`, `status`, `watch`) are immediately available in a fresh Claude Code session without any per-user manual step.
-
-**Acceptance Criteria**:
-- [ ] With `@generacy-ai/claude-plugin-cockpit` installed (locally, in `SHARED_PACKAGES_DIR`, or globally), `generacy setup build` copies the cockpit command files to the same destination Phase 4 uses for spec-kit commands.
-- [ ] The copied commands resolve as `/cockpit:<name>` in a fresh Claude Code session using the same namespace mechanism spec-kit uses for `/speckit:<name>`.
-- [ ] The resolver walks the same tier order as `resolveSpeckitCommandsDir`: `generacyDir` → `agencyDir` → `SHARED_PACKAGES_DIR/node_modules` → `{npm root -g}`.
-- [ ] Structured `logger.info` line records the resolved cockpit commands path and file count on success (matching the spec-kit log line shape).
-- [ ] Phase 4 continues to install spec-kit and Agency MCP unchanged when cockpit is or is not present.
-
-### US2: Cockpit absence degrades gracefully
-
-**As a** developer on a machine that has not installed `@generacy-ai/claude-plugin-cockpit`,
-**I want** `generacy setup build` to complete with a single non-fatal warning listing the paths it checked,
-**So that** setup does not fail and I can decide whether to install the package.
+**As a** developer using a Generacy cluster,
+**I want** `generacy setup build` to install the `@generacy-ai/claude-plugin-cockpit` slash commands into my Claude Code config,
+**So that** I can invoke `/cockpit:<name>` (e.g. `/cockpit:watch`) in a fresh Claude Code session without any manual copy step.
 
 **Acceptance Criteria**:
-- [ ] Absence of `@generacy-ai/claude-plugin-cockpit` at every tier produces exactly one warning-level (not error) log line, worded like the spec-kit "not found — install it to enable ... commands" line.
-- [ ] The warning enumerates the same four tier paths that were checked (matching the spec-kit error's `checkedPaths` shape).
-- [ ] `generacy setup build` exits successfully (non-zero exit only on unrelated failures).
+- [ ] With `@generacy-ai/claude-plugin-cockpit` installed (globally, in shared packages, or in a local/workspace `node_modules`), `generacy setup build` copies every `.md` file from the package's `commands/` directory into `~/.claude/commands/cockpit/`.
+- [ ] After setup, a fresh Claude Code session resolves each command as `/cockpit:<name>` (Q1 mechanism: subdirectory namespacing).
+- [ ] Copied cockpit commands do NOT overwrite spec-kit commands sharing the same base name (e.g. `clarify.md`, `plan.md`); collisions are prevented by the subdirectory placement.
+- [ ] When the package is absent from every checked path, `generacy setup build` exits successfully (non-fatal) after emitting exactly one `logger.warn` line with the template-substituted message.
+- [ ] The spec-kit block (~348-355) is not modified by this change (FR-007 isolation).
 
 ## Functional Requirements
 
-| ID    | Requirement | Priority | Notes |
-|-------|-------------|----------|-------|
-| FR-001 | Add a `resolveCockpitCommandsDir(config)` helper mirroring `resolveSpeckitCommandsDir` (build.ts ~271-315) but targeting package `@generacy-ai/claude-plugin-cockpit` with source subdir `commands/`. | P1 | Same 4-tier search order and same structured `logger.info` lines. |
-| FR-002 | In `installClaudeCodeIntegration` (build.ts ~322-356), after the existing spec-kit block (~328-356), add an analogous block that resolves cockpit commands and copies `.md` files into the cockpit namespace destination. | P1 | Must sit inside Phase 4, not create a new phase. |
-| FR-003 | The destination path/method must match whatever mechanism causes `/speckit:*` namespaced resolution today. | P1 | Namespace mechanism ambiguous in current code; see Assumptions. Candidate for `/clarify`. |
-| FR-004 | Cockpit absence must produce a non-fatal warning (not `logger.error` at fatal level; not thrown), matching the wording style of the existing spec-kit branch. | P1 | Behavioral parity requirement from the issue. |
-| FR-005 | Cockpit resolution and copy failure must not prevent the subsequent Agency MCP configuration step from running. | P1 | Phase 4's remaining Agency MCP work continues regardless. |
-| FR-006 | Tests in `packages/generacy/src/cli/commands/setup/build.test.ts` (or peer) cover: (a) resolution from each of the 4 tiers, (b) copy success with file count assertion, (c) absent-package warning path, (d) presence of both `/speckit:*` and `/cockpit:*` after a combined run. | P1 | Owned scope per the issue: `build.ts + its tests`. |
-| FR-007 | No other files or packages are modified. | P1 | Isolation boundary. |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Add a `resolveCockpitCommandsDir(config)` helper in `build.ts` that mirrors `resolveSpeckitCommandsDir`'s 4-tier order, substituting the package name `@generacy-ai/claude-plugin-cockpit` and (tier-1 source path) `packages/claude-plugin-cockpit/commands`. | P1 | Q3: keeps parity with spec-kit resolver so source-checkout dev clusters work identically. |
+| FR-002 | In `installClaudeCodeIntegration`, add a new block (below the existing spec-kit block) that calls `resolveCockpitCommandsDir`, copies every `.md` file into `~/.claude/commands/cockpit/`, and logs a `count/source/dest` info line matching the spec-kit block's shape. | P1 | Q1 (B): subdirectory `cockpit/` under `~/.claude/commands/` yields `/cockpit:<name>` via Claude Code's documented convention and sidesteps name collisions with spec-kit. |
+| FR-003 | Ensure `~/.claude/commands/cockpit/` exists before copying (`mkdirSync(..., { recursive: true })`). Each `.md` file from the source dir is copied verbatim to `~/.claude/commands/cockpit/<same-basename>.md`. | P1 | Filenames are preserved; namespacing comes from the parent directory, not from a filename prefix. |
+| FR-004 | When `resolveCockpitCommandsDir` returns `null`, call `logger.warn(...)` (NOT `logger.error`) with the exact message: `"@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands"` and a `checkedPaths` array listing the four checked paths (workspace source, generacy `node_modules`, agency `node_modules`, shared packages, `{npm root -g}`). Execution continues; setup exits successfully. | P1 | Q2 (A) + Q4 (A): explicit `logger.warn`; byte-for-byte template substitution of the spec-kit message. |
+| FR-005 | The cockpit block runs independently of the spec-kit block: spec-kit absent + cockpit present, or vice-versa, both succeed. Neither block short-circuits the other. | P1 | Preserves existing spec-kit behavior. |
+| FR-006 | The Agency MCP configuration step (Step 3 in `installClaudeCodeIntegration`) is unaffected by this change. | P1 | Ordering: cockpit copy sits between spec-kit copy and MCP configuration, or immediately after spec-kit copy — either placement is acceptable so long as MCP configuration still runs. |
+| FR-007 | No files outside `packages/generacy/src/cli/commands/setup/build.ts` and its co-located tests are modified. | P1 | Isolation rule from epic issue. |
+| FR-008 | The number of cockpit `.md` files copied equals the number of `.md` files in the resolved `commands/` directory (six per the epic S6 spec, but the code does not hardcode "six"). | P2 | Symmetric with spec-kit's `readdirSync(...).filter(f => f.endsWith('.md'))` pattern. |
 
 ## Success Criteria
 
-| ID    | Metric | Target | Measurement |
-|-------|--------|--------|-------------|
-| SC-001 | Cockpit commands available after fresh `generacy setup build` on a machine with the plugin installed. | 100% of the cockpit `commands/*.md` files copied; each resolves as `/cockpit:<name>` in a new Claude Code session. | Manual verification in a fresh session; test assertion counts installed files against source. |
-| SC-002 | Setup does not fail when the plugin is absent. | `generacy setup build` exits 0 and emits exactly one non-fatal warning naming the checked paths. | Automated test that stubs all 4 tiers as missing. |
-| SC-003 | Spec-kit behavior is unchanged. | Zero regressions to `/speckit:*` resolution or Agency MCP setup. | Existing spec-kit and MCP tests continue to pass without modification. |
-| SC-004 | Cockpit and spec-kit blocks stay structurally symmetric. | Cockpit block reuses the same tier order, same logger call shape, same absent-package wording pattern. | Code review checklist; diff comparison of the two blocks. |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Six cockpit commands resolvable in fresh Claude Code session | 6/6 `/cockpit:<name>` commands resolve | With `@generacy-ai/claude-plugin-cockpit` installed globally, run `generacy setup build`, open a fresh Claude Code session, invoke `/cockpit:` → all six commands appear and resolve. |
+| SC-002 | Non-fatal absence path | `generacy setup build` exits 0; stderr contains exactly one warn line with the template-substituted message | Uninstall the cockpit package from every checked path, run `generacy setup build`, assert exit code and log line. |
+| SC-003 | Zero collisions | No spec-kit command file in `~/.claude/commands/` is overwritten by cockpit copy | After running setup with both packages installed, checksums of spec-kit `.md` files at `~/.claude/commands/*.md` match the source spec-kit files. |
+| SC-004 | Structural symmetry | New cockpit block is a near-identical mirror of the spec-kit block (same resolver shape, same copy shape, same log-shape) except for the four axes of difference: package name, tier-1 source path, destination subdirectory, and warn-vs-error log level | Code review of the diff; test file mirrors the spec-kit test structure. |
+| SC-005 | Isolation | Diff touches only `packages/generacy/src/cli/commands/setup/build.ts` and its co-located test file(s) | `git diff --name-only develop...HEAD` returns only these paths. |
 
 ## Assumptions
 
-- The `/speckit:*` and `/cockpit:*` namespaces are provided by Claude Code's plugin discovery (see the sibling `.claude-plugin/plugin.json` files in `@generacy-ai/claude-plugin-agency-spec-kit` and `@generacy-ai/claude-plugin-cockpit`) rather than by any prefix logic in `build.ts` itself. The current spec-kit block simply copies files into `~/.claude/commands/`; the cockpit block should use the same target mechanism.
-- The cockpit `commands/` directory ships with 10 `.md` files at time of writing (`breakdown`, `bug`, `clarify`, `file`, `merge`, `plan`, `queue`, `review`, `status`, `watch`). The issue references "six cockpit commands"; the implementation must copy whatever `.md` files are present, not a hard-coded count.
-- `SHARED_PACKAGES_DIR` and `resolveNpmGlobalRoot()` are already exported from `build.ts` and reusable by the new resolver.
-- The dependency on A-S2 (package name/layout for `@generacy-ai/claude-plugin-cockpit`) is satisfied — the package exists at `/workspaces/agency/packages/claude-plugin-cockpit` with `commands/` populated.
+- Claude Code's subdirectory namespacing convention (`~/.claude/commands/<ns>/<name>.md` → `/<ns>:<name>`) is the documented mechanism for producing the `/cockpit:` prefix; the acceptance test on a fresh Claude Code session validates this at runtime (Q1 grounding).
+- `@generacy-ai/claude-plugin-cockpit` ships its command `.md` files under a top-level `commands/` directory (mirrors `@generacy-ai/agency-plugin-spec-kit`; dependency on A-S2 for exact layout).
+- The spec-kit block's use of `logger.error` for a non-fatal absent-package branch is a pre-existing quirk; this issue does NOT correct it (FR-007 isolation). Alignment is a follow-up (Q2 answer).
+- `SHARED_PACKAGES_DIR` (`/shared-packages`) and `resolveNpmGlobalRoot()` helpers are reused as-is; no new helpers needed except `resolveCockpitCommandsDir`.
+- `BuildConfig.agencyDir` and `BuildConfig.generacyDir` are already populated by the time `installClaudeCodeIntegration` runs (existing invariant).
 
 ## Out of Scope
 
-- Changing the destination directory or namespace mechanism for spec-kit commands.
-- Publishing or versioning `@generacy-ai/claude-plugin-cockpit` (owned by A-S2).
-- End-to-end verification across the epic (owned by C-S1/T-S2).
-- Any change to Agency MCP wiring in Phase 4.
-- Files outside `packages/generacy/src/cli/commands/setup/build.ts` and its tests.
+- Modifying the existing spec-kit block (log level, message, path, or ordering) — see FR-007 and Q2 answer.
+- Registering the cockpit package as a Claude Code marketplace plugin (`~/.claude/plugins/**`) — explicitly rejected in Q1 (option A); files copied there without marketplace registration don't load.
+- Any changes to the `@generacy-ai/claude-plugin-cockpit` package itself (owned by A-S2).
+- End-to-end verification against a live Claude Code session (owned by C-S1/T-S2).
+- Uninstall/cleanup semantics (removing cockpit files on package removal) — not part of `setup build`.
 
 ---
 

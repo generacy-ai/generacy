@@ -14,7 +14,7 @@
 - D: Copy flat into `~/.claude/commands/`, matching spec-kit exactly, and accept that `clarify.md`/`plan.md` collisions are resolved by copy order (last-writer wins) — collisions are considered acceptable for this issue.
 - E: Other (please describe, including the exact destination path).
 
-**Answer**: *Pending*
+**Answer**: B — copy to `~/.claude/commands/cockpit/<name>.md`. Claude Code's documented subdirectory namespacing (commands/<ns>/<name>.md → /<ns>:<name>) yields exactly /cockpit:watch etc., and the subfolder sidesteps the clarify.md/plan.md collision with spec-kit's flat copy. Grounding: spec-kit's package commands/ is flat and copied flat, which is why npm-wired sessions expose bare /specify and /plan — the /speckit: prefix exists only in the marketplace-plugin variant. Cockpit's FR-003 requires the prefix, so the subdirectory is load-bearing, not stylistic. Not A: ~/.claude/plugins/** is gated by marketplace registration/enabledPlugins — files copied there without registration don't load. The acceptance criterion (fresh session, /cockpit:watch resolves) validates the namespacing assumption.
 
 ### Q2: Log level for absent package
 **Context**: FR-004 explicitly requires the cockpit "not found" branch to be a non-fatal warning and NOT `logger.error`. However, the existing spec-kit block at `build.ts:344` calls `logger.error(...)` (non-fatally — execution continues). Behavioral parity ("same non-fatal warning") is in tension with the "not `logger.error` at fatal level" wording of FR-004, and FR-007 forbids modifying files outside the cockpit scope (so the spec-kit block cannot be changed to `logger.warn` in the same PR).
@@ -26,7 +26,7 @@
 - B: `logger.error(...)` — matches spec-kit branch structurally (both are non-fatal); accepts wording drift with FR-004.
 - C: `logger.warn(...)` AND additionally change spec-kit's `logger.error` to `logger.warn` in the same PR (relaxes FR-007's isolation rule for that one-line change).
 
-**Answer**: *Pending*
+**Answer**: A — `logger.warn`, per FR-004's explicit wording. Asymmetry with spec-kit's `logger.error` is acceptable; that line is arguably wrong (absent optional package is not an error) and can be aligned opportunistically in a later change. Not C — keep FR-007's isolation intact.
 
 ### Q3: Tier-1 workspace source path
 **Context**: `resolveSpeckitCommandsDir` tier-1 checks the source directory `<agencyDir>/packages/agency-plugin-spec-kit/commands` (in addition to `node_modules` paths). The cockpit package lives at `packages/claude-plugin-cockpit/commands` (different subpath — no `agency-plugin-` prefix). FR-001 requires "same 4-tier search order" but the exact tier-1 path for cockpit is not stated.
@@ -38,7 +38,7 @@
 - B: No — check only `node_modules` at tier 1 (`generacyDir/node_modules/...` and `agencyDir/node_modules/...`); skip the source-directory check. This differs from the spec-kit resolver.
 - C: Other (please describe).
 
-**Answer**: *Pending*
+**Answer**: A — mirror the full 4-tier order including the workspace source-directory check at `<agencyDir>/packages/claude-plugin-cockpit/commands`. That tier is what makes source-checkout dev clusters (agency cloned, package not yet npm-installed) work — dropping it would make cockpit second-class in exactly the environment we develop in.
 
 ### Q4: "Not found" warning wording
 **Context**: FR-004 states cockpit's warning should match "the wording style of the existing spec-kit branch." SC-004 asks for the two blocks to be "structurally symmetric." The spec-kit line reads: `"@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands"`. It is unclear whether the cockpit line must be a byte-for-byte template substitution or whether semantic parity is enough.
@@ -49,4 +49,4 @@
 - A: Byte-for-byte template of the spec-kit line, substituting `@generacy-ai/agency-plugin-spec-kit`→`@generacy-ai/claude-plugin-cockpit` and `speckit commands`→`cockpit commands`. Exact string: `"@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands"`.
 - B: Semantic parity is enough — any message that conveys "package not found; install to enable cockpit commands" is acceptable.
 
-**Answer**: *Pending*
+**Answer**: A — byte-for-byte template substitution: `"@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands"`. Deterministic and directly assertable in tests.
