@@ -22,10 +22,10 @@ The detection gap is that `hasChanges` (see `pr-manager.ts:57` `commitAndPush`) 
 **So that** the run halts at `agent:error` / `needs:intervention` instead of proceeding to `validate` (which trivially passes) and auto-merging a spec-only PR that fails to deliver the requested change.
 
 **Acceptance Criteria**:
-- [ ] When `implement` completes with a diff scoped entirely to `specs/**` (and configured exclusion paths), the phase loop routes to error rather than proceeding to `validate`.
+- [ ] When `implement` completes with a cumulative branch diff scoped entirely to `specs/` (the hardcoded exclusion prefix), the phase loop routes to error rather than proceeding to `validate`.
 - [ ] The error surfaces on the issue via the stage comment and error label (matching the existing `PHASES_REQUIRING_CHANGES` failure path).
-- [ ] Runs where `implement` *does* touch at least one file outside the excluded paths proceed normally.
-- [ ] Prior-commit fallback (`hasPriorImplementation` at `phase-loop.ts:355–374`) is preserved for requeued runs, but the "prior implementation" scan uses the same product-diff definition — spec-only prior commits do not count as satisfying implement.
+- [ ] Runs where `implement`'s cumulative branch diff contains at least one file outside the excluded prefix proceed normally.
+- [ ] The `hasPriorImplementation` fallback (`phase-loop.ts:355–374`) is replaced by the same cumulative product-diff check; the existing commit-message heuristics (`complete ${phase} phase`, `feat: complete T`, `partial implement progress`) are removed. A resumed run whose cumulative branch diff already contains product-code changes correctly counts as satisfying implement.
 
 ### US2: Detection is independent of `validate`'s exit status
 
@@ -41,12 +41,13 @@ The detection gap is that `hasChanges` (see `pr-manager.ts:57` `commitAndPush`) 
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | After the `implement` phase's commit step, the phase loop MUST evaluate whether the branch's cumulative diff vs. the base branch contains at least one changed file outside excluded paths. | P1 | Cumulative, not per-commit — a partial-implement run's earlier commits count. |
-| FR-002 | Excluded paths MUST at minimum include `specs/**`. Additional paths (e.g. `.github/`) MAY be configured, but the default MUST exclude only spec artifacts. | P1 | Prevents false positives on doc-only exclusions creeping in. |
+| FR-001 | When the `implement` phase is about to transition to `validate` (phase completion, not per inner iteration), the phase loop MUST evaluate whether the branch's cumulative diff vs. the resolved base ref contains at least one changed file outside excluded paths. | P1 | Cumulative, not per-commit — a partial-implement run's earlier commits count. Intermediate spec-only increments are legitimate and MUST NOT fail the run mid-phase. |
+| FR-002 | Excluded paths MUST be a hardcoded module-level constant colocated with `PHASES_REQUIRING_CHANGES` in `phase-loop.ts`, defaulting to the single prefix `specs/` (literal, not glob). No workflow-YAML or `WorkerConfig` surface is exposed. | P1 | Store as a plain prefix list (`['specs/']`); do not advertise glob syntax the matcher does not implement. `specs/README.md` correctly counts as excluded via prefix match. |
 | FR-003 | When the implement phase produces zero product-diff, the phase loop MUST invoke the same error path as the existing `PHASES_REQUIRING_CHANGES` failure: `labelManager.onError('implement')`, stage-comment update, and workflow termination with a descriptive error message. | P1 | Reuse of existing path keeps observability consistent. |
-| FR-004 | The `hasPriorImplementation` fallback at `phase-loop.ts:355–374` MUST use the product-diff definition when scanning prior commits: a commit whose diff is spec-only does not count as prior implementation. | P1 | Otherwise the fallback re-opens the same bug. |
+| FR-004 | The existing `hasPriorImplementation` fallback at `phase-loop.ts:355–374` MUST be replaced by the same cumulative product-diff check used in FR-001. The commit-message heuristics (`complete ${phase} phase`, `feat: complete T`, `partial implement progress`) MUST be removed. A resumed run whose cumulative branch diff already contains at least one non-excluded file satisfies implement. | P1 | Cumulative diff answers exactly the question the fallback exists for; it is more truthful than per-commit inspection (a commit that adds product files later reverted nets to zero, which cumulative reports correctly). Keeping two mechanisms (walk + heuristics) for one job retains the fragile part. |
 | FR-005 | The error message on empty-implement MUST identify the check ("implement phase produced no product-code changes") and point at the excluded-path filter, so operators can distinguish this from unrelated implement failures. | P2 | Aids triage. |
 | FR-006 | The check MUST NOT fire on non-implement phases. `specify`/`clarify`/`plan`/`tasks` legitimately produce spec-only diffs. | P1 | Guardrail. |
+| FR-007 | The base ref used for the diff MUST be resolved from the PR's `base` ref via the GitHub API (`pr-manager` already has this in hand), falling back to `origin/<default-branch>` when no PR exists yet. The comparison MUST use merge-base (triple-dot `A...B`) semantics so that rebased or long-lived branches only surface branch-local commits. | P1 | Diffing against the default branch on a stacked PR that targets a non-default base would let the base branch's own product files register as "prior implementation" — exactly the false-negative class this issue closes. |
 
 ## Success Criteria
 
@@ -58,8 +59,9 @@ The detection gap is that `hasChanges` (see `pr-manager.ts:57` `commitAndPush`) 
 
 ## Assumptions
 
-- The phase loop has access to `git diff --name-only origin/<base>...HEAD` (or equivalent via the `github` client) at the point of the check. `pr-manager.commitAndPush` already invokes similar git operations, so this is available.
-- `specs/**` is the correct exclusion set for the current speckit workflows. If additional workflows produce non-code diffs that should also be excluded, they are out of scope for this issue and can be added later.
+- The phase loop can invoke `git diff --name-only <base>...HEAD` (triple-dot / merge-base semantics) at the point of the check. `pr-manager.commitAndPush` already runs comparable git operations and holds a GitHub client for base-ref resolution, so both inputs are available.
+- The PR's `base` ref (via the GitHub API on `pr-manager`) is authoritative when a PR exists; `origin/<default-branch>` is the fallback for pre-PR runs. Merge-base semantics keep rebased branches from surfacing base-branch commits as false positives.
+- `specs/` is the correct exclusion prefix for the current speckit workflows. If additional workflows produce non-code diffs that should also be excluded, promoting the constant to a config surface is a small, informed follow-up.
 - The clarify gate-skip race (#818) and label interleaving noted in the issue are *related* but separate defects. This spec only addresses the empty-implement detection gap.
 
 ## Out of Scope
@@ -67,13 +69,9 @@ The detection gap is that `hasChanges` (see `pr-manager.ts:57` `commitAndPush`) 
 - Fixing the #818 clarify gate-skip race or the two-runs-on-one-branch interleaving observed in agency#374.
 - Retroactively re-opening or unmerging agency PR #376 or its issue.
 - Redesigning `validate` to detect zero-diff states (the fix lives in the phase loop, not validate).
-- Making the exclusion path list workflow-configurable — a hardcoded default of `specs/**` is sufficient for this issue.
+- Making the exclusion path list workflow-configurable — a hardcoded module-level constant of `specs/` is sufficient for this issue (see Batch 1 Q1).
+- Any glob or gitignore matcher — the exclusion list is a literal prefix, matched via `startsWith` (see Batch 1 Q4).
 - Any changes to the `implement` agent's prompt or behavior. This is a detection fix, not a prevention fix.
-
-## Open Questions
-
-- Should the exclusion set be defined as a constant next to `PHASES_REQUIRING_CHANGES`, or as part of the workflow config? (Recommend constant for now; move to config only if a second workflow needs a different set.)
-- Should the "prior implementation" scan (`phase-loop.ts:355–374`) actually inspect each prior commit's diff, or just check the cumulative branch diff? (Cumulative branch diff is simpler and correct — a spec-only history with no product changes should still fail.)
 
 ---
 
