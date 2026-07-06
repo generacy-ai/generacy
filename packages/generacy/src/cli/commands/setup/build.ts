@@ -315,6 +315,48 @@ function resolveSpeckitCommandsDir(config: BuildConfig): string | null {
 }
 
 /**
+ * Resolve the cockpit commands directory from the @generacy-ai/claude-plugin-cockpit package.
+ * Mirrors resolveSpeckitCommandsDir's 4-tier order with the cockpit package name and
+ * tier-1 source path substituted in.
+ */
+function resolveCockpitCommandsDir(config: BuildConfig): string | null {
+  const logger = getLogger();
+  const pkgSubpath = join('@generacy-ai', 'claude-plugin-cockpit', 'commands');
+
+  // Tier 1: Local workspace — source package directory, then node_modules
+  const localPaths = [
+    join(config.agencyDir, 'packages', 'claude-plugin-cockpit', 'commands'),
+    join(config.generacyDir, 'node_modules', pkgSubpath),
+    join(config.agencyDir, 'node_modules', pkgSubpath),
+  ];
+  for (const p of localPaths) {
+    if (existsSync(p)) {
+      logger.info({ path: p }, 'Resolved cockpit commands from local workspace');
+      return p;
+    }
+  }
+
+  // Tier 2: Shared packages volume (cluster-templates pattern)
+  const sharedPath = join(SHARED_PACKAGES_DIR, 'node_modules', pkgSubpath);
+  if (existsSync(sharedPath)) {
+    logger.info({ path: sharedPath }, 'Resolved cockpit commands from shared packages volume');
+    return sharedPath;
+  }
+
+  // Tier 3: npm global
+  const globalRoot = resolveNpmGlobalRoot();
+  if (globalRoot) {
+    const globalPath = join(globalRoot, pkgSubpath);
+    if (existsSync(globalPath)) {
+      logger.info({ path: globalPath }, 'Resolved cockpit commands from npm global');
+      return globalPath;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Phase 4: Install speckit commands and configure Agency MCP for Claude Code.
  * Copies speckit command files from @generacy-ai/agency-plugin-spec-kit package.
  * Adds the Agency MCP server to the user-level Claude config.
@@ -352,6 +394,35 @@ function installClaudeCodeIntegration(config: BuildConfig): void {
         ],
       },
       '@generacy-ai/agency-plugin-spec-kit not found — install it locally or globally to enable speckit commands',
+    );
+  }
+
+  // Step 2b: Resolve cockpit commands directory and copy under commands/cockpit/
+  const cockpitCommandsDir = resolveCockpitCommandsDir(config);
+
+  if (cockpitCommandsDir) {
+    const userCockpitDir = join(home, '.claude', 'commands', 'cockpit');
+    mkdirSync(userCockpitDir, { recursive: true });
+    const files = readdirSync(cockpitCommandsDir).filter((f) => f.endsWith('.md'));
+    for (const file of files) {
+      copyFileSync(join(cockpitCommandsDir, file), join(userCockpitDir, file));
+    }
+    logger.info(
+      { count: files.length, source: cockpitCommandsDir, dest: userCockpitDir },
+      'Copied cockpit command files',
+    );
+  } else {
+    logger.warn(
+      {
+        checkedPaths: [
+          join(config.agencyDir, 'packages', 'claude-plugin-cockpit', 'commands'),
+          join(config.generacyDir, 'node_modules', '@generacy-ai', 'claude-plugin-cockpit', 'commands'),
+          join(config.agencyDir, 'node_modules', '@generacy-ai', 'claude-plugin-cockpit', 'commands'),
+          join(SHARED_PACKAGES_DIR, 'node_modules', '@generacy-ai', 'claude-plugin-cockpit', 'commands'),
+          '{npm root -g}/@generacy-ai/claude-plugin-cockpit/commands',
+        ],
+      },
+      '@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands',
     );
   }
 

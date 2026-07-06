@@ -12,14 +12,14 @@ All tasks touch only `packages/generacy/src/cli/commands/setup/build.ts` and its
 
 ## Phase 1: Baseline
 
-- [ ] **T001** Read `packages/generacy/src/cli/commands/setup/build.ts` and locate the anchor points:
+- [X] **T001** Read `packages/generacy/src/cli/commands/setup/build.ts` and locate the anchor points:
   - `resolveSpeckitCommandsDir` (~lines 278-315) — the resolver to mirror.
   - `SHARED_PACKAGES_DIR` constant (~line 268) — reused as-is.
   - `resolveNpmGlobalRoot()` (~lines 255-261) — reused as-is.
   - spec-kit copy block inside `installClaudeCodeIntegration` (~lines 328-356) — the copy block to mirror.
   - Step 3 MCP-configuration block (~line 358+) — must still run after cockpit block.
 
-- [ ] **T002** Read `packages/generacy/src/__tests__/setup/build.test.ts` and locate:
+- [X] **T002** Read `packages/generacy/src/__tests__/setup/build.test.ts` and locate:
   - The existing spec-kit resolver tests (structural template to mirror for cockpit resolver).
   - The `installClaudeCodeIntegration` tests exercising the spec-kit copy block (structural template to mirror for cockpit copy block).
   - The shared `fs`/`os`/`logger`/`child_process` mock harness (reuse as-is).
@@ -28,7 +28,7 @@ All tasks touch only `packages/generacy/src/cli/commands/setup/build.ts` and its
 
 Write these tests BEFORE implementation. They must fail against the current codebase (no cockpit resolver/block exists yet) and pass after Phase 3.
 
-- [ ] **T010** [US1] In `packages/generacy/src/__tests__/setup/build.test.ts`, add a `describe('resolveCockpitCommandsDir')` block with six cases (mirrors spec-kit resolver tests):
+- [X] **T010** [US1] In `packages/generacy/src/__tests__/setup/build.test.ts`, add a `describe('resolveCockpitCommandsDir')` block with six cases (mirrors spec-kit resolver tests):
   - **T010.1** Tier-1a: only `<agencyDir>/packages/claude-plugin-cockpit/commands` exists → returns that path.
   - **T010.2** Tier-1b: only `<generacyDir>/node_modules/@generacy-ai/claude-plugin-cockpit/commands` exists → returns that path.
   - **T010.3** Tier-1c: only `<agencyDir>/node_modules/@generacy-ai/claude-plugin-cockpit/commands` exists → returns that path.
@@ -36,7 +36,7 @@ Write these tests BEFORE implementation. They must fail against the current code
   - **T010.5** Tier-3: only `{npmRoot}/@generacy-ai/claude-plugin-cockpit/commands` exists (mock `execSafe`/`child_process` for `npm root -g`) → returns that path.
   - **T010.6** No path exists → returns `null`.
 
-- [ ] **T011** [US1] In the same test file, add tests for the cockpit copy branch inside `installClaudeCodeIntegration`:
+- [X] **T011** [US1] In the same test file, add tests for the cockpit copy branch inside `installClaudeCodeIntegration`:
   - **T011.1 (happy path)**: resolver returns a directory containing `a.md`, `b.md`, `c.md`, plus one non-`.md` file. Assert `mkdirSync` called with `join(home, '.claude', 'commands', 'cockpit')` and `{ recursive: true }`; assert `copyFileSync` called exactly three times with the correct src/dst pairs; assert `logger.info` called once with `{ count: 3, source, dest }` and message `'Copied cockpit command files'`.
   - **T011.2 (non-`.md` filter)**: resolver returns a directory with only `README.txt` → `copyFileSync` NOT called; `logger.info` called with `count: 0`.
   - **T011.3 (absent branch)**: resolver returns `null` → `logger.warn` called exactly once with the byte-exact message `'@generacy-ai/claude-plugin-cockpit not found — install it locally or globally to enable cockpit commands'` and `checkedPaths` array with exactly these five entries in order:
@@ -47,22 +47,22 @@ Write these tests BEFORE implementation. They must fail against the current code
     5. `'{npm root -g}/@generacy-ai/claude-plugin-cockpit/commands'` (literal string).
   - **T011.4 (absent branch does not error)**: `logger.error` NOT called by cockpit block.
 
-- [ ] **T012** [US1] Add isolation/coexistence tests:
+- [X] **T012** [US1] Add isolation/coexistence tests:
   - **T012.1**: With both spec-kit and cockpit resolvers returning paths, spec-kit still copies to `~/.claude/commands/*.md` (top-level) unchanged; cockpit copies to `~/.claude/commands/cockpit/*.md`. No cross-overwrite.
   - **T012.2**: With cockpit resolver returning `null` but spec-kit present, spec-kit block still runs and Step 3 MCP configuration still executes.
   - **T012.3**: With spec-kit resolver returning `null` but cockpit present, cockpit block still runs and Step 3 MCP configuration still executes (FR-005).
 
-- [ ] **T013** [US1] Run `pnpm --filter @generacy-ai/generacy test build.test` (or repo-standard `vitest` invocation) and confirm all new tests in T010–T012 fail (implementation not yet added). Baseline for TDD.
+- [X] **T013** [US1] Run `pnpm --filter @generacy-ai/generacy test build.test` (or repo-standard `vitest` invocation) and confirm all new tests in T010–T012 fail (implementation not yet added). Baseline for TDD.
 
 ## Phase 3: Implementation
 
-- [ ] **T020** [US1] In `packages/generacy/src/cli/commands/setup/build.ts`, add `resolveCockpitCommandsDir(config: BuildConfig): string | null` immediately after `resolveSpeckitCommandsDir`. Mirror its 4-tier structure exactly, substituting:
+- [X] **T020** [US1] In `packages/generacy/src/cli/commands/setup/build.ts`, add `resolveCockpitCommandsDir(config: BuildConfig): string | null` immediately after `resolveSpeckitCommandsDir`. Mirror its 4-tier structure exactly, substituting:
   - Package scope+name → `@generacy-ai/claude-plugin-cockpit`.
   - Tier-1 workspace source dir → `join(config.agencyDir, 'packages', 'claude-plugin-cockpit', 'commands')`.
   - Tier-1b/1c/2/3 → `join(<base>, 'node_modules', '@generacy-ai', 'claude-plugin-cockpit', 'commands')`.
   - `logger.info` tier-identifying log line matches the spec-kit resolver's shape.
 
-- [ ] **T021** [US1] In `installClaudeCodeIntegration`, insert the cockpit copy block immediately after the spec-kit block (~line 356), before Step 3. Structure:
+- [X] **T021** [US1] In `installClaudeCodeIntegration`, insert the cockpit copy block immediately after the spec-kit block (~line 356), before Step 3. Structure:
   ```ts
   const cockpitCommandsDir = resolveCockpitCommandsDir(config);
   if (cockpitCommandsDir) {
@@ -93,19 +93,19 @@ Write these tests BEFORE implementation. They must fail against the current code
   ```
   Use `logger.warn` (NOT `logger.error`) per FR-004. Message string is byte-for-byte (U+2014 EM DASH).
 
-- [ ] **T022** [US1] Run the new tests from T010–T012 and confirm they now pass. Iterate until green.
+- [X] **T022** [US1] Run the new tests from T010–T012 and confirm they now pass. Iterate until green.
 
 ## Phase 4: Validation & Isolation Check
 
-- [ ] **T030** Run the full `build.test.ts` suite and confirm all pre-existing spec-kit tests still pass (regression guard).
+- [X] **T030** Run the full `build.test.ts` suite and confirm all pre-existing spec-kit tests still pass (regression guard).
 
-- [ ] **T031** Run type-check (`pnpm --filter @generacy-ai/generacy typecheck` or repo standard) and lint. Fix any issues.
+- [X] **T031** Run type-check (`pnpm --filter @generacy-ai/generacy typecheck` or repo standard) and lint. Fix any issues.
 
-- [ ] **T032** Run `git diff --name-only develop...HEAD` and confirm only these two paths appear (SC-005 isolation):
+- [X] **T032** Run `git diff --name-only develop...HEAD` and confirm only these two paths appear (SC-005 isolation):
   - `packages/generacy/src/cli/commands/setup/build.ts`
   - `packages/generacy/src/__tests__/setup/build.test.ts`
 
-- [ ] **T033** Byte-diff the spec-kit block (~lines 328-356 pre-change) against the post-change file to confirm it is byte-identical (FR-007 / SC-004). One-liner: verify the lines in the pre-change hunk appear verbatim in the post-change file.
+- [X] **T033** Byte-diff the spec-kit block (~lines 328-356 pre-change) against the post-change file to confirm it is byte-identical (FR-007 / SC-004). One-liner: verify the lines in the pre-change hunk appear verbatim in the post-change file.
 
 ## Dependencies & Execution Order
 
