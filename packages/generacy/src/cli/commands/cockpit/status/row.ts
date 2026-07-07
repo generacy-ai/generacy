@@ -11,6 +11,7 @@ export interface StatusRow {
   prNumber: number | null;
   checks: 'pending' | 'success' | 'failure' | 'none';
   url: string;
+  phase: string | null;
 }
 
 export function buildStatusRow(
@@ -20,6 +21,7 @@ export function buildStatusRow(
   kind: 'issue' | 'pr',
   prNumber: number | null,
   checks: 'pending' | 'success' | 'failure' | 'none',
+  phase: string | null,
 ): StatusRow {
   return {
     repo,
@@ -31,5 +33,6 @@ export function buildStatusRow(
     prNumber,
     checks,
     url: issue.url,
+    phase,
   };
 }

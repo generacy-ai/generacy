@@ -8,7 +8,7 @@ function epicBody(refs: string[]): string {
 }
 
 describe('runStatus', () => {
-  it('emits a grouped table for a multi-repo epic body (SC-002 regression)', async () => {
+  it('emits a phase-grouped table for a multi-repo epic body (SC-002 regression)', async () => {
     const body = epicBody(['owner/repo-a#1', 'owner/repo-b#2']);
     const gh = new FakeGh({
       bodyByIssue: { 'owner/epic#42': body },
@@ -31,7 +31,8 @@ describe('runStatus', () => {
     );
     expect(code).toBe(0);
     const joined = out.join('\n');
-    expect(joined).toContain('epic owner/epic');
+    expect(joined).toContain('— S2 — cohort —');
+    expect(joined).not.toContain('epic owner/epic');
     expect(joined).toContain('owner/repo-a');
     expect(joined).toContain('owner/repo-b');
   });
@@ -59,6 +60,10 @@ describe('runStatus', () => {
     expect(parsed.scope.issue).toBe(42);
     expect(Array.isArray(parsed.rows)).toBe(true);
     expect(parsed.rows[0].repo).toBe('owner/repo');
+    for (const r of parsed.rows) {
+      expect(Object.prototype.hasOwnProperty.call(r, 'phase')).toBe(true);
+    }
+    expect(parsed.rows[0].phase).toBe('s2');
   });
 
   it('unparseable body exits 1 with expected-format message (SC-003)', async () => {
@@ -121,6 +126,6 @@ describe('runStatus', () => {
     );
     expect(code).toBe(0);
     expect(runner).toHaveBeenCalledTimes(1);
-    expect(out.join('\n')).toContain('epic owner/repo');
+    expect(out.join('\n')).toContain('— S2 — cohort —');
   });
 });

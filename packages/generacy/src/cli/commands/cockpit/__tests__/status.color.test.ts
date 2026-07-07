@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CockpitState } from '@generacy-ai/cockpit';
+import type { CockpitState, ParsedPhase } from '@generacy-ai/cockpit';
 import { renderTable } from '../status/render-table.js';
 import { groupRows } from '../status/group.js';
 import type { Colorizer } from '../status/color.js';
@@ -16,8 +16,19 @@ function row(overrides: Partial<StatusRow> = {}): StatusRow {
     prNumber: null,
     checks: 'none',
     url: 'https://github.com/o/r/issues/1',
+    phase: null,
     ...overrides,
   };
+}
+
+function phasesFor(rows: StatusRow[]): ParsedPhase[] {
+  return [
+    {
+      heading: 'P1',
+      token: 'p1',
+      refs: rows.map((r) => ({ repo: r.repo, number: r.number })),
+    },
+  ];
 }
 
 function sentinelColorizer(): {
@@ -39,8 +50,9 @@ function sentinelColorizer(): {
 describe('status color application', () => {
   it('applies the colorizer to the state column only', () => {
     const { colorizer, calls } = sentinelColorizer();
+    const rows = [row({ phase: 'p1' })];
     const out = renderTable(
-      groupRows([row()], { kind: 'repos', repos: ['o/r'] }),
+      groupRows(rows, phasesFor(rows), 'o/r'),
       { tty: true, json: false, colorizer },
     );
     expect(calls).toHaveLength(1);
@@ -52,14 +64,14 @@ describe('status color application', () => {
   it('passes the correct state value per row', () => {
     const { colorizer, calls } = sentinelColorizer();
     const rows: StatusRow[] = [
-      row({ number: 1, state: 'terminal' }),
-      row({ number: 2, state: 'error' }),
-      row({ number: 3, state: 'waiting' }),
-      row({ number: 4, state: 'pending' }),
-      row({ number: 5, state: 'unknown' }),
+      row({ number: 1, state: 'terminal', phase: 'p1' }),
+      row({ number: 2, state: 'error', phase: 'p1' }),
+      row({ number: 3, state: 'waiting', phase: 'p1' }),
+      row({ number: 4, state: 'pending', phase: 'p1' }),
+      row({ number: 5, state: 'unknown', phase: 'p1' }),
     ];
     renderTable(
-      groupRows(rows, { kind: 'repos', repos: ['o/r'] }),
+      groupRows(rows, phasesFor(rows), 'o/r'),
       { tty: true, json: false, colorizer },
     );
     expect(calls.map((c) => c.state)).toEqual([
