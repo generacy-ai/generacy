@@ -26,9 +26,9 @@ Phase membership is the primary mental model when driving an epic (the playbook 
 
 **Acceptance Criteria**:
 - [ ] Running `generacy cockpit status <epic-ref>` on an epic with `### P1`, `### P2`, `### P3` phases renders one visually distinct group per phase, in body order.
-- [ ] Each group shows the phase heading (e.g. `— P1 — Foundation —`) followed by that phase's child rows.
-- [ ] Row order within a group matches the child order defined in the epic body (or a stable sort — TBD in plan).
-- [ ] Rows for refs that appear in `allRefs` but under no phase render in a single trailing implicit group (e.g. `— (no phase) —`).
+- [ ] Each group's header renders the full parsed phase heading (e.g. `— P1 — Foundation —`), falling back to the token alone (e.g. `— P1 —`) when the epic body has no label after the token.
+- [ ] Row order within a group matches the child order defined in the epic body — `ParsedPhase.refs` as parsed, no re-sorting.
+- [ ] Rows for refs that appear in `allRefs` but under no phase render in a single trailing implicit group with header `— (no phase) —`.
 
 ### US2: Automation consumer reads phase membership from JSON
 
@@ -38,7 +38,9 @@ Phase membership is the primary mental model when driving an epic (the playbook 
 
 **Acceptance Criteria**:
 - [ ] Each row in the JSON envelope's `rows` array includes a `phase` field (e.g. `"phase": "p1"`) populated from `ParsedPhase.token`.
-- [ ] Rows for refs under no phase have `phase: null` (or an equivalent explicit marker).
+- [ ] Rows for refs under no phase have `phase: null`.
+- [ ] A ref that appears under multiple phase headings emits one row per (ref × phase) membership, each with the corresponding phase token; total row count may exceed `allRefs.length`.
+- [ ] Row order in the JSON envelope matches phase body order across phases, then `ParsedPhase.refs` body order within each phase; the trailing `phase: null` group (if any) is last.
 - [ ] The envelope shape stays backward-compatible: existing fields on each row are unchanged; consumers that don't read `phase` continue to work.
 
 ### US3: Repro case validates the fix
@@ -58,12 +60,13 @@ Phase membership is the primary mental model when driving an epic (the playbook 
 |----|-------------|----------|-------|
 | FR-001 | `status.ts` MUST consume `resolved.parsed.phases` (not just `resolved.parsed.allRefs`) when building the output. | P1 | Data is already in the object returned by `resolveEpic`; no new call needed. |
 | FR-002 | The rendered (non-JSON) table MUST group rows under phase headings, one group per `ParsedPhase`, in body order. | P1 | Grouped output preferred over a PHASE column since it mirrors the epic body's `### <phase>` structure. |
-| FR-003 | Each phase group header MUST clearly identify the phase — at minimum the token (e.g. `P1`), preferably the full heading text (e.g. `— P1 — Foundation —`). | P1 | Format detailed in plan; must render legibly with and without color/TTY. |
-| FR-004 | Refs present in `allRefs` but not in any phase MUST render in a single trailing implicit group with a distinct header (e.g. `— (no phase) —`). | P2 | Edge case; may be common for freshly-drafted epics. |
-| FR-005 | The `--json` envelope MUST include a `phase` field on every row, populated from `ParsedPhase.token`. Refs under no phase MUST use `null`. | P1 | Additive, backward-compatible schema change. |
-| FR-006 | Grouping MUST NOT double-render children that appear in multiple phases; deduplication semantics for that (which unlikely edge case) TBD in plan. | P3 | Current parser dedups within a phase but not across phases (worth verifying). |
+| FR-003 | Each phase group header MUST render the full `ParsedPhase.heading` text (e.g. `— P1 — Foundation —`), falling back to just the token (e.g. `— P1 —`) only when the parsed heading equals the token (label-less phase). | P1 | Format decided in clarify Q1 = B. Must render legibly with and without color/TTY. |
+| FR-004 | Refs present in `allRefs` but not in any phase MUST render in a single trailing implicit group with header `— (no phase) —`. | P2 | Header text decided in clarify Q4 = B (consistent label everywhere). |
+| FR-005 | The `--json` envelope MUST include a `phase` field on every row, populated from `ParsedPhase.token`. Refs under no phase MUST use `null`. A ref appearing under multiple phases MUST emit one row per membership (see FR-006); row count MAY exceed `allRefs.length`. | P1 | Additive, backward-compatible schema change. |
+| FR-006 | A ref appearing under multiple `### <phase>` headings MUST render once per phase group in the table AND emit one row per (ref × phase) membership in `--json` (each with a single-string `phase` token). This mirrors `queue <phase>` semantics from #806 Q2 (per-heading membership). | P2 | Decided in clarify Q3 = A. Distinct-issue count is the deduped `allRefs.length`; row count MAY exceed it. |
 | FR-007 | Fetching, PR/checks rollup, and per-row content of the table MUST remain unchanged; only the row-grouping and JSON row schema change. | P1 | Keep this fix tightly scoped to the grouping bug. |
-| FR-008 | If the epic body has zero phases (all refs implicit), status MUST fall back to today's single-group behavior (labelled `— (no phase) —` or the existing `epic <owner/repo>#<n>` header — TBD in plan). | P2 | Avoid a regression for phase-less epics. |
+| FR-008 | If the epic body has zero phases (all refs implicit), status MUST render a single group with header `— (no phase) —` (matching FR-004's trailing group header). | P2 | Decided in clarify Q4 = B. The epic-identity line above the table keeps the epic ref visible; header text is consistent everywhere. |
+| FR-009 | Row order within any phase group MUST match `ParsedPhase.refs` body order (as parsed) — no re-sort by `(repo, number)` or otherwise. Applies to both the table and `--json`. | P1 | Decided in clarify Q2 = A. JSON consumers who want a different sort can re-sort. |
 
 ## Success Criteria
 
@@ -85,10 +88,9 @@ Phase membership is the primary mental model when driving an epic (the playbook 
 
 - Adding a PHASE **column** to the table (alternative rendering considered in the issue but not selected).
 - Changes to how epics are parsed or how `ParsedPhase` is derived.
-- Cross-phase membership deduplication policy (a ref appearing in `### P1` and `### P2`) beyond documenting today's behavior — a follow-up if it turns out to matter.
 - Interactive/`watch` mode changes; this issue is scoped to `status` (one-shot).
 - Any change to `resolveIssueContext`, `listAllIssues`, `classifyIssue`, `check-rollup`, or PR resolution.
-- Sort order changes within phases (unless required to match epic-body order).
+- Sort options / user-facing sort flags — row order is fixed to epic-body order (FR-009); consumers of `--json` re-sort client-side if needed.
 
 ## References
 
