@@ -1,125 +1,147 @@
-# Feature Specification: Recover VS Code Tunnel After Device-Code Timeout
+# Feature Specification: ## Summary
+
+The cloud **Restart tunnel** button on the project page can silently do nothing
 
 **Branch**: `825-summary-cloud-restart-tunnel` | **Date**: 2026-07-07 | **Status**: Draft
-**Issue**: [#825](https://github.com/generacy-ai/generacy/issues/825)
-**Type**: Bug fix
 
 ## Summary
 
-The cloud **Restart tunnel** button on the project page can silently no-op. Once
-`VsCodeTunnelProcessManager` lands in `status = "error"` with a live child (the
-30s device-code timeout path), every subsequent `start()` call hits the
-`if (this.child)` early-return and does nothing. The only recovery today is
-restarting the control-plane container. This spec covers the cluster-side fix
-so the UI Restart button becomes reliable end-to-end.
+## Summary
 
-## Root Cause
+The cloud **Restart tunnel** button on the project page can silently do nothing. Once
+the tunnel manager lands in a specific error state, every subsequent start request is a
+no-op until the control-plane process (or container) restarts. This is the likely
+reason "restarting the tunnel from the UI doesn't work" when users hit it.
 
-`packages/control-plane/src/services/vscode-tunnel-manager.ts`, two interacting
-facts:
+## Root cause
 
-1. **Device-code timeout leaves the child alive.** The 30s timer sets
-   `this.status = "error"` and emits an error event, but does not call
-   `child.kill()` and does not clear `this.child`
-   (`vscode-tunnel-manager.ts:235-247`).
+Two interacting facts:
 
-2. **`start()` early-returns whenever a child exists.** If `this.child`
-   is non-null, `start()` re-emits `authorization_pending` or `connected`
-   and returns — but for `status = "error"` it just returns the error state
-   without spawning a replacement (`vscode-tunnel-manager.ts:125-146`).
+1. The UI **Restart** only calls `vscode-tunnel-start` — it never calls
+   `vscode-tunnel-stop` first:
+   - `generacy-cloud` → `packages/web/src/lib/hooks/use-vscode-tunnel.ts`
+     (`startTunnel()` POSTs `.../relay/control-plane/lifecycle/vscode-tunnel-start`).
 
-Result: after a stuck device-code attempt, the manager holds an orphaned
-`code tunnel` child and reports `status = "error"`. The UI's Restart button
-(which only calls `POST /lifecycle/vscode-tunnel-start`, never
-`vscode-tunnel-stop` first) hits the early-return and the user sees no
-state change.
+2. In `VsCodeTunnelProcessManager`
+   (`packages/control-plane/src/services/vscode-tunnel-manager.ts`), the 30s
+   device-code timeout sets `status = "error"` but does **not** kill the child or clear
+   `this.child`:
+
+   ```ts
+   this.deviceCodeTimer = setTimeout(() => {
+     if (this.status === "starting") {
+       this.status = "error";
+       // ... emit error ...
+     }
+   }, timeoutMs);   // no child.kill(), no this.child = null
+   ```
+
+   `start()` guards on `this.child`:
+
+   ```ts
+   async start() {
+     if (this.child) {
+       // only re-emits for authorization_pending / connected
+       return { status: this.status, tunnelName: ... };   // ← no-op when status === "error"
+     }
+     // ... spawn ...
+   }
+   ```
+
+So if a start attempt reaches the device-code timeout (child still alive but never
+produced a device code or a "connected" line within 30s), the manager is left with
+`status = "error"` **and** a live `this.child`. A subsequent `start()` (the Restart
+button) hits the early-return and does nothing — the orphaned process is never replaced.
+
+## Impact
+
+- UI **Restart** appears dead; the user sees no state change and cannot recover the
+  tunnel from the project page.
+- Only recovered by restarting the control-plane / orchestrator container.
+
+## Proposed fix
+
+- In the device-code timeout handler, treat it like a failed start: `child.kill()`
+  (SIGTERM → SIGKILL) and let the exit handler clear `this.child`, or set
+  `this.child = null` after killing, so a later `start()` respawns.
+- Harden `start()`: if `this.child` exists but `status` is `error` / `disconnected` /
+  `stopped`, replace it (stop-then-spawn) instead of returning.
+- Optional (defense in depth): make the cloud **Restart** perform stop-then-start.
+
+## Related
+
+- Companion / primary bug: **the tunnel never auto-restarts after a cluster stop/start**
+  (filed separately) — that is why users reach for the Restart button in the first place.
+- **#604** (device-code emit-before-subscribe race; idempotent restart couldn't
+  re-emit) touched this same `start()` early-return path.
+
+## Scope
+
+`generacy` repo — `packages/control-plane/src/services/vscode-tunnel-manager.ts`.
+Optional companion tweak in `generacy-cloud`
+(`packages/web/src/lib/hooks/use-vscode-tunnel.ts`) to stop-then-start.
+
 
 ## User Stories
 
-### US1: Reliable UI Restart after a stuck tunnel
+### US1: Recover a stalled tunnel from the cloud Restart button
 
-**As a** Generacy user whose VS Code tunnel got stuck during device-code
-authorization,
-**I want** the **Restart tunnel** button on the project page to actually
-respawn the tunnel,
-**So that** I can recover the IDE link without asking an operator to restart
-the container.
-
-**Acceptance Criteria**:
-- [ ] After a device-code timeout leaves the manager in `status = "error"`,
-  a subsequent `start()` call spawns a fresh `code tunnel` child and emits a
-  new `starting` event on `cluster.vscode-tunnel`.
-- [ ] The orphaned child from the timed-out attempt is terminated (no
-  duplicate `code tunnel` processes remain).
-- [ ] The manager reaches `authorization_pending` (or `connected`) on the
-  retry if the underlying environment is healthy.
-- [ ] No regression to the happy path: a Restart while `status = "connected"`
-  still re-emits the current `connected` event without respawning.
-
-### US2: No orphaned tunnel processes
-
-**As a** cluster operator,
-**I want** timed-out `code tunnel` attempts to leave no leftover child
-processes,
-**So that** the container's process table doesn't accumulate zombies and a
-future `start()` doesn't race a stale process for the tunnel name.
+**As a** developer using the generacy-cloud project page,
+**I want** the **Restart tunnel** button to reliably respawn the `code tunnel` child even
+after a prior start attempt hit the 30s device-code timeout,
+**So that** I can recover the tunnel from the UI without asking an operator to restart
+the control-plane container.
 
 **Acceptance Criteria**:
-- [ ] After the device-code timeout fires, the `code tunnel` PID no longer
-  exists (SIGTERM, escalating to SIGKILL after the standard force-kill
-  window).
-- [ ] `this.child` is cleared before the next `start()` runs (either via the
-  exit handler or explicit reset in the timeout branch).
+- [ ] When a first `vscode-tunnel-start` fails at the device-code timeout, the manager
+      finishes cleanup with `this.child === null` and `getStatus() === "error"`.
+- [ ] Clicking **Restart tunnel** (a subsequent `vscode-tunnel-start` call) spawns a
+      fresh `code tunnel` process — no early-return, no orphan.
+- [ ] The cloud UI observes exactly one `error` event per failed start attempt on
+      `cluster.vscode-tunnel`, with message `"Timed out waiting for device code"`.
+- [ ] Even without the optional cloud-side stop-then-start change, the button works
+      after a single click.
 
 ## Functional Requirements
 
-| ID     | Requirement                                                                                                                                                             | Priority | Notes |
-|--------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------|
-| FR-001 | On device-code timeout, `VsCodeTunnelProcessManager` MUST terminate the child process (SIGTERM, then SIGKILL after `forceKillTimeoutMs`) in addition to setting `status = "error"`. | P1 | Bug fix core |
-| FR-002 | On device-code timeout, `this.child` MUST be cleared (directly or via the exit handler) so a subsequent `start()` respawns instead of early-returning. | P1 | Bug fix core |
-| FR-003 | `start()` MUST spawn a fresh child when `this.status ∈ {error, disconnected, stopped}`, even if a stale `this.child` reference somehow remains. It MUST stop-then-spawn in that case, not just spawn on top. | P1 | Defense in depth against any future path that also fails to clear `child` |
-| FR-004 | `start()` MUST continue to be a re-emit-only no-op when `this.status ∈ {starting, authorization_pending, connected}`. Idempotent restart in healthy states is preserved (per #604). | P1 | Regression guard |
-| FR-005 | The timeout handler MUST emit exactly one `error` event on `cluster.vscode-tunnel` (no duplicate error emissions when the killed child's `exit` handler fires). | P2 | Cosmetics — avoid double-error in cloud UI |
-| FR-006 | `stop()` behavior for an already-stopped or errored manager MUST remain a safe no-op (existing contract). | P2 | Regression guard |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | On device-code timeout, `VsCodeTunnelProcessManager` MUST set `status = "error"`, emit the single `error` event on `cluster.vscode-tunnel`, set a dedicated `timedOut = true` flag, then call `child.kill()` (SIGTERM → SIGKILL). | P1 | Clarify Q1=B. Dedicated flag — do NOT reuse `stopping`. |
+| FR-002 | The child-`exit` handler MUST detect `timedOut === true`, skip its `wasPending` error emit, and leave `status = "error"` intact while clearing `this.child` to `null`. | P1 | Clarify Q1=B, Q2=A, Q3=A. Prevents the second/duplicate error event and preserves the actionable timeout message. |
+| FR-003 | `start()` MUST respawn from any resting state where `this.child` exists but `status ∈ { "error", "disconnected", "stopped" }` by first `await stop()` (up to `forceKillTimeoutMs = 5000`, SIGTERM → SIGKILL) and then spawning a fresh child. | P1 | Clarify Q4=A. Defense-in-depth; ensures no two `code tunnel --name <same>` processes overlap (see #743). |
+| FR-004 | After a device-code timeout has fully settled (timeout handler + child exit), `manager.getStatus()` MUST return `"error"` until the next `start()` call. | P1 | Clarify Q2=A. `"error"` stays user-visible; recovery already permitted by FR-003. |
+| FR-005 | For each failed start attempt, exactly one `error` event MUST be emitted on `cluster.vscode-tunnel`, with `error: "Timed out waiting for device code"` and the timeout handler's last-stdout-lines in `details`. | P1 | Clarify Q3=A. Suppress the child-exit `wasPending` emit; keep the timer's proximal-cause message. |
+| FR-006 | Optional companion (out of `packages/control-plane` scope): the cloud **Restart** hook MAY POST `vscode-tunnel-stop` before `vscode-tunnel-start`. Not required for the fix to work. | P3 | Defense-in-depth in `generacy-cloud/packages/web/src/lib/hooks/use-vscode-tunnel.ts`. Filed separately; deferrable. |
 
 ## Success Criteria
 
-| ID     | Metric                                                                                                              | Target                                     | Measurement |
-|--------|---------------------------------------------------------------------------------------------------------------------|--------------------------------------------|-------------|
-| SC-001 | UI **Restart tunnel** recovers a stuck (device-code-timed-out) tunnel without container restart.                    | 100% in manual repro                       | Manual test: force a 30s timeout (block network to `github.com/login/device`), then click Restart. New `starting` event appears within 2s. |
-| SC-002 | Zero orphaned `code tunnel` PIDs after a device-code timeout.                                                       | 0 processes                                | `pgrep -f 'code tunnel'` after 60s of a timed-out attempt returns nothing. |
-| SC-003 | Idempotent restart in healthy state still re-emits without side effects (no regression from #604).                  | 100%                                       | Call `start()` while `connected`; assert no new spawn and a `connected` event is re-emitted. |
-| SC-004 | New test coverage for the timeout→restart path in `vscode-tunnel-manager.test.ts`.                                  | ≥ 2 new tests                              | Vitest: (a) timeout kills child + clears `child`; (b) `start()` after timeout spawns a fresh child. |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Restart recovers from device-code-timeout state | 100% of the time on a single Restart click, no container restart required | Reproduce the timeout (e.g., block outbound to Microsoft's device-code endpoint for 30s), observe the emitted `error` event, click Restart, confirm a fresh `code tunnel` child spawns and transitions past `starting`. |
+| SC-002 | No duplicate error events per failed attempt | Exactly one `error` event on `cluster.vscode-tunnel` per timeout | Capture the relay event stream during a timeout; assert length 1 with message `"Timed out waiting for device code"`. |
+| SC-003 | No concurrent `code tunnel` processes with the same `--name` | Zero overlap window | While Restart runs against a stale child, verify only one `code tunnel` process exists at any instant (e.g., `ps` snapshot loop, or unit test asserting `await stop()` resolves before `spawn()`). |
 
 ## Assumptions
 
-- The device-code timeout (`DEFAULT_DEVICE_CODE_TIMEOUT_MS = 30_000`) stays
-  at 30s. This spec does not tune the timeout value.
-- The cloud UI's Restart button continues to send only `vscode-tunnel-start`.
-  The stop-then-start companion tweak in `generacy-cloud` is optional
-  defense-in-depth; the cluster-side fix must be sufficient on its own.
-- The tunnel-name collision surfacing (#744 FR-012) and per-cluster tunnel
-  name derivation stay as-is — this bug fix does not touch naming.
-- Existing `stop()` semantics (SIGTERM → SIGKILL after `forceKillTimeoutMs`)
-  are the correct model for the timeout path too.
+- The `code tunnel` CLI at `VSCODE_CLI_BIN` (default `/usr/local/bin/code`) accepts
+  SIGTERM cleanly within the 5s `forceKillTimeoutMs` window; SIGKILL is the backstop.
+- The relay event delivery is best-effort (existing behavior); "exactly one" refers to
+  what the manager emits, not what the cloud ultimately receives after network loss.
+- Cloud-side Restart callers already treat `vscode-tunnel-start` as an async operation
+  and tolerate the up-to-5s wait introduced by `await stop()` in FR-003.
+- The bootstrap-complete auto-start path (control-plane `lifecycle.ts`) uses the same
+  `start()` entry, so this fix also hardens the initial-boot case, not just Restart.
 
 ## Out of Scope
 
-- The companion bug "tunnel never auto-restarts after a cluster stop/start"
-  (tracked separately). This spec only covers the manual **Restart** button
-  path from an error state.
-- Cloud-side (`generacy-cloud`) changes to make Restart perform
-  stop-then-start. Optional; can be filed as a follow-up if desired.
-- Tuning `DEFAULT_DEVICE_CODE_TIMEOUT_MS`.
-- Rework of the `code tunnel` stdout parser or device-code emit-before-
-  subscribe race handled by #604.
-- Any changes to `unregister()` (destroy-path cleanup).
-
-## Scope of Change
-
-- **File**: `packages/control-plane/src/services/vscode-tunnel-manager.ts`
-- **Tests**: `packages/control-plane/src/services/vscode-tunnel-manager.test.ts`
-  (existing file; add cases for the new paths)
+- The primary reason the tunnel is down after a cluster stop/start (auto-restart on
+  reconnect) — tracked separately in **#824**.
+- Cloud UI behavior beyond the optional FR-006 stop-then-start tweak; the fix in
+  `packages/control-plane` is sufficient on its own.
+- Changing the 30s `deviceCodeTimeoutMs` constant or the `forceKillTimeoutMs = 5000`
+  value.
+- Persisting or reporting error state across control-plane restarts (out of the
+  process-lifetime scope of `VsCodeTunnelProcessManager`).
 
 ---
 

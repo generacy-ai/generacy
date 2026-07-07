@@ -12,7 +12,7 @@
 - B: Add a new `timedOut = true` flag. The exit handler checks it and skips the error emit, leaving `status = "error"` as set by the timeout handler.
 - C: Something else (please describe).
 
-**Answer**: *Pending*
+**Answer**: B — add a dedicated `timedOut` flag; don't reuse `stopping`. The timeout handler sets `status = "error"`, emits the single error event, sets `timedOut = true`, then kills the child. The `exit` listener checks `timedOut`, skips its `wasPending` error emit, and leaves `status = "error"` intact. Reusing `stopping` (option A) routes the exit through the `stopInitiated` branch and forces the resting status to `"stopped"` (Q2) — conflating a genuine failure with a user-initiated stop, and discarding the meaningful timeout message (Q3). A distinct flag keeps the two exit reasons — user stop vs. self-kill-after-timeout — semantically separate.
 
 ---
 
@@ -26,7 +26,7 @@
 - B: `"stopped"` — reset to a clean idle state after cleanup. Natural fit if Q1=A (the `stopping` flag path sets `stopped`).
 - C: `"error"` first, then transition to `"stopped"` after the child exits.
 
-**Answer**: *Pending*
+**Answer**: A — resting status `"error"`. A device-code timeout is a real failure (the CLI never surfaced a code within the window — an auth/network problem), and the user should see it, not a clean slate. It matches the emitted error event and the spec's "lands in `status = "error"`" language. Recovery is unaffected: FR-003 already lists `error` among the respawn-from states, so the next `start()` (Restart) respawns regardless. `"stopped"` (B) would hide an actionable failure behind an idle-looking state.
 
 ---
 
@@ -40,7 +40,7 @@
 - B: `"code tunnel exited (code N) before reaching connected state"` — describes the process outcome. Only makes sense if the timeout handler kills silently and defers the emit to `exit`.
 - C: A merged message (e.g., timeout text with exit code in `details`).
 
-**Answer**: *Pending*
+**Answer**: A — `"Timed out waiting for device code"`. That's the proximal, actionable cause. `"code tunnel exited (code N)…"` describes a process exit that *we* initiated by killing it — mechanically true but misleading as the user-facing reason. Keep the last stdout lines in `details` as the timeout handler already does. This follows directly from Q1=B: the timeout handler owns the emit, the exit handler is suppressed.
 
 ---
 
@@ -54,6 +54,15 @@
 - B: Fire-and-forget `stop()` (or synchronous `child.kill("SIGTERM")`) and `spawn()` immediately — faster UI response, but brief overlap of two `code tunnel` processes until the stale one exits, risking a tunnel-name registration race.
 - C: Something else (please describe).
 
-**Answer**: *Pending*
+**Answer**: A — `await stop()` before `spawn()`. Never allow two `code tunnel --name <same>` processes to overlap. A concurrent second registration of the same name is exactly the collision that made the CLI fall back to a random name and the cloud deep-link to a dead tunnel in #743. `await stop()` (≤ `forceKillTimeoutMs` = 5s, SIGTERM→SIGKILL) guarantees the stale process is gone before the new one registers. The Restart path is already async in the cloud UI, so the worst-case 5s wait is acceptable; correctness beats shaving latency here. Bonus: `stop()` sets `stopping = true`, so the stale child's exit routes to `"stopped"` with no spurious error event during recovery.
+
+---
+
+## Net resting contract after a device-code timeout
+
+- **One** `error` event on `cluster.vscode-tunnel`, message `"Timed out waiting for device code"`
+- `manager.getStatus() === "error"`
+- `this.child === null`
+- The next `start()` (Restart) spawns cleanly with no early-return.
 
 ---
