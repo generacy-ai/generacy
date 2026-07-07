@@ -269,6 +269,8 @@ export class EpicCompletionMonitorService {
     );
 
     // Find existing status comment
+    // #842 audit: whitelist — reads only for STATUS_MARKER to dedupe bot's
+    // own status-comment postings; body content is not surfaced to an agent.
     const comments = await client.getIssueComments(owner, repo, epicNumber);
     const existing = comments.find(c => c.body.includes(STATUS_MARKER));
 

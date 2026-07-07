@@ -23,6 +23,15 @@ vi.mock('node:fs', () => ({
   writeFileSync: (path: string, content: string) => mockWriteFileSync(path, content),
 }));
 
+// Author-trust helpers (#842). Default stubs pass every comment through as
+// trusted so pre-existing test fixtures (comments without authorAssociation)
+// still exercise the intended behaviors. Individual tests can override.
+vi.mock('@generacy-ai/workflow-engine', () => ({
+  isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
+  tryLoadCommentTrustConfig: vi.fn(() => undefined),
+  wrapUntrustedData: vi.fn((content: string) => content),
+}));
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

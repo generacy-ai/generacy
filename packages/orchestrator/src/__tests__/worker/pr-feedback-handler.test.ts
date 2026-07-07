@@ -62,6 +62,10 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
     removeLabels: vi.fn().mockResolvedValue(undefined),
     replyToPRComment: vi.fn().mockResolvedValue(undefined),
   })),
+  // Author-trust helpers (#842). Default stubs pass every comment through.
+  isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
+  tryLoadCommentTrustConfig: vi.fn(() => undefined),
+  wrapUntrustedData: vi.fn((content: string) => content),
 }));
 
 describe('PrFeedbackHandler credentials', () => {

@@ -80,6 +80,11 @@ export interface Comment {
   line?: number;          // Line number
   in_reply_to_id?: number;
   resolved?: boolean;
+  // GitHub author_association tier (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
+  // FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE, or future tiers).
+  // Optional for fixture / cache / older-response compatibility — unset is
+  // treated as untrusted by the trust helper (fail-closed, per FR-011).
+  authorAssociation?: string;
 }
 
 // =============================================================================
@@ -434,12 +439,27 @@ export interface ReadPRFeedbackInput {
 }
 
 /**
+ * Skipped comment metadata (untrusted authors filtered out of feedback).
+ * Only carries metadata — never the body — so log records stay body-free
+ * (SC-003).
+ */
+export interface SkippedCommentInfo {
+  commentId: number;
+  author: string;
+  authorAssociation?: string;
+  reason: string;
+}
+
+/**
  * github.read_pr_feedback output
  */
 export interface ReadPRFeedbackOutput {
   comments: Comment[];
   has_unresolved: boolean;
   unresolved_count: number;
+  // Untrusted comments partitioned out for logging (not surfaced to agents).
+  // Optional for backwards-compat with older callers.
+  skippedComments?: SkippedCommentInfo[];
 }
 
 /**

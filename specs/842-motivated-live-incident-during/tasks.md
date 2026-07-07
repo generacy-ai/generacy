@@ -16,15 +16,15 @@
 
 These tasks are prerequisites for every downstream surface. Nothing else can trust-gate until the field flows from `gh` through `Comment` to the helper.
 
-- [ ] T001 [P] [US1] Extend `Comment` type with optional `authorAssociation?: string` field in `packages/workflow-engine/src/types/github.ts` (per data-model.md §Entity Extensions). Field is nullable for fixture / cache / older-response compatibility (FR-002, FR-011).
+- [X] T001 [P] [US1] Extend `Comment` type with optional `authorAssociation?: string` field in `packages/workflow-engine/src/types/github.ts` (per data-model.md §Entity Extensions). Field is nullable for fixture / cache / older-response compatibility (FR-002, FR-011).
 
-- [ ] T002 [P] [US1] Extend `ReadPRFeedbackOutput` type with optional `skippedComments?: Array<{commentId, author, authorAssociation?, reason}>` field in `packages/workflow-engine/src/types/github.ts` (per data-model.md §Modified Entities). Backwards-compat: field is optional (FR-006).
+- [X] T002 [P] [US1] Extend `ReadPRFeedbackOutput` type with optional `skippedComments?: Array<{commentId, author, authorAssociation?, reason}>` field in `packages/workflow-engine/src/types/github.ts` (per data-model.md §Modified Entities). Backwards-compat: field is optional (FR-006).
 
-- [ ] T003 [US1] Extend `getIssueComments()` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts:256` to project `author_association` in the outbound response mapping. Purely additive on the outbound side (FR-001, P1).
+- [X] T003 [US1] Extend `getIssueComments()` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts:256` to project `author_association` in the outbound response mapping. Purely additive on the outbound side (FR-001, P1).
 
-- [ ] T004 [US1] Extend `getPRComments()` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts:437` to project `author_association` in the `jq` selector. Purely additive on the outbound side (FR-001, P1).
+- [X] T004 [US1] Extend `getPRComments()` in `packages/workflow-engine/src/actions/github/client/gh-cli.ts:437` to project `author_association` in the `jq` selector. Purely additive on the outbound side (FR-001, P1).
 
-- [ ] T005 [P] [US1] Add gh-cli unit tests asserting `authorAssociation` field is populated from a mock GitHub REST response for both `getIssueComments` and `getPRComments` in `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.test.ts` (or nearest existing test file). Foundational for SC-004.
+- [X] T005 [P] [US1] Add gh-cli unit tests asserting `authorAssociation` field is populated from a mock GitHub REST response for both `getIssueComments` and `getPRComments` in `packages/workflow-engine/src/actions/github/client/__tests__/gh-cli.test.ts` (or nearest existing test file). Foundational for SC-004.
 
 ---
 
@@ -32,22 +32,22 @@ These tasks are prerequisites for every downstream surface. Nothing else can tru
 
 Central logic — one helper serves all three ingestion surfaces (SC-002).
 
-- [ ] T010 [P] [US1] Create `packages/workflow-engine/src/security/comment-trust.ts` implementing:
+- [X] T010 [P] [US1] Create `packages/workflow-engine/src/security/comment-trust.ts` implementing:
   - Exports: `TrustSurface`, `TrustReason`, `TrustDecision`, `CommentTrustContext`, `isTrustedCommentAuthor()` (per data-model.md §New Entities and research.md §P2).
   - Constants: `DEFAULT_TRUSTED_TIERS = ['OWNER', 'MEMBER', 'COLLABORATOR']`, `KNOWN_UNTRUSTED_TIERS = ['NONE', 'FIRST_TIME_CONTRIBUTOR', 'FIRST_TIMER', 'MANNEQUIN', 'CONTRIBUTOR']`.
   - Behavior (D5): bot-login short-circuit → default-tier → widen-config (skipped for `answer-scanner` surface) → known-untrusted → unknown-tier (with one `warn` log). Fail-closed on unset `authorAssociation` with reason `'author-association-unset'` (no warn).
   - Pure function; only side effect is `logger.warn` on unknown tiers (FR-011, SC-008).
 
-- [ ] T011 [P] [US1] Create `packages/workflow-engine/src/security/comment-trust-config.ts` implementing:
+- [X] T011 [P] [US1] Create `packages/workflow-engine/src/security/comment-trust-config.ts` implementing:
   - `CommentTrustConfigSchema` (Zod, `.strict()` — extra keys rejected).
   - `tryLoadCommentTrustConfig(workspaceDir): CommentTrustConfig | undefined` — reads `<workspaceDir>/.agency/comment-trust.yaml`, returns `undefined` for missing/malformed/schema-invalid (warn-logs on malformed/invalid, no throw).
   - Uses `yaml` + `zod` (already deps). Per data-model.md §CommentTrustConfig and research.md §P4.
 
-- [ ] T012 [P] [US4] Create `packages/workflow-engine/src/security/untrusted-data-fence.ts` implementing:
+- [X] T012 [P] [US4] Create `packages/workflow-engine/src/security/untrusted-data-fence.ts` implementing:
   - `wrapUntrustedData(content: string, sourceLabel: string): string` — returns a `<untrusted-data source="...">` fence with the leading instruction from research.md §D6.
   - Pure function, no side effects (FR-007, SC-006).
 
-- [ ] T013 [P] [US1] Create `packages/workflow-engine/src/security/__tests__/comment-trust.test.ts` — table-driven tests covering the matrix in data-model.md §Validation Rules Summary:
+- [X] T013 [P] [US1] Create `packages/workflow-engine/src/security/__tests__/comment-trust.test.ts` — table-driven tests covering the matrix in data-model.md §Validation Rules Summary:
   - Trusted: `OWNER`, `MEMBER`, `COLLABORATOR`, bot-login (short-circuit before tier check).
   - Untrusted with normal reason: `NONE`, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `MANNEQUIN`, `CONTRIBUTOR`.
   - Fail-closed: `undefined` `authorAssociation` → `'author-association-unset'`, no warn log.
@@ -56,7 +56,7 @@ Central logic — one helper serves all three ingestion surfaces (SC-002).
   - Widen-login: specific login is trusted on context surfaces even at tier `NONE`; still untrusted on `answer-scanner`.
   - Config cannot narrow: even if widen were somehow negative, `OWNER`/`MEMBER`/`COLLABORATOR` remain trusted.
 
-- [ ] T014 [P] [US3] Create `packages/workflow-engine/src/security/__tests__/comment-trust-config.test.ts` covering:
+- [X] T014 [P] [US3] Create `packages/workflow-engine/src/security/__tests__/comment-trust-config.test.ts` covering:
   - Missing file → `undefined`, no throw, no warn.
   - Malformed YAML → `undefined`, one warn log, no throw.
   - Schema violation (e.g., `widen.tiers` is a string not array) → `undefined`, warn naming failed field, no throw.
@@ -64,7 +64,7 @@ Central logic — one helper serves all three ingestion surfaces (SC-002).
   - Empty `{}` → equivalent to default posture (widen tiers/logins both empty).
   - Valid config → parsed shape matches expectation.
 
-- [ ] T015 [P] [US4] Create `packages/workflow-engine/src/security/__tests__/untrusted-data-fence.test.ts` — asserts fence format matches research.md §D6, source label is interpolated safely (no HTML/prompt-injection via source), and inner content is emitted verbatim (not sanitized — this is a data fence, not a filter).
+- [X] T015 [P] [US4] Create `packages/workflow-engine/src/security/__tests__/untrusted-data-fence.test.ts` — asserts fence format matches research.md §D6, source label is interpolated safely (no HTML/prompt-injection via source), and inner content is emitted verbatim (not sanitized — this is a data fence, not a filter).
 
 ---
 
@@ -72,24 +72,24 @@ Central logic — one helper serves all three ingestion surfaces (SC-002).
 
 Depends on Phase 1 (`authorAssociation` in `Comment`) and Phase 2 (helper + fence). Each surface is independently editable.
 
-- [ ] T020 [US1] [US2] Modify `packages/orchestrator/src/worker/clarification-poster.ts:437` (`integrateClarificationAnswers`) to filter every comment through `isTrustedCommentAuthor(comment, 'answer-scanner', ctx)` before `parseAnswersFromComments`. For each skip, emit one structured info log matching the FR-010 shape (`{ event: 'comment-skipped', surface: 'answer-scanner', commentId, author, authorAssociation, reason }`). Body MUST NOT appear in the log (SC-003). Wire `botLogin` in via the existing `identity.ts` resolution and `config` via `tryLoadCommentTrustConfig(workspaceDir)` (note: config is loaded but has no effect on `answer-scanner`, per FR-008 / SC-009). (FR-004, US1 AC, US2 AC.)
+- [X] T020 [US1] [US2] Modify `packages/orchestrator/src/worker/clarification-poster.ts:437` (`integrateClarificationAnswers`) to filter every comment through `isTrustedCommentAuthor(comment, 'answer-scanner', ctx)` before `parseAnswersFromComments`. For each skip, emit one structured info log matching the FR-010 shape (`{ event: 'comment-skipped', surface: 'answer-scanner', commentId, author, authorAssociation, reason }`). Body MUST NOT appear in the log (SC-003). Wire `botLogin` in via the existing `identity.ts` resolution and `config` via `tryLoadCommentTrustConfig(workspaceDir)` (note: config is loaded but has no effect on `answer-scanner`, per FR-008 / SC-009). (FR-004, US1 AC, US2 AC.)
 
-- [ ] T021 [US1] [US2] In `packages/orchestrator/src/worker/clarification-poster.ts`, when a comment that MATCHED the `Q<N>:` answer pattern is skipped, post one bot explainer comment on the issue (FR-013 / D7):
+- [X] T021 [US1] [US2] In `packages/orchestrator/src/worker/clarification-poster.ts`, when a comment that MATCHED the `Q<N>:` answer pattern is skipped, post one bot explainer comment on the issue (FR-013 / D7):
   - Text: `> Answers from @<author> were not applied (association tier: <TIER>). A trusted member (OWNER/MEMBER/COLLABORATOR) must post or confirm the answers.` Metadata only; comment body MUST NOT be included (SC-007).
   - Idempotence: prefix with hidden marker `<!-- generacy-untrusted-answer:<commentId> -->`. Skip posting if a comment with the same marker already exists on the issue.
   - Generic scanner skips (comments that did not match `Q<N>:`) do NOT post a bot comment — cluster logs only.
 
-- [ ] T022 [US1] [US4] Modify `packages/workflow-engine/src/actions/builtin/speckit/operations/clarify.ts:61` (`buildResumePrompt`) to drop the raw `gh issue view <n> --comments` pass-through. Instead:
+- [X] T022 [US1] [US4] Modify `packages/workflow-engine/src/actions/builtin/speckit/operations/clarify.ts:61` (`buildResumePrompt`) to drop the raw `gh issue view <n> --comments` pass-through. Instead:
   - Fetch comments via `github.getIssueComments()` action-side.
   - Partition via `isTrustedCommentAuthor(..., 'clarify-resume', ctx)`.
   - Emit info skip-log per FR-010 for each skipped comment (surface: `'clarify-resume'`).
   - Wrap trusted comment content into the prompt via `wrapUntrustedData(rendered, 'issue #<n> comments')` (FR-005, FR-007, US4).
 
-- [ ] T023 [US1] [US2] Modify `packages/workflow-engine/src/actions/github/read-pr-feedback.ts:31` (`ReadPRFeedbackAction.executeInternal`) to partition unresolved comments into `{ comments (trusted only), skippedComments }`. Only trusted comments are forwarded to the agent prompt via the existing return shape. `skippedComments` carries only `{ commentId, author, authorAssociation?, reason }` — no body. (FR-006.)
+- [X] T023 [US1] [US2] Modify `packages/workflow-engine/src/actions/github/read-pr-feedback.ts:31` (`ReadPRFeedbackAction.executeInternal`) to partition unresolved comments into `{ comments (trusted only), skippedComments }`. Only trusted comments are forwarded to the agent prompt via the existing return shape. `skippedComments` carries only `{ commentId, author, authorAssociation?, reason }` — no body. (FR-006.)
 
-- [ ] T024 [US2] Modify `packages/orchestrator/src/worker/pr-feedback-handler.ts` to consume `ReadPRFeedbackOutput.skippedComments` and emit one info-level structured log per entry (surface: `'pr-feedback'`), matching the FR-010 shape. Body MUST NOT appear.
+- [X] T024 [US2] Modify `packages/orchestrator/src/worker/pr-feedback-handler.ts` to consume `ReadPRFeedbackOutput.skippedComments` and emit one info-level structured log per entry (surface: `'pr-feedback'`), matching the FR-010 shape. Body MUST NOT appear.
 
-- [ ] T025 [US4] Audit every prompt template that ingests issue/PR-thread content (`specify`, `plan`, `clarify`, `implement`, `tasks`, `address-pr-feedback`) and wrap thread content in `wrapUntrustedData()` per FR-007 / SC-006. Add a prompt-template unit test asserting each ingesting template routes through `wrapUntrustedData` (grep-shaped audit or template-registry loop).
+- [X] T025 [US4] Audit every prompt template that ingests issue/PR-thread content (`specify`, `plan`, `clarify`, `implement`, `tasks`, `address-pr-feedback`) and wrap thread content in `wrapUntrustedData()` per FR-007 / SC-006. Add a prompt-template unit test asserting each ingesting template routes through `wrapUntrustedData` (grep-shaped audit or template-registry loop).
 
 ---
 
@@ -97,23 +97,23 @@ Depends on Phase 1 (`authorAssociation` in `Comment`) and Phase 2 (helper + fenc
 
 Depends on Phase 3.
 
-- [ ] T030 [P] [US1] [US2] Create `packages/orchestrator/src/worker/__tests__/clarification-poster-trust.test.ts` covering (FR-004 / SC-001 / SC-003):
+- [X] T030 [P] [US1] [US2] Create `packages/orchestrator/src/worker/__tests__/clarification-poster-trust.test.ts` covering (FR-004 / SC-001 / SC-003):
   - `NONE`-authored `Q1: answer` comment is dropped from `integrateClarificationAnswers` output.
   - Exactly one skip-log per skipped comment; no `body` field, no body substring, correct `surface`/`commentId`/`author`/`authorAssociation`/`reason`.
   - `OWNER` / `MEMBER` / `COLLABORATOR` / bot-login `Q1: A` answers pass through unmodified (SC-005).
   - Widen-config adding `CONTRIBUTOR` does NOT trust `CONTRIBUTOR` on this surface (SC-009 — answer-scanner pinned).
 
-- [ ] T031 [P] [US1] [US2] Extend the same file with FR-013 / SC-007 tests:
+- [X] T031 [P] [US1] [US2] Extend the same file with FR-013 / SC-007 tests:
   - `NONE`-authored `Q1: A` comment → exactly one bot explainer comment posted on the issue; metadata only (no body substring in the posted body); marker `<!-- generacy-untrusted-answer:<commentId> -->` present.
   - Second scan of same skipped comment → no duplicate posting (idempotence).
   - `NONE`-authored comment that did NOT match `Q<N>:` → no bot comment (generic skips are log-only).
 
-- [ ] T032 [P] [US1] [US2] Create `packages/orchestrator/src/worker/__tests__/pr-feedback-trust.test.ts` covering FR-006 / SC-001 / SC-003:
+- [X] T032 [P] [US1] [US2] Create `packages/orchestrator/src/worker/__tests__/pr-feedback-trust.test.ts` covering FR-006 / SC-001 / SC-003:
   - `NONE`-authored PR review comment is placed in `skippedComments`, not `comments`.
   - Skip-log line shape verified; no body substring.
   - Trusted-tier comments pass through untouched.
 
-- [ ] T033 [P] [US1] [US4] Create a clarify-resume integration test (colocate with existing `clarify.ts` tests) covering FR-005:
+- [X] T033 [P] [US1] [US4] Create a clarify-resume integration test (colocate with existing `clarify.ts` tests) covering FR-005:
   - `gh issue view --comments` no longer appears in the produced resume prompt (grep the prompt string).
   - Trusted comments are rendered inside a `<untrusted-data>` fence.
   - `NONE`-authored comments do not appear anywhere in the prompt.
@@ -122,19 +122,19 @@ Depends on Phase 3.
 
 ## Phase 5: Polish — audit, smoke, documentation
 
-- [ ] T040 [P] [US1] SC-002 grep audit: verify every `getIssueComments` / `getPRComments` / `--comments` call site is adjacent to an `isTrustedCommentAuthor` call OR carries an explicit whitelist code comment naming the reason. Command from quickstart.md §Testing locally:
+- [X] T040 [P] [US1] SC-002 grep audit: verify every `getIssueComments` / `getPRComments` / `--comments` call site is adjacent to an `isTrustedCommentAuthor` call OR carries an explicit whitelist code comment naming the reason. Command from quickstart.md §Testing locally:
   ```
   rg -n "getIssueComments|getPRComments|--comments" packages/
   ```
   Add whitelist comments to any legitimate remaining sites (e.g., non-agent-facing CLI helpers) so future audits stay clean.
 
-- [ ] T041 [P] [US1] SC-004 smoke test: run the workflow-engine against a real public repo (or fixture-replayed live gh output) and assert `Comment.authorAssociation` is non-null on every returned comment for both `getIssueComments` and `getPRComments`. Log capture attached to the smoke test artifact.
+- [X] T041 [P] [US1] SC-004 smoke test: run the workflow-engine against a real public repo (or fixture-replayed live gh output) and assert `Comment.authorAssociation` is non-null on every returned comment for both `getIssueComments` and `getPRComments`. Log capture attached to the smoke test artifact.
 
-- [ ] T042 [P] [US1] SC-005 backfill test: pull ≥20 recent maintainer comments across the `generacy-ai` org (metadata only — no bodies committed to repo), assert the trust helper returns `trusted: true` for every one. Fixture file lives in `packages/workflow-engine/src/security/__tests__/fixtures/` and is metadata-only.
+- [X] T042 [P] [US1] SC-005 backfill test: pull ≥20 recent maintainer comments across the `generacy-ai` org (metadata only — no bodies committed to repo), assert the trust helper returns `trusted: true` for every one. Fixture file lives in `packages/workflow-engine/src/security/__tests__/fixtures/` and is metadata-only.
 
-- [ ] T043 [P] [US3] Add a fixture-based test covering SC-005 for the widen config path: a `.agency/comment-trust.yaml` with `widen.tiers: [CONTRIBUTOR]` and `widen.logins: [external-triage-bot]` produces the expected decision for context surfaces and does not affect the answer-scanner.
+- [X] T043 [P] [US3] Add a fixture-based test covering SC-005 for the widen config path: a `.agency/comment-trust.yaml` with `widen.tiers: [CONTRIBUTOR]` and `widen.logins: [external-triage-bot]` produces the expected decision for context surfaces and does not affect the answer-scanner.
 
-- [ ] T044 [P] [US1] Verify quickstart.md instructions work end-to-end by following them manually: enable default posture (no config), verify a `NONE` comment is skipped; add `.agency/comment-trust.yaml` with `widen.tiers: [CONTRIBUTOR]`, verify a `CONTRIBUTOR` comment is trusted on context surfaces only.
+- [X] T044 [P] [US1] Verify quickstart.md instructions work end-to-end by following them manually: enable default posture (no config), verify a `NONE` comment is skipped; add `.agency/comment-trust.yaml` with `widen.tiers: [CONTRIBUTOR]`, verify a `CONTRIBUTOR` comment is trusted on context surfaces only.
 
 ---
 

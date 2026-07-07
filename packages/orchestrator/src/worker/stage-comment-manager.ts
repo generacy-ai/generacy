@@ -52,6 +52,8 @@ export class StageCommentManager {
    */
   async findOrCreateStageComment(stage: StageType): Promise<number> {
     const marker = STAGE_MARKERS[stage];
+    // #842 audit: whitelist — reads only for STAGE_MARKERS to dedupe bot's
+    // own stage-comment postings; body content is never surfaced to an agent.
     const comments = await this.github.getIssueComments(
       this.owner,
       this.repo,

@@ -43,7 +43,9 @@ function createStep(inputs: Record<string, unknown> = {}): StepDefinition {
   };
 }
 
-// Helper to create mock comment
+// Helper to create mock comment. Defaults to a trusted author_association
+// tier so existing tests (which pre-date #842's author-trust gating) still
+// exercise the "trusted, pass through" path.
 function createMockComment(overrides: Partial<Comment> = {}): Comment {
   return {
     id: 1,
@@ -51,6 +53,7 @@ function createMockComment(overrides: Partial<Comment> = {}): Comment {
     author: 'reviewer',
     created_at: '2024-01-01T00:00:00Z',
     updated_at: '2024-01-01T00:00:00Z',
+    authorAssociation: 'MEMBER',
     ...overrides,
   };
 }

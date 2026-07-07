@@ -68,6 +68,10 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
       this.name = 'GhAuthError';
     }
   },
+  // Author-trust helpers (#842). Default stubs pass every comment through.
+  isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
+  tryLoadCommentTrustConfig: vi.fn(() => undefined),
+  wrapUntrustedData: vi.fn((content: string) => content),
 }));
 
 // ==========================================================================
