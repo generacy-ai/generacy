@@ -27,8 +27,8 @@ export function formatManualAdvanceComment(marker: ManualAdvanceMarker): string 
     ? `<!-- generacy-cockpit:manual-advance gate=${gate} actor=${actor} ts=${ts} -->`
     : `<!-- generacy-cockpit:manual-advance gate=${gate} ts=${ts} -->`;
   const sentence = hasActor
-    ? `Manually advanced \`waiting-for:${gate}\` → \`completed:${gate}\` by **@${actor}**.`
-    : `Manually advanced \`waiting-for:${gate}\` → \`completed:${gate}\`.`;
+    ? `Marked \`completed:${gate}\` by **@${actor}** — \`waiting-for:${gate}\` left in place for the worker to clear on resume.`
+    : `Marked \`completed:${gate}\` — \`waiting-for:${gate}\` left in place for the worker to clear on resume.`;
   return `${commentPrelude}\n\n${sentence}`;
 }
 

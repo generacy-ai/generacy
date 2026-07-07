@@ -38,10 +38,10 @@ When `cockpit advance` flips a gate, it posts **one issue comment** with the sha
 
 ```
 <!-- generacy-cockpit:manual-advance gate=<name> actor=<gh-login> ts=<ISO-8601> -->
-Manually advanced `waiting-for:<name>` → `completed:<name>` by **@<gh-login>**.
+Marked `completed:<name>` by **@<gh-login>** — `waiting-for:<name>` left in place for the worker to clear on resume.
 ```
 
-Then adds `completed:<name>` and removes `waiting-for:<name>` via `gh issue edit`. The HTML comment is the machine-readable side; the human line is for the issue thread reader. No label vocabulary change.
+Then adds `completed:<name>` via `gh issue edit`. `waiting-for:<name>` is intentionally left in place so the poll-path resume detector sees the label pair (see #845); the worker clears both labels plus `agent:paused` on resume. The HTML comment is the machine-readable side; the human line is for the issue thread reader. No label vocabulary change.
 
 **Why**: Spec §Assumptions: "The 'marked' mechanism on manual advance does not require new label vocabulary (no `manual:` prefix); a comment + the `completed:*` label suffices." Body markers were ruled out by the assumption (they conflict with stage trackers); label suffixes were ruled out by Out of Scope ("No new label types or vocabulary changes").
 

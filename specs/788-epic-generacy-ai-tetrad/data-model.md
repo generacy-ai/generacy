@@ -79,7 +79,7 @@ Rendered by `formatManualAdvanceComment(marker)` into:
 ```
 <!-- generacy-cockpit:manual-advance gate=<gate> actor=<actor> ts=<ts> -->
 
-Manually advanced `waiting-for:<gate>` → `completed:<gate>` by **@<actor>**.
+Marked `completed:<gate>` by **@<actor>** — `waiting-for:<gate>` left in place for the worker to clear on resume.
 ```
 
 Validation rules:

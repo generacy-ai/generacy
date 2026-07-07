@@ -1,10 +1,18 @@
 /**
  * `generacy cockpit advance <issue> --gate <name>` — manually flip a gate.
  *
- * Happy-path side-effect order:
- *   1. gh issue comment   (post manual-advance marker)
+ * Label-pair invariant (see #845):
+ *   Poll-path resume detection in label-monitor-service.ts requires BOTH
+ *   `waiting-for:<gate>` AND `completed:<gate>` to be present on the issue
+ *   for the monitor to emit a resume event. The worker owns clearing
+ *   `waiting-for:*`, `completed:*`, and `agent:paused` on the resume path —
+ *   this command MUST NOT remove `waiting-for:<gate>` here, or poll-only
+ *   clusters (no webhook delivery) strand the issue indefinitely at
+ *   {completed:<gate>, agent:in-progress, agent:paused}.
+ *
+ * Side effects (in order):
+ *   1. gh issue comment                        (post manual-advance marker)
  *   2. gh issue edit --add-label completed:<gate>
- *   3. gh issue edit --remove-label waiting-for:<gate>
  *
  * Idempotent (AD-6): if `completed:<gate>` is already on the issue, exits 0
  * with `already advanced …` and posts nothing.
@@ -166,17 +174,9 @@ export async function runAdvance(
     );
   }
 
-  try {
-    await gh.removeLabel(ref.nwo, ref.number, gateDef.waitingLabel);
-  } catch (err) {
-    throw new CockpitExit(
-      1,
-      `Error: cockpit advance: gh issue edit (remove ${gateDef.waitingLabel}): ${(err as Error).message}`,
-    );
-  }
-
   print(
-    `advanced ${ref.nwo}#${ref.number}: ${gateDef.waitingLabel} → ${gateDef.completedLabel}` +
+    `advanced ${ref.nwo}#${ref.number}: ${gateDef.completedLabel} added — ` +
+      `${gateDef.waitingLabel} left in place for the worker to clear on resume` +
       (commentUrl ? ` (comment: ${commentUrl})` : ''),
   );
 }
