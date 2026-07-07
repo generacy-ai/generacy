@@ -873,3 +873,383 @@ describe('clarificationMarker', () => {
     expect(clarificationMarker(316)).toBe('<!-- generacy-clarifications:316 -->');
   });
 });
+
+// ---------------------------------------------------------------------------
+// T002: isQuestionComment — markup co-occurrence (FR-001)
+// ---------------------------------------------------------------------------
+describe('isQuestionComment — markup co-occurrence (FR-001)', () => {
+  it('detects marker-absent comment with all three markups (Q/Context/Options) in section', () => {
+    const body = `### Q1: Auth strategy
+**Context**: The spec is ambiguous.
+**Question**: Which flow?
+**Options**:
+- A) OAuth
+- B) JWT`;
+    expect(isQuestionComment(body)).toBe(true);
+  });
+
+  it('detects marker-absent comment with **Question**: only', () => {
+    const body = `### Q1: Auth strategy
+**Question**: Which flow?`;
+    expect(isQuestionComment(body)).toBe(true);
+  });
+
+  it('detects marker-absent comment with **Context**: only', () => {
+    const body = `### Q1: Auth strategy
+**Context**: Spec ambiguity here.`;
+    expect(isQuestionComment(body)).toBe(true);
+  });
+
+  it('detects marker-absent comment with **Options**: only', () => {
+    const body = `### Q1: Auth strategy
+**Options**:
+- A) OAuth
+- B) JWT`;
+    expect(isQuestionComment(body)).toBe(true);
+  });
+
+  it('does NOT flag comment where markup lives outside any ### Q<n>: section (negative)', () => {
+    // Markup appears in prose before any ### Q<n>: heading, and no such heading is present.
+    const body = `Here is what the bot asked earlier: it said **Question**: what flow? And **Context**: yes.
+But I'm just replying casually — no headings here.`;
+    expect(isQuestionComment(body)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T003 / T004: integrateClarificationAnswers regression fixtures (FR-006, FR-007)
+// (extends the existing describe block)
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers — questions comment must not be self-answered (FR-006, FR-007)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('FR-006: well-formed bot questions comment (with marker) integrates 0 answers', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    // Build a body verbatim from formatComment (contains marker + full markup shape).
+    const questions = parseClarifications(SAMPLE_CLARIFICATIONS);
+    const botBody = formatComment(questions, 42);
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 1, body: botBody, author: 'bot', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('FR-007: variant questions comment (no marker, no ## heading, only ### Q<n>: + markup) integrates 0 answers and gate stays active', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+
+    // The exact agency#374 failure mode: no dedup marker, no `## Clarification Questions`
+    // heading, only per-question `### Q<n>:` headings with **Context** / **Question** markup.
+    const variantBody = `### Q1: Authentication method
+**Context**: The spec mentions user auth.
+**Question**: Which authentication method should be used?
+
+### Q2: Database choice
+**Context**: Multiple databases could work.
+**Question**: PostgreSQL or MongoDB?`;
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 7, body: variantBody, author: 'bot', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    // Gate must stay active — hasPendingClarifications reads the SAME clarifications.md
+    // (mockReadFileSync returns SAMPLE_CLARIFICATIONS unchanged, so pending remains).
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T005: parseAnswersFromComments — line anchoring (FR-005, FR-008)
+// ---------------------------------------------------------------------------
+describe('parseAnswersFromComments — line anchoring (FR-005, FR-008)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('captures Q1: A at line start (positive)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 10, body: 'Q1: A', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(1);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+  });
+
+  it('does NOT capture mid-prose "as per Q1: yes" (negative)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 11,
+        body: 'Great — I agree with your framing, as per Q1: yes I like OAuth.',
+        author: 'user',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it('captures Q1 at line start but skips mid-prose "as per Q2: no" (mixed)', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 12,
+        body: `Q1: A
+some context prose
+as per Q2: no I don't want that`,
+        author: 'user',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    // Only Q1 should be captured; the mid-prose "as per Q2:" must NOT anchor.
+    expect(result.integrated).toBe(1);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+    // Q2 must remain *Pending* (was pending in the fixture).
+    expect(writtenContent).toContain('### Q2: Database choice');
+    // Grab the Q2 section after the write.
+    const q2SectionStart = writtenContent.indexOf('### Q2:');
+    const q2SectionEnd = writtenContent.indexOf('### Q3:');
+    const q2Section = writtenContent.slice(q2SectionStart, q2SectionEnd);
+    expect(q2Section).toContain('*Pending*');
+    expect(q2Section).not.toContain("no I don't want that");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T006: parseAnswersFromComments — suspicious answer skip (FR-002, US2)
+// ---------------------------------------------------------------------------
+describe('parseAnswersFromComments — suspicious answer skip (FR-002, US2)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('skips captured answer containing **Question**: markup and warns SKIPPED_SUSPICIOUS_ANSWER', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    // Craft a comment whose body looks like it slipped past isQuestionComment
+    // (no marker, no ## heading, no ### Q<n>: heading — so the section-scoped
+    // FR-001 rule can't fire), but whose captured Q1 answer text contains
+    // `**Question**:` markup — a signal the bot's question body is being read
+    // back as an answer.
+    const bodyWithQuestionMarkup = `Q1: Some intro text
+**Question**: Which authentication method should be used?
+Q2: PostgreSQL`;
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 501,
+        body: bodyWithQuestionMarkup,
+        author: 'user',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    // Q2 clean → integrates. Q1 tainted → skipped.
+    expect(result.integrated).toBe(1);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: PostgreSQL');
+
+    // Q1 must remain pending.
+    const q1SectionStart = writtenContent.indexOf('### Q1:');
+    const q1SectionEnd = writtenContent.indexOf('### Q2:');
+    const q1Section = writtenContent.slice(q1SectionStart, q1SectionEnd);
+    expect(q1Section).toContain('*Pending*');
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'SKIPPED_SUSPICIOUS_ANSWER',
+        commentId: 501,
+        questionNumber: 1,
+        excerpt: expect.any(String),
+      }),
+      expect.stringContaining('Skipped suspicious clarification answer'),
+    );
+  });
+
+  it('skips captured answer containing **Context**: markup and warns SKIPPED_SUSPICIOUS_ANSWER', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    const bodyWithContextMarkup = `Q1: Some text
+**Context**: The spec mentions user auth but doesn't specify.`;
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 502,
+        body: bodyWithContextMarkup,
+        author: 'user',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'SKIPPED_SUSPICIOUS_ANSWER',
+        commentId: 502,
+        questionNumber: 1,
+      }),
+      expect.stringContaining('Skipped suspicious clarification answer'),
+    );
+  });
+
+  it('does NOT warn when the answer is a clean human answer', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 503,
+        body: 'Q1: OAuth 2.0 works for us\nQ2: PostgreSQL',
+        author: 'user',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    // No SKIPPED_SUSPICIOUS_ANSWER warn should fire on clean answers.
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('SKIPPED_SUSPICIOUS_ANSWER');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T007: integrateClarificationAnswers — residual race warn (FR-004)
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers — residual race warn (FR-004)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+  });
+
+  it('warns TRANSITION_WITH_QUESTION_HEADINGS when a real answer transitions from a comment with ### Q<n>: heading', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    // Comment has ### Q1: heading (per data-model, sourceHadQuestionHeadings=true)
+    // but no markup, so it passes FR-001 and FR-002. Yet integration happens.
+    const body = `### Q1: my answer follows
+Q1: real answer text`;
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 8001, body, author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'TRANSITION_WITH_QUESTION_HEADINGS',
+        commentId: 8001,
+        issueNumber: 42,
+        questionNumber: 1,
+        answer: expect.any(String),
+      }),
+      expect.stringContaining('question headings'),
+    );
+  });
+
+  it('does NOT warn on a normal human answer without ### Q<n>: heading', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 8002, body: 'Q1: OAuth 2.0\nQ2: PostgreSQL', author: 'user', created_at: '', updated_at: '' },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('TRANSITION_WITH_QUESTION_HEADINGS');
+    }
+  });
+
+  it('does NOT warn when the question is already answered (no transition happens)', async () => {
+    // Fixture where Q3 is already answered. Provide a comment with ### Q3: heading
+    // + Q3: answer — the .replace() should NOT change content because Q3's
+    // **Answer**: is not *Pending*.
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 8003,
+        body: `### Q3: my re-answer
+Q3: some overridden text`,
+        author: 'user',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    // Q3 is already answered in the fixture — pendingNumbers excludes 3,
+    // so parseAnswersFromComments does not integrate it. No transition, no warn.
+    expect(result.integrated).toBe(0);
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('TRANSITION_WITH_QUESTION_HEADINGS');
+    }
+  });
+});

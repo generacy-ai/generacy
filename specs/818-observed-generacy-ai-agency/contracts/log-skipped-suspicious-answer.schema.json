@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/log/skipped-suspicious-answer.schema.json",
+  "title": "SKIPPED_SUSPICIOUS_ANSWER log payload",
+  "description": "Structured payload for the pino `warn`-level log line emitted by `parseAnswersFromComments` (in `packages/orchestrator/src/worker/clarification-poster.ts`) when the FR-002 content-based skip fires. Indicates the defense-in-depth filter caught an answer whose captured text contains question-side markdown markup (`**Question**:` or `**Context**:`) — i.e., the answer was probably captured from a bot-authored questions comment that slipped past `isQuestionComment` (FR-001).",
+  "type": "object",
+  "required": ["code", "commentId", "questionNumber", "excerpt"],
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "const": "SKIPPED_SUSPICIOUS_ANSWER",
+      "description": "Machine-readable event code. Distinct from TRANSITION_WITH_QUESTION_HEADINGS so operator dashboards can count defense-working vs defense-failing separately."
+    },
+    "commentId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "GitHub numeric id of the offending comment. Operators can jump to it via https://github.com/OWNER/REPO/issues/N#issuecomment-{commentId}."
+    },
+    "questionNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The question number for which the suspicious answer was captured (1-based, matches the `Q<n>` heading in clarifications.md)."
+    },
+    "excerpt": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "First 120 characters of the captured answer text. Truncated to keep log volume bounded across repeated poll cycles."
+    }
+  }
+}

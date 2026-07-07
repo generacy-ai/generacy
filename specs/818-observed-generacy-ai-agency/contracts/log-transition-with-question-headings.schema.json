@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/log/transition-with-question-headings.schema.json",
+  "title": "TRANSITION_WITH_QUESTION_HEADINGS log payload",
+  "description": "Structured payload for the pino `warn`-level log line emitted by `integrateClarificationAnswers` (in `packages/orchestrator/src/worker/clarification-poster.ts`) when a `*Pending*` → `<answer>` transition is written to clarifications.md from a source comment whose body still contains `### Q<n>:` heading(s). This is the residual-race detector: FR-001 (isQuestionComment) and FR-002 (content skip) both let this comment through, yet its structure resembles a bot-authored questions comment. Alerts here indicate an uncovered failure vector that needs post-mortem.",
+  "type": "object",
+  "required": ["code", "commentId", "issueNumber", "questionNumber", "answer"],
+  "additionalProperties": false,
+  "properties": {
+    "code": {
+      "const": "TRANSITION_WITH_QUESTION_HEADINGS",
+      "description": "Machine-readable event code. Distinct from SKIPPED_SUSPICIOUS_ANSWER (which fires when the filter caught the offender)."
+    },
+    "commentId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "GitHub numeric id of the source comment. Operators can jump to it via https://github.com/OWNER/REPO/issues/N#issuecomment-{commentId}."
+    },
+    "issueNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The GitHub issue number where the transition happened, for cross-referencing with workflow state."
+    },
+    "questionNumber": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The question number that transitioned from *Pending* to answered (1-based)."
+    },
+    "answer": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "First 120 characters of the integrated answer text. Truncated to keep log volume bounded and to prevent large bot-generated bodies from bloating logs."
+    }
+  }
+}
