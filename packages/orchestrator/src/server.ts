@@ -828,9 +828,17 @@ async function activateInBackground(
 
   onInitialized(relayBridge, conversationManager);
 
-  // Server is already listening — start relay bridge directly
+  // Server is already listening — start relay bridge directly.
+  // Fire-and-forget: relayBridge.start() awaits client.connect(), which is a
+  // long-lived reconnect loop that only resolves on disconnect. Awaiting it
+  // here would strand everything below (identity-split detection, the
+  // post-activation dispatch) as unreachable dead code — the bug that made the
+  // #834 boot-resume never fire on wizard-provisioned clusters. Mirrors the
+  // synchronous existing-key path, which also starts the bridge fire-and-forget.
   if (relayBridge) {
-    await relayBridge.start();
+    relayBridge.start().catch((err) => {
+      server.log.error({ err }, 'Relay bridge start failed');
+    });
   }
 
   // Detect identity split after relay bridge has started (wizard-mode path, #750).
