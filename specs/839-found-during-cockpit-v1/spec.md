@@ -49,16 +49,18 @@ This is *not* the rev-2 baseline protocol resurrected. Rev 2 emitted every state
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The sensor MUST emit one NDJSON line per issue in an actionable state during the first poll. | P1 | "First poll" = poll where `prev` snapshot map is empty. |
-| FR-002 | The actionable-state set MUST be exactly: `waiting-for:*`, `completed:validate`, `failed:*`, `needs:intervention`, `agent:error`. | P1 | Matches issue #839 wording verbatim. Any other `completed:*` label is NOT actionable (only `completed:validate`). |
-| FR-003 | Each first-poll emission MUST carry a boolean `initial: true` field on the NDJSON payload. | P1 | Additive schema change — no existing consumer breaks. |
-| FR-004 | Transitions on polls 2..N MUST NOT carry `initial: true` (either `false` or field omitted). | P1 | Preserves existing rev-3 semantics for downstream tooling that keys on `event` type. |
+| FR-001 | The sensor MUST emit one NDJSON line per issue in an actionable state during the first poll. | P1 | "First poll" = poll where `prev` snapshot map is empty. One line per issue, even when the issue carries multiple actionable labels (see Q2). |
+| FR-002 | The actionable-state set MUST be exactly: (a) any label matching `waiting-for:*`, `completed:validate`, `failed:*`, `needs:intervention`, `agent:error`; AND (b) for PRs only, `checksRollup === 'failure'`. | P1 | Any other `completed:*` label is NOT actionable (only `completed:validate`). Per Q5: a red-CI PR with no `failed:*` label MUST also be surfaced at first poll — the transition path (`pr-checks`) never fires when the PR started red. |
+| FR-003 | Each first-poll emission MUST carry `initial: true`, `event: 'label-change'`, and `from: null` on the NDJSON payload. | P1 | Per Q1: reuses the existing `event` enum (no plugin fallback needed for a new discriminator); `from: null` renders naturally as "(none) → <state>"; `initial: true` is the explicit marker. |
+| FR-004 | Transitions on polls 2..N MUST NOT carry the `initial` field at all — it MUST be absent from the emitted JSON. | P1 | Per Q3: schema is `z.literal(true).optional()`. "Field present ⇔ first poll" is the wire contract. Consumers key on truthiness (`if (event.initial)`), not on `=== false`. |
 | FR-005 | Non-actionable states MUST NOT be emitted at first-poll baseline. | P1 | Rules out any accidental drift back to rev-2 "emit every state" protocol. |
 | FR-006 | Actionable-state classification MUST live in the cockpit engine (sensor code), not in plugin command markdown. | P1 | Rejected alternative: plugin-side `status --json` sweep at startup. |
 | FR-007 | The `/cockpit:watch` command markdown MUST require no change to render `initial: true` lines correctly. | P2 | Plugin already treats each NDJSON line as `(print notification + suggestion)`; `initial: true` participates as a normal field. |
 | FR-008 | On watch restart, still-pending actionable items MUST be re-emitted as `initial: true` again (no cross-run dedupe). | P1 | This is the desired behavior — sensor holds no persistent state across runs. |
-| FR-009 | The first-poll sweep MUST cover both issues and PRs — an actionable PR (e.g., PR carrying `waiting-for:review`) is emitted the same as an actionable issue. | P2 | Snapshot map already unions both kinds. |
+| FR-009 | The first-poll sweep MUST cover both issues and PRs — an actionable PR (e.g., PR carrying `waiting-for:review`, or with `checksRollup === 'failure'`) is emitted the same as an actionable issue. | P2 | Snapshot map already unions both kinds. Rollup-based actionability applies to PRs only. |
 | FR-010 | If the first poll returns zero issues (e.g., epic body has zero refs), the sensor MUST emit nothing, matching current behavior. | P2 | No regression on empty epics. |
+| FR-011 | The actionable-emission decision at first poll MUST scan the raw `labels[]` array for any label in the FR-002 set, NOT the classifier's reduced `classified.state`. The emitted line's `sourceLabel` field MUST still be `classified.sourceLabel`. | P1 | Per Q2: live counterexample — issues carrying both `completed:specify` and `waiting-for:clarification` are ranked terminal by the classifier's tier precedence, so trusting `classified.state` would skip the exact issues this feature exists to surface. One line per issue; the wider net decides emission, the classifier decides the `to` state. |
+| FR-012 | Initial-sweep lines within the first poll MUST be emitted in ascending order by `(repo, kind, number)`, matching `snapshotKey` construction. | P2 | Per Q4: deterministic and directly assertable in tests. Urgency-first ordering is a consumer-side presentation concern, not the sensor's. |
 
 ## Success Criteria
 
@@ -68,8 +70,11 @@ This is *not* the rev-2 baseline protocol resurrected. Rev 2 emitted every state
 | SC-002 | Non-actionable baseline stays silent | 0 lines | Fixture where every issue is `phase:plan` / `agent:in-progress`: first poll emits 0 NDJSON lines. |
 | SC-003 | Restart re-surfacing works | 100% | Kill and restart watch against an epic with N pending actionable issues; second run emits N initial lines within its first poll. |
 | SC-004 | Existing transition semantics unchanged | 0 regressions | All existing watch tests in `packages/generacy/src/cli/commands/cockpit/watch/__tests__` continue to pass unmodified except for baseline-related assertions that were previously testing "silent first poll for actionable states". |
-| SC-005 | `initial` field is machine-verifiable | 100% valid | Every NDJSON line emitted during first poll validates against the updated `CockpitEventSchema` with `initial: true`; every subsequent-poll line validates with `initial: false` or the field absent. |
+| SC-005 | `initial` field is machine-verifiable | 100% valid | Every NDJSON line emitted during first poll validates against the updated `CockpitEventSchema` with `initial: true`, `event: 'label-change'`, `from: null`; every subsequent-poll line validates with the `initial` field ABSENT (schema: `z.literal(true).optional()`). |
 | SC-006 | No actionable-state literal duplication | 1 source | The list of actionable labels/states appears in exactly one file (a new engine-side classifier). Grep for `'completed:validate'` outside that file returns nothing new. |
+| SC-007 | Label-scan sweep catches classifier-outranked actionable labels | 100% recall | Fixture: an issue carrying both `completed:specify` AND `waiting-for:clarification` MUST produce one initial line (regression guard for the Q2 counterexample). |
+| SC-008 | Initial-sweep ordering is deterministic | Byte-stable | Given a fixed input snapshot, the first-poll NDJSON output is byte-identical across runs when compared line-for-line, sorted by `(repo, kind, number)`. |
+| SC-009 | Red-CI PRs surfaced at baseline | 0 missed | Fixture: a PR with `checksRollup === 'failure'` and no `failed:*` label MUST produce one initial line at first poll (regression guard for the Q5 concern). |
 
 ## Assumptions
 
@@ -88,12 +93,24 @@ This is *not* the rev-2 baseline protocol resurrected. Rev 2 emitted every state
 - Cloud-side or UI consumers of the NDJSON stream — none exist yet (the plugin is the only consumer today).
 - Changes to `cockpit status` or `cockpit advance` output formats.
 
+## Clarifications
+
+Batch 1 — 2026-07-07 (see [`clarifications.md`](./clarifications.md)):
+
+- **Q1 → A**: First-poll lines use `event: 'label-change'`, `from: null`, `initial: true`. No new `event` enum value (protects FR-007).
+- **Q2 → B**: Actionable-emission decision scans raw `labels[]` (not `classified.state`) to avoid the tier-precedence trap where `completed:specify` outranks `waiting-for:*`. Emitted `sourceLabel` still comes from the classifier. One line per issue.
+- **Q3 → A**: On polls 2..N, the `initial` field is ABSENT (not present-and-false). Schema: `z.literal(true).optional()`. Consumers key on truthiness.
+- **Q4 → A**: Initial-sweep lines sort by `(repo, kind, number)` ascending. Deterministic; matches `snapshotKey`.
+- **Q5 → B**: PRs with `checksRollup === 'failure'` (and no `failed:*` label) MUST also be emitted at first poll. FR-002 amended accordingly. Rationale: the initial sweep must show what the transition stream would have shown had the watcher been running, collapsed to current state — and `pr-checks` transitions never fire for a PR that started red.
+
 ## Design Notes (for reference — refined during `/speckit:plan`)
 
 - Emission plumbing lives in `packages/generacy/src/cli/commands/cockpit/watch/diff.ts` (`computeTransitions`) — the `if (prev.size === 0) return [];` guard on line ~134 is the exact place to branch into the startup-sweep code path.
-- The actionable-state classifier is new engine surface; the only file that hard-codes the list should be a single module (e.g., `packages/cockpit/src/state/actionable.ts` or a new file under `packages/generacy/src/cli/commands/cockpit/watch/`), consumed by `computeTransitions`.
-- `CockpitEventSchema` in `emit.ts` gains an optional `initial: z.boolean().optional()` field (or `z.literal(true).optional()` for stricter typing on the sensor side).
+- The actionable-state classifier is new engine surface; the only file that hard-codes the list should be a single module (e.g., `packages/cockpit/src/state/actionable.ts` or a new file under `packages/generacy/src/cli/commands/cockpit/watch/`), consumed by `computeTransitions`. The check operates on the raw `Snapshot.labels[]` array (Q2), not the reduced `classified.state`.
+- `CockpitEventSchema` in `emit.ts` gains `initial: z.literal(true).optional()` (Q3 — strict typing; field is either `true` or absent, never `false`).
 - Behavior on polls 2..N stays byte-identical to today for downstream compatibility.
+- Sweep sort key: `(repo, kind, number)` ascending, matching `snapshotKey` construction (Q4).
+- The actionable predicate takes both `labels[]` AND (for PRs only) the `checksRollup` field (Q5).
 
 ---
 
