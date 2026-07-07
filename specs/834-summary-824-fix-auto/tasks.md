@@ -10,7 +10,7 @@
 
 ## Phase 1: Helper module (new source file)
 
-- [ ] T001 [US1] Create `packages/orchestrator/src/services/post-activation-dispatch.ts` implementing the full contract from `specs/834-summary-824-fix-auto/contracts/helper-contract.md`:
+- [X] T001 [US1] Create `packages/orchestrator/src/services/post-activation-dispatch.ts` implementing the full contract from `specs/834-summary-824-fix-auto/contracts/helper-contract.md`:
   - Export `DispatchOutcome = 'retry' | 'resume' | 'noop'`.
   - Export `DispatchOptions` interface: `logger: FastifyBaseLogger`, optional `sendRelayEvent?: (channel, payload) => void`, optional test-only `retryServiceFactory` / `resumeServiceFactory`.
   - Export `async function runPostActivationBranch(opts): Promise<DispatchOutcome>`.
@@ -25,7 +25,7 @@
 
 ## Phase 2: Wire helper into both `server.ts` branches
 
-- [ ] T002 [US1] Refactor env-key branch in `packages/orchestrator/src/server.ts` (~L470-503, following `initializeRelayBridge()` + `detectIdentitySplit(...)`). Replace the existing inline `new PostActivationRetryService(...)` + `checkPostActivationState()` + `if (needsRetry) / else if (activated && postActivationComplete)` block with a single call:
+- [X] T002 [US1] Refactor env-key branch in `packages/orchestrator/src/server.ts` (~L470-503, following `initializeRelayBridge()` + `detectIdentitySplit(...)`). Replace the existing inline `new PostActivationRetryService(...)` + `checkPostActivationState()` + `if (needsRetry) / else if (activated && postActivationComplete)` block with a single call:
   ```ts
   await runPostActivationBranch({
     logger: server.log,
@@ -36,7 +36,7 @@
   ```
   Preserve the exact `sendRelayEvent` shape used today by inlining the same `relayClientRef!.send(...)` expression. Add the import from `./services/post-activation-dispatch.js`. Remove the now-unused `PostActivationRetryService` / `BootResumeService` imports if no other reference remains in this branch (verify with grep — the wizard branch's inline block still uses `PostActivationRetryService` until T003 lands).
 
-- [ ] T003 [US1] Refactor wizard branch inside `activateInBackground()` in `packages/orchestrator/src/server.ts` (~L879-896, after `detectIdentitySplit(...)`). Replace the existing retry-only block with the same helper call:
+- [X] T003 [US1] Refactor wizard branch inside `activateInBackground()` in `packages/orchestrator/src/server.ts` (~L879-896, after `detectIdentitySplit(...)`). Replace the existing retry-only block with the same helper call:
   ```ts
   await runPostActivationBranch({
     logger: server.log,
@@ -49,7 +49,7 @@
 
 ## Phase 3: Load-bearing regression test (per Q3→A, SC-003)
 
-- [ ] T004 [US1] Create `packages/orchestrator/src/__tests__/server-boot-resume-wizard-branch.test.ts`. Mirror the mock scaffolding from `server-background-activation.test.ts` (see data-model.md §Test surface):
+- [X] T004 [US1] Create `packages/orchestrator/src/__tests__/server-boot-resume-wizard-branch.test.ts`. Mirror the mock scaffolding from `server-background-activation.test.ts` (see data-model.md §Test surface):
   - `vi.mock('../activation/index.js', () => ({ activate: vi.fn() }))`.
   - `vi.mock('@generacy-ai/cluster-relay', ...)` — stub `ClusterRelayClient` constructor.
   - `vi.mock('@generacy-ai/control-plane', ...)` — stub `TunnelHandler`, `getCodeServerManager()` → null.
@@ -64,7 +64,7 @@
 
 ## Phase 4: Optional helper unit test (per Q3→C complement)
 
-- [ ] T005 [P] [US1] Create `packages/orchestrator/src/__tests__/post-activation-dispatch.test.ts`. Direct import of `runPostActivationBranch`; construct fake services and inject via `retryServiceFactory` / `resumeServiceFactory`. Cases from data-model.md §Test surface:
+- [X] T005 [P] [US1] Create `packages/orchestrator/src/__tests__/post-activation-dispatch.test.ts`. Direct import of `runPostActivationBranch`; construct fake services and inject via `retryServiceFactory` / `resumeServiceFactory`. Cases from data-model.md §Test surface:
   - `retry outcome` — state `{needsRetry: true}` → outcome `'retry'`; retry called; resume not called.
   - `resume outcome` — state `{activated: true, postActivationComplete: true, needsRetry: false}` → outcome `'resume'`; resume called; retry not called.
   - `noop outcome` — state `{activated: false}` → outcome `'noop'`; neither called.
@@ -75,7 +75,7 @@
 
 ## Phase 5: Validation
 
-- [ ] T006 [US1] Run `pnpm --filter @generacy-ai/orchestrator typecheck` and `pnpm --filter @generacy-ai/orchestrator test` (or the repo's canonical equivalents). Verify:
+- [X] T006 [US1] Run `pnpm --filter @generacy-ai/orchestrator typecheck` and `pnpm --filter @generacy-ai/orchestrator test` (or the repo's canonical equivalents). Verify:
   - Typecheck passes.
   - T004 test file passes end-to-end.
   - If T005 was landed: T005 tests pass.

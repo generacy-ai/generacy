@@ -57,8 +57,7 @@ import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
-import { PostActivationRetryService } from './services/post-activation-retry.js';
-import { BootResumeService } from './services/boot-resume-service.js';
+import { runPostActivationBranch } from './services/post-activation-dispatch.js';
 import { detectIdentitySplit } from './services/identity-split-detector.js';
 import {
   TunnelHandler,
@@ -467,8 +466,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       server.log.error({ err }, 'Identity-split detection failed (non-fatal)');
     });
 
-    // Check if post-activation needs to be retried (activated but completion flag absent)
-    const retryService = new PostActivationRetryService({
+    await runPostActivationBranch({
       logger: server.log,
       sendRelayEvent: relayClientRef
         ? (channel, payload) => relayClientRef!.send({
@@ -479,28 +477,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           } as unknown as import('./types/relay.js').RelayMessage)
         : undefined,
     });
-    const postActivationState = retryService.checkPostActivationState();
-    if (postActivationState.needsRetry) {
-      server.log.info('Post-activation incomplete on restart — triggering retry');
-      retryService.triggerPostActivationRetry().catch((err) => {
-        server.log.error({ err }, 'Post-activation retry failed');
-      });
-    } else if (postActivationState.activated && postActivationState.postActivationComplete) {
-      const resumeService = new BootResumeService({
-        logger: server.log,
-        sendRelayEvent: relayClientRef
-          ? (channel, payload) => relayClientRef!.send({
-              type: 'event',
-              event: channel,
-              data: payload,
-              timestamp: new Date().toISOString(),
-            } as unknown as import('./types/relay.js').RelayMessage)
-          : undefined,
-      });
-      resumeService.triggerBootResume().catch((err) => {
-        server.log.error({ err }, 'Boot resume failed');
-      });
-    }
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
@@ -874,9 +850,7 @@ async function activateInBackground(
     server.log.error({ err }, 'Identity-split detection failed (non-fatal)');
   });
 
-  // Check if post-activation needs to be retried (wizard-mode: activation just completed
-  // but post-activation may have failed on a prior container lifecycle)
-  const retryService = new PostActivationRetryService({
+  await runPostActivationBranch({
     logger: server.log,
     sendRelayEvent: localRelayClient
       ? (channel, payload) => localRelayClient!.send({
@@ -887,13 +861,6 @@ async function activateInBackground(
         } as unknown as import('./types/relay.js').RelayMessage)
       : undefined,
   });
-  const postActivationState = retryService.checkPostActivationState();
-  if (postActivationState.needsRetry) {
-    server.log.info('Post-activation incomplete after wizard activation — triggering retry');
-    retryService.triggerPostActivationRetry().catch((err) => {
-      server.log.error({ err }, 'Post-activation retry failed');
-    });
-  }
 }
 
 /**
