@@ -9,6 +9,26 @@ const TASK_LIST_RE = /^\s*-\s*\[[ xX]\]\s+(.+?)\s*$/;
 const REF_SHAPED_RE =
   /(?:^|[\s(])(?:#\d+|\[#?\d+\]|\[[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#\d+\]|[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#\d+|https:\/\/github\.com\/[A-Za-z0-9._\-\/]+)/;
 
+// #826 (FR-005): rejection-family taxonomy carried in warnings[]. Each returned
+// string contains exactly one documented marker substring so tests can assert
+// via toContain() without pinning full wording. Do not remove or rename these
+// three markers without updating parse-epic-body.test.ts and
+// contracts/parser-behavior.md §Warnings:
+//   - "bare '#N'"
+//   - "titled but not ref-shaped"
+//   - "URL path not /(issues|pull)/N"
+const BARE_HASH_N_RE = /^#\d+$/;
+const URL_LIKE_RE = /^https?:\/\//;
+function classifyRejection(token: string): string {
+  if (BARE_HASH_N_RE.test(token)) {
+    return "unrecognised shape — bare '#N' shorthand is not accepted";
+  }
+  if (URL_LIKE_RE.test(token)) {
+    return 'unrecognised shape — URL path not /(issues|pull)/N';
+  }
+  return 'unrecognised shape — titled but not ref-shaped';
+}
+
 function sortRefs(refs: Iterable<IssueRef>): IssueRef[] {
   return [...refs].sort((a, b) => {
     if (a.repo < b.repo) return -1;
@@ -69,12 +89,22 @@ export function parseEpicBody(body: string): ParsedEpicBody {
     const task = TASK_LIST_RE.exec(line);
     if (task == null) continue;
     const refText = task[1]!.trim();
+    // #826: the ref is only the first whitespace-delimited token; everything after
+    // is a free-form title consumed unparsed. All four accepted shapes in
+    // ref-shapes.ts are whitespace-free tokens, so first-token extraction is
+    // sufficient and passing the full refText to parseRef would fail every
+    // ^…$-anchored shape.
+    const refToken = refText.split(/\s+/)[0]!;
 
-    const ref = parseRef(refText);
+    const ref = parseRef(refToken);
     if (ref == null) {
-      if (REF_SHAPED_RE.test(refText)) {
+      // First-token silence rule (FR-007): if the first token is not ref-shaped,
+      // stay silent regardless of what appears later on the line — prose
+      // checkboxes that mention a ref mid-sentence never warn.
+      if (REF_SHAPED_RE.test(refToken)) {
+        const reason = classifyRejection(refToken);
         warnings.push(
-          `cockpit: ignored ref-shaped task-list line ${lineNumber}: '${refText}' (unrecognised shape — bare '#N' shorthand is not accepted)`,
+          `cockpit: ignored ref-shaped task-list line ${lineNumber}: '${refText}' (${reason})`,
         );
       }
       continue;
