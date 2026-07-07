@@ -25,11 +25,13 @@ import { parseIssueRef, type IssueRef } from './resolver.js';
 import { GATES, listGates, type GateDefinition } from './gate-vocabulary.js';
 import { formatManualAdvanceComment } from './manual-advance-marker.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
+import { resolveCockpitIdentity } from './shared/identity.js';
 
 export interface AdvanceCommandDeps {
   runner?: CommandRunner;
   gh?: GhWrapper;
   loadConfig?: typeof loadCockpitConfig;
+  env?: NodeJS.ProcessEnv;
   now?: () => Date;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -132,13 +134,18 @@ export async function runAdvance(
     );
   }
 
-  // Happy path. Resolve actor via gh api user.
-  let actor: string;
-  try {
-    actor = await gh.getCurrentUser();
-  } catch (err) {
-    throw new CockpitExit(1, `Error: cockpit advance: gh api user: ${(err as Error).message}`);
-  }
+  // Happy path. Resolve actor via the shared identity helper. Optional mode
+  // means an unresolvable identity is cosmetic degradation — the label/gate
+  // transition still happens (FR-003).
+  const { login: actor } = await resolveCockpitIdentity({
+    flag: undefined,
+    configAssignee: loaded.config.assignee,
+    gh,
+    logger: log,
+    verb: 'advance',
+    mode: 'optional',
+    env: deps.env,
+  });
 
   const ts = (deps.now ?? (() => new Date()))().toISOString();
   const body = formatManualAdvanceComment({ gate: gateDef.name, actor, ts });

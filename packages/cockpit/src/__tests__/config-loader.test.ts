@@ -35,6 +35,26 @@ describe('loadCockpitConfig', () => {
     expect(result.warnings).toEqual([]);
   });
 
+  it('reads cockpit.assignee and round-trips it through the loader', async () => {
+    await writeConfig(cwd, 'cockpit:\n  assignee: someone\n');
+    const result = await loadCockpitConfig({
+      cwd,
+      whoami: async () => null,
+    });
+    expect(result.source).toBe('cockpit-block');
+    expect(result.config.assignee).toBe('someone');
+  });
+
+  it('rejects empty-string cockpit.assignee via Zod parse', async () => {
+    await writeConfig(cwd, "cockpit:\n  assignee: ''\n");
+    await expect(
+      loadCockpitConfig({
+        cwd,
+        whoami: async () => null,
+      }),
+    ).rejects.toThrow();
+  });
+
   it('falls back to whoami() when no owner is set', async () => {
     const result = await loadCockpitConfig({
       cwd,

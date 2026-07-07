@@ -12,6 +12,7 @@ import * as p from '@clack/prompts';
 import {
   GhCliWrapper,
   LoudResolverError,
+  loadCockpitConfig,
   nodeChildProcessRunner,
   resolveEpic,
   matchPhaseHeading,
@@ -22,8 +23,10 @@ import {
   type ParsedPhase,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
+import { getLogger } from '../../utils/logger.js';
 import { resolveIssueContext } from './resolver.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
+import { LoudIdentityError, resolveCockpitIdentity } from './shared/identity.js';
 
 const DEFAULT_LABEL = 'process:speckit-feature';
 
@@ -74,6 +77,8 @@ export interface QueueCommandDeps {
   runner?: CommandRunner;
   gh?: GhWrapper;
   cockpitGh?: GhWrapper;
+  loadConfig?: typeof loadCockpitConfig;
+  env?: NodeJS.ProcessEnv;
   prompt?: (message: string) => Promise<boolean>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
@@ -219,6 +224,10 @@ export async function runQueue(
   const gh = deps.gh ?? new GhCliWrapper();
   const cockpitGh = deps.cockpitGh ?? new GhCliWrapper(deps.runner ?? nodeChildProcessRunner);
 
+  const loadedConfig = await (deps.loadConfig ?? loadCockpitConfig)({});
+  const log = getLogger();
+  for (const w of loadedConfig.warnings) log.warn(w);
+
   let expandedEpicRef: string;
   try {
     const resolvedCtx = await resolveIssueContext({ issue: epicRef, runner: deps.runner });
@@ -295,17 +304,22 @@ export async function runQueue(
   }
 
   let assignee: string;
-  if (opts.assignee != null) {
-    assignee = opts.assignee;
-  } else {
-    try {
-      assignee = await cockpitGh.getCurrentUser();
-    } catch (err) {
-      throw new CockpitExit(
-        1,
-        `Error: cockpit queue: gh api user: ${(err as Error).message}`,
-      );
+  try {
+    const resolved = await resolveCockpitIdentity({
+      flag: opts.assignee,
+      configAssignee: loadedConfig.config.assignee,
+      gh: cockpitGh,
+      logger: log,
+      verb: 'queue',
+      mode: 'required',
+      env: deps.env,
+    });
+    assignee = resolved.login;
+  } catch (err) {
+    if (err instanceof LoudIdentityError) {
+      throw new CockpitExit(1, `Error: ${err.message}`);
     }
+    throw err;
   }
 
   for (const line of renderPreview(epic, phase, targetRepo, workflowLabel, assignee, rows)) {

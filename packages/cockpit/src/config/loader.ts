@@ -68,7 +68,8 @@ export async function loadCockpitConfig(
   }
 
   const parsedCockpit = CockpitConfigSchema.parse(cockpitBlock ?? {});
-  const source: CockpitConfigSource = parsedCockpit.owner != null ? 'cockpit-block' : 'defaults';
+  const source: CockpitConfigSource =
+    parsedCockpit.owner != null || parsedCockpit.assignee != null ? 'cockpit-block' : 'defaults';
 
   let owner: string | undefined = parsedCockpit.owner;
   if (owner == null) {
@@ -82,7 +83,7 @@ export async function loadCockpitConfig(
     }
   }
 
-  const config: CockpitConfig = { owner };
+  const config: CockpitConfig = { owner, assignee: parsedCockpit.assignee };
 
   return { config, source, warnings };
 }

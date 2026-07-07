@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const CockpitConfigSchema = z.object({
   owner: z.string().min(1).optional(),
+  assignee: z.string().min(1).optional(),
 });
 
 export type CockpitConfig = z.infer<typeof CockpitConfigSchema>;
