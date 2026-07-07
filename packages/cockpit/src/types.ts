@@ -15,6 +15,7 @@ export const COCKPIT_STATES = [
   'waiting',
   'error',
   'terminal',
+  'stage-complete',
   'unknown',
 ] as const;
 

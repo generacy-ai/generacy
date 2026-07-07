@@ -10,7 +10,8 @@ export const TIER_RANK: Record<CockpitState, number> = {
   waiting: 2,
   active: 3,
   pending: 4,
-  unknown: 5,
+  'stage-complete': 5,
+  unknown: 6,
 };
 
 /**
@@ -29,6 +30,25 @@ export const WAITING_PIPELINE_ORDER: string[] = [
   'waiting-for:tasks-review',
   'waiting-for:implementation-review',
   'waiting-for:manual-validation',
+];
+
+// Latest-phase-wins order for the `stage-complete` tier (FR-005).
+// Reverse of pipeline: labels closer to workflow end come first so lower
+// index wins the sourceLabel slot when multiple demoted completed:* co-occur.
+export const STAGE_COMPLETE_PIPELINE_ORDER: string[] = [
+  'completed:implementation-review',
+  'completed:implement',
+  'completed:tasks-review',
+  'completed:tasks',
+  'completed:plan-review',
+  'completed:plan',
+  'completed:clarification-review',
+  'completed:clarification',
+  'completed:clarify',
+  'completed:spec-review',
+  'completed:specify',
+  'completed:setup',
+  'completed:manual-validation',
 ];
 
 /**
@@ -51,6 +71,17 @@ export function compareSourceLabels(
     const bi = WAITING_PIPELINE_ORDER.indexOf(b);
     if (ai !== -1 || bi !== -1) {
       // At least one is in the pipeline order: listed gates win over unlisted.
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    }
+    // Neither listed: fall through to workflow-index comparison.
+  }
+
+  if (tier === 'stage-complete') {
+    const ai = STAGE_COMPLETE_PIPELINE_ORDER.indexOf(a);
+    const bi = STAGE_COMPLETE_PIPELINE_ORDER.indexOf(b);
+    if (ai !== -1 || bi !== -1) {
       if (ai === -1) return 1;
       if (bi === -1) return -1;
       return ai - bi;

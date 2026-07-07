@@ -13,6 +13,7 @@ export const STATE_COLOR: Record<CockpitState, ChalkFn> = {
   waiting: chalk.yellow,
   active: chalk.cyan,
   pending: chalk.dim,
+  'stage-complete': chalk.dim,
   unknown: chalk.dim,
 };
 
