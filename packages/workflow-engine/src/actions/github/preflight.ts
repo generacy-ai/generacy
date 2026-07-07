@@ -204,6 +204,8 @@ export class PreflightAction extends BaseAction {
       const prNumber = existingPR?.number;
 
       // Get unresolved comments count
+      // #842 audit: whitelist — counts unresolved comments as metadata for
+      // preflight report; body content is never surfaced to an agent.
       let unresolvedComments = 0;
       if (prNumber) {
         try {

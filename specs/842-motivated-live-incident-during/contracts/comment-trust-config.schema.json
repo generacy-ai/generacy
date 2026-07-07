@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/comment-trust-config.json",
+  "title": "CommentTrustConfig",
+  "description": "Workspace-level config at .agency/comment-trust.yaml. Widens the default author_association allowlist for CONTEXT ingestion surfaces (clarify-resume, pr-feedback) only. The clarify answer-scanner is pinned to the hard default (OWNER/MEMBER/COLLABORATOR + cluster bot) regardless of this config.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "widen": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Additive allowlist entries. Never removes default-trusted tiers (OWNER/MEMBER/COLLABORATOR). Applies to context surfaces only.",
+      "properties": {
+        "tiers": {
+          "type": "array",
+          "description": "GitHub author_association tiers to treat as trusted on context surfaces. Common: CONTRIBUTOR.",
+          "items": {
+            "type": "string",
+            "examples": ["CONTRIBUTOR"]
+          },
+          "default": []
+        },
+        "logins": {
+          "type": "array",
+          "description": "Specific GitHub logins to treat as trusted on context surfaces regardless of tier.",
+          "items": {
+            "type": "string",
+            "examples": ["alice", "bob"]
+          },
+          "default": []
+        }
+      },
+      "default": {
+        "tiers": [],
+        "logins": []
+      }
+    }
+  },
+  "examples": [
+    {
+      "widen": {
+        "tiers": ["CONTRIBUTOR"]
+      }
+    },
+    {
+      "widen": {
+        "logins": ["alice"]
+      }
+    },
+    {
+      "widen": {
+        "tiers": ["CONTRIBUTOR"],
+        "logins": ["external-triage-bot"]
+      }
+    }
+  ]
+}

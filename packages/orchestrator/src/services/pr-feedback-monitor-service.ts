@@ -154,6 +154,10 @@ export class PrFeedbackMonitorService {
     }
 
     // 3. Fetch review comments and filter for unresolved threads
+    // #842 audit: whitelist — collects only `id` values (unresolvedThreadIds)
+    // for `waiting-for:address-pr-feedback` gating; body content is never
+    // surfaced to an agent. The downstream address-pr-feedback handler applies
+    // full author-trust gating before any body reaches the CLI.
     let unresolvedThreadIds: number[];
     try {
       const comments = await client.getPRComments(owner, repo, prNumber);

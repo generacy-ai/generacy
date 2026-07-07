@@ -1,5 +1,10 @@
-import { createGitHubClient } from '@generacy-ai/workflow-engine';
-import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import {
+  createGitHubClient,
+  isTrustedCommentAuthor,
+  tryLoadCommentTrustConfig,
+  wrapUntrustedData,
+} from '@generacy-ai/workflow-engine';
+import type { Comment, GitHubClient } from '@generacy-ai/workflow-engine';
 import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -125,15 +130,54 @@ export class PrFeedbackHandler {
       }
 
       // 3. Fetch fresh unresolved review threads
-      let allComments;
-      let unresolvedComments;
+      let allComments: Comment[];
+      let unresolvedComments: Comment[];
       try {
         allComments = await github.getPRComments(owner, repo, prNumber);
-        unresolvedComments = allComments.filter((c) => c.resolved === false);
+
+        // Author-trust gating (#842). Log each skip and drop untrusted
+        // comments before the CLI ever sees them. `pr-feedback` surface
+        // honors widen-config from .agency/comment-trust.yaml.
+        const trustConfig = tryLoadCommentTrustConfig(checkoutPath, this.logger);
+        const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+        const trustedComments: Comment[] = [];
+        for (const c of allComments) {
+          const decision = isTrustedCommentAuthor(
+            c,
+            'pr-feedback',
+            {
+              logger: this.logger,
+              ...(botLogin ? { botLogin } : {}),
+              ...(trustConfig ? { config: trustConfig } : {}),
+            },
+          );
+          if (decision.trusted) {
+            trustedComments.push(c);
+          } else {
+            this.logger.info(
+              {
+                event: 'comment-skipped',
+                surface: 'pr-feedback',
+                commentId: c.id,
+                author: c.author,
+                authorAssociation: c.authorAssociation,
+                reason: decision.reason,
+              },
+              'Skipped PR review comment from untrusted author',
+            );
+          }
+        }
+
+        unresolvedComments = trustedComments.filter((c) => c.resolved === false);
 
         this.logger.info(
-          { prNumber, totalComments: allComments.length, unresolved: unresolvedComments.length },
-          'Fetched PR review comments',
+          {
+            prNumber,
+            totalComments: allComments.length,
+            trustedComments: trustedComments.length,
+            unresolved: unresolvedComments.length,
+          },
+          'Fetched PR review comments (author-trust filtered)',
         );
       } catch (error) {
         this.logger.error(
@@ -265,11 +309,14 @@ export class PrFeedbackHandler {
       })
       .join('\n\n');
 
+    // #842: fence ingested thread content (author-trust filtered upstream).
+    const fenced = wrapUntrustedData(commentList, `PR #${prNumber} review comments`);
+
     return `You are addressing PR review feedback for PR #${prNumber} (linked to issue #${issueNumber}).
 
 The following unresolved review comments need to be addressed:
 
-${commentList}
+${fenced}
 
 **Instructions:**
 1. Read and understand each review comment above

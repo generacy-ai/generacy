@@ -245,6 +245,8 @@ export class GhCliGitHubClient implements GitHubClient {
     }
 
     // gh doesn't return the comment details, so we need to fetch the latest comment
+    // #842 audit: whitelist — fetches the bot's own just-posted comment for
+    // metadata; content is not surfaced to any agent.
     const comments = await this.getIssueComments(owner, repo, number);
     const latest = comments[comments.length - 1];
     if (!latest) {
@@ -271,6 +273,7 @@ export class GhCliGitHubClient implements GitHubClient {
       user: { login: string };
       created_at: string;
       updated_at: string;
+      author_association?: string;
     }> | null;
 
     if (!data) {
@@ -283,6 +286,7 @@ export class GhCliGitHubClient implements GitHubClient {
       author: c.user.login,
       created_at: c.created_at,
       updated_at: c.updated_at,
+      authorAssociation: c.author_association,
     }));
   }
 
@@ -439,7 +443,7 @@ export class GhCliGitHubClient implements GitHubClient {
     const result = await this.executeGh([
       'api',
       `/repos/${owner}/${repo}/pulls/${number}/comments`,
-      '--jq', '.[] | {id: .id, body: .body, author: .user.login, path: .path, line: .line, in_reply_to_id: .in_reply_to_id, created_at: .created_at, updated_at: .updated_at}',
+      '--jq', '.[] | {id: .id, body: .body, author: .user.login, author_association: .author_association, path: .path, line: .line, in_reply_to_id: .in_reply_to_id, created_at: .created_at, updated_at: .updated_at}',
     ]);
 
     if (result.exitCode !== 0) {
@@ -456,6 +460,7 @@ export class GhCliGitHubClient implements GitHubClient {
         id: data['id'] as number,
         body: data['body'] as string,
         author: data['author'] as string,
+        authorAssociation: data['author_association'] as string | undefined,
         path: data['path'] as string | undefined,
         line: data['line'] as number | undefined,
         in_reply_to_id: data['in_reply_to_id'] as number | undefined,

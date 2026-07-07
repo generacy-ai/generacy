@@ -43,6 +43,12 @@ const mockGitHub = {
 // ---------------------------------------------------------------------------
 vi.mock('@generacy-ai/workflow-engine', () => ({
   createGitHubClient: vi.fn(() => mockGitHub),
+  // Author-trust helpers (#842). Default stubs pass every comment through
+  // as trusted so existing test fixtures (comments without authorAssociation)
+  // still exercise the trusted-path behaviors these tests were written for.
+  isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
+  tryLoadCommentTrustConfig: vi.fn(() => undefined),
+  wrapUntrustedData: vi.fn((content: string) => content),
 }));
 
 // ---------------------------------------------------------------------------

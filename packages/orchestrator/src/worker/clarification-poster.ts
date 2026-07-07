@@ -8,7 +8,91 @@
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  isTrustedCommentAuthor,
+  tryLoadCommentTrustConfig,
+  type CommentTrustContext,
+} from '@generacy-ai/workflow-engine';
+import type { Comment as TrustComment } from '@generacy-ai/workflow-engine';
 import type { WorkerContext, Logger } from './types.js';
+
+/**
+ * Resolve cluster bot login from env vars (identity.ts chain). The
+ * `gh api /user` fallback is intentionally skipped here — it fails on
+ * App-token clusters and env vars are the load-bearing tier in-cluster.
+ */
+function resolveBotLoginFromEnv(): string | undefined {
+  return process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'] ?? undefined;
+}
+
+/**
+ * Adapter: pino-style logger (WorkerContext.Logger) → workflow-engine Logger.
+ * The workflow-engine helper calls `logger.warn(message, obj)` (message first);
+ * pino-style loggers accept `warn(obj, message)`. Bridge the arg order.
+ */
+function toEngineLogger(logger: Logger): CommentTrustContext['logger'] {
+  return {
+    info: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.info(meta as Record<string, unknown>, msg);
+      else logger.info(msg);
+    },
+    warn: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.warn(meta as Record<string, unknown>, msg);
+      else logger.warn(msg);
+    },
+    error: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.error(meta as Record<string, unknown>, msg);
+      else logger.error(msg);
+    },
+    debug: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.debug(meta as Record<string, unknown>, msg);
+      else logger.debug(msg);
+    },
+  };
+}
+
+/**
+ * Emit a structured skip-log for FR-010. Body is deliberately absent
+ * (SC-003).
+ */
+function logCommentSkipped(
+  logger: Logger,
+  surface: 'answer-scanner' | 'clarify-resume' | 'pr-feedback',
+  comment: TrustComment,
+  reason: string,
+): void {
+  logger.info(
+    {
+      event: 'comment-skipped',
+      surface,
+      commentId: comment.id,
+      author: comment.author,
+      authorAssociation: comment.authorAssociation,
+      reason,
+    },
+    'Skipped comment from untrusted author',
+  );
+}
+
+/**
+ * Marker for the bot's untrusted-answer explainer comment. Used to
+ * dedupe repeat postings for the same skipped comment (FR-013 idempotence).
+ */
+const UNTRUSTED_ANSWER_MARKER_PREFIX = '<!-- generacy-untrusted-answer:';
+
+function untrustedAnswerMarker(commentId: number): string {
+  return `${UNTRUSTED_ANSWER_MARKER_PREFIX}${commentId} -->`;
+}
+
+/**
+ * Detect whether a comment body matches the `Q<N>:` answer pattern that
+ * `parseAnswersFromComments` would attempt to consume. Used to decide
+ * whether an untrusted-comment skip warrants an explainer bot comment
+ * (matched) or log-only treatment (unmatched, generic drive-by).
+ */
+function commentMatchesAnswerPattern(body: string): boolean {
+  return /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:\s*.+/.test(body);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -426,6 +510,53 @@ export interface IntegrationResult {
 }
 
 /**
+ * Post explainer bot comments for skipped untrusted `Q<N>:` answers
+ * (FR-013 / D7). Metadata only — never comment body (SC-007). Idempotent
+ * via `<!-- generacy-untrusted-answer:<commentId> -->` markers.
+ */
+async function postUntrustedAnswerExplainers(opts: {
+  github: WorkerContext['github'];
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  existingComments: TrustComment[];
+  skipped: TrustComment[];
+  logger: Logger;
+}): Promise<void> {
+  const { github, owner, repo, issueNumber, existingComments, skipped, logger } = opts;
+  if (skipped.length === 0) return;
+
+  for (const c of skipped) {
+    const marker = untrustedAnswerMarker(c.id);
+    const alreadyPosted = existingComments.some((existing) => existing.body.includes(marker));
+    if (alreadyPosted) {
+      logger.debug(
+        { commentId: c.id, issueNumber },
+        'Untrusted-answer explainer already posted — skipping (idempotence)',
+      );
+      continue;
+    }
+
+    const tier = c.authorAssociation ?? 'unknown';
+    const body = `${marker}
+> Answers from @${c.author} were not applied (association tier: \`${tier}\`). A trusted member (OWNER/MEMBER/COLLABORATOR) must post or confirm the answers.`;
+
+    try {
+      await github.addIssueComment(owner, repo, issueNumber, body);
+      logger.info(
+        { commentId: c.id, author: c.author, tier, issueNumber },
+        'Posted untrusted-answer explainer comment',
+      );
+    } catch (error) {
+      logger.warn(
+        { commentId: c.id, error: error instanceof Error ? error.message : String(error) },
+        'Failed to post untrusted-answer explainer comment',
+      );
+    }
+  }
+}
+
+/**
  * Integrate clarification answers from GitHub issue comments into the local
  * clarifications.md file.
  *
@@ -467,7 +598,7 @@ export async function integrateClarificationAnswers(
   const pendingNumbers = pendingQuestions.map((q) => q.number);
 
   // 3. Fetch GitHub issue comments and parse answers
-  let comments: Array<{ id: number; body: string; created_at?: string }>;
+  let comments: TrustComment[];
   try {
     comments = await github.getIssueComments(owner, repo, issueNumber);
   } catch (error) {
@@ -478,11 +609,50 @@ export async function integrateClarificationAnswers(
     return { integrated: 0, reason: 'no-answers' };
   }
 
+  // 3a. Author-trust gating (#842). Every comment goes through the shared
+  // helper before we treat it as an answer source. Answer-scanner surface
+  // ignores widen-config (FR-008).
+  const botLogin = resolveBotLoginFromEnv();
+  const trustConfig = tryLoadCommentTrustConfig(checkoutPath, toEngineLogger(logger));
+  const trustCtx: CommentTrustContext = {
+    logger: toEngineLogger(logger),
+    ...(botLogin ? { botLogin } : {}),
+    ...(trustConfig ? { config: trustConfig } : {}),
+  };
+
+  const trustedComments: TrustComment[] = [];
+  const skippedForExplainer: TrustComment[] = [];
+  for (const c of comments) {
+    const decision = isTrustedCommentAuthor(c, 'answer-scanner', trustCtx);
+    if (decision.trusted) {
+      trustedComments.push(c);
+    } else {
+      logCommentSkipped(logger, 'answer-scanner', c, decision.reason);
+      // Only comments that would have been consumed as answers get an
+      // explainer bot comment (FR-013 / D7). Generic drive-bys are log-only.
+      if (commentMatchesAnswerPattern(c.body)) {
+        skippedForExplainer.push(c);
+      }
+    }
+  }
+
   // Filter out comments that contain the clarification questions themselves.
   // Without this, parseAnswersFromComments matches Q patterns from the bot's
   // own questions comment (e.g., "### Q1: Topic") and treats the topic text
   // as an answer, causing the gate to incorrectly see all questions as answered.
-  const answerComments = comments.filter((c) => !isQuestionComment(c.body));
+  const answerComments = trustedComments.filter((c) => !isQuestionComment(c.body));
+
+  // Post explainer comments for untrusted Q<N>: answers, before parsing.
+  // Fire-and-forget: failures are non-fatal.
+  await postUntrustedAnswerExplainers({
+    github,
+    owner,
+    repo,
+    issueNumber,
+    existingComments: comments,
+    skipped: skippedForExplainer,
+    logger,
+  });
 
   const answers = parseAnswersFromComments(answerComments, pendingNumbers, logger);
   if (answers.size === 0) {
@@ -580,6 +750,8 @@ export async function postClarifications(
 
   // 4. Check for existing clarification comment (dedup)
   // Check both our own marker and the Claude CLI clarify phase marker
+  // #842 audit: whitelist — reads only for own-marker dedup; body content is
+  // not surfaced to an agent.
   const marker = clarificationMarker(issueNumber);
   const cliMarkerPrefix = '<!-- generacy-clarification:';
   const comments = await github.getIssueComments(owner, repo, issueNumber);

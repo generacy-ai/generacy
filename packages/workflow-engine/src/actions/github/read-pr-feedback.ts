@@ -11,9 +11,12 @@ import type {
   ReadPRFeedbackOutput,
   Comment,
 } from '../../types/index.js';
+import type { SkippedCommentInfo } from '../../types/github.js';
 import { isNamespacedAction } from '../../types/action.js';
 import type { GitHubClient } from './client/index.js';
 import { createGitHubClient } from './client/index.js';
+import { isTrustedCommentAuthor } from '../../security/comment-trust.js';
+import { tryLoadCommentTrustConfig } from '../../security/comment-trust-config.js';
 
 /**
  * github.read_pr_feedback action handler
@@ -56,15 +59,46 @@ export class ReadPRFeedbackAction extends BaseAction {
         comments = allComments.filter(c => c.resolved !== true);
       }
 
-      const unresolvedCount = comments.filter(c => c.resolved === false).length;
+      // Author-trust gating (#842). Partition into trusted (surfaced to
+      // agent) + skippedComments (metadata only, for downstream logging).
+      const trustConfig = tryLoadCommentTrustConfig(context.workdir, context.logger);
+      const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+      const trustedComments: Comment[] = [];
+      const skippedComments: SkippedCommentInfo[] = [];
+      for (const c of comments) {
+        const decision = isTrustedCommentAuthor(
+          c,
+          'pr-feedback',
+          {
+            logger: context.logger,
+            ...(botLogin ? { botLogin } : {}),
+            ...(trustConfig ? { config: trustConfig } : {}),
+          },
+        );
+        if (decision.trusted) {
+          trustedComments.push(c);
+        } else {
+          skippedComments.push({
+            commentId: c.id,
+            author: c.author,
+            ...(c.authorAssociation !== undefined ? { authorAssociation: c.authorAssociation } : {}),
+            reason: decision.reason,
+          });
+        }
+      }
+
+      const unresolvedCount = trustedComments.filter(c => c.resolved === false).length;
 
       const output: ReadPRFeedbackOutput = {
-        comments,
+        comments: trustedComments,
         has_unresolved: unresolvedCount > 0,
         unresolved_count: unresolvedCount,
+        ...(skippedComments.length > 0 ? { skippedComments } : {}),
       };
 
-      context.logger.info(`Found ${comments.length} comments (${unresolvedCount} unresolved)`);
+      context.logger.info(
+        `Found ${trustedComments.length} trusted comments (${unresolvedCount} unresolved); skipped ${skippedComments.length} untrusted`,
+      );
 
       return this.successResult(output);
     } catch (error) {
