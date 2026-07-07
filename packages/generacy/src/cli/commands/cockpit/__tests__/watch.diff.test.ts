@@ -66,10 +66,169 @@ function prSnap(opts: {
 }
 
 describe('computeTransitions', () => {
-  it('emits nothing on first poll (prev empty)', () => {
+  it('emits nothing on first poll when no snapshot is actionable', () => {
     const prev: SnapshotMap = new Map();
-    const curr = map([snapshotKey('o/r', 'issue', 1), issueSnap({ number: 1 })]);
+    const curr = map([
+      snapshotKey('o/r', 'issue', 1),
+      issueSnap({
+        number: 1,
+        labels: ['phase:plan', 'agent:in-progress'],
+        classifiedState: 'active',
+        sourceLabel: 'phase:plan',
+      }),
+    ]);
     expect(computeTransitions(prev, curr, ts)).toEqual([]);
+  });
+
+  it('emits an initial sweep line when an actionable label is present at first poll', () => {
+    const prev: SnapshotMap = new Map();
+    const curr = map([
+      snapshotKey('o/r', 'issue', 1),
+      issueSnap({
+        number: 1,
+        labels: ['waiting-for:clarification'],
+        classifiedState: 'waiting',
+        sourceLabel: 'waiting-for:clarification',
+      }),
+    ]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject<Partial<CockpitEvent>>({
+      event: 'label-change',
+      from: null,
+      to: 'waiting',
+      sourceLabel: 'waiting-for:clarification',
+      initial: true,
+    });
+  });
+
+  it('emits only actionable snapshots at first poll (mixed input)', () => {
+    const prev: SnapshotMap = new Map();
+    const curr = map(
+      [
+        snapshotKey('o/r', 'issue', 1),
+        issueSnap({
+          number: 1,
+          labels: ['phase:plan'],
+          classifiedState: 'active',
+          sourceLabel: 'phase:plan',
+        }),
+      ],
+      [
+        snapshotKey('o/r', 'issue', 2),
+        issueSnap({
+          number: 2,
+          labels: ['waiting-for:review'],
+          classifiedState: 'waiting',
+          sourceLabel: 'waiting-for:review',
+        }),
+      ],
+    );
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.number).toBe(2);
+    expect(events[0]?.initial).toBe(true);
+  });
+
+  it('emits an initial line for an issue carrying completed:specify AND waiting-for:clarification (SC-007 / Q2)', () => {
+    const prev: SnapshotMap = new Map();
+    const curr = map([
+      snapshotKey('o/r', 'issue', 3),
+      issueSnap({
+        number: 3,
+        labels: ['completed:specify', 'waiting-for:clarification'],
+        // Simulates classifier's tier-precedence outcome (terminal beats waiting today).
+        classifiedState: 'terminal',
+        sourceLabel: 'completed:specify',
+      }),
+    ]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject<Partial<CockpitEvent>>({
+      event: 'label-change',
+      from: null,
+      to: 'terminal',
+      sourceLabel: 'completed:specify',
+      initial: true,
+    });
+  });
+
+  it('emits an initial line for a PR with checksRollup: failure and no failed:* label (SC-009 / Q5)', () => {
+    const prev: SnapshotMap = new Map();
+    const curr = map([
+      snapshotKey('o/r', 'pr', 47),
+      prSnap({
+        number: 47,
+        labels: ['phase:implement'],
+        classifiedState: 'active',
+        sourceLabel: 'phase:implement',
+        rollup: 'failure',
+      }),
+    ]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject<Partial<CockpitEvent>>({
+      event: 'label-change',
+      from: null,
+      to: 'active',
+      sourceLabel: 'phase:implement',
+      initial: true,
+    });
+    expect(events[0]?.kind).toBe('pr');
+  });
+
+  it('emits initial-sweep lines sorted by (repo, kind, number) — deterministic (SC-008)', () => {
+    const prev: SnapshotMap = new Map();
+    // Insert in reverse to prove sort is by key, not insertion order.
+    const curr: SnapshotMap = new Map();
+    curr.set(
+      snapshotKey('o/r', 'pr', 5),
+      buildPrSnapshot(
+        'o/r',
+        { number: 5, url: 'https://github.com/o/r/pull/5', state: 'OPEN', labels: ['waiting-for:review'] },
+        { state: 'waiting', sourceLabel: 'waiting-for:review', labels: ['waiting-for:review'] },
+        'open',
+        'pending',
+      ),
+    );
+    curr.set(
+      snapshotKey('a/b', 'issue', 3),
+      buildIssueSnapshot(
+        'a/b',
+        { number: 3, url: 'https://github.com/a/b/issues/3', state: 'OPEN', labels: ['waiting-for:clarification'] },
+        { state: 'waiting', sourceLabel: 'waiting-for:clarification', labels: ['waiting-for:clarification'] },
+      ),
+    );
+    curr.set(
+      snapshotKey('a/b', 'pr', 1),
+      buildPrSnapshot(
+        'a/b',
+        { number: 1, url: 'https://github.com/a/b/pull/1', state: 'OPEN', labels: ['waiting-for:review'] },
+        { state: 'waiting', sourceLabel: 'waiting-for:review', labels: ['waiting-for:review'] },
+        'open',
+        'pending',
+      ),
+    );
+    const events = computeTransitions(prev, curr, ts);
+    expect(events.map((e) => `${e.repo}#${e.kind}#${e.number}`)).toEqual([
+      'a/b#issue#3',
+      'a/b#pr#1',
+      'o/r#pr#5',
+    ]);
+  });
+
+  it('polls 2..N never carry initial (SC-005 / FR-004)', () => {
+    const prev = map([
+      snapshotKey('o/r', 'issue', 1),
+      issueSnap({ classifiedState: 'pending', sourceLabel: 'workflow:speckit-feature' }),
+    ]);
+    const curr = map([
+      snapshotKey('o/r', 'issue', 1),
+      issueSnap({ classifiedState: 'waiting', sourceLabel: 'waiting-for:clarification' }),
+    ]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]).not.toHaveProperty('initial');
   });
 
   it('emits nothing when a key is new (baseline establishment)', () => {
