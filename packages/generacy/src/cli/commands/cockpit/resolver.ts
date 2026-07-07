@@ -105,7 +105,7 @@ export function parseIssueRef(input: string): IssueRef {
 
   fail(
     `unrecognized issue ref "${input}". ` +
-      `Use <owner>/<repo>#<n> or https://github.com/<owner>/<repo>/issues/<n>.`,
+      `Use <n>, <owner>/<repo>#<n>, or https://github.com/<owner>/<repo>/issues/<n>.`,
   );
 }
 

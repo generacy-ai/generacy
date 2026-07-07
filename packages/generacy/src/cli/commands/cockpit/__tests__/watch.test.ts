@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { runWatch } from '../watch.js';
 import { FakeGh } from './helpers/fake-gh.js';
+import type { CommandRunner } from '@generacy-ai/cockpit';
 
 function buildBody(refs: Array<{ repo: string; number: number }>): string {
   const lines = ['### S2 — cohort'];
@@ -91,7 +92,8 @@ describe('cockpit watch', () => {
 
     const { controller, onTick } = makeStopper(2);
     await runWatch(
-      { epic: epicRef },
+      epicRef,
+      {},
       {
         gh,
         intervalOverride: 5,
@@ -124,7 +126,8 @@ describe('cockpit watch', () => {
 
     const { controller, onTick } = makeStopper(1);
     const exit = await runWatch(
-      { epic: epicRef, interval: '5000' },
+      epicRef,
+      { interval: '5000' },
       { gh, onTick, abortSignal: controller.signal },
     );
     expect(exit).toBe(0);
@@ -158,7 +161,8 @@ describe('cockpit watch', () => {
 
     const { controller, onTick } = makeStopper(2);
     const exit = await runWatch(
-      { epic: epicRef },
+      epicRef,
+      {},
       { gh, intervalOverride: 5, onTick, abortSignal: controller.signal },
     );
     expect(exit).toBe(0);
@@ -178,21 +182,91 @@ describe('cockpit watch', () => {
         createdAt: '',
       }),
     });
-    const exit = await runWatch({ epic: 'owner/epic#42' }, { gh });
+    const exit = await runWatch('owner/epic#42', {}, { gh });
     expect(exit).toBe(1);
     expect(stderrOut).toContain("'### <phase>'");
     expect(stderrOut).toContain('- [ ] owner/repo#N');
   });
 
-  it('malformed --epic exits 2', async () => {
+  it('malformed <epic-ref> exits 2 with parse issue error message', async () => {
     const gh = new FakeGh({});
-    const exit = await runWatch({ epic: 'not-a-ref' }, { gh });
+    const exit = await runWatch('garbage', {}, { gh });
     expect(exit).toBe(2);
+    expect(stderrOut).toContain(
+      'cockpit watch: parse issue: unrecognized issue ref "garbage". ' +
+        'Use <n>, <owner>/<repo>#<n>, or https://github.com/<owner>/<repo>/issues/<n>.',
+    );
   });
 
-  it('missing --epic exits 2', async () => {
+  it('missing <epic-ref> exits 2', async () => {
     const gh = new FakeGh({});
-    const exit = await runWatch({}, { gh });
+    const exit = await runWatch(undefined, {}, { gh });
     expect(exit).toBe(2);
+    expect(stderrOut).toContain('cockpit watch: parse issue: issue argument is required');
+  });
+
+  it('bare number resolves via injected runner (US2)', async () => {
+    const body = buildBody([{ repo: 'owner/r', number: 1 }]);
+    const gh = new FakeGh({
+      getIssueBy: (repo, number) => ({
+        number,
+        title: '',
+        state: 'OPEN',
+        labels: [],
+        url: `https://github.com/${repo}/issues/${number}`,
+        body,
+        createdAt: '',
+      }),
+    });
+    const runner: CommandRunner = vi.fn(async () => ({
+      stdout: 'https://github.com/owner/repo.git\n',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const { controller, onTick } = makeStopper(1);
+    const exit = await runWatch(
+      '42',
+      {},
+      { gh, runner, intervalOverride: 5, onTick, abortSignal: controller.signal, logger: { warn: () => {} } },
+    );
+    expect(exit).toBe(0);
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(stderrOut).toContain('cockpit watch: epic owner/repo#42');
+  });
+
+  it('per-poll invariant: bare-number inference runs exactly once across N poll intervals', async () => {
+    const epicRef = '42';
+    const body = buildBody([{ repo: 'owner/repo', number: 1 }]);
+    const gh = new FakeGh({
+      getIssueBy: (repo, number) => ({
+        number,
+        title: '',
+        state: 'OPEN',
+        labels: [],
+        url: `https://github.com/${repo}/issues/${number}`,
+        body,
+        createdAt: '',
+      }),
+    });
+    const runner = vi.fn<CommandRunner>(async (cmd, args) => {
+      expect(cmd).toBe('git');
+      expect(args).toEqual(['remote', 'get-url', 'origin']);
+      return {
+        stdout: 'https://github.com/owner/repo.git\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    });
+
+    const N = 5;
+    const { controller, onTick } = makeStopper(N);
+    const exit = await runWatch(
+      epicRef,
+      {},
+      { gh, runner, intervalOverride: 5, onTick, abortSignal: controller.signal, logger: { warn: () => {} } },
+    );
+    expect(exit).toBe(0);
+    // FR-invariant: `git remote get-url origin` fires exactly once, not once per poll.
+    expect(runner).toHaveBeenCalledTimes(1);
   });
 });

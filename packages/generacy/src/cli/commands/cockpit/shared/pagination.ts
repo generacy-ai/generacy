@@ -48,7 +48,7 @@ export async function listAllIssues(
     }
     if (!warned && out.length > safetyCap && logger != null) {
       logger.warn(
-        `cockpit: poll cycle exceeded ${safetyCap} items; consider --epic scoping`,
+        `cockpit: poll cycle exceeded ${safetyCap} items; consider narrower epic scoping`,
       );
       warned = true;
     }

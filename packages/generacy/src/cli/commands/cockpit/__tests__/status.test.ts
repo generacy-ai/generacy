@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runStatus } from '../status.js';
 import { FakeGh, makeIssue } from './helpers/fake-gh.js';
-import type { Issue } from '@generacy-ai/cockpit';
+import type { CommandRunner, Issue } from '@generacy-ai/cockpit';
 
 function epicBody(refs: string[]): string {
   return ['### S2 — cohort', ...refs.map((r) => `- [ ] ${r}`)].join('\n');
@@ -25,7 +25,8 @@ describe('runStatus', () => {
     const out: string[] = [];
     const err: string[] = [];
     const code = await runStatus(
-      { epic: 'owner/epic#42' },
+      'owner/epic#42',
+      {},
       { gh, stdout: (l) => out.push(l), stderr: (l) => err.push(l), logger: { warn: () => {} } },
     );
     expect(code).toBe(0);
@@ -45,7 +46,8 @@ describe('runStatus', () => {
     });
     const out: string[] = [];
     const code = await runStatus(
-      { epic: 'owner/epic#42', json: true },
+      'owner/epic#42',
+      { json: true },
       { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
     );
     expect(code).toBe(0);
@@ -65,7 +67,8 @@ describe('runStatus', () => {
     });
     const err: string[] = [];
     const code = await runStatus(
-      { epic: 'owner/epic#42' },
+      'owner/epic#42',
+      {},
       { gh, stderr: (l) => err.push(l), logger: { warn: () => {} } },
     );
     expect(code).toBe(1);
@@ -74,21 +77,50 @@ describe('runStatus', () => {
     expect(joined).toContain('- [ ] owner/repo#N');
   });
 
-  it('malformed --epic exits 2', async () => {
+  it('malformed <epic-ref> exits 2 with parse issue error message (FR-007)', async () => {
     const gh = new FakeGh({});
     const err: string[] = [];
     const code = await runStatus(
-      { epic: 'not-a-ref' },
+      'garbage',
+      {},
       { gh, stderr: (l) => err.push(l), logger: { warn: () => {} } },
     );
     expect(code).toBe(2);
+    expect(err.join('\n')).toBe(
+      'cockpit status: parse issue: unrecognized issue ref "garbage". ' +
+        'Use <n>, <owner>/<repo>#<n>, or https://github.com/<owner>/<repo>/issues/<n>.',
+    );
   });
 
-  it('missing --epic exits 2', async () => {
+  it('missing <epic-ref> exits 2', async () => {
     const gh = new FakeGh({});
     const err: string[] = [];
-    const code = await runStatus({}, { gh, stderr: (l) => err.push(l) });
+    const code = await runStatus(undefined, {}, { gh, stderr: (l) => err.push(l) });
     expect(code).toBe(2);
-    expect(err.join('\n')).toContain('--epic is required');
+    expect(err.join('\n')).toContain('parse issue: issue argument is required');
+  });
+
+  it('bare number resolves via injected runner (US2)', async () => {
+    const body = epicBody(['owner/repo#5']);
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/repo#1': body },
+      issuesByQuery: (): Issue[] => [
+        makeIssue({ number: 5, url: 'https://github.com/owner/repo/issues/5' }),
+      ],
+    });
+    const runner: CommandRunner = vi.fn(async () => ({
+      stdout: 'https://github.com/owner/repo.git\n',
+      stderr: '',
+      exitCode: 0,
+    }));
+    const out: string[] = [];
+    const code = await runStatus(
+      '1',
+      {},
+      { gh, runner, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(out.join('\n')).toContain('epic owner/repo');
   });
 });
