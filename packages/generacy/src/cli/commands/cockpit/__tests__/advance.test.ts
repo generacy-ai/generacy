@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runAdvance } from '../advance.js';
 import { CockpitExit } from '../exit.js';
+import { getLogger, setLogger } from '../../../utils/logger.js';
 import type { GhWrapper } from '@generacy-ai/cockpit';
+import type pino from 'pino';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -153,5 +155,115 @@ describe('cockpit advance — CockpitExit subclass plumbing', () => {
     } catch (err) {
       expect(err).toBeInstanceOf(CockpitExit);
     }
+  });
+});
+
+describe('cockpit advance — App-credentialed identity resolution (#830)', () => {
+  it('resolves actor from CLUSTER_GITHUB_USERNAME env; comment carries that actor; label still applied', async () => {
+    const calls: string[] = [];
+    const throwingGetUser = vi.fn(async () => {
+      throw new Error('HTTP 403: Resource not accessible by integration');
+    });
+    let commentBody = '';
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+      postIssueComment: vi.fn(async (_repo, _n, body) => {
+        commentBody = body;
+        calls.push('comment');
+        return { url: 'https://github.com/o/r/issues/1#issuecomment-1' };
+      }),
+      addLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`add:${label}`);
+      }),
+      removeLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`remove:${label}`);
+      }),
+      getCurrentUser: throwingGetUser,
+    });
+    await runAdvance(
+      'generacy-ai/generacy#1',
+      { gate: 'clarification' },
+      {
+        loadConfig: baseLoad,
+        gh,
+        now: fixedNow,
+        env: { CLUSTER_GITHUB_USERNAME: 'cluster-bot' },
+      },
+    );
+    expect(calls).toEqual([
+      'comment',
+      'add:completed:clarification',
+      'remove:waiting-for:clarification',
+    ]);
+    expect(commentBody).toContain('actor=cluster-bot');
+    expect(commentBody).toContain('by **@cluster-bot**');
+    expect(throwingGetUser).not.toHaveBeenCalled();
+  });
+
+  it('all identity sources miss → warns with 4-knob message, applies label, omits actor from comment (FR-003 / SC-002)', async () => {
+    const calls: string[] = [];
+    let commentBody = '';
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+      postIssueComment: vi.fn(async (_repo, _n, body) => {
+        commentBody = body;
+        calls.push('comment');
+        return { url: 'https://github.com/o/r/issues/1#issuecomment-1' };
+      }),
+      addLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`add:${label}`);
+      }),
+      removeLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`remove:${label}`);
+      }),
+      getCurrentUser: vi.fn(async () => {
+        throw new Error('gh api user: 403');
+      }),
+    });
+    const warnCalls: string[] = [];
+    const originalLogger = getLogger();
+    const stubLogger = {
+      info: vi.fn(),
+      warn: vi.fn((msg: unknown) => {
+        warnCalls.push(typeof msg === 'string' ? msg : String(msg));
+      }),
+      error: vi.fn(),
+      debug: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      child: vi.fn(() => stubLogger),
+    } as unknown as pino.Logger;
+    setLogger(stubLogger);
+    try {
+      await runAdvance(
+        'generacy-ai/generacy#1',
+        { gate: 'clarification' },
+        {
+          loadConfig: baseLoad,
+          gh,
+          now: fixedNow,
+          env: {},
+        },
+      );
+    } finally {
+      setLogger(originalLogger);
+    }
+    expect(calls).toEqual([
+      'comment',
+      'add:completed:clarification',
+      'remove:waiting-for:clarification',
+    ]);
+    expect(commentBody).not.toContain('actor=');
+    expect(commentBody).not.toContain('by **@');
+    expect(commentBody).toContain('<!-- generacy-cockpit:manual-advance gate=clarification ts=');
+    expect(warnCalls.length).toBeGreaterThan(0);
+    const knobWarn = warnCalls.find(
+      (m) =>
+        m.includes('--assignee') &&
+        m.includes('cockpit.assignee') &&
+        m.includes('CLUSTER_GITHUB_USERNAME') &&
+        m.includes('GH_USERNAME'),
+    );
+    expect(knobWarn, `expected a warn call containing all four knobs; got: ${warnCalls.join(' | ')}`).toBeDefined();
   });
 });

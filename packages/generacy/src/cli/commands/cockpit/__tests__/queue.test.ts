@@ -236,4 +236,73 @@ describe('runQueue', () => {
     expect(result.epic.epic.number).toBe(123);
     expect(result.exitCode).toBe(0);
   });
+
+  it('App-credentialed cluster resolves identity from CLUSTER_GITHUB_USERNAME (no gh api user)', async () => {
+    const body = epicBody([{ heading: 'S1', refs: ['owner/repo#201'] }]);
+    const gh = ghWithBody(body);
+    const throwingGetUser = vi.fn(async () => {
+      throw new Error('HTTP 403: Resource not accessible by integration');
+    });
+    const cockpitGh = stubGhWrapper({}, { getCurrentUser: throwingGetUser });
+    const loadConfig = vi.fn(async () => ({
+      config: {},
+      source: 'defaults' as const,
+      warnings: [],
+    }));
+
+    const result = await runQueue(
+      'owner/epic#42',
+      's1',
+      { yes: true },
+      {
+        gh,
+        cockpitGh,
+        loadConfig,
+        env: { CLUSTER_GITHUB_USERNAME: 'cluster-bot' },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.assignee).toBe('cluster-bot');
+    expect(throwingGetUser).not.toHaveBeenCalled();
+    expect(cockpitGh.addAssignees).toHaveBeenCalledWith('owner/repo', 201, ['cluster-bot']);
+  });
+
+  it('all identity sources miss → CockpitExit(1, ...) with the 4-knob message (SC-004)', async () => {
+    const body = epicBody([{ heading: 'S1', refs: ['owner/repo#201'] }]);
+    const gh = ghWithBody(body);
+    const throwingGetUser = vi.fn(async () => {
+      throw new Error('gh api user: 403 forbidden');
+    });
+    const cockpitGh = stubGhWrapper({}, { getCurrentUser: throwingGetUser });
+    const loadConfig = vi.fn(async () => ({
+      config: {},
+      source: 'defaults' as const,
+      warnings: [],
+    }));
+
+    let caught: unknown;
+    try {
+      await runQueue(
+        'owner/epic#42',
+        's1',
+        { yes: true },
+        {
+          gh,
+          cockpitGh,
+          loadConfig,
+          env: {},
+        },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(CockpitExit);
+    const cx = caught as CockpitExit;
+    expect(cx.code).toBe(1);
+    expect(cx.message).toContain('--assignee');
+    expect(cx.message).toContain('cockpit.assignee');
+    expect(cx.message).toContain('CLUSTER_GITHUB_USERNAME');
+    expect(cx.message).toContain('GH_USERNAME');
+  });
 });
