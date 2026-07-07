@@ -10,7 +10,7 @@
 
 ## Phase 1: Regression Test First (red)
 
-- [ ] T001 [US2] Create subprocess regression test at `packages/generacy/src/cli/commands/cockpit/__tests__/watch-subprocess.test.ts`:
+- [X] T001 [US2] Create subprocess regression test at `packages/generacy/src/cli/commands/cockpit/__tests__/watch-subprocess.test.ts`:
   - Spawn compiled CLI: `node dist/bin/generacy.js cockpit watch <fixture-epic-ref>` via `node:child_process.spawn`.
   - Fixture: a stable closed issue in `generacy-ai/generacy` (pick a low-noise reference; e.g., an already-closed issue in this repo). Skip the test locally when `process.env.CI == null && process.env.GH_TOKEN == null` (`describe.skipIf(...)`); rely on CI `GH_TOKEN` otherwise.
   - Listen on child stderr for the `cockpit watch: epic ` startup line; resolve a promise when it appears. Timeout 15 s for the startup line (network + `gh` resolution).
@@ -20,11 +20,11 @@
   - Do NOT inject `abortSignal`. Do NOT run in-process (`runWatch` + `onTick`) — per D2, vitest handles mask the drain.
   - Do NOT add the optional white-box `hasRef()` assertion (Q1: allowed but not required).
 
-- [ ] T002 [US2] Run the new test against the current (unfixed) code and confirm it FAILS the "still alive after 5 s" assertion. This proves the regression gate has real signal. Command: `pnpm --filter @generacy-ai/generacy build && pnpm --filter @generacy-ai/generacy test -- watch-subprocess`. Do NOT commit any workaround that makes the buggy code pass this test.
+- [X] T002 [US2] Run the new test against the current (unfixed) code and confirm it FAILS the "still alive after 5 s" assertion. This proves the regression gate has real signal. Command: `pnpm --filter @generacy-ai/generacy build && pnpm --filter @generacy-ai/generacy test -- watch-subprocess`. Do NOT commit any workaround that makes the buggy code pass this test.
 
 ## Phase 2: Fix (green)
 
-- [ ] T003 [US1] In `packages/generacy/src/cli/commands/cockpit/watch.ts`, in the `sleep()` helper (currently lines 48-61), remove the line `timer.unref?.();` (line 55). Immediately above `const timer = setTimeout(resolve, ms);`, add a one-line comment referencing this issue and the constraint from FR-002:
+- [X] T003 [US1] In `packages/generacy/src/cli/commands/cockpit/watch.ts`, in the `sleep()` helper (currently lines 48-61), remove the line `timer.unref?.();` (line 55). Immediately above `const timer = setTimeout(resolve, ms);`, add a one-line comment referencing this issue and the constraint from FR-002:
 
   ```ts
   // Do not unref — see #836. An embedder that needs an unref'd timer must gate
@@ -36,11 +36,11 @@
 
 ## Phase 3: Verify
 
-- [ ] T004 [US2] Rebuild and re-run the subprocess test; assert it now PASSES (`pnpm --filter @generacy-ai/generacy build && pnpm --filter @generacy-ai/generacy test -- watch-subprocess`). Runtime ≤ ~10 s per SC-002.
+- [X] T004 [US2] Rebuild and re-run the subprocess test; assert it now PASSES (`pnpm --filter @generacy-ai/generacy build && pnpm --filter @generacy-ai/generacy test -- watch-subprocess`). Runtime ≤ ~10 s per SC-002.
 
-- [ ] T005 [P] [US1] Run the full watcher unit-test suite and confirm no regression: `pnpm --filter @generacy-ai/generacy test -- watch`. All existing `watch.test.ts`, `watch.diff.test.ts`, `watch.emit.test.ts`, `watch.epic-walk.test.ts`, `watch.pagination.test.ts`, `watch.poll-loop.test.ts`, `watch.no-mutations.test.ts`, `watch.check-rollup.test.ts` cases must remain green (SC-003).
+- [X] T005 [P] [US1] Run the full watcher unit-test suite and confirm no regression: `pnpm --filter @generacy-ai/generacy test -- watch`. All existing `watch.test.ts`, `watch.diff.test.ts`, `watch.emit.test.ts`, `watch.epic-walk.test.ts`, `watch.pagination.test.ts`, `watch.poll-loop.test.ts`, `watch.no-mutations.test.ts`, `watch.check-rollup.test.ts` cases must remain green (SC-003).
 
-- [ ] T006 [P] [US1] Manual smoke test per `quickstart.md` SC-001:
+- [X] T006 [P] [US1] Manual smoke test per `quickstart.md` SC-001:
   ```bash
   pnpm --filter @generacy-ai/generacy build
   timeout 75 node packages/generacy/dist/bin/generacy.js cockpit watch <owner>/<repo>#<n> </dev/null; echo "exit: $?"

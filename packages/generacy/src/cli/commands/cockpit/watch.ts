@@ -51,8 +51,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
       resolve();
       return;
     }
+    // Do not unref — see #836. An embedder that needs an unref'd timer must gate
+    // it behind an explicit WatchDeps flag the CLI never sets.
     const timer = setTimeout(resolve, ms);
-    timer.unref?.();
     signal?.addEventListener('abort', () => {
       clearTimeout(timer);
       resolve();
