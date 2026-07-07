@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { runQueue } from '../queue.js';
 import { CockpitExit } from '../exit.js';
 import { FakeGh } from './helpers/fake-gh.js';
-import type { GhWrapper, IssueStateResult } from '@generacy-ai/cockpit';
+import type { CommandRunner, GhWrapper, IssueStateResult } from '@generacy-ai/cockpit';
 
 interface IssueSeed {
   state?: 'OPEN' | 'CLOSED';
@@ -191,5 +191,49 @@ describe('runQueue', () => {
       expect(err).toBeInstanceOf(CockpitExit);
       expect((err as CockpitExit).code).toBe(2);
     }
+  });
+
+  it('bare number <epic-ref> resolves via injected runner (US2 + US3 regression)', async () => {
+    const body = epicBody([{ heading: 'S1', refs: ['owner/repo#201'] }]);
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/repo#1': body },
+    });
+    const cockpitGh = stubGhWrapper();
+    const runner: CommandRunner = vi.fn(async () => ({
+      stdout: 'https://github.com/owner/repo.git\n',
+      stderr: '',
+      exitCode: 0,
+    }));
+
+    const result = await runQueue(
+      '1',
+      's1',
+      { yes: true },
+      { gh, cockpitGh, runner },
+    );
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(result.epic.epic.repo).toBe('owner/repo');
+    expect(result.epic.epic.number).toBe(1);
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('owner/repo#N form continues to work identically (FR-005, FR-009)', async () => {
+    const body = epicBody([{ heading: 'S1', refs: ['owner/repo#201'] }]);
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/epic#123': body },
+    });
+    const cockpitGh = stubGhWrapper();
+
+    const result = await runQueue(
+      'owner/epic#123',
+      's1',
+      { yes: true },
+      { gh, cockpitGh },
+    );
+
+    expect(result.epic.epic.repo).toBe('owner/epic');
+    expect(result.epic.epic.number).toBe(123);
+    expect(result.exitCode).toBe(0);
   });
 });

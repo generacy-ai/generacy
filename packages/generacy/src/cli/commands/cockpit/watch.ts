@@ -3,15 +3,16 @@ import {
   GhCliWrapper,
   LoudResolverError,
   resolveEpic,
+  type CommandRunner,
   type GhWrapper,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
+import { resolveIssueContext } from './resolver.js';
 import { runOnePoll } from './watch/poll-loop.js';
 import { emit } from './watch/emit.js';
 import type { SnapshotMap } from './watch/snapshot.js';
 
 interface WatchOptions {
-  epic?: string;
   interval?: string;
   safetyCap?: string;
 }
@@ -61,6 +62,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 
 export interface WatchDeps {
   gh?: GhWrapper;
+  runner?: CommandRunner;
   logger?: { warn: (msg: string) => void };
   intervalOverride?: number;
   onTick?: () => void;
@@ -69,11 +71,12 @@ export interface WatchDeps {
 }
 
 export async function runWatch(
+  epicRef: string | undefined,
   options: WatchOptions,
   deps: WatchDeps = {},
 ): Promise<number> {
-  if (options.epic == null || options.epic.trim() === '') {
-    process.stderr.write('cockpit watch: --epic is required (format owner/repo#N)\n');
+  if (epicRef == null || epicRef.trim() === '') {
+    process.stderr.write('cockpit watch: parse issue: issue argument is required\n');
     return 2;
   }
 
@@ -87,12 +90,22 @@ export async function runWatch(
     return 2;
   }
 
-  const gh = deps.gh ?? new GhCliWrapper();
   const logger = deps.logger ?? { warn: (msg: string) => process.stderr.write(`${msg}\n`) };
+
+  let expandedRef: string;
+  let gh: GhWrapper;
+  try {
+    const resolvedCtx = await resolveIssueContext({ issue: epicRef, runner: deps.runner });
+    expandedRef = `${resolvedCtx.ref.nwo}#${resolvedCtx.ref.number}`;
+    gh = deps.gh ?? resolvedCtx.gh;
+  } catch (err) {
+    process.stderr.write(`cockpit watch: ${err instanceof Error ? err.message : String(err)}\n`);
+    return 2;
+  }
 
   let initialResolved: ResolvedEpic;
   try {
-    initialResolved = await resolveEpic({ epicRef: options.epic, gh, logger });
+    initialResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
   } catch (err) {
     process.stderr.write(`cockpit watch: ${err instanceof Error ? err.message : String(err)}\n`);
     if (err instanceof LoudResolverError && err.code === 'INVALID_EPIC_REF') {
@@ -128,7 +141,7 @@ export async function runWatch(
   while (!stopped) {
     if (!firstTick) {
       try {
-        currentResolved = await resolveEpic({ epicRef: options.epic, gh, logger });
+        currentResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
       } catch (err) {
         process.stderr.write(
           `cockpit watch: poll error: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -170,11 +183,14 @@ export async function runWatch(
 export function watchCommand(): Command {
   return new Command('watch')
     .description('Emit one NDJSON line per issue/PR state transition. Pure sensor.')
-    .requiredOption('--epic <ownerRepoIssue>', 'Scope to a single epic. Format owner/repo#N.')
+    .argument(
+      '<epic-ref>',
+      'Epic ref. Accepts <n>, <owner>/<repo>#<n>, or https://github.com/<owner>/<repo>/issues/<n>.',
+    )
     .option('--interval <ms>', `Poll interval in ms (default ${DEFAULT_INTERVAL_MS}, floor ${INTERVAL_FLOOR_MS}).`)
     .option('--safety-cap <n>', `Warn when per-poll item count exceeds this (default ${DEFAULT_SAFETY_CAP}).`)
-    .action(async (options: WatchOptions) => {
-      const code = await runWatch(options);
+    .action(async (epicRef: string, options: WatchOptions) => {
+      const code = await runWatch(epicRef, options);
       process.exit(code);
     });
 }

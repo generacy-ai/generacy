@@ -6,7 +6,7 @@ export interface RowGroup {
 }
 
 /**
- * Group rows for rendering. `status --epic` renders every row under a single
+ * Group rows for rendering. `status <epic-ref>` renders every row under a single
  * `epic owner/repo#N` header, sorted by number.
  */
 export function groupRows(rows: StatusRow[], epicOwnerRepo: string): RowGroup[] {

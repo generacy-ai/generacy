@@ -49,6 +49,12 @@ describe('parseIssueRef', () => {
     expect(() => parseIssueRef('not-an-issue')).toThrow(/^parse issue: unrecognized issue ref/);
   });
 
+  it("garbage error message enumerates <n>, <owner>/<repo>#<n>, and URL forms (FR-007)", () => {
+    expect(() => parseIssueRef('garbage')).toThrow(
+      /Use <n>, <owner>\/<repo>#<n>, or https:\/\/github\.com\/<owner>\/<repo>\/issues\/<n>\./,
+    );
+  });
+
   it('rejects issue number 0 in owner/repo#n form', () => {
     expect(() => parseIssueRef('owner/repo#0')).toThrow(/positive integer/);
   });
@@ -110,6 +116,21 @@ describe('resolveIssueContext', () => {
     await expect(
       resolveIssueContext({ issue: '123', runner }),
     ).rejects.toThrow(/could not infer owner\/repo/);
+  });
+
+  it('bare "1" with ssh origin URL expands to owner/repo#1 (T007 integration)', async () => {
+    const runner: CommandRunner = vi.fn(async (cmd, args) => {
+      expect(cmd).toBe('git');
+      expect(args).toEqual(['remote', 'get-url', 'origin']);
+      return {
+        stdout: 'git@github.com:owner/repo.git\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    });
+    const ctx = await resolveIssueContext({ issue: '1', runner });
+    expect(ctx.ref.nwo).toBe('owner/repo');
+    expect(ctx.ref.number).toBe(1);
   });
 
   it('propagates non-bare-number parse failures without falling through to git-origin', async () => {

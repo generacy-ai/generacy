@@ -22,6 +22,7 @@ import {
   type ParsedPhase,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
+import { resolveIssueContext } from './resolver.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
 
 const DEFAULT_LABEL = 'process:speckit-feature';
@@ -218,9 +219,20 @@ export async function runQueue(
   const gh = deps.gh ?? new GhCliWrapper();
   const cockpitGh = deps.cockpitGh ?? new GhCliWrapper(deps.runner ?? nodeChildProcessRunner);
 
+  let expandedEpicRef: string;
+  try {
+    const resolvedCtx = await resolveIssueContext({ issue: epicRef, runner: deps.runner });
+    expandedEpicRef = `${resolvedCtx.ref.nwo}#${resolvedCtx.ref.number}`;
+  } catch (err) {
+    throw new CockpitExit(
+      2,
+      `Error: cockpit queue: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
   let epic: ResolvedEpic;
   try {
-    epic = await resolveEpic({ epicRef, gh });
+    epic = await resolveEpic({ epicRef: expandedEpicRef, gh });
   } catch (err) {
     if (err instanceof LoudResolverError) {
       throw new CockpitExit(2, `Error: cockpit queue: ${err.message}`);

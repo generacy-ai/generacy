@@ -3,9 +3,11 @@ import {
   GhCliWrapper,
   LoudResolverError,
   resolveEpic,
+  type CommandRunner,
   type GhWrapper,
   type Issue,
 } from '@generacy-ai/cockpit';
+import { resolveIssueContext } from './resolver.js';
 import { listAllIssues } from './shared/pagination.js';
 import { classifyIssue } from './shared/classify-issue.js';
 import { rollup } from './watch/check-rollup.js';
@@ -15,7 +17,6 @@ import { renderTable, renderJsonEnvelope } from './status/render-table.js';
 import { chalkColorizer, identityColorizer } from './status/color.js';
 
 interface StatusCliOptions {
-  epic?: string;
   json?: boolean;
 }
 
@@ -26,29 +27,41 @@ function isPullRequest(issue: Issue): boolean {
 
 export interface StatusDeps {
   gh?: GhWrapper;
+  runner?: CommandRunner;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
   logger?: { warn: (msg: string) => void };
 }
 
 export async function runStatus(
+  epicRef: string | undefined,
   options: StatusCliOptions,
   deps: StatusDeps = {},
 ): Promise<number> {
   const stderr = deps.stderr ?? ((line) => process.stderr.write(`${line}\n`));
   const stdout = deps.stdout ?? ((line) => process.stdout.write(`${line}\n`));
 
-  if (options.epic == null || options.epic.trim() === '') {
-    stderr('cockpit status: --epic is required (format owner/repo#N)');
+  if (epicRef == null || epicRef.trim() === '') {
+    stderr('cockpit status: parse issue: issue argument is required');
     return 2;
   }
 
-  const gh = deps.gh ?? new GhCliWrapper();
   const logger = deps.logger ?? { warn: (msg: string) => process.stderr.write(`${msg}\n`) };
+
+  let expandedRef: string;
+  let gh: GhWrapper;
+  try {
+    const resolvedCtx = await resolveIssueContext({ issue: epicRef, runner: deps.runner });
+    expandedRef = `${resolvedCtx.ref.nwo}#${resolvedCtx.ref.number}`;
+    gh = deps.gh ?? resolvedCtx.gh;
+  } catch (err) {
+    stderr(`cockpit status: ${err instanceof Error ? err.message : String(err)}`);
+    return 2;
+  }
 
   let resolved;
   try {
-    resolved = await resolveEpic({ epicRef: options.epic, gh, logger });
+    resolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
   } catch (err) {
     stderr(`cockpit status: ${err instanceof Error ? err.message : String(err)}`);
     if (err instanceof LoudResolverError && err.code === 'INVALID_EPIC_REF') {
@@ -137,10 +150,13 @@ export async function runStatus(
 export function statusCommand(): Command {
   return new Command('status')
     .description("Print a one-shot snapshot of every ref in the epic body's phases.")
-    .requiredOption('--epic <ownerRepoIssue>', 'Scope to a single epic. Format owner/repo#N.')
+    .argument(
+      '<epic-ref>',
+      'Epic ref. Accepts <n>, <owner>/<repo>#<n>, or https://github.com/<owner>/<repo>/issues/<n>.',
+    )
     .option('--json', 'Emit a single-line JSON envelope and exit. Disables color.', false)
-    .action(async (options: StatusCliOptions) => {
-      const code = await runStatus(options);
+    .action(async (epicRef: string, options: StatusCliOptions) => {
+      const code = await runStatus(epicRef, options);
       process.exit(code);
     });
 }
