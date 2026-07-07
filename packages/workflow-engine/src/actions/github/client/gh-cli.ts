@@ -954,6 +954,20 @@ export class GhCliGitHubClient implements GitHubClient {
     });
   }
 
+  async getFilesChangedBetween(base: string, head: string): Promise<string[]> {
+    const result = await executeCommand('git', [
+      'diff', '--name-only', `${base}...${head}`,
+    ], { cwd: this.workdir });
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git diff --name-only ${base}...${head} failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    return result.stdout.split('\n').filter(Boolean);
+  }
+
   // ==========================================================================
   // Alias Methods (convenience wrappers)
   // ==========================================================================
