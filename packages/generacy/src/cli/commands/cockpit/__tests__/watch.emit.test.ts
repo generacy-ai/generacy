@@ -47,6 +47,26 @@ describe('CockpitEventSchema validation', () => {
   it('rejects non-ISO ts', () => {
     expect(() => CockpitEventSchema.parse(makeEvent({ ts: 'tomorrow' }))).toThrow();
   });
+
+  it('accepts an event with initial absent', () => {
+    expect(() => CockpitEventSchema.parse(makeEvent())).not.toThrow();
+  });
+
+  it('accepts an event with initial: true', () => {
+    expect(() => CockpitEventSchema.parse({ ...makeEvent(), initial: true })).not.toThrow();
+  });
+
+  it('rejects an event with initial: false', () => {
+    expect(() => CockpitEventSchema.parse({ ...makeEvent(), initial: false })).toThrow();
+  });
+
+  it('rejects an event with initial: "yes"', () => {
+    expect(() => CockpitEventSchema.parse({ ...makeEvent(), initial: 'yes' })).toThrow();
+  });
+
+  it('rejects an event with initial: 1', () => {
+    expect(() => CockpitEventSchema.parse({ ...makeEvent(), initial: 1 })).toThrow();
+  });
 });
 
 describe('emit', () => {

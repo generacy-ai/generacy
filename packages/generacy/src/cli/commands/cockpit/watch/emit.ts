@@ -13,6 +13,7 @@ export const CockpitEventSchema = z.object({
   url: z.string().url(),
   event: z.enum(['label-change', 'issue-closed', 'pr-merged', 'pr-closed', 'pr-checks']),
   labels: z.array(z.string()),
+  initial: z.literal(true).optional(),
 });
 
 export type CockpitEventValidated = z.infer<typeof CockpitEventSchema>;

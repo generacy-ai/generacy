@@ -1,4 +1,5 @@
 import type { CockpitState } from '@generacy-ai/cockpit';
+import { isActionableSnapshot } from './actionable.js';
 import type {
   IssueSnapshot,
   PrSnapshot,
@@ -25,6 +26,7 @@ export interface CockpitEvent {
   url: string;
   event: CockpitEventDiscriminator;
   labels: string[];
+  initial?: true;
 }
 
 function nowIso(): string {
@@ -38,8 +40,9 @@ function makeEvent(
   to: CockpitState | null,
   sourceLabel: string | null,
   ts: string,
+  opts: { initial?: true } = {},
 ): CockpitEvent {
-  return {
+  const out: CockpitEvent = {
     ts,
     repo: curr.repo,
     kind: curr.kind,
@@ -51,6 +54,8 @@ function makeEvent(
     event,
     labels: [...curr.labels],
   };
+  if (opts.initial === true) out.initial = true;
+  return out;
 }
 
 function diffIssue(
@@ -119,21 +124,44 @@ function diffPr(
   }
 }
 
+function computeInitialSweep(curr: SnapshotMap, ts: string): CockpitEvent[] {
+  const out: CockpitEvent[] = [];
+  const sortedKeys = [...curr.keys()].sort();
+  for (const key of sortedKeys) {
+    const snap = curr.get(key)!;
+    if (!isActionableSnapshot(snap)) continue;
+    out.push(
+      makeEvent(
+        snap,
+        'label-change',
+        null,
+        snap.classified.state,
+        snap.classified.sourceLabel,
+        ts,
+        { initial: true },
+      ),
+    );
+  }
+  return out;
+}
+
 /**
  * Compute the set of transitions between two SnapshotMaps. Events for the same
  * key are emitted in the order: label-change → lifecycle → pr-checks.
  *
- * First-poll baseline (R9): if `prev` is empty, returns []. If a specific key
- * is absent from `prev`, that key is treated as baseline and emits nothing.
+ * First-poll (prev empty): emits one line per actionable snapshot in `curr`,
+ * each marked `initial: true`. Non-actionable snapshots stay silent.
+ * If a specific key is absent from `prev` on polls 2..N, that key is treated
+ * as baseline and emits nothing.
  */
 export function computeTransitions(
   prev: SnapshotMap,
   curr: SnapshotMap,
   now: () => string = nowIso,
 ): CockpitEvent[] {
-  if (prev.size === 0) return [];
-  const out: CockpitEvent[] = [];
   const ts = now();
+  if (prev.size === 0) return computeInitialSweep(curr, ts);
+  const out: CockpitEvent[] = [];
   for (const [key, currSnap] of curr) {
     const prevSnap = prev.get(key);
     if (prevSnap == null) continue;
