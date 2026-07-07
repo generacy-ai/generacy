@@ -58,6 +58,7 @@ import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
 import { PostActivationRetryService } from './services/post-activation-retry.js';
+import { BootResumeService } from './services/boot-resume-service.js';
 import { detectIdentitySplit } from './services/identity-split-detector.js';
 import {
   TunnelHandler,
@@ -483,6 +484,21 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       server.log.info('Post-activation incomplete on restart — triggering retry');
       retryService.triggerPostActivationRetry().catch((err) => {
         server.log.error({ err }, 'Post-activation retry failed');
+      });
+    } else if (postActivationState.activated && postActivationState.postActivationComplete) {
+      const resumeService = new BootResumeService({
+        logger: server.log,
+        sendRelayEvent: relayClientRef
+          ? (channel, payload) => relayClientRef!.send({
+              type: 'event',
+              event: channel,
+              data: payload,
+              timestamp: new Date().toISOString(),
+            } as unknown as import('./types/relay.js').RelayMessage)
+          : undefined,
+      });
+      resumeService.triggerBootResume().catch((err) => {
+        server.log.error({ err }, 'Boot resume failed');
       });
     }
   }
