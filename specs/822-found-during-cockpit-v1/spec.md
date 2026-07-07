@@ -17,6 +17,16 @@ Three-part argument-contract drift, all CLI-side:
 
 **Repro**: `generacy cockpit status 1` → exit 1, usage error. **Expected**: renders the epic snapshot for issue 1 of the cwd repo.
 
+## Clarifications
+
+See `clarifications.md` for Q&A. Answers settled on 2026-07-07:
+
+- **Q1 → A** (parser architecture): Lift resolution *up*. Each verb calls `resolveIssueContext(...)` FIRST (the same helper `cockpit context` already uses, in `packages/generacy/src/cli/commands/cockpit/resolver.ts`), which handles bare-number/owner-repo/URL parsing and cwd-origin inference; it then passes the expanded `owner/repo#N` to the existing sync `resolveEpic()` in `@generacy-ai/cockpit`. `@generacy-ai/cockpit` stays pure — no filesystem/git subprocess dependency added to the shared library.
+- **Q2 → A** (file paths): The spec's `packages/cockpit/src/cli/*` paths are wrong. The real CLI verbs live at `packages/generacy/src/cli/commands/cockpit/{status,watch,queue}.ts`. Retarget all FR notes. `packages/cockpit/src/resolver/resolve.ts` is untouched (Q1=A).
+- **Q3 → B** (error shape): Reuse the existing `parse issue: <detailed reason>` message from `resolveIssueContext`, wrapped as `Error: cockpit <verb>: parse issue: …`, exit 2. FR-007's "INVALID_EPIC_REF" named the *requirement* (loud + enumerate accepted forms), not a mandatory error-code string. Ensure the listed forms in the message now include the bare number.
+- **Q4 → A** (`queue` migration): `queue` also routes through `resolveIssueContext` so `queue 1 <phase>` works. FR-009's "unchanged" refers to the *argument surface* (positional `<epic-ref> <phase>` stays byte-identical), not the internal parser call.
+- **Q5 → A** (`--repo` flag): No `--repo` flag on `status`/`watch`. Session cwd is the single source of truth for bare-number inference (matches #807 Q5 precedent on `context`); a repo override is spelled `owner/repo#N` in the ref itself. `queue`'s existing `--repo` flag (which means *enqueue target*, not ref-resolution override) is unaffected.
+
 ## User Stories
 
 ### US1: Plugin-driven cockpit invocation (primary)
@@ -58,15 +68,15 @@ Three-part argument-contract drift, all CLI-side:
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `cockpit status` accepts positional `<epic-ref>` (required, single argument) | P1 | `packages/cockpit/src/cli/status.ts:140` |
-| FR-002 | `cockpit watch` accepts positional `<epic-ref>` (required, single argument) | P1 | `packages/cockpit/src/cli/watch.ts:173` |
-| FR-003 | `--epic <ownerRepoIssue>` flag is removed from `status` and `watch` (no deprecation path — pre-1.0) | P1 | One mechanism per rev-3 catalog |
-| FR-004 | `parseEpicRef` accepts bare integer (e.g. `1`, `123`) and infers `owner/repo` from cwd git origin | P1 | `packages/cockpit/src/resolver/resolve.ts:10-20`; reuse the same origin-inference `context` verb uses |
-| FR-005 | `parseEpicRef` continues to accept `owner/repo#N` form | P1 | No regression |
-| FR-006 | `parseEpicRef` continues to accept full GitHub issue URL form (`https://github.com/owner/repo/issues/N`) | P1 | No regression |
-| FR-007 | Invalid ref emits `INVALID_EPIC_REF` error listing all three accepted forms (bare number, `owner/repo#N`, full URL) | P2 | Loud failure — no silent fallback |
-| FR-008 | Bare-number ref in a directory without a git origin emits `INVALID_EPIC_REF` (not a different error code) | P2 | Same error for all "can't resolve" paths |
-| FR-009 | `queue` verb continues to accept positional `<epic-ref> <phase>` unchanged | P1 | Already correct; regression-guard |
+| FR-001 | `cockpit status` accepts positional `<epic-ref>` (required, single argument) | P1 | `packages/generacy/src/cli/commands/cockpit/status.ts` (Q2→A retarget from `packages/cockpit/src/cli/status.ts`) |
+| FR-002 | `cockpit watch` accepts positional `<epic-ref>` (required, single argument) | P1 | `packages/generacy/src/cli/commands/cockpit/watch.ts` (Q2→A retarget from `packages/cockpit/src/cli/watch.ts`) |
+| FR-003 | `--epic <ownerRepoIssue>` flag is removed from `status` and `watch` (no deprecation path — pre-1.0) | P1 | One mechanism per rev-3 catalog. Also removes `--repo` from `status`/`watch` per Q5→A (never existed on those verbs today; regression-guard only). `queue`'s existing `--repo` (enqueue target) is unaffected |
+| FR-004 | `status`, `watch`, `queue` each call `resolveIssueContext(epicRef, { gh })` FIRST to expand bare-integer / `owner/repo#N` / URL forms into `owner/repo#N`, then pass the expanded string to the existing sync `resolveEpic()` in `@generacy-ai/cockpit` | P1 | Q1→A: lift resolution up into the verb layer. Reuses `resolveIssueContext` in `packages/generacy/src/cli/commands/cockpit/resolver.ts` (the same helper `cockpit context` uses). `@generacy-ai/cockpit` stays pure — no git subprocess added. `packages/cockpit/src/resolver/resolve.ts` untouched |
+| FR-005 | `owner/repo#N` form continues to work across all three verbs | P1 | No regression. Handled by the same `resolveIssueContext` → `resolveEpic` chain |
+| FR-006 | Full GitHub issue URL form (`https://github.com/owner/repo/issues/N`) continues to work across all three verbs | P1 | No regression. Handled by the same chain |
+| FR-007 | Invalid ref emits `Error: cockpit <verb>: parse issue: <reason>` (exit code 2) where `<reason>` enumerates all three accepted forms: bare number (`<n>`), `<owner>/<repo>#<n>`, and `https://github.com/<owner>/<repo>/issues/<n>` | P2 | Q3→B: reuse `parseIssueRef`/`resolveIssueContext`'s existing message shape, wrapped with verb name. Update its listed forms to include the bare number now that it's legal. Applies to all three verbs uniformly |
+| FR-008 | Bare-number ref in a directory without a resolvable git origin emits the same `parse issue: …` error as FR-007 (single error mechanism) | P2 | Same error for all "can't resolve" paths — no distinct code for the origin-missing case |
+| FR-009 | `queue` verb's argument surface is unchanged: still `<epic-ref> <phase>`, byte-identical | P1 | Q4→A: "unchanged" applies to the CLI surface. Internally `queue` also routes through `resolveIssueContext` (per FR-004) so `queue 1 <phase>` works. Regression-guard: existing `queue owner/repo#N <phase>` invocations continue to succeed |
 
 ## Success Criteria
 
@@ -74,16 +84,17 @@ Three-part argument-contract drift, all CLI-side:
 |----|--------|--------|-------------|
 | SC-001 | `/cockpit:status <ref>` invocations that fail at Commander usage parsing | 0 (from every invocation today) | Manual repro on fresh preview-channel cluster: `generacy cockpit status 1`, `generacy cockpit status owner/repo#1` both succeed |
 | SC-002 | `/cockpit:watch <ref>` invocations that fail at Commander usage parsing | 0 | Same as SC-001 for `watch` |
-| SC-003 | Number of epic-ref parsing mechanisms in the codebase | 1 (positional, in `parseEpicRef`) | Grep for `--epic` flag references in `packages/cockpit/src/cli/**` returns 0 |
+| SC-003 | Number of epic-ref parsing entrypoints in the CLI | 1 (`resolveIssueContext` in `packages/generacy/src/cli/commands/cockpit/resolver.ts`, called by all four verbs — `status`, `watch`, `queue`, `context` — before `resolveEpic`) | Grep for `--epic` flag references in `packages/generacy/src/cli/commands/cockpit/**` returns 0; grep for direct `parseIssueRef(` or `resolveEpic({ epicRef` calls that bypass `resolveIssueContext` in `status.ts`/`watch.ts`/`queue.ts` returns 0 |
 | SC-004 | Bare-number invocation in cwd-is-repo scenario | Succeeds | `generacy cockpit status 1` in cwd whose origin is `owner/repo` renders the snapshot for `owner/repo#1` |
 | SC-005 | Plugin markdown files touched | 0 | `claude-plugin-cockpit` (`status.md`, `watch.md`) unchanged; they already pass `$ARGUMENTS` positionally |
 
 ## Assumptions
 
-- The origin-inference helper used by `cockpit context` (reads `git remote get-url origin` and parses `owner/repo`) can be reused by `parseEpicRef` without introducing a circular dependency.
+- `resolveIssueContext` (in `packages/generacy/src/cli/commands/cockpit/resolver.ts`) is the shared ref-resolution helper; each cockpit verb calls it directly (Q1→A). `@generacy-ai/cockpit`'s `parseEpicRef`/`resolveEpic` stay sync and do not gain a git-subprocess dependency.
 - No downstream tool, CI script, or docs (outside plugin markdown and cockpit CLI itself) invokes `cockpit status --epic ...` or `cockpit watch --epic ...`. Pre-1.0 = free to break the flag surface.
 - Rev-3 catalog (`docs/epic-cockpit-plan.md` in tetrad-development) and #807 Q5 (unified ref grammar) are the authoritative contract — this bug fix aligns the CLI to them, not the other way around.
 - The `#806` implementation misread ("scope by `--epic` only" as "keep `--epic` flag") is settled — no ambiguity to relitigate.
+- `queue`'s existing `--repo` flag (enqueue target) is unrelated to ref resolution and is untouched by this fix; potential naming-overload cleanup is a separate follow-up (Q5→A).
 
 ## Out of Scope
 
@@ -91,7 +102,9 @@ Three-part argument-contract drift, all CLI-side:
 - Deprecation shim / compat alias for `--epic`. Pre-1.0, one mechanism only.
 - Multi-repo / `--repos` flag reintroduction — that was intentionally dropped in #806 and stays dropped.
 - Cross-repo bare-number disambiguation (e.g. bare `1` when cwd has multiple potential owners). Session cwd is the single source of truth; ambiguity → `INVALID_EPIC_REF`.
-- Changes to `cockpit queue` argument surface — it's already correct.
+- Changes to `cockpit queue`'s CLI argument surface — stays byte-identical (positional `<epic-ref> <phase>`). Internal wiring to `resolveIssueContext` is in scope per FR-004/FR-009 and Q4→A.
+- `--repo` (singular) override flag on `status` or `watch`. Session cwd is the single source of truth for bare-number inference (Q5→A). `owner/repo#N` in the ref itself is the explicit-repo mechanism.
+- Renaming or repurposing `queue`'s existing `--repo` flag (enqueue target). Naming-overload cleanup is a separate later issue.
 - Broader CLI-argument-contract audit across other `generacy` verbs — scoped to cockpit.
 
 ---
