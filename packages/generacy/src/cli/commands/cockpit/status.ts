@@ -83,6 +83,16 @@ export async function runStatus(
       query: `repo:${repo} ${numbers.map((n) => String(n)).join(' ')}`,
     }));
 
+  const membershipByKey = new Map<string, string[]>();
+  for (const phase of resolved.parsed.phases) {
+    for (const ref of phase.refs) {
+      const key = `${ref.repo}#${ref.number}`;
+      const memberships = membershipByKey.get(key);
+      if (memberships != null) memberships.push(phase.token);
+      else membershipByKey.set(key, [phase.token]);
+    }
+  }
+
   const rows: StatusRow[] = [];
   for (const { repo, query } of repoBatches) {
     let issues: Issue[] = [];
@@ -116,30 +126,39 @@ export async function runStatus(
           checks = 'none';
         }
       }
-      rows.push(
-        buildStatusRow(
-          repo,
-          issue,
-          classified,
-          isPr ? 'pr' : 'issue',
-          prNumber,
-          checks,
-        ),
-      );
+      const key = `${repo}#${issue.number}`;
+      const memberships = membershipByKey.get(key);
+      const phaseTokens: (string | null)[] =
+        memberships != null && memberships.length > 0 ? memberships : [null];
+      for (const phaseToken of phaseTokens) {
+        rows.push(
+          buildStatusRow(
+            repo,
+            issue,
+            classified,
+            isPr ? 'pr' : 'issue',
+            prNumber,
+            checks,
+            phaseToken,
+          ),
+        );
+      }
     }
   }
+
+  const groups = groupRows(rows, resolved.parsed.phases, resolved.epic.repo);
+  const orderedRows = groups.flatMap((g) => g.rows);
 
   if (options.json === true) {
     const [ownerStr, repoStr] = resolved.epic.repo.split('/');
     const line = renderJsonEnvelope(
       { owner: ownerStr!, repo: repoStr!, issue: resolved.epic.number },
-      rows,
+      orderedRows,
     );
     stdout(line);
     return 0;
   }
 
-  const groups = groupRows(rows, resolved.epic.repo);
   const tty = process.stdout.isTTY === true;
   const colorizer = tty ? chalkColorizer : identityColorizer;
   const table = renderTable(groups, { tty, json: false, colorizer });
