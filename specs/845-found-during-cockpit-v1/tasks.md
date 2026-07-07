@@ -12,7 +12,7 @@
 
 Both test files are independent — updates are on the same happy-path test only in `advance.test.ts`, but land in one file, so no [P] between T001 and T002 for the shared advance.test.ts.
 
-- [ ] T001 [P] [US1] Update `formatManualAdvanceComment` fixtures in `packages/generacy/src/cli/commands/cockpit/__tests__/advance-marker.test.ts`:
+- [X] T001 [P] [US1] Update `formatManualAdvanceComment` fixtures in `packages/generacy/src/cli/commands/cockpit/__tests__/advance-marker.test.ts`:
   - "with actor" case → expected sentence:
     ``Marked `completed:<gate>` by **@<actor>** — `waiting-for:<gate>` left in place for the worker to clear on resume.``
   - "without actor" (undefined and empty-string) case → expected sentence:
@@ -20,12 +20,12 @@ Both test files are independent — updates are on the same happy-path test only
   - HTML-prelude fixtures unchanged (`<!-- generacy-cockpit:manual-advance gate=… actor=… ts=… -->` is byte-stable per contract).
   - Validation-error test cases (bad gate, bad actor, bad ts) unchanged.
 
-- [ ] T002 [US1] Update happy-path assertion in `packages/generacy/src/cli/commands/cockpit/__tests__/advance.test.ts` (lines ~36–60):
+- [X] T002 [US1] Update happy-path assertion in `packages/generacy/src/cli/commands/cockpit/__tests__/advance.test.ts` (lines ~36–60):
   - Drop `'remove:waiting-for:clarification'` from the expected `calls` array — new expected: `['comment', 'add:completed:clarification']` (or equivalent shape matching the existing test's call-log convention).
   - Update stdout assertion to match new summary: `advanced <ref>: completed:<gate> added — waiting-for:<gate> left in place for the worker to clear on resume (comment: <url>)`.
   - Do NOT change idempotence-branch test (exits 0 with `already advanced …`) or gate-refusal test (exits 3) — they never reach the removed step.
 
-- [ ] T003 [US1] Add regression test in `packages/generacy/src/cli/commands/cockpit/__tests__/advance.test.ts` (SC-003 signal):
+- [X] T003 [US1] Add regression test in `packages/generacy/src/cli/commands/cockpit/__tests__/advance.test.ts` (SC-003 signal):
   - In or immediately after the happy-path test, assert that `gh.removeLabel` is never called with any label starting with `waiting-for:`.
   - Shape (adapt to existing mock convention):
     ```ts
@@ -40,13 +40,13 @@ Both test files are independent — updates are on the same happy-path test only
 ## Phase 2: Core Implementation
 <!-- Phase boundary: T001–T003 should exist as failing / updated tests before T004–T005 land, so the fix flips them green. -->
 
-- [ ] T004 [P] [US1] Update sentence text in `packages/generacy/src/cli/commands/cockpit/manual-advance-marker.ts` (line ~30–31):
+- [X] T004 [P] [US1] Update sentence text in `packages/generacy/src/cli/commands/cockpit/manual-advance-marker.ts` (line ~30–31):
   - With actor: ``Marked `completed:<gate>` by **@<actor>** — `waiting-for:<gate>` left in place for the worker to clear on resume.``
   - Without actor: ``Marked `completed:<gate>` — `waiting-for:<gate>` left in place for the worker to clear on resume.``
   - HTML prelude line UNCHANGED (byte-stable per contract — scanned by `clarification-comment-finder.ts`).
   - Regex validation and thrown-error paths UNCHANGED.
 
-- [ ] T005 [US1] Fix `runAdvance` in `packages/generacy/src/cli/commands/cockpit/advance.ts`:
+- [X] T005 [US1] Fix `runAdvance` in `packages/generacy/src/cli/commands/cockpit/advance.ts`:
   - Delete the `try/catch` block around `removeLabel(waitingLabel)` (lines ~169–176 in current source). Steps 1 (postIssueComment) and 2 (addLabel completed:*) remain in order.
   - Update stdout summary line (lines ~178–181) to:
     `advanced <ref>: completed:<gate> added — waiting-for:<gate> left in place for the worker to clear on resume (comment: <url>)`
@@ -59,7 +59,7 @@ Both test files are independent — updates are on the same happy-path test only
 ## Phase 3: Downstream Documentation (Q1→C surface 3)
 <!-- Phase boundary: verify against the shipped CLI text before touching docs to avoid drift. -->
 
-- [ ] T006 [US1] Update operator-facing cockpit CLI docs referencing the old arrow-form phrasing (`waiting-for:X → completed:X`) to the new persistence-oriented phrasing.
+- [X] T006 [US1] Update operator-facing cockpit CLI docs referencing the old arrow-form phrasing (`waiting-for:X → completed:X`) to the new persistence-oriented phrasing.
   - Locate: grep for the arrow-form under `docs/` and `specs/788-*/` (and any successor cockpit-CLI surface reference doc under `specs/` referenced by #788).
   - Update matching operator-facing text to the phrasing from `contracts/advance-command.md` §Stdout summary. Do NOT touch machine-parsed log formats or internal-only comments.
   - `specs/845-found-during-cockpit-v1/quickstart.md` — already updated during /plan; verify only.
@@ -67,20 +67,20 @@ Both test files are independent — updates are on the same happy-path test only
 
 ## Phase 4: Validation & Polish
 
-- [ ] T007 [US1] Run the two focused test files and confirm green:
+- [X] T007 [US1] Run the two focused test files and confirm green:
   ```bash
   pnpm --filter @generacy-ai/generacy test src/cli/commands/cockpit/__tests__/advance.test.ts
   pnpm --filter @generacy-ai/generacy test src/cli/commands/cockpit/__tests__/advance-marker.test.ts
   ```
   - Expected: all pass, including the new SC-003 regression case from T003.
 
-- [ ] T008 [P] [US1] Run the full generacy package test + typecheck to confirm no collateral breakage:
+- [X] T008 [P] [US1] Run the full generacy package test + typecheck to confirm no collateral breakage:
   ```bash
   pnpm --filter @generacy-ai/generacy test
   pnpm --filter @generacy-ai/generacy typecheck
   ```
 
-- [ ] T009 [US1] Local smoke test per `quickstart.md`:
+- [X] T009 [US1] Local smoke test per `quickstart.md`:
   - On a poll-only cluster (webhooks not delivering), run `generacy cockpit advance <owner>/<repo>#<n> --gate clarification` on a paused test issue.
   - Immediately after: `gh issue view <ref> --json labels -q '.labels[].name'` → BOTH `waiting-for:clarification` and `completed:clarification` present.
   - After one poll interval (~30s): both labels + `agent:paused` gone; worker resumed.

@@ -10,7 +10,7 @@ describe('formatManualAdvanceComment', () => {
     });
     expect(out).toBe(
       '<!-- generacy-cockpit:manual-advance gate=clarification actor=octocat ts=2026-06-26T12:00:00.000Z -->\n\n' +
-        'Manually advanced `waiting-for:clarification` → `completed:clarification` by **@octocat**.',
+        'Marked `completed:clarification` by **@octocat** — `waiting-for:clarification` left in place for the worker to clear on resume.',
     );
   });
 
@@ -21,7 +21,7 @@ describe('formatManualAdvanceComment', () => {
     });
     expect(out).toBe(
       '<!-- generacy-cockpit:manual-advance gate=clarification ts=2026-06-26T12:00:00.000Z -->\n\n' +
-        'Manually advanced `waiting-for:clarification` → `completed:clarification`.',
+        'Marked `completed:clarification` — `waiting-for:clarification` left in place for the worker to clear on resume.',
     );
     expect(out).not.toContain('actor=');
     expect(out).not.toContain('by **@');
@@ -35,7 +35,7 @@ describe('formatManualAdvanceComment', () => {
     });
     expect(out).toBe(
       '<!-- generacy-cockpit:manual-advance gate=clarification ts=2026-06-26T12:00:00.000Z -->\n\n' +
-        'Manually advanced `waiting-for:clarification` → `completed:clarification`.',
+        'Marked `completed:clarification` — `waiting-for:clarification` left in place for the worker to clear on resume.',
     );
   });
 

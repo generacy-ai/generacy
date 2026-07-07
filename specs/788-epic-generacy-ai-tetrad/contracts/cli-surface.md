@@ -47,7 +47,10 @@ Exit codes:
 ```
 Usage: generacy cockpit advance [options] <issue>
 
-Manually advance a gated issue by flipping waiting-for:<gate> → completed:<gate>.
+Manually advance a gated issue by marking completed:<gate>. The
+waiting-for:<gate> label is left in place so the poll-path resume
+detector sees the label pair; the worker clears both labels plus
+agent:paused on resume (see #845).
 
 Arguments:
   <issue>                     Issue ref — <number>, <owner>/<repo>#<n>, or full URL.
@@ -59,7 +62,8 @@ Options:
   -h, --help                  display help for command
 
 Exit codes:
-  0   Success — completed:<gate> added; waiting-for:<gate> removed; comment posted.
+  0   Success — completed:<gate> added; comment posted. waiting-for:<gate> left
+      in place — the worker removes it on resume (label-pair invariant, #845).
       Also 0 when issue already has completed:<gate> (idempotent — no-op message on stdout).
   1   Operational error (gh auth, 404, network).
   2   Bad usage — unknown gate, missing --gate, ambiguous bare-number ref.
@@ -67,19 +71,18 @@ Exit codes:
 ```
 
 **stdout**: Short human-readable line:
-- Success: `advanced owner/repo#123: waiting-for:clarification → completed:clarification (comment: <url>)`
+- Success: `advanced owner/repo#123: completed:clarification added — waiting-for:clarification left in place for the worker to clear on resume (comment: <url>)`
 - Already-advanced: `already advanced owner/repo#123: completed:clarification is present (no-op)`
 - Refusal (exit 3): `refusing to advance gate "plan-review": active waiting gate is "clarification"`
 - Unknown gate (exit 2): `unknown gate "clarificaton". Valid gates: clarification, clarification-review, ...`
 
 **stderr**: Log lines, error details.
 
-**Side effects on GitHub** (in order, fail-fast — partial failures DO leave the issue in an inconsistent state, which is then visible via `cockpit state` re-run):
+**Side effects on GitHub** (in order, fail-fast):
 1. `gh issue comment <n> --repo <r> --body <manual-advance-comment>`
 2. `gh issue edit <n> --repo <r> --add-label completed:<gate>`
-3. `gh issue edit <n> --repo <r> --remove-label waiting-for:<gate>`
 
-If step 2 succeeds but step 3 fails, the issue has both `waiting-for:<gate>` and `completed:<gate>`. The classifier's tier-rank rule (`terminal > waiting`) means downstream tools see it as "advanced" anyway; a subsequent `cockpit advance` re-run is idempotent and will retry the removal.
+`waiting-for:<gate>` is intentionally NOT removed here. The poll-path resume detector in `label-monitor-service.ts` requires both `waiting-for:<gate>` and `completed:<gate>` to be present on the issue to emit a resume event; on resume the worker clears `waiting-for:*`, `completed:*`, and `agent:paused` itself. See #845.
 
 ## `generacy cockpit clarify-context <issue>`
 

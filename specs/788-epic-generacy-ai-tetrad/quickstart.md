@@ -62,11 +62,13 @@ generacy cockpit state https://github.com/generacy-ai/generacy/issues/788
 ### 2. Advance a gate
 
 ```bash
-# Move an issue from waiting-for:clarification to completed:clarification
+# Mark an issue as clarified — adds completed:clarification and leaves
+# waiting-for:clarification in place so the poll-path resume detector sees
+# the label pair. The worker clears both labels on resume.
 generacy cockpit advance 788 --gate clarification
 
 # Output:
-#   advanced generacy-ai/generacy#788: waiting-for:clarification → completed:clarification (comment: https://github.com/generacy-ai/generacy/issues/788#issuecomment-12345)
+#   advanced generacy-ai/generacy#788: completed:clarification added — waiting-for:clarification left in place for the worker to clear on resume (comment: https://github.com/generacy-ai/generacy/issues/788#issuecomment-12345)
 
 # Re-running is a no-op (idempotent)
 generacy cockpit advance 788 --gate clarification

@@ -33,8 +33,11 @@ function stubGh(overrides: Partial<GhWrapper> = {}): GhWrapper {
 const fixedNow = () => new Date('2026-06-26T12:00:00.000Z');
 
 describe('cockpit advance', () => {
-  it('happy path: comment → add completed → remove waiting (in order)', async () => {
+  it('happy path: comment → add completed (waiting-for:* left in place)', async () => {
     const calls: string[] = [];
+    const removeLabel = vi.fn(async (_repo: string, _n: number, label: string) => {
+      calls.push(`remove:${label}`);
+    });
     const gh = stubGh({
       fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification', 'phase:clarify'] })),
       postIssueComment: vi.fn(async (_repo, _n, body) => {
@@ -45,9 +48,7 @@ describe('cockpit advance', () => {
       addLabel: vi.fn(async (_repo, _n, label) => {
         calls.push(`add:${label}`);
       }),
-      removeLabel: vi.fn(async (_repo, _n, label) => {
-        calls.push(`remove:${label}`);
-      }),
+      removeLabel,
     });
     const out: string[] = [];
     await runAdvance(
@@ -55,8 +56,35 @@ describe('cockpit advance', () => {
       { gate: 'clarification' },
       { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
     );
-    expect(calls).toEqual(['comment', 'add:completed:clarification', 'remove:waiting-for:clarification']);
-    expect(out[0]).toContain('advanced generacy-ai/generacy#1: waiting-for:clarification → completed:clarification');
+    expect(calls).toEqual(['comment', 'add:completed:clarification']);
+    expect(out[0]).toContain(
+      'advanced generacy-ai/generacy#1: completed:clarification added — waiting-for:clarification left in place for the worker to clear on resume',
+    );
+
+    // SC-003 regression: advance MUST NOT remove any waiting-for:* label.
+    // Deleting the fix in advance.ts (restoring the removeLabel(waitingLabel)
+    // call) makes this assertion fail deterministically.
+    for (const call of removeLabel.mock.calls) {
+      expect(call[2]).not.toMatch(/^waiting-for:/);
+    }
+  });
+
+  it('advance never removes waiting-for:* on the happy path', async () => {
+    const removeLabel = vi.fn(async () => {});
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+      removeLabel,
+    });
+    await runAdvance(
+      'generacy-ai/generacy#1',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: () => {} },
+    );
+    for (const call of removeLabel.mock.calls) {
+      expect(call[2]).not.toMatch(/^waiting-for:/);
+    }
+    // Direct assertion for extra clarity: no waiting-for:* removal ever.
+    expect(removeLabel).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.stringMatching(/^waiting-for:/));
   });
 
   it('idempotent: already-advanced is a no-op with exit 0', async () => {
@@ -190,11 +218,7 @@ describe('cockpit advance — App-credentialed identity resolution (#830)', () =
         env: { CLUSTER_GITHUB_USERNAME: 'cluster-bot' },
       },
     );
-    expect(calls).toEqual([
-      'comment',
-      'add:completed:clarification',
-      'remove:waiting-for:clarification',
-    ]);
+    expect(calls).toEqual(['comment', 'add:completed:clarification']);
     expect(commentBody).toContain('actor=cluster-bot');
     expect(commentBody).toContain('by **@cluster-bot**');
     expect(throwingGetUser).not.toHaveBeenCalled();
@@ -248,11 +272,7 @@ describe('cockpit advance — App-credentialed identity resolution (#830)', () =
     } finally {
       setLogger(originalLogger);
     }
-    expect(calls).toEqual([
-      'comment',
-      'add:completed:clarification',
-      'remove:waiting-for:clarification',
-    ]);
+    expect(calls).toEqual(['comment', 'add:completed:clarification']);
     expect(commentBody).not.toContain('actor=');
     expect(commentBody).not.toContain('by **@');
     expect(commentBody).toContain('<!-- generacy-cockpit:manual-advance gate=clarification ts=');
