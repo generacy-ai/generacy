@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit-status-envelope-v2.json",
+  "title": "Cockpit Status Envelope (phase-grouped)",
+  "description": "Single-line JSON envelope emitted by `generacy cockpit status --json <epic-ref>`. Backward-compatible superset of the pre-#828 envelope: adds `rows[].phase`. Row identity is (repo, number, phase).",
+  "type": "object",
+  "required": ["scope", "rows"],
+  "additionalProperties": false,
+  "properties": {
+    "scope": {
+      "type": "object",
+      "required": ["kind", "owner", "repo", "issue"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "const": "epic" },
+        "owner": { "type": "string", "minLength": 1 },
+        "repo": { "type": "string", "minLength": 1 },
+        "issue": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "rows": {
+      "type": "array",
+      "description": "One entry per (issue × phase membership). Order: outer key = ParsedPhase body order; inner key = ParsedPhase.refs body order; trailing `phase: null` group last. Total length MAY exceed the count of distinct (repo, number) pairs when refs appear under multiple phases (FR-006).",
+      "items": { "$ref": "#/$defs/statusRow" }
+    }
+  },
+  "$defs": {
+    "statusRow": {
+      "type": "object",
+      "required": [
+        "repo",
+        "kind",
+        "number",
+        "title",
+        "state",
+        "sourceLabel",
+        "prNumber",
+        "checks",
+        "url",
+        "phase"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "repo": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$",
+          "description": "GitHub owner/repo — matches ParsedPhase.refs[].repo."
+        },
+        "kind": {
+          "enum": ["issue", "pr"],
+          "description": "Classification of the item. `pr` when the item URL matches `/pull/\\d+` or carries the `type:pr` label."
+        },
+        "number": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "GitHub issue or PR number."
+        },
+        "title": { "type": "string" },
+        "state": {
+          "type": "string",
+          "description": "CockpitState — the classifier's derived state (e.g. `active`, `merged`)."
+        },
+        "sourceLabel": {
+          "type": "string",
+          "description": "The label the classifier used to pick this state — e.g. `phase:plan`."
+        },
+        "prNumber": {
+          "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }],
+          "description": "The PR number (either the row's own number when kind=pr, or the resolved PR for an issue). `null` when no PR is linked."
+        },
+        "checks": {
+          "enum": ["pending", "success", "failure", "none"],
+          "description": "Rollup of check-run conclusions for the linked PR. `none` when no PR or when the API call failed (non-fatal)."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri",
+          "description": "The GitHub URL for the issue or PR."
+        },
+        "phase": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[a-z0-9]([a-z0-9._-]*[a-z0-9])?$",
+              "description": "ParsedPhase.token — lowercased first token of the `### <phase>` heading in the epic body."
+            },
+            { "type": "null" }
+          ],
+          "description": "Phase membership from ParsedEpicBody.phases. `null` when the ref appears in ParsedEpicBody.allRefs but under no phase heading, or the epic has zero phases. Refs under multiple phase headings emit one row per phase membership; row count MAY exceed allRefs.length."
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "scope": { "kind": "epic", "owner": "christrudelpw", "repo": "sniplink", "issue": 1 },
+      "rows": [
+        {
+          "repo": "christrudelpw/sniplink",
+          "kind": "issue",
+          "number": 2,
+          "title": "Foundation task",
+          "state": "active",
+          "sourceLabel": "phase:plan",
+          "prNumber": null,
+          "checks": "none",
+          "url": "https://github.com/christrudelpw/sniplink/issues/2",
+          "phase": "p1"
+        },
+        {
+          "repo": "christrudelpw/sniplink",
+          "kind": "pr",
+          "number": 15,
+          "title": "Ship P3 milestone",
+          "state": "review",
+          "sourceLabel": "phase:review",
+          "prNumber": 15,
+          "checks": "success",
+          "url": "https://github.com/christrudelpw/sniplink/pull/15",
+          "phase": "p3"
+        }
+      ]
+    }
+  ]
+}
