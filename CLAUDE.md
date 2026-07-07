@@ -243,6 +243,15 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - Control-plane untouched. Both `VsCodeTunnelProcessManager.start()` and `CodeServerProcessManager.start()` are already idempotent.
 - Mutually exclusive with sibling: `needsRetry === true` branch fires `bootstrap-complete` (which starts both services); `needsRetry === false && activated && postActivationComplete` branch fires per-service resumes. No overlap.
 
+## Wire boot-resume into the wizard startup path (#834)
+
+- Bug: #824's `BootResumeService` wiring was added only to `createServer()`'s "existing API key" branch (`server.ts:447-503`). Wizard-provisioned clusters boot with `config.relay.apiKey === undefined` (the key persists to `/var/lib/generacy/cluster-api-key` and is reloaded during activation), so they take the `activateInBackground()` branch (`server.ts:433, :799`), which only handles the retry half of the decision matrix (`server.ts:879-896`). Net: on every wizard-cluster stop/start, `BootResumeService` never fires and #824's fix is unreachable.
+- Fix: `packages/orchestrator/src/services/post-activation-dispatch.ts` — NEW. Exports `runPostActivationBranch({ logger, sendRelayEvent })` that owns the entire retry/resume/noop decision (internally constructs `PostActivationRetryService`, calls `checkPostActivationState()`, dispatches to `triggerPostActivationRetry()` / `triggerBootResume()` / no-op). Returns `DispatchOutcome = 'retry' | 'resume' | 'noop'` for observability + test hooks. Both `server.ts` branches collapse to a single `await runPostActivationBranch(...)` call — regression is impossible by construction (no per-branch `if/else` to skew).
+- Prod call sites pass only `{ logger, sendRelayEvent }`; the two optional `retryServiceFactory` / `resumeServiceFactory` fields on `DispatchOptions` are test-only injection seams for the helper unit test.
+- Fire-and-forget preserved: helper does NOT await `triggerPostActivationRetry()` / `triggerBootResume()` — both remain `.catch(logger)`-guarded promises exactly as in `server.ts` today.
+- Regression coverage: `packages/orchestrator/src/__tests__/server-boot-resume-wizard-branch.test.ts` — NEW, load-bearing per clarifications Q3→A. Drives `createServer()` with empty `config.relay.apiKey` (forces wizard branch), stubs `activate()` + control-plane + `checkPostActivationState()` → `{ activated: true, postActivationComplete: true, needsRetry: false }`, asserts `BootResumeService.triggerBootResume` fires. Deleting the resume dispatch from either the helper or the wizard call site makes this test fail (SC-003). Optional Q3→C complement: `post-activation-dispatch.test.ts` unit tests the full retry / resume / noop matrix by direct import.
+- `PostActivationRetryService`, `BootResumeService`, control-plane, lifecycle handlers, and relay wiring all UNCHANGED — this is purely a call-site consolidation + regression test.
+
 ## Bootstrap-Complete Lifecycle Action (#562)
 
 - `packages/control-plane/src/schemas.ts` — MODIFIED in #562: `LifecycleActionSchema` enum extended from 5 to 6 entries, adding `'bootstrap-complete'`.
