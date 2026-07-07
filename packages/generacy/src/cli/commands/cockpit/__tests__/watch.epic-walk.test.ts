@@ -44,7 +44,9 @@ describe('SC-002 — watch emits every transition across a 10-step phase walk', 
     expect(states[0]).toBe('pending');
     expect(states).toContain('active');
     expect(states).toContain('waiting');
-    expect(states).toContain('terminal');
+    // Per #841: mid-pipeline completed:* labels no longer silently promote
+    // above workflow:speckit-feature (pending), so the label-change stream
+    // never reaches 'terminal' — only the CLOSED transition below does.
 
     const closedEvent = allEvents.find((e) => e.event === 'issue-closed');
     expect(closedEvent).toBeDefined();

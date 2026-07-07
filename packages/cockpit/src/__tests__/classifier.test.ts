@@ -121,6 +121,72 @@ describe('classify()', () => {
     );
   });
 
+  describe('#841 — mid-pipeline completed:* is not terminal', () => {
+    it('FR-007: waiting beats demoted completed', () => {
+      // A stalled cluster carrying completed:specify + a live waiting-for
+      // gate must not disappear into the terminal bucket.
+      expect(
+        classify([
+          'completed:specify',
+          'waiting-for:clarification',
+          'agent:in-progress',
+          'agent:paused',
+        ]),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'waiting-for:clarification',
+      });
+    });
+
+    it('FR-008: completed:validate stays terminal', () => {
+      expect(classify(['completed:validate'])).toEqual({
+        state: 'terminal',
+        sourceLabel: 'completed:validate',
+      });
+    });
+
+    it('FR-009a: single demoted completed:* maps to stage-complete', () => {
+      expect(classify(['completed:specify'])).toEqual({
+        state: 'stage-complete',
+        sourceLabel: 'completed:specify',
+      });
+    });
+
+    it('FR-009b: latest-phase-wins tie-break among demoted completed:*', () => {
+      expect(classify(['completed:specify', 'completed:plan'])).toEqual({
+        state: 'stage-complete',
+        sourceLabel: 'completed:plan',
+      });
+    });
+
+    it('canary: terminal outranks stage-complete regardless of pipeline order', () => {
+      expect(
+        classify(['completed:epic-approval', 'completed:implement']),
+      ).toEqual({
+        state: 'terminal',
+        sourceLabel: 'completed:epic-approval',
+      });
+    });
+
+    it('canary: completed:children-complete is terminal', () => {
+      expect(classify(['completed:children-complete'])).toEqual({
+        state: 'terminal',
+        sourceLabel: 'completed:children-complete',
+      });
+    });
+
+    it('canary: error beats stage-complete', () => {
+      expect(classify(['failed:plan', 'completed:specify'])).toEqual({
+        state: 'error',
+        sourceLabel: 'failed:plan',
+      });
+    });
+
+    it('canary: empty input still returns unknown/""', () => {
+      expect(classify([])).toEqual({ state: 'unknown', sourceLabel: '' });
+    });
+  });
+
   describe('empty / unknown-only input (f)', () => {
     it('empty iterable → unknown with empty sourceLabel', () => {
       expect(classify([])).toEqual({ state: 'unknown', sourceLabel: '' });

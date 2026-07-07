@@ -1,12 +1,22 @@
 import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
 import type { CockpitState } from '../types.js';
 
+// Explicit terminal set for completed:* labels (#841). Every other completed:*
+// falls through to 'stage-complete' — promotion to terminal requires editing
+// this set, so silent mid-pipeline demotion of waiting-for:* is impossible.
+const TERMINAL_COMPLETED_LABELS = new Set<string>([
+  'completed:validate',
+  'completed:epic-approval',
+  'completed:children-complete',
+]);
+
 /**
  * Build-time-static lookup table mapping label name → curated CockpitState.
  *
- * Rules (plan.md §D2):
- *   closed / completed:epic-approval / completed:children-complete → terminal
- *   any other completed:*                                          → terminal
+ * Rules (plan.md §D2, #841):
+ *   closed                                                         → terminal
+ *   completed:* ∈ TERMINAL_COMPLETED_LABELS                        → terminal
+ *   any other completed:*                                          → stage-complete
  *   failed:* / agent:error                                         → error
  *   waiting-for:* / needs:*                                        → waiting
  *   phase:* / agent:in-progress / agent:dispatched                 → active
@@ -18,7 +28,9 @@ import type { CockpitState } from '../types.js';
  */
 function classifyByPattern(label: string): CockpitState {
   if (label === 'closed') return 'terminal';
-  if (label.startsWith('completed:')) return 'terminal';
+  if (label.startsWith('completed:')) {
+    return TERMINAL_COMPLETED_LABELS.has(label) ? 'terminal' : 'stage-complete';
+  }
   if (label.startsWith('failed:') || label === 'agent:error') return 'error';
   if (label.startsWith('waiting-for:') || label.startsWith('needs:')) return 'waiting';
   if (label.startsWith('phase:') || label === 'agent:in-progress' || label === 'agent:dispatched') {
