@@ -16,7 +16,9 @@
 - C: Subprocess only — `child_process.spawn` the compiled `generacy` CLI with `--interval` (below floor triggers clamp; may need small override), tail stderr for evidence of ≥ 2 polls, kill via SIGTERM. Slower but tests the exact prod path.
 - D: Both — one in-process test (A or B) covering `runWatch` semantics + one subprocess test (C) covering CLI wiring.
 
-**Answer**: *Pending*
+**Answer**: C — subprocess only, with one amendment to FR-004's assertion. The in-process variants (A, B, and D's first half) structurally CANNOT catch this bug class: under vitest the test runner's own handles keep the event loop alive, and an unref'd timer still fires when the process survives for other reasons — so `runWatch` + `onTick` counting PASSES against the buggy code. That's not a weaker test; it's false confidence, the exact thing the existing abort-driven suite already provides. Only a spawned real CLI process — where the watch loop is the sole thing keeping Node alive — exhibits the drain.
+
+Amendment: don't assert "≥ 2 poll ticks" — at the 15000ms clamp floor that's a 30+ second CI test. The property that broke is "process stays alive through the first sleep": spawn the CLI, await the startup line, assert the process is still alive ~5s later (the buggy build exits within ~1s of the first poll settling), then SIGTERM and assert clean exit 0. Same regression power, ~5s runtime, and it exercises the real signal path for free. If loop-cadence semantics need more in-process coverage, a supplementary white-box assert that the sleep timer `hasRef()` is cheap — but the subprocess test is the regression gate.
 
 ---
 
@@ -29,4 +31,4 @@
 - A: Proactive — add `WatchDeps.unrefTimer?: boolean` (default `false`), thread it into `sleep()`, add one test that asserts `unrefTimer: true` yields an unref'd timer. CLI never sets it. Establishes the opt-in contract now.
 - B: Defer — remove `timer.unref?.()` entirely with no flag. If a future embedder needs unref behavior, they add the flag then (following FR-002 at that point). Smaller diff, YAGNI.
 
-**Answer**: *Pending*
+**Answer**: B — defer, YAGNI. No embedder exists, so the flag is config surface with zero readers — the exact dead-surface class rev 3 spent three issues deleting. FR-002's real requirement is a constraint on any FUTURE reintroduction of unref, which is satisfied today by a comment at the sleep site: "do not unref — see #836; an embedder needing unref must gate it behind an explicit `WatchDeps` flag the CLI never sets." Whoever needs the flag writes it, with a consumer attached.
