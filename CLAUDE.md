@@ -230,6 +230,19 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/src/services/credential-writer.ts` — NEW in #558: `writeCredential()` orchestrates secret write + YAML metadata write + relay event emission. Follows `default-role-writer.ts` pattern (atomic YAML writes, `yaml` package).
 - Cache coherence: credhelper-daemon restarted on bootstrap-complete (AD-2). Follow-up needed for post-bootstrap credential edit cache reload.
 
+## Orchestrator Boot-Time Service Resume (#824)
+
+- Bug: `generacy stop` explicitly stops the VS Code tunnel + code-server (`vscode-tunnel-stop` + `code-server-stop` lifecycle actions), but on `generacy start` neither service ever restarts. Sole auto-start site is the control-plane `bootstrap-complete` handler, which is only *replayed* by `PostActivationRetryService` when `needsRetry === true`. On a healthy already-activated cluster, `activated && postActivationComplete` → `needsRetry === false` → no replay → tunnel/code-server stay dead.
+- Fix: New sibling service `BootResumeService` in `packages/orchestrator/src/services/boot-resume-service.ts`. In `server.ts`'s "existing API key" branch, after `PostActivationRetryService.checkPostActivationState()`, a new `else if (activated && postActivationComplete)` branch instantiates `BootResumeService` and calls `triggerBootResume()`.
+- Design (per clarifications, spec `#824`): fires two independent, best-effort lifecycle POSTs concurrently via `Promise.allSettled`:
+  - `POST /lifecycle/vscode-tunnel-start`
+  - `POST /lifecycle/code-server-start`
+- Envelope mirrors `PostActivationRetryService.triggerPostActivationRetry()`: 15 s `probeControlPlaneSocket` wait + 1 POST attempt with 10 s request timeout. No retry loop; UI Restart is the manual backstop.
+- Failure surface: reuses `cluster.bootstrap` channel with new payload shape `{ status: 'failed', reason: 'resume-failed', service: 'vscode-tunnel' | 'code-server', error }`. Emitted per-service (each POST can fail independently). Does NOT push `cluster.state = degraded` (divergence from sibling — a failed tunnel restart is not cluster-degraded).
+- Runs after `initializeRelayBridge()` so `cluster.vscode-tunnel { status: 'starting' }` events from the tunnel manager reach the cloud on the very first emit.
+- Control-plane untouched. Both `VsCodeTunnelProcessManager.start()` and `CodeServerProcessManager.start()` are already idempotent.
+- Mutually exclusive with sibling: `needsRetry === true` branch fires `bootstrap-complete` (which starts both services); `needsRetry === false && activated && postActivationComplete` branch fires per-service resumes. No overlap.
+
 ## Bootstrap-Complete Lifecycle Action (#562)
 
 - `packages/control-plane/src/schemas.ts` — MODIFIED in #562: `LifecycleActionSchema` enum extended from 5 to 6 entries, adding `'bootstrap-complete'`.

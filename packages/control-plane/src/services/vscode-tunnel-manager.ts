@@ -110,6 +110,10 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
   // cloud/UI deep-links to the tunnel that's actually running, not the dead one.
   private actualTunnelName: string | null = null;
   private stopping = false;
+  // Set by the device-code timeout handler before it kills the child so the
+  // exit handler can suppress the wasPending `error` emit. Cleared at the top
+  // of the exit handler alongside `stopping` so a stale value cannot leak.
+  private timedOut = false;
 
   constructor(private readonly opts: VsCodeTunnelManagerOptions) {}
 
@@ -124,25 +128,39 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
 
   async start(): Promise<VsCodeTunnelStartResult> {
     if (this.child) {
-      if (this.status === "authorization_pending" && this.deviceCode) {
-        emitTunnelEvent({
-          status: "authorization_pending",
-          deviceCode: this.deviceCode,
-          verificationUri:
-            this.verificationUri ?? "https://github.com/login/device",
-          tunnelName: this.opts.tunnelName,
-        });
-      } else if (this.status === "connected") {
-        emitTunnelEvent({
-          status: "connected",
+      // Defense-in-depth (FR-003): if some code path has left a stale child
+      // behind alongside a resting-error status, don't early-return — SIGTERM
+      // the stale child (via stop(), which handles SIGKILL backstop) and fall
+      // through to a fresh spawn. `await` guarantees no two `code tunnel
+      // --name <same>` processes ever overlap (#743).
+      if (
+        this.status === "error" ||
+        this.status === "disconnected" ||
+        this.status === "stopped"
+      ) {
+        await this.stop();
+        // fall through to the fresh-spawn path below
+      } else {
+        if (this.status === "authorization_pending" && this.deviceCode) {
+          emitTunnelEvent({
+            status: "authorization_pending",
+            deviceCode: this.deviceCode,
+            verificationUri:
+              this.verificationUri ?? "https://github.com/login/device",
+            tunnelName: this.opts.tunnelName,
+          });
+        } else if (this.status === "connected") {
+          emitTunnelEvent({
+            status: "connected",
+            tunnelName: this.actualTunnelName ?? this.opts.tunnelName,
+            tunnelUrl: this.tunnelUrl ?? undefined,
+          });
+        }
+        return {
+          status: this.status,
           tunnelName: this.actualTunnelName ?? this.opts.tunnelName,
-          tunnelUrl: this.tunnelUrl ?? undefined,
-        });
+        };
       }
-      return {
-        status: this.status,
-        tunnelName: this.actualTunnelName ?? this.opts.tunnelName,
-      };
     }
 
     this.status = "starting";
@@ -166,7 +184,9 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       const wasPending =
         this.status === "authorization_pending" || this.status === "starting";
       const stopInitiated = this.stopping;
+      const timedOut = this.timedOut;
       this.stopping = false;
+      this.timedOut = false;
       this.child = null;
       this.clearDeviceCodeTimer();
       this.deviceCode = null;
@@ -176,6 +196,10 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
 
       if (stopInitiated) {
         this.status = "stopped";
+      } else if (timedOut) {
+        // Device-code timeout initiated this exit. status was already set to
+        // "error" and the single `error` event was emitted by the timeout
+        // handler; suppress the wasPending duplicate emit.
       } else if (wasConnected) {
         this.status = "disconnected";
         emitTunnelEvent({
@@ -240,7 +264,25 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
           status: "error",
           error: "Timed out waiting for device code",
           details: last20 || undefined,
+          tunnelName: this.opts.tunnelName,
         });
+        // Kill the child so the exit handler can clear `this.child`, otherwise
+        // every subsequent start() (the Restart button) will hit the early-
+        // return with a live `this.child` and silently no-op. `timedOut`
+        // routes the exit-handler cascade past the wasPending branch so we
+        // don't emit a second, misleading "code tunnel exited (code N)" event.
+        this.timedOut = true;
+        this.child?.kill("SIGTERM");
+        const forceKillMs =
+          this.opts.forceKillTimeoutMs ?? DEFAULT_FORCE_KILL_TIMEOUT_MS;
+        const forceKillTimer = setTimeout(() => {
+          try {
+            this.child?.kill("SIGKILL");
+          } catch {
+            // already gone
+          }
+        }, forceKillMs);
+        if (typeof forceKillTimer.unref === "function") forceKillTimer.unref();
       }
     }, timeoutMs);
     if (typeof this.deviceCodeTimer.unref === "function")

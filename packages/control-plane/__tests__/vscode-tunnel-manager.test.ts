@@ -81,6 +81,9 @@ describe("VsCodeTunnelProcessManager", () => {
     });
     getRelayPushEventMock.mockReturnValue(pushEventFn);
 
+    // Full reset (not just clear) so that any `mockReturnValueOnce` queue
+    // residue from a previous test does not leak into this test's spawn.
+    spawnMock.mockReset();
     spawnMock.mockImplementation(() => createMockChild());
   });
 
@@ -303,6 +306,130 @@ describe("VsCodeTunnelProcessManager", () => {
 
       const errorEvent = relayEvents.find((e) => e.payload.status === "error");
       expect(errorEvent?.payload.details).toBeUndefined();
+    });
+
+    // T002: FR-001 — timeout handler must SIGTERM the child so this.child is
+    // eventually cleared by the exit handler and Restart can respawn.
+    it("kills the child with SIGTERM after device code timeout (FR-001)", async () => {
+      vi.useFakeTimers();
+
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ deviceCodeTimeoutMs: 30_000 })
+      );
+      await mgr.start();
+
+      vi.advanceTimersByTime(30_000);
+
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    });
+
+    // T003: FR-005, SC-002, Q3→A — exactly ONE error event with the timeout
+    // message and tunnelName. The "code tunnel exited (code N)…" text (from the
+    // exit handler's wasPending branch) must NOT appear.
+    it("emits exactly one error event with timeout message and tunnelName (FR-005, SC-002)", async () => {
+      vi.useFakeTimers();
+
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ deviceCodeTimeoutMs: 100 })
+      );
+      await mgr.start();
+      pushLine(child, "Initializing tunnel...");
+
+      vi.advanceTimersByTime(100);
+
+      const errorEvents = relayEvents.filter(
+        (e) => e.payload.status === "error"
+      );
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].payload.error).toBe(
+        "Timed out waiting for device code"
+      );
+      expect(errorEvents[0].payload.tunnelName).toBe("test-cluster");
+      // The wasPending exit-handler text must NOT be present on the timeout path:
+      const anyPendingExitText = relayEvents.some((e) =>
+        (e.payload.error ?? "").includes(
+          "code tunnel exited"
+        )
+      );
+      expect(anyPendingExitText).toBe(false);
+    });
+
+    // T004: FR-002, SC-002 — after the timeout-initiated kill, the child's
+    // exit must not produce a second error event (wasPending branch suppressed).
+    it("does not emit a second error event when child exits after timeout (FR-002)", async () => {
+      vi.useFakeTimers();
+
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ deviceCodeTimeoutMs: 100 })
+      );
+      await mgr.start();
+
+      vi.advanceTimersByTime(100);
+      const errorCountAfterTimeout = relayEvents.filter(
+        (e) => e.payload.status === "error"
+      ).length;
+
+      // Simulate the child exiting in response to SIGTERM:
+      child.emit("exit", 0);
+
+      const errorCountAfterExit = relayEvents.filter(
+        (e) => e.payload.status === "error"
+      ).length;
+      expect(errorCountAfterExit).toBe(errorCountAfterTimeout);
+    });
+
+    // T005: FR-004 — resting status after timeout + exit is "error" (not
+    // "stopped"). A device-code timeout is a real failure and must remain
+    // observable via getStatus().
+    it("keeps status as 'error' after timeout + exit settles (FR-004)", async () => {
+      vi.useFakeTimers();
+
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ deviceCodeTimeoutMs: 100 })
+      );
+      await mgr.start();
+
+      vi.advanceTimersByTime(100);
+      child.emit("exit", 0);
+
+      expect(mgr.getStatus()).toBe("error");
+    });
+
+    // T006: SC-001 — Restart-button recovery. After the timeout cascade
+    // settles, a second start() must spawn a fresh child.
+    it("subsequent start() after settled timeout spawns a new child (SC-001)", async () => {
+      vi.useFakeTimers();
+
+      const child1 = createMockChild();
+      const child2 = createMockChild();
+      spawnMock
+        .mockReturnValueOnce(child1)
+        .mockReturnValueOnce(child2);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ deviceCodeTimeoutMs: 100 })
+      );
+      await mgr.start();
+
+      vi.advanceTimersByTime(100);
+      child1.emit("exit", 0);
+
+      // The "Restart tunnel" click:
+      await mgr.start();
+
+      expect(spawnMock).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -739,6 +866,107 @@ describe("VsCodeTunnelProcessManager", () => {
       expect(reEmitted).toHaveLength(1);
       expect(reEmitted[0].payload.status).toBe("connected");
       expect(reEmitted[0].payload).not.toHaveProperty("deviceCode");
+    });
+
+    // T007: FR-003, SC-003 — stale-child recovery when status === "error".
+    // Simulates a hypothetical future regression where a code path leaves
+    // this.child set with a resting-error status; start() must SIGTERM the
+    // stale child, await its exit, then spawn — never overlap.
+    it("recovers a stale child when status is 'error' (FR-003, SC-003)", async () => {
+      const staleChild = createMockChild();
+      const freshChild = createMockChild();
+      spawnMock
+        .mockReturnValueOnce(staleChild)
+        .mockReturnValueOnce(freshChild);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start(); // wires stale child + exit handler
+
+      // Manually corrupt the manager state to simulate the resting-error-with-
+      // stale-child condition:
+      (mgr as any).status = "error";
+
+      const startPromise = mgr.start();
+      // stop() sent SIGTERM synchronously; simulate the child obeying it:
+      staleChild.emit("exit", 0);
+      await startPromise;
+
+      expect(staleChild.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      // Ordering: the stale child's SIGTERM must precede the second spawn —
+      // no concurrent `code tunnel --name <same>` processes.
+      const killOrder = (staleChild.kill as any).mock.invocationCallOrder[0];
+      const secondSpawnOrder = spawnMock.mock.invocationCallOrder[1];
+      expect(secondSpawnOrder).toBeGreaterThan(killOrder);
+    });
+
+    // T008a: FR-003 recovery from status === "disconnected" with stale child.
+    it("recovers a stale child when status is 'disconnected' (FR-003)", async () => {
+      const staleChild = createMockChild();
+      const freshChild = createMockChild();
+      spawnMock
+        .mockReturnValueOnce(staleChild)
+        .mockReturnValueOnce(freshChild);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      (mgr as any).status = "disconnected";
+
+      const startPromise = mgr.start();
+      staleChild.emit("exit", 0);
+      await startPromise;
+
+      expect(staleChild.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    // T008b: FR-003 recovery from status === "stopped" with stale child.
+    it("recovers a stale child when status is 'stopped' (FR-003)", async () => {
+      const staleChild = createMockChild();
+      const freshChild = createMockChild();
+      spawnMock
+        .mockReturnValueOnce(staleChild)
+        .mockReturnValueOnce(freshChild);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      (mgr as any).status = "stopped";
+
+      const startPromise = mgr.start();
+      staleChild.emit("exit", 0);
+      await startPromise;
+
+      expect(staleChild.kill).toHaveBeenCalledWith("SIGTERM");
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+    });
+
+    // T009: regression guard — quickstart.md Case 5. Normal connected → stop
+    // → start reconnect still spawns cleanly with only one spawn per start().
+    // The FR-003 recovery branch must not fire when this.child === null.
+    it("does not double-spawn on normal reconnect after clean stop (Case 5)", async () => {
+      const child1 = createMockChild();
+      const child2 = createMockChild();
+      spawnMock
+        .mockReturnValueOnce(child1)
+        .mockReturnValueOnce(child2);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+
+      pushLine(child1, "AAAA-BBBB");
+      pushLine(child1, "is connected");
+      expect(mgr.getStatus()).toBe("connected");
+
+      const stopPromise = mgr.stop();
+      child1.emit("exit", 0);
+      await stopPromise;
+      expect(mgr.getStatus()).toBe("stopped");
+
+      await mgr.start();
+      expect(mgr.getStatus()).toBe("starting");
+      expect(spawnMock).toHaveBeenCalledTimes(2);
     });
   });
 
