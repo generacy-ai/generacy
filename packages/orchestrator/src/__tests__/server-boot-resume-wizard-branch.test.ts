@@ -25,9 +25,20 @@ vi.mock('../activation/index.js', () => ({
 
 vi.mock('@generacy-ai/cluster-relay', () => ({
   ClusterRelayClient: vi.fn().mockImplementation(() => ({
-    connect: vi.fn().mockResolvedValue(undefined),
+    // connect() must stay PENDING to honor the real client's contract: it runs a
+    // long-lived reconnect loop that only resolves on disconnect. A mock that
+    // resolves immediately hides the blocking-await bug where `await
+    // relayBridge.start()` stranded the post-activation dispatch as dead code
+    // (that mock is exactly why the original #834 fix shipped green but broken).
+    connect: vi.fn(() => new Promise<void>(() => {})),
     disconnect: vi.fn().mockResolvedValue(undefined),
     send: vi.fn(),
+    // RelayBridge.start() registers these before awaiting connect(); without
+    // them start() would throw synchronously instead of hanging, masking the
+    // real "start() never resolves while connected" behavior.
+    on: vi.fn(),
+    off: vi.fn(),
+    once: vi.fn(),
     isConnected: false,
   })),
 }));
@@ -35,6 +46,11 @@ vi.mock('@generacy-ai/cluster-relay', () => ({
 vi.mock('@generacy-ai/control-plane', () => ({
   TunnelHandler: vi.fn().mockImplementation(() => ({})),
   getCodeServerManager: vi.fn().mockReturnValue(null),
+  // Required so initializeRelayBridge() constructs a NON-null relayBridge and
+  // actually reaches relayBridge.start(). Without it, `new DockerEngineClient()`
+  // throws, initializeRelayBridge swallows it, relayBridge is null, start() is
+  // never called — and the blocking-await path under test is never exercised.
+  DockerEngineClient: vi.fn().mockImplementation(() => ({})),
 }));
 
 vi.mock('../services/boot-resume-service.js', () => ({
