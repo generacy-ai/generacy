@@ -17,7 +17,7 @@ Before this fix, the arrow accurately described the *label diff* — `advance` r
 - C: Update all three surfaces consistently (stdout + marker comment body + #788 docs) to phrasing that does not imply a label diff.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: C — update all three surfaces consistently. The arrow phrasing is indistinguishable from a label-diff claim to an operator staring at the labels tab, and a message that describes intent rather than effect is exactly how this smoke test got burned (advance reported success; nothing resumed; the message gave no clue the pair was supposed to persist). Suggested phrasing for all three: "completed:<gate> added — waiting-for:<gate> left in place for the worker to clear on resume". Option B leaves the marker comment — the surface that lives permanently in the issue thread — telling future readers the old story.
 
 ---
 
@@ -31,4 +31,4 @@ Before this fix, the arrow accurately described the *label diff* — `advance` r
 - C: Rewrite the header comment to emphasize the label-pair contract (poll-path resume requires BOTH labels present) rather than the numbered steps.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: C — rewrite the header around the label-pair invariant rather than the numbered steps. The steps framing is what invited the bug: a numbered recipe makes the absent removal look like an omission to complete, not a contract to respect. State it as: poll-path resume detection requires BOTH labels present (label-monitor-service returns no resume event for a completed:* without its waiting-for:*); the worker owns clearing waiting-for/completed/agent:paused on resume; do not remove labels here — see #845. That subsumes option B's one-liner and removes the structure that made step 3 look load-bearing.
