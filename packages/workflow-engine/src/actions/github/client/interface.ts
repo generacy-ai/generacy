@@ -300,6 +300,17 @@ export interface GitHubClient {
   getCommitsBetween(base: string, head: string): Promise<{ sha: string; message: string }[]>;
 
   /**
+   * List files changed between two refs using merge-base (triple-dot) semantics.
+   * Equivalent to `git diff --name-only <base>...<head>`.
+   *
+   * @param base Base ref, typically `origin/<branch>`.
+   * @param head Head ref, typically `HEAD`.
+   * @returns Repo-relative file paths as emitted by git; empty array `[]` never null/undefined.
+   * @throws Error when the git command exits non-zero (missing ref, no fetch, ...).
+   */
+  getFilesChangedBetween(base: string, head: string): Promise<string[]>;
+
+  /**
    * List all branches in the repository
    */
   listBranches(owner: string, repo: string): Promise<string[]>;
