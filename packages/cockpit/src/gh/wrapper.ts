@@ -76,6 +76,7 @@ export interface IssueLabelsResult {
 
 export interface IssueStateResult {
   state: 'OPEN' | 'CLOSED';
+  stateReason: string | null;
   closedAt: string | null;
   labels: string[];
   assignees: string[];
@@ -233,6 +234,7 @@ const IssueLabelsRawSchema = z.object({
 
 const IssueStateRawSchema = z.object({
   state: z.string(),
+  stateReason: z.string().nullable().optional(),
   closedAt: z.string().nullable().optional(),
   labels: z.array(LabelLikeSchema).default([]),
   assignees: z.array(z.object({ login: z.string() }).passthrough()).default([]),
@@ -916,7 +918,7 @@ export class GhCliWrapper implements GhWrapper {
       '--repo',
       repo,
       '--json',
-      'state,closedAt,labels,assignees,title',
+      'state,stateReason,closedAt,labels,assignees,title',
     ]);
     failIfNonZero(result, 'issue view (state)');
     let parsed: unknown;
@@ -935,6 +937,7 @@ export class GhCliWrapper implements GhWrapper {
     }
     return {
       state: normalizeIssueState(shape.data.state),
+      stateReason: shape.data.stateReason ?? null,
       closedAt: shape.data.closedAt ?? null,
       labels: extractLabelNames(shape.data.labels),
       assignees: shape.data.assignees.map((a) => a.login),

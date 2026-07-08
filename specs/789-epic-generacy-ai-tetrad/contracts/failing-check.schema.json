@@ -49,6 +49,21 @@
           "url":   { "type": "string", "format": "uri" }
         }
       }
+    },
+    "issue": { "$ref": "#/$defs/IssueRefWithState" }
+  },
+  "$defs": {
+    "IssueRefWithState": {
+      "type": "object",
+      "required": ["owner", "repo", "number"],
+      "additionalProperties": false,
+      "properties": {
+        "owner":  { "type": "string", "minLength": 1 },
+        "repo":   { "type": "string", "minLength": 1 },
+        "number": { "type": "integer", "minimum": 1 },
+        "state":       { "type": "string", "enum": ["OPEN", "CLOSED"] },
+        "stateReason": { "type": ["string", "null"] }
+      }
     }
   },
   "allOf": [

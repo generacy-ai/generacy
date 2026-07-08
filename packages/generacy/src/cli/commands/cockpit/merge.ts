@@ -7,8 +7,12 @@ import { classifyChecks } from './shared/required-checks.js';
 import {
   buildFailingCheckPayload,
   serializeFailingCheckJson,
+  type IssueRefWithState,
 } from './shared/failing-check-json.js';
 
+// Workflow labels (`waiting-for:*`, `completed:*`) are issue-scoped per the
+// #807-Q2 label protocol. runMerge reads `completed:validate` from
+// IssueStateResult.labels, never from PullRequestDetail.labels.
 const COMPLETED_VALIDATE_LABEL = 'completed:validate';
 
 export interface RunMergeInput {
@@ -23,8 +27,19 @@ export interface RunMergeResult {
   stdout: string;
 }
 
+function parseIssueRef(repo: string, issue: number): IssueRefWithState {
+  const [owner, name] = repo.split('/');
+  if (!owner || !name) {
+    throw new Error(
+      `runMerge: repo must be "owner/name", got: ${repo}`,
+    );
+  }
+  return { owner, repo: name, number: issue };
+}
+
 export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
   const { gh, issue, repo, logger } = input;
+  const issueRef = parseIssueRef(repo, issue);
 
   const prRef = await gh.resolveIssueToPRRef(repo, issue);
   if (prRef == null) {
@@ -32,7 +47,11 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
     return {
       exitCode: 1,
       stdout: serializeFailingCheckJson(
-        buildFailingCheckPayload({ reason: 'unresolved', pr: null }),
+        buildFailingCheckPayload({
+          reason: 'unresolved',
+          pr: null,
+          issue: issueRef,
+        }),
       ),
     };
   }
@@ -47,16 +66,61 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
         buildFailingCheckPayload({
           reason: 'unresolved',
           pr: { number: prRef.number, url: prRef.url },
+          issue: issueRef,
         }),
       ),
     };
   }
 
   const pr = await gh.getPullRequestDetail(repo, prRef.number);
-  if (!pr.labels.includes(COMPLETED_VALIDATE_LABEL)) {
+
+  let issueState;
+  try {
+    issueState = await gh.fetchIssueState(repo, issue);
+  } catch (err) {
+    logger.error({ issue, repo, err }, 'Failed to fetch issue state');
+    return {
+      exitCode: 1,
+      stdout: serializeFailingCheckJson(
+        buildFailingCheckPayload({
+          reason: 'unresolved',
+          pr: null,
+          issue: issueRef,
+        }),
+      ),
+    };
+  }
+
+  if (issueState.state === 'CLOSED') {
     logger.error(
-      { pr: pr.number, missingLabel: COMPLETED_VALIDATE_LABEL },
-      'PR missing completed:validate label',
+      {
+        issue,
+        repo,
+        state: issueState.state,
+        stateReason: issueState.stateReason,
+      },
+      'Issue is CLOSED',
+    );
+    return {
+      exitCode: 1,
+      stdout: serializeFailingCheckJson(
+        buildFailingCheckPayload({
+          reason: 'unresolved',
+          pr: { number: pr.number, url: pr.url },
+          issue: {
+            ...issueRef,
+            state: issueState.state,
+            stateReason: issueState.stateReason,
+          },
+        }),
+      ),
+    };
+  }
+
+  if (!issueState.labels.includes(COMPLETED_VALIDATE_LABEL)) {
+    logger.error(
+      { issue, repo, missingLabel: COMPLETED_VALIDATE_LABEL },
+      'Issue missing completed:validate label',
     );
     return {
       exitCode: 1,
@@ -64,6 +128,7 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
         buildFailingCheckPayload({
           reason: 'missing-label',
           pr: { number: pr.number, url: pr.url },
+          issue: issueRef,
         }),
       ),
     };
@@ -93,6 +158,7 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
           reason: 'checks-failing',
           pr: { number: pr.number, url: pr.url },
           failingChecks,
+          issue: issueRef,
         }),
       ),
     };
