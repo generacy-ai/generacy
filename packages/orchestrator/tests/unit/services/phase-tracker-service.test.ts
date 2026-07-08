@@ -132,4 +132,34 @@ describe('PhaseTrackerService', () => {
       );
     });
   });
+
+  // #849 (paired resume-dedupe clear): backstop-of-the-backstop guard.
+  // LabelManager.onGateHit clears the paired `resume:<gate>` dedupe at pause
+  // time; this test asserts the underlying `clear()` behavior is sound.
+  describe('clear', () => {
+    it('clear() then isDuplicate() returns false', async () => {
+      // Simulate the two states: pre-clear (exists:1 → duplicate) and
+      // post-clear (exists:0 → not duplicate). One mock, two return values,
+      // avoids pulling in ioredis-mock just for this case.
+      const redis = createMockRedis({
+        exists: vi.fn().mockResolvedValueOnce(1).mockResolvedValueOnce(0),
+        del: vi.fn().mockResolvedValue(1),
+      });
+      const tracker = new PhaseTrackerService(logger, redis);
+
+      await expect(
+        tracker.isDuplicate('owner', 'repo', 42, 'resume:implementation-review'),
+      ).resolves.toBe(true);
+
+      await tracker.clear('owner', 'repo', 42, 'resume:implementation-review');
+
+      expect(redis.del).toHaveBeenCalledWith(
+        'phase-tracker:owner:repo:42:resume:implementation-review',
+      );
+
+      await expect(
+        tracker.isDuplicate('owner', 'repo', 42, 'resume:implementation-review'),
+      ).resolves.toBe(false);
+    });
+  });
 });
