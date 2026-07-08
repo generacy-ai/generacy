@@ -18,13 +18,12 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
-  GhCliWrapper,
   WAITING_PIPELINE_ORDER,
   nodeChildProcessRunner,
   type CommandRunner,
   type GhWrapper,
 } from '@generacy-ai/cockpit';
-import { parseIssueRef, type IssueRef } from './resolver.js';
+import { resolveIssueContext, type IssueRef } from './resolver.js';
 import { findClarificationComment } from './clarification-comment-finder.js';
 import { buildReviewContextPayload } from './shared/review-context-json.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
@@ -152,13 +151,14 @@ export async function runContext(
   const runner = deps.runner ?? nodeChildProcessRunner;
 
   let ref: IssueRef;
+  let gh: GhWrapper;
   try {
-    ref = parseIssueRef(issueArg);
+    const resolvedCtx = await resolveIssueContext({ issue: issueArg, runner: deps.runner });
+    ref = resolvedCtx.ref;
+    gh = deps.gh ?? resolvedCtx.gh;
   } catch (err) {
     throw new CockpitExit(2, `Error: cockpit context: ${(err as Error).message}`);
   }
-
-  const gh = deps.gh ?? new GhCliWrapper(runner);
 
   let labels: string[];
   try {

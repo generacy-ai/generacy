@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { runAdvance } from '../advance.js';
 import { CockpitExit } from '../exit.js';
 import { getLogger, setLogger } from '../../../utils/logger.js';
-import type { GhWrapper } from '@generacy-ai/cockpit';
+import type { CommandRunner, GhWrapper } from '@generacy-ai/cockpit';
 import type pino from 'pino';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -172,6 +172,67 @@ describe('cockpit advance', () => {
     // What must NOT exist: an array/list literal of "completed:foo" strings.
     const completedLiterals = src.match(/'completed:[a-z-]+'/g);
     expect(completedLiterals, `unexpected hard-coded completed:* literals in advance.ts: ${completedLiterals?.join(',')}`).toBeNull();
+  });
+});
+
+describe('cockpit advance — bare-number ref resolution (#850)', () => {
+  it('bare-number happy path: infers repo from git origin and calls fetchIssueLabels(owner/repo, N)', async () => {
+    const fetchLabels = vi.fn(async () => ({ labels: ['waiting-for:clarification'] }));
+    const gh = stubGh({ fetchIssueLabels: fetchLabels });
+    const runner: CommandRunner = vi.fn(async (cmd, args) => {
+      expect(cmd).toBe('git');
+      expect(args).toEqual(['remote', 'get-url', 'origin']);
+      return { stdout: 'https://github.com/owner/repo.git\n', stderr: '', exitCode: 0 };
+    });
+    await runAdvance(
+      '2',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, runner, now: fixedNow, stdout: () => {} },
+    );
+    expect(fetchLabels).toHaveBeenCalledWith('owner/repo', 2);
+  });
+
+  it('bare-number failure: unresolvable origin → CockpitExit(2) with FR-002 copy', async () => {
+    const gh = stubGh();
+    const runner: CommandRunner = vi.fn(async () => ({
+      stdout: '',
+      stderr: 'fatal: no such remote',
+      exitCode: 128,
+    }));
+    let caught: unknown = null;
+    try {
+      await runAdvance(
+        '2',
+        { gate: 'clarification' },
+        { loadConfig: baseLoad, gh, runner, now: fixedNow, stdout: () => {} },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(CockpitExit);
+    const msg = (caught as CockpitExit).message;
+    expect((caught as CockpitExit).code).toBe(2);
+    expect(msg).toMatch(
+      /^Error: cockpit advance: parse issue: bare issue number "2" is not accepted here\./,
+    );
+    expect(msg).toMatch(
+      /Accepted: <owner>\/<repo>#2, a full issue URL, or a bare number inside a checkout/,
+    );
+  });
+
+  it('regression: owner/repo#N still routes without a runner call for origin', async () => {
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+    });
+    const runner: CommandRunner = vi.fn();
+    await runAdvance(
+      'owner/repo#2',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, runner, now: fixedNow, stdout: () => {} },
+    );
+    for (const call of (runner as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[1]).not.toEqual(['remote', 'get-url', 'origin']);
+    }
   });
 });
 
