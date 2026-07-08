@@ -22,7 +22,6 @@ export interface ReviewContextPayload {
   checks: Array<{
     name: string;
     state: 'SUCCESS' | 'FAILURE' | 'PENDING' | 'NEUTRAL' | 'SKIPPED' | 'CANCELLED';
-    conclusion?: string;
     url?: string;
   }>;
 }
@@ -53,7 +52,6 @@ export function buildReviewContextPayload(
     checks: checks.map((c) => ({
       name: c.name,
       state: c.state,
-      ...(c.conclusion != null ? { conclusion: c.conclusion } : {}),
       ...(c.url != null ? { url: c.url } : {}),
     })),
   };

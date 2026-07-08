@@ -197,8 +197,8 @@ describe('GhCliWrapper', () => {
     it('builds correct gh pr checks command and parses output', async () => {
       const { runner, calls } = stubRunner({
         stdout: JSON.stringify([
-          { name: 'lint', state: 'SUCCESS', conclusion: 'success', detailsUrl: 'https://x' },
-          { name: 'test', state: 'PENDING', conclusion: null },
+          { name: 'lint', state: 'pass', bucket: 'pass', link: 'https://x' },
+          { name: 'test', state: 'pending', bucket: 'pending' },
         ]),
       });
       const wrapper = new GhCliWrapper(runner);
@@ -206,16 +206,32 @@ describe('GhCliWrapper', () => {
       const args = calls[0]?.args ?? [];
       expect(args.slice(0, 5)).toEqual(['pr', 'checks', '99', '--repo', 'o/r']);
       expect(args).toContain('--json');
+      expect(args).toContain('name,state,bucket,link');
       expect(checks).toHaveLength(2);
       expect(checks[0]).toMatchObject({
         name: 'lint',
         state: 'SUCCESS',
-        conclusion: 'success',
         url: 'https://x',
       });
+      expect(checks[0]).not.toHaveProperty('conclusion');
       expect(checks[1]).toMatchObject({
         name: 'test',
         state: 'PENDING',
+      });
+    });
+
+    it('maps bucket=cancel to CANCELLED state', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          { name: 'cancelled-check', bucket: 'cancel', link: 'https://y' },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const checks = await wrapper.getPullRequestCheckRuns('o/r', 1);
+      expect(checks[0]).toMatchObject({
+        name: 'cancelled-check',
+        state: 'CANCELLED',
+        url: 'https://y',
       });
     });
 
@@ -226,6 +242,24 @@ describe('GhCliWrapper', () => {
         wrapper.getPullRequestCheckRuns('o/r', 1),
       ).rejects.toThrow(/malformed JSON/);
     });
+
+    it('emits warn log and rethrows on non-zero exit', async () => {
+      const logger = { warn: vi.fn() };
+      const runner: CommandRunner = async () => ({
+        stdout: '',
+        stderr: 'Unknown JSON field: "foo"',
+        exitCode: 1,
+      });
+      const wrapper = new GhCliWrapper(runner, logger);
+      await expect(
+        wrapper.getPullRequestCheckRuns('o/r', 99),
+      ).rejects.toThrow(/gh pr checks failed/);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        { repo: 'o/r', prNumber: 99, ghStderr: 'Unknown JSON field: "foo"' },
+        'gh pr checks failed',
+      );
+    });
   });
 
   describe('resolveIssueToPR', () => {
@@ -235,7 +269,6 @@ describe('GhCliWrapper', () => {
           closedByPullRequestsReferences: [
             { number: 42, url: 'https://github.com/o/r/pull/42' },
           ],
-          timelineItems: [],
         }),
       });
       const wrapper = new GhCliWrapper(runner);
@@ -244,20 +277,7 @@ describe('GhCliWrapper', () => {
       const args = calls[0]?.args ?? [];
       expect(args.slice(0, 5)).toEqual(['issue', 'view', '7', '--repo', 'o/r']);
       expect(args).toContain('--json');
-      expect(args).toContain('closedByPullRequestsReferences,timelineItems');
-    });
-
-    it('falls back to timelineItems source when references is empty', async () => {
-      const { runner } = stubRunner({
-        stdout: JSON.stringify({
-          closedByPullRequestsReferences: [],
-          timelineItems: [
-            { source: { __typename: 'PullRequest', number: 99, url: 'https://github.com/o/r/pull/99' } },
-          ],
-        }),
-      });
-      const wrapper = new GhCliWrapper(runner);
-      expect(await wrapper.resolveIssueToPR('o/r', 7)).toBe(99);
+      expect(args).toContain('closedByPullRequestsReferences');
     });
 
     it('extracts PR number from URL when number absent', async () => {
@@ -272,7 +292,7 @@ describe('GhCliWrapper', () => {
 
     it('returns null when no linked PR exists', async () => {
       const { runner } = stubRunner({
-        stdout: JSON.stringify({ closedByPullRequestsReferences: [], timelineItems: [] }),
+        stdout: JSON.stringify({ closedByPullRequestsReferences: [] }),
       });
       const wrapper = new GhCliWrapper(runner);
       expect(await wrapper.resolveIssueToPR('o/r', 7)).toBeNull();

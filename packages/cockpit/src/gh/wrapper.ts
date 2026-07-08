@@ -18,9 +18,19 @@ export interface Issue {
 export interface CheckRunSummary {
   name: string;
   state: 'SUCCESS' | 'FAILURE' | 'PENDING' | 'NEUTRAL' | 'SKIPPED' | 'CANCELLED';
-  conclusion?: string;
   url?: string;
 }
+
+export interface GhWrapperLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+
+const defaultGhWrapperLogger: GhWrapperLogger = {
+  warn(obj, msg) {
+    // eslint-disable-next-line no-console
+    console.warn(msg, obj);
+  },
+};
 
 export interface ListIssuesOptions {
   limit?: number;
@@ -159,8 +169,6 @@ const CheckRunRawSchema = z
     state: z.string().optional(),
     bucket: z.string().optional(),
     status: z.string().optional(),
-    conclusion: z.string().nullable().optional(),
-    detailsUrl: z.string().optional(),
     link: z.string().optional(),
   })
   .passthrough();
@@ -320,6 +328,7 @@ function normalizeCheckState(raw: z.infer<typeof CheckRunRawSchema>): CheckRunSu
       return 'SKIPPED';
     case 'CANCELLED':
     case 'CANCELED':
+    case 'CANCEL':
       return 'CANCELLED';
     default:
       return 'PENDING';
@@ -415,22 +424,6 @@ const ResolveIssueToPrRawSchema = z
           .passthrough(),
       )
       .optional(),
-    timelineItems: z
-      .array(
-        z
-          .object({
-            source: z
-              .object({
-                __typename: z.string().optional(),
-                number: z.number().int().optional(),
-                url: z.string().optional(),
-              })
-              .passthrough()
-              .optional(),
-          })
-          .passthrough(),
-      )
-      .optional(),
   })
   .passthrough();
 
@@ -461,13 +454,6 @@ function parseResolveIssueToPr(stdout: string): number | null {
     const fromUrl = extractPrNumberFromUrl(ref.url);
     if (fromUrl != null) return fromUrl;
   }
-  for (const item of data.timelineItems ?? []) {
-    const src = item.source;
-    if (src == null) continue;
-    if (typeof src.number === 'number') return src.number;
-    const fromUrl = extractPrNumberFromUrl(src.url);
-    if (fromUrl != null) return fromUrl;
-  }
   return null;
 }
 
@@ -487,8 +473,7 @@ function parseCheckRuns(stdout: string): CheckRunSummary[] {
   return arr.data.map<CheckRunSummary>((raw) => ({
     name: raw.name,
     state: normalizeCheckState(raw),
-    conclusion: raw.conclusion ?? undefined,
-    url: raw.detailsUrl ?? raw.link ?? undefined,
+    url: raw.link ?? undefined,
   }));
 }
 
@@ -500,9 +485,14 @@ function failIfNonZero(result: { stdout: string; stderr: string; exitCode: numbe
 
 export class GhCliWrapper implements GhWrapper {
   private readonly runner: CommandRunner;
+  private readonly logger: GhWrapperLogger;
 
-  constructor(runner: CommandRunner = nodeChildProcessRunner) {
+  constructor(
+    runner: CommandRunner = nodeChildProcessRunner,
+    logger: GhWrapperLogger = defaultGhWrapperLogger,
+  ) {
     this.runner = runner;
+    this.logger = logger;
   }
 
   async listIssues(query: string, options: ListIssuesOptions = {}): Promise<Issue[]> {
@@ -602,10 +592,16 @@ export class GhCliWrapper implements GhWrapper {
       '--repo',
       repo,
       '--json',
-      'name,state,conclusion,detailsUrl',
+      'name,state,bucket,link',
     ];
     const result = await this.runner('gh', args);
-    failIfNonZero(result, 'pr checks');
+    if (result.exitCode !== 0) {
+      this.logger.warn(
+        { repo, prNumber, ghStderr: result.stderr.trim() },
+        'gh pr checks failed',
+      );
+      throw new Error(`gh pr checks failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
+    }
     return parseCheckRuns(result.stdout);
   }
 
@@ -617,7 +613,7 @@ export class GhCliWrapper implements GhWrapper {
       '--repo',
       repo,
       '--json',
-      'closedByPullRequestsReferences,timelineItems',
+      'closedByPullRequestsReferences',
     ];
     const result = await this.runner('gh', args);
     failIfNonZero(result, 'issue view');
