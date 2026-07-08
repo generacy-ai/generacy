@@ -12,11 +12,23 @@ import type { ChildProcessHandle, Logger } from '../types.js';
 // mockGitHub is populated per-test.
 const mockGitHub: Record<string, ReturnType<typeof vi.fn>> = {
   getPullRequest: vi.fn(),
-  getPRComments: vi.fn(),
+  getPRReviewThreads: vi.fn(),
   getStatus: vi.fn(),
   removeLabels: vi.fn(),
   replyToPRComment: vi.fn(),
 };
+
+// #861: wrap comments as ReviewThread[] (each comment becomes its own thread).
+function asThreads(comments: Array<{ id: number; resolved?: boolean; [k: string]: unknown }>) {
+  return comments.map(c => {
+    const { resolved, ...rest } = c;
+    return {
+      rootCommentId: c.id,
+      isResolved: resolved === true,
+      comments: [{ author: 'reviewer', created_at: '', updated_at: '', ...rest }],
+    };
+  });
+}
 
 vi.mock('@generacy-ai/workflow-engine', async () => {
   const actual = await vi.importActual<typeof import('@generacy-ai/workflow-engine')>(
@@ -100,7 +112,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
   });
 
   it('filters NONE-authored PR review comment out (not surfaced to agent)', async () => {
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 501,
         body: 'evil review comment with SECRET_PAYLOAD',
@@ -119,7 +131,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
         path: 'src/y.ts',
         line: 2,
       },
-    ]);
+    ]));
 
     const logger = makeLogger();
     const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher());
@@ -144,7 +156,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
   });
 
   it('emits skip-log with no body substring (SC-003)', async () => {
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 999,
         body: 'CANARY_SUBSTRING_MUST_NOT_LEAK',
@@ -152,7 +164,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
         authorAssociation: 'NONE',
         resolved: false,
       },
-    ]);
+    ]));
 
     const logger = makeLogger();
     const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher());
@@ -188,7 +200,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
   });
 
   it('passes trusted-tier comments through untouched', async () => {
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 601,
         body: 'looks good, small nit',
@@ -203,7 +215,7 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
         authorAssociation: 'COLLABORATOR',
         resolved: false,
       },
-    ]);
+    ]));
 
     const logger = makeLogger();
     const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher());

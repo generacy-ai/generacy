@@ -20,16 +20,18 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  ReviewThread,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
 
 /**
- * Thrown by `executeGh()` when the gh CLI's stderr signals HTTP 401.
+ * Thrown by `executeGh()` when the gh CLI's stderr signals HTTP 401 or 403.
  * Callers (label/PR-feedback monitors) catch this to drive auth-health state.
+ * See #861 for the 403 widening (GraphQL scope-denial paths).
  */
 export class GhAuthError extends Error {
   constructor(
-    public readonly statusCode: 401,
+    public readonly statusCode: 401 | 403,
     public readonly stderr: string,
     message?: string,
   ) {
@@ -87,8 +89,11 @@ export class GhCliGitHubClient implements GitHubClient {
   private async executeGh(args: string[]) {
     const env = await this.resolveTokenEnv();
     const result = await executeCommand('gh', args, { cwd: this.workdir, env });
-    if (result.exitCode !== 0 && parseGhStatusCode(result.stderr) === 401) {
-      throw new GhAuthError(401, result.stderr);
+    if (result.exitCode !== 0) {
+      const code = parseGhStatusCode(result.stderr);
+      if (code === 401 || code === 403) {
+        throw new GhAuthError(code, result.stderr);
+      }
     }
     return result;
   }
@@ -469,6 +474,105 @@ export class GhCliGitHubClient implements GitHubClient {
       });
     }
     return comments;
+  }
+
+  async getPRReviewThreads(owner: string, repo: string, number: number): Promise<ReviewThread[]> {
+    const query = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          isResolved
+          comments(first: 100) {
+            nodes {
+              databaseId
+              body
+              path
+              line
+              createdAt
+              updatedAt
+              author { login }
+              authorAssociation
+              replyTo { databaseId }
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+    const result = await this.executeGh([
+      'api', 'graphql',
+      '-f', `query=${query}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `number=${number}`,
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to fetch review threads for PR #${number}: ${result.stderr}`);
+    }
+
+    const parsed = parseJSONSafe(result.stdout) as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: {
+              nodes?: Array<{
+                isResolved: boolean;
+                comments?: {
+                  nodes?: Array<{
+                    databaseId: number;
+                    body: string;
+                    path: string | null;
+                    line: number | null;
+                    createdAt: string;
+                    updatedAt: string;
+                    author: { login: string } | null;
+                    authorAssociation: string | null;
+                    replyTo: { databaseId: number } | null;
+                  }>;
+                };
+              }>;
+            };
+          };
+        };
+      };
+    } | null;
+
+    const nodes = parsed?.data?.repository?.pullRequest?.reviewThreads?.nodes;
+    if (!nodes) return [];
+
+    const threads: ReviewThread[] = [];
+    for (const node of nodes) {
+      const commentNodes = node.comments?.nodes;
+      if (!commentNodes || commentNodes.length === 0) continue;
+      const comments: Comment[] = commentNodes.map(c => {
+        const comment: Comment = {
+          id: c.databaseId,
+          body: c.body,
+          author: c.author?.login ?? '',
+          created_at: c.createdAt,
+          updated_at: c.updatedAt,
+        };
+        if (c.path !== null && c.path !== undefined) comment.path = c.path;
+        if (c.line !== null && c.line !== undefined) comment.line = c.line;
+        if (c.replyTo?.databaseId !== undefined && c.replyTo?.databaseId !== null) {
+          comment.in_reply_to_id = c.replyTo.databaseId;
+        }
+        if (c.authorAssociation !== null && c.authorAssociation !== undefined) {
+          comment.authorAssociation = c.authorAssociation;
+        }
+        return comment;
+      });
+      threads.push({
+        rootCommentId: comments[0]!.id,
+        isResolved: node.isResolved,
+        comments,
+      });
+    }
+    return threads;
   }
 
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {

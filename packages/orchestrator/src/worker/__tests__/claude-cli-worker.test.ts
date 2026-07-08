@@ -37,7 +37,7 @@ const mockGithub = {
   getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/foo/src/bar.ts']),
   // PR operations for PrFeedbackHandler
   getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
-  getPRComments: vi.fn().mockResolvedValue([]),
+  getPRReviewThreads: vi.fn().mockResolvedValue([]),
   replyToPRComment: vi.fn().mockResolvedValue(undefined),
 };
 

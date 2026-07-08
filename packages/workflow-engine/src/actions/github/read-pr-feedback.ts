@@ -48,15 +48,17 @@ export class ReadPRFeedbackAction extends BaseAction {
       // Get repo info
       const repoInfo = await client.getRepoInfo();
 
-      // Get PR comments
-      const allComments = await client.getPRComments(repoInfo.owner, repoInfo.repo, prNumber);
+      // Get review threads via GraphQL — see #861. Thread resolution is a
+      // GraphQL-only concept; the REST payload never populated `.resolved`.
+      const threads = await client.getPRReviewThreads(repoInfo.owner, repoInfo.repo, prNumber);
+      const unresolvedThreadCount = threads.filter(t => !t.isResolved).length;
 
-      // Filter based on resolved status
+      // Filter based on thread resolution status
       let comments: Comment[];
       if (includeResolved) {
-        comments = allComments;
+        comments = threads.flatMap(t => t.comments);
       } else {
-        comments = allComments.filter(c => c.resolved !== true);
+        comments = threads.filter(t => !t.isResolved).flatMap(t => t.comments);
       }
 
       // Author-trust gating (#842). Partition into trusted (surfaced to
@@ -87,17 +89,17 @@ export class ReadPRFeedbackAction extends BaseAction {
         }
       }
 
-      const unresolvedCount = trustedComments.filter(c => c.resolved === false).length;
-
+      // unresolved_count is a THREAD count (matches monitor + preflight
+      // semantics after #861). Field name preserved for prompt-token stability.
       const output: ReadPRFeedbackOutput = {
         comments: trustedComments,
-        has_unresolved: unresolvedCount > 0,
-        unresolved_count: unresolvedCount,
+        has_unresolved: unresolvedThreadCount > 0,
+        unresolved_count: unresolvedThreadCount,
         ...(skippedComments.length > 0 ? { skippedComments } : {}),
       };
 
       context.logger.info(
-        `Found ${trustedComments.length} trusted comments (${unresolvedCount} unresolved); skipped ${skippedComments.length} untrusted`,
+        `Found ${trustedComments.length} trusted comments (${unresolvedThreadCount} unresolved thread(s)); skipped ${skippedComments.length} untrusted`,
       );
 
       return this.successResult(output);
