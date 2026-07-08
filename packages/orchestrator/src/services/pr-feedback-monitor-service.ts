@@ -49,6 +49,10 @@ export class PrFeedbackMonitorService {
   private readonly githubAppCredentialId: string | undefined;
   private abortController: AbortController | null = null;
 
+  // #861: state-transition tracking for zero-unresolved skip logging. Key is
+  // `${owner}/${repo}#${prNumber}`. Never evicted (open PR set is bounded).
+  private lastUnresolvedThreadCount: Map<string, number> = new Map();
+
   private state: MonitorState;
 
   constructor(
@@ -153,32 +157,67 @@ export class PrFeedbackMonitorService {
       }
     }
 
-    // 3. Fetch review comments and filter for unresolved threads
-    // #842 audit: whitelist — collects only `id` values (unresolvedThreadIds)
-    // for `waiting-for:address-pr-feedback` gating; body content is never
-    // surfaced to an agent. The downstream address-pr-feedback handler applies
-    // full author-trust gating before any body reaches the CLI.
+    // 3. Fetch review threads via GraphQL and filter for unresolved threads.
+    // #861: replaces the REST-comment-based path — REST never returned
+    // `.resolved`, so the previous filter always matched nothing.
+    // #842 audit: whitelist — collects only `rootCommentId` values
+    // (unresolvedThreadIds) for `waiting-for:address-pr-feedback` gating; body
+    // content is never surfaced to an agent. The downstream address-pr-feedback
+    // handler applies full author-trust gating before any body reaches the CLI.
     let unresolvedThreadIds: number[];
+    let totalThreads: number;
     try {
-      const comments = await client.getPRComments(owner, repo, prNumber);
-      // Filter for root-level unresolved comments (not replies)
-      const unresolvedComments = comments.filter(
-        (c) => c.resolved === false && !c.in_reply_to_id,
-      );
-      unresolvedThreadIds = unresolvedComments.map((c) => c.id);
+      const threads = await client.getPRReviewThreads(owner, repo, prNumber);
+      totalThreads = threads.length;
+      const unresolvedThreads = threads.filter(t => !t.isResolved);
+      unresolvedThreadIds = unresolvedThreads.map(t => t.rootCommentId);
     } catch (error) {
-      this.logger.error(
-        { err: error, owner, repo, prNumber },
-        'Failed to fetch PR comments',
+      if (error instanceof GhAuthError) {
+        if (this.githubAppCredentialId) {
+          this.authHealth.recordResult(
+            this.githubAppCredentialId,
+            { ok: false, statusCode: error.statusCode },
+          );
+        }
+        this.logger.error(
+          { err: error, owner, repo, prNumber, statusCode: error.statusCode },
+          'GraphQL review-threads call failed (auth)',
+        );
+        return false;
+      }
+      this.logger.warn(
+        { error: error instanceof Error ? error.message : String(error), owner, repo, prNumber },
+        'GraphQL review-threads call failed (transient)',
       );
       return false;
     }
 
+    // Successful call — mark auth-health OK for this credential.
+    if (this.githubAppCredentialId) {
+      this.authHealth.recordResult(this.githubAppCredentialId, { ok: true });
+    }
+
+    const stateKey = `${owner}/${repo}#${prNumber}`;
+
     if (unresolvedThreadIds.length === 0) {
-      this.logger.debug(
-        { owner, repo, prNumber, issueNumber },
-        'No unresolved review threads — skipping',
+      // #861 state-transition logging: `info` on transition, `debug` on
+      // steady-state. Bootstrap (previous === undefined) counts as a transition.
+      const previous = this.lastUnresolvedThreadCount.get(stateKey);
+      const isTransition = previous === undefined || previous !== 0;
+      const logFn = isTransition ? this.logger.info : this.logger.debug;
+      logFn.call(
+        this.logger,
+        {
+          owner, repo, prNumber, issueNumber,
+          totalThreads,
+          unresolvedThreads: 0,
+          previousUnresolvedThreads: previous ?? null,
+        },
+        isTransition
+          ? 'No unresolved review threads (state change)'
+          : 'No unresolved review threads — skipping',
       );
+      this.lastUnresolvedThreadCount.set(stateKey, 0);
       return false;
     }
 
@@ -186,6 +225,7 @@ export class PrFeedbackMonitorService {
       { owner, repo, prNumber, issueNumber, linkMethod, unresolvedCount: unresolvedThreadIds.length },
       `Found ${unresolvedThreadIds.length} unresolved review thread(s)`,
     );
+    this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
 
     // 4. Atomic deduplication via tryMarkProcessed (SET NX)
     const isNew = await this.phaseTracker.tryMarkProcessed(

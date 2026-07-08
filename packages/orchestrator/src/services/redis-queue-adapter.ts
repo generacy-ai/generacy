@@ -7,6 +7,27 @@ const PENDING_KEY = 'orchestrator:queue:pending';
 const CLAIMED_KEY_PREFIX = 'orchestrator:queue:claimed:';
 const HEARTBEAT_KEY_PREFIX = 'orchestrator:worker:';
 const DEAD_LETTER_KEY = 'orchestrator:queue:dead-letter';
+const IN_FLIGHT_KEY = 'orchestrator:queue:in-flight-items';
+
+/**
+ * Lua script for atomic in-flight-checked enqueue.
+ * KEYS[1] = pending sorted set
+ * KEYS[2] = in-flight SET
+ * ARGV[1] = itemKey
+ * ARGV[2] = priority (numeric string)
+ * ARGV[3] = serialized item JSON
+ *
+ * Returns 1 if enqueued, 0 if already in flight.
+ */
+const ENQUEUE_IF_ABSENT_SCRIPT = `
+local exists = redis.call('SISMEMBER', KEYS[2], ARGV[1])
+if exists == 1 then
+  return 0
+end
+redis.call('SADD', KEYS[2], ARGV[1])
+redis.call('ZADD', KEYS[1], tonumber(ARGV[2]), ARGV[3])
+return 1
+`;
 
 /**
  * Lua script for atomic claim: ZPOPMIN + HSET claimed + SET heartbeat.
@@ -63,6 +84,7 @@ export class RedisQueueAdapter implements QueueManager {
   private readonly logger: Logger;
   private readonly maxRetries: number;
   private claimCommandDefined = false;
+  private enqueueIfAbsentCommandDefined = false;
 
   constructor(redis: Redis, logger: Logger, config?: Pick<DispatchConfig, 'maxRetries'>) {
     this.redis = redis;
@@ -77,6 +99,61 @@ export class RedisQueueAdapter implements QueueManager {
       lua: CLAIM_SCRIPT,
     });
     this.claimCommandDefined = true;
+  }
+
+  private ensureEnqueueIfAbsentCommand(): void {
+    if (this.enqueueIfAbsentCommandDefined) return;
+    this.redis.defineCommand('enqueueIfAbsent', {
+      numberOfKeys: 2,
+      lua: ENQUEUE_IF_ABSENT_SCRIPT,
+    });
+    this.enqueueIfAbsentCommandDefined = true;
+  }
+
+  async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
+    this.ensureEnqueueIfAbsentCommand();
+    const itemKey = buildItemKey(item);
+    const priority = getPriorityScore(item.queueReason);
+    const serialized: SerializedQueueItem = {
+      ...item,
+      priority,
+      attemptCount: 0,
+      itemKey,
+    };
+
+    try {
+      const result = await (this.redis as any).enqueueIfAbsent(
+        PENDING_KEY,
+        IN_FLIGHT_KEY,
+        itemKey,
+        String(priority),
+        JSON.stringify(serialized),
+      );
+      const enqueued = result === 1;
+      if (enqueued) {
+        this.logger.info(
+          { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
+          'Item enqueued to Redis sorted set (in-flight-checked)',
+        );
+      }
+      return enqueued;
+    } catch (error) {
+      this.logger.warn(
+        { err: error, itemKey },
+        'Redis error in enqueueIfAbsent, dropping (fail-safe)',
+      );
+      return false;
+    }
+  }
+
+  async hasInFlight(itemKey: string): Promise<boolean> {
+    try {
+      const result = await this.redis.sismember(IN_FLIGHT_KEY, itemKey);
+      return result === 1;
+    } catch (error) {
+      this.logger.warn({ err: error, itemKey }, 'Redis error in hasInFlight');
+      return false;
+    }
   }
 
   async enqueue(item: QueueItem): Promise<void> {
@@ -163,24 +240,26 @@ export class RedisQueueAdapter implements QueueManager {
         attemptCount = parsed.attemptCount + 1;
       }
 
-      // Clean up claimed hash and heartbeat
-      await this.redis.hdel(claimedKey, itemKey);
-      await this.redis.del(heartbeatKey);
-
       if (attemptCount >= this.maxRetries) {
-        // Dead-letter: too many retries
+        // Dead-letter: too many retries. Co-atomically remove from in-flight SET.
         const deadLetterItem: SerializedQueueItem = {
           ...item,
           attemptCount,
           itemKey,
         };
-        await this.redis.zadd(DEAD_LETTER_KEY, Date.now(), JSON.stringify(deadLetterItem));
+        await this.redis
+          .multi()
+          .hdel(claimedKey, itemKey)
+          .del(heartbeatKey)
+          .zadd(DEAD_LETTER_KEY, Date.now(), JSON.stringify(deadLetterItem))
+          .srem(IN_FLIGHT_KEY, itemKey)
+          .exec();
         this.logger.warn(
           { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
           'Item dead-lettered after max retries'
         );
       } else {
-        // Re-queue with retry priority
+        // Re-queue with retry priority. Item stays in in-flight SET (still in flight).
         const retryPriority = getPriorityScore('retry');
         const requeueItem: SerializedQueueItem = {
           ...item,
@@ -189,7 +268,12 @@ export class RedisQueueAdapter implements QueueManager {
           attemptCount,
           itemKey,
         };
-        await this.redis.zadd(PENDING_KEY, retryPriority, JSON.stringify(requeueItem));
+        await this.redis
+          .multi()
+          .hdel(claimedKey, itemKey)
+          .del(heartbeatKey)
+          .zadd(PENDING_KEY, retryPriority, JSON.stringify(requeueItem))
+          .exec();
         this.logger.info(
           { workerId, itemKey, attemptCount },
           'Item released back to pending queue'
@@ -209,11 +293,15 @@ export class RedisQueueAdapter implements QueueManager {
     const heartbeatKey = buildHeartbeatKey(workerId);
 
     try {
-      await this.redis.hdel(claimedKey, itemKey);
-      await this.redis.del(heartbeatKey);
+      await this.redis
+        .multi()
+        .hdel(claimedKey, itemKey)
+        .del(heartbeatKey)
+        .srem(IN_FLIGHT_KEY, itemKey)
+        .exec();
       this.logger.info(
         { workerId, itemKey },
-        'Item completed and removed from claimed set'
+        'Item completed and removed from claimed set + in-flight index'
       );
     } catch (error) {
       this.logger.warn(

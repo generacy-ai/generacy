@@ -3,7 +3,7 @@ import { JitTokenError } from '@generacy-ai/control-plane';
 import type {
   LabelEvent,
   MonitorState,
-  QueueAdapter,
+  QueueManager,
   PhaseTracker,
   QueueItem,
 } from '../types/index.js';
@@ -67,7 +67,7 @@ export class LabelMonitorService {
   private readonly createClient: GitHubClientFactory;
   private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly phaseTracker: PhaseTracker;
-  private readonly queueAdapter: QueueAdapter;
+  private readonly queueManager: QueueManager;
   private readonly options: LabelMonitorOptions;
   private readonly clusterGithubUsername: string | undefined;
   private readonly authHealth: AuthHealthSink;
@@ -88,7 +88,7 @@ export class LabelMonitorService {
     logger: Logger,
     createClient: GitHubClientFactory,
     phaseTracker: PhaseTracker,
-    queueAdapter: QueueAdapter,
+    queueManager: QueueManager,
     config: MonitorConfig,
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
@@ -100,7 +100,7 @@ export class LabelMonitorService {
     this.createClient = createClient;
     this.tokenProvider = tokenProvider;
     this.phaseTracker = phaseTracker;
-    this.queueAdapter = queueAdapter;
+    this.queueManager = queueManager;
     this.clusterGithubUsername = clusterGithubUsername;
     this.authHealth = authHealth ?? { recordResult: () => undefined };
     this.githubAppCredentialId = githubAppCredentialId;
@@ -269,23 +269,24 @@ export class LabelMonitorService {
       `Processing ${type} label event`,
     );
 
-    // Deduplication: prevents webhook+poll race from double-processing.
-    // For 'process' events, clear any existing dedup key first so the issue
-    // can be re-queued after a failure or completion. The label removal after
-    // processing prevents the poll from re-detecting the same label.
-    const dedupPhase = type === 'process' ? parsedName : `resume:${parsedName}`;
-
+    // Deduplication:
+    //   - For 'process' events, phaseTracker guards against webhook+poll double-fire
+    //     of a fresh trigger before the trigger label is removed from GitHub.
+    //   - For 'resume' events, dedupe is now in-flight-keyed via
+    //     queueManager.enqueueIfAbsent(); the phaseTracker resume-branch keys
+    //     (`resume:<gate>`) were retired in #862.
     if (type === 'process') {
+      const dedupPhase = parsedName;
       await this.phaseTracker.clear(owner, repo, issueNumber, dedupPhase);
-    }
 
-    const isDuplicate = await this.phaseTracker.isDuplicate(owner, repo, issueNumber, dedupPhase);
-    if (isDuplicate) {
-      this.logger.info(
-        { owner, repo, issueNumber, phase: dedupPhase },
-        'Skipping duplicate event',
-      );
-      return false;
+      const isDuplicate = await this.phaseTracker.isDuplicate(owner, repo, issueNumber, dedupPhase);
+      if (isDuplicate) {
+        this.logger.info(
+          { owner, repo, issueNumber, phase: dedupPhase },
+          'Skipping duplicate event',
+        );
+        return false;
+      }
     }
 
     // Resolve workflow name: for process events, use parsedName directly;
@@ -328,45 +329,67 @@ export class LabelMonitorService {
       queueReason: type === 'process' ? 'new' : 'resume',
     };
 
-    // Enqueue
-    await this.queueAdapter.enqueue(queueItem);
+    if (type === 'resume') {
+      const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
+      if (!enqueued) {
+        this.logger.info(
+          {
+            itemKey: `${owner}/${repo}#${issueNumber}`,
+            gate: parsedName,
+            reason: 'in-flight',
+            source,
+            owner,
+            repo,
+            issueNumber,
+          },
+          'Dropping resume event (item already in flight)',
+        );
+        return false;
+      }
+      this.logger.info(
+        { owner, repo, issueNumber, command: queueItem.command, workflowName },
+        'Issue enqueued (resume)',
+      );
+      // Note: waiting-for:* label removal for resume events is handled by the
+      // worker (labelManager.onResumeStart) to avoid a race condition where
+      // the label is removed before the worker reads it for phase resolution.
+      return true;
+    }
+
+    // type === 'process'
+    await this.queueManager.enqueue(queueItem);
     this.logger.info(
       { owner, repo, issueNumber, command: queueItem.command, workflowName },
       'Issue enqueued',
     );
 
     // Mark as processed for dedup
-    await this.phaseTracker.markProcessed(owner, repo, issueNumber, dedupPhase);
+    await this.phaseTracker.markProcessed(owner, repo, issueNumber, parsedName);
 
-    // Manage labels via GitHubClient
-    if (type === 'process') {
-      // Remove trigger label, agent:error, and all completed:* labels from previous runs.
-      // Without clearing completed:* labels, requeued issues skip already-labeled phases
-      // even if the prior run failed mid-implementation.
-      try {
-        // Reuse issue data from description fetch if available, otherwise re-fetch
-        const issue = fetchedIssue ?? await this.createClient(undefined, this.tokenProvider).getIssue(owner, repo, issueNumber);
-        const completedLabels = issue.labels
-          .map(l => typeof l === 'string' ? l : l.name)
-          .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX) || name.startsWith(FAILED_LABEL_PREFIX));
+    // Manage labels via GitHubClient.
+    // Remove trigger label, agent:error, and all completed:* labels from previous runs.
+    // Without clearing completed:* labels, requeued issues skip already-labeled phases
+    // even if the prior run failed mid-implementation.
+    try {
+      // Reuse issue data from description fetch if available, otherwise re-fetch
+      const issue = fetchedIssue ?? await this.createClient(undefined, this.tokenProvider).getIssue(owner, repo, issueNumber);
+      const completedLabels = issue.labels
+        .map(l => typeof l === 'string' ? l : l.name)
+        .filter(name => name.startsWith(COMPLETED_LABEL_PREFIX) || name.startsWith(FAILED_LABEL_PREFIX));
 
-        const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
-        const client = this.createClient(undefined, this.tokenProvider);
-        await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
-        await client.addLabels(owner, repo, issueNumber, [
-          AGENT_IN_PROGRESS_LABEL,
-          `workflow:${parsedName}`,
-        ]);
-      } catch (error) {
-        this.logger.warn(
-          { err: error, owner, repo, issueNumber },
-          'Failed to update labels after process enqueue',
-        );
-      }
+      const labelsToRemove = [event.labelName, 'agent:error', ...completedLabels];
+      const client = this.createClient(undefined, this.tokenProvider);
+      await client.removeLabels(owner, repo, issueNumber, labelsToRemove);
+      await client.addLabels(owner, repo, issueNumber, [
+        AGENT_IN_PROGRESS_LABEL,
+        `workflow:${parsedName}`,
+      ]);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber },
+        'Failed to update labels after process enqueue',
+      );
     }
-    // Note: waiting-for:* label removal for resume events is handled by the
-    // worker (labelManager.onResumeStart) to avoid a race condition where
-    // the label is removed before the worker reads it for phase resolution.
 
     return true;
   }

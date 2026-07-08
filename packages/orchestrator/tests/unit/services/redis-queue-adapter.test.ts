@@ -12,7 +12,7 @@ function createMockLogger() {
 }
 
 function createMockRedis(overrides: Record<string, unknown> = {}) {
-  return {
+  const mock: Record<string, unknown> = {
     zadd: vi.fn().mockResolvedValue(1),
     zcard: vi.fn().mockResolvedValue(0),
     zrange: vi.fn().mockResolvedValue([]),
@@ -20,11 +20,34 @@ function createMockRedis(overrides: Record<string, unknown> = {}) {
     hdel: vi.fn().mockResolvedValue(1),
     del: vi.fn().mockResolvedValue(1),
     hlen: vi.fn().mockResolvedValue(0),
+    sadd: vi.fn().mockResolvedValue(1),
+    srem: vi.fn().mockResolvedValue(1),
+    sismember: vi.fn().mockResolvedValue(0),
     scan: vi.fn().mockResolvedValue(['0', []]),
     defineCommand: vi.fn(),
     claimItem: vi.fn().mockResolvedValue(null),
+    enqueueIfAbsent: vi.fn().mockResolvedValue(1),
     ...overrides,
-  } as unknown as import('ioredis').Redis;
+  };
+  // Chainable multi() that forwards to the underlying fns and returns [null, res] tuples on exec.
+  mock['multi'] = vi.fn(() => {
+    const chain: Record<string, unknown> = {};
+    const queued: Promise<unknown>[] = [];
+    const forward = (name: string) => (...args: unknown[]) => {
+      const fn = mock[name] as (...a: unknown[]) => Promise<unknown>;
+      queued.push(fn(...args));
+      return chain;
+    };
+    for (const name of ['hdel', 'del', 'zadd', 'srem', 'sadd', 'hset']) {
+      chain[name] = forward(name);
+    }
+    chain['exec'] = vi.fn(async () => {
+      const results = await Promise.all(queued);
+      return results.map((r) => [null, r] as [null, unknown]);
+    });
+    return chain;
+  });
+  return mock as unknown as import('ioredis').Redis;
 }
 
 const sampleItem: QueueItem = {
@@ -409,7 +432,7 @@ describe('RedisQueueAdapter', () => {
 
       expect(logger.info).toHaveBeenCalledWith(
         { workerId: 'worker-1', itemKey: 'test-org/test-repo#42' },
-        'Item completed and removed from claimed set'
+        'Item completed and removed from claimed set + in-flight index'
       );
     });
 

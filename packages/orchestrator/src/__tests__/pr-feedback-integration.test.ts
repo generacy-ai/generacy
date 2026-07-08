@@ -44,7 +44,7 @@ import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code
 // ==========================================================================
 const mockGitHub = {
   getPullRequest: vi.fn(),
-  getPRComments: vi.fn(),
+  getPRReviewThreads: vi.fn(),
   addLabels: vi.fn(),
   removeLabels: vi.fn(),
   getIssue: vi.fn(),
@@ -77,6 +77,19 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
 // ==========================================================================
 // Test Helpers
 // ==========================================================================
+
+// #861: wrap a list of REST-like comment literals into a `ReviewThread[]`,
+// promoting `resolved` → `isResolved` on the wrapping thread.
+function asThreads(comments: Array<Record<string, unknown> & { id: number; resolved?: boolean }>) {
+  return comments.map(c => {
+    const { resolved, ...rest } = c;
+    return {
+      rootCommentId: c.id,
+      isResolved: resolved === true,
+      comments: [{ created_at: '', updated_at: '', ...rest }],
+    };
+  });
+}
 
 function createMockLogger(): Logger {
   return {
@@ -248,7 +261,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -267,7 +280,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
@@ -339,7 +352,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
 
     // Verify GitHub API calls
     expect(mockGitHub.getIssue).toHaveBeenCalled();
-    expect(mockGitHub.getPRComments).toHaveBeenCalledWith('test-org', 'test-repo', 100);
+    expect(mockGitHub.getPRReviewThreads).toHaveBeenCalledWith('test-org', 'test-repo', 100);
   });
 
   // ==========================================================================
@@ -469,7 +482,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
 
   it('should skip PRs with no unresolved review threads', async () => {
     // All comments are resolved
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -479,7 +492,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
         resolved: true,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const payload = createWebhookPayload();
     const rawBody = JSON.stringify(payload);
@@ -773,7 +786,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -792,7 +805,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
@@ -855,7 +868,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
 
     // Verify GitHub API calls
     expect(mockGitHub.listOpenPullRequests).toHaveBeenCalledWith('test-org', 'test-repo');
-    expect(mockGitHub.getPRComments).toHaveBeenCalledWith('test-org', 'test-repo', 100);
+    expect(mockGitHub.getPRReviewThreads).toHaveBeenCalledWith('test-org', 'test-repo', 100);
   });
 
   // ==========================================================================
@@ -910,7 +923,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
     ]);
 
     // All comments are resolved
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -920,7 +933,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
         resolved: true,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     await monitorService.poll();
 
@@ -1120,7 +1133,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
     expect(queueAdapter.enqueuedItems).toHaveLength(0);
 
     // No additional API calls should be made
-    expect(mockGitHub.getPRComments).not.toHaveBeenCalled();
+    expect(mockGitHub.getPRReviewThreads).not.toHaveBeenCalled();
     expect(mockGitHub.addLabels).not.toHaveBeenCalled();
   });
 
@@ -1248,7 +1261,7 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -1267,7 +1280,7 @@ describe('PR Feedback Integration Test: Deduplication', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.listOpenPullRequests.mockResolvedValue([
       {
@@ -1724,7 +1737,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -1743,7 +1756,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
@@ -1840,7 +1853,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockRepoCheckout.switchBranch).toHaveBeenCalledWith(checkoutPath, '42-add-tests');
 
     // Verify fresh unresolved threads were fetched
-    expect(mockGitHub.getPRComments).toHaveBeenCalledWith('test-org', 'test-repo', 100);
+    expect(mockGitHub.getPRReviewThreads).toHaveBeenCalledWith('test-org', 'test-repo', 100);
 
     // Verify Claude CLI was spawned with correct prompt
     expect(processFactory.spawn).toHaveBeenCalledWith(
@@ -1921,7 +1934,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
     // Mock many unresolved threads
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/file1.ts',
@@ -1967,7 +1980,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const handler = new PrFeedbackHandler(
       {
@@ -2068,7 +2081,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   it('should build prompt with all required information', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 101,
         path: 'src/auth.ts',
@@ -2087,7 +2100,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const handler = new PrFeedbackHandler(
       {
@@ -2209,7 +2222,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       .mockRejectedValueOnce(new Error('GitHub API error')) // Thread 2: fail
       .mockResolvedValueOnce(undefined); // Thread 3: success
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/file1.ts',
@@ -2237,7 +2250,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const handler = new PrFeedbackHandler(
       {

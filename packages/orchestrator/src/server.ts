@@ -323,19 +323,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
-    // Paired-clear (#849): instantiate PhaseTrackerService in worker-mode so
-    // LabelManager.onGateHit can invalidate the paired `resume:<gate>` dedupe
-    // key at pause time. Mirrors the full-mode instantiation below; both
-    // instances share the same Redis keyspace, so the worker-mode
-    // `clear(resume:<gate>)` invalidates the key written by full-mode
-    // `markProcessed(resume:<gate>)`.
-    const workerPhaseTracker = redisClient
-      ? new PhaseTrackerService(server.log, redisClient)
-      : undefined;
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
-      phaseTracker: workerPhaseTracker,
     });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,

@@ -9,6 +9,7 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  ReviewThread,
 } from '../../../types/github.js';
 
 /**
@@ -167,9 +168,26 @@ export interface GitHubClient {
   markPRReady(owner: string, repo: string, number: number): Promise<void>;
 
   /**
-   * Get comments on a PR (review comments)
+   * Get comments on a PR (review comments).
+   *
+   * @deprecated The REST endpoint underneath this method does not expose
+   * thread resolution — every returned `Comment.resolved` is `undefined`.
+   * Use `getPRReviewThreads()` instead. Removed in a follow-up PR. See #861.
    */
   getPRComments(owner: string, repo: string, number: number): Promise<Comment[]>;
+
+  /**
+   * Fetch all review threads on a PR, with resolution state, via GraphQL.
+   *
+   * The REST endpoint at `/repos/{owner}/{repo}/pulls/{n}/comments` does NOT
+   * expose thread resolution — thread state is a GraphQL-only concept.
+   * Callers that need per-thread resolved state MUST use this method.
+   * `getPRComments()` is deprecated; do not use it for new code.
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on any other non-zero exit.
+   */
+  getPRReviewThreads(owner: string, repo: string, number: number): Promise<ReviewThread[]>;
 
   /**
    * Reply to a PR comment

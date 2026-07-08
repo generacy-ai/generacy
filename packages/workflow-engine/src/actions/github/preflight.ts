@@ -203,16 +203,16 @@ export class PreflightAction extends BaseAction {
       const prExists = existingPR !== null;
       const prNumber = existingPR?.number;
 
-      // Get unresolved comments count
-      // #842 audit: whitelist — counts unresolved comments as metadata for
+      // Get unresolved thread count via GraphQL — see #861.
+      // #842 audit: whitelist — counts unresolved threads as metadata for
       // preflight report; body content is never surfaced to an agent.
-      let unresolvedComments = 0;
+      let unresolvedThreads = 0;
       if (prNumber) {
         try {
-          const comments = await this.client.getPRComments(owner, repo, prNumber);
-          unresolvedComments = comments.filter(c => c.resolved === false).length;
+          const threads = await this.client.getPRReviewThreads(owner, repo, prNumber);
+          unresolvedThreads = threads.filter(t => !t.isResolved).length;
         } catch {
-          // Ignore errors fetching comments
+          // Ignore errors fetching threads
         }
       }
 
@@ -252,7 +252,7 @@ export class PreflightAction extends BaseAction {
         pr_exists: prExists,
         pr_number: prNumber,
         uncommitted_changes: uncommittedChanges,
-        unresolved_comments: unresolvedComments,
+        unresolved_threads: unresolvedThreads,
         speckit_status: speckitStatus,
         label_status: labelStatus,
         existing_branches: existingBranches,
