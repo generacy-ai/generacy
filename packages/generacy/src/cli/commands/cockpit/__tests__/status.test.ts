@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { runStatus } from '../status.js';
-import { FakeGh, makeIssue } from './helpers/fake-gh.js';
+import { FakeGh, makeIssue, makePr } from './helpers/fake-gh.js';
 import type { CommandRunner, Issue } from '@generacy-ai/cockpit';
 
 function epicBody(refs: string[]): string {
@@ -103,6 +103,52 @@ describe('runStatus', () => {
     const code = await runStatus(undefined, {}, { gh, stderr: (l) => err.push(l) });
     expect(code).toBe(2);
     expect(err.join('\n')).toContain('parse issue: issue argument is required');
+  });
+
+  it('#857: wrapper resolves [] → row.checks === "none"', async () => {
+    const body = epicBody(['owner/repo#5']);
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/epic#42': body },
+      issuesByQuery: (): Issue[] => [
+        makePr({ number: 5, url: 'https://github.com/owner/repo/pull/5' }),
+      ],
+      // checksByPr unset → getPullRequestCheckRuns resolves [] by default.
+    });
+    const out: string[] = [];
+    const code = await runStatus(
+      'owner/epic#42',
+      { json: true },
+      { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out[0]!);
+    const row = parsed.rows.find((r: { number: number }) => r.number === 5);
+    expect(row?.checks).toBe('none');
+  });
+
+  it('#857: real wrapper throw → row.checks === "error" (distinct from "none")', async () => {
+    const body = epicBody(['owner/repo#6']);
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/epic#42': body },
+      issuesByQuery: (): Issue[] => [
+        makePr({ number: 6, url: 'https://github.com/owner/repo/pull/6' }),
+      ],
+    });
+    // Force getPullRequestCheckRuns to throw a real error (not a no-checks case).
+    gh.getPullRequestCheckRuns = async () => {
+      throw new Error('gh pr checks failed (exit 1): HTTP 500 boom');
+    };
+    const out: string[] = [];
+    const code = await runStatus(
+      'owner/epic#42',
+      { json: true },
+      { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    const parsed = JSON.parse(out[0]!);
+    const row = parsed.rows.find((r: { number: number }) => r.number === 6);
+    expect(row?.checks).toBe('error');
+    expect(row?.checks).not.toBe('none');
   });
 
   it('bare number resolves via injected runner (US2)', async () => {

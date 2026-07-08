@@ -117,13 +117,13 @@ export async function runStatus(
           prNumber = null;
         }
       }
-      let checks: 'pending' | 'success' | 'failure' | 'none' = 'none';
+      let checks: 'pending' | 'success' | 'failure' | 'none' | 'error' = 'none';
       if (prNumber != null) {
         try {
           const checkRuns = await gh.getPullRequestCheckRuns(repo, prNumber);
           checks = rollup(checkRuns);
         } catch {
-          checks = 'none';
+          checks = 'error';
         }
       }
       const key = `${repo}#${issue.number}`;

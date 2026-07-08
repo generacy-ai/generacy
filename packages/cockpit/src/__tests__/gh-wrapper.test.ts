@@ -260,6 +260,46 @@ describe('GhCliWrapper', () => {
         'gh pr checks failed',
       );
     });
+
+    it('resolves [] and does not warn when stderr says "no checks reported" (#857)', async () => {
+      const logger = { warn: vi.fn() };
+      const runner: CommandRunner = async () => ({
+        stdout: '',
+        stderr: "no checks reported on the '002-phase-1-foundation-part' branch",
+        exitCode: 1,
+      });
+      const wrapper = new GhCliWrapper(runner, logger);
+      const result = await wrapper.getPullRequestCheckRuns('o/r', 16);
+      expect(result).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('detects "no checks reported" case-insensitively (#857)', async () => {
+      const logger = { warn: vi.fn() };
+      const runner: CommandRunner = async () => ({
+        stdout: '',
+        stderr: 'No Checks Reported',
+        exitCode: 1,
+      });
+      const wrapper = new GhCliWrapper(runner, logger);
+      const result = await wrapper.getPullRequestCheckRuns('o/r', 1);
+      expect(result).toEqual([]);
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('still throws + warns when stderr mentions checks but not the fixed literal (#857)', async () => {
+      const logger = { warn: vi.fn() };
+      const runner: CommandRunner = async () => ({
+        stdout: '',
+        stderr: 'Some other error mentioning checks',
+        exitCode: 1,
+      });
+      const wrapper = new GhCliWrapper(runner, logger);
+      await expect(
+        wrapper.getPullRequestCheckRuns('o/r', 1),
+      ).rejects.toThrow(/gh pr checks failed/);
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('resolveIssueToPR', () => {

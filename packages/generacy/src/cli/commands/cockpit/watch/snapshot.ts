@@ -3,7 +3,7 @@ import type { ClassifiedIssue } from '../shared/classify-issue.js';
 
 export type SnapshotKey = string;
 
-export type ChecksRollup = 'pending' | 'success' | 'failure';
+export type ChecksRollup = 'pending' | 'success' | 'failure' | 'none' | 'error';
 export type PrLifecycle = 'open' | 'closed' | 'merged';
 
 export interface IssueSnapshot {

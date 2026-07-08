@@ -596,11 +596,15 @@ export class GhCliWrapper implements GhWrapper {
     ];
     const result = await this.runner('gh', args);
     if (result.exitCode !== 0) {
+      const stderr = result.stderr.trim();
+      if (stderr.toLowerCase().includes('no checks reported')) {
+        return [];
+      }
       this.logger.warn(
-        { repo, prNumber, ghStderr: result.stderr.trim() },
+        { repo, prNumber, ghStderr: stderr },
         'gh pr checks failed',
       );
-      throw new Error(`gh pr checks failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
+      throw new Error(`gh pr checks failed (exit ${result.exitCode}): ${stderr}`);
     }
     return parseCheckRuns(result.stdout);
   }

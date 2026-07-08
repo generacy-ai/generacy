@@ -1,5 +1,4 @@
 import type {
-  CheckRunSummary,
   GhWrapper,
   Issue,
   IssueRef,
@@ -13,6 +12,7 @@ import {
   buildIssueSnapshot,
   buildPrSnapshot,
   snapshotKey,
+  type ChecksRollup,
   type Snapshot,
   type SnapshotMap,
 } from './snapshot.js';
@@ -93,13 +93,13 @@ export async function runOnePoll(
         const lifecycle = await derivePrLifecycle(repo, prevSnap, issue, {
           getPullRequest: deps.gh.getPullRequest.bind(deps.gh),
         });
-        let checks: CheckRunSummary[];
+        let checksResult: ChecksRollup;
         try {
-          checks = await deps.gh.getPullRequestCheckRuns(repo, issue.number);
+          checksResult = rollup(await deps.gh.getPullRequestCheckRuns(repo, issue.number));
         } catch {
-          checks = [];
+          checksResult = 'error';
         }
-        snapshot = buildPrSnapshot(repo, issue, classified, lifecycle, rollup(checks));
+        snapshot = buildPrSnapshot(repo, issue, classified, lifecycle, checksResult);
         curr.set(key, snapshot);
       } else {
         const key = snapshotKey(repo, 'issue', issue.number);
