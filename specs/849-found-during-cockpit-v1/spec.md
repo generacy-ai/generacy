@@ -67,6 +67,9 @@ The highest-blast-radius manifestation is the PR-feedback loop: an operator requ
 | FR-006 | The TTL backstop (default 24h) MUST remain in place unchanged as a safety net for pause events that never fire. | P2 | Keeps protection if pause path is bypassed by a bug. |
 | FR-007 | Regression test MUST cover: pause → resume → pause again → resume again, asserting the second resume enqueues (not deduped). | P1 | The exact scenario from the issue's fix description. |
 | FR-008 | Regression test MUST cover: pause → resume → immediate duplicate resume, asserting the duplicate resume is still deduped (single-cycle protection intact). | P1 | Non-regression of the original dedupe purpose. |
+| FR-009 | The paired DEL MUST run AFTER `addLabels(waiting-for:<gate>)` returns success; if the retried `addLabels` throws, the DEL MUST NOT run (dedupe survives until TTL for that pause only). | P1 | Q1 answer — asymmetric failure: never clear a dedupe for a pause that didn't manifest on the issue. |
+| FR-010 | The paired DEL MUST be one-shot (single `phaseTracker.clear(...)` call, no inline retry); transient Redis errors are logged at `warn` and swallowed (FR-003). | P1 | Q2 answer — TTL backstop absorbs the blip; retrying would couple pause success to Redis health. |
+| FR-011 | On successful paired-clear, the orchestrator MUST emit an `info` log line identifying the paired-clear (e.g., "Cleared paired resume dedupe on pause") with `phase`, `gateLabel`, `owner`, `repo`, `issueNumber`. On swallowed DEL failure, the log MUST be `warn` with the same structured fields plus the error. | P2 | Q4 answer — makes SC-002 verifiable by log grep instead of runbook grep. |
 
 ## Success Criteria
 
@@ -91,6 +94,7 @@ The highest-blast-radius manifestation is the PR-feedback loop: an operator requ
 - Fixing the `type === 'process'` clear pattern at `label-monitor-service.ts:273-282` (already correct; only the resume side needs the paired clear).
 - Retroactively repairing production/test-project stranded issues. Operators use the documented `redis-cli DEL` repair until each stranded issue is unblocked; new pauses after the fix will not accumulate this state.
 - UI/cockpit surfacing of "stranded resume" as a distinct diagnostic state.
+- Wiring choice for the DEL capability (narrow callback vs. injected service vs. caller-side DEL) is a plan-phase implementation decision, not a spec requirement (Q3 answer favors a narrow callback but does not constrain it here).
 
 ---
 

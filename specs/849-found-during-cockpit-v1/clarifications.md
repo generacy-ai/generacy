@@ -10,7 +10,7 @@
 - B: **DEL first, then label-apply.** Clears the stale dedupe before it can matter. If `addLabels` then fails, dedupe is lost for that gate until the next pause attempt succeeds — a stray resume could enqueue in the interim.
 - C: **DEL alongside label-apply, both inside the retry block.** DEL is retried in lockstep with label ops; but FR-003 says DEL failure is swallowed at warn, which conflicts with retrying it.
 
-**Answer**: *Pending*
+**Answer**: A — label-apply first, DEL after `addLabels` returns success. The dedupe key must only be cleared once the new pause actually exists on GitHub; the failure directions are asymmetric in exactly the way that decides it. A's partial failure (addLabels exhausted, DEL never ran) degrades to the pre-fix behavior for one pause — TTL backstop, annoying but known. B's partial failure (DEL done, no pause manifested) is a cleared dedupe guarding nothing, letting a stale `completed:<gate>` from the previous cycle enqueue a resume for a pause that never happened — a NEW failure mode this fix would be introducing. Encoded as FR-009.
 
 ### Q2: DEL retry policy on transient Redis failure
 **Context**: FR-003 says "If the Redis `DEL` fails (transient error, Redis down), the pause MUST still succeed — the failure is logged at `warn` and swallowed." Existing `PhaseTrackerService.clear()` behavior is single-shot best-effort. `LabelManager.onGateHit()` currently wraps GitHub API calls in `retryWithBackoff` for transient network flakes. The spec doesn't say whether the paired DEL gets the same retry treatment or is one-shot.
@@ -20,7 +20,7 @@
 - B: **Retried alongside the label op** (inside `retryWithBackoff`). Higher chance the DEL lands, but conflicts with FR-003's "swallowed" phrasing and means a truly-down Redis blocks the pause via the retry budget.
 - C: **One-shot with an inline mini-retry** (e.g., 2 attempts, short backoff), still swallowing terminal failure.
 
-**Answer**: *Pending*
+**Answer**: A — one-shot, best-effort, `warn` on failure. The TTL backstop exists precisely to absorb this case: a Redis blip at DEL time costs at most the old 12h behavior for that single pause. Retrying (B) couples pause success to Redis health, which FR-003 explicitly forbids; C's mini-retry is complexity purchasing almost nothing the TTL doesn't already cover. Encoded as FR-010.
 
 ### Q3: Where the DEL capability is wired into `LabelManager`
 **Context**: `LabelManager` today has zero Redis / `PhaseTrackerService` dependency (constructor: `GitHubClient`, `owner`, `repo`, `issueNumber`, `Logger` — label-manager.ts:15-22). The spec anchors the fix at `LabelManager.onGateHit()` but leaves the wiring open. `PhaseTrackerService` lives in `packages/orchestrator/src/services/`; `LabelManager` lives in `packages/orchestrator/src/worker/`. Introducing a direct `PhaseTrackerService` field changes the worker-layer's dep graph and test surface.
@@ -30,7 +30,7 @@
 - B: **Inject `PhaseTrackerService`** directly into `LabelManager`. Simpler at the call site but drags a service dep into the label layer; test setups need a real/mocked `PhaseTrackerService`.
 - C: **Move the DEL to the caller** (`phase-loop.ts` or wherever `onGateHit` is invoked). Keeps `LabelManager` unchanged, but splits the paired-lifecycle contract across two files — future maintainers can add a new pause path without noticing the DEL half.
 
-**Answer**: *Pending*
+**Answer**: A — narrow callback injection. The paired-lifecycle contract ("a new pause invalidates the prior resume's dedupe") must live at the pause site so every future pause path inherits it — option C scatters the invariant across files, which is precisely how the next maintainer reintroduces this bug. But the label layer shouldn't grow a Redis dependency for one DEL: a `clearResumeDedupe?: (gate) => Promise<void>` callback keeps `LabelManager` storage-agnostic, the worker closes over `phaseTracker.clear` at wiring time, and tests stub one optional function. Treated as a plan-phase implementation decision (see Out of Scope).
 
 ### Q4: Observability — dedicated log line on paired-clear?
 **Context**: SC-002 targets "0 manual `redis-cli DEL phase-tracker:…:resume:…` interventions" and proposes measurement via "search operator runbooks and support logs for the `redis-cli DEL phase-tracker:` command." That measures the *symptom*. If operators or a future incident want to confirm the paired-clear actually ran on a given pause, there's no signal today — `PhaseTrackerService.clear()` doesn't advertise the caller's intent.
@@ -40,4 +40,4 @@
 - B: **No dedicated log** — the paired-clear is an internal implementation detail; existing `Gate hit: ...` log line is enough. `PhaseTrackerService.clear()`'s own logging (if any) covers the rest.
 - C: **Structured metric only** (counter increment on paired-clear success/failure), no log line. Higher-value for dashboards, but this repo doesn't have a shared metrics sink so this expands scope.
 
-**Answer**: *Pending*
+**Answer**: A — dedicated `info` line on paired-clear, `warn` on swallowed failure. It turns SC-002 from "grep the runbooks for the manual `redis-cli` command" (measuring the symptom) into "grep the logs for the paired-clear line" (measuring the mechanism), and it costs one logger call in a function that already logs at that cadence. Encoded as FR-011.
