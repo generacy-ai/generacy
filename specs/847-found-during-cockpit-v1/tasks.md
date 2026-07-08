@@ -10,18 +10,18 @@
 
 ## Phase 1: Foundation — shared type surface
 
-- [ ] T001 [US2] Extend `StageCommentData` in `packages/orchestrator/src/worker/types.ts` with optional `errorEvidence?: { command: string; exitDescriptor: string; stderrTail: string }` field. Field is optional; renderer + phase-loop callers land in later phases. No changes to `PhaseResult` (deliberately per plan Design Overview → Non-changes and Decision 7). See `data-model.md#modified-type` for exact JSDoc.
+- [X] T001 [US2] Extend `StageCommentData` in `packages/orchestrator/src/worker/types.ts` with optional `errorEvidence?: { command: string; exitDescriptor: string; stderrTail: string }` field. Field is optional; renderer + phase-loop callers land in later phases. No changes to `PhaseResult` (deliberately per plan Design Overview → Non-changes and Decision 7). See `data-model.md#modified-type` for exact JSDoc.
 
 ## Phase 2: Gap A — preValidate degrade (US1)
 <!-- Phase boundary: Phase 1 is prerequisite only for Phase 3; Phase 2 can proceed independently after T001 is not required (US1 does not touch types.ts). -->
 
-- [ ] T002 [US1] Update `WorkerConfigSchema.preValidateCommand` default in `packages/orchestrator/src/worker/config.ts:59` to the byte-exact degrade shell string per `contracts/pre-validate-degrade.md#default-command-post-fix`:
+- [X] T002 [US1] Update `WorkerConfigSchema.preValidateCommand` default in `packages/orchestrator/src/worker/config.ts:59` to the byte-exact degrade shell string per `contracts/pre-validate-degrade.md#default-command-post-fix`:
   ```
   pnpm install && if [ -f pnpm-workspace.yaml ] && ls packages/*/package.json >/dev/null 2>&1; then pnpm -r --filter './packages/*' build; fi
   ```
   Do NOT touch `applyRepoValidateOverrides` (`config.ts:98`) or the explicit-empty-string handling (`config.ts:110–115`). FR-001, FR-002.
 
-- [ ] T003 [US1] Extend `packages/orchestrator/src/worker/__tests__/config.test.ts` with:
+- [X] T003 [US1] Extend `packages/orchestrator/src/worker/__tests__/config.test.ts` with:
   1. `WorkerConfigSchema.parse({}).preValidateCommand === "<exact default string>"` byte-assertion (SC-005 signal, catches whitespace drift).
   2. Override with a custom `preValidateCommand` → returned config has the custom string (FR-002 regression guard on `applyRepoValidateOverrides`).
   3. Override with `""` (explicit empty) → returned config has `""` (skip-install preserved, FR-002).
@@ -31,14 +31,14 @@
 ## Phase 3: Gap B — evidence block (US2)
 <!-- Phase boundary: Complete Phase 1 (T001) before starting. T004/T005/T007 are parallelizable; T006/T008/T009 have file-level dependencies. -->
 
-- [ ] T004 [P] [US2] Create `packages/orchestrator/src/worker/stderr-tail.ts` exporting a pure `boundStderrTail(raw: string): string` per `data-model.md#new-pure-function-boundary`:
+- [X] T004 [P] [US2] Create `packages/orchestrator/src/worker/stderr-tail.ts` exporting a pure `boundStderrTail(raw: string): string` per `data-model.md#new-pure-function-boundary`:
   - Empty input → literal `(stderr empty)`.
   - Non-empty ≤ 4096 bytes after `slice(-30)`.join('\n') → return unchanged (no marker).
   - Non-empty > 4096 bytes → truncate-from-start of the last-30-lines slice to 4096 bytes; prepend `… truncated (kept last <N> lines / 4096 bytes) …\n` where `<N>` is the line count of the returned slice.
   - MUST hold ≤ ~4200 bytes for any input up to 100 MB.
   Zero dependencies beyond `node:buffer`.
 
-- [ ] T005 [P] [US2] Create `packages/orchestrator/src/worker/__tests__/stderr-tail.test.ts` covering `boundStderrTail` contract from T004:
+- [X] T005 [P] [US2] Create `packages/orchestrator/src/worker/__tests__/stderr-tail.test.ts` covering `boundStderrTail` contract from T004:
   1. Empty string → `(stderr empty)`.
   2. Short (< 30 lines, < 4 KiB) → unchanged, no marker.
   3. Exactly 30 lines totaling ≤ 4 KiB → unchanged, no marker.
@@ -47,7 +47,7 @@
   6. 100 MB synthetic stderr (SC-004 fuzz) → output ≤ ~4200 bytes total, marker present.
   7. UTF-8 multi-byte content near cut point → decoded output is valid UTF-8 (no split codepoints; MAY resync to `\n`).
 
-- [ ] T006 [US2] In `packages/orchestrator/src/worker/phase-loop.ts`, add a private `buildErrorEvidence(command: string, result: PhaseResult, resolvedTimeoutMs?: number): StageCommentData['errorEvidence']` helper matching `contracts/failure-evidence-block.md#field-derivations-from-phaseresult`:
+- [X] T006 [US2] In `packages/orchestrator/src/worker/phase-loop.ts`, add a private `buildErrorEvidence(command: string, result: PhaseResult, resolvedTimeoutMs?: number): StageCommentData['errorEvidence']` helper matching `contracts/failure-evidence-block.md#field-derivations-from-phaseresult`:
   - `exitDescriptor` = `killed (SIGTERM) after ${resolvedTimeoutMs}ms` when `result.error?.message.includes('timed out')`; `'aborted'` when it includes `'was aborted'`; else `exit ${result.exitCode}`.
   - `stderrTail` = `boundStderrTail(result.error?.stderr ?? '')`.
   Then thread it into all three `updateStageComment({ status: 'error', ... })` call sites:
@@ -55,7 +55,7 @@
   2. Unexpected spawn error catch (line ~217): synthesize `PhaseResult` from caught error (`{ error: { message: String(error), stderr: '', phase }, exitCode: 1, success: false }`); `command = phase === 'validate' ? config.validateCommand : phase`.
   3. Post-phase failure sites (~336, ~373, ~394): `command = phase === 'validate' ? config.validateCommand : phase`, `result = result`, `resolvedTimeoutMs` from the same source passed to the spawner. FR-003, FR-005. Depends on T001.
 
-- [ ] T007 [P] [US2] Extend `renderStageComment` in `packages/orchestrator/src/worker/stage-comment-manager.ts` (starting at ~line 119) to append the evidence block per `contracts/failure-evidence-block.md#placement`:
+- [X] T007 [P] [US2] Extend `renderStageComment` in `packages/orchestrator/src/worker/stage-comment-manager.ts` (starting at ~line 119) to append the evidence block per `contracts/failure-evidence-block.md#placement`:
   - Only when `data.status === 'error'` AND `data.errorEvidence` present (all three sub-fields).
   - Insert horizontal rule `---` after the last existing summary metadata line (after `**PR**` or `**Completed**`).
   - Emit exactly:
@@ -76,7 +76,7 @@
   - On `errorEvidence` absent while `status === 'error'` (defensive path), omit the block and log a warning via the existing logger.
   - MUST NOT change any bytes above the horizontal rule; the `**Status**: ❌ Error` line stays byte-stable for the cockpit classifier (FR-006). Depends on T001.
 
-- [ ] T008 [US2] Extend `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` to assert `errorEvidence` is passed to `updateStageComment` at each of the three `status: 'error'` sites:
+- [X] T008 [US2] Extend `packages/orchestrator/src/worker/__tests__/phase-loop.test.ts` to assert `errorEvidence` is passed to `updateStageComment` at each of the three `status: 'error'` sites:
   1. Pre-validate install failure → mock spy on `stageCommentManager.updateStageComment` asserts `command === config.preValidateCommand`, `exitDescriptor === 'exit <N>'`, `stderrTail` matches `installResult.error.stderr` after bounding.
   2. Unexpected spawn catch → synthetic `PhaseResult` shape asserted; `exitDescriptor === 'exit 1'`, `stderrTail === '(stderr empty)'`.
   3. Post-phase failure (validate + implement + gate paths) → three sub-cases with the correct `command` sourcing (`config.validateCommand` for validate; phase name string otherwise).
@@ -84,7 +84,7 @@
   5. Abort site → `error.message` set to the abort wording → `exitDescriptor === 'aborted'`.
   Depends on T006.
 
-- [ ] T009 [US2] Extend `packages/orchestrator/src/worker/__tests__/stage-comment-manager.test.ts` per `contracts/failure-evidence-block.md#test-fixtures-stage-comment-managertestts`:
+- [X] T009 [US2] Extend `packages/orchestrator/src/worker/__tests__/stage-comment-manager.test.ts` per `contracts/failure-evidence-block.md#test-fixtures-stage-comment-managertestts`:
   1. Happy path (`status: 'complete'` + PR URL) → rendered markdown byte-identical to pre-fix (FR-007).
   2. Numeric-exit failure → asserts on exact rendered markdown including `**Failed command**`, `**Exit**: exit 1`, fenced block contents.
   3. Timeout failure → `**Exit**: killed (SIGTERM) after 300000ms` renders verbatim.
@@ -98,7 +98,7 @@
 ## Phase 4: Documentation (FR-008)
 <!-- Phase boundary: Complete Phases 2 and 3 first — docs describe shipped behavior. -->
 
-- [ ] T010 [P] [US1] Update `docs/docs/getting-started/configuration.md` to document the new degrade behavior: (a) the default `preValidateCommand` now runs `pnpm install` unconditionally and only fires the `pnpm -r --filter` build half when both `pnpm-workspace.yaml` and `packages/*/package.json` exist; (b) the per-repo override in `.generacy/config.yaml` still takes precedence and an explicit empty string still means "skip install"; (c) template authors who want a non-pnpm stack should set the override rather than depend on the default (FR-008).
+- [X] T010 [P] [US1] Update `docs/docs/getting-started/configuration.md` to document the new degrade behavior: (a) the default `preValidateCommand` now runs `pnpm install` unconditionally and only fires the `pnpm -r --filter` build half when both `pnpm-workspace.yaml` and `packages/*/package.json` exist; (b) the per-repo override in `.generacy/config.yaml` still takes precedence and an explicit empty string still means "skip install"; (c) template authors who want a non-pnpm stack should set the override rather than depend on the default (FR-008).
 
 ## Dependencies & Execution Order
 

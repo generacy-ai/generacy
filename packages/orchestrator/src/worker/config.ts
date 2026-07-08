@@ -56,7 +56,11 @@ export const WorkerConfigSchema = z.object({
   /** Command to run during the validate phase */
   validateCommand: z.string().default('pnpm test && pnpm build'),
   /** Command to run before validation to install dependencies (empty string to skip) */
-  preValidateCommand: z.string().default("pnpm install && pnpm -r --filter './packages/*' build"),
+  preValidateCommand: z
+    .string()
+    .default(
+      "pnpm install && if [ -f pnpm-workspace.yaml ] && ls packages/*/package.json >/dev/null 2>&1; then pnpm -r --filter './packages/*' build; fi",
+    ),
   /** Maximum retries for implement phase when partial progress is detected */
   maxImplementRetries: z.number().int().min(0).max(5).default(2),
   /** Credential role from .generacy/config.yaml defaults.role — when set, credentials are populated on launch requests */

@@ -153,6 +153,48 @@ export class StageCommentManager {
 
     lines.push('');
 
+    if (data.status === 'error') {
+      if (data.errorEvidence) {
+        this.appendEvidenceBlock(lines, data.errorEvidence);
+      } else {
+        this.logger.warn(
+          { stage: data.stage },
+          'Stage comment error status without errorEvidence — omitting evidence block',
+        );
+      }
+    }
+
     return lines.join('\n');
+  }
+
+  /**
+   * Append the failure-evidence block to the rendered comment lines.
+   *
+   * See specs/847-found-during-cockpit-v1/contracts/failure-evidence-block.md
+   * for the exact byte layout. The block is placed after the existing summary
+   * metadata (below a horizontal-rule separator), so bytes above the `---`
+   * remain identical to the pre-fix output (invariant 1).
+   */
+  private appendEvidenceBlock(
+    lines: string[],
+    evidence: NonNullable<StageCommentData['errorEvidence']>,
+  ): void {
+    // Neutralize any triple-backtick sequence inside stderrTail so it cannot
+    // break out of our fenced block. Insert U+200B (ZWSP) between the first two
+    // backticks of every 3-backtick run.
+    const safeStderr = evidence.stderrTail.replace(/```/g, '`​``');
+    const lineCount = evidence.stderrTail.split('\n').length;
+
+    lines.push('---');
+    lines.push(`**Failed command**: \`${evidence.command}\``);
+    lines.push(`**Exit**: ${evidence.exitDescriptor}`);
+    lines.push('');
+    lines.push(`<details><summary>stderr (last ${lineCount} lines)</summary>`);
+    lines.push('');
+    lines.push('```text');
+    lines.push(safeStderr);
+    lines.push('```');
+    lines.push('');
+    lines.push('</details>');
   }
 }

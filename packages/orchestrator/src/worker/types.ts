@@ -202,6 +202,20 @@ export interface StageCommentData {
   completedAt?: string;
   /** PR URL if available */
   prUrl?: string;
+  /**
+   * Rendered inside the comment when status === 'error'. Omitted on
+   * successful phases (FR-007). Populated by phase-loop.ts at each of the
+   * three `updateStageComment({ status: 'error' })` call sites; consumed by
+   * StageCommentManager.renderStageComment.
+   */
+  errorEvidence?: {
+    /** The failing command string as it was passed to the spawner. */
+    command: string;
+    /** Resolved exit descriptor: `exit <N>`, `killed (SIGTERM) after <Nms>`, or `aborted` (FR-005, Q5→A). */
+    exitDescriptor: string;
+    /** Bounded stderr tail (last 30 lines → 4 KiB cap, truncation marker prepended when applicable). Literal `(stderr empty)` when empty. */
+    stderrTail: string;
+  };
 }
 
 /**

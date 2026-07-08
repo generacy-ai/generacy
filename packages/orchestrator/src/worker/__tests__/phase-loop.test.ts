@@ -718,3 +718,185 @@ describe('PhaseLoop - phaseAfterHandlers', () => {
     expect(deps.gateChecker.checkGates).toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Failure evidence threading (#847 Gap B / T008)
+// ---------------------------------------------------------------------------
+
+/** Locate the last stage-comment update call with status === 'error'. */
+function findLastErrorCall(spy: any): any | undefined {
+  const calls = spy.mock.calls;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (calls[i][0].status === 'error') return calls[i][0];
+  }
+  return undefined;
+}
+
+describe('PhaseLoop - errorEvidence threading (#847)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('threads errorEvidence into pre-validate install failure', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+
+    const installResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 42,
+      durationMs: 100,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 42',
+        stderr: 'ELIFECYCLE Command failed with exit code 42',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(installResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'pnpm install',
+      exitDescriptor: 'exit 42',
+      stderrTail: 'ELIFECYCLE Command failed with exit code 42',
+    });
+  });
+
+  it('threads errorEvidence for unexpected spawn error catch (synthetic PhaseResult)', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockRejectedValue(new Error('spawn ENOENT'));
+
+    await expect(
+      phaseLoop.executeLoop(context, config, deps, ['specify']),
+    ).rejects.toThrow('spawn ENOENT');
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.command).toBe('specify');
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('exit 1');
+    expect(errorCall.errorEvidence.stderrTail).toBe('(stderr empty)');
+  });
+
+  it('threads errorEvidence for a post-phase CLI failure (implement)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    const failResult: PhaseResult = {
+      phase: 'implement',
+      success: false,
+      exitCode: 3,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "implement" failed with exit code 3',
+        stderr: 'compilation failed\n  at line 5',
+        phase: 'implement',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'implement',
+      exitDescriptor: 'exit 3',
+      stderrTail: 'compilation failed\n  at line 5',
+    });
+  });
+
+  it('threads errorEvidence for a post-phase validate failure (uses validateCommand)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm test && npm run build',
+    });
+
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        stderr: 'Tests failed: 2 of 5',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'npm test && npm run build',
+      exitDescriptor: 'exit 1',
+      stderrTail: 'Tests failed: 2 of 5',
+    });
+  });
+
+  it('renders killed (SIGTERM) descriptor when error message signals a timeout', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig({ phaseTimeoutMs: 900_000 });
+
+    const failResult: PhaseResult = {
+      phase: 'specify',
+      success: false,
+      exitCode: 1,
+      durationMs: 900_000,
+      output: [],
+      error: {
+        message: 'Phase "specify" timed out after 900000ms',
+        stderr: 'last log line before kill',
+        phase: 'specify',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('killed (SIGTERM) after 900000ms');
+  });
+
+  it('renders aborted descriptor when error message signals an abort', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    const failResult: PhaseResult = {
+      phase: 'specify',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "specify" was aborted',
+        stderr: '',
+        phase: 'specify',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('aborted');
+    expect(errorCall.errorEvidence.stderrTail).toBe('(stderr empty)');
+  });
+});

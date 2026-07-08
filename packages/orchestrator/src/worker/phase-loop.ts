@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageCommentData } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs } from './config.js';
@@ -6,6 +6,7 @@ import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
+import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
 import type { ConversationLogger } from './conversation-logger.js';
@@ -13,6 +14,7 @@ import { postClarifications, hasPendingClarifications, integrateClarificationAns
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
+import { boundStderrTail } from './stderr-tail.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -170,6 +172,11 @@ export class PhaseLoop {
                 status: 'error',
                 phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
                 startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+                errorEvidence: this.buildErrorEvidence(
+                  config.preValidateCommand,
+                  installResult,
+                  DEFAULT_INSTALL_TIMEOUT_MS,
+                ),
               });
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
@@ -214,11 +221,23 @@ export class PhaseLoop {
           'Unexpected error during phase execution',
         );
         await labelManager.onError(phase);
+        const syntheticResult: PhaseResult = {
+          phase,
+          success: false,
+          exitCode: 1,
+          durationMs: 0,
+          output: [],
+          error: { message: String(error), stderr: '', phase },
+        };
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
           phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          errorEvidence: this.buildErrorEvidence(
+            phase === 'validate' ? config.validateCommand : phase,
+            syntheticResult,
+          ),
         });
         throw error;
       }
@@ -338,6 +357,13 @@ export class PhaseLoop {
           status: 'error',
           phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          errorEvidence: this.buildErrorEvidence(
+            phase === 'validate' ? config.validateCommand : phase,
+            result,
+            phase === 'validate'
+              ? DEFAULT_VALIDATE_TIMEOUT_MS
+              : resolvePhaseTimeoutMs(config, phase as Exclude<WorkflowPhase, 'validate'>),
+          ),
         });
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
@@ -370,19 +396,23 @@ export class PhaseLoop {
             'product-diff computation threw — treating as detection failure',
           );
           await labelManager.onError(phase);
-          await stageCommentManager.updateStageComment({
-            stage,
-            status: 'error',
-            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
-            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-            prUrl: context.prUrl,
-          });
           result.success = false;
           result.error = {
             message: `Phase "${phase}" product-diff detection failed: ${String(err)}`,
             stderr: '',
             phase,
           };
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+            errorEvidence: this.buildErrorEvidence(
+              phase === 'validate' ? config.validateCommand : phase,
+              result,
+            ),
+          });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
 
@@ -392,13 +422,6 @@ export class PhaseLoop {
             'implement phase produced no product-code changes — all diff lives under excluded paths',
           );
           await labelManager.onError(phase);
-          await stageCommentManager.updateStageComment({
-            stage,
-            status: 'error',
-            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
-            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-            prUrl: context.prUrl,
-          });
           result.success = false;
           result.error = {
             message:
@@ -407,6 +430,17 @@ export class PhaseLoop {
             stderr: '',
             phase,
           };
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+            errorEvidence: this.buildErrorEvidence(
+              phase === 'validate' ? config.validateCommand : phase,
+              result,
+            ),
+          });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
       }
@@ -563,6 +597,27 @@ export class PhaseLoop {
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
     };
+  }
+
+  /**
+   * Build the `errorEvidence` payload rendered inside the stage comment on
+   * `status: 'error'` transitions. See specs/847-found-during-cockpit-v1/
+   * contracts/failure-evidence-block.md for the derivation rules.
+   */
+  private buildErrorEvidence(
+    command: string,
+    result: PhaseResult,
+    resolvedTimeoutMs?: number,
+  ): StageCommentData['errorEvidence'] {
+    const message = result.error?.message ?? '';
+    const exitDescriptor =
+      message.includes('timed out') && resolvedTimeoutMs !== undefined
+        ? `killed (SIGTERM) after ${resolvedTimeoutMs}ms`
+        : message.includes('was aborted')
+        ? 'aborted'
+        : `exit ${result.exitCode}`;
+    const stderrTail = boundStderrTail(result.error?.stderr ?? '');
+    return { command, exitDescriptor, stderrTail };
   }
 
   /**

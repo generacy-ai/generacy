@@ -73,6 +73,32 @@ describe('resolvePhaseTimeoutMs', () => {
   });
 });
 
+describe('WorkerConfigSchema - preValidateCommand default (degrade)', () => {
+  const DEFAULT_PRE_VALIDATE_COMMAND =
+    "pnpm install && if [ -f pnpm-workspace.yaml ] && ls packages/*/package.json >/dev/null 2>&1; then pnpm -r --filter './packages/*' build; fi";
+
+  it('resolves to the degrade shell string byte-exact (SC-005)', () => {
+    const config = WorkerConfigSchema.parse({});
+    expect(config.preValidateCommand).toBe(DEFAULT_PRE_VALIDATE_COMMAND);
+  });
+
+  it('honors a custom preValidateCommand override', () => {
+    const config = WorkerConfigSchema.parse({ preValidateCommand: 'npm ci' });
+    expect(config.preValidateCommand).toBe('npm ci');
+  });
+
+  it('preserves an explicit empty preValidateCommand (skip install)', () => {
+    const config = WorkerConfigSchema.parse({ preValidateCommand: '' });
+    expect(config.preValidateCommand).toBe('');
+  });
+
+  it('retains the new default when only validateCommand is overridden', () => {
+    const config = WorkerConfigSchema.parse({ validateCommand: 'pnpm build' });
+    expect(config.validateCommand).toBe('pnpm build');
+    expect(config.preValidateCommand).toBe(DEFAULT_PRE_VALIDATE_COMMAND);
+  });
+});
+
 describe('applyRepoValidateOverrides', () => {
   const base = WorkerConfigSchema.parse({});
 
