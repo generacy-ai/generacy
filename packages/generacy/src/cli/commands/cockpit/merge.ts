@@ -145,6 +145,20 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
     );
   }
 
+  const noActual = actualChecks.length === 0;
+  const noRequired =
+    required.source === 'branch-protection'
+      ? (required.names?.length ?? 0) === 0
+      : true;
+  if (noActual && noRequired) {
+    await gh.mergePullRequest(repo, pr.number, { squash: true });
+    logger.info({ pr: pr.number }, 'PR merged');
+    return {
+      exitCode: 0,
+      stdout: 'no checks configured and none required — proceeding on completed:validate\n',
+    };
+  }
+
   const { failingChecks, ok } = classifyChecks({ required, actual: actualChecks });
   if (!ok) {
     logger.error(

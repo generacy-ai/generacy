@@ -9,7 +9,7 @@ export interface StatusRow {
   state: CockpitState;
   sourceLabel: string;
   prNumber: number | null;
-  checks: 'pending' | 'success' | 'failure' | 'none';
+  checks: 'pending' | 'success' | 'failure' | 'none' | 'error';
   url: string;
   phase: string | null;
 }
@@ -20,7 +20,7 @@ export function buildStatusRow(
   classified: ClassifiedIssue,
   kind: 'issue' | 'pr',
   prNumber: number | null,
-  checks: 'pending' | 'success' | 'failure' | 'none',
+  checks: 'pending' | 'success' | 'failure' | 'none' | 'error',
   phase: string | null,
 ): StatusRow {
   return {

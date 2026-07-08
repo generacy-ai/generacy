@@ -451,6 +451,81 @@ describe('runMerge FR-007 regression tests', () => {
   });
 });
 
+describe('runMerge #857 regression: no-checks is not RED', () => {
+  it('(a) CI-less unprotected repo + completed:validate → merges with FR-003 stdout note, exit 0', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
+      getPullRequestCheckRuns: [],
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'no checks configured and none required — proceeding on completed:validate\n',
+    );
+    expect(calls.mergePullRequest).toBe(1);
+    expect(gh.mergePullRequest).toHaveBeenCalledWith('o/r', 42, { squash: true });
+  });
+
+  it('(b) branch-protection with required contexts + empty actual → red naming missing contexts, exit 1', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: greenPr,
+      getRequiredCheckNames: {
+        source: 'branch-protection',
+        names: ['ci/test', 'ci/lint'],
+      },
+      getPullRequestCheckRuns: [],
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(calls.mergePullRequest).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.reason).toBe('checks-failing');
+    expect(payload.failingChecks.map((c: { name: string }) => c.name)).toEqual([
+      'ci/test',
+      'ci/lint',
+    ]);
+    for (const c of payload.failingChecks as Array<{ state: string }>) {
+      expect(c.state).toBe('MISSING');
+    }
+  });
+
+  it('(c) non-empty actual with a FAILURE state → red path unchanged, exit 1', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
+      getPullRequestCheckRuns: [{ name: 'ci/test', state: 'FAILURE' }],
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(calls.mergePullRequest).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.reason).toBe('checks-failing');
+    expect(payload.failingChecks[0]).toMatchObject({
+      name: 'ci/test',
+      state: 'FAILURE',
+    });
+  });
+});
+
 describe('SC-004 meta-guard: no PullRequestDetail fixture asserts completed:validate as merge precondition', () => {
   // If a future contributor re-encodes the tests-encode-the-bug pattern
   // (#800/#826/#836) by setting labels: ['completed:validate'] on a

@@ -7,12 +7,24 @@ function check(state: CheckRunSummary['state']): CheckRunSummary {
 }
 
 describe('rollup', () => {
-  it('empty → pending', () => {
-    expect(rollup([])).toBe('pending');
+  it('empty → none (was pending pre-#857)', () => {
+    expect(rollup([])).toBe('none');
   });
 
   it('all SUCCESS → success', () => {
     expect(rollup([check('SUCCESS'), check('SUCCESS')])).toBe('success');
+  });
+
+  it('single PENDING → pending (non-empty behavior unchanged)', () => {
+    expect(rollup([check('PENDING')])).toBe('pending');
+  });
+
+  it('single SUCCESS → success (non-empty behavior unchanged)', () => {
+    expect(rollup([check('SUCCESS')])).toBe('success');
+  });
+
+  it('single FAILURE → failure (non-empty behavior unchanged)', () => {
+    expect(rollup([check('FAILURE')])).toBe('failure');
   });
 
   it('mix of SUCCESS/NEUTRAL/SKIPPED → success', () => {

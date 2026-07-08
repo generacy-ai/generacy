@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { isActionableLabel, isActionableSnapshot } from '../watch/actionable.js';
-import { buildIssueSnapshot, buildPrSnapshot } from '../watch/snapshot.js';
+import {
+  buildIssueSnapshot,
+  buildPrSnapshot,
+  type ChecksRollup,
+} from '../watch/snapshot.js';
 
 describe('isActionableLabel', () => {
   it.each([
@@ -42,7 +46,7 @@ describe('isActionableSnapshot', () => {
     );
   }
 
-  function pr(labels: string[], rollup: 'pending' | 'success' | 'failure') {
+  function pr(labels: string[], rollup: ChecksRollup) {
     return buildPrSnapshot(
       'o/r',
       { number: 1, url: 'https://github.com/o/r/pull/1', state: 'OPEN', labels },
@@ -86,5 +90,17 @@ describe('isActionableSnapshot', () => {
   it('returns false for a PR with only non-actionable labels and non-failing rollup', () => {
     expect(isActionableSnapshot(pr(['phase:implement'], 'pending'))).toBe(false);
     expect(isActionableSnapshot(pr(['phase:implement'], 'success'))).toBe(false);
+  });
+
+  it('#857: returns false for a PR with checksRollup: none and no actionable labels', () => {
+    expect(isActionableSnapshot(pr(['phase:implement'], 'none'))).toBe(false);
+  });
+
+  it('#857: returns false for a PR with checksRollup: error and no actionable labels', () => {
+    expect(isActionableSnapshot(pr(['phase:implement'], 'error'))).toBe(false);
+  });
+
+  it('#857: still returns true for a PR with checksRollup: failure (pin unchanged behavior)', () => {
+    expect(isActionableSnapshot(pr(['phase:implement'], 'failure'))).toBe(true);
   });
 });

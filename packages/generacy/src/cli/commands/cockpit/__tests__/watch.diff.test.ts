@@ -4,6 +4,7 @@ import {
   buildIssueSnapshot,
   buildPrSnapshot,
   snapshotKey,
+  type ChecksRollup,
   type SnapshotMap,
 } from '../watch/snapshot.js';
 
@@ -44,7 +45,7 @@ function prSnap(opts: {
   labels?: string[];
   classifiedState?: 'pending' | 'active' | 'waiting' | 'error' | 'terminal' | 'unknown';
   sourceLabel?: string;
-  rollup?: 'pending' | 'success' | 'failure';
+  rollup?: ChecksRollup;
 }) {
   const number = opts.number ?? 1;
   return buildPrSnapshot(
@@ -288,6 +289,30 @@ describe('computeTransitions', () => {
   it('emits pr-checks when checksRollup flips', () => {
     const prev = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'pending' })]);
     const curr = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'success' })]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe('pr-checks');
+  });
+
+  it('#857: emits pr-checks on prev pending → curr none transition', () => {
+    const prev = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'pending' })]);
+    const curr = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'none' })]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe('pr-checks');
+  });
+
+  it('#857: emits pr-checks on prev none → curr success transition (repo gained CI mid-watch)', () => {
+    const prev = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'none' })]);
+    const curr = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'success' })]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe('pr-checks');
+  });
+
+  it('#857: emits pr-checks on prev success → curr error transition (gh started failing)', () => {
+    const prev = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'success' })]);
+    const curr = map([snapshotKey('o/r', 'pr', 1), prSnap({ rollup: 'error' })]);
     const events = computeTransitions(prev, curr, ts);
     expect(events).toHaveLength(1);
     expect(events[0]?.event).toBe('pr-checks');
