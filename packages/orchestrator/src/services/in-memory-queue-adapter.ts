@@ -31,6 +31,8 @@ export class InMemoryQueueAdapter implements QueueManager {
   private readonly deadLetter: SerializedQueueItem[] = [];
   /** Track attempt counts across claim/release cycles by itemKey */
   private readonly attemptCounts = new Map<string, number>();
+  /** In-flight index: itemKeys currently pending or claimed */
+  private readonly inFlightSet = new Set<string>();
 
   constructor(logger: Logger, config?: Pick<DispatchConfig, 'maxRetries'>) {
     this.logger = logger;
@@ -69,11 +71,41 @@ export class InMemoryQueueAdapter implements QueueManager {
     };
 
     this.insertSorted(serialized);
+    this.inFlightSet.add(itemKey);
 
     this.logger.info(
       { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority },
       'Item enqueued to in-memory queue'
     );
+  }
+
+  async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
+    const itemKey = buildItemKey(item);
+
+    if (this.inFlightSet.has(itemKey)) {
+      return false;
+    }
+
+    const priority = getPriorityScore(item.queueReason);
+    const serialized: SerializedQueueItem = {
+      ...item,
+      priority,
+      attemptCount: 0,
+      itemKey,
+    };
+
+    this.inFlightSet.add(itemKey);
+    this.insertSorted(serialized);
+
+    this.logger.info(
+      { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
+      'Item enqueued to in-memory queue (in-flight-checked)'
+    );
+    return true;
+  }
+
+  async hasInFlight(itemKey: string): Promise<boolean> {
+    return this.inFlightSet.has(itemKey);
   }
 
   async claim(workerId: string): Promise<QueueItem | null> {
@@ -130,13 +162,14 @@ export class InMemoryQueueAdapter implements QueueManager {
     this.attemptCounts.set(itemKey, attemptCount);
 
     if (attemptCount >= this.maxRetries) {
-      // Dead-letter: too many retries
+      // Dead-letter: too many retries. Remove from in-flight index.
       const deadLetterItem: SerializedQueueItem = {
         ...item,
         attemptCount,
         itemKey,
       };
       this.deadLetter.push(deadLetterItem);
+      this.inFlightSet.delete(itemKey);
       this.logger.warn(
         { workerId, itemKey, attemptCount, maxRetries: this.maxRetries },
         'Item dead-lettered after max retries'
@@ -170,12 +203,13 @@ export class InMemoryQueueAdapter implements QueueManager {
       }
     }
 
-    // Clean up attempt tracking
+    // Clean up attempt tracking and in-flight index
     this.attemptCounts.delete(itemKey);
+    this.inFlightSet.delete(itemKey);
 
     this.logger.info(
       { workerId, itemKey },
-      'Item completed and removed from claimed set'
+      'Item completed and removed from claimed set + in-flight index'
     );
   }
 

@@ -7,7 +7,6 @@ import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSett
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
 import type { QueueItem } from '../types/index.js';
-import type { PhaseTracker } from '../types/monitor.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -112,8 +111,6 @@ export interface ClaudeCliWorkerDeps {
   jobEventEmitter?: JobEventEmitter;
   /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
   tokenProvider?: () => Promise<string | undefined>;
-  /** Redis-backed phase tracker for paired-clear on pause (#849). Absent → paired-clear is skipped. */
-  phaseTracker?: PhaseTracker;
 }
 
 /**
@@ -136,7 +133,6 @@ export class ClaudeCliWorker {
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly tokenProvider?: () => Promise<string | undefined>;
-  private readonly phaseTracker?: PhaseTracker;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -150,7 +146,6 @@ export class ClaudeCliWorker {
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
     this.tokenProvider = deps.tokenProvider;
-    this.phaseTracker = deps.phaseTracker;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -409,17 +404,12 @@ export class ClaudeCliWorker {
       });
 
       // 7. Create sub-components
-      const phaseTracker = this.phaseTracker;
       labelManager = new LabelManager(
         github,
         item.owner,
         item.repo,
         item.issueNumber,
         workerLogger,
-        phaseTracker
-          ? (gateSuffix: string) =>
-              phaseTracker.clear(item.owner, item.repo, item.issueNumber, `resume:${gateSuffix}`)
-          : undefined,
       );
 
       const stageCommentManager = new StageCommentManager(

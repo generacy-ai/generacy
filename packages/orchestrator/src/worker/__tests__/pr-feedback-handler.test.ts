@@ -29,7 +29,7 @@ const mockLogger = {
 // ---------------------------------------------------------------------------
 const mockGitHub = {
   getPullRequest: vi.fn(),
-  getPRComments: vi.fn(),
+  getPRReviewThreads: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
   commit: vi.fn(),
@@ -131,14 +131,25 @@ function createMockPR(branchName = 'feature-branch') {
   };
 }
 
+// Returns a ReviewThread wrapping a single root Comment. The `resolved` flag
+// becomes `isResolved` on the thread (#861 semantics). Call sites that
+// previously did `.mockResolvedValue([createMockComment(1, false), ...])` now
+// yield a `ReviewThread[]` — matches the shape `getPRReviewThreads` returns.
 function createMockComment(id: number, resolved = false, path?: string, line?: number) {
   return {
-    id,
-    path: path || 'src/index.ts',
-    line: line || 10,
-    body: `Review comment ${id}`,
-    author: 'reviewer',
-    resolved,
+    rootCommentId: id,
+    isResolved: resolved,
+    comments: [
+      {
+        id,
+        path: path || 'src/index.ts',
+        line: line || 10,
+        body: `Review comment ${id}`,
+        author: 'reviewer',
+        created_at: '',
+        updated_at: '',
+      },
+    ],
   };
 }
 
@@ -164,7 +175,7 @@ describe('PrFeedbackHandler', () => {
 
     // Default mock implementations
     mockGitHub.getPullRequest = vi.fn().mockResolvedValue(createMockPR());
-    mockGitHub.getPRComments = vi.fn().mockResolvedValue([]);
+    mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
     mockGitHub.getStatus = vi.fn().mockResolvedValue({ has_changes: false, staged: [], unstaged: [], untracked: [] });
     mockGitHub.stageAll = vi.fn().mockResolvedValue(undefined);
     mockGitHub.commit = vi.fn().mockResolvedValue(undefined);
@@ -203,7 +214,7 @@ describe('PrFeedbackHandler', () => {
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
       // All comments are resolved
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, true),
         createMockComment(2, true),
       ]);
@@ -234,7 +245,7 @@ describe('PrFeedbackHandler', () => {
         createMockComment(2, false, 'src/util.ts', 20),
       ];
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         ...unresolvedComments,
         createMockComment(3, true), // resolved, should be filtered out
       ]);
@@ -307,7 +318,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -348,7 +359,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -415,7 +426,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -445,7 +456,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1, 2, 3] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
         createMockComment(2, false),
         createMockComment(3, false),
@@ -485,7 +496,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -519,7 +530,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -549,7 +560,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -587,7 +598,7 @@ describe('PrFeedbackHandler', () => {
         createMockComment(2, false, 'src/util.ts', 20),
       ];
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue(comments);
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue(comments);
 
       const { handle } = createMockProcess(0, 50);
       spawnFn.mockReturnValue(handle);
@@ -616,9 +627,9 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
-        { ...createMockComment(1, false), author: 'alice' },
-      ]);
+      const thread = createMockComment(1, false);
+      thread.comments[0]!.author = 'alice';
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([thread]);
 
       const { handle } = createMockProcess(0, 50);
       spawnFn.mockReturnValue(handle);
@@ -638,7 +649,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -663,7 +674,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -696,7 +707,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1, 2] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
         createMockComment(2, false),
       ]);
@@ -728,7 +739,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -774,7 +785,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
 
@@ -824,7 +835,7 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
-      mockGitHub.getPRComments = vi.fn().mockResolvedValue([
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
       mockGitHub.getStatus = vi.fn().mockResolvedValue({

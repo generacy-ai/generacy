@@ -55,8 +55,14 @@ function makeConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
 vi.mock('@generacy-ai/workflow-engine', () => ({
   createGitHubClient: vi.fn(() => ({
     getPullRequest: vi.fn().mockResolvedValue({ head: { ref: 'test-branch' } }),
-    getPRComments: vi.fn().mockResolvedValue([
-      { id: 1, path: 'src/test.ts', line: 10, body: 'Fix this', author: 'reviewer', resolved: false },
+    getPRReviewThreads: vi.fn().mockResolvedValue([
+      {
+        rootCommentId: 1,
+        isResolved: false,
+        comments: [
+          { id: 1, path: 'src/test.ts', line: 10, body: 'Fix this', author: 'reviewer', created_at: '', updated_at: '' },
+        ],
+      },
     ]),
     getStatus: vi.fn().mockResolvedValue({ has_changes: false, staged: [], unstaged: [], untracked: [] }),
     removeLabels: vi.fn().mockResolvedValue(undefined),

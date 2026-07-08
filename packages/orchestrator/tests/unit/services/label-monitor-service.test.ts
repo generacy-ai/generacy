@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { LabelMonitorService } from '../../../src/services/label-monitor-service.js';
-import type { QueueAdapter, PhaseTracker, QueueItem } from '../../../src/types/index.js';
+import type { QueueManager, PhaseTracker, QueueItem } from '../../../src/types/index.js';
 import type { MonitorConfig, RepositoryConfig } from '../../../src/config/schema.js';
 
 function createMockLogger() {
@@ -21,9 +21,17 @@ function createMockPhaseTracker(overrides: Partial<PhaseTracker> = {}): PhaseTra
   };
 }
 
-function createMockQueueAdapter(overrides: Partial<QueueAdapter> = {}): QueueAdapter {
+function createMockQueueAdapter(overrides: Partial<QueueManager> = {}): QueueManager {
   return {
     enqueue: vi.fn().mockResolvedValue(undefined),
+    enqueueIfAbsent: vi.fn().mockResolvedValue(true),
+    hasInFlight: vi.fn().mockResolvedValue(false),
+    claim: vi.fn().mockResolvedValue(null),
+    release: vi.fn().mockResolvedValue(undefined),
+    complete: vi.fn().mockResolvedValue(undefined),
+    getQueueDepth: vi.fn().mockResolvedValue(0),
+    getQueueItems: vi.fn().mockResolvedValue([]),
+    getActiveWorkerCount: vi.fn().mockResolvedValue(0),
     ...overrides,
   };
 }
@@ -52,7 +60,7 @@ const defaultRepos: RepositoryConfig[] = [
 describe('LabelMonitorService', () => {
   let logger: ReturnType<typeof createMockLogger>;
   let phaseTracker: PhaseTracker;
-  let queueAdapter: QueueAdapter;
+  let queueAdapter: QueueManager;
   let mockClient: ReturnType<typeof createMockGitHubClient>;
   let clientFactory: ReturnType<typeof vi.fn>;
   let service: LabelMonitorService;
@@ -339,7 +347,7 @@ describe('LabelMonitorService', () => {
 
       await service.processLabelEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueAdapter.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           command: 'continue',
           workflowName: 'speckit-feature',
@@ -380,7 +388,7 @@ describe('LabelMonitorService', () => {
 
       await service.processLabelEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueAdapter.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           command: 'continue',
           workflowName: 'speckit-feature',
@@ -389,7 +397,7 @@ describe('LabelMonitorService', () => {
       expect(logger.warn).toHaveBeenCalled();
     });
 
-    it('should use resume dedup key prefix', async () => {
+    it('should route resume enqueue through enqueueIfAbsent (in-flight dedupe)', async () => {
       const event = {
         type: 'resume' as const,
         owner: 'owner',
@@ -401,10 +409,49 @@ describe('LabelMonitorService', () => {
         issueLabels: ['completed:spec-review', 'waiting-for:spec-review', 'workflow:speckit-feature'],
       };
 
-      await service.processLabelEvent(event);
+      const result = await service.processLabelEvent(event);
 
-      expect(phaseTracker.isDuplicate).toHaveBeenCalledWith(
-        'owner', 'repo', 42, 'resume:spec-review',
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueueIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'owner',
+          repo: 'repo',
+          issueNumber: 42,
+          command: 'continue',
+        }),
+      );
+      // Resume events no longer touch phaseTracker at all.
+      expect(phaseTracker.isDuplicate).not.toHaveBeenCalled();
+      expect(phaseTracker.markProcessed).not.toHaveBeenCalled();
+      // Plain enqueue not called for resume path.
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should drop resume when in-flight (enqueueIfAbsent returns false)', async () => {
+      (queueAdapter.enqueueIfAbsent as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+
+      const event = {
+        type: 'resume' as const,
+        owner: 'owner',
+        repo: 'repo',
+        issueNumber: 42,
+        labelName: 'completed:spec-review',
+        parsedName: 'spec-review',
+        source: 'webhook' as const,
+        issueLabels: ['completed:spec-review', 'waiting-for:spec-review', 'workflow:speckit-feature'],
+      };
+
+      const result = await service.processLabelEvent(event);
+
+      expect(result).toBe(false);
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({
+          itemKey: 'owner/repo#42',
+          gate: 'spec-review',
+          reason: 'in-flight',
+          source: 'webhook',
+        }),
+        'Dropping resume event (item already in flight)',
       );
     });
   });
@@ -429,7 +476,7 @@ describe('LabelMonitorService', () => {
 
       expect(result).toBe(true);
       expect(mockClient.getIssue).toHaveBeenCalledWith('owner', 'repo', 42);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueAdapter.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           command: 'continue',
           issueNumber: 42,
@@ -469,8 +516,8 @@ describe('LabelMonitorService', () => {
       );
     });
 
-    it('should respect dedup when re-fetch finds a valid pair', async () => {
-      (phaseTracker.isDuplicate as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    it('should respect in-flight dedup when re-fetch finds a valid pair', async () => {
+      (queueAdapter.enqueueIfAbsent as ReturnType<typeof vi.fn>).mockResolvedValue(false);
       (mockClient.getIssue as ReturnType<typeof vi.fn>).mockResolvedValue({
         labels: [
           { name: 'completed:spec-review', color: '' },
@@ -588,10 +635,9 @@ describe('LabelMonitorService', () => {
   // ==========================================================================
 
   describe('deduplication integration', () => {
-    it('should skip duplicate events via phase tracker (resume events only)', async () => {
-      // Process events always clear dedup first, so they won't be blocked.
-      // Resume events don't clear, so they can be deduplicated.
-      (phaseTracker.isDuplicate as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    it('should drop resume when in-flight (queue enqueueIfAbsent returns false)', async () => {
+      // Resume events dedupe via in-flight queue SET, not phaseTracker.
+      (queueAdapter.enqueueIfAbsent as ReturnType<typeof vi.fn>).mockResolvedValue(false);
 
       const event = {
         type: 'resume' as const,
@@ -608,8 +654,9 @@ describe('LabelMonitorService', () => {
 
       expect(result).toBe(false);
       expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      // Resume never touches phaseTracker under new design.
+      expect(phaseTracker.isDuplicate).not.toHaveBeenCalled();
       expect(phaseTracker.markProcessed).not.toHaveBeenCalled();
-      // clear should NOT be called for resume events
       expect(phaseTracker.clear).not.toHaveBeenCalled();
     });
 
@@ -914,11 +961,11 @@ describe('LabelMonitorService', () => {
       await service.poll();
 
       // Issue 50 (assigned to my-user) should be enqueued as a resume
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueAdapter.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({ issueNumber: 50, command: 'continue' }),
       );
       // Issue 60 (assigned to other-user) should be filtered out
-      expect(queueAdapter.enqueue).not.toHaveBeenCalledWith(
+      expect(queueAdapter.enqueueIfAbsent).not.toHaveBeenCalledWith(
         expect.objectContaining({ issueNumber: 60 }),
       );
     });

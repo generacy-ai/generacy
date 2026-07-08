@@ -314,7 +314,7 @@ describe('InMemoryQueueAdapter', () => {
 
       expect(logger.info).toHaveBeenCalledWith(
         { workerId: 'worker-1', itemKey: 'test-org/test-repo#42' },
-        'Item completed and removed from claimed set'
+        'Item completed and removed from claimed set + in-flight index'
       );
     });
 

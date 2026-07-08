@@ -129,19 +129,24 @@ export class PrFeedbackHandler {
         throw new Error(`Failed to switch to branch ${branchName}: ${String(error)}`);
       }
 
-      // 3. Fetch fresh unresolved review threads
+      // 3. Fetch fresh unresolved review threads via GraphQL (#861).
+      // REST never populated `.resolved`, so the old filter always emitted []
+      // and the handler no-op'd. GraphQL exposes thread-level resolution.
       let allComments: Comment[];
       let unresolvedComments: Comment[];
       try {
-        allComments = await github.getPRComments(owner, repo, prNumber);
+        const threads = await github.getPRReviewThreads(owner, repo, prNumber);
+        const unresolvedThreads = threads.filter(t => !t.isResolved);
+        allComments = threads.flatMap(t => t.comments);
+        const unresolvedThreadComments = unresolvedThreads.flatMap(t => t.comments);
 
         // Author-trust gating (#842). Log each skip and drop untrusted
         // comments before the CLI ever sees them. `pr-feedback` surface
         // honors widen-config from .agency/comment-trust.yaml.
         const trustConfig = tryLoadCommentTrustConfig(checkoutPath, this.logger);
         const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
-        const trustedComments: Comment[] = [];
-        for (const c of allComments) {
+        const trustedUnresolved: Comment[] = [];
+        for (const c of unresolvedThreadComments) {
           const decision = isTrustedCommentAuthor(
             c,
             'pr-feedback',
@@ -152,7 +157,7 @@ export class PrFeedbackHandler {
             },
           );
           if (decision.trusted) {
-            trustedComments.push(c);
+            trustedUnresolved.push(c);
           } else {
             this.logger.info(
               {
@@ -168,23 +173,23 @@ export class PrFeedbackHandler {
           }
         }
 
-        unresolvedComments = trustedComments.filter((c) => c.resolved === false);
+        unresolvedComments = trustedUnresolved;
 
         this.logger.info(
           {
             prNumber,
             totalComments: allComments.length,
-            trustedComments: trustedComments.length,
-            unresolved: unresolvedComments.length,
+            unresolvedThreads: unresolvedThreads.length,
+            trustedUnresolvedComments: trustedUnresolved.length,
           },
-          'Fetched PR review comments (author-trust filtered)',
+          'Fetched PR review threads (author-trust filtered)',
         );
       } catch (error) {
         this.logger.error(
           { error: String(error), prNumber, owner, repo },
-          'Failed to fetch PR review comments',
+          'Failed to fetch PR review threads',
         );
-        throw new Error(`Failed to fetch review comments for PR #${prNumber}: ${String(error)}`);
+        throw new Error(`Failed to fetch review threads for PR #${prNumber}: ${String(error)}`);
       }
 
       // 4. If no unresolved threads, remove label and return early

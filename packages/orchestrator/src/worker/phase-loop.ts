@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageCommentData, StageType } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageType, CommandExitEvidence } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs } from './config.js';
@@ -16,6 +16,7 @@ import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
 import { boundStderrTail } from './stderr-tail.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
+import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -93,6 +94,10 @@ export class PhaseLoop {
     const baseMergeRunner: BaseMergeRunner = deps.baseMergeRunner ?? performBaseMerge;
     const results: PhaseResult[] = [];
 
+    // Mint a stable per-invocation runId used inside the failure-alert marker.
+    // See specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
+    const runId = randomUUID();
+
     // Track session ID across phases for conversation resume.
     // When a CLI phase completes, its session ID is passed to the next phase
     // so Claude CLI can reuse the conversation (keeping MCP servers warm and
@@ -111,7 +116,7 @@ export class PhaseLoop {
     }
 
     this.logger.info(
-      { startPhase: context.startPhase, startIndex, totalPhases: sequence.length },
+      { startPhase: context.startPhase, startIndex, totalPhases: sequence.length, runId },
       'Starting phase loop',
     );
 
@@ -212,17 +217,19 @@ export class PhaseLoop {
               );
               results.push(installResult);
               await labelManager.onError(phase);
+              const evidence = this.buildErrorEvidence(
+                config.preValidateCommand,
+                installResult,
+                DEFAULT_INSTALL_TIMEOUT_MS,
+              );
               await stageCommentManager.updateStageComment({
                 stage,
                 status: 'error',
                 phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
                 startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-                errorEvidence: this.buildErrorEvidence(
-                  config.preValidateCommand,
-                  installResult,
-                  DEFAULT_INSTALL_TIMEOUT_MS,
-                ),
+                errorEvidence: evidence,
               });
+              await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
           }
@@ -290,16 +297,18 @@ export class PhaseLoop {
           output: [],
           error: { message: String(error), stderr: '', phase },
         };
+        const evidence = this.buildErrorEvidence(
+          phase === 'validate' ? config.validateCommand : phase,
+          syntheticResult,
+        );
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
           phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-          errorEvidence: this.buildErrorEvidence(
-            phase === 'validate' ? config.validateCommand : phase,
-            syntheticResult,
-          ),
+          errorEvidence: evidence,
         });
+        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
         throw error;
       }
 
@@ -335,6 +344,15 @@ export class PhaseLoop {
             { phase, tasksRemaining, lastTasksRemaining },
             'Implement increment made no progress — failing to prevent infinite loop',
           );
+          // FR-007: set result.error BEFORE evidence derivation so the alert
+          // and stage-comment evidence blocks have diagnostic content.
+          result.success = false;
+          result.error = {
+            message: 'Implement increment made no progress — aborting to prevent infinite loop',
+            stderr: `no progress: tasks_remaining stayed at ${tasksRemaining} across two increments`,
+            phase,
+          };
+          const evidence = this.buildErrorEvidence('implement (no-progress guard)', result);
           await labelManager.onError(phase);
           await stageCommentManager.updateStageComment({
             stage,
@@ -342,13 +360,9 @@ export class PhaseLoop {
             phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
             startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
             prUrl: context.prUrl,
+            errorEvidence: evidence,
           });
-          result.success = false;
-          result.error = {
-            message: 'Implement increment made no progress — aborting to prevent infinite loop',
-            stderr: '',
-            phase,
-          };
+          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
         lastTasksRemaining = tasksRemaining;
@@ -413,19 +427,21 @@ export class PhaseLoop {
         }
 
         await labelManager.onError(phase);
+        const evidence = this.buildErrorEvidence(
+          phase === 'validate' ? config.validateCommand : phase,
+          result,
+          phase === 'validate'
+            ? DEFAULT_VALIDATE_TIMEOUT_MS
+            : resolvePhaseTimeoutMs(config, phase as Exclude<WorkflowPhase, 'validate'>),
+        );
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
           phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
-          errorEvidence: this.buildErrorEvidence(
-            phase === 'validate' ? config.validateCommand : phase,
-            result,
-            phase === 'validate'
-              ? DEFAULT_VALIDATE_TIMEOUT_MS
-              : resolvePhaseTimeoutMs(config, phase as Exclude<WorkflowPhase, 'validate'>),
-          ),
+          errorEvidence: evidence,
         });
+        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
 
@@ -463,17 +479,19 @@ export class PhaseLoop {
             stderr: '',
             phase,
           };
+          const evidence = this.buildErrorEvidence(
+            phase === 'validate' ? config.validateCommand : phase,
+            result,
+          );
           await stageCommentManager.updateStageComment({
             stage,
             status: 'error',
             phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
             startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
             prUrl: context.prUrl,
-            errorEvidence: this.buildErrorEvidence(
-              phase === 'validate' ? config.validateCommand : phase,
-              result,
-            ),
+            errorEvidence: evidence,
           });
+          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
 
@@ -491,17 +509,19 @@ export class PhaseLoop {
             stderr: '',
             phase,
           };
+          const evidence = this.buildErrorEvidence(
+            phase === 'validate' ? config.validateCommand : phase,
+            result,
+          );
           await stageCommentManager.updateStageComment({
             stage,
             status: 'error',
             phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
             startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
             prUrl: context.prUrl,
-            errorEvidence: this.buildErrorEvidence(
-              phase === 'validate' ? config.validateCommand : phase,
-              result,
-            ),
+            errorEvidence: evidence,
           });
+          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
       }
@@ -823,7 +843,7 @@ export class PhaseLoop {
     command: string,
     result: PhaseResult,
     resolvedTimeoutMs?: number,
-  ): StageCommentData['errorEvidence'] {
+  ): CommandExitEvidence {
     const message = result.error?.message ?? '';
     const exitDescriptor =
       message.includes('timed out') && resolvedTimeoutMs !== undefined

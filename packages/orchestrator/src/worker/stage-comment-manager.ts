@@ -1,12 +1,6 @@
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
-import type { StageType, StageCommentData, Logger } from './types.js';
-import { STAGE_MARKERS } from './types.js';
-
-/** Narrow variant of `StageCommentData.errorEvidence` for the #847 command-exit block. */
-type CommandExitEvidence = Extract<
-  NonNullable<StageCommentData['errorEvidence']>,
-  { command: string }
->;
+import type { StageType, StageCommentData, Logger, FailureAlertData, CommandExitEvidence } from './types.js';
+import { STAGE_MARKERS, FAILURE_ALERT_MARKER_PREFIX } from './types.js';
 
 /** Narrow variant of `StageCommentData.errorEvidence` for the #864 merge-conflict block. */
 type MergeConflictEvidence = Extract<
@@ -248,5 +242,73 @@ export class StageCommentManager {
     }
     lines.push('');
     lines.push('</details>');
+  }
+
+  /**
+   * Post a bottom-of-thread failure-alert comment on the issue.
+   *
+   * On a terminal-failure occurrence, `phase-loop.ts` calls this to surface a
+   * fresh comment (fires a GitHub notification) carrying a summary line + a
+   * collapsible <details> block with the verbatim buildErrorEvidence output.
+   *
+   * Deduplicated via marker scan: a matching `(stage, runId)` marker in an
+   * existing comment suppresses re-posting. See
+   * specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
+   */
+  async postFailureAlert(data: FailureAlertData): Promise<void> {
+    const marker = `${FAILURE_ALERT_MARKER_PREFIX}${data.stage}:${data.runId} -->`;
+
+    const comments = await this.github.getIssueComments(
+      this.owner,
+      this.repo,
+      this.issueNumber,
+    );
+
+    const existing = comments.find((c) => c.body.includes(marker));
+    if (existing) {
+      this.logger.info(
+        { stage: data.stage, runId: data.runId, existingCommentId: existing.id },
+        'Failure alert already exists — suppressing duplicate post',
+      );
+      return;
+    }
+
+    const body = this.renderFailureAlert(marker, data);
+    const created = await this.github.addIssueComment(
+      this.owner,
+      this.repo,
+      this.issueNumber,
+      body,
+    );
+
+    this.logger.info(
+      { stage: data.stage, runId: data.runId, commentId: created.id },
+      'Posted failure alert comment',
+    );
+  }
+
+  /**
+   * Render the failure-alert body per contract §"Alert body layout".
+   * Byte-exact: marker line, summary line, blank, <details> wrapper, fenced
+   * text block with backtick-neutralized stderr, closing </details>.
+   */
+  private renderFailureAlert(marker: string, data: FailureAlertData): string {
+    const evidence = data.evidence;
+    const lineCount = evidence.stderrTail.split('\n').length;
+    // Same ZWSP substitution used by appendEvidenceBlock — neutralize any
+    // ``` sequence inside stderrTail so the outer fenced block stays closed.
+    const safeStderr = evidence.stderrTail.replace(/```/g, '`​``');
+    return [
+      marker,
+      `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`,
+      '',
+      `<details><summary>stderr (last ${lineCount} lines)</summary>`,
+      '',
+      '```text',
+      safeStderr,
+      '```',
+      '',
+      '</details>',
+    ].join('\n');
   }
 }

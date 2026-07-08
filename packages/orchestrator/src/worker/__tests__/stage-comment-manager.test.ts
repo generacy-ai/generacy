@@ -1,8 +1,8 @@
 import { vi, describe, it, expect } from 'vitest';
 import { StageCommentManager } from '../stage-comment-manager.js';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
-import type { StageCommentData, Logger } from '../types.js';
-import { STAGE_MARKERS } from '../types.js';
+import type { StageCommentData, Logger, FailureAlertData } from '../types.js';
+import { STAGE_MARKERS, FAILURE_ALERT_MARKER_PREFIX } from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -180,5 +180,204 @@ describe('StageCommentManager.renderStageComment', () => {
       errorEvidence: { command: 'x', exitDescriptor: 'exit 1', stderrTail: 'y' },
     });
     expect(bodyError.split('\n')[0]).toBe(STAGE_MARKERS.implementation);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// postFailureAlert helper + fixtures
+// ---------------------------------------------------------------------------
+
+const TEST_RUN_ID = '9e5c8a0d-755e-40b3-b0c3-43e849f0bb90';
+
+function makeAlertGithub(existingComments: { id: number; body: string }[] = []): {
+  github: GitHubClient;
+  getIssueComments: ReturnType<typeof vi.fn>;
+  addIssueComment: ReturnType<typeof vi.fn>;
+  updateComment: ReturnType<typeof vi.fn>;
+  lastAddedBody: () => string;
+} {
+  let lastBody = '';
+  const getIssueComments = vi.fn().mockResolvedValue(existingComments);
+  const addIssueComment = vi.fn().mockImplementation(
+    async (_o: string, _r: string, _i: number, body: string) => {
+      lastBody = body;
+      return { id: 999 };
+    },
+  );
+  const updateComment = vi.fn().mockResolvedValue(undefined);
+  const github = {
+    getIssueComments,
+    addIssueComment,
+    updateComment,
+  } as unknown as GitHubClient;
+  return { github, getIssueComments, addIssueComment, updateComment, lastAddedBody: () => lastBody };
+}
+
+const BASE_ALERT: FailureAlertData = {
+  stage: 'implementation',
+  runId: TEST_RUN_ID,
+  phase: 'validate',
+  evidence: {
+    command: 'pnpm test',
+    exitDescriptor: 'exit 1',
+    stderrTail: 'npm error Missing script: "test"',
+  },
+};
+
+describe('StageCommentManager.postFailureAlert', () => {
+  it('posts new comment with correct body bytes on first-time occurrence', async () => {
+    const { github, addIssueComment, lastAddedBody } = makeAlertGithub();
+    const logger = makeLogger();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, logger);
+
+    await manager.postFailureAlert(BASE_ALERT);
+
+    expect(addIssueComment).toHaveBeenCalledTimes(1);
+    const expected = [
+      `<!-- generacy:failure-alert:implementation:${TEST_RUN_ID} -->`,
+      '❌ **validate failed** — `pnpm test` exit 1.',
+      '',
+      '<details><summary>stderr (last 1 lines)</summary>',
+      '',
+      '```text',
+      'npm error Missing script: "test"',
+      '```',
+      '',
+      '</details>',
+    ].join('\n');
+    expect(lastAddedBody()).toBe(expected);
+  });
+
+  it('dedup — matching marker in existing comments → NO addIssueComment call, info log', async () => {
+    const marker = `<!-- generacy:failure-alert:implementation:${TEST_RUN_ID} -->`;
+    const { github, addIssueComment } = makeAlertGithub([{ id: 42, body: `${marker}\nprior alert body` }]);
+    const logger = makeLogger();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, logger);
+
+    await manager.postFailureAlert(BASE_ALERT);
+
+    expect(addIssueComment).not.toHaveBeenCalled();
+    const infoCalls = (logger.info as any).mock.calls;
+    const dedupCall = infoCalls.find((call: any[]) =>
+      typeof call[1] === 'string' && call[1] === 'Failure alert already exists — suppressing duplicate post',
+    );
+    expect(dedupCall).toBeDefined();
+    expect(dedupCall[0]).toMatchObject({ existingCommentId: 42 });
+  });
+
+  it('renders timeout exitDescriptor verbatim in the summary line', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'killed (SIGTERM) after 300000ms',
+        stderrTail: 'still running…',
+      },
+    });
+
+    expect(lastAddedBody()).toContain(
+      '❌ **validate failed** — `pnpm test` killed (SIGTERM) after 300000ms.',
+    );
+  });
+
+  it('renders abort exitDescriptor + empty stderr inside the fenced block', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence: {
+        command: 'validate',
+        exitDescriptor: 'aborted',
+        stderrTail: '(stderr empty)',
+      },
+    });
+
+    const body = lastAddedBody();
+    expect(body).toContain('❌ **validate failed** — `validate` aborted.');
+    expect(body).toContain('```text\n(stderr empty)\n```');
+  });
+
+  it('neutralizes backtick-poisoned stderr so the outer fenced block stays closed', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence: {
+        command: 'echo',
+        exitDescriptor: 'exit 1',
+        stderrTail: 'before\n```\nafter',
+      },
+    });
+
+    const body = lastAddedBody();
+    const openerIdx = body.indexOf('```text');
+    const afterOpener = openerIdx + '```text\n'.length;
+    const closerIdx = body.indexOf('\n```', afterOpener);
+    const inner = body.slice(afterOpener, closerIdx);
+    expect(inner.includes('```')).toBe(false);
+    expect(inner).toContain('`​``');
+  });
+
+  it('renders truncated stderr unchanged inside the fenced block', async () => {
+    const marker = '… truncated (kept last 30 lines / 4096 bytes) …';
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'exit 1',
+        stderrTail: `${marker}\nline body`,
+      },
+    });
+
+    expect(lastAddedBody()).toContain(`\`\`\`text\n${marker}\nline body\n\`\`\``);
+  });
+
+  it('marker shape matches the contract regex on the first line', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert(BASE_ALERT);
+
+    const firstLine = lastAddedBody().split('\n')[0];
+    expect(firstLine).toMatch(
+      /^<!-- generacy:failure-alert:(specification|planning|implementation):[0-9a-f-]{36} -->$/,
+    );
+    expect(firstLine!.startsWith(FAILURE_ALERT_MARKER_PREFIX)).toBe(true);
+  });
+
+  it('does not alter the canonical stage comment (FR-008)', async () => {
+    // Render a stage comment first (captures body), then post a failure alert,
+    // then re-render and assert byte-identity.
+    const before = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'exit 1',
+        stderrTail: 'oops',
+      },
+    });
+
+    const { github } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+    await manager.postFailureAlert(BASE_ALERT);
+
+    const after = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'exit 1',
+        stderrTail: 'oops',
+      },
+    });
+
+    expect(after).toBe(before);
   });
 });
