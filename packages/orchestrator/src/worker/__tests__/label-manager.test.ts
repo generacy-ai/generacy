@@ -1,5 +1,5 @@
 import { vi, describe, it, expect, beforeEach } from 'vitest';
-import { LabelManager, type ClearResumeDedupeCallback } from '../label-manager.js';
+import { LabelManager } from '../label-manager.js';
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { Logger } from '../types.js';
 
@@ -17,16 +17,13 @@ const mockLogger = {
   child: () => mockLogger,
 };
 
-function createLabelManager(
-  clearResumeDedupe?: ClearResumeDedupeCallback,
-): LabelManager {
+function createLabelManager(): LabelManager {
   return new LabelManager(
     mockGithub as unknown as GitHubClient,
     'owner',
     'repo',
     42,
     mockLogger as unknown as Logger,
-    clearResumeDedupe,
   );
 }
 
@@ -121,132 +118,6 @@ describe('LabelManager', () => {
       ]);
     });
 
-    // Paired-clear (#849): DEL of `phase-tracker:.../resume:<gate>` paired to
-    // the pause lifecycle. Covers FR-001, FR-002, FR-003, FR-008, FR-009,
-    // FR-010, FR-011.
-    describe('paired resume-dedupe clear', () => {
-      it('invokes clearResumeDedupe with gate suffix after successful onGateHit', async () => {
-        const clearStub = vi.fn().mockResolvedValue(undefined);
-        const lm = createLabelManager(clearStub);
-
-        await lm.onGateHit('implement', 'waiting-for:implementation-review');
-
-        expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
-          'waiting-for:implementation-review',
-          'agent:paused',
-        ]);
-        expect(clearStub).toHaveBeenCalledTimes(1);
-        expect(clearStub).toHaveBeenCalledWith('implementation-review');
-        // Ordering: label-apply must precede paired-clear.
-        const addLabelsOrder = mockGithub.addLabels.mock.invocationCallOrder[0]!;
-        const clearOrder = clearStub.mock.invocationCallOrder[0]!;
-        expect(clearOrder).toBeGreaterThan(addLabelsOrder);
-      });
-
-      it('invokes clearResumeDedupe on every onGateHit call (second pause in same cycle)', async () => {
-        const clearStub = vi.fn().mockResolvedValue(undefined);
-        const lm = createLabelManager(clearStub);
-
-        await lm.onGateHit('implement', 'waiting-for:implementation-review');
-        await lm.onGateHit('implement', 'waiting-for:implementation-review');
-
-        expect(clearStub).toHaveBeenCalledTimes(2);
-        expect(clearStub).toHaveBeenNthCalledWith(1, 'implementation-review');
-        expect(clearStub).toHaveBeenNthCalledWith(2, 'implementation-review');
-      });
-
-      it('does NOT invoke clearResumeDedupe when addLabels exhausts retries', async () => {
-        const clearStub = vi.fn().mockResolvedValue(undefined);
-        const lm = createLabelManager(clearStub);
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (lm as any).sleep = vi.fn().mockResolvedValue(undefined);
-        mockGithub.addLabels.mockRejectedValue(new Error('GitHub API 503'));
-
-        await expect(
-          lm.onGateHit('implement', 'waiting-for:implementation-review'),
-        ).rejects.toThrow('GitHub API 503');
-
-        expect(mockGithub.addLabels).toHaveBeenCalledTimes(3);
-        expect(clearStub).not.toHaveBeenCalled();
-      });
-
-      it('swallows clearResumeDedupe rejection and still resolves', async () => {
-        const clearStub = vi
-          .fn()
-          .mockRejectedValue(new Error('Redis timeout'));
-        const lm = createLabelManager(clearStub);
-
-        await expect(
-          lm.onGateHit('implement', 'waiting-for:implementation-review'),
-        ).resolves.toBeUndefined();
-
-        expect(clearStub).toHaveBeenCalledOnce();
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            phase: 'implement',
-            gateLabel: 'waiting-for:implementation-review',
-            owner: 'owner',
-            repo: 'repo',
-            issueNumber: 42,
-            error: expect.stringContaining('Redis timeout'),
-          }),
-          expect.stringContaining('Failed to clear paired resume dedupe on pause'),
-        );
-      });
-
-      it('logs info on successful paired-clear', async () => {
-        const clearStub = vi.fn().mockResolvedValue(undefined);
-        const lm = createLabelManager(clearStub);
-
-        await lm.onGateHit('implement', 'waiting-for:implementation-review');
-
-        expect(mockLogger.info).toHaveBeenCalledWith(
-          {
-            phase: 'implement',
-            gateLabel: 'waiting-for:implementation-review',
-            owner: 'owner',
-            repo: 'repo',
-            issueNumber: 42,
-          },
-          'Cleared paired resume dedupe on pause',
-        );
-      });
-
-      it('absent callback → no paired-clear, no log, pause unchanged', async () => {
-        const lm = createLabelManager();
-
-        await lm.onGateHit('implement', 'waiting-for:implementation-review');
-
-        expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
-          'waiting-for:implementation-review',
-          'agent:paused',
-        ]);
-        // No paired-clear info or warn log emitted.
-        const infoCalls = mockLogger.info.mock.calls.map((c) => c[1] ?? c[0]);
-        const warnCalls = mockLogger.warn.mock.calls.map((c) => c[1] ?? c[0]);
-        expect(infoCalls).not.toContain('Cleared paired resume dedupe on pause');
-        expect(
-          warnCalls.some(
-            (msg) =>
-              typeof msg === 'string' &&
-              msg.includes('Failed to clear paired resume dedupe on pause'),
-          ),
-        ).toBe(false);
-      });
-
-      it('strips waiting-for: prefix correctly (and defensively passes through bare suffix)', async () => {
-        const clearStub = vi.fn().mockResolvedValue(undefined);
-        const lm = createLabelManager(clearStub);
-
-        await lm.onGateHit('clarify', 'waiting-for:clarify-review');
-        expect(clearStub).toHaveBeenLastCalledWith('clarify-review');
-
-        await lm.onGateHit('clarify', 'clarify-review');
-        expect(clearStub).toHaveBeenLastCalledWith('clarify-review');
-
-        expect(clearStub).toHaveBeenCalledTimes(2);
-      });
-    });
   });
 
   describe('onError', () => {
