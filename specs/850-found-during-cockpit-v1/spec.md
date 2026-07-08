@@ -50,12 +50,12 @@ This spec covers (a) routing `advance` through `resolveIssueContext`, (b) refres
 | ID    | Requirement | Priority | Notes |
 |-------|-------------|----------|-------|
 | FR-001 | `cockpit advance` MUST resolve its issue-ref argument via `resolveIssueContext` (not `parseIssueRef` alone), matching `status`/`watch`/`queue`. | P1 | Callsite: `packages/generacy/src/cli/commands/cockpit/advance.ts:108`. |
-| FR-002 | The bare-number rejection message in `resolver.ts` MUST NOT reference `cockpit.repos` or "repos are not configured". It MUST enumerate the accepted forms (`<owner>/<repo>#N`, full URL, bare number when cwd origin resolves). | P1 | Current copy: `packages/generacy/src/cli/commands/cockpit/resolver.ts:101-102`. |
+| FR-002 | The bare-number rejection message in `resolver.ts` MUST NOT reference `cockpit.repos` or "repos are not configured". It MUST enumerate the accepted forms (`<owner>/<repo>#N`, full URL, bare number when cwd origin resolves) as a single inline sentence. | P1 | Current copy: `packages/generacy/src/cli/commands/cockpit/resolver.ts:101-102`. Per Q2=C: after the refactor the message is thrown by `resolveIssueContext`'s origin-inference failure path, not by `parseIssueRef`. Per Q4=A: single inline sentence, form: `bare issue number "N" is not accepted here. Accepted: <owner>/<repo>#N, a full issue URL, or a bare number inside a checkout with a resolvable GitHub origin.` |
 | FR-003 | `cockpit advance <bare-number>` MUST succeed when run from inside a checkout whose git origin resolves to a GitHub `owner/repo`. | P1 | Cwd-origin inference already implemented for other verbs via `resolveIssueContext`. |
 | FR-004 | `cockpit advance <bare-number>` MUST fail with the refreshed message (FR-002) when cwd origin cannot be resolved. | P1 | Fail-closed: no silent guess. |
 | FR-005 | Every remaining cockpit subcommand that takes an issue-ref argument MUST also route through `resolveIssueContext`. | P1 | Audit `context.ts:156` (currently calls `parseIssueRef` directly) and any other callsite; migrate as needed. |
-| FR-006 | The unified-grammar invariant MUST be enforced by test(s) that fail if a cockpit verb is wired to `parseIssueRef` without the cwd-origin resolver wrapping it. | P2 | Prevents future skew. |
-| FR-007 | Existing `parseIssueRef` unit tests (`__tests__/resolver.test.ts`) MUST be updated so that the "bare number rejected" case asserts the new copy — no test may still assert the stale "repos are not configured" string. | P1 | Prevents FR-002 regressing under a green test suite. |
+| FR-006 | The unified-grammar invariant MUST be enforced by an ESLint `no-restricted-imports` rule that disallows importing `parseIssueRef` outside `resolver.ts` (and its own tests). Rule message MUST name `resolveIssueContext` as the correct import. | P2 | Per Q1=C: enforced at lint time (CI already runs lint); fires in-editor at the moment of the mistake. `parseIssueRef` should also be marked `@internal`. Rule scope: `packages/generacy/src/cli/commands/cockpit/**` (allowed only in `resolver.ts` and `__tests__/`). |
+| FR-007 | Existing `parseIssueRef` unit tests (`__tests__/resolver.test.ts`) MUST be updated so that the bare-number path reflects the Q2=C refactor: `parseIssueRef` no longer throws on a bare number (it's a strict qualified-forms-only parser), and the "cannot resolve cwd origin" failure — now thrown by `resolveIssueContext` — asserts the new FR-002 copy. No test may still assert the stale "repos are not configured" string. | P1 | Prevents FR-002 regressing under a green test suite. |
 
 ## Success Criteria
 
@@ -63,16 +63,17 @@ This spec covers (a) routing `advance` through `resolveIssueContext`, (b) refres
 |--------|--------|--------|-------------|
 | SC-001 | `generacy cockpit advance 2 --gate implementation-review`, run from inside a resolvable checkout, succeeds. | Exit 0 (or exits with a downstream gate-related non-zero code — never with a ref-parse error). | Manual + integration test. |
 | SC-002 | Substring `repos are not configured` in `packages/generacy/src/`. | 0 occurrences. | `grep -r "repos are not configured" packages/generacy/src/` returns nothing. |
-| SC-003 | Substring `cockpit.repos` in `packages/generacy/src/`. | 0 occurrences (excluding historical spec docs under `specs/`). | grep. |
-| SC-004 | Cockpit verbs calling `parseIssueRef` without a `resolveIssueContext` wrapper. | 0 verbs. | Codebase audit + FR-006 test. |
+| SC-003 | Substring `cockpit.repos` in `packages/generacy/src/`. | 0 occurrences (excluding historical spec docs under `specs/`). | grep. Per Q3=A: whole of `packages/generacy/src/` is in scope — including `--help` / description text and in-`src/` docs strings, not just the error copy. Any live code reading `cockpit.repos` is dead code (should be zero post-#806); remove if trivial, split off if not. |
+| SC-004 | Cockpit verbs calling `parseIssueRef` without a `resolveIssueContext` wrapper. | 0 verbs. | Codebase audit + FR-006 ESLint rule. |
 | SC-005 | Every accepted-form assertion in `resolver.test.ts` (bare number, owner/repo#N, full URL) passes after the migration. | All green. | `pnpm test` in the affected package. |
 
 ## Assumptions
 
-- `resolveIssueContext` already implements the cwd-origin inference and error taxonomy needed here; no new helper is required (it landed in #822 and is used by `status`/`watch`/`queue`).
+- `resolveIssueContext` already implements the cwd-origin inference and error taxonomy needed here; no new helper is required (it landed in #822 and is used by `status`/`watch`/`queue`). Per Q2=C, `resolveIssueContext` will grow the `/^\d+$/` bare-number gate that currently lives inside `parseIssueRef`; the plan phase owns the exact split.
 - The `advance` command's downstream logic only needs the parsed `IssueRef` and the same wrapper metadata (`repo`, `gh`) that other verbs consume — swapping the resolver is a call-site change, not a signature overhaul.
 - Historical spec documents under `specs/` that mention `cockpit.repos` are frozen artifacts and NOT in scope for the SC-003 grep (grep is scoped to `packages/generacy/src/`).
 - `context.ts:156` currently calling `parseIssueRef` directly is either a genuine second offender (to be migrated under FR-005) or a case where the calling flow already provides cwd-origin inference upstream — planning phase will confirm which.
+- Per Q2=C: `parseIssueRef` will be narrowed to a strict qualified-forms-only parser (owner/repo#N and URL). It no longer throws a "bare issue number" error, and the string-based signaling regex at `resolver.ts:153` (`/bare issue number/.test(message)`) is deleted. This removes the control-flow-by-exception-message pattern rather than repinning or typing it.
 
 ## Out of Scope
 

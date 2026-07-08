@@ -18,7 +18,7 @@
 - B: **Per-verb runtime test** — for each cockpit subcommand that takes an issue ref, invoke it with a bare number (with a stubbed git-origin runner) and assert bare-number inference fires. Higher fidelity but higher maintenance (must be updated when new verbs land).
 - C: **Type-level / lint guard** — mark `parseIssueRef` as `@internal` and add an ESLint `no-restricted-imports` rule disallowing imports of `parseIssueRef` outside `resolver.ts`. Enforced at lint time, no vitest at all.
 
-**Answer**: *Pending*
+**Answer**: **C** — the ESLint `no-restricted-imports` guard, with the rule message naming `resolveIssueContext` as the correct import. It's the mechanism purpose-built for "this import is reserved": enforcement fires in-editor at the moment of the mistake, not at test time, and CI already runs lint on every package. A's scanner vitest checks the same thing one stage later with hand-rolled file walking; B's per-verb runtime matrix is the high-maintenance option for a regression class that is fundamentally about imports, not behavior.
 
 ---
 
@@ -33,7 +33,7 @@
 - B: **Typed error class** — introduce `BareNumberRefError extends Error` (or a sentinel field); `resolveIssueContext` uses `instanceof` / property check. Message copy becomes free to change without co-updating a regex.
 - C: **Move the bare-number gate out of `parseIssueRef`** — `parseIssueRef` becomes a "known-good forms only" parser. `resolveIssueContext` checks `BARE_NUMBER` itself before calling `parseIssueRef`. Deletes the fall-through-by-catch pattern entirely.
 
-**Answer**: *Pending*
+**Answer**: **C** — move the bare-number gate out of `parseIssueRef` entirely. `resolveIssueContext` checks `/^\d+$/` first and runs cwd-origin inference; `parseIssueRef` becomes a strict parser of qualified forms only. This deletes the control-flow-by-exception-message pattern rather than typing it (B) or re-pinning it (A) — after FR-002's copy rewrite there is simply no string or error class left to keep in sync, because the bare-number path never throws.
 
 ---
 
@@ -48,7 +48,7 @@
 - B: **Out of scope** — only the specific error copy called out in the spec (`resolver.ts:101-102`) is in scope. Any incidental `--help` references get a follow-up issue.
 - C: **In scope, but limited to `advance` and the other verbs migrated under FR-005** — i.e. audit help text for verbs we touch, ignore others.
 
-**Answer**: *Pending*
+**Answer**: **A** — the whole of `packages/generacy/src/` is in scope for the grep. Stale references to deleted config are defects wherever they sit, SC-003's grep already finds them all at zero marginal cost, and shipping a fix for "stale copy references removed config" while knowingly leaving sibling instances is this bug half-done. If the grep turns up actual code reading `cockpit.repos` (it shouldn't, post-#806), that's dead code — remove it here if trivial, split it out if not.
 
 ---
 
@@ -63,4 +63,4 @@
 - B: **Multi-line bulleted list** — leading sentence + one bullet per form. More readable at a terminal, noisier in log capture.
 - C: **Two-part message** — one-line summary line + a `hint:` line that references cwd-origin inference. Matches other cockpit error idioms (verify against existing verbs).
 
-**Answer**: *Pending*
+**Answer**: **A** — single inline sentence enumerating the three accepted forms. It stays one greppable unit in CI logs and matches the existing error style; the enumeration is short enough (`<owner>/<repo>#N`, a full issue URL, or a bare number inside a checkout with a GitHub origin) that multi-line formats buy scannability nothing. C would establish a new `hint:` idiom the cockpit errors don't currently have — not this fix's job.
