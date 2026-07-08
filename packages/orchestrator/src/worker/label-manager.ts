@@ -2,6 +2,14 @@ import type { GitHubClient } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger } from './types.js';
 
 /**
+ * Best-effort DEL of the paired `resume:<gate>` dedupe key.
+ * Invoked by `onGateHit` *after* the pause labels are successfully applied on GitHub.
+ * Errors thrown by this callback are caught and swallowed at warn — pause labels are
+ * the source of truth. Absent (undefined) → paired-clear is skipped (backwards-compat).
+ */
+export type ClearResumeDedupeCallback = (gate: string) => Promise<void>;
+
+/**
  * Manages label transitions on GitHub issues throughout the worker's phase loop.
  *
  * Each phase transition updates labels to reflect the current workflow state:
@@ -19,6 +27,7 @@ export class LabelManager {
     private readonly repo: string,
     private readonly issueNumber: number,
     private readonly logger: Logger,
+    private readonly clearResumeDedupe?: ClearResumeDedupeCallback,
   ) {}
 
   /**
@@ -94,6 +103,44 @@ export class LabelManager {
         'agent:paused',
       ]);
     });
+
+    // Paired-clear (#849): the retry block above returned success, so
+    // `waiting-for:<gate>` now exists on the issue in GitHub. Invalidate the
+    // prior cycle's resume dedupe so the NEXT resume event for this gate can
+    // enqueue. One-shot, best-effort. If addLabels exhausted retries and
+    // threw above, control leaves via throw and this line never runs — the
+    // dedupe survives to TTL for exactly one pause (asymmetric partial
+    // failure: never clear a dedupe for a pause that didn't manifest).
+    if (this.clearResumeDedupe) {
+      const gateSuffix = gateLabel.startsWith('waiting-for:')
+        ? gateLabel.slice('waiting-for:'.length)
+        : gateLabel;
+      try {
+        await this.clearResumeDedupe(gateSuffix);
+        this.logger.info(
+          {
+            phase,
+            gateLabel,
+            owner: this.owner,
+            repo: this.repo,
+            issueNumber: this.issueNumber,
+          },
+          'Cleared paired resume dedupe on pause',
+        );
+      } catch (error) {
+        this.logger.warn(
+          {
+            phase,
+            gateLabel,
+            owner: this.owner,
+            repo: this.repo,
+            issueNumber: this.issueNumber,
+            error: String(error),
+          },
+          'Failed to clear paired resume dedupe on pause (non-fatal, TTL backstop will absorb)',
+        );
+      }
+    }
   }
 
   /**
