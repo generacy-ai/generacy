@@ -26,6 +26,7 @@ function createMockDeps(): PhaseLoopDeps {
     } as any,
     stageCommentManager: {
       updateStageComment: vi.fn().mockResolvedValue(undefined),
+      postFailureAlert: vi.fn().mockResolvedValue(undefined),
     } as any,
     gateChecker: {
       checkGates: vi.fn().mockReturnValue([]),
