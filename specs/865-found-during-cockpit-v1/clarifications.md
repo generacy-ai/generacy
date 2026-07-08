@@ -15,7 +15,7 @@
 - B: Per phase name within an invocation. A validate-error alert is distinct from an implement-error alert even inside one run. Rare but possible if the loop swallows an error and continues.
 - C: Per `updateStageComment({ status: 'error' })` call. Simplest, but requires FR-004's de-duplication to actively suppress spam from repeated polls.
 
-**Answer**: *Pending*
+**Answer**: A — per `runPhaseLoop` invocation. Since the loop stops at the first phase failure, A and B coincide in practice; A is the simpler bright line, and a re-trigger after resume is correctly a *new* occurrence (the developer must act again, so a fresh alert is right).
 
 ---
 
@@ -27,7 +27,7 @@
 - B: In-process `Set` in `PhaseLoop`. Zero API cost; does not survive worker restarts mid-run (a restart during the error path could re-post).
 - C: Dedicated `phase-tracker`-style Redis key (consistent with the `phase-tracker:*` pattern used in #849's paired resume-dedupe clear). Consistent with cluster-side observability tooling; adds a small new key.
 
-**Answer**: *Pending*
+**Answer**: A — GitHub marker search, mirroring `findOrCreateStageComment`'s `STAGE_MARKERS` lookup. Survives worker restarts, no new infra, and the dedup state lives next to the thing it deduplicates. Avoid C: #862 is moving the orchestrator *away* from history-keyed `phase-tracker:*` dedupe keys — don't add a new one here.
 
 ---
 
@@ -39,7 +39,7 @@
 - B: One-line summary + link to the stage comment ("Validate failed — see stage comment for evidence"). No duplication; requires a click to see the diagnostic.
 - C: Short summary line + collapsible `<details>` block containing the full evidence. Compromise: readable on the timeline without dominating it, still standalone-readable when expanded.
 
-**Answer**: *Pending*
+**Answer**: C — short summary line + collapsible `<details>` with the full evidence. The summary line must name the phase, failing command, and exit descriptor so email/mobile previews carry the diagnosis without a click; the details block is verbatim `buildErrorEvidence` reuse. (This is what the issue's proposed rendering showed.)
 
 ---
 
@@ -51,7 +51,7 @@
 - B: One marker per stage — `<!-- generacy:failure-alert:<stage> -->`. The next occurrence would need to *edit* the existing marker-bearing comment, which defeats the fix (edits are silent).
 - C: One marker per occurrence, with a monotonic component — `<!-- generacy:failure-alert:<stage>:<iso-timestamp> -->`. Each occurrence gets a distinct marker so a fresh POST always fires a notification. Older alerts remain identifiable but do not block new posts. (Provisional pick — matches the fix's intent.)
 
-**Answer**: *Pending*
+**Answer**: A — `<!-- generacy:failure-alert:<stage>:<runId> -->` with a runId minted at `runPhaseLoop` start. C's timestamp only works if it's stable for the whole occurrence — a timestamp generated at post time breaks Q2's dedup within the same run. A runId is exactly "a stable per-occurrence token", i.e. C done right. A restart mid-run mints a new runId → possible second alert after a restart, which is acceptable (the phase genuinely re-ran).
 
 ---
 
@@ -63,4 +63,4 @@
 - B: Every failure occurrence, including transient retries, emits an alert. Louder but strictly accurate — subscribers see every failure, even the ones the worker will self-heal.
 - C: Only terminal failures alert, AND the "no-progress" site at `phase-loop.ts:~278` also gets an evidence block (currently missing per the Assumptions section) so that terminal alerts always carry a diagnostic. Slightly larger scope; closes the assumptions-section gap.
 
-**Answer**: *Pending*
+**Answer**: C — only terminal failures alert, and close the no-progress evidence gap at `phase-loop.ts:~278` in the same change. Otherwise some terminal alerts would fire with nothing to say, which is the shipped-but-useless variant of the bug this issue fixes. Intermediate retries stay silent (they're not actionable).
