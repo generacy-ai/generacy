@@ -3,12 +3,6 @@ import type { CommandRunner } from '@generacy-ai/cockpit';
 import { parseIssueRef, resolveIssueContext } from '../resolver.js';
 
 describe('parseIssueRef', () => {
-  it('refuses a bare number (repos are not configured)', () => {
-    expect(() => parseIssueRef('123')).toThrow(
-      /^parse issue: bare issue number "123" is not accepted/,
-    );
-  });
-
   it('parses owner/repo#number form', () => {
     expect(parseIssueRef('owner/repo#7')).toEqual({
       owner: 'owner',
@@ -104,7 +98,28 @@ describe('resolveIssueContext', () => {
       number: 55,
       nwo: 'foo/bar',
     });
+    // input.repo override MUST short-circuit git-origin inference (T043).
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  it('bare number with unresolvable origin fails with the FR-002 copy', async () => {
+    const runner: CommandRunner = vi.fn(async () => ({
+      stdout: '',
+      stderr: 'fatal: no such remote',
+      exitCode: 128,
+    }));
+    let caught: Error | null = null;
+    try {
+      await resolveIssueContext({ issue: '123', runner });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    const msg = caught!.message;
+    expect(msg).toMatch(/parse issue: bare issue number "123" is not accepted here\./);
+    expect(msg).toMatch(
+      /Accepted: <owner>\/<repo>#123, a full issue URL, or a bare number inside a checkout/,
+    );
   });
 
   it('fails loudly when bare number is passed and git origin lookup fails', async () => {
@@ -113,9 +128,21 @@ describe('resolveIssueContext', () => {
       stderr: 'fatal: no such remote',
       exitCode: 128,
     }));
-    await expect(
-      resolveIssueContext({ issue: '123', runner }),
-    ).rejects.toThrow(/could not infer owner\/repo/);
+    let caught: Error | null = null;
+    try {
+      await resolveIssueContext({ issue: '123', runner });
+    } catch (err) {
+      caught = err as Error;
+    }
+    expect(caught).not.toBeNull();
+    // FR-002 outer wrap comes first…
+    expect(caught!.message).toMatch(
+      /^parse issue: bare issue number "123" is not accepted here\./,
+    );
+    // …with the inner `could not infer` reason nested in parentheses.
+    expect(caught!.message).toMatch(
+      /\(cwd-origin inference failed: could not infer owner\/repo/,
+    );
   });
 
   it('bare "1" with ssh origin URL expands to owner/repo#1 (T007 integration)', async () => {

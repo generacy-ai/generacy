@@ -3,10 +3,12 @@
  * `{ ref, repo, gh }` bundle:
  *
  *   - `IssueRef`               — owner/repo/number/nwo
- *   - `parseIssueRef(input)`   — pure; throws on bare number
- *   - `resolveIssueContext(x)` — parses the ref (or infers repo from git origin
- *                                for a bare number) and returns a live
- *                                `{ ref, repo, gh }` bundle.
+ *   - `parseIssueRef(input)`   — @internal; strict qualified-forms parser
+ *                                (owner/repo#N and URL only). Cockpit callers
+ *                                MUST go through `resolveIssueContext`.
+ *   - `resolveIssueContext(x)` — gates bare numbers via cwd-origin inference,
+ *                                delegates qualified forms to `parseIssueRef`,
+ *                                and returns a live `{ ref, repo, gh }` bundle.
  *
  * Errors are loud (`parse issue: <reason>`) so callers can prefix
  * `Error: cockpit <verb>: ` per cli-surface.md.
@@ -69,14 +71,18 @@ function makeRef(owner: string, repo: string, number: number): IssueRef {
 }
 
 /**
- * Pure parser. Accepts:
+ * @internal — cockpit callers MUST use `resolveIssueContext` instead. This
+ * function is exported only for its unit tests. Enforced by ESLint
+ * `no-restricted-imports` (see `.eslintrc.json`). See #850.
+ *
+ * Strict qualified-forms parser. Accepts:
  *   - `owner/repo#123`
  *   - `https://github.com/owner/repo/issues/123`
  *   - `https://github.com/owner/repo/pull/123`
  *
- * Bare-number shorthand ("123") is intentionally rejected — the caller must
- * pipe it through `resolveIssueContext`, which falls back to `git remote
- * get-url origin` inference.
+ * Bare numbers ("123") fall through to the `unrecognized issue ref` throw —
+ * they are NOT a special case here. The bare-number remedy (cwd-origin
+ * inference) lives in `resolveIssueContext`.
  */
 export function parseIssueRef(input: string): IssueRef {
   const trimmed = input.trim();
@@ -94,13 +100,6 @@ export function parseIssueRef(input: string): IssueRef {
   if (url) {
     const [, owner, repo, num] = url;
     return makeRef(owner!, repo!, Number.parseInt(num!, 10));
-  }
-
-  if (BARE_NUMBER.test(trimmed)) {
-    fail(
-      `bare issue number "${trimmed}" is not accepted — repos are not configured, ` +
-        `so a bare number is ambiguous. Use <owner>/<repo>#${trimmed} or the full URL.`,
-    );
   }
 
   fail(
@@ -132,9 +131,9 @@ async function inferRepoFromGitOrigin(
  * Resolve an issue argument to a full `{ ref, repo, gh }` bundle.
  *
  * Strategy:
- *   1. Try `parseIssueRef(input.issue)` — succeeds for `owner/repo#N` or URL.
- *   2. On bare-number rejection (only), try `input.repo` first, then fall back
- *      to `git remote get-url origin` inference. Re-parse as `<inferred>#<n>`.
+ *   1. Bare numbers ("123"): resolve owner/repo from `input.repo` or cwd git
+ *      origin inference, then build the ref directly via `makeRef`.
+ *   2. Qualified forms (`owner/repo#N`, URLs): delegate to `parseIssueRef`.
  *
  * The `input.repo` override exists for programmatic callers; the `context`
  * verb intentionally does not expose it as a CLI flag (spec Q5 → A).
@@ -143,27 +142,30 @@ export async function resolveIssueContext(
   input: ResolveIssueContextInput,
 ): Promise<ResolvedIssueContext> {
   const runner = input.runner ?? nodeChildProcessRunner;
-
-  try {
-    const ref = parseIssueRef(input.issue);
-    return { ref, repo: ref.nwo, gh: new GhCliWrapper(runner) };
-  } catch (err) {
-    const message = (err as Error).message;
-    // Only fall through for the bare-number case; other parse failures are fatal.
-    if (!/bare issue number/.test(message)) throw err;
-  }
-
   const trimmed = input.issue.trim();
-  const number = Number.parseInt(trimmed, 10);
-  if (!Number.isInteger(number) || number <= 0) {
-    fail(`bare issue number "${trimmed}" is not a positive integer`);
+
+  if (BARE_NUMBER.test(trimmed)) {
+    const number = Number.parseInt(trimmed, 10);
+    let repoNwo: string;
+    try {
+      repoNwo = input.repo ?? (await inferRepoFromGitOrigin(runner, input.cwd));
+    } catch (err) {
+      const innerReason = (err as Error).message.replace(/^parse issue: /, '');
+      throw new Error(
+        `parse issue: bare issue number "${trimmed}" is not accepted here. ` +
+          `Accepted: <owner>/<repo>#${trimmed}, a full issue URL, or a bare number inside a ` +
+          `checkout with a resolvable GitHub origin. ` +
+          `(cwd-origin inference failed: ${innerReason})`,
+      );
+    }
+    const parts = repoNwo.split('/');
+    if (parts.length !== 2 || !parts[0] || !parts[1]) {
+      fail(`inferred repo "${repoNwo}" is not in <owner>/<repo> form`);
+    }
+    const ref = makeRef(parts[0]!, parts[1]!, number);
+    return { ref, repo: ref.nwo, gh: new GhCliWrapper(runner) };
   }
 
-  const repoNwo = input.repo ?? (await inferRepoFromGitOrigin(runner, input.cwd));
-  const parts = repoNwo.split('/');
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
-    fail(`inferred repo "${repoNwo}" is not in <owner>/<repo> form`);
-  }
-  const ref = makeRef(parts[0]!, parts[1]!, number);
+  const ref = parseIssueRef(input.issue);
   return { ref, repo: ref.nwo, gh: new GhCliWrapper(runner) };
 }

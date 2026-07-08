@@ -22,14 +22,12 @@
  */
 import { Command, Option } from 'commander';
 import {
-  GhCliWrapper,
   loadCockpitConfig,
-  nodeChildProcessRunner,
   type CommandRunner,
   type GhWrapper,
 } from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
-import { parseIssueRef, type IssueRef } from './resolver.js';
+import { resolveIssueContext, type IssueRef } from './resolver.js';
 import { GATES, listGates, type GateDefinition } from './gate-vocabulary.js';
 import { formatManualAdvanceComment } from './manual-advance-marker.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
@@ -104,13 +102,14 @@ export async function runAdvance(
   for (const w of loaded.warnings) log.warn(w);
 
   let ref: IssueRef;
+  let gh: GhWrapper;
   try {
-    ref = parseIssueRef(issue);
+    const resolvedCtx = await resolveIssueContext({ issue, runner: deps.runner });
+    ref = resolvedCtx.ref;
+    gh = deps.gh ?? resolvedCtx.gh;
   } catch (err) {
     throw new CockpitExit(2, `Error: cockpit advance: ${(err as Error).message}`);
   }
-
-  const gh = deps.gh ?? new GhCliWrapper(deps.runner ?? nodeChildProcessRunner);
 
   let labels: string[];
   try {
