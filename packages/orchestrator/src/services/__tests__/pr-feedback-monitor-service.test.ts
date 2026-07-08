@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { GhAuthError } from '@generacy-ai/workflow-engine';
 import { PrFeedbackMonitorService } from '../pr-feedback-monitor-service.js';
 import type {
   QueueAdapter,
@@ -7,6 +11,18 @@ import type {
 } from '../../types/monitor.js';
 import type { PrMonitorConfig, RepositoryConfig } from '../../config/schema.js';
 import type { Logger } from '../../worker/types.js';
+
+// DO NOT add a `resolved` field to this fixture — see #861 / quickstart.md.
+// The REST payload never carried thread resolution; that is the whole bug.
+// Read via getPRReviewThreads() instead.
+const FIXTURE_PATH = join(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures/pr-comments-rest.json',
+);
+const restCommentFixture = JSON.parse(readFileSync(FIXTURE_PATH, 'utf-8')) as {
+  _meta: { source: string; capturedAt: string; note: string };
+  comments: Array<Record<string, unknown>>;
+};
 
 // ==========================================================================
 // Mock Factories
@@ -56,7 +72,7 @@ function createMockGitHubClient(overrides: Record<string, unknown> = {}) {
       created_at: '',
       updated_at: '',
     }),
-    getPRComments: vi.fn().mockResolvedValue([]),
+    getPRReviewThreads: vi.fn().mockResolvedValue([]),
     listOpenPullRequests: vi.fn().mockResolvedValue([]),
     replyToPRComment: vi.fn().mockResolvedValue({}),
     ...overrides,
@@ -103,9 +119,17 @@ describe('PrFeedbackMonitorService', () => {
     phaseTracker = createMockPhaseTracker();
     queueAdapter = createMockQueueAdapter();
     mockClient = createMockGitHubClient({
-      getPRComments: vi.fn().mockResolvedValue([
-        { id: 101, resolved: false, in_reply_to_id: undefined, body: 'Fix this', path: 'src/app.ts', line: 10 },
-        { id: 102, resolved: false, in_reply_to_id: undefined, body: 'Also fix this', path: 'src/util.ts', line: 20 },
+      getPRReviewThreads: vi.fn().mockResolvedValue([
+        {
+          rootCommentId: 101,
+          isResolved: false,
+          comments: [{ id: 101, body: 'Fix this', author: 'r', created_at: '', updated_at: '', path: 'src/app.ts', line: 10 }],
+        },
+        {
+          rootCommentId: 102,
+          isResolved: false,
+          comments: [{ id: 102, body: 'Also fix this', author: 'r', created_at: '', updated_at: '', path: 'src/util.ts', line: 20 }],
+        },
       ]),
     });
     clientFactory = vi.fn().mockReturnValue(mockClient);
@@ -311,8 +335,8 @@ describe('PrFeedbackMonitorService', () => {
     // ==========================================================================
 
     it('should skip PRs with no unresolved review threads', async () => {
-      (mockClient.getPRComments as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { id: 101, resolved: true, in_reply_to_id: undefined, body: 'Fixed' },
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { rootCommentId: 101, isResolved: true, comments: [{ id: 101, body: 'Fixed', author: 'r', created_at: '', updated_at: '' }] },
       ]);
 
       const event = createPrReviewEvent();
@@ -322,8 +346,8 @@ describe('PrFeedbackMonitorService', () => {
       expect(queueAdapter.enqueue).not.toHaveBeenCalled();
     });
 
-    it('should skip PRs with zero review comments', async () => {
-      (mockClient.getPRComments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    it('should skip PRs with zero review threads', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       const event = createPrReviewEvent();
       const result = await service.processPrReviewEvent(event);
@@ -332,11 +356,10 @@ describe('PrFeedbackMonitorService', () => {
       expect(queueAdapter.enqueue).not.toHaveBeenCalled();
     });
 
-    it('should only count root-level unresolved comments (not replies)', async () => {
-      (mockClient.getPRComments as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { id: 101, resolved: false, in_reply_to_id: undefined, body: 'Root comment' },
-        { id: 102, resolved: false, in_reply_to_id: 101, body: 'Reply to root' },
-        { id: 103, resolved: true, in_reply_to_id: undefined, body: 'Resolved root' },
+    it('should emit rootCommentId per unresolved thread', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { rootCommentId: 101, isResolved: false, comments: [{ id: 101, body: 'Root', author: 'r', created_at: '', updated_at: '' }] },
+        { rootCommentId: 103, isResolved: true, comments: [{ id: 103, body: 'Resolved', author: 'r', created_at: '', updated_at: '' }] },
       ]);
 
       const event = createPrReviewEvent();
@@ -345,14 +368,14 @@ describe('PrFeedbackMonitorService', () => {
       expect(queueAdapter.enqueue).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({
-            reviewThreadIds: [101], // Only root-level unresolved comment
+            reviewThreadIds: [101], // Only unresolved thread's root
           }),
         }),
       );
     });
 
-    it('should return false when fetching PR comments fails', async () => {
-      (mockClient.getPRComments as ReturnType<typeof vi.fn>).mockRejectedValue(
+    it('should return false when fetching review threads fails with generic error (warn)', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockRejectedValue(
         new Error('API error'),
       );
 
@@ -360,7 +383,10 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(logger.error).toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('API error'), owner: 'test-org', repo: 'test-repo', prNumber: 10 }),
+        expect.stringContaining('transient'),
+      );
       expect(queueAdapter.enqueue).not.toHaveBeenCalled();
     });
 
@@ -672,7 +698,7 @@ describe('PrFeedbackMonitorService', () => {
 
       // The linked PR should be processed, the unlinked one will fail at linking stage
       // Both should be attempted (dedup doesn't filter unlinked ones)
-      expect(mockClient.getPRComments).toHaveBeenCalled();
+      expect(mockClient.getPRReviewThreads).toHaveBeenCalled();
     });
 
     it('should process single PR per issue without warning', async () => {
@@ -1196,10 +1222,226 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await serviceWithUser.processPrReviewEvent(event);
 
-      // getPRComments should not be called since the assignee check skips early
-      expect(mockClient.getPRComments).not.toHaveBeenCalled();
+      // getPRReviewThreads should not be called since the assignee check skips early
+      expect(mockClient.getPRReviewThreads).not.toHaveBeenCalled();
 
       serviceWithUser.stopPolling();
+    });
+  });
+
+  // ==========================================================================
+  // #861: thread-shaped review API — D8 matrix
+  // ==========================================================================
+
+  describe('#861 thread-shaped review API', () => {
+    it('never reads the REST fixture (getPRReviewThreads is the source of truth)', async () => {
+      // Fixture is present, but the monitor MUST NOT read it — its whole
+      // job is to prove the GraphQL path drives behavior.
+      expect(restCommentFixture.comments.length).toBeGreaterThan(0);
+      for (const c of restCommentFixture.comments) {
+        expect(c).not.toHaveProperty('resolved');
+      }
+
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(mockClient.getPRReviewThreads).toHaveBeenCalled();
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('enqueues rootCommentIds when getPRReviewThreads returns unresolved threads', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { rootCommentId: 501, isResolved: false, comments: [{ id: 501, body: 'b', author: 'r', created_at: '', updated_at: '' }] },
+        { rootCommentId: 502, isResolved: true, comments: [{ id: 502, body: 'b', author: 'r', created_at: '', updated_at: '' }] },
+        { rootCommentId: 503, isResolved: false, comments: [{ id: 503, body: 'b', author: 'r', created_at: '', updated_at: '' }] },
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            reviewThreadIds: [501, 503],
+          }),
+        }),
+      );
+    });
+
+    it('records auth-health failure + error log + no enqueue on GhAuthError(401)', async () => {
+      const authHealthRecord = vi.fn();
+      const serviceWithHealth = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        undefined,
+        undefined,
+        { recordResult: authHealthRecord },
+        'cred-github-app',
+      );
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new GhAuthError(401, 'HTTP 401: Bad credentials'),
+      );
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithHealth.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(authHealthRecord).toHaveBeenCalledWith('cred-github-app', { ok: false, statusCode: 401 });
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 401, owner: 'test-org', repo: 'test-repo', prNumber: 10 }),
+        expect.stringContaining('auth'),
+      );
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      serviceWithHealth.stopPolling();
+    });
+
+    it('records auth-health failure + error log + no enqueue on GhAuthError(403)', async () => {
+      const authHealthRecord = vi.fn();
+      const serviceWithHealth = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        undefined,
+        undefined,
+        { recordResult: authHealthRecord },
+        'cred-github-app',
+      );
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new GhAuthError(403, 'HTTP 403: Resource not accessible'),
+      );
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithHealth.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(authHealthRecord).toHaveBeenCalledWith('cred-github-app', { ok: false, statusCode: 403 });
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.objectContaining({ statusCode: 403 }),
+        expect.stringContaining('auth'),
+      );
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      serviceWithHealth.stopPolling();
+    });
+
+    it('logs warn (not auth-health) on generic 5xx and does not enqueue', async () => {
+      const authHealthRecord = vi.fn();
+      const serviceWithHealth = new PrFeedbackMonitorService(
+        logger,
+        clientFactory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        undefined,
+        undefined,
+        { recordResult: authHealthRecord },
+        'cred-github-app',
+      );
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error('HTTP 500: internal server error'),
+      );
+
+      const event = createPrReviewEvent();
+      const result = await serviceWithHealth.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ error: expect.stringContaining('500'), owner: 'test-org', repo: 'test-repo', prNumber: 10 }),
+        expect.stringContaining('transient'),
+      );
+      // Auth-health MUST NOT be recorded on transient errors.
+      expect(authHealthRecord).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ok: false }));
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      serviceWithHealth.stopPolling();
+    });
+
+    describe('state-transition info logging', () => {
+      it('bootstrap: first poll at 0 threads fires info once', async () => {
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+        const event = createPrReviewEvent();
+        await service.processPrReviewEvent(event);
+
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({ unresolvedThreads: 0, previousUnresolvedThreads: null }),
+          expect.stringContaining('state change'),
+        );
+      });
+
+      it('steady-state zero: second consecutive 0 fires debug', async () => {
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+        const event = createPrReviewEvent();
+        await service.processPrReviewEvent(event); // bootstrap → info
+        vi.clearAllMocks();
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        await service.processPrReviewEvent(event); // steady → debug
+
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({ unresolvedThreads: 0, previousUnresolvedThreads: 0 }),
+          expect.stringContaining('skipping'),
+        );
+        expect(logger.info).not.toHaveBeenCalledWith(
+          expect.anything(),
+          expect.stringContaining('state change'),
+        );
+      });
+
+      it('unresolved→zero: fires info', async () => {
+        const event = createPrReviewEvent();
+
+        // Cycle 1: N > 0
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+          { rootCommentId: 601, isResolved: false, comments: [{ id: 601, body: 'x', author: 'r', created_at: '', updated_at: '' }] },
+        ]);
+        await service.processPrReviewEvent(event);
+        vi.clearAllMocks();
+
+        // Cycle 2: 0
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        await service.processPrReviewEvent(event);
+
+        expect(logger.info).toHaveBeenCalledWith(
+          expect.objectContaining({ unresolvedThreads: 0, previousUnresolvedThreads: 1 }),
+          expect.stringContaining('state change'),
+        );
+      });
+
+      it('error paths do not update lastUnresolvedThreadCount', async () => {
+        const event = createPrReviewEvent();
+
+        // Bootstrap successful cycle at 0 → previous = 0
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        await service.processPrReviewEvent(event);
+        vi.clearAllMocks();
+
+        // Error cycle
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockRejectedValue(
+          new Error('HTTP 500'),
+        );
+        await service.processPrReviewEvent(event);
+        vi.clearAllMocks();
+
+        // Cycle 3 back at 0 → still steady-state (debug), not a "state change"
+        // If the error path had wrongly reset state, we'd see info here.
+        (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+        await service.processPrReviewEvent(event);
+
+        expect(logger.debug).toHaveBeenCalledWith(
+          expect.objectContaining({ unresolvedThreads: 0, previousUnresolvedThreads: 0 }),
+          expect.stringContaining('skipping'),
+        );
+      });
     });
   });
 });
