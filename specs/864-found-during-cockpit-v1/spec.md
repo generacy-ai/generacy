@@ -37,15 +37,16 @@ Merged main into `003-phase-1-foundation-part` (commit `9c5be5a`): `package.json
 
 ### US1: Validate runs against the post-merge tree, not the branch tip
 
-**As an** orchestrator worker running the validate (and pre-validate) phase,
-**I want** the workspace to reflect `origin/<base>` merged into the feature branch before I run any validation commands,
-**So that** a green validate result actually predicts the state of the tree after merge — the same guarantee CI gets by checking out `refs/pull/N/merge` instead of the branch tip.
+**As an** orchestrator worker running the implement, pre-validate, and validate phases,
+**I want** the workspace to reflect `origin/<base>` merged into the feature branch before I run any phase commands,
+**So that** the phase operates on the real post-merge tree — the same guarantee CI gets by checking out `refs/pull/N/merge` instead of the branch tip, and implement never writes code against a stale tree that will not exist post-merge (the #864 originating condition).
 
 **Acceptance Criteria**:
-- [ ] Before the pre-validate and validate phases execute their commands, the worker performs an ephemeral `git merge origin/<base>` into the workspace.
-- [ ] The ephemeral merge is never pushed to the remote — it exists only in the worker's checkout.
-- [ ] A clean merge lets validate proceed against the merged tree.
-- [ ] A conflicting merge aborts the phase, emits the conflicted paths into the #847 evidence block, and applies the standard pause label (proposal (b) escalation path is out of scope for US1).
+- [ ] Before the implement, pre-validate, and validate phases execute their commands, the worker resets to the branch tip, freshly fetches `origin/<base>`, and performs a `git merge origin/<base>` into the workspace.
+- [ ] The validate-time and pre-validate-time ephemeral merges are never pushed to the remote — they exist only in the worker's checkout.
+- [ ] The implement-time merge is committed as a distinct merge commit ahead of implement's own commits and rides out with implement's normal push (ordinary branch hygiene; the squash-merge at PR close collapses it).
+- [ ] A clean merge lets the phase proceed against the merged tree.
+- [ ] A conflicting merge aborts the phase, emits the conflicted paths into the #847 evidence block, and applies the standard pause label.
 - [ ] Base ref is `origin/<base>`, freshly fetched — not a stale local ref.
 
 ### US2: Merge-conflict pauses land as actionable work, not silent stalls
@@ -77,12 +78,15 @@ Merged main into `003-phase-1-foundation-part` (commit `9c5be5a`): `package.json
 | FR-002 | Before the validate phase runs, the worker fetches `origin/<base>` and attempts the same ephemeral merge. | P1 | Proposal (a). Redundant with FR-001 by design — base may have moved between phases. |
 | FR-003 | If the ephemeral merge is clean, the phase proceeds against the merged tree. | P1 | |
 | FR-004 | If the ephemeral merge produces conflicts, the phase fails loud: conflicted paths are enumerated in the #847 evidence block. | P1 | Structural failure, distinct from command-exit-nonzero failure. |
-| FR-005 | On merge conflict, the phase pauses via the existing pause/resume-label protocol (gate label naming TBD — clarify: `waiting-for:merge-conflicts` vs. reuse of an existing label). | P1 | Pairs with #849's paired-clear. |
-| FR-006 | The ephemeral merge is workspace-local and never pushed to the remote branch. | P1 | The push-base-into-feature-branch flow (proposal (b) recovery step) is out of scope for v1. |
+| FR-005 | On merge conflict, the phase pauses via the existing pause/resume-label protocol using the gate label `waiting-for:merge-conflicts` (paired resume label `completed:merge-conflicts`, per Q1 clarification). | P1 | Pairs with #849's paired-clear. |
+| FR-006 | The pre-validate and validate ephemeral merges are workspace-local and never pushed to the remote branch. The implement-phase merge (FR-013) is committed and pushed as a distinct merge commit ahead of implement's own commits — ordinary branch hygiene, collapsed by the squash-merge at PR close. | P1 | Clarified per Q5: "never pushed" applies to validate-time only. |
 | FR-007 | The ephemeral merge uses a freshly fetched `origin/<base>` — worker must fetch before merging, not rely on a stale local ref. | P1 | |
-| FR-008 | When ephemeral-merge conflicts occur, a bounded conflict-resolution subagent (mirroring the cockpit merge fixer's shape) MAY be invoked to attempt resolution; if it cannot resolve, the pause protocol (FR-005) applies. | P2 | Proposal (b) — layer on top of (a). Trigger point: at phase start only in v1. |
+| FR-008 | *(removed per Q4 clarification — bounded conflict-resolution subagent moved to Out of Scope for v1)* | — | See Out of Scope. |
 | FR-009 | `cockpit queue <ref> implement` MUST parse the target issue's plan.md, extract declared dependencies on other issues, and emit a warning when any dependency is not yet merged/closed. | P3 | Proposal (c). Warning-only in v1; hard-block deferred. |
 | FR-010 | The evidence block (#847) MUST distinguish "merge conflict" failure mode from "validate command failed" failure mode — operators need to tell them apart at a glance. | P1 | |
+| FR-011 | The worker resolves `<base>` from the open PR's `baseRefName` (via `gh pr view` on the branch); if no PR exists yet, it falls back to the repo default branch (`origin/HEAD`). | P1 | Q2 clarification. Authoritative even for deliberately retargeted / stacked PRs. |
+| FR-012 | Each phase entry begins with `git reset --hard origin/<branch>` followed by a fresh fetch of `origin/<base>` and a fresh merge attempt. Nothing persists across phase boundaries; a worker killed mid-merge leaves no contaminated state for the next phase. | P1 | Q3 clarification. Reset-at-start is crash-safe; workspaces are disposable. |
+| FR-013 | Before the implement phase runs, the worker performs the same reset+fetch+merge as pre-validate/validate. On a clean merge, the merge commit is committed to the feature branch as a distinct commit ahead of implement's own commits (rides out with implement's normal push per FR-006). On conflict, FR-004/FR-005 apply. | P1 | Q5 clarification. Prevents implement writing wrong code from a stale tree (root cause of #864). |
 
 ## Success Criteria
 
@@ -95,15 +99,15 @@ Merged main into `003-phase-1-foundation-part` (commit `9c5be5a`): `package.json
 
 ## Assumptions
 
-- The originating repository (sniplink#3 in the incident) has a well-defined base branch resolvable at phase start (typically `main` or `develop`). Multi-base scenarios are out of scope for v1.
-- The worker has push-free write access to its workspace and can perform `git merge` without side-effects on the remote. (No proposal-(b) push flow in v1.)
+- The base branch is resolvable at phase start via FR-011: the open PR's `baseRefName` (authoritative for retargeted/stacked PRs), falling back to the repo default branch (`origin/HEAD`) when no PR exists yet. Multi-base scenarios are out of scope for v1.
+- The worker has write access to its workspace (for FR-012's `git reset --hard` and the ephemeral merge) and, for the implement phase, push access to the feature branch (for FR-013's merge commit). No push to `<base>` itself in any phase.
 - The `plan.md` dependency-declaration format for FR-009 (proposal (c)) is a natural-language artifact the queue command can regex or LLM-extract from; the schema is not formalized in v1.
 - The #847 evidence block already has a slot suitable for enumerating conflicted paths, or one can be added without a schema-migration on stored evidence.
 
 ## Out of Scope
 
-- **Push-based base-sync** — proposal (b)'s "merge base into feature branch and push" flow. v1 keeps the merge ephemeral (workspace-local only).
-- **Webhook/poll-driven base-sync** — proposal (b)'s "on base-branch push" trigger point. v1 syncs only at phase start.
+- **Bounded conflict-resolution subagent (former FR-008)** — per Q4 clarification. On ephemeral-merge conflict, v1 goes directly to the pause protocol (FR-005); the reactive remedy already exists (cockpit merge's fixer subagent plus human resolution via the new gate). The upstream conflict-resolution subagent is a follow-up issue.
+- **Standing / webhook-driven base-sync** — proposal (b)'s "on base-branch push" trigger point (a job running outside phase boundaries). v1 syncs only at phase start. Note: FR-013's implement-phase merge commit *is* pushed with implement's normal push, but that is not a standing sync job — the Out-of-Scope exclusion applies to base-sync workers that run outside the phase envelope.
 - **Hard-blocking queue on unmerged dependency** — proposal (c) is warning-only in v1.
 - **Formalizing `plan.md` dependency schema** — v1 extracts what's already there; a structured `depends-on:` field is a follow-up.
 - **Multi-base branches** — one base branch per feature branch.
