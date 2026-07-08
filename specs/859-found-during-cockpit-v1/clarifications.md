@@ -12,7 +12,7 @@
 - B: Explicit `gh api -X DELETE …/git/refs/heads/…` after `gh pr merge` succeeds (two-step, sharpest FR-003/FR-004 distinction, larger diff)
 - C: Explicit ref delete as the default; use single-call `--delete-branch` only if simpler tests pass equivalence checks
 
-**Answer**: *Pending*
+**Answer**: B — explicit ref delete after merge confirmation. It's the only mechanism that gives the caller distinguishable outcomes (404 = already gone, 422/403 = real failure), which is what makes FR-003/FR-004/FR-005 implementable as distinct stdout variants at all; --delete-branch (A) folds all of that into gh's opaque success. One extra API call on the merge path is nothing.
 
 ### Q2: Cross-fork detection source
 **Context**: FR-004 requires skipping the delete for cross-fork PRs with an info log. The spec suggests detection via `PullRequestDetail`: head repo owner ≠ base repo owner, OR the `gh` error message clearly indicates permission denial. But `PullRequestDetail` today carries only ref names (`base`, `head`), not repo owners — a small wrapper extension would be needed to surface `headRepositoryOwner`. Relying on `gh` stderr pattern-matching for permission denial is fragile (message wording changes across `gh` versions).
@@ -22,7 +22,7 @@
 - B: Do not extend the wrapper; attempt the delete unconditionally and pattern-match `gh` stderr for permission-denial keywords (`must have admin`, `403`, `Resource not accessible`) to route to FR-004; everything else routes to FR-005.
 - C: Both — surface `headRepositoryOwner` for the deterministic pre-check, but also treat permission-shaped `gh` errors as FR-004 as a safety net.
 
-**Answer**: *Pending*
+**Answer**: A — extend the wrapper to surface headRepositoryOwner and pre-check deterministically. Stderr pattern-matching (B, and C's "safety net") is precisely the #855-class fragility this test keeps finding: gh's message wording is not a contract. A residual permission error after the pre-check passes lands correctly in FR-005's delete-failed warn without needing to be classified as cross-fork.
 
 ### Q3: Wrapper vs caller — where does the delete step live?
 **Context**: `mergePullRequest` (wrapper.ts:799) is the natural place to attach delete-branch behavior (it already knows `repo`, has the `runner`, and returns `MergeResult`). But `runMerge` (merge.ts) owns the operator-facing stdout composition and the two success-path branches. Options differ in mockability, `MergeResult` API surface, and which layer owns fork classification.
@@ -32,7 +32,7 @@
 - B: In `runMerge` — keep `mergePullRequest` unchanged (still passes `--delete-branch=false`); `runMerge` calls a new `deleteHeadRef(repo, headRef)` wrapper method after merge succeeds, classifies outcomes there, composes stdout there. Caller carries fork-detection.
 - C: Split — wrapper exposes primitives (`mergePullRequest`, `deleteHeadRef`, and a fork-check helper such as `isCrossForkPr(detail)`); `runMerge` orchestrates.
 
-**Answer**: *Pending*
+**Answer**: C, slimmed — the wrapper gains exactly two primitives (`deleteHeadRef`; the `headRepositoryOwner` field on `PullRequestDetail`), and `runMerge` orchestrates, classifies, and composes stdout, where the rest of the decision tree already lives. No `isCrossForkPr` helper: it's a one-line field comparison in the caller. Option A pushes policy (outcome classification) into the plumbing layer the cockpit deliberately keeps thin.
 
 ### Q4: Exact stdout wording
 **Context**: FR-002/FR-003/FR-004 give example strings ("merged and branch deleted", "merged (branch was already deleted)"). SC-004's regression test likely asserts on stdout. Locking wording avoids test churn and lets downstream consumers grep; leaving it flexible allows the implementer to refine phrasing. The vacuous-green path already emits `"no checks configured and none required — proceeding on completed:validate\n"` and needs an append; the classify-passing path emits `''` today and needs a new base message.
@@ -42,7 +42,7 @@
 - B: Flexible — implementer chooses precise phrasing; tests assert on substring markers (`deleted`, `already deleted`, `cross-fork`, `delete failed`).
 - C: Canonical for the four success/skip variants; flexible for the FR-005 warning line since it wraps arbitrary gh stderr.
 
-**Answer**: *Pending*
+**Answer**: C — canonical strings for the four deterministic variants (tests assert byte-exact, consistent with the #857 vacuous-green precedent), while the delete-failed line has a canonical PREFIX (`merged (branch delete failed: `) with the wrapped gh stderr free-form. B's substring assertions invite the wording drift that byte-exactness exists to prevent.
 
 ### Q5: Operator opt-out
 **Context**: The spec makes deletion the default post-merge behavior and out-of-scopes flipping the repo-level auto-delete setting. It does not address whether the operator should have a per-invocation opt-out (e.g., `--keep-branch`) — useful when merging a PR whose head branch is still being used for follow-up review or when GitHub's UI-side branch delete is preferred. Adding a flag now costs one option and one test; adding later is a breaking-behavior surprise.
@@ -52,4 +52,4 @@
 - B: Yes — add `--keep-branch` (or `--no-delete-branch`) flag that skips the delete step; success stdout in that case says `merged (branch delete skipped: --keep-branch)`.
 - C: Defer — ship without a flag; add one only if operators actually request it after the change lands.
 
-**Answer**: *Pending*
+**Answer**: C — ship without a flag. GitHub's "Restore branch" button makes an unwanted deletion a one-click recovery, so the flag's insurance value is near zero, and an option with no requesting consumer is the dead-surface class this epic keeps deleting. If a real workflow surfaces (follow-up review on the merged head), add `--keep-branch` then, with the requester attached.
