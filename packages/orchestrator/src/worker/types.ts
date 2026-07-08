@@ -102,7 +102,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review' | 'on-merge-conflict';
 }
 
 /**
@@ -203,19 +203,36 @@ export interface StageCommentData {
   /** PR URL if available */
   prUrl?: string;
   /**
-   * Rendered inside the comment when status === 'error'. Omitted on
-   * successful phases (FR-007). Populated by phase-loop.ts at each of the
-   * three `updateStageComment({ status: 'error' })` call sites; consumed by
-   * StageCommentManager.renderStageComment.
+   * Rendered inside the comment when status === 'error' or during a merge-conflict pause.
+   *
+   * Discriminated union with two variants:
+   * - #847 command-exit variant: `{ command, exitDescriptor, stderrTail }` — populated by
+   *   phase-loop.ts at each `updateStageComment({ status: 'error' })` call site.
+   * - #864 merge-conflict variant: `{ mergeConflict: { baseRef, conflictedPaths } }` — populated
+   *   by the pre-phase base-merge hook when a merge conflict pauses the workflow.
+   *
+   * Consumed by StageCommentManager.renderStageComment which narrows on `.mergeConflict`
+   * presence. Exactly one variant is populated per call; both being present is a
+   * programmer bug and asserted (dev-mode).
    */
-  errorEvidence?: {
-    /** The failing command string as it was passed to the spawner. */
-    command: string;
-    /** Resolved exit descriptor: `exit <N>`, `killed (SIGTERM) after <Nms>`, or `aborted` (FR-005, Q5→A). */
-    exitDescriptor: string;
-    /** Bounded stderr tail (last 30 lines → 4 KiB cap, truncation marker prepended when applicable). Literal `(stderr empty)` when empty. */
-    stderrTail: string;
-  };
+  errorEvidence?:
+    | {
+        /** The failing command string as it was passed to the spawner. */
+        command: string;
+        /** Resolved exit descriptor: `exit <N>`, `killed (SIGTERM) after <Nms>`, or `aborted` (FR-005, Q5→A). */
+        exitDescriptor: string;
+        /** Bounded stderr tail (last 30 lines → 4 KiB cap, truncation marker prepended when applicable). Literal `(stderr empty)` when empty. */
+        stderrTail: string;
+      }
+    | {
+        /** Base-sync merge conflict variant (#864). */
+        mergeConflict: {
+          /** The `origin/<base>` ref that was being merged. */
+          baseRef: string;
+          /** Paths reported by `git diff --name-only --diff-filter=U`. */
+          conflictedPaths: string[];
+        };
+      };
 }
 
 /**
@@ -259,6 +276,8 @@ export interface WorkerContext {
   signal: AbortSignal;
   /** Repository checkout path */
   checkoutPath: string;
+  /** Feature branch name (e.g. `864-found-during-cockpit-v1`) — un-prefixed. */
+  branch?: string;
   /** Issue URL for prompts */
   issueUrl: string;
   /** Issue description (from metadata or GitHub fetch) */

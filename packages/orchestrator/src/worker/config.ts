@@ -11,7 +11,7 @@ export const GateDefinitionSchema = z.object({
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
-  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review']),
+  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review', 'on-merge-conflict']),
 });
 
 /**
@@ -71,10 +71,14 @@ export const WorkerConfigSchema = z.object({
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
       { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
       { phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' },
+      { phase: 'implement', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
+      { phase: 'validate', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
     ],
     'speckit-bugfix': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
       { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'on-request' },
+      { phase: 'implement', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
+      { phase: 'validate', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
     ],
     'speckit-epic': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },

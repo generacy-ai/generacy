@@ -117,11 +117,31 @@ export class RepoCheckout {
       });
     }
 
+    await this.resetToBranchTip(checkoutPath, branch);
+
+    this.logger.info({ checkoutPath, branch }, 'Switched to branch successfully');
+  }
+
+  /**
+   * Reset the working tree to `origin/<branch>` (branch tip on the remote).
+   *
+   * Extracted from `switchBranch` so the pre-phase base-merge hook (#864) can call it
+   * directly without re-running fetch/checkout. Uses the un-prefixed branch name.
+   */
+  async resetToBranchTip(checkoutPath: string, branch: string): Promise<void> {
     await execFileAsync('git', ['reset', '--hard', `origin/${branch}`], {
       cwd: checkoutPath,
     });
+  }
 
-    this.logger.info({ checkoutPath, branch }, 'Switched to branch successfully');
+  /**
+   * Fetch a single base branch from `origin` (does not update other refs).
+   *
+   * Callers pass the un-prefixed name (e.g. `main`, not `origin/main`). Used by the
+   * pre-phase base-merge hook (#864) to refresh the base ref immediately before merging.
+   */
+  async fetchBase(checkoutPath: string, baseBranch: string): Promise<void> {
+    await execFileAsync('git', ['fetch', 'origin', baseBranch], { cwd: checkoutPath });
   }
 
   /**

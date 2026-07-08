@@ -1,4 +1,4 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageCommentData } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageCommentData, StageType } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs } from './config.js';
@@ -15,6 +15,7 @@ import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
 import { boundStderrTail } from './stderr-tail.js';
+import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -34,6 +35,12 @@ export interface PhaseLoopDeps {
   jobEventEmitter?: JobEventEmitter;
   /** Optional callbacks invoked after each phase completes, before gate check */
   phaseAfterHandlers?: PhaseAfterHandler[];
+  /**
+   * Injected base-merge runner used by the pre-phase base-merge hook (#864).
+   * Defaults to `performBaseMerge` from `./base-merge.js`. Tests inject a fake
+   * that returns canned `BaseMergeResult` values without exercising real git.
+   */
+  baseMergeRunner?: BaseMergeRunner;
 }
 
 /**
@@ -83,6 +90,7 @@ export class PhaseLoop {
   ): Promise<PhaseLoopResult> {
     const sequence = phaseSequence ?? PHASE_SEQUENCE;
     const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger, jobEventEmitter } = deps;
+    const baseMergeRunner: BaseMergeRunner = deps.baseMergeRunner ?? performBaseMerge;
     const results: PhaseResult[] = [];
 
     // Track session ID across phases for conversation resume.
@@ -149,10 +157,47 @@ export class PhaseLoop {
         startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
       });
 
+      // 2b. Pre-phase base-merge (#864) — implement, pre-validate, validate only.
+      // On {ok:false} the workflow pauses with the merge-conflict gate; on {ok:true}
+      // execution proceeds normally. Non-conflict git failures throw and are caught
+      // in the same try/catch as phase execution below.
+      if (phase === 'implement') {
+        const baseMergeOutcome = await this.runPreImplementBaseMerge(
+          context,
+          deps,
+          baseMergeRunner,
+          phase,
+          stage,
+          sequence,
+          startIndex,
+          i,
+          phaseTimestamps,
+        );
+        if (baseMergeOutcome !== undefined) {
+          return baseMergeOutcome;
+        }
+      }
+
       // 3. Execute the phase
       let result: PhaseResult;
       try {
         if (phase === 'validate') {
+          // 3a. Pre-phase base-merge for pre-validate (#864) — ephemeral.
+          const preValidateMergeOutcome = await this.runPreValidateBaseMerge(
+            context,
+            deps,
+            baseMergeRunner,
+            phase,
+            stage,
+            sequence,
+            startIndex,
+            i,
+            phaseTimestamps,
+          );
+          if (preValidateMergeOutcome !== undefined) {
+            return preValidateMergeOutcome;
+          }
+
           // Pre-validate: install dependencies if configured
           if (config.preValidateCommand) {
             const installResult = await cliSpawner.runPreValidateInstall(
@@ -180,6 +225,22 @@ export class PhaseLoop {
               });
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
+          }
+
+          // 3b. Pre-phase base-merge for validate (#864) — ephemeral.
+          const validateMergeOutcome = await this.runPreValidateBaseMerge(
+            context,
+            deps,
+            baseMergeRunner,
+            phase,
+            stage,
+            sequence,
+            startIndex,
+            i,
+            phaseTimestamps,
+          );
+          if (validateMergeOutcome !== undefined) {
+            return validateMergeOutcome;
           }
 
           // Validate phase — run test command
@@ -596,6 +657,160 @@ export class PhaseLoop {
       completed: true,
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
+    };
+  }
+
+  /**
+   * Run the pre-implement base-merge (#864, committed). On conflict, pause the
+   * workflow via `waiting-for:merge-conflicts` and return the pause result;
+   * on clean merge, return `undefined` so the caller proceeds with phase execution.
+   */
+  private async runPreImplementBaseMerge(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    baseMergeRunner: BaseMergeRunner,
+    phase: WorkflowPhase,
+    stage: StageType,
+    sequence: WorkflowPhase[],
+    startIndex: number,
+    i: number,
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>,
+  ): Promise<PhaseLoopResult | undefined> {
+    return this.runPrePhaseBaseMerge(
+      context,
+      deps,
+      baseMergeRunner,
+      phase,
+      stage,
+      sequence,
+      startIndex,
+      i,
+      phaseTimestamps,
+      { commit: true },
+    );
+  }
+
+  /**
+   * Run the pre-validate/validate base-merge (#864, ephemeral). Symmetric with
+   * `runPreImplementBaseMerge` but `opts.commit === false` — the merge is left
+   * as an un-committed merge in the workspace and MUST be discarded by the next
+   * phase's reset-at-start (FR-006).
+   */
+  private async runPreValidateBaseMerge(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    baseMergeRunner: BaseMergeRunner,
+    phase: WorkflowPhase,
+    stage: StageType,
+    sequence: WorkflowPhase[],
+    startIndex: number,
+    i: number,
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>,
+  ): Promise<PhaseLoopResult | undefined> {
+    return this.runPrePhaseBaseMerge(
+      context,
+      deps,
+      baseMergeRunner,
+      phase,
+      stage,
+      sequence,
+      startIndex,
+      i,
+      phaseTimestamps,
+      { commit: false },
+    );
+  }
+
+  /**
+   * Shared pre-phase base-merge implementation. Resolves the base ref, invokes
+   * the runner, and (on conflict) pauses with `waiting-for:merge-conflicts` +
+   * `errorEvidence.mergeConflict`. Reuses the existing gate-return path so
+   * #849's paired resume-dedupe clear applies symmetrically.
+   */
+  private async runPrePhaseBaseMerge(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    baseMergeRunner: BaseMergeRunner,
+    phase: WorkflowPhase,
+    stage: StageType,
+    sequence: WorkflowPhase[],
+    startIndex: number,
+    i: number,
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>,
+    opts: { commit: boolean },
+  ): Promise<PhaseLoopResult | undefined> {
+    if (!context.branch) {
+      this.logger.warn(
+        { phase },
+        'Skipping pre-phase base-merge — WorkerContext.branch not set',
+      );
+      return undefined;
+    }
+
+    const baseRef = await resolveBaseBranch(
+      context.github,
+      deps.prManager,
+      context.checkoutPath,
+      context.item.owner,
+      context.item.repo,
+      this.logger,
+    );
+
+    const mergeResult = await baseMergeRunner(
+      context.checkoutPath,
+      context.branch,
+      baseRef,
+      opts,
+      this.logger,
+    );
+
+    if (mergeResult.ok) {
+      this.logger.info(
+        { phase, baseRef, commit: opts.commit, mergeSha: mergeResult.mergeSha },
+        'Pre-phase base-merge succeeded',
+      );
+      return undefined;
+    }
+
+    // Conflict: pause with merge-conflict gate.
+    const gateLabel = 'waiting-for:merge-conflicts';
+    this.logger.warn(
+      { phase, baseRef, conflictedPaths: mergeResult.conflictedPaths },
+      'Pre-phase base-merge conflict — pausing workflow',
+    );
+
+    deps.jobEventEmitter?.('job:paused', {
+      jobId: context.jobId,
+      workflowName: context.item.workflowName,
+      owner: context.item.owner,
+      repo: context.item.repo,
+      issueNumber: context.item.issueNumber,
+      status: 'paused',
+      currentStep: phase,
+      gateLabel,
+    });
+
+    await deps.stageCommentManager.updateStageComment({
+      stage,
+      status: 'in_progress',
+      phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps),
+      startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+      prUrl: context.prUrl,
+      errorEvidence: {
+        mergeConflict: {
+          baseRef: mergeResult.baseRef,
+          conflictedPaths: mergeResult.conflictedPaths,
+        },
+      },
+    });
+
+    await deps.labelManager.onGateHit(phase, gateLabel);
+
+    return {
+      results: [],
+      completed: false,
+      lastPhase: phase,
+      gateHit: true,
     };
   }
 

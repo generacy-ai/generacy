@@ -27,6 +27,10 @@ import { getLogger } from '../../utils/logger.js';
 import { resolveIssueContext } from './resolver.js';
 import { CockpitExit, isCockpitExit } from './exit.js';
 import { LoudIdentityError, resolveCockpitIdentity } from './shared/identity.js';
+import {
+  extractPlanDependencies,
+  type DependencyRef,
+} from './plan-dependency-extractor.js';
 
 const DEFAULT_LABEL = 'process:speckit-feature';
 
@@ -52,12 +56,25 @@ export type MutationOutcome =
   | { kind: 'already' }
   | { kind: 'error'; reason: string };
 
+/** Warning state observed at queue time for a plan.md-declared dependency (#864). */
+export type DependencyWarningState = 'unresolved' | 'closed-unmerged';
+
+export interface DependencyWarning {
+  ref: DependencyRef;
+  state: DependencyWarningState;
+}
+
 export interface QueueRow {
   ref: IssueRef;
   title: string;
   labels: string[];
   assignees: string[];
   eligibility: EligibilityStatus;
+  /**
+   * Present only when eligibility.kind === 'eligible', the phase heading matches
+   * /implement/i, and plan.md-declared prerequisites are not yet merged (#864).
+   */
+  dependencyWarnings?: DependencyWarning[];
   assignResult?: MutationOutcome;
   labelResult?: MutationOutcome;
 }
@@ -73,6 +90,12 @@ export interface QueueResult {
   exitCode: 0 | 1 | 2;
 }
 
+/**
+ * Fetches the raw `plan.md` for a given issue via the GitHub API.
+ * Returns `null` when the file (or spec directory) doesn't exist yet.
+ */
+export type PlanFetcher = (ref: IssueRef) => Promise<string | null>;
+
 export interface QueueCommandDeps {
   runner?: CommandRunner;
   gh?: GhWrapper;
@@ -82,6 +105,103 @@ export interface QueueCommandDeps {
   prompt?: (message: string) => Promise<boolean>;
   stdout?: (line: string) => void;
   stderr?: (line: string) => void;
+  /** Optional plan.md fetcher — defaults to a `gh api` call via `deps.runner`. */
+  fetchPlan?: PlanFetcher;
+}
+
+/**
+ * Default plan.md fetcher. Uses `gh api` via the provided CommandRunner to fetch the
+ * spec directory contents for an issue's feature branch and returns the decoded plan.md
+ * body. Returns null when the PR (and thus the branch, and thus the spec dir) does not
+ * exist yet, or when plan.md is not present.
+ */
+function makeDefaultPlanFetcher(
+  runner: CommandRunner,
+  gh: GhWrapper,
+): PlanFetcher {
+  return async (ref: IssueRef): Promise<string | null> => {
+    let prRef;
+    try {
+      prRef = await gh.resolveIssueToPRRef(ref.repo, ref.number);
+    } catch {
+      return null;
+    }
+    if (prRef == null) return null;
+    const branch = prRef.headRefName;
+    const specDir = `specs/${branch}/plan.md`;
+    const apiPath = `repos/${ref.repo}/contents/${encodeURIComponent(specDir).replace(/%2F/g, '/')}?ref=${encodeURIComponent(branch)}`;
+    const result = await runner('gh', ['api', apiPath, '--jq', '.content']);
+    if (result.exitCode !== 0) return null;
+    // gh returns base64 content (from GitHub API `.content` field) with newlines.
+    const b64 = result.stdout.trim().replace(/\n/g, '');
+    if (!b64) return null;
+    try {
+      return Buffer.from(b64, 'base64').toString('utf-8');
+    } catch {
+      return null;
+    }
+  };
+}
+
+/**
+ * Classify a dependency's state at queue time. Returns null when the dep is fine
+ * (merged or already closed with an associated merged PR).
+ */
+async function classifyDependency(
+  dep: DependencyRef,
+  gh: GhWrapper,
+): Promise<DependencyWarningState | null> {
+  const nwo = `${dep.owner}/${dep.repo}`;
+  let prRef;
+  try {
+    prRef = await gh.resolveIssueToPRRef(nwo, dep.number);
+  } catch {
+    return 'unresolved';
+  }
+  if (prRef != null) {
+    if (prRef.state === 'MERGED') return null;
+    if (prRef.state === 'CLOSED') return 'closed-unmerged';
+    return 'unresolved';
+  }
+  // No PR linked — fall back to the issue's state.
+  let issueState: IssueStateResult | null = null;
+  try {
+    issueState = await gh.fetchIssueState(nwo, dep.number);
+  } catch {
+    return 'unresolved';
+  }
+  if (issueState == null) return 'unresolved';
+  if (issueState.state === 'CLOSED') return 'closed-unmerged';
+  return 'unresolved';
+}
+
+async function annotateRowsWithDependencyWarnings(
+  rows: QueueRow[],
+  fetchPlan: PlanFetcher,
+  gh: GhWrapper,
+): Promise<void> {
+  for (const row of rows) {
+    if (row.eligibility.kind !== 'eligible') continue;
+    let planMd: string | null;
+    try {
+      planMd = await fetchPlan(row.ref);
+    } catch {
+      continue; // treat any fetch error as "no plan.md — skip"
+    }
+    if (planMd == null) continue;
+
+    // IssueRef.repo is the full owner/repo string; split for the extractor's defaults.
+    const [defaultOwner = '', defaultRepo = ''] = row.ref.repo.split('/');
+    const deps = extractPlanDependencies(planMd, defaultOwner, defaultRepo);
+    const warnings: DependencyWarning[] = [];
+    for (const dep of deps) {
+      const state = await classifyDependency(dep, gh);
+      if (state != null) warnings.push({ ref: dep, state });
+    }
+    if (warnings.length > 0) {
+      row.dependencyWarnings = warnings;
+    }
+  }
 }
 
 function classifyRow(
@@ -133,6 +253,12 @@ export function renderPreview(
       `  ${row.ref.repo}#${row.ref.number}  ${row.title} ` +
         `(${row.eligibility.workflowLabel}, assignee: ${assignee})`,
     );
+    if (row.dependencyWarnings) {
+      for (const warning of row.dependencyWarnings) {
+        const depRef = `${warning.ref.owner}/${warning.ref.repo}#${warning.ref.number}`;
+        lines.push(`    [WARN: depends-on ${depRef} not yet merged]`);
+      }
+    }
   }
   for (const row of skipped) {
     if (row.eligibility.kind !== 'skip') continue;
@@ -301,6 +427,17 @@ export async function runQueue(
       assignees: view?.assignees ?? [],
       eligibility,
     });
+  }
+
+  // Warning-only dependency check for the implement phase (#864).
+  if (/implement/i.test(phase.heading)) {
+    const fetchPlan =
+      deps.fetchPlan ?? makeDefaultPlanFetcher(deps.runner ?? nodeChildProcessRunner, cockpitGh);
+    try {
+      await annotateRowsWithDependencyWarnings(rows, fetchPlan, cockpitGh);
+    } catch (err) {
+      log.warn(`cockpit queue: dependency warning check failed — ${String(err)}`);
+    }
   }
 
   let assignee: string;
