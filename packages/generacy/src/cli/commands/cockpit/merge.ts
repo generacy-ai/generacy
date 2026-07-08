@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import type { Logger } from 'pino';
-import type { GhWrapper } from '@generacy-ai/cockpit';
+import type { GhWrapper, PullRequestDetail } from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
 import { resolveIssueContext } from './resolver.js';
 import { classifyChecks } from './shared/required-checks.js';
@@ -35,6 +35,47 @@ function parseIssueRef(repo: string, issue: number): IssueRefWithState {
     );
   }
   return { owner, repo: name, number: issue };
+}
+
+interface DeletionCtx {
+  gh: GhWrapper;
+  pr: PullRequestDetail;
+  issueRef: IssueRefWithState;
+  logger: Logger;
+}
+
+async function classifyAndDeleteBranch(ctx: DeletionCtx): Promise<string> {
+  const { gh, pr, issueRef, logger } = ctx;
+
+  if (
+    pr.headRepositoryOwner != null &&
+    pr.headRepositoryOwner !== issueRef.owner
+  ) {
+    logger.info(
+      { pr: pr.number, headRef: pr.head, headOwner: pr.headRepositoryOwner },
+      'branch deletion skipped: cross-fork PR',
+    );
+    return 'merged (branch delete skipped: cross-fork PR)\n';
+  }
+
+  const repo = `${issueRef.owner}/${issueRef.repo}`;
+  const result = await gh.deleteHeadRef(repo, pr.head);
+  switch (result.outcome) {
+    case 'deleted':
+      return 'merged and branch deleted\n';
+    case 'already-gone':
+      logger.info(
+        { pr: pr.number, headRef: pr.head },
+        'branch was already deleted',
+      );
+      return 'merged (branch was already deleted)\n';
+    case 'delete-failed':
+      logger.warn(
+        { pr: pr.number, repo, headRef: pr.head, stderr: result.stderr },
+        'branch deletion failed',
+      );
+      return `merged (branch delete failed: ${result.stderr ?? ''})\n`;
+  }
 }
 
 export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
@@ -153,9 +194,17 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
   if (noActual && noRequired) {
     await gh.mergePullRequest(repo, pr.number, { squash: true });
     logger.info({ pr: pr.number }, 'PR merged');
+    const deletionSuffix = await classifyAndDeleteBranch({
+      gh,
+      pr,
+      issueRef,
+      logger,
+    });
     return {
       exitCode: 0,
-      stdout: 'no checks configured and none required — proceeding on completed:validate\n',
+      stdout:
+        'no checks configured and none required — proceeding on completed:validate\n' +
+        deletionSuffix,
     };
   }
 
@@ -180,7 +229,13 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
 
   await gh.mergePullRequest(repo, pr.number, { squash: true });
   logger.info({ pr: pr.number }, 'PR merged');
-  return { exitCode: 0, stdout: '' };
+  const deletionSuffix = await classifyAndDeleteBranch({
+    gh,
+    pr,
+    issueRef,
+    logger,
+  });
+  return { exitCode: 0, stdout: deletionSuffix };
 }
 
 export function cockpitMergeCommand(): Command {

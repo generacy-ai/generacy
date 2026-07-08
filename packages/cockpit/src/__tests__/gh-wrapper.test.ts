@@ -539,6 +539,7 @@ describe('GhCliWrapper', () => {
         url: 'https://github.com/o/r/pull/5',
         base: 'develop',
         head: 'feature/z',
+        headRepositoryOwner: null,
         body: 'PR body text',
         author: { login: 'alice' },
         state: 'OPEN',
@@ -585,6 +586,69 @@ describe('GhCliWrapper', () => {
       expect(pr.body).toBe('');
     });
 
+    it('surfaces headRepositoryOwner for same-owner, fork, and deleted head repo (#859)', async () => {
+      const baseRaw = {
+        number: 1,
+        title: 't',
+        url: 'u',
+        baseRefName: 'develop',
+        headRefName: 'h',
+        body: '',
+        author: null,
+        state: 'OPEN',
+        isDraft: false,
+        labels: [],
+      };
+
+      // Same-owner PR — headRepositoryOwner.login === base owner.
+      {
+        const { runner } = queuedRunner([
+          {
+            stdout: JSON.stringify({
+              ...baseRaw,
+              headRepositoryOwner: { login: 'acme' },
+            }),
+          },
+          { stdout: '' },
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const pr = await wrapper.getPullRequestDetail('acme/repo', 1);
+        expect(pr.headRepositoryOwner).toBe('acme');
+      }
+
+      // Fork PR — headRepositoryOwner.login is a different account.
+      {
+        const { runner } = queuedRunner([
+          {
+            stdout: JSON.stringify({
+              ...baseRaw,
+              headRepositoryOwner: { login: 'contributor42' },
+            }),
+          },
+          { stdout: '' },
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const pr = await wrapper.getPullRequestDetail('acme/repo', 1);
+        expect(pr.headRepositoryOwner).toBe('contributor42');
+      }
+
+      // Deleted head repo — headRepositoryOwner is null.
+      {
+        const { runner } = queuedRunner([
+          {
+            stdout: JSON.stringify({
+              ...baseRaw,
+              headRepositoryOwner: null,
+            }),
+          },
+          { stdout: '' },
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const pr = await wrapper.getPullRequestDetail('acme/repo', 1);
+        expect(pr.headRepositoryOwner).toBeNull();
+      }
+    });
+
     it('normalizes MERGED state from gh pr view', async () => {
       const { runner } = queuedRunner([
         {
@@ -606,6 +670,68 @@ describe('GhCliWrapper', () => {
       const wrapper = new GhCliWrapper(runner);
       const pr = await wrapper.getPullRequestDetail('o/r', 1);
       expect(pr.state).toBe('MERGED');
+    });
+  });
+
+  describe('deleteHeadRef', () => {
+    it('exit 0 → { outcome: "deleted" }', async () => {
+      const { runner, calls } = stubRunner({ exitCode: 0, stdout: '', stderr: '' });
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.deleteHeadRef('o/r', 'feature/x');
+      expect(result).toEqual({ outcome: 'deleted' });
+      const args = calls[0]?.args ?? [];
+      expect(args).toEqual([
+        'api',
+        '-X',
+        'DELETE',
+        'repos/o/r/git/refs/heads/feature/x',
+      ]);
+    });
+
+    it('exit 1 + HTTP 422 stderr → { outcome: "already-gone" }', async () => {
+      const { runner } = stubRunner({
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          'HTTP 422: Reference does not exist (https://api.github.com/repos/o/r/git/refs/heads/feature%2Fx)\n{"message":"Reference does not exist","documentation_url":"https://docs.github.com/rest/git/refs#delete-a-reference","status":"422"}',
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.deleteHeadRef('o/r', 'feature/x');
+      expect(result).toEqual({ outcome: 'already-gone' });
+    });
+
+    it('exit 1 + HTTP 404 stderr → { outcome: "already-gone" }', async () => {
+      const { runner } = stubRunner({
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          'HTTP 404: Not Found (https://api.github.com/repos/o/r/git/refs/heads/gone)',
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.deleteHeadRef('o/r', 'gone');
+      expect(result).toEqual({ outcome: 'already-gone' });
+    });
+
+    it('exit 1 + arbitrary stderr → { outcome: "delete-failed", stderr }', async () => {
+      const { runner } = stubRunner({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'HTTP 403: Resource not accessible by integration',
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const result = await wrapper.deleteHeadRef('o/r', 'feature/x');
+      expect(result).toEqual({
+        outcome: 'delete-failed',
+        stderr: 'HTTP 403: Resource not accessible by integration',
+      });
+    });
+
+    it('throws on malformed repo', async () => {
+      const { runner } = stubRunner();
+      const wrapper = new GhCliWrapper(runner);
+      await expect(wrapper.deleteHeadRef('badrepo', 'x')).rejects.toThrow(
+        /owner\/name/,
+      );
     });
   });
 
