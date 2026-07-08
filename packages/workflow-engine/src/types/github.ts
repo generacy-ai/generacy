@@ -79,12 +79,33 @@ export interface Comment {
   path?: string;          // File path
   line?: number;          // Line number
   in_reply_to_id?: number;
+  /**
+   * @deprecated The REST endpoint underlying `getPRComments()` never populated
+   * this field — it was always `undefined`. Use `ReviewThread.isResolved` from
+   * `getPRReviewThreads()` instead. See #861. Left in the type for one release
+   * cycle; a follow-up PR deletes it.
+   */
   resolved?: boolean;
   // GitHub author_association tier (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
   // FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE, or future tiers).
   // Optional for fixture / cache / older-response compatibility — unset is
   // treated as untrusted by the trust helper (fail-closed, per FR-011).
   authorAssociation?: string;
+}
+
+/**
+ * A GitHub PR review thread, as reported by GraphQL
+ * `pullRequest.reviewThreads`. Resolution is a property of the thread —
+ * NOT of individual comments. Do NOT add a `resolved` field to `Comment`.
+ * See #861.
+ */
+export interface ReviewThread {
+  /** databaseId of the first (root) comment in the thread. Stable identifier. */
+  rootCommentId: number;
+  /** True when the thread has been marked resolved in the GitHub UI. */
+  isResolved: boolean;
+  /** All comments in the thread, in chronological order. */
+  comments: Comment[];
 }
 
 // =============================================================================
@@ -262,7 +283,12 @@ export interface PreflightOutput {
   pr_exists: boolean;
   pr_number?: number;
   uncommitted_changes: boolean;
-  unresolved_comments: number;
+  /**
+   * Count of unresolved review threads (matches GitHub UI's
+   * "N unresolved conversations" and `PrFeedbackMonitorService`'s
+   * enqueue decision). Renamed from `unresolved_comments` in #861.
+   */
+  unresolved_threads: number;
   speckit_status: SpeckitStatus;
   label_status: LabelStatus;
   existing_branches?: BranchLookupResult;
