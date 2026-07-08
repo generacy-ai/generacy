@@ -49,6 +49,7 @@ function createMockDeps(): PhaseLoopDeps {
     } as any,
     stageCommentManager: {
       updateStageComment: vi.fn().mockResolvedValue(undefined),
+      postFailureAlert: vi.fn().mockResolvedValue(undefined),
     } as any,
     gateChecker: {
       checkGates: vi.fn().mockReturnValue([]),
@@ -898,5 +899,238 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
     expect(errorCall.errorEvidence.exitDescriptor).toBe('aborted');
     expect(errorCall.errorEvidence.stderrTail).toBe('(stderr empty)');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-alert bottom-of-thread comment (#865)
+// ---------------------------------------------------------------------------
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('mints a distinct runId per executeLoop invocation (T019)', async () => {
+    // First invocation: pre-validate fails, capture runId
+    const context1 = createMockContext('validate');
+    const config1 = createConfig({ preValidateCommand: 'pnpm install' });
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(makeFailResult('validate'));
+
+    await phaseLoop.executeLoop(context1, config1, deps, ['validate']);
+
+    const firstCall = (deps.stageCommentManager.postFailureAlert as any).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const runId1 = firstCall[0].runId;
+    expect(runId1).toMatch(UUID_REGEX);
+
+    // Second invocation: fresh deps + fresh phaseLoop → new runId
+    const phaseLoop2 = new PhaseLoop(mockLogger);
+    const deps2 = createMockDeps();
+    (deps2.cliSpawner.runPreValidateInstall as any).mockResolvedValue(makeFailResult('validate'));
+
+    await phaseLoop2.executeLoop(context1, config1, deps2, ['validate']);
+
+    const secondCall = (deps2.stageCommentManager.postFailureAlert as any).mock.calls[0];
+    expect(secondCall).toBeDefined();
+    const runId2 = secondCall[0].runId;
+    expect(runId2).toMatch(UUID_REGEX);
+    expect(runId2).not.toBe(runId1);
+  });
+
+  it('uses a stable runId within one executeLoop invocation (T020)', async () => {
+    // The Starting-phase-loop log line and the postFailureAlert call should
+    // carry the same runId. Capture logger.info calls to check the mint value.
+    const captured: { info: any[] } = { info: [] };
+    const capturingLogger = {
+      info: (obj: any, msg?: string) => {
+        if (typeof obj === 'object' && obj !== null && 'runId' in obj) {
+          captured.info.push({ obj, msg });
+        }
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      child: () => capturingLogger,
+    } as unknown as Logger;
+
+    const phaseLoopWithLog = new PhaseLoop(capturingLogger);
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(makeFailResult('validate'));
+
+    await phaseLoopWithLog.executeLoop(context, config, deps, ['validate']);
+
+    const startCall = captured.info.find((c) => c.msg === 'Starting phase loop');
+    expect(startCall).toBeDefined();
+    const runIdFromLog = startCall!.obj.runId;
+
+    const alertCall = (deps.stageCommentManager.postFailureAlert as any).mock.calls[0];
+    expect(alertCall).toBeDefined();
+    expect(alertCall[0].runId).toBe(runIdFromLog);
+  });
+
+  it('calls postFailureAlert once on pre-validate install failure with correct data (T021)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+
+    const installResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 100,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        stderr: 'missing package.json',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(installResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const spy = deps.stageCommentManager.postFailureAlert as any;
+    expect(spy).toHaveBeenCalledTimes(1);
+    const arg = spy.mock.calls[0][0];
+    expect(arg.stage).toBe('implementation');
+    expect(arg.phase).toBe('validate');
+    expect(arg.evidence.command).toBe('pnpm install');
+    expect(arg.evidence.exitDescriptor).toBe('exit 1');
+    expect(arg.runId).toMatch(UUID_REGEX);
+  });
+
+  it('calls postFailureAlert once on post-phase validate failure (T022)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm test && npm run build',
+    });
+
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        stderr: 'Tests failed',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const spy = deps.stageCommentManager.postFailureAlert as any;
+    expect(spy).toHaveBeenCalledTimes(1);
+    const arg = spy.mock.calls[0][0];
+    expect(arg.phase).toBe('validate');
+    expect(arg.evidence.command).toBe('npm test && npm run build');
+  });
+
+  it('does NOT call postFailureAlert on intermediate implement retry that eventually succeeds (T023)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    // Fail once (retry), then succeed
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(deps.stageCommentManager.postFailureAlert).not.toHaveBeenCalled();
+  });
+
+  it('calls postFailureAlert exactly once when implement exhausts retries (T024)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 1 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const spy = deps.stageCommentManager.postFailureAlert as any;
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0].phase).toBe('implement');
+  });
+
+  it('no-progress site emits evidence via updateStageComment AND postFailureAlert with same evidence (T025)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(0, 10))  // 10 remaining
+      .mockResolvedValueOnce(makePartialResult(0, 10)); // still 10 — guard fires
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    // updateStageComment gets error status with errorEvidence non-empty
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toBeDefined();
+    expect(errorCall.errorEvidence.stderrTail).toContain('no progress: tasks_remaining stayed at');
+
+    // postFailureAlert gets the same evidence object
+    const alertSpy = deps.stageCommentManager.postFailureAlert as any;
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    const alertArg = alertSpy.mock.calls[0][0];
+    expect(alertArg.evidence).toEqual(errorCall.errorEvidence);
+    expect(alertArg.phase).toBe('implement');
+    expect(alertArg.evidence.command).toBe('implement (no-progress guard)');
+  });
+
+  it('preserves runId identity across log mint and error-site call (T026)', async () => {
+    // Regression fixture for the dedup semantic: within one invocation, the
+    // runId that appears in the "Starting phase loop" log MUST be the same
+    // string passed to postFailureAlert. If a second error site were
+    // hypothetically reached in the same executeLoop, dedup would match the
+    // marker written by the first site.
+    const captured: string[] = [];
+    const capturingLogger = {
+      info: (obj: any, msg?: string) => {
+        if (typeof obj === 'object' && obj !== null && obj.runId && msg === 'Starting phase loop') {
+          captured.push(obj.runId);
+        }
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      child: () => capturingLogger,
+    } as unknown as Logger;
+
+    const phaseLoopWithLog = new PhaseLoop(capturingLogger);
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoopWithLog.executeLoop(context, config, deps, ['implement']);
+
+    expect(captured).toHaveLength(1);
+    const loggedRunId = captured[0];
+
+    const alertSpy = deps.stageCommentManager.postFailureAlert as any;
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    // The runId passed to postFailureAlert must match the runId logged at
+    // executeLoop entry — proving that all error sites in this invocation
+    // would use the same marker (and therefore dedup among themselves).
+    expect(alertSpy.mock.calls[0][0].runId).toBe(loggedRunId);
   });
 });

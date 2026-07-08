@@ -94,6 +94,18 @@ export const STAGE_MARKERS: Record<StageType, string> = {
 };
 
 /**
+ * HTML-marker prefix used on failure-alert comments. Full marker shape:
+ *   <!-- generacy:failure-alert:<stage>:<runId> -->
+ * where <stage> is a StageType and <runId> is a UUID minted at
+ * PhaseLoop.executeLoop entry.
+ *
+ * Future cockpit tooling MAY parse this prefix to discover alert history on
+ * an issue. Format changes require a contract-file edit
+ * (specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md).
+ */
+export const FAILURE_ALERT_MARKER_PREFIX = '<!-- generacy:failure-alert:';
+
+/**
  * Gate definition for pausing workflow at review checkpoints
  */
 export interface GateDefinition {
@@ -216,6 +228,28 @@ export interface StageCommentData {
     /** Bounded stderr tail (last 30 lines → 4 KiB cap, truncation marker prepended when applicable). Literal `(stderr empty)` when empty. */
     stderrTail: string;
   };
+}
+
+/**
+ * Input to StageCommentManager.postFailureAlert. Composed by phase-loop.ts at
+ * each of the terminal-error sites (pre-validate install failure, unexpected
+ * spawn error, post-phase failure, product-diff failures, no-progress guard)
+ * and passed as-is to the manager.
+ *
+ * `runId` is minted once per PhaseLoop.executeLoop invocation via
+ * crypto.randomUUID(). See specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
+ */
+export interface FailureAlertData {
+  /** Which stage the failing phase belongs to (used in the marker). */
+  stage: StageType;
+  /** Stable per-runPhaseLoop-invocation UUID (dedup key inside the marker). */
+  runId: string;
+  /** The failing phase name (used in the summary line). */
+  phase: WorkflowPhase;
+  /**
+   * Verbatim reuse of buildErrorEvidence output. NO re-derivation.
+   */
+  evidence: NonNullable<StageCommentData['errorEvidence']>;
 }
 
 /**
