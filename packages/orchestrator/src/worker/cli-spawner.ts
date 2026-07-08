@@ -11,10 +11,10 @@ import type { ShellIntent } from '../launcher/types.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
 
 /** Default timeout for the validate phase (10 minutes). */
-const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
+export const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
 
 /** Default timeout for pre-validate dependency installation (5 minutes). */
-const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
+export const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
 
 /**
  * Spawns Claude CLI processes (or shell commands for validation) and manages

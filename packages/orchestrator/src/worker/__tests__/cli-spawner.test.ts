@@ -421,9 +421,11 @@ describe('CliSpawner', () => {
 });
 
 describe('WorkerConfigSchema - preValidateCommand', () => {
-  it('defaults to pnpm install && pnpm -r --filter ./packages/* build', () => {
+  it('defaults to the degrade shell string (unconditional pnpm install + guarded workspace build)', () => {
     const config = WorkerConfigSchema.parse({});
-    expect(config.preValidateCommand).toBe("pnpm install && pnpm -r --filter './packages/*' build");
+    expect(config.preValidateCommand).toBe(
+      "pnpm install && if [ -f pnpm-workspace.yaml ] && ls packages/*/package.json >/dev/null 2>&1; then pnpm -r --filter './packages/*' build; fi",
+    );
   });
 
   it('accepts empty string', () => {
