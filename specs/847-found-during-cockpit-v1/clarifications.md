@@ -12,7 +12,7 @@
 - C: Detect the repo's package manager (npm/yarn/pnpm/bun) from lockfile and run that manager's install. (Broader; probably out of scope per "Out of Scope" bullet #6.)
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — keep `pnpm install`, make only the `-r --filter … build` half conditional. preValidate exists to make validateCommand runnable, and skipping install (B) just moves the failure ("missing node_modules") one step later. `pnpm install` behaves acceptably on npm/yarn repos as a *default*, and precision belongs to the per-repo override — which part (b) of this issue has the scaffolder writing with the template's real package manager anyway. C is correctly out of scope.
 
 ---
 
@@ -26,7 +26,7 @@
 - C: Append inside the stage comment for the current failure, but move the previous failure's block to a rolling sibling comment on the next retry (hybrid — one "current" + one "history").
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — the evidence block lives in the stage comment, rewritten per retry. The cockpit classifier keeps reading the one surface it already reads, the thread doesn't grow a marker-tagged failure trail (option B is unbounded in the other direction), and failure *history* isn't lost: GitHub preserves comment edit revisions, which is adequate archaeology for the rare repeated-failure dig. C is two surfaces with a synchronization rule — more mechanism than the problem needs.
 
 ---
 
@@ -40,7 +40,7 @@
 - C: Respect `pnpm-workspace.yaml` — run the monorepo half only if the file exists and includes `packages/*` (or an equivalent glob). Semantically correct but couples to a specific pnpm config file that not every monorepo uses.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **D** — require BOTH `pnpm-workspace.yaml` at the root AND at least one `packages/*/package.json`. Each check alone leaves a real failure mode: `pnpm -r` needs a workspace file to enumerate projects at all (`packages/` full of code but no workspace file still dies), and a workspace file with an empty `packages/` dir still produces zero filter matches (the transition case the question names). Both are two-line fs checks; together they answer the actual question, "will the filter match at least one project."
 
 ---
 
@@ -54,7 +54,7 @@
 - C: Take min(last 30 lines, last 4 KiB), whichever is *smaller*, prepended with `… truncated …` if any truncation occurred.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A, with B's richer marker text** — take the last 30 lines, then if that slice exceeds 4 KiB truncate from the beginning (keep the newest bytes), and prepend `… truncated (kept last N lines / M bytes) …`. Newest-at-bottom matches terminal reading habits, the marker-at-top tells the reader immediately that they're seeing a tail, and the counts make the bound self-describing.
 
 ---
 
@@ -68,4 +68,4 @@
 - C: Top-line distinct message only for aborts (operator-triggered, no diagnostic value); full block for timeouts (which represent a real hang worth debugging).
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — uniform full block: the distinct top-line message + failing command + synthesized exit descriptor (`killed (SIGTERM) after Nms` / `aborted`) + stderr tail, rendering `(stderr empty)` when there's nothing. Timeouts are hangs, and the stderr tail is often the single most diagnostic artifact for a hang (the last line names the stuck step) — option B throws that away. Option C's abort/timeout split is two renderers for one block; an abort's evidence is harmless and occasionally useful (what was in flight when the operator pulled the cord).
