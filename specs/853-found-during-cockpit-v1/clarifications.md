@@ -12,7 +12,7 @@
 - C: **In parallel with PR resolution** (`Promise.all([fetchIssueLabels, resolveIssueToPRRef → getPullRequestDetail])`). Missing-label payload optionally includes PR ref when the parallel resolution happened to succeed, `null` otherwise.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **B** — keep PR resolution first, then check the ISSUE's labels; the missing-label payload keeps its non-null `pr` invariant and additively gains the issue ref. The fail-fast saving (A) is one gh call on the failure path only — irrelevant — while relaxing `pr` to `null` changes a payload invariant the plugin's merge.md decision table was written against, turning a one-repo fix into a cross-repo contract change. B touches nothing consumers rely on and gives operators both refs, which is what they actually want when diagnosing "missing-label: which issue, which PR?"
 
 ---
 
@@ -26,7 +26,7 @@
 - C: **Let the exception bubble** — non-zero exit, no red JSON, stderr carries the gh error. Matches today's behavior for other gh failures inside `runMerge` (which also don't try/catch).
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **B** — reuse `unresolved` with the issue ref included; the raw gh error still goes to stderr. It's semantically exact ("couldn't get far enough to check"), and it keeps the reason vocabulary closed: option A's new enum value forces the plugin's result×reason table to learn a row (cross-repo ripple) for an edge that operators handle identically to `unresolved` anyway. Option C's crash is today's accidental behavior, not a contract — but making THIS fetch structured while `getPullRequestDetail` still bubbles is fine; a general gh-error taxonomy for the verb is a separate cleanup, not this bugfix.
 
 ---
 
@@ -40,4 +40,4 @@
 - C: **Only block on issues closed *not-as-completed*** — if the issue is closed with `state_reason: 'not_planned'` (or similar), block; otherwise proceed. GraphQL/gh CLI surface this via `stateReason`.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — refuse to merge when the issue is `CLOSED`, mirroring the PR-OPEN guard, with the issue state and `stateReason` named in the payload/stderr so the operator knows why. The cost asymmetry decides it: wrongly blocking costs a human ten seconds (reopen the issue — which doubles as the deliberate override), while wrongly merging is an unwanted squash to `develop`, the one irreversible outward action this whole design treats as sacred. Option C's `stateReason` discrimination gets the semantics almost right but silently merges the closed-as-completed-with-open-PR anomaly — and an anomaly at the merge gate should never be resolved silently in the direction of merging.
