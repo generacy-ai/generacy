@@ -1,5 +1,6 @@
 import type {
   CheckRunSummary,
+  DeleteHeadRefResult,
   GhWrapper,
   Issue,
   IssueComment,
@@ -125,6 +126,11 @@ export class FakeGh implements GhWrapper {
   ): Promise<MergeResult> {
     this.calls.push({ method: 'mergePullRequest', args: [repo, prNumber] });
     throw new Error('mergePullRequest is forbidden in FakeGh (watch/status sensor)');
+  }
+
+  async deleteHeadRef(repo: string, headRef: string): Promise<DeleteHeadRefResult> {
+    this.calls.push({ method: 'deleteHeadRef', args: [repo, headRef] });
+    throw new Error('deleteHeadRef is forbidden in FakeGh (watch/status sensor)');
   }
 
   async getRequiredCheckNames(repo: string, branch: string): Promise<RequiredChecksResult> {

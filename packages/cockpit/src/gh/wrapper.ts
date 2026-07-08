@@ -51,6 +51,7 @@ export interface PullRequestDetail {
   url: string;
   base: string;
   head: string;
+  headRepositoryOwner: string | null;
   body: string;
   author: { login: string } | null;
   state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -58,6 +59,11 @@ export interface PullRequestDetail {
   labels: string[];
   diff: string;
   diffTruncated: boolean;
+}
+
+export interface DeleteHeadRefResult {
+  outcome: 'deleted' | 'already-gone' | 'delete-failed';
+  stderr?: string;
 }
 
 export interface MergeResult {
@@ -125,6 +131,10 @@ export interface GhWrapper {
     prNumber: number,
     opts: { squash: true },
   ): Promise<MergeResult>;
+  deleteHeadRef(
+    repo: string,
+    headRef: string,
+  ): Promise<DeleteHeadRefResult>;
   getRequiredCheckNames(
     repo: string,
     branch: string,
@@ -190,6 +200,11 @@ const PullRequestDetailRawSchema = z
     url: z.string(),
     baseRefName: z.string(),
     headRefName: z.string(),
+    headRepositoryOwner: z
+      .object({ login: z.string() })
+      .passthrough()
+      .nullable()
+      .optional(),
     body: z.string().nullable().optional(),
     author: z
       .object({ login: z.string() })
@@ -748,7 +763,7 @@ export class GhCliWrapper implements GhWrapper {
       '--repo',
       repo,
       '--json',
-      'number,title,url,baseRefName,headRefName,body,author,state,isDraft,labels',
+      'number,title,url,baseRefName,headRefName,headRepositoryOwner,body,author,state,isDraft,labels',
     ]);
     failIfNonZero(viewResult, 'pr view');
 
@@ -783,6 +798,7 @@ export class GhCliWrapper implements GhWrapper {
       url: detail.data.url,
       base: detail.data.baseRefName,
       head: detail.data.headRefName,
+      headRepositoryOwner: detail.data.headRepositoryOwner?.login ?? null,
       body: detail.data.body ?? '',
       author:
         detail.data.author?.login != null
@@ -836,6 +852,32 @@ export class GhCliWrapper implements GhWrapper {
       return { merged: true };
     }
     return { merged: true, commitSha: shape.data.mergeCommit.oid };
+  }
+
+  async deleteHeadRef(
+    repo: string,
+    headRef: string,
+  ): Promise<DeleteHeadRefResult> {
+    const [owner, name] = repo.split('/');
+    if (!owner || !name) {
+      throw new Error(
+        `deleteHeadRef: repo must be "owner/name", got: ${repo}`,
+      );
+    }
+    const result = await this.runner('gh', [
+      'api',
+      '-X',
+      'DELETE',
+      `repos/${owner}/${name}/git/refs/heads/${headRef}`,
+    ]);
+    if (result.exitCode === 0) {
+      return { outcome: 'deleted' };
+    }
+    const stderr = result.stderr.trim();
+    if (/HTTP\s+422|HTTP\s+404/.test(stderr)) {
+      return { outcome: 'already-gone' };
+    }
+    return { outcome: 'delete-failed', stderr };
   }
 
   async getRequiredCheckNames(

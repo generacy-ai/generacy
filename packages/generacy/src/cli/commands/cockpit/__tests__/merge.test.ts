@@ -6,6 +6,7 @@ import addFormats from 'ajv-formats';
 import pino from 'pino';
 import type {
   CheckRunSummary,
+  DeleteHeadRefResult,
   GhWrapper,
   IssueStateResult,
   MergeResult,
@@ -31,6 +32,7 @@ interface FakeOverrides {
   getPullRequestCheckRuns?: CheckRunSummary[];
   mergePullRequest?: MergeResult;
   fetchIssueState?: IssueStateResult | (() => IssueStateResult);
+  deleteHeadRef?: DeleteHeadRefResult;
 }
 
 const defaultIssueState: IssueStateResult = {
@@ -44,9 +46,12 @@ const defaultIssueState: IssueStateResult = {
 
 function fakeGh(overrides: FakeOverrides = {}): {
   gh: GhWrapper;
-  calls: { mergePullRequest: number };
+  calls: { mergePullRequest: number; deleteHeadRef: Array<[string, string]> };
 } {
-  const calls = { mergePullRequest: 0 };
+  const calls = {
+    mergePullRequest: 0,
+    deleteHeadRef: [] as Array<[string, string]>,
+  };
   const gh: GhWrapper = {
     listIssues: vi.fn(async () => []),
     addLabels: vi.fn(async () => {}),
@@ -70,6 +75,10 @@ function fakeGh(overrides: FakeOverrides = {}): {
     mergePullRequest: vi.fn(async () => {
       calls.mergePullRequest++;
       return overrides.mergePullRequest ?? { merged: true, commitSha: 'sha' };
+    }),
+    deleteHeadRef: vi.fn(async (repo: string, headRef: string) => {
+      calls.deleteHeadRef.push([repo, headRef]);
+      return overrides.deleteHeadRef ?? { outcome: 'deleted' as const };
     }),
     getRequiredCheckNames: vi.fn(async () =>
       overrides.getRequiredCheckNames ?? {
@@ -97,6 +106,7 @@ const greenPr: PullRequestDetail = {
   url: 'https://github.com/o/r/pull/42',
   base: 'develop',
   head: 'feature/x',
+  headRepositoryOwner: 'o',
   body: '',
   author: { login: 'alice' },
   state: 'OPEN',
@@ -117,7 +127,7 @@ const openRef: PullRequestRef = {
 const expectedIssueRef = { owner: 'o', repo: 'r', number: 7 };
 
 describe('runMerge (SC-001/002/003)', () => {
-  it('SC-001: green + completed:validate on ISSUE → calls mergePullRequest, exit 0, empty stdout', async () => {
+  it('SC-001: green + completed:validate on ISSUE → calls mergePullRequest, exit 0, branch-deletion suffix stdout', async () => {
     const { gh, calls } = fakeGh({
       resolveIssueToPR: openRef,
       getPullRequest: greenPr,
@@ -131,7 +141,7 @@ describe('runMerge (SC-001/002/003)', () => {
       logger: silentLogger(),
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('');
+    expect(result.stdout).toBe('merged and branch deleted\n');
     expect(calls.mergePullRequest).toBe(1);
   });
 
@@ -342,7 +352,7 @@ describe('runMerge FR-007 regression tests', () => {
       logger: silentLogger(),
     });
     expect(result.exitCode).toBe(0);
-    expect(result.stdout).toBe('');
+    expect(result.stdout).toBe('merged and branch deleted\n');
     expect(calls.mergePullRequest).toBe(1);
   });
 
@@ -467,7 +477,7 @@ describe('runMerge #857 regression: no-checks is not RED', () => {
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe(
-      'no checks configured and none required — proceeding on completed:validate\n',
+      'no checks configured and none required — proceeding on completed:validate\nmerged and branch deleted\n',
     );
     expect(calls.mergePullRequest).toBe(1);
     expect(gh.mergePullRequest).toHaveBeenCalledWith('o/r', 42, { squash: true });
@@ -523,6 +533,142 @@ describe('runMerge #857 regression: no-checks is not RED', () => {
       name: 'ci/test',
       state: 'FAILURE',
     });
+  });
+});
+
+describe('runMerge #859 regression: head-branch deletion after successful squash', () => {
+  it('SC-101: same-owner + classify-passing + deleted → stdout "merged and branch deleted\\n"', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
+      getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
+      deleteHeadRef: { outcome: 'deleted' },
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('merged and branch deleted\n');
+    expect(calls.deleteHeadRef).toEqual([['o/r', 'feature/x']]);
+  });
+
+  it('SC-102: same-owner + vacuous-green + already-gone → stdout composes on vacuous-green + info log', async () => {
+    const logger = pino({ level: 'silent' });
+    const infoSpy = vi.spyOn(logger, 'info');
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
+      getPullRequestCheckRuns: [],
+      deleteHeadRef: { outcome: 'already-gone' },
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'no checks configured and none required — proceeding on completed:validate\nmerged (branch was already deleted)\n',
+    );
+    expect(calls.deleteHeadRef).toEqual([['o/r', 'feature/x']]);
+    const alreadyGoneCall = infoSpy.mock.calls.find(
+      (call) => call[1] === 'branch was already deleted',
+    );
+    expect(alreadyGoneCall).toBeDefined();
+  });
+
+  it('SC-103: cross-fork PR → skipped, stdout "cross-fork PR", deleteHeadRef NOT called, info log', async () => {
+    const logger = pino({ level: 'silent' });
+    const infoSpy = vi.spyOn(logger, 'info');
+    const forkPr: PullRequestDetail = {
+      ...greenPr,
+      headRepositoryOwner: 'contributor42',
+    };
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: forkPr,
+      getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
+      getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('merged (branch delete skipped: cross-fork PR)\n');
+    expect(calls.deleteHeadRef).toEqual([]);
+    const skipCall = infoSpy.mock.calls.find(
+      (call) => call[1] === 'branch deletion skipped: cross-fork PR',
+    );
+    expect(skipCall).toBeDefined();
+  });
+
+  it('SC-104: same-owner + delete-failed → stdout wraps stderr, warn log, exit 0', async () => {
+    const logger = pino({ level: 'silent' });
+    const warnSpy = vi.spyOn(logger, 'warn');
+    const { gh } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
+      getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
+      deleteHeadRef: {
+        outcome: 'delete-failed',
+        stderr: 'HTTP 403: Resource not accessible by integration',
+      },
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'merged (branch delete failed: HTTP 403: Resource not accessible by integration)\n',
+    );
+    const warnCall = warnSpy.mock.calls.find(
+      (call) => call[1] === 'branch deletion failed',
+    );
+    expect(warnCall).toBeDefined();
+    expect(warnCall![0]).toMatchObject({
+      pr: 42,
+      repo: 'o/r',
+      headRef: 'feature/x',
+      stderr: 'HTTP 403: Resource not accessible by integration',
+    });
+  });
+
+  it('SC-105: null head repo + vacuous-green + deleted → falls through pre-check, composes on vacuous-green', async () => {
+    const nullHeadPr: PullRequestDetail = {
+      ...greenPr,
+      headRepositoryOwner: null,
+    };
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: openRef,
+      getPullRequest: nullHeadPr,
+      getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
+      getPullRequestCheckRuns: [],
+      deleteHeadRef: { outcome: 'deleted' },
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'no checks configured and none required — proceeding on completed:validate\nmerged and branch deleted\n',
+    );
+    expect(calls.deleteHeadRef).toEqual([['o/r', 'feature/x']]);
   });
 });
 

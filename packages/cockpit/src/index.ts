@@ -52,6 +52,7 @@ export {
   type PullRequestRef,
   type PullRequestDetail,
   type MergeResult,
+  type DeleteHeadRefResult,
   type RequiredChecksResult,
   type CommandRunner,
   type IssueLabelsResult,
