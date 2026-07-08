@@ -63,6 +63,13 @@ vi.mock('../repo-checkout.js', () => ({
   })),
 }));
 
+// Mock base-merge so the pre-phase base-merge hook (#864) does not exercise
+// real git during integration tests. Returns a canned clean merge.
+vi.mock('../base-merge.js', () => ({
+  performBaseMerge: vi.fn().mockResolvedValue({ ok: true, baseRef: 'origin/develop' }),
+  resolveBaseBranch: vi.fn().mockResolvedValue('origin/develop'),
+}));
+
 // Mock PrFeedbackHandler for address-pr-feedback command routing tests
 const mockPrFeedbackHandlerInstance = {
   handle: vi.fn().mockResolvedValue(undefined),

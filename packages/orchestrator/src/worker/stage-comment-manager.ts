@@ -1,6 +1,12 @@
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
-import type { StageType, StageCommentData, Logger, FailureAlertData } from './types.js';
+import type { StageType, StageCommentData, Logger, FailureAlertData, CommandExitEvidence } from './types.js';
 import { STAGE_MARKERS, FAILURE_ALERT_MARKER_PREFIX } from './types.js';
+
+/** Narrow variant of `StageCommentData.errorEvidence` for the #864 merge-conflict block. */
+type MergeConflictEvidence = Extract<
+  NonNullable<StageCommentData['errorEvidence']>,
+  { mergeConflict: unknown }
+>['mergeConflict'];
 
 /**
  * Stage display titles with emoji prefixes
@@ -153,15 +159,24 @@ export class StageCommentManager {
 
     lines.push('');
 
-    if (data.status === 'error') {
-      if (data.errorEvidence) {
+    // Merge-conflict evidence can appear during a pause (status: 'in_progress').
+    // Command-exit evidence only appears on status: 'error' — preserving the #847 contract.
+    if (data.errorEvidence) {
+      if ('mergeConflict' in data.errorEvidence) {
+        this.appendMergeConflictBlock(lines, data.errorEvidence.mergeConflict);
+      } else if (data.status === 'error') {
         this.appendEvidenceBlock(lines, data.errorEvidence);
       } else {
-        this.logger.warn(
-          { stage: data.stage },
-          'Stage comment error status without errorEvidence — omitting evidence block',
+        this.logger.debug(
+          { stage: data.stage, status: data.status },
+          'Command-exit errorEvidence on non-error status — omitting evidence block',
         );
       }
+    } else if (data.status === 'error') {
+      this.logger.warn(
+        { stage: data.stage },
+        'Stage comment error status without errorEvidence — omitting evidence block',
+      );
     }
 
     return lines.join('\n');
@@ -177,7 +192,7 @@ export class StageCommentManager {
    */
   private appendEvidenceBlock(
     lines: string[],
-    evidence: NonNullable<StageCommentData['errorEvidence']>,
+    evidence: CommandExitEvidence,
   ): void {
     // Neutralize any triple-backtick sequence inside stderrTail so it cannot
     // break out of our fenced block. Insert U+200B (ZWSP) between the first two
@@ -194,6 +209,37 @@ export class StageCommentManager {
     lines.push('```text');
     lines.push(safeStderr);
     lines.push('```');
+    lines.push('');
+    lines.push('</details>');
+  }
+
+  /**
+   * Append the merge-conflict evidence block (#864).
+   *
+   * See specs/864-found-during-cockpit-v1/contracts/merge-conflict-evidence-block.md
+   * §"Byte layout (variant B)" for the exact layout.
+   */
+  private appendMergeConflictBlock(
+    lines: string[],
+    mergeConflict: MergeConflictEvidence,
+  ): void {
+    // Neutralize any backticks inside paths using ZWSP (same treatment as #847's stderrTail).
+    const escapePath = (p: string): string => p.replace(/`/g, '`​');
+    const paths = mergeConflict.conflictedPaths;
+
+    lines.push('---');
+    lines.push('**Merge conflict during base-sync**');
+    lines.push(`**Base**: \`${mergeConflict.baseRef}\``);
+    lines.push('');
+    lines.push(`<details><summary>Conflicted paths (${paths.length})</summary>`);
+    lines.push('');
+    if (paths.length === 0) {
+      lines.push('- (no paths reported — merge failed for a non-conflict reason)');
+    } else {
+      for (const path of paths) {
+        lines.push(`- \`${escapePath(path)}\``);
+      }
+    }
     lines.push('');
     lines.push('</details>');
   }

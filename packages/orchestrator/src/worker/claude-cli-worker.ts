@@ -381,6 +381,7 @@ export class ClaudeCliWorker {
         logger: workerLogger,
         signal: abortController.signal,
         checkoutPath,
+        branch: featureResult.branch_name,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
         siblingWorkdirs,
