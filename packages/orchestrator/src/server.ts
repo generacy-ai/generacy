@@ -42,7 +42,6 @@ import { setupPrWebhookRoutes } from './routes/pr-webhooks.js';
 import { setupDispatchRoutes } from './routes/dispatch.js';
 import { createGitHubClient } from '@generacy-ai/workflow-engine';
 import { resolveClusterIdentity } from './services/identity.js';
-import { resolveActingIdentity } from './services/acting-identity.js';
 import { Redis as IORedis } from 'ioredis';
 import { ClaudeCliWorker } from './worker/claude-cli-worker.js';
 import { existsSync } from 'node:fs';
@@ -163,13 +162,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     config.monitor.clusterGithubUsername,
     server.log,
   );
-
-  // #874: acting identity used exclusively by the `cluster-identity` trust
-  // rule. Distinct from the assignee chain (`clusterGithubUsername` above)
-  // so a scaffolded cluster's App-bot login can be compared against
-  // cockpit-posted review authors. Emits an `error`-level boot line iff
-  // CLUSTER_ACTING_LOGIN is unset (degraded mode is observable).
-  const actingIdentity = resolveActingIdentity(server.log);
 
   const isWorkerMode = config.mode === 'worker';
 
@@ -334,9 +326,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
-      // #874: distinct acting-identity chain — trust predicate compares
-      // against the App bot login, not the operator/assignee login.
-      clusterIdentity: actingIdentity,
     });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
@@ -405,7 +394,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
-        actingIdentity,
       );
     }
   }

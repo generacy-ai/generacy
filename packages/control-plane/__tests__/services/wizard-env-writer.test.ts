@@ -194,6 +194,84 @@ describe('writeWizardEnvFile', () => {
     const stat = await fs.stat(envFilePath);
     expect(stat.mode & 0o777).toBe(0o600);
   });
+
+  it('written file ends with a trailing newline', async () => {
+    await backend.setSecret('github-main-org', '{"installationId":1,"token":"ghp_abc123"}');
+    await backend.setSecret('anthropic-api-key', 'sk-ant-xyz789');
+
+    const yamlContent = {
+      credentials: {
+        'github-main-org': {
+          type: 'github-app',
+          backend: 'cluster-local',
+          status: 'active',
+          updatedAt: '2026-05-12T10:00:00.000Z',
+        },
+        'anthropic-api-key': {
+          type: 'api-key',
+          backend: 'cluster-local',
+          status: 'active',
+          updatedAt: '2026-05-12T10:00:00.000Z',
+        },
+      },
+    };
+    await fs.writeFile(
+      path.join(agencyDir, 'credentials.yaml'),
+      YAML.stringify(yamlContent),
+    );
+
+    await writeWizardEnvFile({ agencyDir, envFilePath });
+
+    const contents = await fs.readFile(envFilePath, 'utf8');
+    expect(contents.endsWith('\n')).toBe(true);
+  });
+
+  it('naive append after write parses cleanly with no key collision', async () => {
+    await backend.setSecret(
+      'github-main-org',
+      '{"installationId":1,"token":"ghp_abc123","accountLogin":"christrudelpw"}',
+    );
+    await backend.setSecret('anthropic-api-key', 'sk-ant-xyz789');
+
+    const yamlContent = {
+      credentials: {
+        'github-main-org': {
+          type: 'github-app',
+          backend: 'cluster-local',
+          status: 'active',
+          updatedAt: '2026-05-12T10:00:00.000Z',
+        },
+        'anthropic-api-key': {
+          type: 'api-key',
+          backend: 'cluster-local',
+          status: 'active',
+          updatedAt: '2026-05-12T10:00:00.000Z',
+        },
+      },
+    };
+    await fs.writeFile(
+      path.join(agencyDir, 'credentials.yaml'),
+      YAML.stringify(yamlContent),
+    );
+
+    await writeWizardEnvFile({ agencyDir, envFilePath });
+    await fs.appendFile(envFilePath, 'NEW_KEY=value\n');
+
+    const contents = await fs.readFile(envFilePath, 'utf8');
+    const parsed: Record<string, string> = {};
+    for (const line of contents.split('\n')) {
+      if (line.length === 0) continue;
+      const eq = line.indexOf('=');
+      if (eq === -1) continue;
+      parsed[line.slice(0, eq)] = line.slice(eq + 1);
+    }
+
+    expect(parsed.GH_TOKEN).toBe('ghp_abc123');
+    expect(parsed.GH_USERNAME).toBe('christrudelpw');
+    expect(parsed.GH_EMAIL).toBe('christrudelpw@users.noreply.github.com');
+    expect(parsed.ANTHROPIC_API_KEY).toBe('sk-ant-xyz789');
+    expect(parsed.NEW_KEY).toBe('value');
+  });
 });
 
 describe('mapCredentialToEnvEntries', () => {
@@ -369,6 +447,6 @@ describe('formatEnvFile', () => {
       { key: 'KEY1', value: 'val1' },
       { key: 'KEY2', value: 'val2' },
     ]);
-    expect(result).toBe('KEY1=val1\nKEY2=val2');
+    expect(result).toBe('KEY1=val1\nKEY2=val2\n');
   });
 });

@@ -1484,24 +1484,17 @@ describe('PrFeedbackMonitorService', () => {
         defaultConfig,
         defaultRepos,
         clusterId,
-        undefined,
-        undefined,
-        undefined,
-        // #874: acting identity — pre-#874 these tests conflated assignee
-        // login and acting login into a single param; keep parity by
-        // passing the same value into both slots.
-        clusterId,
       );
       return { svc, client };
     }
 
-    it('M1: enqueues when unresolved thread has a cluster-identity comment (NONE tier)', async () => {
+    it('M1: enqueues when unresolved thread has a self-authored comment (NONE tier)', async () => {
       const { svc, client } = makeServiceWithIdentity('cluster-app[bot]');
       (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
         {
           rootCommentId: 700,
           isResolved: false,
-          comments: [{ id: 700, body: 'issue', author: 'cluster-app[bot]', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+          comments: [{ id: 700, body: 'issue', author: 'cluster-app[bot]', authorAssociation: 'NONE', viewerDidAuthor: true, created_at: '', updated_at: '' }],
         },
       ]);
 
@@ -1531,11 +1524,25 @@ describe('PrFeedbackMonitorService', () => {
         expect.objectContaining({
           totalUnresolvedThreads: 1,
           untrustedCommentSkips: expect.arrayContaining([
-            expect.objectContaining({ author: 'random-user', reason: 'none-untrusted' }),
+            expect.objectContaining({
+              author: 'random-user',
+              reason: 'none-untrusted',
+              viewerDidAuthor: null,
+            }),
           ]),
         }),
         expect.stringContaining('every comment author is untrusted'),
       );
+      // #878: top-level clusterIdentity / normalizedClusterIdentity fields
+      // are gone; per-skip normalizedAuthor is gone. Assert the deprecated
+      // fields are absent from the warn payload.
+      const warnCall = (logger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => typeof c[1] === 'string' && c[1].includes('every comment author is untrusted'),
+      );
+      expect(warnCall![0]).not.toHaveProperty('clusterIdentity');
+      expect(warnCall![0]).not.toHaveProperty('normalizedClusterIdentity');
+      expect(warnCall![0].untrustedCommentSkips[0]).not.toHaveProperty('normalizedAuthor');
+
       expect(client.postPrComment).toHaveBeenCalledTimes(1);
       const [, , , body] = (client.postPrComment as ReturnType<typeof vi.fn>).mock.calls[0]!;
       expect(body).toContain('<!-- generacy:pr-feedback-untrusted-notice -->');
@@ -1674,120 +1681,6 @@ describe('PrFeedbackMonitorService', () => {
     });
   });
 
-  // #874 / FR-007: the trust predicate MUST NOT fall back to
-  // CLUSTER_GITHUB_USERNAME, GH_USERNAME, or `gh api /user` for the
-  // acting-identity comparison when CLUSTER_ACTING_LOGIN is unresolvable.
-  // The bot-login match (a separate, pre-existing rule sourced from
-  // CLUSTER_GITHUB_USERNAME/GH_USERNAME) is out of scope here — this
-  // assertion is scoped strictly to the `cluster-identity` reason.
-  describe('FR-007 regression: no fallback from acting to assignee chain (#874)', () => {
-    const originalActing = process.env['CLUSTER_ACTING_LOGIN'];
-    const originalGithubUser = process.env['CLUSTER_GITHUB_USERNAME'];
-    const originalGhUser = process.env['GH_USERNAME'];
-
-    beforeEach(() => {
-      delete process.env['CLUSTER_ACTING_LOGIN'];
-      // Set both bot-login sources to a login that MUST NOT match the
-      // comment author. This isolates the cluster-identity path from the
-      // bot-login path (a pre-existing rule sourced from these vars).
-      process.env['CLUSTER_GITHUB_USERNAME'] = 'someone-else';
-      delete process.env['GH_USERNAME'];
-    });
-
-    afterEach(() => {
-      if (originalActing === undefined) {
-        delete process.env['CLUSTER_ACTING_LOGIN'];
-      } else {
-        process.env['CLUSTER_ACTING_LOGIN'] = originalActing;
-      }
-      if (originalGithubUser === undefined) {
-        delete process.env['CLUSTER_GITHUB_USERNAME'];
-      } else {
-        process.env['CLUSTER_GITHUB_USERNAME'] = originalGithubUser;
-      }
-      if (originalGhUser === undefined) {
-        delete process.env['GH_USERNAME'];
-      } else {
-        process.env['GH_USERNAME'] = originalGhUser;
-      }
-    });
-
-    it('does NOT trust a comment via cluster-identity when actingIdentity is undefined even if clusterGithubUsername matches the author', async () => {
-      // Wire the service exactly as server.ts does when
-      // CLUSTER_ACTING_LOGIN is unset:
-      //   - clusterGithubUsername = 'christrudelpw' (assignee filter passes)
-      //   - actingIdentity        = undefined (degraded FR-007 mode)
-      const client = createMockGitHubClient({
-        getIssue: vi.fn().mockResolvedValue({
-          number: 42,
-          title: 'Test issue',
-          body: '',
-          state: 'open',
-          labels: [{ name: 'agent:in-progress', color: '' }],
-          assignees: ['christrudelpw'],
-          created_at: '',
-          updated_at: '',
-        }),
-        getPRReviewThreads: vi.fn().mockResolvedValue([
-          {
-            rootCommentId: 999,
-            isResolved: false,
-            comments: [
-              {
-                id: 999,
-                body: 'author-matches-assignee',
-                author: 'christrudelpw',
-                authorAssociation: 'NONE',
-                created_at: '',
-                updated_at: '',
-              },
-            ],
-          },
-        ]),
-        listPrCommentBodies: vi.fn().mockResolvedValue([]),
-        postPrComment: vi.fn().mockResolvedValue(undefined),
-      });
-      const factory = vi.fn().mockReturnValue(client);
-      const svc = new PrFeedbackMonitorService(
-        logger,
-        factory,
-        queueManager,
-        defaultConfig,
-        defaultRepos,
-        'christrudelpw',
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-      );
-
-      const result = await svc.processPrReviewEvent(createPrReviewEvent());
-
-      // The comment must NOT be trusted via cluster-identity. With
-      // botLogin='someone-else' (unrelated) and actingIdentity=undefined,
-      // no trust rule fires, so this reduces to a zero-trusted skip.
-      expect(result).toBe(false);
-      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
-      // The specific FR-007 assertion: the skip reason for the assignee-
-      // authored comment must NOT be `cluster-identity`. If the trust
-      // predicate had fallen back to CLUSTER_GITHUB_USERNAME, the comment
-      // would have been trusted (reason=`cluster-identity`) and the skip
-      // would not have been emitted at all.
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          untrustedCommentSkips: expect.arrayContaining([
-            expect.objectContaining({
-              author: 'christrudelpw',
-              reason: 'none-untrusted',
-            }),
-          ]),
-        }),
-        expect.stringContaining('every comment author is untrusted'),
-      );
-      svc.stopPolling();
-    });
-  });
-
   // ==========================================================================
   // #879: SC-001..SC-005 + FR-009 + FR-010 regressions
   // ==========================================================================
@@ -1857,10 +1750,9 @@ describe('PrFeedbackMonitorService', () => {
       // Restore isTrustedCommentAuthor to trust nothing for this test.
       const { isTrustedCommentAuthor: _mock } = await import('@generacy-ai/workflow-engine');
 
-      // Zero-trusted PR: unresolved thread with only NONE-tier authors and
-      // no cluster-identity match. Uses the trust-aware factory pattern
-      // (which passes `actingIdentity = undefined` implicitly for
-      // `other-cluster`) so the trust predicate really returns false.
+      // Zero-trusted PR: unresolved thread with only NONE-tier authors.
+      // No comment is self-authored (viewerDidAuthor false) and the author
+      // is not the bot login, so the trust predicate returns false.
       const client = createMockGitHubClient({
         getIssue: vi.fn().mockResolvedValue({
           number: 42,
@@ -1893,7 +1785,6 @@ describe('PrFeedbackMonitorService', () => {
         undefined,
         undefined,
         undefined,
-        'other-cluster',
       );
 
       // Fire multiple polls to be sure — no enqueue on any poll.

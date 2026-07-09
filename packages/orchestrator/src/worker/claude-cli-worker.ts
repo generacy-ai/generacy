@@ -111,12 +111,6 @@ export interface ClaudeCliWorkerDeps {
   jobEventEmitter?: JobEventEmitter;
   /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
   tokenProvider?: () => Promise<string | undefined>;
-  /**
-   * #869 / FR-001, FR-007: resolved cluster GitHub identity. Threaded into
-   * `PrFeedbackHandler` so the shared trust predicate can trust the
-   * cluster's own cockpit-posted reviews (`author_association: NONE`).
-   */
-  clusterIdentity?: string;
 }
 
 /**
@@ -139,7 +133,6 @@ export class ClaudeCliWorker {
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly tokenProvider?: () => Promise<string | undefined>;
-  private readonly clusterIdentity?: string;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -153,7 +146,6 @@ export class ClaudeCliWorker {
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
     this.tokenProvider = deps.tokenProvider;
-    this.clusterIdentity = deps.clusterIdentity;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -274,7 +266,6 @@ export class ClaudeCliWorker {
           this.config,
           workerLogger,
           this.agentLauncher,
-          this.clusterIdentity,
           this.sseEmitter,
         );
 

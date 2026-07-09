@@ -91,6 +91,16 @@ export interface Comment {
   // Optional for fixture / cache / older-response compatibility — unset is
   // treated as untrusted by the trust helper (fail-closed, per FR-011).
   authorAssociation?: string;
+  /**
+   * True iff GitHub reports the comment was authored by the credential
+   * making the query (GraphQL's `viewerDidAuthor` on
+   * `PullRequestReviewComment`). Populated by `getPRReviewThreads()` only.
+   * Undefined on comments fetched from any other client (fixture / cache /
+   * REST). The pr-feedback trust predicate treats non-`true` (`false` /
+   * `undefined` / `null` at wire level) as *not* self-authored and, when
+   * non-boolean, emits a `warn` log.
+   */
+  viewerDidAuthor?: boolean;
 }
 
 /**
