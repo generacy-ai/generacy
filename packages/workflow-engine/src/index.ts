@@ -232,4 +232,4 @@ export { wrapUntrustedData } from './security/untrusted-data-fence.js';
 
 // Comment types (re-exported so consumers filtering via isTrustedCommentAuthor
 // don't need to import from the deep types barrel)
-export type { Comment, SkippedCommentInfo } from './types/github.js';
+export type { Comment, ReviewThread, SkippedCommentInfo } from './types/github.js';

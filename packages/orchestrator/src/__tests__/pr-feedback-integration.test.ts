@@ -49,12 +49,16 @@ const mockGitHub = {
   addLabels: vi.fn(),
   removeLabels: vi.fn(),
   getIssue: vi.fn(),
+  // #883: default to empty label set so the monitor's blocked:* skip check
+  // passes through without needing per-test setup.
+  getIssueLabels: vi.fn().mockResolvedValue([]),
   listOpenPullRequests: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn(),
+  resolveReviewThread: vi.fn(),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -73,6 +77,8 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
   tryLoadCommentTrustConfig: vi.fn(() => undefined),
   wrapUntrustedData: vi.fn((content: string) => content),
+  // #883: short SHA lookup for reply-body interpolation.
+  executeCommand: vi.fn(async () => ({ exitCode: 0, stdout: 'abc1234\n', stderr: '' })),
 }));
 
 // ==========================================================================
@@ -85,6 +91,7 @@ function asThreads(comments: Array<Record<string, unknown> & { id: number; resol
   return comments.map(c => {
     const { resolved, ...rest } = c;
     return {
+      id: `PRRT_${c.id}`,
       rootCommentId: c.id,
       isResolved: resolved === true,
       comments: [{ created_at: '', updated_at: '', ...rest }],
@@ -252,6 +259,8 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       created_at: '',
       updated_at: '',
     });
+    // #883: monitor's pre-enqueue skip fetches issue labels; default → none blocked.
+    mockGitHub.getIssueLabels.mockResolvedValue([]);
 
     mockGitHub.getPullRequest.mockResolvedValue({
       number: 100,
@@ -1254,6 +1263,8 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       created_at: '',
       updated_at: '',
     });
+    // #883: monitor's pre-enqueue skip fetches issue labels; default → none blocked.
+    mockGitHub.getIssueLabels.mockResolvedValue([]);
 
     mockGitHub.getPullRequest.mockResolvedValue({
       number: 100,
@@ -1937,22 +1948,27 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     );
     expect(mockGitHub.push).toHaveBeenCalledWith('origin', '42-add-tests');
 
-    // Verify replies were posted to all unresolved threads (SC-005)
+    // #883: verify replies were posted with the new "Addressed in <sha>" body
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       100,
       1,
-      expect.stringContaining('addressed this feedback'),
+      expect.stringContaining('Addressed in abc1234'),
     );
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       100,
       2,
-      expect.stringContaining('addressed this feedback'),
+      expect.stringContaining('Addressed in abc1234'),
     );
+
+    // #883: verify each thread was resolved via resolveReviewThread
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(2);
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_1');
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_2');
 
     // Verify label was removed
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
@@ -1961,10 +1977,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       42,
       ['waiting-for:address-pr-feedback'],
     );
-
-    // Verify no resolve API was called (SC-006: Thread auto-resolve prevention)
-    expect((mockGitHub as any).resolveThread).toBeUndefined();
-    expect((mockGitHub as any).resolveReviewThread).toBeUndefined();
   });
 
   // ==========================================================================
@@ -2077,13 +2089,8 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   // Test: Thread Auto-Resolve Prevention (SC-006)
   // ==========================================================================
 
-  it('should never auto-resolve threads, only reply (SC-006)', async () => {
+  it('#883: resolves each unresolved thread after successful reply', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
-
-    // Add potential resolve methods to mock to ensure they're not called
-    (mockGitHub as any).resolveThread = vi.fn();
-    (mockGitHub as any).resolveReviewThread = vi.fn();
-    (mockGitHub as any).markReviewThreadAsResolved = vi.fn();
 
     const handler = new PrFeedbackHandler(
       {
@@ -2120,13 +2127,9 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
 
     await handler.handle(queueItem, '/tmp/workspace/test-org/test-repo');
 
-    // SC-006: Verify only replyToPRComment was used
+    // #883: reply once per thread + resolve once per thread
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
-
-    // SC-006: Verify no resolve methods were called
-    expect((mockGitHub as any).resolveThread).not.toHaveBeenCalled();
-    expect((mockGitHub as any).resolveReviewThread).not.toHaveBeenCalled();
-    expect((mockGitHub as any).markReviewThreadAsResolved).not.toHaveBeenCalled();
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(2);
   });
 
   // ==========================================================================
@@ -2221,7 +2224,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   // Test: No Changes Skip
   // ==========================================================================
 
-  it('should skip commit/push when CLI makes no changes', async () => {
+  it('#883: no-diff cycle → Disposition B (blocked label, no replies, no removal)', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
     // No changes after CLI runs
@@ -2272,20 +2275,29 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockGitHub.commit).not.toHaveBeenCalled();
     expect(mockGitHub.push).not.toHaveBeenCalled();
 
-    // Should still post replies and remove label
-    expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
-    expect(mockGitHub.removeLabels).toHaveBeenCalled();
+    // #883: no-diff → Disposition B → no replies, no resolves, no label removal
+    expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
+    expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
+    expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+    // #883: blocked:stuck-feedback-loop is added
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org',
+      'test-repo',
+      42,
+      ['blocked:stuck-feedback-loop'],
+    );
   });
 
   // ==========================================================================
   // Test: Partial Reply Failure (FR-007)
   // ==========================================================================
 
-  it('should remove label even when some replies fail (FR-007)', async () => {
+  it('#883: partial resolve failure — label still removed when ≥1 resolve succeeds', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
-    // Some replies succeed, some fail
-    mockGitHub.replyToPRComment = vi
+    // Middle resolve fails (transient); replies all succeed
+    mockGitHub.resolveReviewThread = vi
       .fn()
       .mockResolvedValueOnce(undefined) // Thread 1: success
       .mockRejectedValueOnce(new Error('GitHub API error')) // Thread 2: fail
@@ -2356,10 +2368,11 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
 
     await handler.handle(queueItem, '/tmp/workspace/test-org/test-repo');
 
-    // All three replies should be attempted
+    // All three replies + resolves should be attempted
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(3);
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(3);
 
-    // FR-007: Label should still be removed despite partial failure
+    // FR-006 strict-decrease met (2 of 3 resolves succeeded) → label removed
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
@@ -2367,7 +2380,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       ['waiting-for:address-pr-feedback'],
     );
 
-    // Warnings should be logged for failed replies
+    // FR-010: warn emitted for the persistently-failed resolve
     expect(logger.warn).toHaveBeenCalled();
   });
 
@@ -2411,6 +2424,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     });
     mockGitHub.getPRReviewThreads.mockResolvedValue([
       {
+        id: 'PRRT_999',
         rootCommentId: 999,
         isResolved: false,
         comments: [{

@@ -314,6 +314,37 @@ export class PrFeedbackMonitorService {
     }
     this.lastZeroTrustedState.set(stateKey, false);
 
+    // Case A tail (#883): before enqueue, check for any `blocked:*` label on
+    // the linked issue. The handler adds `blocked:stuck-feedback-loop` when
+    // its fix cycle can't advance; the operator removes the label to permit
+    // another attempt. Any `blocked:*` prefix is the contract — no allow-list.
+    let issueLabels: string[];
+    try {
+      issueLabels = await client.getIssueLabels(owner, repo, issueNumber);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber },
+        'Failed to fetch issue labels for blocked:* skip check — proceeding without skip',
+      );
+      issueLabels = [];
+    }
+    const blockedLabel = issueLabels.find(l => l.startsWith('blocked:'));
+    if (blockedLabel) {
+      this.logger.info(
+        {
+          owner, repo, prNumber, issueNumber,
+          blockedLabel,
+          unresolvedThreads: unresolvedThreadIds.length,
+          reason: 'blocked-label-present',
+        },
+        'Skipping PR-feedback enqueue while blocked:* label is present',
+      );
+      // Idempotent-state hygiene: keep the transition-log map fresh so the
+      // next non-blocked poll doesn't look like a fresh transition.
+      this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
+      return false;
+    }
+
     this.logger.info(
       { owner, repo, prNumber, issueNumber, linkMethod, unresolvedCount: unresolvedThreadIds.length },
       `Found ${unresolvedThreadIds.length} unresolved review thread(s)`,

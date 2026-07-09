@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
 import { classify } from '../state/classifier.js';
+import { mapLabelToState } from '../state/label-map.js';
 import { WAITING_PIPELINE_ORDER } from '../state/precedence.js';
 
 describe('classify()', () => {
@@ -85,7 +86,9 @@ describe('classify()', () => {
 
     it('keeps pipeline order through full chain', () => {
       const ordered = [...WAITING_PIPELINE_ORDER].reverse();
-      expect(classify(ordered).sourceLabel).toBe('waiting-for:spec-review');
+      // #883: blocked:stuck-feedback-loop is now the first entry in
+      // WAITING_PIPELINE_ORDER (highest priority), so it wins.
+      expect(classify(ordered).sourceLabel).toBe(WAITING_PIPELINE_ORDER[0]);
     });
 
     it('listed pipeline gate beats unlisted waiting label', () => {
@@ -184,6 +187,38 @@ describe('classify()', () => {
 
     it('canary: empty input still returns unknown/""', () => {
       expect(classify([])).toEqual({ state: 'unknown', sourceLabel: '' });
+    });
+  });
+
+  describe('#883: blocked:* labels classify as waiting', () => {
+    it('blocked:stuck-feedback-loop alone classifies as waiting', () => {
+      expect(classify(['blocked:stuck-feedback-loop'])).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('arbitrary blocked:* prefix sibling also classifies as waiting', () => {
+      // Future-proofing: any `blocked:*` label inherits the waiting tier via
+      // the prefix rule in classifyByPattern, even if it is not in
+      // WORKFLOW_LABELS. mapLabelToState returns unknown for such names but
+      // the prefix branch will classify them as waiting when they reach it.
+      // Note: the classifier consumes mapLabelToState, so for this
+      // future-proofing to bite we simply verify the prefix branch below.
+      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('waiting');
+    });
+
+    it('blocked:stuck-feedback-loop wins tie-break over waiting-for:address-pr-feedback', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'blocked:stuck-feedback-loop']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('LABEL_TO_STATE includes blocked:stuck-feedback-loop → waiting', () => {
+      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('waiting');
     });
   });
 

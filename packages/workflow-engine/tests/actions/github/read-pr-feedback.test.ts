@@ -57,10 +57,11 @@ function createMockComment(overrides: Partial<Comment> = {}): Comment {
   };
 }
 
-// Helper: mock review thread (#861 shape)
+// Helper: mock review thread (#861 shape, #883: id required)
 function createMockThread(overrides: Partial<ReviewThread> = {}): ReviewThread {
   const comments = overrides.comments ?? [createMockComment({ id: overrides.rootCommentId ?? 1 })];
   return {
+    id: overrides.id ?? `PRRT_${overrides.rootCommentId ?? comments[0]!.id}`,
     rootCommentId: overrides.rootCommentId ?? comments[0]!.id,
     isResolved: overrides.isResolved ?? false,
     comments,

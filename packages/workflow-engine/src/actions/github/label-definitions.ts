@@ -94,4 +94,12 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
 
   // Relationship labels
   { name: 'epic-child', color: 'bfd4f2', description: 'Child issue of an epic' },
+
+  // Blocked labels
+  {
+    name: 'blocked:stuck-feedback-loop',
+    color: 'D73A4A',
+    description:
+      'PR-feedback loop paused itself: last cycle could not advance the trigger. Remove this label to permit another attempt.',
+  },
 ];

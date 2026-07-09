@@ -18,7 +18,7 @@ const TERMINAL_COMPLETED_LABELS = new Set<string>([
  *   completed:* ∈ TERMINAL_COMPLETED_LABELS                        → terminal
  *   any other completed:*                                          → stage-complete
  *   failed:* / agent:error                                         → error
- *   waiting-for:* / needs:*                                        → waiting
+ *   waiting-for:* / needs:* / blocked:*                            → waiting
  *   phase:* / agent:in-progress / agent:dispatched                 → active
  *   agent:paused / type:* / process:* / workflow:* / epic-child    → pending
  *
@@ -32,7 +32,11 @@ function classifyByPattern(label: string): CockpitState {
     return TERMINAL_COMPLETED_LABELS.has(label) ? 'terminal' : 'stage-complete';
   }
   if (label.startsWith('failed:') || label === 'agent:error') return 'error';
-  if (label.startsWith('waiting-for:') || label.startsWith('needs:')) return 'waiting';
+  if (
+    label.startsWith('waiting-for:') ||
+    label.startsWith('needs:') ||
+    label.startsWith('blocked:')
+  ) return 'waiting';
   if (label.startsWith('phase:') || label === 'agent:in-progress' || label === 'agent:dispatched') {
     return 'active';
   }

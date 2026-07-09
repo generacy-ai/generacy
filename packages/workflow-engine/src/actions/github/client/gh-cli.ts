@@ -170,6 +170,26 @@ export class GhCliGitHubClient implements GitHubClient {
     };
   }
 
+  async getIssueLabels(owner: string, repo: string, number: number): Promise<string[]> {
+    const result = await this.executeGh([
+      'issue', 'view', String(number),
+      '-R', `${owner}/${repo}`,
+      '--json', 'labels',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to get labels for issue #${number}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Record<string, unknown> | null;
+    if (!data) {
+      throw new Error('Failed to parse issue label data');
+    }
+
+    const labels = (data['labels'] as Array<{ name: string }> | undefined) ?? [];
+    return labels.map(l => l.name);
+  }
+
   async listIssuesWithLabel(owner: string, repo: string, label: string): Promise<Issue[]> {
     const result = await this.executeGh([
       'issue', 'list',
@@ -482,6 +502,7 @@ export class GhCliGitHubClient implements GitHubClient {
     pullRequest(number: $number) {
       reviewThreads(first: 100) {
         nodes {
+          id
           isResolved
           comments(first: 100) {
             nodes {
@@ -521,6 +542,7 @@ export class GhCliGitHubClient implements GitHubClient {
           pullRequest?: {
             reviewThreads?: {
               nodes?: Array<{
+                id: string;
                 isResolved: boolean;
                 comments?: {
                   nodes?: Array<{
@@ -572,6 +594,7 @@ export class GhCliGitHubClient implements GitHubClient {
         return comment;
       });
       threads.push({
+        id: node.id,
         rootCommentId: comments[0]!.id,
         isResolved: node.isResolved,
         comments,
@@ -604,6 +627,54 @@ export class GhCliGitHubClient implements GitHubClient {
       created_at: data['created_at'] as string,
       updated_at: data['updated_at'] as string,
     };
+  }
+
+  async resolveReviewThread(threadId: string): Promise<void> {
+    const mutation =
+      'mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }';
+    const backoffs = [1000, 2000, 4000];
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await this.executeGh([
+          'api', 'graphql',
+          '-f', `query=${mutation}`,
+          '-F', `id=${threadId}`,
+        ]);
+        if (result.exitCode !== 0) {
+          lastError = new Error(
+            `resolveReviewThread failed for ${threadId}: ${result.stderr}`,
+          );
+        } else {
+          const parsed = parseJSONSafe(result.stdout) as
+            | { errors?: Array<{ message?: string }> }
+            | null;
+          if (parsed?.errors && parsed.errors.length > 0) {
+            const messages = parsed.errors
+              .map(e => e.message ?? 'unknown')
+              .join('; ');
+            throw new Error(
+              `resolveReviewThread returned GraphQL errors for ${threadId}: ${messages}`,
+            );
+          }
+          return;
+        }
+      } catch (err) {
+        if (err instanceof GhAuthError) throw err;
+        if (
+          err instanceof Error &&
+          err.message.startsWith('resolveReviewThread returned GraphQL errors')
+        ) {
+          throw err;
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+      const backoff = backoffs[attempt];
+      if (backoff !== undefined) {
+        await new Promise(resolve => setTimeout(resolve, backoff));
+      }
+    }
+    throw lastError ?? new Error(`resolveReviewThread failed for ${threadId}`);
   }
 
   async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {

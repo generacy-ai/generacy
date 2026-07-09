@@ -36,6 +36,8 @@ const mockGitHub = {
   push: vi.fn(),
   replyToPRComment: vi.fn(),
   removeLabels: vi.fn(),
+  addLabels: vi.fn(),
+  resolveReviewThread: vi.fn(),
 } as unknown as GitHubClient;
 
 // ---------------------------------------------------------------------------
@@ -52,6 +54,9 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   normalizeLogin: (raw: string) => raw.trim().toLowerCase().replace(/\[bot\]$/, ''),
   tryLoadCommentTrustConfig: vi.fn(() => undefined),
   wrapUntrustedData: vi.fn((content: string) => content),
+  // #883: handler calls `executeCommand('git', ['rev-parse', '--short', 'HEAD'], ...)`
+  // for the short-SHA reply interpolation. Default returns a stable value.
+  executeCommand: vi.fn(async () => ({ exitCode: 0, stdout: 'abc1234\n', stderr: '' })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -140,6 +145,7 @@ function createMockPR(branchName = 'feature-branch') {
 // yield a `ReviewThread[]` — matches the shape `getPRReviewThreads` returns.
 function createMockComment(id: number, resolved = false, path?: string, line?: number) {
   return {
+    id: `PRRT_${id}`,
     rootCommentId: id,
     isResolved: resolved,
     comments: [
@@ -185,6 +191,8 @@ describe('PrFeedbackHandler', () => {
     mockGitHub.push = vi.fn().mockResolvedValue(undefined);
     mockGitHub.replyToPRComment = vi.fn().mockResolvedValue(undefined);
     mockGitHub.removeLabels = vi.fn().mockResolvedValue(undefined);
+    mockGitHub.addLabels = vi.fn().mockResolvedValue(undefined);
+    mockGitHub.resolveReviewThread = vi.fn().mockResolvedValue(undefined);
   });
 
   describe('handle - missing metadata', () => {
@@ -289,22 +297,27 @@ describe('PrFeedbackHandler', () => {
       );
       expect(mockGitHub.push).toHaveBeenCalledWith('origin', 'feature-branch');
 
-      // Should post replies to all unresolved threads
+      // Should post replies to all unresolved threads with #883 body shape
       expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
       expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         100,
         1,
-        expect.stringContaining('addressed this feedback'),
+        expect.stringContaining('Addressed in abc1234'),
       );
       expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         100,
         2,
-        expect.stringContaining('addressed this feedback'),
+        expect.stringContaining('Addressed in abc1234'),
       );
+
+      // #883: should resolve every thread
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(2);
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_1');
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_2');
 
       // Should remove label
       expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
@@ -313,11 +326,14 @@ describe('PrFeedbackHandler', () => {
         42,
         ['waiting-for:address-pr-feedback'],
       );
+
+      // Should NOT add blocked label on the happy path
+      expect(mockGitHub.addLabels).not.toHaveBeenCalled();
     });
   });
 
-  describe('handle - no changes to commit', () => {
-    it('skips commit/push when CLI makes no changes', async () => {
+  describe('handle - no changes to commit (#883 Disposition B)', () => {
+    it('adds blocked:stuck-feedback-loop, keeps waiting-for label, no replies', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -343,9 +359,18 @@ describe('PrFeedbackHandler', () => {
       expect(mockGitHub.commit).not.toHaveBeenCalled();
       expect(mockGitHub.push).not.toHaveBeenCalled();
 
-      // Should still post replies and remove label
-      expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(1);
-      expect(mockGitHub.removeLabels).toHaveBeenCalled();
+      // #883: NO replies, NO resolves, NO waiting-for removal
+      expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
+      expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+      // #883: blocked:stuck-feedback-loop is added
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:stuck-feedback-loop'],
+      );
     });
   });
 
@@ -421,11 +446,19 @@ describe('PrFeedbackHandler', () => {
 
       // FR-013: Should NOT remove label (keep for retry)
       expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+      // #883: timeout → Disposition B → blocked label added
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:stuck-feedback-loop'],
+      );
     });
   });
 
-  describe('handle - CLI failure', () => {
-    it('keeps label when CLI exits with non-zero code', async () => {
+  describe('handle - CLI failure (#883 Disposition B)', () => {
+    it('adds blocked label, keeps waiting-for label, no replies, no resolves', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -446,16 +479,23 @@ describe('PrFeedbackHandler', () => {
 
       await handler.handle(item, checkoutPath);
 
-      // Should NOT post replies
+      // Should NOT post replies, resolves, or remove label
       expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
-
-      // Should NOT remove label (keep for retry)
+      expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
       expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+      // #883: blocked:stuck-feedback-loop is added
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:stuck-feedback-loop'],
+      );
     });
   });
 
-  describe('handle - reply failure (FR-007)', () => {
-    it('removes label even when some replies fail', async () => {
+  describe('handle - partial resolve failure (#883 FR-010)', () => {
+    it('removes waiting-for label when some resolves succeed and warns on failures', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1, 2, 3] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -475,27 +515,38 @@ describe('PrFeedbackHandler', () => {
         untracked: [],
       });
 
-      // Second reply fails
-      mockGitHub.replyToPRComment = vi.fn()
-        .mockResolvedValueOnce(undefined) // First succeeds
-        .mockRejectedValueOnce(new Error('API error')) // Second fails
-        .mockResolvedValueOnce(undefined); // Third succeeds
+      // Middle thread's resolve fails, other two succeed → R = 2 ≥ 1 → success
+      mockGitHub.resolveReviewThread = vi.fn()
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('resolve failed transient'))
+        .mockResolvedValueOnce(undefined);
 
       await handler.handle(item, checkoutPath);
 
-      // All three replies should be attempted
+      // All three replies + resolves attempted
       expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(3);
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(3);
 
-      // FR-007: Should still remove label even with partial reply failure
+      // One FR-010 warn for the persistently-failed thread
+      const warnMessages = (mockLogger.warn as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[1] ?? ''));
+      expect(
+        warnMessages.some((m) => m.includes('resolveReviewThread persistently failed after retries')),
+      ).toBe(true);
+
+      // Should remove waiting-for:address-pr-feedback (strict decrease met)
       expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
         ['waiting-for:address-pr-feedback'],
       );
+
+      // Should NOT add blocked (R ≥ 1)
+      expect(mockGitHub.addLabels).not.toHaveBeenCalled();
     });
 
-    it('removes label even when all replies fail', async () => {
+    it('zero-resolve cycle (all fail) → Disposition B, no label removal', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -513,17 +564,24 @@ describe('PrFeedbackHandler', () => {
         untracked: [],
       });
 
-      // All replies fail
-      mockGitHub.replyToPRComment = vi.fn().mockRejectedValue(new Error('API error'));
+      // All resolves fail → R = 0 → FR-006 tail
+      mockGitHub.resolveReviewThread = vi.fn().mockRejectedValue(new Error('API error'));
 
       await handler.handle(item, checkoutPath);
 
-      // FR-007: Should still remove label because code was pushed successfully
-      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+      // Reply and resolve still attempted
+      expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(1);
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(1);
+
+      // Should NOT remove waiting-for label
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+      // Should add blocked:stuck-feedback-loop
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
-        ['waiting-for:address-pr-feedback'],
+        ['blocked:stuck-feedback-loop'],
       );
     });
   });
@@ -558,8 +616,8 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
-  describe('handle - push failure', () => {
-    it('logs error but continues when push fails', async () => {
+  describe('handle - push failure (#883 Disposition B)', () => {
+    it('adds blocked label when push fails (hasChanges stays false)', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -580,14 +638,23 @@ describe('PrFeedbackHandler', () => {
       // Push fails
       mockGitHub.push = vi.fn().mockRejectedValue(new Error('Push rejected'));
 
-      // Should not throw (just logs error)
+      // Should not throw (caught by inner try/catch)
       await expect(handler.handle(item, checkoutPath)).resolves.toBeUndefined();
 
-      // Should NOT post replies (CLI succeeded but push failed)
-      expect(mockGitHub.replyToPRComment).toHaveBeenCalled();
+      // Should NOT post replies or resolves (push failure → Disposition B)
+      expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
+      expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
 
-      // Should still remove label (CLI succeeded)
-      expect(mockGitHub.removeLabels).toHaveBeenCalled();
+      // Should NOT remove waiting-for label
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+      // Should add blocked label
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:stuck-feedback-loop'],
+      );
     });
   });
 
@@ -705,8 +772,8 @@ describe('PrFeedbackHandler', () => {
     });
   });
 
-  describe('SC-006: Thread resolution prevention', () => {
-    it('never calls any resolve API, only replyToPRComment', async () => {
+  describe('#883: Thread resolution via resolveReviewThread', () => {
+    it('resolves each trusted-unresolved thread exactly once after a successful cycle', async () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1, 2] });
       const checkoutPath = '/tmp/workspace/test-owner/test-repo';
 
@@ -725,15 +792,55 @@ describe('PrFeedbackHandler', () => {
         untracked: [],
       });
 
-      // Add a mock for any potential resolve method
-      const mockResolveThread = vi.fn();
-      (mockGitHub as any).resolveThread = mockResolveThread;
+      await handler.handle(item, checkoutPath);
+
+      // #883: exactly one reply and one resolve per thread
+      expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(2);
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_1');
+      expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_2');
+    });
+
+    it('#883 SC-004: reply granularity — thread with root + 2 replies gets exactly one new reply', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      const checkoutPath = '/tmp/workspace/test-owner/test-repo';
+
+      // Single thread with 3 comments (root + 2 replies); handler should
+      // reply to the root once, not once per comment.
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        {
+          id: 'PRRT_multi',
+          rootCommentId: 100,
+          isResolved: false,
+          comments: [
+            { id: 100, body: 'root', author: 'reviewer', created_at: '', updated_at: '' },
+            { id: 101, body: 'reply-1', author: 'reviewer', created_at: '', updated_at: '', in_reply_to_id: 100 },
+            { id: 102, body: 'reply-2', author: 'reviewer', created_at: '', updated_at: '', in_reply_to_id: 100 },
+          ],
+        },
+      ]);
+
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true,
+        staged: ['src/index.ts'],
+        unstaged: [],
+        untracked: [],
+      });
 
       await handler.handle(item, checkoutPath);
 
-      // SC-006: Should only use replyToPRComment, never resolve
-      expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
-      expect(mockResolveThread).not.toHaveBeenCalled();
+      // Exactly one reply targeting the root comment
+      expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(1);
+      expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        100,
+        100, // rootCommentId
+        expect.any(String),
+      );
     });
   });
 

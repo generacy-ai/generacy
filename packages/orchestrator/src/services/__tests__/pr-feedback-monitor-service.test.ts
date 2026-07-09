@@ -88,6 +88,9 @@ function createMockGitHubClient(overrides: Record<string, unknown> = {}) {
       created_at: '',
       updated_at: '',
     }),
+    // #883: monitor pre-enqueue skip fetches issue labels. Default: no
+    // blocked:* labels → no skip.
+    getIssueLabels: vi.fn().mockResolvedValue([]),
     getPRReviewThreads: vi.fn().mockResolvedValue([]),
     listOpenPullRequests: vi.fn().mockResolvedValue([]),
     replyToPRComment: vi.fn().mockResolvedValue({}),
@@ -1835,6 +1838,136 @@ describe('PrFeedbackMonitorService', () => {
       expect(mockClient.addLabels).toHaveBeenLastCalledWith(
         'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
       );
+    });
+  });
+
+  // ==========================================================================
+  // #883 blocked:* pre-enqueue skip
+  // ==========================================================================
+
+  describe('#883 blocked:* pre-enqueue skip', () => {
+    function trustLiveThreads() {
+      return [
+        {
+          id: 'PRRT_501',
+          rootCommentId: 501,
+          isResolved: false,
+          comments: [{
+            id: 501, body: 'fix this', author: 'reviewer',
+            authorAssociation: 'MEMBER', created_at: '', updated_at: '',
+          }],
+        },
+      ];
+    }
+
+    it('SC-003 skip: blocked:stuck-feedback-loop present → no enqueue, no waiting-for label', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:stuck-feedback-loop',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+
+      // waiting-for was NOT added on this poll
+      const waitingForCall = (mockClient.addLabels as ReturnType<typeof vi.fn>).mock.calls
+        .find((c: unknown[]) => Array.isArray(c[3]) && (c[3] as string[]).includes('waiting-for:address-pr-feedback'));
+      expect(waitingForCall).toBeUndefined();
+
+      // Structured info log emitted
+      const infoCall = (logger.info as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c: unknown[]) => typeof c[1] === 'string' && c[1].includes('blocked:* label is present'),
+      );
+      expect(infoCall).toBeDefined();
+      expect(infoCall![0]).toMatchObject({
+        blockedLabel: 'blocked:stuck-feedback-loop',
+        reason: 'blocked-label-present',
+      });
+    });
+
+    it('prefix generality: blocked:something-else also triggers skip', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:something-else',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    });
+
+    it('no-blocked passthrough: enqueue path fires when no blocked:* labels present', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'agent:in-progress',
+        'workflow:speckit-feature',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+
+      // No blocked skip log emitted
+      const infoMessages = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => String(c[1] ?? ''));
+      expect(infoMessages.some((m) => m.includes('blocked:* label is present'))).toBe(false);
+    });
+
+    it('trust-filter precedence: zero-trusted PR + blocked:* label → untrusted-notice path runs (blocked check not reached)', async () => {
+      // Zero-trusted: unresolved threads exist but no trusted comments.
+      // The Case B branch returns before reaching the Case A blocked check.
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: 'PRRT_800',
+          rootCommentId: 800,
+          isResolved: false,
+          comments: [{
+            id: 800, body: 'evil', author: 'stranger',
+            authorAssociation: 'NONE', created_at: '', updated_at: '',
+          }],
+        },
+      ]);
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:stuck-feedback-loop',
+      ]);
+
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(false);
+      // Case B: enqueue not called (untrusted-notice path)
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      // Blocked check not reached → no blocked info log
+      const infoMessages = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+        .map((c: unknown[]) => String(c[1] ?? ''));
+      expect(infoMessages.some((m) => m.includes('blocked:* label is present'))).toBe(false);
+    });
+
+    it('idempotent-state hygiene: lastUnresolvedThreadCount is updated on skip', async () => {
+      (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue(trustLiveThreads());
+      (mockClient.getIssueLabels as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'blocked:stuck-feedback-loop',
+      ]);
+
+      const event = createPrReviewEvent();
+      // First poll — blocked, skip.
+      await service.processPrReviewEvent(event);
+      // Second poll — still blocked, same count. Neither poll should transition-log.
+      await service.processPrReviewEvent(event);
+
+      // No "state change" info-log line emitted between polls (steady-state).
+      const stateChangeInfos = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: unknown[]) =>
+          typeof c[1] === 'string' && c[1].includes('state change'),
+        );
+      expect(stateChangeInfos).toHaveLength(0);
     });
   });
 });
