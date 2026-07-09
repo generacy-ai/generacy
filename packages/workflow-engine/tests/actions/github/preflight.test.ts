@@ -300,9 +300,9 @@ describe('PreflightAction', () => {
       it('counts unresolved review threads when PR exists', async () => {
         mockGitHubClient.findPRForBranch.mockResolvedValue({ number: 55 });
         mockGitHubClient.getPRReviewThreads.mockResolvedValue([
-          { rootCommentId: 1, isResolved: false, comments: [] },
-          { rootCommentId: 2, isResolved: true, comments: [] },
-          { rootCommentId: 3, isResolved: false, comments: [] },
+          { id: 'PRRT_1', rootCommentId: 1, isResolved: false, comments: [] },
+          { id: 'PRRT_2', rootCommentId: 2, isResolved: true, comments: [] },
+          { id: 'PRRT_3', rootCommentId: 3, isResolved: false, comments: [] },
         ]);
 
         const step = createStep({

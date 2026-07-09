@@ -57,6 +57,7 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
     getPullRequest: vi.fn().mockResolvedValue({ head: { ref: 'test-branch' } }),
     getPRReviewThreads: vi.fn().mockResolvedValue([
       {
+        id: 'PRRT_1',
         rootCommentId: 1,
         isResolved: false,
         comments: [
@@ -67,11 +68,15 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
     getStatus: vi.fn().mockResolvedValue({ has_changes: false, staged: [], unstaged: [], untracked: [] }),
     removeLabels: vi.fn().mockResolvedValue(undefined),
     replyToPRComment: vi.fn().mockResolvedValue(undefined),
+    resolveReviewThread: vi.fn().mockResolvedValue(undefined),
+    addLabels: vi.fn().mockResolvedValue(undefined),
   })),
   // Author-trust helpers (#842). Default stubs pass every comment through.
   isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
   tryLoadCommentTrustConfig: vi.fn(() => undefined),
   wrapUntrustedData: vi.fn((content: string) => content),
+  // #883: short SHA lookup for reply body interpolation.
+  executeCommand: vi.fn(async () => ({ exitCode: 0, stdout: 'abc1234\n', stderr: '' })),
 }));
 
 describe('PrFeedbackHandler credentials', () => {

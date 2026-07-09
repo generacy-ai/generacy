@@ -139,6 +139,12 @@ export interface GitHubClient {
   updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>;
 
   /**
+   * Get the label names on an issue. Cheaper than `getIssue` when only labels
+   * are needed (e.g., pre-enqueue `blocked:*` skip checks). See #883.
+   */
+  getIssueLabels(owner: string, repo: string, number: number): Promise<string[]>;
+
+  /**
    * List open issues in a repository that have a specific label
    */
   listIssuesWithLabel(owner: string, repo: string, label: string): Promise<Issue[]>;
@@ -193,6 +199,20 @@ export interface GitHubClient {
    * Reply to a PR comment
    */
   replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment>;
+
+  /**
+   * Resolve a PR review thread via the GraphQL `resolveReviewThread` mutation.
+   *
+   * Retries transient failures up to 3 times with 1s / 2s / 4s backoff. Auth
+   * failures (`GhAuthError`) are NOT retried — they are rethrown on the first
+   * attempt (aligns with #762 convention). GraphQL-level `errors[]` on a 200
+   * response are treated as terminal (deleted node, permission-denied) and are
+   * NOT retried. On persistent transient failure, throws `Error` with the
+   * last upstream stderr as the message. See #883.
+   *
+   * @param threadId - The GraphQL node ID of the thread (see ReviewThread.id).
+   */
+  resolveReviewThread(threadId: string): Promise<void>;
 
   /**
    * List all open pull requests in a repository

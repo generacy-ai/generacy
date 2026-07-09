@@ -110,6 +110,11 @@ export interface Comment {
  * See #861.
  */
 export interface ReviewThread {
+  /**
+   * GitHub GraphQL node ID for the thread. Consumed by
+   * `resolveReviewThread(input: { threadId })`. See #883.
+   */
+  id: string;
   /** databaseId of the first (root) comment in the thread. Stable identifier. */
   rootCommentId: number;
   /** True when the thread has been marked resolved in the GitHub UI. */

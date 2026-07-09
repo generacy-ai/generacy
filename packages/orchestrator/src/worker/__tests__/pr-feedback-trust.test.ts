@@ -15,7 +15,12 @@ const mockGitHub: Record<string, ReturnType<typeof vi.fn>> = {
   getPRReviewThreads: vi.fn(),
   getStatus: vi.fn(),
   removeLabels: vi.fn(),
+  addLabels: vi.fn(),
   replyToPRComment: vi.fn(),
+  resolveReviewThread: vi.fn(),
+  stageAll: vi.fn(),
+  commit: vi.fn(),
+  push: vi.fn(),
 };
 
 // #861: wrap comments as ReviewThread[] (each comment becomes its own thread).
@@ -23,6 +28,7 @@ function asThreads(comments: Array<{ id: number; resolved?: boolean; [k: string]
   return comments.map(c => {
     const { resolved, ...rest } = c;
     return {
+      id: `PRRT_${c.id}`,
       rootCommentId: c.id,
       isResolved: resolved === true,
       comments: [{ author: 'reviewer', created_at: '', updated_at: '', ...rest }],
@@ -101,14 +107,22 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
       number: 100,
       head: { ref: 'test-branch' },
     });
+    // #883: post-CLI batch requires a real diff for the happy path (reply +
+    // resolve). No-diff → Disposition B (blocked) and replies are skipped, so
+    // trust-filter tests must run under the has-diff branch.
     mockGitHub.getStatus.mockResolvedValue({
-      has_changes: false,
-      staged: [],
+      has_changes: true,
+      staged: ['src/x.ts'],
       unstaged: [],
       untracked: [],
     });
+    mockGitHub.stageAll.mockResolvedValue(undefined);
+    mockGitHub.commit.mockResolvedValue(undefined);
+    mockGitHub.push.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
+    mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.replyToPRComment.mockResolvedValue({ id: 1 });
+    mockGitHub.resolveReviewThread.mockResolvedValue(undefined);
   });
 
   it('filters NONE-authored PR review comment out (not surfaced to agent)', async () => {

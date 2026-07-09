@@ -18,6 +18,7 @@ describe('GhCliGitHubClient.getPRReviewThreads', () => {
   });
 
   function graphqlResponse(threads: Array<{
+    id?: string;
     isResolved: boolean;
     comments: Array<{
       databaseId: number;
@@ -38,7 +39,8 @@ describe('GhCliGitHubClient.getPRReviewThreads', () => {
         repository: {
           pullRequest: {
             reviewThreads: {
-              nodes: threads.map(t => ({
+              nodes: threads.map((t, i) => ({
+                id: t.id ?? `PRRT_thread_${i}`,
                 isResolved: t.isResolved,
                 comments: {
                   nodes: t.comments.map(c => {
@@ -250,6 +252,22 @@ describe('GhCliGitHubClient.getPRReviewThreads', () => {
     const client = new GhCliGitHubClient('/tmp');
     const threads = await client.getPRReviewThreads('o', 'r', 42);
     expect('viewerDidAuthor' in threads[0]!.comments[0]!).toBe(false);
+  });
+
+  it('populates ReviewThread.id from GraphQL node id (#883)', async () => {
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      stdout: graphqlResponse([
+        { id: 'PRRT_customId_1', isResolved: false, comments: [{ databaseId: 800 }] },
+        { id: 'PRRT_customId_2', isResolved: true, comments: [{ databaseId: 900 }] },
+      ]),
+      stderr: '',
+    });
+
+    const client = new GhCliGitHubClient('/tmp');
+    const threads = await client.getPRReviewThreads('o', 'r', 42);
+    expect(threads[0]!.id).toBe('PRRT_customId_1');
+    expect(threads[1]!.id).toBe('PRRT_customId_2');
   });
 
   it('does not populate Comment.resolved on emitted comments', async () => {

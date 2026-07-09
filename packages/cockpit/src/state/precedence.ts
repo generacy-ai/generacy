@@ -24,6 +24,9 @@ export const TIER_RANK: Record<CockpitState, number> = {
  * `WORKFLOW_LABELS` index when not listed here (see classifier).
  */
 export const WAITING_PIPELINE_ORDER: string[] = [
+  // #883: `blocked:stuck-feedback-loop` sorts ahead of every waiting-for:*
+  // gate so cockpit surfaces the pause first when both labels coexist.
+  'blocked:stuck-feedback-loop',
   'waiting-for:spec-review',
   'waiting-for:clarification',
   'waiting-for:plan-review',
