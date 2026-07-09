@@ -67,6 +67,7 @@ function createFakeCloudServer(state: FakeCloudState): http.Server {
             cluster_id: 'cluster_test_1',
             project_id: 'proj_test_1',
             org_id: 'org_test_1',
+            cloud_url: `http://${req.headers.host}`,
           }));
           return;
         }
@@ -185,6 +186,7 @@ describe('activate (integration)', () => {
               cluster_id: 'cluster_retry',
               project_id: 'proj_retry',
               org_id: 'org_retry',
+              cloud_url: `http://${req.headers.host}`,
             }));
           }
           return;

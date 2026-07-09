@@ -38,10 +38,14 @@ vi.mock('@generacy-ai/cluster-relay', () => ({
 }));
 
 // Mock control-plane tunnel handler and code-server manager
-vi.mock('@generacy-ai/control-plane', () => ({
-  TunnelHandler: vi.fn().mockImplementation(() => ({})),
-  getCodeServerManager: vi.fn().mockReturnValue(mockCodeServerManager),
-}));
+vi.mock('@generacy-ai/control-plane', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@generacy-ai/control-plane')>();
+  return {
+    ...actual,
+    TunnelHandler: vi.fn().mockImplementation(() => ({})),
+    getCodeServerManager: vi.fn().mockReturnValue(mockCodeServerManager),
+  };
+});
 
 import { createServer } from '../server.js';
 import { createTestConfig } from '../config/index.js';
@@ -89,7 +93,7 @@ describe('initializeRelayBridge routes (#574, #586)', () => {
         },
         {
           prefix: '/code-server',
-          target: 'unix:///run/code-server.sock',
+          target: 'unix:///run/generacy-control-plane/code-server.sock',
         },
       ]),
     );

@@ -24,6 +24,7 @@
     "start": "node bin/generacy.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest --config ../../vitest.integration.config.ts run",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
     "clean": "rm -rf dist"

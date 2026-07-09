@@ -73,7 +73,7 @@ describe('resolveWorkerCount', () => {
     await expect(
       resolveWorkerCount({ workers: 100 }, withTierCap(4), true),
     ).rejects.toThrow(
-      'Worker count of 100 exceeds your  plan limit of 4. Upgrade your plan or retry with --workers=4.',
+      'Worker count of 100 exceeds your plan limit of 4. Upgrade your plan or retry with --workers=4.',
     );
   });
 
@@ -81,7 +81,7 @@ describe('resolveWorkerCount', () => {
     await expect(
       resolveWorkerCount({ workers: 100 }, withTierCap(), true),
     ).rejects.toThrow(
-      `Worker count of 100 exceeds your  plan limit of ${CLI_FALLBACK_TIER_CAP}. Upgrade your plan or retry with --workers=${CLI_FALLBACK_TIER_CAP}.`,
+      `Worker count of 100 exceeds your plan limit of ${CLI_FALLBACK_TIER_CAP}. Upgrade your plan or retry with --workers=${CLI_FALLBACK_TIER_CAP}.`,
     );
   });
 

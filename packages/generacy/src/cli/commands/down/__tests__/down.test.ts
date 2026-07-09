@@ -28,6 +28,7 @@ vi.mock('../../cluster/context.js', () => ({
 
 vi.mock('../../cluster/compose.js', () => ({
   runCompose: vi.fn(() => ({ ok: true, stdout: '', stderr: '' })),
+  lifecycleAction: vi.fn(() => ({ ok: true, stdout: '', stderr: '' })),
 }));
 
 // ---------------------------------------------------------------------------
