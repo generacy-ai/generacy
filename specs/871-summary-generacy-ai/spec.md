@@ -1,6 +1,6 @@
-# Feature Specification: Wire orchestrator + generacy test suites into CI, unstick 18 red tests on develop
+# Feature Specification: Close the orchestrator + generacy CI test-coverage blind spot
 
-**Branch**: `871-summary-generacy-ai` | **Date**: 2026-07-09 | **Status**: Draft | **Issue**: [#871](https://github.com/generacy-ai/generacy/issues/871)
+**Branch**: `871-summary-generacy-ai` | **Date**: 2026-07-09 | **Status**: Clarified
 
 ## Summary
 
@@ -69,109 +69,105 @@ that have drifted:
 None of these 7 files were modified by #870, and none exercise the #869 PR-feedback/trust
 code paths — they are pre-existing, not a regression from that PR.
 
-## Suggested resolution
+## Resolution (post-clarification)
 
-1. **Decide the intent of the CI exclusion.** Either:
-   - wire the orchestrator + generacy suites into CI (provide the required service
-     containers — Redis at minimum — or split infra-dependent tests behind an
-     integration tag so the unit tests can gate merges), or
-   - if the exclusion is deliberate, document *why* in `ci.yml` and add a separate
-     (scheduled / integration) job so the suites still run somewhere.
-2. **Triage the 18 failing tests:** fix them to properly stub their dependencies (Redis,
-   code-server, cloud/activation endpoints, webhook HTTP), or quarantine them behind an
-   integration-only tag — so the default `pnpm --filter @generacy-ai/orchestrator test`
-   is green.
+Per Q1–Q5 in `clarifications.md`:
+
+1. **CI wiring** — remove the two `--filter '!'` exclusions from the existing
+   `Test (packages)` step in `.github/workflows/ci.yml` so orchestrator + generacy run
+   on the same footing as every other package. Add a new **blocking** `integration` job
+   with `services: redis` that runs the `*.integration.test.ts` glob via a new
+   `vitest.integration.config.ts`.
+2. **Group A (Redis-dependent relay tests, 7 tests across 3 files)** — rename the
+   affected files to `*.integration.test.ts` and run them against a real Redis in the
+   new integration job. Do not hand-mock ioredis.
+3. **Groups B / C / D (11 tests across 4 files)** — fix in place. All three are
+   mock/schema/HTTP-mock drift (Zod `auth` required, activation-poll `cloud_url`
+   required, webhook HTTP-mock drift). No ambient-infra dependency.
+4. **`@generacy-ai/generacy` suite baseline (36 failed / 15 files)** — measured on
+   develop @ 33c9f11 after fresh dependency-graph build. All failures are mock/CLI
+   assertion drift; fix in place before enabling the CI gate for that package.
 
 ## User Stories
 
-### US1: Merge gate catches orchestrator/generacy regressions
+### US1: Merge-gate visibility for orchestrator + generacy regressions
 
-**As a** contributor merging a PR that touches `@generacy-ai/orchestrator` or
-`@generacy-ai/generacy`,
-**I want** the merge gate to run those packages' test suites,
-**So that** regressions surface on my PR instead of rotting on `develop` and being
-discovered later by someone else running tests locally.
-
-**Acceptance Criteria**:
-- [ ] A CI job runs the orchestrator test suite on every PR (or a documented subset;
-      integration-tagged tests may be split off), and its failure blocks merge.
-- [ ] A CI job runs the generacy test suite on every PR, and its failure blocks merge.
-- [ ] Introducing a deliberately-failing test in either package makes the PR check red.
-
-### US2: Green baseline on develop
-
-**As a** contributor pulling `develop` and running the orchestrator suite,
-**I want** `pnpm --filter @generacy-ai/orchestrator test` (after a clean
-`pnpm -r build`) to be green with no ambient infrastructure,
-**So that** I can trust local test results and identify real regressions from my
-changes rather than sifting through pre-existing red tests.
+**As a** contributor merging PRs against `develop`,
+**I want** the orchestrator + generacy unit test suites to run on every PR the same way
+every other package's suite does,
+**So that** regressions in the two largest core packages are caught before merge instead
+of rotting silently on `develop`.
 
 **Acceptance Criteria**:
-- [ ] All 18 currently-failing tests either pass without ambient infrastructure, or
-      are moved behind an integration-only tag and excluded from the default run.
-- [ ] The default `pnpm --filter @generacy-ai/orchestrator test` invocation on
-      `develop` exits 0.
+- [ ] `.github/workflows/ci.yml`'s `Test (packages)` step no longer contains
+      `--filter '!@generacy-ai/orchestrator'` or `--filter '!@generacy-ai/generacy'`.
+- [ ] A red test in either package fails the PR check.
+- [ ] `pnpm --filter @generacy-ai/orchestrator test` and
+      `pnpm --filter @generacy-ai/generacy test` both exit 0 on a clean checkout after
+      `pnpm -r build`, with no ambient infrastructure.
 
-### US3: Intent is documented, not implicit
+### US2: Infra-dependent tests keep gating merges without lying green
 
-**As a** future contributor reading `.github/workflows/ci.yml`,
-**I want** any deliberate test exclusion to state *why* and *where the tests do run*,
-**So that** the exclusion doesn't quietly regress into "nobody knows this suite exists".
+**As a** contributor,
+**I want** the Redis-dependent relay tests to run against a real Redis in CI on every
+PR,
+**So that** we don't rebuild the same "invisible green" blind spot with `continue-on-error`
+or a nightly cron that only reports rot after the fact.
 
 **Acceptance Criteria**:
-- [ ] `ci.yml` either includes the suites or contains a comment stating the rationale
-      and pointing at the alternate job (scheduled / integration) that runs them.
+- [ ] Group A tests are renamed to `*.integration.test.ts`; the default vitest include
+      glob excludes that suffix.
+- [ ] A new `vitest.integration.config.ts` includes only `**/*.integration.test.ts`.
+- [ ] A new CI job with `services: redis:` runs `pnpm -r --if-present run test:integration`
+      (or equivalent), blocks merge on failure, and is visible on every PR.
 
 ## Functional Requirements
 
-| ID     | Requirement                                                                                                                                                   | Priority | Notes                                                                                    |
-|--------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------------|
-| FR-001 | The CI pipeline MUST execute the `@generacy-ai/orchestrator` test suite (or a documented unit-only subset) on every PR to `develop`.                          | P1       | Root cause fix. Failure blocks merge.                                                    |
-| FR-002 | The CI pipeline MUST execute the `@generacy-ai/generacy` test suite on every PR to `develop`.                                                                 | P1       | Same coverage gap as orchestrator.                                                       |
-| FR-003 | The 4 Redis-dependent tests (group A) MUST either mock/stub the Redis client so they pass without a live Redis, or be gated behind an integration-only tag.   | P1       | `relay-bridge.test.ts` (4), `relay-integration.test.ts` (1), `server-relay-routes.test.ts` (2). |
-| FR-004 | The config-parsing test (group B, `health-code-server.test.ts`) MUST provide a valid config fixture so suite setup succeeds.                                  | P1       | ZodError on `auth`.                                                                      |
-| FR-005 | The 7 activation-client tests (group C) MUST include `cloud_url` in their poll-response fixtures (or update the schema/fixture together).                     | P1       | Schema drift — `PollResponseSchema` approved variant requires `cloud_url` per #517.      |
-| FR-006 | The 4 webhook-setup tests (group D) MUST update their HTTP mocks to match the current `WebhookSetupService` request/response shape.                           | P1       | Drifted mocks.                                                                           |
-| FR-007 | If any tests are moved behind an integration-only tag (rather than fixed), the tag mechanism MUST be documented and there MUST be an alternate job (scheduled or integration) that runs them. | P2       | Prevents future "nobody knows this suite exists" regressions.                            |
-| FR-008 | The default `pnpm --filter @generacy-ai/orchestrator test` invocation MUST exit 0 on a clean checkout after `pnpm -r build`, with no ambient infrastructure required. | P1       | Local-dev baseline.                                                                      |
-| FR-009 | Any deliberate CI-exclusion decision MUST be documented in `.github/workflows/ci.yml` (comment or referenced doc).                                            | P2       | Intent-preservation.                                                                     |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | `@generacy-ai/orchestrator` unit suite runs on every PR via the existing `Test (packages)` step | P1 | Drop `--filter '!@generacy-ai/orchestrator'` from `.github/workflows/ci.yml` |
+| FR-002 | `@generacy-ai/generacy` unit suite runs on every PR via the existing `Test (packages)` step | P1 | Drop `--filter '!@generacy-ai/generacy'` from `.github/workflows/ci.yml` |
+| FR-003 | Group A (4 relay-bridge + 1 relay-integration + 2 server-relay-routes tests) moved behind the `*.integration.test.ts` naming convention | P1 | Files: `src/services/__tests__/relay-bridge.test.ts`, `src/__tests__/relay-integration.test.ts`, `src/__tests__/server-relay-routes.test.ts` |
+| FR-004 | Group B (`health-code-server` suite, ZodError `auth` required) fixed in place with a valid test config | P1 | Provide the missing `auth` block in the test's config fixture |
+| FR-005 | Group C (activation poller + activate tests, `cloud_url` required) fixed in place with an updated `PollResponse` fixture | P1 | Add `cloud_url` to approved-response fixtures; matches #517 schema |
+| FR-006 | Group D (4 webhook-setup-service tests) fixed in place by refreshing the HTTP mock expectations | P1 | Files: `src/services/__tests__/webhook-setup-service.test.ts` |
+| FR-007 | New `vitest.integration.config.ts` includes only `**/*.integration.test.ts`; the default `vitest.config.ts` excludes that glob | P1 | File-naming convention (Q2 = C). One convention, greppable. |
+| FR-008 | New CI job `integration` with `services: redis:` runs the integration suite; **blocks merge on failure** | P1 | Q3 = C. No `continue-on-error: true`, no nightly cron. |
+| FR-009 | 36 pre-existing failures in `@generacy-ai/generacy` (mock/CLI-assertion drift, 15 files) fixed in place before FR-002 lands | P1 | Q4 = B. Same treatment as orchestrator groups B–D. |
+| FR-010 | Any generacy test that turns out to be genuinely infra-bound is moved behind FR-007's convention rather than blocking this issue | P2 | Escape hatch, expected to be near-empty |
 
 ## Success Criteria
 
-| ID     | Metric                                                                                             | Target                          | Measurement                                                                                     |
-|--------|----------------------------------------------------------------------------------------------------|---------------------------------|-------------------------------------------------------------------------------------------------|
-| SC-001 | Orchestrator test suite runs on PRs to `develop`.                                                  | Runs on 100% of PRs             | Observe the check on this PR (and any subsequent PR) in GitHub Actions.                         |
-| SC-002 | Generacy test suite runs on PRs to `develop`.                                                      | Runs on 100% of PRs             | Same as above.                                                                                  |
-| SC-003 | Currently-failing tests, on `develop` HEAD after this change lands.                                | 0 failing in the default run    | `pnpm --filter @generacy-ai/workflow-engine build && pnpm --filter @generacy-ai/orchestrator test` exits 0. |
-| SC-004 | Regression detection: a deliberate-failure probe PR (test that always fails) is caught by CI.      | 100% caught pre-merge           | Open a throwaway PR that adds a failing test; verify CI is red before merge; close without merging. |
-| SC-005 | Intent of any residual exclusion is documented.                                                    | Comment present in `ci.yml`     | Grep `ci.yml` for the rationale comment or referenced doc link.                                 |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | `.github/workflows/ci.yml` contains zero `--filter '!'` exclusions for orchestrator + generacy | 0 references | `grep '--filter .!@generacy-ai/(orchestrator\|generacy)' .github/workflows/ci.yml` returns nothing |
+| SC-002 | Orchestrator unit suite green on `develop` HEAD | 0 failed | `pnpm --filter @generacy-ai/workflow-engine build && pnpm --filter @generacy-ai/orchestrator test` |
+| SC-003 | Generacy unit suite green on `develop` HEAD | 0 failed | `pnpm --filter '@generacy-ai/generacy...' build && pnpm --filter @generacy-ai/generacy test` |
+| SC-004 | Integration suite green on `develop` HEAD with a fresh Redis service | 0 failed | Integration job in CI + local reproduction via `docker run --rm -p 6379:6379 redis` + `pnpm -r --if-present run test:integration` |
+| SC-005 | Both packages' failures are visible on subsequent PRs | Failing test → red check | Introduce a deliberate regression on a scratch branch; PR check turns red |
 
 ## Assumptions
 
-- The 18 failing tests represent test-hygiene issues (drifted mocks, missing fixtures,
-  ambient-infra dependencies), **not** live product bugs. Confirmed spot-check for
-  groups B and C (schema/fixture mismatches); groups A and D likely similar.
-- Redis is not required in CI for the base suite. Redis-dependent tests can be
-  stubbed or tagged.
-- Splitting tests behind an integration-only tag (e.g., a `describe.skipIf` env-var
-  gate or a separate vitest config) is acceptable — the goal is a green default run,
-  not that every existing test must run in the default job.
-- The `Test (packages)` step in `ci.yml` is the correct home for the orchestrator +
-  generacy suites (as opposed to inventing a third job), unless service containers
-  push us toward a dedicated job.
+- Redis is the only ambient-infra dependency required by any of the 18 orchestrator
+  failures (no code-server / cloud endpoint dependency remains after groups B–D land as
+  in-place fixes).
+- `services: redis:` on GitHub-hosted runners is sufficiently deterministic for the
+  group-A tests; no flake budget is needed at issue-land time. If a specific test proves
+  flaky post-merge, it is quarantined individually (skipped with an explicit `it.skip`
+  + issue link) rather than un-blocking the whole integration job.
+- The 36 generacy failures counted at Q4 are fully mock/assertion drift; if any turn out
+  to be genuinely infra-bound during implementation, FR-010 covers them.
 
 ## Out of Scope
 
-- Rewriting orchestrator or generacy tests beyond what is needed to make them green
-  or cleanly gated.
-- Refactoring the underlying services (relay-bridge, config loader, activation
-  client, webhook-setup-service) beyond what the failing tests require.
-- Adding new test coverage for uncovered code paths.
-- Investigating or fixing the pre-existing 2 skipped tests (out of 1980).
-- Any changes to `@generacy-ai/workflow-engine` beyond documenting the
-  `pnpm --filter @generacy-ai/workflow-engine build` prerequisite if needed.
-- CI performance tuning (parallelism, caching) — only correctness is in scope.
+- Sharding the unit suite for runtime — treated as a follow-up if wall-clock becomes a
+  problem after FR-001/FR-002 land.
+- Refactoring the existing 1960 passing orchestrator tests or the 1692 passing generacy
+  tests.
+- Introducing an env-var integration gate (`RUN_INTEGRATION=1`) or a scheduled/nightly
+  integration runner — explicitly rejected in Q2 and Q3.
+- Cross-package test consolidation (moving tests between packages).
 
 ---
 
-*Generated by speckit — enhanced from GitHub issue #871.*
+*Generated by speckit*
