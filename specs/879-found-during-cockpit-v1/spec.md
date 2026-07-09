@@ -23,7 +23,7 @@ Note the interaction guard from #869: with dedupe self-clearing, the zero-truste
 - Trusted unresolved thread + no in-flight item → enqueues, regardless of any historical marker for the same issue/phase (the stale-key scenario).
 - Trusted unresolved thread + item already pending/claimed → exactly one in-flight item (webhook+poll race collapses).
 - Handler completes (any terminal path) → next trusted state re-enqueues on the following poll with no manual state clearing.
-- Grep-audit: no `phase-tracker:*:address-pr-feedback` writes remain.
+- Code-audit test (`trust-predicate-audit.test.ts` style): (i) neither `pr-feedback-monitor-service.ts` nor `pr-feedback-handler.ts` references `PhaseTracker`, and (ii) no `DEDUP_PHASE` declaration remains under `packages/orchestrator/src/**`. (See SC-004; the older raw grep shape is unreliable per clarification Q5.)
 
 ## Repro state
 
@@ -64,7 +64,11 @@ The stale key was deleted after capture (name, mark-era, and TTL recorded above)
 | FR-004 | A trusted unresolved thread MUST enqueue regardless of any historical `phase-tracker:*:address-pr-feedback` marker for the same issue/phase (the stale-key scenario). | P1 | Regression target for the observed live consequence. |
 | FR-005 | Concurrent webhook and poll triggers for the same PR feedback state MUST produce exactly one in-flight item (webhook+poll race collapses). | P1 | Atomic itemKey NX guarantees single-in-flight semantics. |
 | FR-006 | After handler completion (any terminal path — success, failure, drop), the next trusted state on the following poll MUST re-enqueue with no manual state clearing. | P1 | Self-clearing derives from in-flight state, not TTL. |
-| FR-007 | The `PhaseTracker` machinery MUST become fully deletable as a follow-up: no remaining `phase-tracker:*:address-pr-feedback` writes anywhere in the repo (`grep -R "phase-tracker" packages/orchestrator | grep address-pr-feedback` returns empty). | P1 | Completes #862's stated goal. |
+| FR-007 | The `PhaseTracker` machinery MUST become fully deletable as a follow-up: no remaining `phase-tracker:*:address-pr-feedback` writes anywhere in the repo. | P1 | Completes #862's stated goal. Audit shape is now defined by SC-004 as a code-audit test, not a raw grep. |
+| FR-008 | `pr-feedback-handler.ts` MUST delete its `DEDUP_PHASE` constant and all five terminal-path `phaseTracker.clear(owner, repo, issueNumber, DEDUP_PHASE)` calls in this PR. The handler was the settlement partner for a key nothing writes post-FR-002; retaining those calls is precisely the per-surface bookkeeping FR-002 targets, and FR-007's "no remaining callers for `address-pr-feedback`" is unsatisfiable while they stay. (Clarification Q1 → A.) | P1 | In-scope in this PR; not deferred. |
+| FR-009 | When `enqueueIfAbsent` returns `false` because of an in-flight collision on the same itemKey, the monitor MUST emit a structured info log line containing at minimum `itemKey` and `reason: "in-flight"`. The current "silently dropped" fail-safe path at `redis-queue-adapter.ts:143` MUST NOT survive this PR: a repeating drop line at poll cadence is the operator's stuck-worker signal, and silence turns the Q2 drop window into an invisible failure mode. (Clarification Q2 → A.) | P1 | Diagnosability requirement carried over from #862's Q5. |
+| FR-010 | The `waiting-for:address-pr-feedback` label MUST be added idempotently whenever trusted unresolved feedback is present on the PR, decoupled from the enqueue outcome — including when `enqueueIfAbsent` returns `false` due to an in-flight collision. Labels are the operator-facing state plane (cockpit `watch`/`status` render from them); enqueue is work scheduling. (Clarification Q3 → B.) | P1 | Combined with FR-009 gives the diagnosable picture: label present + repeating drop lines = feedback pending, blocked by in-flight item. |
+| FR-011 | `PrFeedbackMonitorService` MUST NOT accept `PhaseTracker` as a constructor field/parameter after this PR. `server.ts` wiring and all test stubs of the monitor MUST be updated in the same PR — no dead DI. (Clarification Q4 → A.) | P1 | Tests are already touched (dedupe semantics change), so dropping the field is amortized. |
 
 ## Success Criteria
 
@@ -73,7 +77,7 @@ The stale key was deleted after capture (name, mark-era, and TTL recorded above)
 | SC-001 | Stale-key scenario no longer blocks first trusted enqueue | 100% | Regression test: seed `phase-tracker:<owner>:<repo>:<issue>:address-pr-feedback` in Redis with any TTL, run monitor with a trusted unresolved thread and no in-flight item, assert enqueue fires on the first poll. |
 | SC-002 | Webhook + poll race collapses to single in-flight item | 1 in-flight item | Test: fire simultaneous webhook + poll triggers against the same PR feedback state, assert queue depth == 1. |
 | SC-003 | Handler-terminal → next poll re-enqueue works with zero manual key clearing | 100% | Test: run handler through each terminal path (complete, fail, drop), then re-poll with a trusted state, assert enqueue fires on the following poll. |
-| SC-004 | Grep-audit: no `phase-tracker:*:address-pr-feedback` writes remain | 0 matches | `grep -R "phase-tracker" packages/orchestrator | grep address-pr-feedback` returns no lines. |
+| SC-004 | No `address-pr-feedback` phase-tracker caller remains, verified by code-audit test | 0 offending references | Audit test in the `trust-predicate-audit.test.ts` style asserting: (i) neither `packages/orchestrator/src/services/pr-feedback-monitor-service.ts` nor `packages/orchestrator/src/worker/pr-feedback-handler.ts` references `PhaseTracker` at all (identifier grep on the file), and (ii) no `DEDUP_PHASE` declaration remains anywhere under `packages/orchestrator/src/**`. The original `grep -R "phase-tracker"` shape false-passes because the string appears only in the key builder, not in callers, and the literal `'address-pr-feedback'` legitimately survives as the queue command name. (Clarification Q5 → B.) |
 | SC-005 | Zero-trusted path does not enqueue | 0 enqueues on zero-trusted | Test: unresolved thread with only untrusted authors → no item is added to the queue on any poll. |
 
 ## Assumptions
@@ -81,11 +85,11 @@ The stale key was deleted after capture (name, mark-era, and TTL recorded above)
 - The #862 in-flight dedupe layer (`enqueueIfAbsent` / itemKey NX on the queue-state atomic layer) is production-hardened for the resume path and is safe to consume from a second surface without further changes.
 - The #869 zero-trusted-does-not-enqueue contract is currently enforced in the monitor's shared predicate and continues to hold post-migration; without it, self-clearing dedupe would busy-loop.
 - Existing in-flight items keyed by the current dedupe scheme do not need migration — the handler drains them naturally; the new dedupe applies to enqueues going forward.
-- The itemKey shape used by the resume path is expressive enough to key `address-pr-feedback` items at the `<owner>:<repo>:<issue>` granularity (or equivalent) without collision against other phases.
+- The itemKey shape used by the resume path (`${owner}/${repo}#${issueNumber}`, no `command` component) is intentionally per-issue single-in-flight: while a `continue`/`process` item is working issue N, a concurrent `address-pr-feedback` enqueue for the same issue is dropped and re-detected on the next poll after the in-flight item completes. This is confirmed as the intended semantics — a second worker concurrently pushing feedback fixes to the same branch is a race we must not create; single-writer-per-issue matches #862's Q3 resolution ("itemKey alone; an issue is in one gate at a time"). Unresolved-thread state persists on the PR, so the drop is deferred-not-lost. `buildItemKey` is NOT extended to include `command` in this PR. Diagnosability of the drop window is provided by FR-009 (structured drop log) and FR-010 (idempotent `waiting-for` label). (Clarification Q2 → A.)
 
 ## Out of Scope
 
-- Deleting the `PhaseTracker` implementation itself (class, module, tests) — this PR removes the last `address-pr-feedback` caller so that a follow-up can delete the machinery cleanly.
+- Deleting the `PhaseTracker` implementation itself (class, module, tests) — this PR removes the last `address-pr-feedback` caller so that a follow-up can delete the machinery cleanly. Note: handler-side cleanup (`pr-feedback-handler.ts` `DEDUP_PHASE`/`clearDedupe` removal) is IN scope this PR per FR-008 (clarification Q1 → A); only the `PhaseTracker` class deletion itself is deferred.
 - Migrating other unrelated `phase-tracker:*` phases beyond `address-pr-feedback`.
 - Changes to the #869 shared predicate (trusted-vs-untrusted classification) — this migration relies on the predicate's contract but does not modify it.
 - Changes to the resume path's dedupe (already migrated in #862).

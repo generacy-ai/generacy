@@ -9,7 +9,7 @@
 - A: Remove in this PR — handler was the settlement partner for a key nobody writes; retaining dead `phaseTracker.clear()` calls is exactly the "per-surface bookkeeping" FR-002 targets, and it satisfies FR-007's "no remaining callers for address-pr-feedback" in one shot.
 - B: Leave in this PR — spec's Proposal names only the monitor as the migration site; handler cleanup ships in the follow-up that removes the class.
 
-**Answer**: *Pending*
+**Answer**: A — delete the handler's `DEDUP_PHASE` constant and all five `phaseTracker.clear()` exit-path calls in this PR. Settlement calls against a key nothing writes are precisely the "per-surface bookkeeping" this issue exists to remove, and FR-007's "no remaining callers for `address-pr-feedback`" is unsatisfiable while they stay. Leaving them (B) converts an optional follow-up into a mandatory one.
 
 ### Q2: `buildItemKey` granularity vs. cross-phase collision
 **Context**: `buildItemKey` in `redis-queue-adapter.ts:65` and `in-memory-queue-adapter.ts:14` returns `${owner}/${repo}#${issueNumber}` — with **no** `command` component. The resume path enqueues `command: 'continue'` items; the label-monitor's process branch enqueues `command: 'process'`; PR-feedback wants to enqueue `command: 'address-pr-feedback'`. All three share one itemKey per issue. If a `continue` is already in-flight for issue N and PR feedback arrives on the linked PR, `enqueueIfAbsent` will return `false` and the `address-pr-feedback` item is silently dropped (fail-safe path in `redis-queue-adapter.ts:143`). Assumption 4 in the spec says "at the `<owner>:<repo>:<issue>` granularity (or equivalent) without collision against other phases" — but the current key **does** collide across commands.
@@ -19,7 +19,7 @@
 - B: Extend `buildItemKey` to include `command` — `address-pr-feedback` can enqueue concurrently with `continue`/`process` on the same issue. Also changes resume-path collision semantics.
 - C: Something else — specify.
 
-**Answer**: *Pending*
+**Answer**: A — per-issue single-in-flight is the intended semantics, and the collision is a feature: while a `continue`/`process` item is working issue N, a second worker concurrently pushing feedback fixes to the same branch is a race we must not create. Single-writer-per-issue matches #862's Q3 resolution ("itemKey alone; an issue is in one gate at a time"), and the drop is deferred-not-lost — unresolved-thread state persists on the PR, so the first poll after the in-flight item completes re-detects and enqueues. One requirement carried over from #862's Q5: the drop must emit the structured info line (`itemKey`, `reason: "in-flight"`), because a *repeating* drop line at poll cadence is the operator's stuck-worker signal — the "silently dropped" fail-safe path as currently worded at `redis-queue-adapter.ts:143` should not survive this PR.
 
 ### Q3: `waiting-for:address-pr-feedback` label on dedupe rejection
 **Context**: Current code at `pr-feedback-monitor-service.ts:381` adds the `waiting-for:address-pr-feedback` label **only after a successful new enqueue** (`isNew === true`). After migration, `enqueueIfAbsent` can return `false` because an item is already in-flight for this issue (webhook+poll race, or an in-flight `continue` if we pick Q2=A). The PR still has unresolved trusted feedback — the operator arguably wants the "waiting-for" label visible whenever that state holds, regardless of enqueue outcome. On the other hand, current behavior (skip label on dedupe rejection) is the only precedent, and the in-flight item that owns the feedback work will drive its own labels.
@@ -28,7 +28,7 @@
 - A: No — preserve current behavior; skip both enqueue and label on dedupe rejection. The in-flight item owns state.
 - B: Yes — always add the label idempotently when unresolved trusted feedback is present, decoupling label state from enqueue outcome.
 
-**Answer**: *Pending*
+**Answer**: B — add `waiting-for:address-pr-feedback` idempotently whenever trusted unresolved feedback is present, decoupled from enqueue outcome. Labels are the operator-facing state plane (cockpit watch/status render from them); enqueue is work scheduling. Under A, a webhook+poll race or an in-flight `continue` leaves the PR in a real "feedback pending" state that status doesn't show — the label lies by omission for the duration. Truthful state also makes the Q2 drop window visible: label present + repeated drop lines = exactly the diagnosable picture we want. The owning worker's existing label transitions are unaffected (adds are idempotent).
 
 ### Q4: `PhaseTracker` constructor dependency on the monitor
 **Context**: After migration, `PrFeedbackMonitorService` no longer calls any `phaseTracker.*` method. The `PhaseTracker` is currently injected via its constructor and wired in `server.ts`. Leaving the field in place is dead DI but harmless; removing it changes the constructor signature and every test that stubs the monitor.
@@ -37,7 +37,7 @@
 - A: Remove — drop the constructor field, update `server.ts` wiring, update tests. No dead DI.
 - B: Keep — leave the field/parameter for now; drop it in the follow-up that deletes `PhaseTracker` altogether.
 
-**Answer**: *Pending*
+**Answer**: A — remove the constructor field and rewire `server.ts` + test stubs in this PR. The tests must be touched anyway (the dedupe behavior they assert is changing); keeping dead DI just schedules the same churn twice and leaves every future reader wondering what the monitor still tracks.
 
 ### Q5: SC-004 grep audit reformulation
 **Context**: SC-004 as written — `grep -R "phase-tracker" packages/orchestrator | grep address-pr-feedback` — passes **today** (0 matches). The literal string `phase-tracker` appears only in `phase-tracker-service.ts:37` (the key builder), never in callers. Callers reach the key indirectly via `phaseTracker.tryMarkProcessed(owner, repo, issueNumber, DEDUP_PHASE)`. The intent of SC-004 is clearly "no code path writes an `address-pr-feedback` phase-tracker key," but the literal grep can't detect that.
@@ -47,4 +47,4 @@
 - B: Replace with an AST/pattern check — assert `DEDUP_PHASE = 'address-pr-feedback'` and any `phaseTracker.tryMarkProcessed(..., 'address-pr-feedback')` calls are absent from `packages/orchestrator/src/**`.
 - C: Leave SC-004 as-is (already passing at the string level) — treat it as satisfied and rely on Q1/FR-002 for the substantive check.
 
-**Answer**: *Pending*
+**Answer**: B, with a concrete shape that can't false-pass — the option-A broadened grep has the same line-level co-occurrence flaw as the original: the `'address-pr-feedback'` literal sits on the `DEDUP_PHASE` constant line, not on the `tryMarkProcessed(...)` call line, so the pipe returns 0 matches even *before* the migration. Plain string-absence can't work either, because `'address-pr-feedback'` legitimately survives as the queue command name. Reformulate as an audit test in the existing `trust-predicate-audit.test.ts` style: assert (i) neither `pr-feedback-monitor-service.ts` nor `pr-feedback-handler.ts` references `PhaseTracker` at all (trivially file-scoped, composes with Q1=A and Q4=A), and (ii) no `DEDUP_PHASE` declaration remains under `packages/orchestrator/src/**`.
