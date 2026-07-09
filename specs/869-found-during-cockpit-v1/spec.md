@@ -45,98 +45,62 @@ No manual repair applied to the loop (deliberately — evidence): PR #14's threa
 
 ## User Stories
 
-### US1: Cockpit request-changes drives the loop (Primary)
+### US1: Operator's request-changes review reaches the worker
 
-**As an** operator using the cockpit implementation-review gate,
-**I want** the request-changes review I submit through the cockpit to be auto-addressed by the agent,
-**So that** the human-approved feedback the pipeline was designed to consume actually reaches the worker, without me having to open a second personal account to reply from.
-
-**Acceptance Criteria**:
-- [ ] A review comment authored by the resolved cluster identity (bot/App login) with `author_association: NONE` on an unresolved thread is treated as trusted for the `pr-feedback` surface.
-- [ ] The live repro (christrudelpw/sniplink#4 / PR #14) — where the cockpit posted a request-changes review from the App identity — is processed end-to-end (worker addresses the comment, pushes changes, replies to the thread).
-- [ ] The trust decision is emitted in structured logs so the "why did/didn't this fire" question is answerable from log lines alone.
-
-### US2: Zero-trusted state is loud, not silent
-
-**As an** operator watching the pipeline,
-**I want** the handler to loudly retain state and surface a diagnostic when unresolved threads exist but none are from trusted authors,
-**So that** the same class of fail-silent bug that #861 fixed (label removed, worker "succeeds") does not recur one layer up in the trust filter.
+**As a** cockpit operator who selected request-changes at the implementation-review gate,
+**I want** the inline review comments the cockpit posts through the cluster's own GitHub identity to be treated as first-party feedback,
+**So that** the #861 PR-feedback loop actually addresses the changes I asked for instead of silently dropping them and stranding the PR.
 
 **Acceptance Criteria**:
-- [ ] When `unresolvedThreads > 0` and `trustedUnresolvedComments == 0`, the handler does NOT remove `waiting-for:address-pr-feedback`.
-- [ ] The handler does NOT emit the log line "No unresolved threads found" in this case (it is factually wrong: its own structured fields say otherwise).
-- [ ] The handler emits a `warn`-level log naming the skipped authors and their `reason` codes.
-- [ ] The handler optionally posts a bot-visible notice on the PR of the shape "feedback is present but not from a trusted author — reply from a maintainer account to proceed" (matching the #842 clarification-poster pattern).
+- [ ] A review comment authored by the resolved cluster identity (with `author_association: NONE`) on an unresolved thread of a PR the cluster opened is processed by the PR-feedback worker (not skipped by the #842 trust filter).
+- [ ] When unresolved threads exist but every comment author is untrusted, the handler retains `waiting-for:address-pr-feedback`, emits a `warn` log naming the skipped authors and `authorAssociation` values, and does not print the "No unresolved threads found" line.
+- [ ] The enqueue-dedupe key (`phase-tracker:<owner>:<repo>:<pr>:address-pr-feedback`) is settled on every terminal exit of the handler — success, zero-trusted retention, and caught exception — so a later state change re-triggers the loop instead of hitting TTL.
 
-### US3: Monitor and handler agree on eligibility
+### US2: Untrusted-only state is visible on the PR
 
-**As an** orchestrator maintainer,
-**I want** the monitor (which decides to enqueue) and the handler (which decides to act) to evaluate the same thread set through the same trust predicate,
-**So that** the monitor can never manufacture work the handler will silently discard — a class of busy-loop that is only masked today by the wedge dedupe key.
-
-**Acceptance Criteria**:
-- [ ] The trust predicate is a single shared function (or the asymmetry is explicitly documented, bounded, and justified in-code).
-- [ ] If the monitor path is refactored to filter by trust, the "enqueue → immediate zero-trusted exit" pattern is no longer possible.
-- [ ] If the asymmetry is retained (e.g., monitor over-enqueues intentionally), the handler's zero-trusted exit path must be non-destructive per US2.
-
-### US4: Dedupe never strands a live thread
-
-**As an** operator,
-**I want** the enqueue-dedupe key to be settled on every handler exit path,
-**So that** a later new trusted comment on the same PR re-triggers the loop instead of being permanently skipped until TTL expiry.
+**As a** cockpit operator watching a PR whose only review-thread comments are untrusted,
+**I want** a single bot-authored top-level PR comment explaining that the feedback is present but the handler will not act until it comes from a trusted author,
+**So that** I know to reply from a maintainer account (or reconfigure the cluster identity) instead of assuming the loop is silently working.
 
 **Acceptance Criteria**:
-- [ ] The handler clears (or the framework settles) the `phase-tracker:<owner>:<repo>:<pr>:address-pr-feedback` key on every terminal exit path (success, zero-trusted, error).
-- [ ] A subsequent monitor poll that observes a new trusted comment re-enqueues the item rather than logging "Duplicate detected … Skipping duplicate".
-- [ ] This behavior is preserved (or explicitly subsumed) by #862's dedupe redesign — the two changes compose correctly.
+- [ ] Exactly one notice is posted per zero-trusted episode (idempotent via hidden HTML marker, checked against prior PR comments before posting).
+- [ ] The notice is a top-level PR comment (`gh pr comment`), not a review-thread reply — so it never re-enters the unresolved-thread scan and cannot form a self-trust loop with FR-001.
 
 ## Functional Requirements
 
-| ID     | Requirement | Priority | Notes |
-|--------|-------------|----------|-------|
-| FR-001 | The `pr-feedback` trust decision MUST return `trusted: true` when the comment author matches the resolved cluster identity (bot login), regardless of `author_association` value. | P0 | Bot-login check already exists in `isTrustedCommentAuthor`; must verify handler passes the correctly-resolved `botLogin` on the actual live path. Chain: config → `CLUSTER_GITHUB_USERNAME` → `GH_USERNAME` → `gh api user`. |
-| FR-002 | When unresolved threads exist but zero comments pass the trust filter, the handler MUST NOT remove the `waiting-for:address-pr-feedback` label. | P0 | Directly replaces the current `unresolvedComments.length === 0` short-circuit at `pr-feedback-handler.ts:196-203`. |
-| FR-003 | When unresolved threads exist but zero comments pass the trust filter, the handler MUST NOT log "No unresolved threads found" and MUST emit a `warn` naming the skipped authors and their trust `reason` codes. | P0 | Same code site as FR-002. |
-| FR-004 | On the zero-trusted exit path, the handler SHOULD post a single bot-visible notice to the PR indicating trusted-author feedback is required to proceed. | P1 | Follow #842 clarification-poster pattern; must be idempotent (one notice per zero-trusted state, not per poll). |
-| FR-005 | The monitor and handler MUST evaluate PR thread eligibility through the same trust predicate, OR the asymmetry MUST be explicitly documented and justified in-code AND the handler's zero-trusted path MUST be non-destructive (per FR-002/FR-003). | P0 | Prefers shared predicate; falls back to documented asymmetry only if refactor scope is prohibitive. |
-| FR-006 | The handler MUST settle the enqueue-dedupe key (`phase-tracker:<owner>:<repo>:<pr>:address-pr-feedback`) on every terminal exit path (success, zero-trusted retention, exception). | P0 | Interacts with #862; if #862 lands first, FR-006 is satisfied by inheritance and must be verified, not re-implemented. |
-| FR-007 | The trust decision for every ingested comment MUST be logged at `info` level with structured fields (`commentId`, `author`, `authorAssociation`, `reason`, `trusted`), so the trust outcome for each poll is auditable from log lines alone. | P1 | Existing skip-log covers untrusted; add symmetric log for trusted-accept path so both branches are visible. |
-| FR-008 | Regression coverage: the four scenarios enumerated in the issue's "Regression tests" section MUST have unit or integration tests in the orchestrator/workflow-engine packages. | P0 | Bot-authored NONE → processed; all-untrusted → label retained + warn + no false log; monitor/handler predicate agreement; dedupe cleared on every exit. |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | Trust predicate accepts a comment as trusted when either `author_association ∈ {OWNER, MEMBER, COLLABORATOR}` **or** `author.login == resolved cluster identity`. Identity resolution reuses the #830 chain (config → `CLUSTER_GITHUB_USERNAME` → `GH_USERNAME` → `gh api user`). | P0 | Fixes sub-defect 1 (observed live on PR #14). |
+| FR-002 | When unresolved threads exist and every author is untrusted, the handler retains `waiting-for:address-pr-feedback` and exits without removing the label. No "No unresolved threads found" log line on this path. | P0 | Fixes sub-defect 2. Non-silent outcome is load-bearing. |
+| FR-003 | On the zero-trusted retention path, the handler emits a `warn` log naming each skipped comment's author login, `authorAssociation`, and the reason (`none-untrusted`). | P0 | Companion to FR-002; operator diagnosability. |
+| FR-004 | On the transition into the zero-trusted state, a single top-level PR comment is posted via `gh pr comment` explaining that feedback is present but untrusted and that a maintainer must reply to proceed. Idempotency: a hidden HTML marker (`<!-- generacy:pr-feedback-untrusted-notice -->`) is grep-checked against prior PR comments before posting; one notice per episode; old notices are left in place as audit trail (not edited or deleted on exit). Under Q1's shared-predicate design, the notice is posted by the **monitor** at the state transition it already detects, not by the handler. | P1 | Placement chosen (top-level, not review-thread reply) to structurally prevent the self-trust loop that FR-001's expanded trust set would otherwise create. |
+| FR-005 | Monitor and handler evaluate thread trust through a **single shared predicate** (`isTrustedCommentAuthor`) exported from the same module as `getPRReviewThreads` (from #861). The monitor's GraphQL query is extended to pull `author.login` + `authorAssociation` per comment; unresolved threads whose comments are all untrusted are not enqueued. FR-002/FR-003 loud retention stays in the handler as a defense-in-depth fallback for races (comment edited/deleted between poll and claim). | P0 | Fixes sub-defect 3. |
+| FR-006 | The enqueue-dedupe key is cleared on every terminal handler exit: success, zero-trusted retention, and caught exception (all exception classes — transient and permanent). Rationale: fail-loud-and-retry beats fail-silent-and-strand; busy-loop risk on persistent failure is bounded by the monitor's 60s poll cadence and is diagnosable, unlike the TTL strand this fix closes. Forward-compatible with #862's dedupe redesign. | P0 | Fixes sub-defect 4. |
+| FR-007 | When the cluster identity resolution chain returns nothing at runtime, the handler logs the failure at `error` level naming each chain link tried (`config`, `CLUSTER_GITHUB_USERNAME`, `GH_USERNAME`, `gh api user`) and then continues to apply FR-002/FR-003/FR-004 unconditionally to any untrusted comments observed. Association-trusted comments are still processed normally. No new error class is introduced; the worker is not marked failed. | P1 | Prevents identity-unresolvable degradation from silently re-opening the sub-defect-2 wound. |
 
 ## Success Criteria
 
-| ID     | Metric | Target | Measurement |
-|--------|--------|--------|-------------|
-| SC-001 | Bot-authored request-changes comments processed | 100% | Re-run the PR #14 flow (or an equivalent fixture); the review comment authored by the cluster App identity is not skipped by the trust filter. |
-| SC-002 | Zero-trusted exit paths retain state | 100% | For every handler exit where `unresolvedThreads > 0 && trustedUnresolvedComments == 0`, the `waiting-for:address-pr-feedback` label is present at exit AND the dedupe key is cleared. Verified in unit + one live rerun. |
-| SC-003 | Wedge does not recur | 0 occurrences | On a fresh repro of PR #14, no subsequent monitor poll logs `Duplicate detected (atomic check) … Skipping duplicate` for an unresolved-thread state. |
-| SC-004 | Monitor / handler predicate agreement | 100% (or explicitly bounded) | Either a shared function is imported by both call sites (grep), or the asymmetry is documented in-code with a comment referencing this spec and #862. |
-| SC-005 | Fail-silent regression audit | Zero "No unresolved threads found" log lines when `unresolvedThreads > 0` | grep production logs (post-fix) for the exact string, cross-referenced with the same-line `unresolvedThreads` field. |
-| SC-006 | Live cockpit request-changes → worker action | End-to-end pass | Rerun the cockpit v1 integration smoke test (`tetrad-development#88`) request-changes gate; worker addresses the comment, pushes a commit, replies to the thread, removes the label. |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Cockpit request-changes reaches the worker end-to-end | 100% of request-changes reviews posted through the cockpit result in the worker claiming, addressing, and pushing a follow-up commit within one poll cycle of the review being submitted | Replay of the christrudelpw/sniplink#4 / PR #14 scenario (or equivalent test double); assert log sequence contains `PR feedback work enqueued` → `PrFeedbackHandler` claim → new commit pushed; no `comment-skipped … reason=none-untrusted` line for the cluster-identity author. |
+| SC-002 | Zero-trusted state is never silent | 0 occurrences of "No unresolved threads found" log while GitHub reports `unresolvedThreads > 0` | Regression test: unresolved thread with only-untrusted authors → assert label retained, `warn` line emitted with author names, no false-positive log. |
+| SC-003 | Dedupe never wedges the loop | 0 residual `phase-tracker:*:address-pr-feedback` keys remain marked after any terminal handler exit path in the test suite | Unit test all three exit paths (success, zero-trusted retention, exception) and assert Redis `DEL` invoked; integration test asserts a second unrelated trusted comment on the same PR triggers a fresh claim. |
+| SC-004 | One notice per zero-trusted episode | ≤ 1 top-level bot comment carrying the FR-004 marker per PR per zero-trusted state transition | Integration test with 3 consecutive monitor polls against a zero-trusted PR → assert exactly one comment with the marker exists. |
+| SC-005 | Monitor and handler agree on trust | The `isTrustedCommentAuthor` predicate has exactly one production call site per package (monitor + handler share the same import) | Grep audit in test: no ad-hoc `authorAssociation` conditions outside the shared function. |
 
 ## Assumptions
 
-- The `#830` cluster-identity resolution chain (config → `CLUSTER_GITHUB_USERNAME` → `GH_USERNAME` → `gh api user`) is reliable and present at handler runtime. If it is not, FR-001 degrades to "handler with unresolvable identity falls through to the existing `author_association` gate" — this is a defensible degradation but should be logged.
-- `#862`'s dedupe redesign will land independently. This spec's FR-006 is compatible with #862's approach and is stated so that either ordering (this-first or #862-first) yields a correct end state.
-- Monitor and handler live in the same package (or share `workflow-engine/security`) such that a shared trust predicate is a realistic refactor. If they don't, the asymmetry-documentation escape hatch in FR-005 applies.
-- Reply-from-personal-account is not a viable long-term workaround (confirmed by the live incident) — the fix must land in the pipeline, not in operator behavior.
+- The cluster identity is resolvable in the vast majority of live runs (the #830 chain has three fallbacks including a live API probe). FR-007 governs the degraded path; the design does not depend on identity resolution succeeding.
+- The monitor's existing previous-state tracking (used for label-transition detection) can carry one more bit — "was zero-trusted last poll" — to gate FR-004's transition-edge posting. If it cannot, the marker-grep already provides idempotency and the transition edge collapses to per-poll no-op.
+- #862's dedupe redesign is in flight but not landed. FR-006's "clear on all exit paths" is stated in terms of the current Redis-key semantics; when #862 lands, the invariant translates directly to whatever the new mechanism calls "settled."
 
 ## Out of Scope
 
-- Redesigning the dedupe key layout or TTL semantics — that is `#862`'s remit; this spec only requires that whatever the dedupe framework is, the handler settles it on every exit.
-- Widening trust to bot accounts beyond the cluster's own resolved identity (no "trust any GitHub App" policy).
-- Cockpit-side UX changes (e.g., prompting the operator to also reply from a personal account) — the fix is in the orchestrator/handler.
-- Refactoring the `authorAssociation` tier taxonomy itself; this spec composes with the existing `TIER_TO_TRUSTED_REASON` / `KNOWN_UNTRUSTED_TIERS` matrices in `packages/workflow-engine/src/security/comment-trust.ts`.
-- Repairing the specific live repro state left in place at PR #14 — that PR is being kept as evidence per the issue's "Repro state left in place" note.
-
-## Related Issues
-
-- **#842** — Author-trust filter (composes with this fix; the trust matrix is inherited from here).
-- **#861** — Original PR-feedback loop fix (this bug is a fail-silent regression one layer up).
-- **#830** — Cluster identity resolution chain (FR-001's `botLogin` source).
-- **#862** — Dedupe redesign (FR-006's interacting change).
-- **#849** — Prior history-keyed-dedupe stranding class (context for FR-006).
-- **generacy-ai/tetrad-development#88** — Cockpit v1 integration smoke test; this is finding #31.
+- The #862 dedupe key redesign itself (this spec is compatible with the current key layout and with #862's redesign; it does not change the layout).
+- Trust rules for *pushed commits* on the PR branch (only review-comment authorship is in scope; branch-push author policy is a separate concern).
+- The cockpit's own review-composition surface (the fact that the cockpit posts as the cluster identity is a given; this spec does not change how the cockpit submits reviews).
+- Auto-resolving GitHub review threads from the bot (Q5-C was explicitly rejected — the operator's unresolved-conversations signal must be preserved).
+- Multi-cluster / shared-identity clusters where more than one cluster shares one GitHub identity (single-identity assumption; multi-cluster is a follow-up).
 
 ---
 
