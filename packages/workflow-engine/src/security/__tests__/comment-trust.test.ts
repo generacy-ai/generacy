@@ -3,6 +3,7 @@ import type { Logger } from '../../types/logger.js';
 import type { Comment } from '../../types/github.js';
 import {
   isTrustedCommentAuthor,
+  normalizeLogin,
   type CommentTrustContext,
   type TrustSurface,
 } from '../comment-trust.js';
@@ -266,6 +267,107 @@ describe('isTrustedCommentAuthor', () => {
         ctx({ botLogin: 'mybot', clusterIdentity: 'mybot' }),
       );
       expect(decision).toEqual({ trusted: true, reason: 'bot' });
+    });
+  });
+
+  // SC-002 — 16-fixture normalization matrix from
+  // specs/874-…/contracts/normalize-login.contract.md. Every
+  // (provisioned, observed) pair must trust the observed comment via the
+  // `cluster-identity` reason (and via the `bot` reason when passed as
+  // botLogin). Also covers the 4 negative fixtures and the empty/edge
+  // inputs.
+  describe('SC-002 normalizeLogin fixture matrix (#874)', () => {
+    const POSITIVE_PAIRS: Array<[string, string]> = [
+      ['generacy-ai', 'generacy-ai'],
+      ['generacy-ai', 'generacy-ai[bot]'],
+      ['generacy-ai[bot]', 'generacy-ai'],
+      ['generacy-ai[bot]', 'generacy-ai[bot]'],
+      ['Generacy-AI', 'generacy-ai'],
+      ['Generacy-AI', 'generacy-ai[bot]'],
+      ['Generacy-AI[bot]', 'generacy-ai'],
+      ['Generacy-AI[bot]', 'generacy-ai[bot]'],
+      [' generacy-ai ', 'generacy-ai'],
+      [' generacy-ai ', 'generacy-ai[bot]'],
+      [' generacy-ai[bot] ', 'generacy-ai'],
+      [' generacy-ai[bot] ', 'generacy-ai[bot]'],
+      [' Generacy-AI ', 'generacy-ai'],
+      [' Generacy-AI ', 'generacy-ai[bot]'],
+      [' Generacy-AI[bot] ', 'generacy-ai'],
+      [' Generacy-AI[bot] ', 'generacy-ai[bot]'],
+    ];
+
+    it.each(POSITIVE_PAIRS)(
+      'cluster-identity pair (%j, %j) resolves to trust reason cluster-identity',
+      (provisioned, observed) => {
+        const decision = isTrustedCommentAuthor(
+          makeComment({ author: observed, authorAssociation: 'NONE' }),
+          'pr-feedback',
+          ctx({ clusterIdentity: provisioned }),
+        );
+        expect(decision).toEqual({ trusted: true, reason: 'cluster-identity' });
+      },
+    );
+
+    it.each(POSITIVE_PAIRS)(
+      'botLogin pair (%j, %j) resolves to trust reason bot',
+      (provisioned, observed) => {
+        const decision = isTrustedCommentAuthor(
+          makeComment({ author: observed, authorAssociation: 'NONE' }),
+          'pr-feedback',
+          ctx({ botLogin: provisioned }),
+        );
+        expect(decision).toEqual({ trusted: true, reason: 'bot' });
+      },
+    );
+
+    const NEGATIVE_PAIRS: Array<[string, string]> = [
+      ['generacy-ai', 'generacy-cloud'],
+      ['generacy-ai', 'generacy-ai-staging'],
+      ['generacy-ai[bot]', 'dependabot[bot]'],
+      ['generacy-ai', 'christrudelpw'],
+    ];
+
+    it.each(NEGATIVE_PAIRS)(
+      'cluster-identity negative pair (%j, %j) does not trust as cluster-identity',
+      (provisioned, observed) => {
+        const decision = isTrustedCommentAuthor(
+          makeComment({ author: observed, authorAssociation: 'NONE' }),
+          'pr-feedback',
+          ctx({ clusterIdentity: provisioned }),
+        );
+        expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+      },
+    );
+
+    it.each([
+      ['', ''],
+      ['   ', ''],
+      ['[bot]', ''],
+      [' [bot] ', ''],
+      // Contract note: .toLowerCase() runs before the regex, so 'A[BOT]'
+      // becomes 'a[bot]' and the strip fires — final result is 'a'.
+      ['A[BOT]', 'a'],
+    ])('normalizeLogin(%j) === %j', (input, expected) => {
+      expect(normalizeLogin(input)).toBe(expected);
+    });
+
+    it('empty clusterIdentity after normalization does not fire cluster-identity branch', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: '', authorAssociation: 'NONE' }),
+        'pr-feedback',
+        ctx({ clusterIdentity: '[bot]' }),
+      );
+      // Both sides normalize to '' — must NOT trust via cluster-identity.
+      expect(decision.reason).not.toBe('cluster-identity');
+    });
+
+    it('empty botLogin after normalization does not fire bot branch', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: '', authorAssociation: 'NONE' }),
+        'pr-feedback',
+        ctx({ botLogin: '[bot]' }),
+      );
+      expect(decision.reason).not.toBe('bot');
     });
   });
 

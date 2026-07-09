@@ -48,6 +48,17 @@ export interface CommentTrustContext {
   logger: Logger;
 }
 
+/**
+ * Normalize a GitHub login for equality comparison. Strips wrapping
+ * whitespace, lowercases (GitHub logins are case-insensitive), then
+ * removes a trailing `[bot]` suffix (a REST-surface rendering artifact —
+ * GraphQL exposes the same account without it). See specs/874-…/contracts/
+ * normalize-login.contract.md for the full fixture matrix.
+ */
+export function normalizeLogin(raw: string): string {
+  return raw.trim().toLowerCase().replace(/\[bot\]$/, '');
+}
+
 export const DEFAULT_TRUSTED_TIERS = ['OWNER', 'MEMBER', 'COLLABORATOR'] as const;
 export const KNOWN_UNTRUSTED_TIERS = [
   'NONE',
@@ -84,15 +95,26 @@ export function isTrustedCommentAuthor(
   ctx: CommentTrustContext,
 ): TrustDecision {
   // 1. Bot login match — always trusted, regardless of tier or unset field.
-  if (ctx.botLogin && comment.author === ctx.botLogin) {
-    return { trusted: true, reason: 'bot' };
+  //    Normalize both sides so REST (`generacy-ai[bot]`) and GraphQL
+  //    (`generacy-ai`) surfaces compare equal. Empty result after
+  //    normalization does not match.
+  if (ctx.botLogin) {
+    const normalizedBot = normalizeLogin(ctx.botLogin);
+    const normalizedAuthor = normalizeLogin(comment.author);
+    if (normalizedBot !== '' && normalizedBot === normalizedAuthor) {
+      return { trusted: true, reason: 'bot' };
+    }
   }
 
   // 1.5 Cluster-identity match (#869 / FR-001) — fires before the tier gate
   //     so `author_association: NONE` on the cluster's own cockpit-posted
-  //     review is trusted.
-  if (ctx.clusterIdentity && comment.author === ctx.clusterIdentity) {
-    return { trusted: true, reason: 'cluster-identity' };
+  //     review is trusted. Normalization mirrors the bot-login path.
+  if (ctx.clusterIdentity) {
+    const normalizedCluster = normalizeLogin(ctx.clusterIdentity);
+    const normalizedAuthor = normalizeLogin(comment.author);
+    if (normalizedCluster !== '' && normalizedCluster === normalizedAuthor) {
+      return { trusted: true, reason: 'cluster-identity' };
+    }
   }
 
   const tier = comment.authorAssociation;

@@ -214,6 +214,7 @@ export { parseActionType } from './types/action.js';
 // Comment-author trust helper (author_association gating for ingestion surfaces)
 export {
   isTrustedCommentAuthor,
+  normalizeLogin,
   DEFAULT_TRUSTED_TIERS,
   KNOWN_UNTRUSTED_TIERS,
   type TrustSurface,
