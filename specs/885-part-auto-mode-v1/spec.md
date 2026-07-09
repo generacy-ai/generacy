@@ -10,18 +10,14 @@ Part of auto mode (v1.5) — plan: tetrad-development `docs/epic-cockpit-plan.md
 
 `cockpit watch` derives two synthetic NDJSON events from the snapshot diff it already computes:
 
-- `phase-complete` — when the last open issue in a phase transitions to closed (state-dominates-labels semantics per #873; `not_planned` closures count as done for aggregation). Fires once per *transition into* the state; if an issue reopens (phase regresses) and later re-completes, it fires again. Payload: `{ "type": "phase-complete", "phase": "<heading>", "epicRepo": "<owner/repo>", "epicNumber": <n>, "ts": "<ISO-8601>", "initial"?: true }`.
-- `epic-complete` — when every phase is complete. With `--exit-on-epic-complete`, watch emits it and exits 0 (gives auto mode its termination edge; default behavior unchanged). Payload: `{ "type": "epic-complete", "epicRepo": "<owner/repo>", "epicNumber": <n>, "ts": "<ISO-8601>", "initial"?: true }`.
+- `{"type":"phase-complete","phase":"<heading>", …}` — when the last open issue in a phase transitions to closed (state-dominates-labels semantics per #873; `not_planned` closures count as done for aggregation). Fires once per *transition into* the state; if an issue reopens (phase regresses) and later re-completes, it fires again.
+- `{"type":"epic-complete", …}` — when every phase is complete. With `--exit-on-epic-complete`, watch emits it and exits 0 (gives auto mode its termination edge; default behavior unchanged).
 
-Issues in the `(no phase)` group are excluded from any `phase-complete` but included in `epic-complete`. An epic with zero phase headings emits `epic-complete` when every ref closes; `phase-complete` never fires (nothing to aggregate). The `--exit-on-epic-complete` termination edge must not depend on epic body formatting.
+Issues in the `(no phase)` group are excluded from any `phase-complete` but included in `epic-complete`.
 
 Startup sweep: if a phase is already complete at watch start, emit the event with `initial: true` (consumers are idempotent — the suggested action, queueing the next phase, is state-checked anyway).
 
-Empty phase (heading present, `refs.length === 0`): counts as trivially complete for `epic-complete` aggregation but **never** emits `phase-complete` (neither at startup nor on transition). Emit one stderr warning at watch startup per empty phase: `phase "<heading>" has no issue refs; treated as complete`.
-
-Event ordering within a single poll cycle: (1) all per-issue events (`issue-closed`, `pr-merged`, `label-change`, …) in existing order; then (2) `phase-complete` events in `parsed.phases` body order; then (3) `epic-complete` strictly last (if firing). `--exit-on-epic-complete` exits only after the `epic-complete` line is flushed. Guarantee: cause precedes effect (the last `issue-closed` is always visible before the `phase-complete` it triggered), and the termination edge is the final line written.
-
-Output channels: NDJSON payloads on **stdout only** (machine-pure). Human-readable suggestion / celebration lines (e.g. `all P1 — Foundation issues closed — suggested: /cockpit:queue …`, `epic complete 🎉`) are the **plugin's** responsibility — the watch plugin derives them from the payload fields exactly as it does for other event types (per agency#386). The engine emits **no** `suggestion` field and **no** stderr assist text.
+Assist rendering: suggestion lines, e.g. `all P1 — Foundation issues closed — suggested: /cockpit:queue <epic-ref> "P2 — Core functionality"`; `epic complete 🎉` for the terminal event.
 
 Contract documented in the package README (auto mode consumes it there, per the self-contained-commands principle).
 
@@ -32,10 +28,6 @@ Contract documented in the package README (auto mode consumes it there, per the 
 - No-phase issues excluded from `phase-complete`, included in `epic-complete`.
 - `--exit-on-epic-complete` exits 0 after emitting the event; without the flag, watch keeps polling.
 - Startup sweep emits `initial: true` for pre-completed phases.
-- Empty phase (heading with no refs) emits stderr warning at startup, never emits `phase-complete`, still allows `epic-complete` to fire.
-- Phase-less epic (zero phase headings) emits `epic-complete` when every ref closes; emits no `phase-complete`; honors `--exit-on-epic-complete`.
-- Poll cycle with multiple simultaneous transitions emits per-issue events first, then `phase-complete` in body-order, then `epic-complete` last; `--exit-on-epic-complete` exits after the `epic-complete` line is flushed.
-- `phase-complete` / `epic-complete` payloads carry `epicRepo` and `epicNumber`; carry no `closedRefs`, `totalCount`, or `suggestion` fields.
 
 
 ## User Stories
