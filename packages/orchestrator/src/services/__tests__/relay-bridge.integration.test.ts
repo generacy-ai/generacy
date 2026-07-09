@@ -346,12 +346,12 @@ describe('RelayBridge', () => {
         timestamp: new Date().toISOString(),
       });
 
-      // Should forward via relay
+      // Should forward via relay (post-#600: wire shape is { event: <channel>, data: <payload> })
       expect(mockClient.send).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'event',
-          channel: 'workflows',
-          event: expect.objectContaining({ event: 'workflow:started' }),
+          event: 'workflows',
+          data: expect.objectContaining({ event: 'workflow:started' }),
         }),
       );
     });
@@ -469,7 +469,10 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
-      // Flush the async sendMetadata() promise
+      // Flush the async sendMetadata() promise (multiple await points: probes + readFile)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       const metadataSends = mockClient.send.mock.calls.filter(
@@ -513,6 +516,10 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      // Flush initial connect-triggered sendMetadata (probes + readFile take multiple ticks)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
@@ -535,6 +542,10 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      // Flush initial connect-triggered sendMetadata (probes + readFile take multiple ticks)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
@@ -557,7 +568,10 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!(); // Should not throw
 
-      // Flush the async sendMetadata() promise
+      // Flush the async sendMetadata() promise (multiple await points: probes + readFile)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockLogger.error).toHaveBeenCalledWith(
@@ -573,7 +587,10 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
-      // Flush the async sendMetadata() promise
+      // Flush the async sendMetadata() promise (multiple await points: probes + readFile)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       const metadataSends = mockClient.send.mock.calls.filter(

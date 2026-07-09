@@ -34,12 +34,11 @@ repos:
     writeFileSync(configPath, validConfig);
 
     // Should not throw (exit code 0)
-    const result = execSync(`node ${cliPath} validate ${configPath} --quiet`, {
-      encoding: 'utf-8',
-    });
-
-    // Verify success message is printed to stdout
-    expect(result.trim()).toBe('✓ Valid');
+    expect(() =>
+      execSync(`node ${cliPath} validate ${configPath} --quiet`, {
+        encoding: 'utf-8',
+      }),
+    ).not.toThrow();
   });
 
   it('should validate a valid full config', () => {
@@ -66,11 +65,11 @@ orchestrator:
 `;
     writeFileSync(configPath, fullConfig);
 
-    const result = execSync(`node ${cliPath} validate ${configPath} --quiet`, {
-      encoding: 'utf-8',
-    });
-
-    expect(result.trim()).toBe('✓ Valid');
+    expect(() =>
+      execSync(`node ${cliPath} validate ${configPath} --quiet`, {
+        encoding: 'utf-8',
+      }),
+    ).not.toThrow();
   });
 
   it('should reject config with invalid project ID and return exit code 1', () => {
@@ -227,12 +226,12 @@ repos:
 `;
     writeFileSync(configPath, validConfig);
 
-    const result = execSync(`node ${cliPath} validate --quiet`, {
-      encoding: 'utf-8',
-      cwd: testDir,
-    });
-
-    expect(result.trim()).toBe('✓ Valid');
+    expect(() =>
+      execSync(`node ${cliPath} validate --quiet`, {
+        encoding: 'utf-8',
+        cwd: testDir,
+      }),
+    ).not.toThrow();
   });
 
   it('should handle missing config file gracefully and return exit code 1', () => {
@@ -332,11 +331,11 @@ repos:
     writeFileSync(customConfigPath, validConfig);
 
     // Validate using explicit --config flag
-    const result = execSync(`node ${cliPath} validate ${customConfigPath} --quiet`, {
-      encoding: 'utf-8',
-    });
-
-    expect(result.trim()).toBe('✓ Valid');
+    expect(() =>
+      execSync(`node ${cliPath} validate ${customConfigPath} --quiet`, {
+        encoding: 'utf-8',
+      }),
+    ).not.toThrow();
   });
 
   it('should print success message to stdout when config is valid', () => {

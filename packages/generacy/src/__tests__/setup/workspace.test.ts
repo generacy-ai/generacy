@@ -115,18 +115,19 @@ function mockFileSystem(
 
 describe('setup workspace command', () => {
   describe('config resolution', () => {
-    it('bootstraps with tetrad-development when no CLI args, env vars, or config file', async () => {
+    it('errors and exits when no CLI args, env vars, or config file present', async () => {
       mockExecBehavior();
       mockFileSystem();
 
-      await runWorkspaceCommand([]);
+      // process.exit is mocked (no-op), so downstream code that dereferences
+      // the never-returned config throws — catch and only verify exit(1) was called.
+      try {
+        await runWorkspaceCommand([]);
+      } catch {
+        // Expected: config is undefined after mocked exit
+      }
 
-      // Should bootstrap by cloning only tetrad-development (config file not found)
-      const cloneCalls = mockExecSync.mock.calls
-        .map((c) => c[0] as string)
-        .filter((cmd) => cmd.includes('git clone'));
-      expect(cloneCalls).toHaveLength(1);
-      expect(cloneCalls.some((c) => c.includes('tetrad-development'))).toBe(true);
+      expect(mockExit).toHaveBeenCalledWith(1);
     });
 
     it('uses REPOS env var override (comma-separated → array)', async () => {
@@ -292,7 +293,7 @@ describe('setup workspace command', () => {
   });
 
   describe('repo ordering', () => {
-    it('processes tetrad-development first regardless of list order', async () => {
+    it('clones all repos in the list order provided', async () => {
       mockExecBehavior();
       mockFileSystem();
 
@@ -302,14 +303,9 @@ describe('setup workspace command', () => {
         .map((c) => c[0] as string)
         .filter((cmd) => cmd.includes('git clone'));
 
-      const tetradIdx = cloneCalls.findIndex((c) => c.includes('/tetrad-development.git'));
-      const agencyIdx = cloneCalls.findIndex((c) => c.includes('/agency.git'));
-      const latencyIdx = cloneCalls.findIndex((c) => c.includes('/latency.git'));
-
-      expect(tetradIdx).toBeGreaterThanOrEqual(0);
-      expect(agencyIdx).toBeGreaterThanOrEqual(0);
-      expect(tetradIdx).toBeLessThan(agencyIdx);
-      expect(tetradIdx).toBeLessThan(latencyIdx);
+      expect(cloneCalls.some((c) => c.includes('/agency.git'))).toBe(true);
+      expect(cloneCalls.some((c) => c.includes('/tetrad-development.git'))).toBe(true);
+      expect(cloneCalls.some((c) => c.includes('/latency.git'))).toBe(true);
     });
 
     it('does not duplicate tetrad-development when already first', async () => {

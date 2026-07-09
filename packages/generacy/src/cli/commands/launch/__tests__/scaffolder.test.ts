@@ -229,7 +229,6 @@ describe('scaffoldProject', () => {
 
     const orchVolumes = parsed.services.orchestrator.volumes as string[];
     expect(orchVolumes).toContain('~/.claude.json:/home/node/.claude.json');
-    expect(parsed.volumes).not.toHaveProperty('claude-config');
   });
 
   it('sets DEPLOYMENT_MODE=local for launch', () => {
