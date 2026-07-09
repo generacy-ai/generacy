@@ -107,16 +107,6 @@ const defaultConfig: WorkerConfig = {
   gates: {},
 };
 
-// #869: stub PhaseTracker used by the handler's clearDedupe closure.
-function createStubPhaseTracker() {
-  return {
-    isDuplicate: vi.fn().mockResolvedValue(false),
-    markProcessed: vi.fn().mockResolvedValue(undefined),
-    clear: vi.fn().mockResolvedValue(undefined),
-    tryMarkProcessed: vi.fn().mockResolvedValue(true),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // Helper Functions
 // ---------------------------------------------------------------------------
@@ -184,7 +174,6 @@ describe('PrFeedbackHandler', () => {
       defaultConfig,
       mockLogger,
       agentLauncher,
-      createStubPhaseTracker(),
       undefined,
     );
 
@@ -795,7 +784,6 @@ describe('PrFeedbackHandler', () => {
         defaultConfig,
         mockLogger,
         agentLauncher,
-        createStubPhaseTracker(),
         undefined,
       );
 
@@ -847,7 +835,6 @@ describe('PrFeedbackHandler', () => {
         defaultConfig,
         mockLogger,
         agentLauncher,
-        createStubPhaseTracker(),
         undefined,
       );
 
@@ -880,10 +867,12 @@ describe('PrFeedbackHandler', () => {
   });
 
   // ==========================================================================
-  // #869 / FR-006: dedupe-clear invariant + FR-007 degraded identity
+  // #869 → #879: handler terminal-path behavior (dedupe-clear removed;
+  // in-flight queue state is self-clearing by construction). These tests
+  // preserve non-dedupe behavior on each terminal path.
   // ==========================================================================
-  describe('dedupe-clear invariant (#869)', () => {
-    async function buildHandler(phaseTracker = createStubPhaseTracker(), clusterIdentity?: string) {
+  describe('terminal-path behavior', () => {
+    async function buildHandler(clusterIdentity?: string) {
       const launcherFactory = new RecordingProcessFactory(0);
       const agentLauncher = new AgentLauncher(
         new Map([['default', launcherFactory]]),
@@ -893,19 +882,17 @@ describe('PrFeedbackHandler', () => {
         defaultConfig,
         mockLogger,
         agentLauncher,
-        phaseTracker,
         clusterIdentity,
       );
-      return { handler: localHandler, phaseTracker };
+      return { handler: localHandler };
     }
 
-    it('H1: no unresolved threads → clear called + label removed + "No unresolved threads found" log', async () => {
-      const { handler: localHandler, phaseTracker } = await buildHandler();
+    it('H1: no unresolved threads → label removed + "No unresolved threads found" log', async () => {
+      const { handler: localHandler } = await buildHandler();
       mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
       await localHandler.handle(item, '/tmp/checkout');
 
-      expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
       expect(mockGitHub.removeLabels).toHaveBeenCalled();
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.any(Object),
@@ -913,19 +900,18 @@ describe('PrFeedbackHandler', () => {
       );
     });
 
-    it('H2: zero-trusted → clear called + label NOT removed + no "No unresolved threads found" log', async () => {
+    it('H2: zero-trusted → label NOT removed + no "No unresolved threads found" log', async () => {
       const { isTrustedCommentAuthor } = await import('@generacy-ai/workflow-engine');
       (isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
         .mockReturnValue({ trusted: false, reason: 'none-untrusted' });
 
-      const { handler: localHandler, phaseTracker } = await buildHandler();
+      const { handler: localHandler } = await buildHandler();
       mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
         createMockComment(1, false),
       ]);
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       await localHandler.handle(item, '/tmp/checkout');
 
-      expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
       expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
       const removeCallMessages = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
         .map((c) => String(c[1] ?? ''));
@@ -940,13 +926,12 @@ describe('PrFeedbackHandler', () => {
         .mockReturnValue({ trusted: true, reason: 'owner' });
     });
 
-    it('H5: getPRReviewThreads throws → clear called + re-throws', async () => {
-      const { handler: localHandler, phaseTracker } = await buildHandler();
+    it('H5: getPRReviewThreads throws → re-throws', async () => {
+      const { handler: localHandler } = await buildHandler();
       mockGitHub.getPRReviewThreads = vi.fn().mockRejectedValue(new Error('gh api boom'));
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
 
       await expect(localHandler.handle(item, '/tmp/checkout')).rejects.toThrow(/review threads/);
-      expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
     });
 
     it('H7b: `Generacy-AI` provisioned + REST/GraphQL author variants both resolve via cluster-identity (#874)', async () => {
@@ -961,10 +946,7 @@ describe('PrFeedbackHandler', () => {
         .mockImplementation(real.isTrustedCommentAuthor);
 
       try {
-        const { handler: localHandler } = await buildHandler(
-          createStubPhaseTracker(),
-          'Generacy-AI',
-        );
+        const { handler: localHandler } = await buildHandler('Generacy-AI');
 
         // Two review threads: one REST-shaped author, one GraphQL-shaped.
         // Both should trust via cluster-identity (post-normalization equal
@@ -1021,7 +1003,7 @@ describe('PrFeedbackHandler', () => {
     });
 
     it('H7: clusterIdentity undefined → error log naming the CLUSTER_ACTING_LOGIN chain (#874)', async () => {
-      const { handler: localHandler } = await buildHandler(createStubPhaseTracker(), undefined);
+      const { handler: localHandler } = await buildHandler(undefined);
       mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
       await localHandler.handle(item, '/tmp/checkout');
@@ -1031,26 +1013,6 @@ describe('PrFeedbackHandler', () => {
           triedChain: ['CLUSTER_ACTING_LOGIN'],
         }),
         expect.stringContaining('Acting identity unresolvable at handler runtime'),
-      );
-    });
-
-    it('H9: phaseTracker.clear throws → swallowed with warn log, no re-throw', async () => {
-      const phaseTracker = {
-        isDuplicate: vi.fn().mockResolvedValue(false),
-        markProcessed: vi.fn().mockResolvedValue(undefined),
-        clear: vi.fn().mockRejectedValue(new Error('redis down')),
-        tryMarkProcessed: vi.fn().mockResolvedValue(true),
-      };
-      const { handler: localHandler } = await buildHandler(phaseTracker);
-      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
-      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
-
-      // Must not throw.
-      await localHandler.handle(item, '/tmp/checkout');
-
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ err: expect.stringContaining('redis down') }),
-        expect.stringContaining('Failed to clear PR-feedback dedupe key'),
       );
     });
   });

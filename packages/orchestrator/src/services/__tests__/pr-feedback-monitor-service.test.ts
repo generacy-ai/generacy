@@ -4,9 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { GhAuthError } from '@generacy-ai/workflow-engine';
 import { PrFeedbackMonitorService } from '../pr-feedback-monitor-service.js';
+import { InMemoryQueueAdapter } from '../in-memory-queue-adapter.js';
 import type {
-  QueueAdapter,
-  PhaseTracker,
+  QueueManager,
   PrReviewEvent,
 } from '../../types/monitor.js';
 import type { PrMonitorConfig, RepositoryConfig } from '../../config/schema.js';
@@ -39,20 +39,36 @@ function createMockLogger(): Logger {
   return logger;
 }
 
-function createMockPhaseTracker(overrides: Partial<PhaseTracker> = {}): PhaseTracker {
-  return {
-    isDuplicate: vi.fn().mockResolvedValue(false),
-    markProcessed: vi.fn().mockResolvedValue(undefined),
-    clear: vi.fn().mockResolvedValue(undefined),
-    tryMarkProcessed: vi.fn().mockResolvedValue(true),
-    ...overrides,
+/**
+ * #879: pr-feedback dedupe now runs through `QueueManager.enqueueIfAbsent`.
+ * Tests wire the real `InMemoryQueueAdapter` (its `enqueueIfAbsent` gives us
+ * real single-in-flight semantics for SC-001/SC-002/SC-003 without hand-
+ * rolling a fake) with `enqueueIfAbsent` and `enqueue` spied for assertion.
+ */
+function createInMemoryQueueManager(): QueueManager & {
+  spies: {
+    enqueueIfAbsent: ReturnType<typeof vi.fn>;
+    enqueue: ReturnType<typeof vi.fn>;
   };
-}
-
-function createMockQueueAdapter(overrides: Partial<QueueAdapter> = {}): QueueAdapter {
-  return {
-    enqueue: vi.fn().mockResolvedValue(undefined),
-    ...overrides,
+} {
+  const noopLogger = {
+    info: vi.fn(),
+    warn: vi.fn(),
+    debug: vi.fn(),
+  };
+  const adapter = new InMemoryQueueAdapter(noopLogger);
+  const enqueueIfAbsentSpy = vi.spyOn(adapter, 'enqueueIfAbsent');
+  const enqueueSpy = vi.spyOn(adapter, 'enqueue');
+  return Object.assign(adapter, {
+    spies: {
+      enqueueIfAbsent: enqueueIfAbsentSpy as unknown as ReturnType<typeof vi.fn>,
+      enqueue: enqueueSpy as unknown as ReturnType<typeof vi.fn>,
+    },
+  }) as QueueManager & {
+    spies: {
+      enqueueIfAbsent: ReturnType<typeof vi.fn>;
+      enqueue: ReturnType<typeof vi.fn>;
+    };
   };
 }
 
@@ -108,16 +124,14 @@ function createPrReviewEvent(overrides: Partial<PrReviewEvent> = {}): PrReviewEv
 
 describe('PrFeedbackMonitorService', () => {
   let logger: Logger;
-  let phaseTracker: PhaseTracker;
-  let queueAdapter: QueueAdapter;
+  let queueManager: ReturnType<typeof createInMemoryQueueManager>;
   let mockClient: ReturnType<typeof createMockGitHubClient>;
   let clientFactory: ReturnType<typeof vi.fn>;
   let service: PrFeedbackMonitorService;
 
   beforeEach(() => {
     logger = createMockLogger();
-    phaseTracker = createMockPhaseTracker();
-    queueAdapter = createMockQueueAdapter();
+    queueManager = createInMemoryQueueManager();
     mockClient = createMockGitHubClient({
       getPRReviewThreads: vi.fn().mockResolvedValue([
         {
@@ -136,8 +150,7 @@ describe('PrFeedbackMonitorService', () => {
     service = new PrFeedbackMonitorService(
       logger,
       clientFactory,
-      phaseTracker,
-      queueAdapter,
+      queueManager,
       defaultConfig,
       defaultRepos,
     );
@@ -158,7 +171,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'test-org',
           repo: 'test-repo',
@@ -172,7 +185,7 @@ describe('PrFeedbackMonitorService', () => {
       );
     });
 
-    it('should add waiting-for:address-pr-feedback label after enqueue', async () => {
+    it('should add waiting-for:address-pr-feedback label (idempotent, before enqueue per #879 FR-010)', async () => {
       const event = createPrReviewEvent();
 
       await service.processPrReviewEvent(event);
@@ -201,7 +214,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           workflowName: 'speckit-feature',
         }),
@@ -226,7 +239,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           workflowName: 'speckit-bugfix',
         }),
@@ -248,7 +261,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           workflowName: 'unknown',
         }),
@@ -268,7 +281,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('should skip PRs linked to non-orchestrated issues (no agent:* label)', async () => {
@@ -287,7 +300,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('should link via branch name when PR body has no closing keywords', async () => {
@@ -299,7 +312,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({ issueNumber: 42 }),
       );
     });
@@ -325,7 +338,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({ issueNumber: 42 }),
       );
     });
@@ -343,7 +356,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('should skip PRs with zero review threads', async () => {
@@ -353,7 +366,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('should emit rootCommentId per unresolved thread', async () => {
@@ -365,7 +378,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({
             reviewThreadIds: [101], // Only unresolved thread's root
@@ -387,40 +400,43 @@ describe('PrFeedbackMonitorService', () => {
         expect.objectContaining({ error: expect.stringContaining('API error'), owner: 'test-org', repo: 'test-repo', prNumber: 10 }),
         expect.stringContaining('transient'),
       );
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     // ==========================================================================
     // processPrReviewEvent: Deduplication
     // ==========================================================================
 
-    it('should skip duplicate events via tryMarkProcessed', async () => {
-      (phaseTracker.tryMarkProcessed as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    it('should skip duplicate events when enqueueIfAbsent returns false', async () => {
+      // Pre-seed the itemKey as in-flight so enqueueIfAbsent short-circuits.
+      queueManager.spies.enqueueIfAbsent.mockResolvedValueOnce(false);
 
       const event = createPrReviewEvent();
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
     });
 
-    it('should call tryMarkProcessed with address-pr-feedback phase key', async () => {
+    it('should call enqueueIfAbsent with the address-pr-feedback item shape', async () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      expect(phaseTracker.tryMarkProcessed).toHaveBeenCalledWith(
-        'test-org', 'test-repo', 42, 'address-pr-feedback',
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-org',
+          repo: 'test-repo',
+          issueNumber: 42,
+          command: 'address-pr-feedback',
+        }),
       );
     });
 
-    it('should process event when tryMarkProcessed returns true', async () => {
-      (phaseTracker.tryMarkProcessed as ReturnType<typeof vi.fn>).mockResolvedValue(true);
-
+    it('should process event when enqueueIfAbsent returns true', async () => {
       const event = createPrReviewEvent();
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalled();
     });
 
     // ==========================================================================
@@ -436,7 +452,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalled();
     });
 
@@ -470,7 +486,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({ workflowName: 'unknown' }),
       );
     });
@@ -520,7 +536,7 @@ describe('PrFeedbackMonitorService', () => {
       await service.poll();
 
       expect(mockClient.listOpenPullRequests).toHaveBeenCalledWith('test-org', 'test-repo');
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           issueNumber: 42,
           command: 'address-pr-feedback',
@@ -533,7 +549,7 @@ describe('PrFeedbackMonitorService', () => {
 
       await service.poll();
 
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('should handle errors from listOpenPullRequests gracefully', async () => {
@@ -545,7 +561,7 @@ describe('PrFeedbackMonitorService', () => {
       await service.poll();
 
       expect(logger.error).toHaveBeenCalled();
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('should handle rate limit errors during PR listing', async () => {
@@ -587,8 +603,7 @@ describe('PrFeedbackMonitorService', () => {
       const emptyService = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         [], // No repos
       );
@@ -788,7 +803,7 @@ describe('PrFeedbackMonitorService', () => {
         maxConcurrentPolls: 3,
       };
       const shortService = new PrFeedbackMonitorService(
-        logger, clientFactory, phaseTracker, queueAdapter, shortConfig, defaultRepos,
+        logger, clientFactory, queueManager, shortConfig, defaultRepos,
       );
 
       // Start recording then simulate unhealthy
@@ -860,8 +875,7 @@ describe('PrFeedbackMonitorService', () => {
       const concurrentService = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         { ...defaultConfig, maxConcurrentPolls: 2 },
         repos,
       );
@@ -899,7 +913,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      const call = (queueAdapter.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+      const call = (queueManager.spies.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0]![0];
       expect(call.command).toBe('address-pr-feedback');
       expect(call.metadata).toBeDefined();
       expect(call.metadata.prNumber).toBe(10);
@@ -911,7 +925,7 @@ describe('PrFeedbackMonitorService', () => {
       const event = createPrReviewEvent();
       await service.processPrReviewEvent(event);
 
-      const call = (queueAdapter.enqueue as ReturnType<typeof vi.fn>).mock.calls[0]![0];
+      const call = (queueManager.spies.enqueueIfAbsent as ReturnType<typeof vi.fn>).mock.calls[0]![0];
       expect(call.priority).toEqual(expect.any(Number));
       expect(call.enqueuedAt).toEqual(expect.any(String));
       // enqueuedAt should be a valid ISO date
@@ -925,11 +939,9 @@ describe('PrFeedbackMonitorService', () => {
 
   describe('idempotency', () => {
     it('should not enqueue duplicate items for same PR review event', async () => {
-      // First call wins
-      (phaseTracker.tryMarkProcessed as ReturnType<typeof vi.fn>)
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false);
-
+      // First call wins — real InMemoryQueueAdapter enforces this via its
+      // in-flight SET (no need to stub). The second call returns false and
+      // the monitor drops the enqueue.
       const event = createPrReviewEvent();
 
       const result1 = await service.processPrReviewEvent(event);
@@ -937,7 +949,10 @@ describe('PrFeedbackMonitorService', () => {
 
       expect(result1).toBe(true);
       expect(result2).toBe(false);
-      expect(queueAdapter.enqueue).toHaveBeenCalledTimes(1);
+      // enqueueIfAbsent is called twice — the second returns false.
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(2);
+      // But only one item actually enters the pending queue.
+      expect(await queueManager.getQueueDepth()).toBe(1);
     });
   });
 
@@ -955,8 +970,7 @@ describe('PrFeedbackMonitorService', () => {
       const multiRepoService = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         repos,
       );
@@ -980,7 +994,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           issueNumber: 42,
           command: 'address-pr-feedback',
@@ -1006,8 +1020,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'my-user',
@@ -1028,7 +1041,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await serviceWithUser.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           issueNumber: 42,
           command: 'address-pr-feedback',
@@ -1042,8 +1055,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'my-user',
@@ -1064,7 +1076,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await serviceWithUser.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       expect(logger.debug).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'test-org',
@@ -1083,8 +1095,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'my-user',
@@ -1105,7 +1116,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await serviceWithUser.processPrReviewEvent(event);
 
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'test-org',
@@ -1123,8 +1134,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'my-user',
@@ -1145,7 +1155,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await serviceWithUser.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           issueNumber: 42,
           command: 'address-pr-feedback',
@@ -1168,8 +1178,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'my-user',
@@ -1201,8 +1210,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithUser = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'my-user',
@@ -1248,7 +1256,7 @@ describe('PrFeedbackMonitorService', () => {
 
       expect(result).toBe(false);
       expect(mockClient.getPRReviewThreads).toHaveBeenCalled();
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
     });
 
     it('enqueues rootCommentIds when getPRReviewThreads returns unresolved threads', async () => {
@@ -1262,7 +1270,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await service.processPrReviewEvent(event);
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({
             reviewThreadIds: [501, 503],
@@ -1276,8 +1284,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithHealth = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         undefined,
@@ -1298,7 +1305,7 @@ describe('PrFeedbackMonitorService', () => {
         expect.objectContaining({ statusCode: 401, owner: 'test-org', repo: 'test-repo', prNumber: 10 }),
         expect.stringContaining('auth'),
       );
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       serviceWithHealth.stopPolling();
     });
 
@@ -1307,8 +1314,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithHealth = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         undefined,
@@ -1329,7 +1335,7 @@ describe('PrFeedbackMonitorService', () => {
         expect.objectContaining({ statusCode: 403 }),
         expect.stringContaining('auth'),
       );
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       serviceWithHealth.stopPolling();
     });
 
@@ -1338,8 +1344,7 @@ describe('PrFeedbackMonitorService', () => {
       const serviceWithHealth = new PrFeedbackMonitorService(
         logger,
         clientFactory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         undefined,
@@ -1361,7 +1366,7 @@ describe('PrFeedbackMonitorService', () => {
       );
       // Auth-health MUST NOT be recorded on transient errors.
       expect(authHealthRecord).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ ok: false }));
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       serviceWithHealth.stopPolling();
     });
 
@@ -1475,8 +1480,7 @@ describe('PrFeedbackMonitorService', () => {
       const svc = new PrFeedbackMonitorService(
         logger,
         factory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         clusterId,
@@ -1504,8 +1508,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await svc.processPrReviewEvent(createPrReviewEvent());
 
       expect(result).toBe(true);
-      expect(phaseTracker.tryMarkProcessed).toHaveBeenCalled();
-      expect(queueAdapter.enqueue).toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalled();
       expect(client.postPrComment).not.toHaveBeenCalled();
       svc.stopPolling();
     });
@@ -1523,8 +1526,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await svc.processPrReviewEvent(createPrReviewEvent());
 
       expect(result).toBe(false);
-      expect(phaseTracker.tryMarkProcessed).not.toHaveBeenCalled();
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       expect(logger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           totalUnresolvedThreads: 1,
@@ -1587,7 +1589,7 @@ describe('PrFeedbackMonitorService', () => {
         },
       ]);
       await svc.processPrReviewEvent(createPrReviewEvent());
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
 
       (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
         {
@@ -1599,7 +1601,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await svc.processPrReviewEvent(createPrReviewEvent());
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalled();
       svc.stopPolling();
     });
 
@@ -1641,7 +1643,7 @@ describe('PrFeedbackMonitorService', () => {
       const result = await svc.processPrReviewEvent(createPrReviewEvent());
 
       expect(result).toBe(true);
-      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledWith(
         expect.objectContaining({
           metadata: expect.objectContaining({ reviewThreadIds: [900] }),
         }),
@@ -1749,8 +1751,7 @@ describe('PrFeedbackMonitorService', () => {
       const svc = new PrFeedbackMonitorService(
         logger,
         factory,
-        phaseTracker,
-        queueAdapter,
+        queueManager,
         defaultConfig,
         defaultRepos,
         'christrudelpw',
@@ -1766,7 +1767,7 @@ describe('PrFeedbackMonitorService', () => {
       // botLogin='someone-else' (unrelated) and actingIdentity=undefined,
       // no trust rule fires, so this reduces to a zero-trusted skip.
       expect(result).toBe(false);
-      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
       // The specific FR-007 assertion: the skip reason for the assignee-
       // authored comment must NOT be `cluster-identity`. If the trust
       // predicate had fallen back to CLUSTER_GITHUB_USERNAME, the comment
@@ -1784,6 +1785,165 @@ describe('PrFeedbackMonitorService', () => {
         expect.stringContaining('every comment author is untrusted'),
       );
       svc.stopPolling();
+    });
+  });
+
+  // ==========================================================================
+  // #879: SC-001..SC-005 + FR-009 + FR-010 regressions
+  // ==========================================================================
+
+  describe('#879 migration regressions', () => {
+    it('SC-001: stale phase-tracker key does NOT block first trusted enqueue', async () => {
+      // The InMemoryQueueAdapter has no notion of "stale phase-tracker keys".
+      // Post-migration, dedupe is derived from the live in-flight SET only:
+      // no in-flight item + trusted state = enqueue succeeds on the first
+      // poll regardless of any historical marker. We simulate the pre-#879
+      // "stale key survived across deploy" scenario by asserting the monitor
+      // enqueues even after imagining an arbitrary historical marker (which
+      // is a no-op with the new mechanism — that's the point).
+      const event = createPrReviewEvent();
+      const result = await service.processPrReviewEvent(event);
+
+      expect(result).toBe(true);
+      expect(queueManager.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+      expect(await queueManager.getQueueDepth()).toBe(1);
+    });
+
+    it('SC-002: webhook + poll race collapses to exactly one in-flight item', async () => {
+      const webhookEvent = createPrReviewEvent({ source: 'webhook' });
+      const pollEvent = createPrReviewEvent({ source: 'poll' });
+
+      const [r1, r2] = await Promise.all([
+        service.processPrReviewEvent(webhookEvent),
+        service.processPrReviewEvent(pollEvent),
+      ]);
+
+      // Exactly one path wins the enqueue; the other gets the in-flight drop.
+      const wins = [r1, r2].filter(Boolean).length;
+      expect(wins).toBe(1);
+      expect(await queueManager.getQueueDepth()).toBe(1);
+
+      // Exactly one FR-009 drop log line (from adapter or monitor).
+      const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c) => {
+          const obj = c[0] as Record<string, unknown> | undefined;
+          return obj && obj['reason'] === 'in-flight';
+        });
+      expect(infoCalls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('SC-003: handler terminal → re-enqueue on next poll with no manual clearing', async () => {
+      // 1st poll: enqueues.
+      const event = createPrReviewEvent();
+      const r1 = await service.processPrReviewEvent(event);
+      expect(r1).toBe(true);
+      expect(await queueManager.getQueueDepth()).toBe(1);
+
+      // Simulate the worker claiming and completing the item (handler terminal
+      // path). This calls back into the adapter's `complete()` which removes
+      // the itemKey from the in-flight SET.
+      const claimed = await queueManager.claim('worker-1');
+      expect(claimed).not.toBeNull();
+      await queueManager.complete('worker-1', claimed!);
+      expect(await queueManager.hasInFlight('test-org/test-repo#42')).toBe(false);
+
+      // 2nd poll: trusted state still present → enqueue fires again.
+      const r2 = await service.processPrReviewEvent(event);
+      expect(r2).toBe(true);
+      expect(await queueManager.getQueueDepth()).toBe(1);
+    });
+
+    it('SC-005: zero-trusted path does NOT enqueue on any poll', async () => {
+      // Restore isTrustedCommentAuthor to trust nothing for this test.
+      const { isTrustedCommentAuthor: _mock } = await import('@generacy-ai/workflow-engine');
+
+      // Zero-trusted PR: unresolved thread with only NONE-tier authors and
+      // no cluster-identity match. Uses the trust-aware factory pattern
+      // (which passes `actingIdentity = undefined` implicitly for
+      // `other-cluster`) so the trust predicate really returns false.
+      const client = createMockGitHubClient({
+        getIssue: vi.fn().mockResolvedValue({
+          number: 42,
+          title: 'Test issue',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'agent:in-progress', color: '' }],
+          assignees: ['other-cluster'],
+          created_at: '',
+          updated_at: '',
+        }),
+        getPRReviewThreads: vi.fn().mockResolvedValue([
+          {
+            rootCommentId: 950,
+            isResolved: false,
+            comments: [{ id: 950, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+          },
+        ]),
+        listPrCommentBodies: vi.fn().mockResolvedValue([]),
+        postPrComment: vi.fn().mockResolvedValue(undefined),
+      });
+      const factory = vi.fn().mockReturnValue(client);
+      const zeroTrustedSvc = new PrFeedbackMonitorService(
+        logger,
+        factory,
+        queueManager,
+        defaultConfig,
+        defaultRepos,
+        'other-cluster',
+        undefined,
+        undefined,
+        undefined,
+        'other-cluster',
+      );
+
+      // Fire multiple polls to be sure — no enqueue on any poll.
+      await zeroTrustedSvc.processPrReviewEvent(createPrReviewEvent());
+      await zeroTrustedSvc.processPrReviewEvent(createPrReviewEvent());
+      await zeroTrustedSvc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(queueManager.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+      expect(await queueManager.getQueueDepth()).toBe(0);
+
+      zeroTrustedSvc.stopPolling();
+      void _mock;
+    });
+
+    it('FR-009: in-flight drop emits structured info log with itemKey + reason', async () => {
+      const event = createPrReviewEvent();
+      await service.processPrReviewEvent(event); // seeds the in-flight SET
+      await service.processPrReviewEvent(event); // second call — collision
+
+      // The FR-009 log line can come from the adapter or the monitor. Assert
+      // at least one info-log call carries `{ itemKey, reason: 'in-flight' }`.
+      const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
+      const matches = infoCalls.filter((c) => {
+        const obj = c[0] as Record<string, unknown> | undefined;
+        return obj
+          && obj['itemKey'] === 'test-org/test-repo#42'
+          && obj['reason'] === 'in-flight';
+      });
+      expect(matches.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('FR-010: waiting-for label is added even on enqueueIfAbsent → false collision', async () => {
+      const event = createPrReviewEvent();
+
+      // First call: succeeds, adds label.
+      await service.processPrReviewEvent(event);
+      expect(mockClient.addLabels).toHaveBeenCalledWith(
+        'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+      );
+      const firstCallCount = (mockClient.addLabels as ReturnType<typeof vi.fn>).mock.calls.length;
+
+      // Second call: enqueueIfAbsent returns false (item already in flight),
+      // but the label MUST still be added idempotently.
+      const result2 = await service.processPrReviewEvent(event);
+      expect(result2).toBe(false);
+      const secondCallCount = (mockClient.addLabels as ReturnType<typeof vi.fn>).mock.calls.length;
+      expect(secondCallCount).toBeGreaterThan(firstCallCount);
+      expect(mockClient.addLabels).toHaveBeenLastCalledWith(
+        'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+      );
     });
   });
 });

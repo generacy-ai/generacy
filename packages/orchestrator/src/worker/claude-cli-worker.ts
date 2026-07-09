@@ -6,7 +6,7 @@ import path from 'node:path';
 import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, findWorkspaceConfigPath } from '@generacy-ai/config';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
-import type { QueueItem, PhaseTracker } from '../types/index.js';
+import type { QueueItem } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -112,13 +112,6 @@ export interface ClaudeCliWorkerDeps {
   /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
   tokenProvider?: () => Promise<string | undefined>;
   /**
-   * #869 / FR-006: `PhaseTrackerService` used by `PrFeedbackHandler` to
-   * clear the `address-pr-feedback` dedupe key on every terminal exit.
-   * Optional in the type to preserve test-injection ergonomics; production
-   * wiring in `server.ts` provides one when Redis is available.
-   */
-  phaseTracker?: PhaseTracker;
-  /**
    * #869 / FR-001, FR-007: resolved cluster GitHub identity. Threaded into
    * `PrFeedbackHandler` so the shared trust predicate can trust the
    * cluster's own cockpit-posted reviews (`author_association: NONE`).
@@ -146,7 +139,6 @@ export class ClaudeCliWorker {
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly tokenProvider?: () => Promise<string | undefined>;
-  private readonly phaseTracker?: PhaseTracker;
   private readonly clusterIdentity?: string;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
@@ -161,7 +153,6 @@ export class ClaudeCliWorker {
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
     this.tokenProvider = deps.tokenProvider;
-    this.phaseTracker = deps.phaseTracker;
     this.clusterIdentity = deps.clusterIdentity;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
@@ -279,25 +270,10 @@ export class ClaudeCliWorker {
       if (item.command === 'address-pr-feedback') {
         workerLogger.info('Routing to PrFeedbackHandler for PR feedback addressing');
 
-        // #869: `phaseTracker` is production-required in worker mode; server.ts
-        // provides one when Redis is available. Fallback to a no-op stub with
-        // a warn log preserves test-injection ergonomics (per data-model.md E5).
-        const phaseTrackerForHandler: PhaseTracker = this.phaseTracker ?? {
-          isDuplicate: async () => false,
-          markProcessed: async () => undefined,
-          tryMarkProcessed: async () => true,
-          clear: async () => {
-            workerLogger.warn(
-              'PhaseTracker unavailable — clearDedupe is a no-op (redis-less test wiring)',
-            );
-          },
-        };
-
         const prFeedbackHandler = new PrFeedbackHandler(
           this.config,
           workerLogger,
           this.agentLauncher,
-          phaseTrackerForHandler,
           this.clusterIdentity,
           this.sseEmitter,
         );

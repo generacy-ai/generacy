@@ -135,6 +135,13 @@ export class RedisQueueAdapter implements QueueManager {
           { owner: item.owner, repo: item.repo, issue: item.issueNumber, priority, itemKey },
           'Item enqueued to Redis sorted set (in-flight-checked)',
         );
+      } else {
+        // #879 / FR-009: structured drop signal for the in-flight-collision path.
+        // Distinct from the Redis-error warn path below.
+        this.logger.info(
+          { itemKey, reason: 'in-flight' },
+          'Dropping enqueue (item already in flight)',
+        );
       }
       return enqueued;
     } catch (error) {
