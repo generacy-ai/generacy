@@ -249,6 +249,20 @@ export {
 export { defaultProcessFactory } from './worker/claude-cli-worker.js';
 export { conversationProcessFactory } from './conversation/process-factory.js';
 
+// Worker phase resolution (gate mapping + phase sequence)
+export {
+  PhaseResolver,
+  GATE_MAPPING,
+  WORKFLOW_GATE_MAPPING,
+} from './worker/phase-resolver.js';
+
+export {
+  PHASE_SEQUENCE,
+  WORKFLOW_PHASE_SEQUENCES,
+  getPhaseSequence,
+  type WorkflowPhase,
+} from './worker/types.js';
+
 // Utils
 export {
   setupGracefulShutdown,
