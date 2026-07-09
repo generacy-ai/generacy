@@ -14,7 +14,7 @@
 - C: Rich — Option B plus `closedRefs` (array of `{repo, number}` for the phase or whole epic), `totalCount`, and a `suggestion` string (the human-readable `all P1 — Foundation issues closed — suggested: /cockpit:queue …` / `epic complete 🎉` line).
 - D: Other (please specify the exact field set).
 
-**Answer**: *Pending*
+**Answer**: B — `type`, `phase` (phase-complete only), `initial?`, `ts`, `epicRepo`, `epicNumber`. Correlation without threading CLI-arg state through consumers, and nothing more. C's `closedRefs`/`totalCount` duplicate state that is derivable from `status --json` and create a lying-payload drift surface on exactly the edge cases (reopens, no-phase refs) this spec enumerates; `suggestion` belongs to presentation, not the machine contract (see Q2).
 
 ### Q2: Assist rendering delivery
 
@@ -28,7 +28,7 @@
 - C: Separate NDJSON events — new event types `phase-complete-assist` / `epic-complete-assist` on stdout, one per synthetic aggregate event, carrying the human-readable text.
 - D: Both — payload gets the suggestion inline (Option B) AND stderr echoes the human-readable line (Option A).
 
-**Answer**: *Pending*
+**Answer**: A — stdout stays machine-pure NDJSON; the human-readable line goes to stderr where watch's diagnostics already live. The load-bearing point: the primary assist surface is the watch *plugin*, which already derives complete copyable suggestions from event payloads (that's the agency#386 contract) — it builds the "queue P2?" suggestion from the B-shaped payload exactly as it does for every other event type. Embedding suggestion prose in the payload (B/D) puts slash-command presentation — the plugin's domain — into the engine's contract, and C doubles the event count to deliver text nobody machine-parses.
 
 ### Q3: Empty-phase handling
 
@@ -42,7 +42,7 @@
 - C: Blocks epic-complete — treated as incomplete indefinitely; `epic-complete` cannot fire until the phase has at least one ref and all its refs close.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: B, plus a startup warn — an empty phase counts as trivially complete for `epic-complete` aggregation but never emits `phase-complete` (firing it would drive auto mode to a nonsense "queue the phase after the empty placeholder?" gate at startup). C deadlocks `epic-complete` on a heading typo. Emit one stderr warn at startup — `phase "P4 — Future" has no issue refs; treated as complete` — per the epic-body grammar's existing silent-drop-warning precedent: silent trivial-completeness is how an author's placeholder becomes an unnoticed no-op.
 
 ### Q4: Event ordering within a single poll cycle
 
@@ -56,7 +56,7 @@
 - C: Interleaved by issue — for each newly-closed issue, emit its `issue-closed` immediately followed by any `phase-complete` it triggers, and finally `epic-complete` at the end of the poll. Multiple phases completing in one poll interleave with their triggering closures.
 - D: Other (please specify the exact ordering rule).
 
-**Answer**: *Pending*
+**Answer**: A — all per-issue events for the poll, then `phase-complete` events in body phase order, then `epic-complete` strictly last; `--exit-on-epic-complete` exits only after that final line is flushed. This preserves the two properties consumers actually need: cause precedes effect (the last `issue-closed` is visible before the `phase-complete` it triggered), and the termination edge is guaranteed to be the final line ever written. C's causal interleaving is elegant but under-determined when multiple phases complete in one poll; B inverts causality.
 
 ### Q5: Epics with no phase structure
 
@@ -70,4 +70,4 @@
 - C: `epic-complete` fires only after last close AND at least one phase heading — feature requires phase structure; phase-less epics get no `epic-complete`.
 - D: Other (please specify).
 
-**Answer**: *Pending*
+**Answer**: A — `epic-complete` fires when every ref closes, phase structure or not; `phase-complete` simply never fires (nothing to aggregate); `--exit-on-epic-complete` works. The termination edge must not depend on body formatting — auto mode on a phase-less epic still needs to know when to stop; it just never sees a phase-queue gate. This is also the straight reading of "(no phase) excluded from phase-complete, included in epic-complete."
