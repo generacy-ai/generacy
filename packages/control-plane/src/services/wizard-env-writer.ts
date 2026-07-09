@@ -82,7 +82,7 @@ export function mapCredentialToEnvEntries(
 
 export function formatEnvFile(entries: EnvEntry[]): string {
   if (entries.length === 0) return '';
-  return entries.map((e) => `${e.key}=${e.value}`).join('\n');
+  return entries.map((e) => `${e.key}=${e.value}`).join('\n') + '\n';
 }
 
 export async function writeWizardEnvFile(
