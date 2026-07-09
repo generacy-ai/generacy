@@ -194,20 +194,20 @@ export class StageCommentManager {
     lines: string[],
     evidence: CommandExitEvidence,
   ): void {
-    // Neutralize any triple-backtick sequence inside stderrTail so it cannot
+    // Neutralize any triple-backtick sequence inside outputTail so it cannot
     // break out of our fenced block. Insert U+200B (ZWSP) between the first two
     // backticks of every 3-backtick run.
-    const safeStderr = evidence.stderrTail.replace(/```/g, '`​``');
-    const lineCount = evidence.stderrTail.split('\n').length;
+    const safeOutput = evidence.outputTail.replace(/```/g, '`​``');
+    const lineCount = evidence.outputTail.split('\n').length;
 
     lines.push('---');
     lines.push(`**Failed command**: \`${evidence.command}\``);
     lines.push(`**Exit**: ${evidence.exitDescriptor}`);
     lines.push('');
-    lines.push(`<details><summary>stderr (last ${lineCount} lines)</summary>`);
+    lines.push(`<details><summary>output (last ${lineCount} lines)</summary>`);
     lines.push('');
     lines.push('```text');
-    lines.push(safeStderr);
+    lines.push(safeOutput);
     lines.push('```');
     lines.push('');
     lines.push('</details>');
@@ -223,7 +223,7 @@ export class StageCommentManager {
     lines: string[],
     mergeConflict: MergeConflictEvidence,
   ): void {
-    // Neutralize any backticks inside paths using ZWSP (same treatment as #847's stderrTail).
+    // Neutralize any backticks inside paths using ZWSP (same treatment as #847/#890's outputTail).
     const escapePath = (p: string): string => p.replace(/`/g, '`​');
     const paths = mergeConflict.conflictedPaths;
 
@@ -290,22 +290,22 @@ export class StageCommentManager {
   /**
    * Render the failure-alert body per contract §"Alert body layout".
    * Byte-exact: marker line, summary line, blank, <details> wrapper, fenced
-   * text block with backtick-neutralized stderr, closing </details>.
+   * text block with backtick-neutralized output, closing </details>.
    */
   private renderFailureAlert(marker: string, data: FailureAlertData): string {
     const evidence = data.evidence;
-    const lineCount = evidence.stderrTail.split('\n').length;
+    const lineCount = evidence.outputTail.split('\n').length;
     // Same ZWSP substitution used by appendEvidenceBlock — neutralize any
-    // ``` sequence inside stderrTail so the outer fenced block stays closed.
-    const safeStderr = evidence.stderrTail.replace(/```/g, '`​``');
+    // ``` sequence inside outputTail so the outer fenced block stays closed.
+    const safeOutput = evidence.outputTail.replace(/```/g, '`​``');
     return [
       marker,
       `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`,
       '',
-      `<details><summary>stderr (last ${lineCount} lines)</summary>`,
+      `<details><summary>output (last ${lineCount} lines)</summary>`,
       '',
       '```text',
-      safeStderr,
+      safeOutput,
       '```',
       '',
       '</details>',

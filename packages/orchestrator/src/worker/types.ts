@@ -152,7 +152,19 @@ export interface PhaseResult {
   /** Error details if failed */
   error?: {
     message: string;
-    stderr: string;
+    /**
+     * Merged stdout+stderr tail from the failed subprocess.
+     * - Shell paths (`runValidatePhase`, `runPreValidateInstall`): populated from
+     *   the ring buffer in `manageProcess` (bounded ~8 KiB, arrival-order
+     *   best-effort per Q5→A).
+     * - CLI paths (`spawnPhase`): empty string. Evidence is synthesized from
+     *   `PhaseResult.output` (parsed `type: 'text'` chunks) at evidence-build
+     *   time via `synthesizeOutputTail`.
+     * - Synthesized results (no-progress guard, product-diff detection failure,
+     *   empty-product-diff failure, unexpected-spawn catch): set by the caller
+     *   to a controlled diagnostic string.
+     */
+    output: string;
     phase: WorkflowPhase;
   };
   /** Partial implement result parsed from sentinel output (implement phase only) */
@@ -218,7 +230,7 @@ export interface StageCommentData {
    * Rendered inside the comment when status === 'error' or during a merge-conflict pause.
    *
    * Discriminated union with two variants:
-   * - #847 command-exit variant: `{ command, exitDescriptor, stderrTail }` — populated by
+   * - #847/#890 command-exit variant: `{ command, exitDescriptor, outputTail }` — populated by
    *   phase-loop.ts at each `updateStageComment({ status: 'error' })` call site.
    * - #864 merge-conflict variant: `{ mergeConflict: { baseRef, conflictedPaths } }` — populated
    *   by the pre-phase base-merge hook when a merge conflict pauses the workflow.
@@ -233,8 +245,21 @@ export interface StageCommentData {
         command: string;
         /** Resolved exit descriptor: `exit <N>`, `killed (SIGTERM) after <Nms>`, or `aborted` (FR-005, Q5→A). */
         exitDescriptor: string;
-        /** Bounded stderr tail (last 30 lines → 4 KiB cap, truncation marker prepended when applicable). Literal `(stderr empty)` when empty. */
-        stderrTail: string;
+        /**
+         * Bounded merged tail — stdout and stderr chunks in Node `data`-event
+         * arrival order (best-effort per FR-004, Q5→A). Last 30 lines then 4 KiB
+         * cap, truncation marker prepended when applicable. Literal
+         * `(no output on either stream)` when both streams were empty. Never
+         * renders as `(empty)` when either stream produced any output (FR-003).
+         *
+         * Populated by phase-loop.ts via `buildErrorEvidence`, which:
+         * - For shell phases (validate, pre-validate): reads `result.error.output`
+         *   (the merged ring-buffer tail from manageProcess) and passes through
+         *   `boundOutputTail`.
+         * - For CLI phases: synthesizes from `result.output`'s `type: 'text'`
+         *   chunks via `synthesizeOutputTail` (also bounder-capped).
+         */
+        outputTail: string;
       }
     | {
         /** Base-sync merge conflict variant (#864). */
@@ -248,8 +273,8 @@ export interface StageCommentData {
 }
 
 /**
- * The #847 command-exit variant of `StageCommentData.errorEvidence` —
- * `{ command, exitDescriptor, stderrTail }`. The failure-alert path (#865) only
+ * The #847/#890 command-exit variant of `StageCommentData.errorEvidence` —
+ * `{ command, exitDescriptor, outputTail }`. The failure-alert path (#865) only
  * ever carries this variant; the #864 merge-conflict variant is rendered in
  * place by `StageCommentManager.appendMergeConflictBlock`, never via an alert.
  */
