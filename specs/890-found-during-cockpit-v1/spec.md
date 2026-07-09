@@ -21,13 +21,24 @@ Secondary consequence worth recording: #6's original failure is now **unreproduc
 
 ## Fix
 
-Capture bounded tails of **both** streams in `buildErrorEvidence` — ideally a combined chronological tail (last N lines of interleaved output), else a stdout tail alongside the stderr tail, rendering whichever is non-empty first. Keep the #847 byte bound for the total.
+Capture a bounded, chronologically-interleaved tail of **both** streams (arrival-order best-effort) in `buildErrorEvidence`, rendered as a single `output` block. Keep the #847 4 KiB byte bound. Rename the `stderrTail` field on `CommandExitEvidence` to `outputTail`.
+
+## Clarifications
+
+Session 2026-07-09 (see [clarifications.md](./clarifications.md)):
+
+- **Rendering shape** (Q1 → A): Single interleaved tail. Spawn layer merges stdout+stderr chunks in arrival order into one buffer; `buildErrorEvidence` produces one `outputTail` rendered under one `<details><summary>output (last N lines)</summary>` block. `CommandExitEvidence.stderrTail` is renamed `outputTail` (internal type, no compat ceremony).
+- **Empty rendering** (Q2 → A): Omit empty output entirely. With a single interleaved block this only reaches the both-empty case; that collapses to one shared header containing `(no output on either stream)`. No block, no `(empty)` marker, ever appears when either stream has content.
+- **Spawn-layer scope** (Q3 → C): Shell paths (`runValidatePhase`, `runPreValidateInstall`) gain raw stdout+stderr capture into a **bounded ring buffer (~8 KiB)** attached inside `manageProcess` when `capture === undefined`. Claude-CLI phases synthesize the tail from the `type: 'text'` chunks that `OutputCapture` already retains in `PhaseResult.output` — no double-buffering of JSON transcripts. Memory cost is O(1) regardless of output volume.
+- **Byte budget** (Q4 → N/A): One merged tail, one 4 KiB cap after last-30-lines slicing. No inter-stream allocation rule needed.
+- **Ordering fidelity** (Q5 → A): Arrival-order best-effort. Chunks concatenated in the order Node's `data` events deliver them; no timestamps, no re-sort. Documented as approximate — pipe buffering may reorder near-simultaneous writes.
 
 ## Regression tests
 
-- Fixture command failing with stdout-only output → evidence contains the stdout tail; stderr section absent or marked empty.
-- Both-stream failure → both tails present within the size bound.
-- The rendered alert never reads "(empty)" when the process produced any output on either stream.
+- Fixture command failing with stdout-only output → evidence `output` block contains the stdout tail; no separate stderr section, no `(empty)` marker.
+- Both-stream failure → single interleaved `output` block contains chunks from both streams within the 4 KiB bound.
+- Empty-both-streams failure → single `output` block with body `(no output on either stream)`.
+- The rendered alert never reads `(empty)` when the process produced any output on either stream.
 
 
 ## User Stories
@@ -40,8 +51,8 @@ Capture bounded tails of **both** streams in `buildErrorEvidence` — ideally a 
 
 **Acceptance Criteria**:
 - [ ] When the failing command writes its error only to stdout (Next.js `next build` type errors, `vitest` assertion failures, `npm` install errors), the alert's evidence block contains the tail of that stdout output.
-- [ ] When the failing command writes to both streams, the evidence block contains tails of both, within the same total byte bound established in #847.
-- [ ] The rendered alert never displays a literal `(empty)` (or equivalent) marker as its sole evidence when the process produced any output on either stream.
+- [ ] When the failing command writes to both streams, the evidence block contains a single interleaved tail of both, within the #847 byte bound.
+- [ ] The rendered alert never displays a literal `(empty)` (or equivalent) marker for a silent stream when the process produced any output on either stream.
 
 ### US2: Post-hoc diagnosis of a resolved-but-unexplained failure
 
@@ -56,13 +67,13 @@ Capture bounded tails of **both** streams in `buildErrorEvidence` — ideally a 
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `buildErrorEvidence` MUST capture bounded tails of both stdout and stderr from the failed phase result. | P1 | Today it reads only `result.error.stderr`. |
-| FR-002 | The total byte size of the combined evidence MUST stay within the #847 byte bound (currently 4 KiB after last-30-lines slicing). | P1 | Preserve the alert-size guarantee. |
-| FR-003 | When only one stream produced output, the block MUST render that stream's tail; the empty stream MUST NOT be rendered as a bare `(empty)` line that competes for reader attention. | P1 | Fixes the observed "stderr: (empty)" failure mode. |
-| FR-004 | When both streams produced output, the block MUST render both tails in a form that keeps the byte bound. Preferred: a single chronologically-interleaved tail. Fallback: separately-labeled stdout and stderr tails. | P1 | Interleave-vs-split is a design choice for /clarify or /plan. |
-| FR-005 | The `PhaseResult.error` (or equivalent carrier) MUST expose captured stdout alongside stderr so `buildErrorEvidence` has something to bound. | P1 | Requires plumbing at the spawn/pipe layer, not just the evidence builder. |
-| FR-006 | Existing `CommandExitEvidence` consumers (stage comment renderer, failure-alert composer #865) MUST render the new shape without regressing their current output on stderr-only failures. | P1 | Backwards-compatible on the happy path. |
-| FR-007 | Empty-both-streams case MUST still render a single, unambiguous empty marker rather than two separate `(empty)` lines. | P2 | Cosmetic but reader-visible. |
+| FR-001 | `buildErrorEvidence` MUST produce a single `outputTail` derived from a merged stdout+stderr capture of the failed phase. | P1 | Field replaces today's `stderrTail`; internal type rename inside the discriminated union. |
+| FR-002 | The `outputTail` MUST stay within the #847 byte bound (4 KiB) after last-30-lines slicing. One string, one cap — no per-stream allocation. | P1 | Preserves the alert-size guarantee. |
+| FR-003 | When either stream produced output, the rendered block MUST contain that output and MUST NOT contain any `(empty)` (or equivalent) marker for the silent stream. | P1 | Fixes the observed "stderr: (empty)" failure mode. |
+| FR-004 | When at least one stream produced output, the rendered block is a single `<details><summary>output (last N lines)</summary>` containing the interleaved tail in Node `data`-event arrival order (best-effort; documented as approximate). | P1 | Ordering fidelity: no chunk timestamps, no re-sort, no PTY. |
+| FR-005 | Shell spawn paths (`runValidatePhase`, `runPreValidateInstall`) MUST buffer raw stdout+stderr into a bounded ring (~8 KiB, O(1) memory) inside `manageProcess` when `capture === undefined`, and populate `outputTail` from that ring at exit. Claude-CLI phases MUST synthesize `outputTail` from `type: 'text'` chunks in `PhaseResult.output` — no duplicate raw buffering. | P1 | Corrects the wrong assumption about existing capture; sets the plumbing scope. |
+| FR-006 | Existing `CommandExitEvidence` consumers (stage comment renderer, failure-alert composer #865) MUST render the `outputTail` shape correctly; call sites reading `stderrTail` are updated in the same change. | P1 | Rename is a coordinated internal edit, not backwards-compatible aliasing. |
+| FR-007 | Empty-both-streams case MUST render one shared `output` header with the body `(no output on either stream)` — a single marker, not two. | P2 | Cosmetic but reader-visible. |
 
 ## Success Criteria
 
@@ -75,9 +86,10 @@ Capture bounded tails of **both** streams in `buildErrorEvidence` — ideally a 
 
 ## Assumptions
 
-- The spawn layer already captures stdout somewhere (chunks are stored in `PhaseResult.output`); this feature makes that capture visible to `buildErrorEvidence`, or extends `error` with a stdout tail alongside `stderr`.
-- The #847 byte bound and last-30-lines slicing policy remain the intended shape; this feature broadens what is bounded, not how.
-- Downstream renderers (`StageCommentManager.renderStageComment`, failure-alert composer) live in this repo and can be updated in the same change.
+- Shell-path spawns (`runValidatePhase`, `runPreValidateInstall`) currently discard raw stdout at a no-op listener inside `manageProcess` (cli-spawner.ts:167); the fix adds a bounded ring buffer at that site (~8 KiB, O(1) memory).
+- Claude-CLI phases already retain `type: 'text'` chunks in `PhaseResult.output` via `OutputCapture`; the fix reuses those chunks to synthesize `outputTail` — no duplicate raw buffering, no JSON-transcript RAM cost.
+- The #847 byte bound and last-30-lines slicing policy remain the intended shape; this feature broadens what is bounded (one merged stream vs. stderr only), not how.
+- Downstream renderers (`StageCommentManager.renderStageComment`, failure-alert composer #865) live in this repo and are updated in the same change as the `stderrTail` → `outputTail` rename.
 
 ## Out of Scope
 

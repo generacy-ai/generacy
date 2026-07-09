@@ -15,7 +15,7 @@
 - B: **Two separately-labeled tails, non-empty first.** Spawn layer buffers each stream independently. `CommandExitEvidence` gains `stdoutTail` alongside `stderrTail`. Renderer emits whichever is non-empty first under its own `<details>` block; the empty one is handled per Q2. Preserves stream fidelity (npm log-levels differ across streams) at the cost of two blocks in the both-stream case.
 - C: **Single interleaved tail with per-line stream prefix** (e.g., `[out] …` / `[err] …`). Same plumbing as A but every rendered line carries a tag. Preserves attribution inside one block; adds ~6 bytes per line to the 4 KiB budget and clutters the common single-stream case.
 
-**Answer**: *Pending*
+**Answer**: **A** — single interleaved tail, `stderrTail` renamed `outputTail`. The operator's question is "what did the command print," and a terminal answers that with one merged stream; attribution (C) almost never changes the diagnosis and taxes the byte budget on every line. The rename is an internal type field two days from its introduction — no compat ceremony needed.
 
 ---
 
@@ -27,7 +27,7 @@
 - B: **Small inline note in the metadata section, not a `<details>` block.** `**stderr**: (no output)` appears as a one-liner above the `<details>` of the non-empty stream. Preserves the "stream X was checked and was empty" signal without giving it a full collapsible section.
 - C: **Keep both `<details>` blocks; make the empty one collapsed and terse.** `<details><summary>stderr (empty)</summary></details>` — visually deprioritized (no body, no `(empty)` inside a code fence) but structurally symmetric.
 
-**Answer**: *Pending*
+**Answer**: **A** — omit the empty stream entirely. Given Q1=A there is only one block, so this reduces to the both-empty case: one shared header containing `(no output on either stream)`. The whole finding is that `(empty)` stole the reader's attention from the real evidence; don't keep a diet version of it.
 
 ---
 
@@ -39,7 +39,7 @@
 - B: **All paths.** Buffer raw stdout for every phase, in parallel with any `OutputCapture` present. Claude CLI phases get a raw-stdout tail too. Memory cost: potentially large JSON transcripts held in RAM for the whole phase. Consistent behavior across phases; over-serves the bug.
 - C: **Shell paths raw; Claude-CLI paths derive from `OutputChunk[]` text events.** For CLI phases, `buildErrorEvidence` synthesizes a text tail by concatenating `type: 'text'` chunks from `PhaseResult.output`. Same failure ergonomics for both worlds without duplicating capture in memory.
 
-**Answer**: *Pending*
+**Answer**: **C**, with the shell-path buffer implemented as a bounded ring. Shell paths (`runValidatePhase`/`runPreValidateInstall`) gain raw capture, since the investigation correctly shows the chunks are currently discarded at the no-op listener; Claude-CLI paths synthesize their tail from the `type: 'text'` chunks `OutputCapture` already retains, so every phase gets evidence without double-buffering JSON transcripts. **Memory contract**: the raw buffer is a ring bounded at capture time (last ~8 KiB), so cost is O(1) regardless of output volume — that also moots B's RAM objection.
 
 ---
 
@@ -51,7 +51,7 @@
 - B: **Full 4 KiB per stream, cap the combined output at 4 KiB by dropping older lines from the larger tail first.** Preserves per-stream last-lines fidelity in the common single-stream case; both-stream case shrinks the larger tail until the sum fits. Requires a second pass after per-stream bounding.
 - C: **Reserve the full 4 KiB budget for whichever stream is non-empty; when both non-empty, allocate proportionally by raw byte length.** stdout-only failure gets the full 4 KiB tail (matches today's stderr-only behavior). Both-stream case tails each stream to its share of the budget. Predictable in the common (single-stream) case, proportional in the rare (both-stream) case.
 
-**Answer**: *Pending*
+**Answer**: **N/A** given Q1=A — one merged tail, one 4 KiB cap, no allocation rule needed. (If any B-shaped rendering survives review, C would be the answer — full budget to the non-empty stream — but prefer deleting the question with Q1.)
 
 ---
 
@@ -63,6 +63,6 @@
 - B: **Timestamped chunks, re-sorted at bound time.** Each `data` event records `performance.now()`; `boundOutputTail` sorts before slicing. Adds N clock reads per phase (cheap) and a stable sort. Fidelity improves marginally; still lossy under pipe buffering inside the child.
 - C: **PTY-backed capture for shell phases** (spawn under a pseudo-terminal so both streams merge in the kernel). Highest fidelity; adds a PTY dependency (`node-pty`) and complicates timeout/kill semantics. Out of proportion to the fix.
 
-**Answer**: *Pending*
+**Answer**: **A** — arrival-order best-effort, documented as approximate. B's timestamps record *arrival* time too, so re-sorting recovers nothing the concatenation didn't already have — false precision at real cost; C's native PTY dependency for a log tail is wildly out of proportion. Arrival order is what a terminal shows you anyway.
 
 ---
