@@ -19,6 +19,7 @@ import { AgentRegistry } from './services/agent-registry.js';
 import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
+import { BaseAdvanceMonitorService } from './services/base-advance-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
@@ -323,9 +324,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
+    // #892: PhaseTracker instance for the worker's ValidateFixHandler
+    // (dedupe on validate-fix:<evidenceHash>). Redis is optional; when
+    // absent the worker degrades gracefully to no fix cycle.
+    const workerPhaseTracker = new PhaseTrackerService(server.log, redisClient);
+
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
+      phaseTracker: workerPhaseTracker,
     });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
@@ -345,6 +352,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize label monitor service (full mode only)
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
+  let baseAdvanceMonitorService: BaseAdvanceMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
@@ -396,6 +404,49 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAppCredentialId,
       );
     }
+
+    // #892: Initialize base-advance monitor. Enqueues a resume for any open PR
+    // sitting at `failed:validate` whose base branch head SHA has advanced.
+    // The resume path clears the failed:validate label and re-runs validate
+    // against a fresh merge-preview (stale-evidence recovery). Cadence
+    // matches LabelMonitorService.
+    baseAdvanceMonitorService = new BaseAdvanceMonitorService(
+      server.log,
+      createGitHubClient,
+      {
+        pollIntervalMs: monitorConfig.pollIntervalMs,
+        repositories: config.repositories,
+        concurrency: monitorConfig.maxConcurrentPolls,
+      },
+      phaseTracker,
+      async (item) => {
+        // Wire the resume enqueue. The cockpit-resume handler is a companion
+        // issue; for now we enqueue via the same QueueManager surface used
+        // by the label-monitor resume path. `command: 'continue'` +
+        // `queueReason: 'resume'` follows the existing resume shape, with
+        // metadata carrying the base-advance identity so PhaseLoop can gate
+        // ValidateFixHandler on it.
+        const queueItem = {
+          owner: item.owner,
+          repo: item.repo,
+          issueNumber: item.issueNumber,
+          workflowName: 'speckit-feature',
+          command: 'continue' as const,
+          priority: Date.now(),
+          enqueuedAt: new Date().toISOString(),
+          metadata: {
+            description: `Base advanced to ${item.newSha.slice(0, 12)}; re-validating`,
+            resumeReason: item.reason,
+            baseSha: item.newSha,
+          },
+          queueReason: 'resume' as const,
+        };
+        await queueAdapter.enqueueIfAbsent(queueItem);
+      },
+      githubTokenProvider,
+      githubAuthHealth ?? undefined,
+      githubAppCredentialId,
+    );
   }
 
   // Proactive credential expiry watcher (60s timer). Reads .agency/credentials.yaml
@@ -625,6 +676,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      if (baseAdvanceMonitorService) {
+        baseAdvanceMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Base-advance monitor polling failed');
+        });
+      }
+
       if (smeeReceiver) {
         smeeReceiver.start().catch((error) => {
           server.log.error({ err: error }, 'Smee webhook receiver failed');
@@ -685,6 +742,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (prFeedbackMonitorService) {
             prFeedbackMonitorService.stopPolling();
+          }
+          if (baseAdvanceMonitorService) {
+            await baseAdvanceMonitorService.stopPolling();
           }
           if (credentialExpiryWatcher) {
             await credentialExpiryWatcher.stop();

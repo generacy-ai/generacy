@@ -272,4 +272,13 @@ export interface PhaseTracker {
    * Returns false if already processed (duplicate).
    */
   tryMarkProcessed(owner: string, repo: string, issue: number, phase: string): Promise<boolean>;
+  /**
+   * Raw-key variants for callers that own the full key namespace (#892).
+   * Semantically identical to isDuplicate/markProcessed but with the caller
+   * controlling the entire key string. Used by BaseAdvanceMonitorService
+   * which needs `base-advance-tracker:` keys sitting outside the `phase-tracker:`
+   * namespace.
+   */
+  isDuplicateRaw(key: string): Promise<boolean>;
+  markProcessedRaw(key: string): Promise<void>;
 }

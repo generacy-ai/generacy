@@ -1,0 +1,24 @@
+[2026-07-09T22:15:32.481Z] > sniplink@0.1.0 build /home/node/workspaces/sniplink
+[2026-07-09T22:15:32.482Z] > next build
+
+   ▲ Next.js 14.2.5
+   - Environments: .env.local
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Linting and checking validity of types  ...
+Failed to compile.
+
+/home/node/workspaces/sniplink/src/app/page.tsx:4:24
+Type error: Cannot find module '@/components/CopyButton' or its corresponding type declarations.
+
+  2 | import Link from 'next/link'
+  3 | import { auth } from '@/auth'
+> 4 | import { CopyButton } from '@/components/CopyButton'
+    |                        ^
+  5 | import { db } from '@/db'
+  6 |
+  7 | export default async function Home() {
+
+ ELIFECYCLE  Command failed with exit code 1.
+[pid=48291] Process exited with code 1

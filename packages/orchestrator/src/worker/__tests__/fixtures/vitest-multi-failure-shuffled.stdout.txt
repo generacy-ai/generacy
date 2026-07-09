@@ -1,0 +1,14 @@
+
+ RUN  v1.6.0 /workspace/sniplink
+
+ ❯ src/lib/link.test.ts (1)
+   × resolves link to target url 12ms
+     Error: fetch failed
+ ❯ src/lib/short-code.test.ts (2)
+   × handles collisions gracefully 5ms
+     TypeError: Cannot read properties of undefined (reading 'code')
+   × generates short code with correct length 8ms
+     AssertionError: expected 8 to be 7 // Object.is equality
+
+ Test Files  2 failed (2)
+      Tests  3 failed (3)
