@@ -65,6 +65,14 @@ export const LaunchConfigSchema = z.object({
   registryCredentials: z.array(RegistryCredentialSchema).optional(),
   tierCap: z.number().int().min(1).optional(),
   preApprovedDeviceCode: z.string().min(1).optional(),
+  /**
+   * #874: App-bot login for the `cluster-identity` trust rule. When set,
+   * threaded into `scaffoldEnvFile()` and written as `CLUSTER_ACTING_LOGIN`
+   * under the identity section of `.env`. Cloud provisioning may not yet
+   * populate this — degraded mode is observable via the orchestrator's
+   * FR-006 boot error log.
+   */
+  actingLogin: z.string().min(1).optional(),
 });
 
 /**
