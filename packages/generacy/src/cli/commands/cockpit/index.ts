@@ -8,6 +8,8 @@
  * Single-issue verbs that inspect and drive workflow state for one issue:
  *   - context  — classify the current waiting-for:* gate and emit its bundle
  *   - advance  — manually advance a waiting gate (flip waiting-for → completed)
+ *   - resume   — re-arm a failed phase in place (clears failed:*, restores the
+ *                preceding gate's waiting-for/completed pair + agent:paused)
  *
  * Epic merge/review verbs:
  *   - merge    — merge a PR once its required checks are green
@@ -20,6 +22,7 @@ import { advanceCommand } from './advance.js';
 import { contextCommand } from './context.js';
 import { cockpitMergeCommand } from './merge.js';
 import { queueCommand } from './queue.js';
+import { resumeCommand } from './resume.js';
 
 export function cockpitCommand(): Command {
   const command = new Command('cockpit');
@@ -31,6 +34,7 @@ export function cockpitCommand(): Command {
   command.addCommand(contextCommand());
   command.addCommand(cockpitMergeCommand());
   command.addCommand(queueCommand());
+  command.addCommand(resumeCommand());
 
   return command;
 }
