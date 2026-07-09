@@ -14,7 +14,8 @@ import { postClarifications, hasPendingClarifications, integrateClarificationAns
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
-import { boundStderrTail } from './stderr-tail.js';
+import { boundOutputTail } from './output-tail.js';
+import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { randomUUID } from 'node:crypto';
 
@@ -295,7 +296,7 @@ export class PhaseLoop {
           exitCode: 1,
           durationMs: 0,
           output: [],
-          error: { message: String(error), stderr: '', phase },
+          error: { message: String(error), output: '', phase },
         };
         const evidence = this.buildErrorEvidence(
           phase === 'validate' ? config.validateCommand : phase,
@@ -349,7 +350,7 @@ export class PhaseLoop {
           result.success = false;
           result.error = {
             message: 'Implement increment made no progress — aborting to prevent infinite loop',
-            stderr: `no progress: tasks_remaining stayed at ${tasksRemaining} across two increments`,
+            output: `no progress: tasks_remaining stayed at ${tasksRemaining} across two increments`,
             phase,
           };
           const evidence = this.buildErrorEvidence('implement (no-progress guard)', result);
@@ -476,7 +477,7 @@ export class PhaseLoop {
           result.success = false;
           result.error = {
             message: `Phase "${phase}" product-diff detection failed: ${String(err)}`,
-            stderr: '',
+            output: '',
             phase,
           };
           const evidence = this.buildErrorEvidence(
@@ -506,7 +507,7 @@ export class PhaseLoop {
             message:
               `Phase "${phase}" produced no product-code changes — all changed files are under excluded prefixes ` +
               `[${EXCLUDED_PATH_PREFIXES.join(', ')}]. Implement must modify at least one non-excluded file.`,
-            stderr: '',
+            output: '',
             phase,
           };
           const evidence = this.buildErrorEvidence(
@@ -851,8 +852,16 @@ export class PhaseLoop {
         : message.includes('was aborted')
         ? 'aborted'
         : `exit ${result.exitCode}`;
-    const stderrTail = boundStderrTail(result.error?.stderr ?? '');
-    return { command, exitDescriptor, stderrTail };
+
+    // Shell path: `error.output` is the ring-buffer tail (already merged).
+    // CLI path: `error.output` is empty; synthesize from parsed `type: 'text'` chunks.
+    // For synthetic PhaseResults (no-progress guard, product-diff failures, catch
+    // block): `error.output` is set directly by the caller (still merged-shape).
+    const rawOutput = result.error?.output ?? '';
+    const outputTail = rawOutput.length > 0
+      ? boundOutputTail(rawOutput)
+      : synthesizeOutputTail(result.output);
+    return { command, exitDescriptor, outputTail };
   }
 
   /**
