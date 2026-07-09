@@ -16,6 +16,7 @@ export type CockpitEventDiscriminator =
   | 'pr-checks';
 
 export interface CockpitEvent {
+  type: 'issue-transition';
   ts: string;
   repo: string;
   kind: CockpitEventKind;
@@ -43,6 +44,7 @@ function makeEvent(
   opts: { initial?: true } = {},
 ): CockpitEvent {
   const out: CockpitEvent = {
+    type: 'issue-transition',
     ts,
     repo: curr.repo,
     kind: curr.kind,

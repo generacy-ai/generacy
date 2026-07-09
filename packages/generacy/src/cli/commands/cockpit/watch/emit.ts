@@ -3,6 +3,7 @@ import { COCKPIT_STATES } from '@generacy-ai/cockpit';
 import type { CockpitEvent } from './diff.js';
 
 export const CockpitEventSchema = z.object({
+  type: z.literal('issue-transition'),
   ts: z.string().datetime(),
   repo: z.string().regex(/^[^/]+\/[^/]+$/),
   kind: z.enum(['issue', 'pr']),
@@ -32,6 +33,7 @@ export interface EmitOptions {
  */
 export function emit(event: CockpitEvent, opts: EmitOptions = {}): void {
   const out = opts.stdout ?? process.stdout;
-  const validated = opts.skipValidate === true ? event : CockpitEventSchema.parse(event);
+  const stamped = { ...event, type: 'issue-transition' as const };
+  const validated = opts.skipValidate === true ? stamped : CockpitEventSchema.parse(stamped);
   out.write(`${JSON.stringify(validated)}\n`);
 }

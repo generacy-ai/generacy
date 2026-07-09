@@ -4,6 +4,7 @@ import type { CockpitEvent } from '../watch/diff.js';
 
 function makeEvent(overrides: Partial<CockpitEvent> = {}): CockpitEvent {
   return {
+    type: 'issue-transition',
     ts: '2026-06-26T12:00:00.000Z',
     repo: 'o/r',
     kind: 'issue',
@@ -90,5 +91,31 @@ describe('emit', () => {
     const stdout = new CaptureStdout();
     const bad = { ...makeEvent(), kind: 'mystery' as unknown as 'issue' };
     expect(() => emit(bad, { stdout })).toThrow();
+  });
+
+  it('stamps type: issue-transition on a payload constructed without type', () => {
+    const stdout = new CaptureStdout();
+    const withoutType = { ...makeEvent() } as CockpitEvent;
+    delete (withoutType as { type?: unknown }).type;
+    emit(withoutType, { stdout });
+    const parsed = JSON.parse(stdout.chunks[0]!);
+    expect(parsed.type).toBe('issue-transition');
+  });
+
+  it('overwrites a bogus type value with issue-transition', () => {
+    const stdout = new CaptureStdout();
+    const bogus = { ...makeEvent(), type: 'phase-complete' as unknown as 'issue-transition' };
+    emit(bogus, { stdout });
+    const parsed = JSON.parse(stdout.chunks[0]!);
+    expect(parsed.type).toBe('issue-transition');
+  });
+
+  it('stamps type on the skipValidate: true path', () => {
+    const stdout = new CaptureStdout();
+    const withoutType = { ...makeEvent() } as CockpitEvent;
+    delete (withoutType as { type?: unknown }).type;
+    emit(withoutType, { stdout, skipValidate: true });
+    const parsed = JSON.parse(stdout.chunks[0]!);
+    expect(parsed.type).toBe('issue-transition');
   });
 });

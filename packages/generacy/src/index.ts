@@ -64,5 +64,9 @@ export type {
   LoadConfigOptions,
 } from './config/index.js';
 
+// Cockpit watch stream event union
+export { CockpitStreamEventSchema } from './cli/commands/cockpit/watch/stream-event.js';
+export type { CockpitStreamEvent } from './cli/commands/cockpit/watch/stream-event.js';
+
 // Re-export workflow engine
 export * from '@generacy-ai/workflow-engine';
