@@ -31,6 +31,7 @@ describe('pollForApproval', () => {
         cluster_id: 'cluster_1',
         project_id: 'proj_1',
         org_id: 'org_1',
+        cloud_url: 'https://api.generacy.ai',
       },
     ];
 
@@ -73,6 +74,7 @@ describe('pollForApproval', () => {
         cluster_id: 'cluster_1',
         project_id: 'proj_1',
         org_id: 'org_1',
+        cloud_url: 'https://api.generacy.ai',
       },
     ];
 
@@ -163,6 +165,7 @@ describe('pollForApproval', () => {
       cluster_id: 'cluster_1',
       project_id: 'proj_1',
       org_id: 'org_1',
+      cloud_url: 'https://api.generacy.ai',
     });
 
     let callIndex = 0;

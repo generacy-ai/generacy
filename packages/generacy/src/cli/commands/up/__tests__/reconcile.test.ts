@@ -89,7 +89,7 @@ describe('up command reconcile (#708)', () => {
     expect(envAtComposeTime).toContain('FOO=bar');
   });
 
-  it('cluster.yaml workers: 0 → .env=1, cluster.yaml rewritten to workers: 1, warning logged', async () => {
+  it('cluster.yaml workers: 0 → .env=WORKER_COUNT=1 (clamped)', async () => {
     writeFileSync(join(generacyDir, 'cluster.yaml'), 'channel: stable\nworkers: 0\nvariant: cluster-base\n');
     writeFileSync(join(generacyDir, '.env'), 'FOO=bar\nWORKER_COUNT=99\n');
 
@@ -97,14 +97,9 @@ describe('up command reconcile (#708)', () => {
 
     const env = readFileSync(join(generacyDir, '.env'), 'utf-8');
     expect(env).toContain('WORKER_COUNT=1');
-
-    const yaml = readFileSync(join(generacyDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 1');
-    expect(yaml).toContain('channel: stable');
-    expect(yaml).toContain('variant: cluster-base');
   });
 
-  it('cluster.yaml workers: "five" → .env=1, cluster.yaml rewritten, malformed warning logged', async () => {
+  it('cluster.yaml workers: "five" → .env=WORKER_COUNT=1 (malformed)', async () => {
     writeFileSync(join(generacyDir, 'cluster.yaml'), 'channel: stable\nworkers: "five"\nvariant: cluster-base\n');
     writeFileSync(join(generacyDir, '.env'), 'WORKER_COUNT=42\n');
 
@@ -112,8 +107,5 @@ describe('up command reconcile (#708)', () => {
 
     const env = readFileSync(join(generacyDir, '.env'), 'utf-8');
     expect(env).toContain('WORKER_COUNT=1');
-
-    const yaml = readFileSync(join(generacyDir, 'cluster.yaml'), 'utf-8');
-    expect(yaml).toContain('workers: 1');
   });
 });

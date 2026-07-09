@@ -8,6 +8,26 @@ vi.mock('../control-plane-probe.js', () => ({
   probeControlPlaneSocket: vi.fn(async () => false),
 }));
 
+// collectMetadata() reads /run/generacy-control-plane/init-result.json via the
+// real node:fs/promises readFile. Under fake timers, real fs I/O completes on
+// the libuv thread pool as a macrotask whose timing is nondeterministic, so the
+// fixed-tick flushes below would occasionally observe sendMetadata() before it
+// finished (CI flake). Mock readFile to reject synchronously (as it does in CI,
+// where the file is absent) so the whole chain is microtask-deterministic.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...original,
+    readFile: vi.fn(async () => {
+      const err = new Error(
+        "ENOENT: no such file or directory, open '/run/generacy-control-plane/init-result.json'",
+      ) as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    }),
+  };
+});
+
 import { RelayBridge } from '../relay-bridge.js';
 import type { ClusterRelayClient, RelayMessage, RelayBridgeOptions } from '../../types/relay.js';
 import type { SSESubscriptionManager } from '../../sse/subscriptions.js';
@@ -346,12 +366,12 @@ describe('RelayBridge', () => {
         timestamp: new Date().toISOString(),
       });
 
-      // Should forward via relay
+      // Should forward via relay (post-#600: wire shape is { event: <channel>, data: <payload> })
       expect(mockClient.send).toHaveBeenCalledWith(
         expect.objectContaining({
           type: 'event',
-          channel: 'workflows',
-          event: expect.objectContaining({ event: 'workflow:started' }),
+          event: 'workflows',
+          data: expect.objectContaining({ event: 'workflow:started' }),
         }),
       );
     });
@@ -469,7 +489,10 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
-      // Flush the async sendMetadata() promise
+      // Flush the async sendMetadata() promise (multiple await points: probes + readFile)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       const metadataSends = mockClient.send.mock.calls.filter(
@@ -513,6 +536,10 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      // Flush initial connect-triggered sendMetadata (probes + readFile take multiple ticks)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
@@ -535,6 +562,10 @@ describe('RelayBridge', () => {
 
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
+      // Flush initial connect-triggered sendMetadata (probes + readFile take multiple ticks)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       mockClient.send.mockClear();
@@ -557,7 +588,10 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!(); // Should not throw
 
-      // Flush the async sendMetadata() promise
+      // Flush the async sendMetadata() promise (multiple await points: probes + readFile)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       expect(mockLogger.error).toHaveBeenCalledWith(
@@ -573,7 +607,10 @@ describe('RelayBridge', () => {
       const connectedHandler = handlers['connected']?.[0];
       connectedHandler!();
 
-      // Flush the async sendMetadata() promise
+      // Flush the async sendMetadata() promise (multiple await points: probes + readFile)
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(0);
 
       const metadataSends = mockClient.send.mock.calls.filter(

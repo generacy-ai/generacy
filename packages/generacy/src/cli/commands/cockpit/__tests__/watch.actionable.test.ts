@@ -38,10 +38,10 @@ describe('isActionableLabel', () => {
 });
 
 describe('isActionableSnapshot', () => {
-  function issue(labels: string[]) {
+  function issue(labels: string[], state: 'OPEN' | 'CLOSED' = 'OPEN') {
     return buildIssueSnapshot(
       'o/r',
-      { number: 1, url: 'https://github.com/o/r/issues/1', state: 'OPEN', labels },
+      { number: 1, url: 'https://github.com/o/r/issues/1', state, stateReason: null, labels },
       { state: 'unknown', sourceLabel: '', labels },
     );
   }
@@ -49,7 +49,7 @@ describe('isActionableSnapshot', () => {
   function pr(labels: string[], rollup: ChecksRollup) {
     return buildPrSnapshot(
       'o/r',
-      { number: 1, url: 'https://github.com/o/r/pull/1', state: 'OPEN', labels },
+      { number: 1, url: 'https://github.com/o/r/pull/1', state: 'OPEN', stateReason: null, labels },
       { state: 'unknown', sourceLabel: '', labels },
       'open',
       rollup,
@@ -102,5 +102,13 @@ describe('isActionableSnapshot', () => {
 
   it('#857: still returns true for a PR with checksRollup: failure (pin unchanged behavior)', () => {
     expect(isActionableSnapshot(pr(['phase:implement'], 'failure'))).toBe(true);
+  });
+
+  it('#873: returns false for a CLOSED issue carrying completed:validate (closed dominates label residue)', () => {
+    expect(isActionableSnapshot(issue(['completed:validate'], 'CLOSED'))).toBe(false);
+  });
+
+  it('#873: baseline preservation — OPEN issue carrying completed:validate is still actionable', () => {
+    expect(isActionableSnapshot(issue(['completed:validate'], 'OPEN'))).toBe(true);
   });
 });

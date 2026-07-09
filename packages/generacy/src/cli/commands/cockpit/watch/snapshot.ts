@@ -12,6 +12,7 @@ export interface IssueSnapshot {
   number: number;
   url: string;
   state: 'OPEN' | 'CLOSED';
+  stateReason: 'COMPLETED' | 'NOT_PLANNED' | null;
   labels: string[];
   classified: ClassifiedIssue;
 }
@@ -23,6 +24,7 @@ export interface PrSnapshot {
   url: string;
   lifecycle: PrLifecycle;
   state: 'OPEN' | 'CLOSED';
+  stateReason: 'COMPLETED' | 'NOT_PLANNED' | null;
   labels: string[];
   classified: ClassifiedIssue;
   checksRollup: ChecksRollup;
@@ -37,7 +39,7 @@ export function snapshotKey(repo: string, kind: 'issue' | 'pr', number: number):
 
 export function buildIssueSnapshot(
   repo: string,
-  issue: Pick<Issue, 'number' | 'url' | 'state' | 'labels'>,
+  issue: Pick<Issue, 'number' | 'url' | 'state' | 'stateReason' | 'labels'>,
   classified: ClassifiedIssue,
 ): IssueSnapshot {
   return {
@@ -46,6 +48,7 @@ export function buildIssueSnapshot(
     number: issue.number,
     url: issue.url,
     state: issue.state,
+    stateReason: issue.stateReason,
     labels: [...issue.labels],
     classified,
   };
@@ -53,7 +56,7 @@ export function buildIssueSnapshot(
 
 export function buildPrSnapshot(
   repo: string,
-  issue: Pick<Issue, 'number' | 'url' | 'state' | 'labels'>,
+  issue: Pick<Issue, 'number' | 'url' | 'state' | 'stateReason' | 'labels'>,
   classified: ClassifiedIssue,
   lifecycle: PrLifecycle,
   rollup: ChecksRollup,
@@ -64,6 +67,7 @@ export function buildPrSnapshot(
     number: issue.number,
     url: issue.url,
     state: issue.state,
+    stateReason: issue.stateReason,
     lifecycle,
     labels: [...issue.labels],
     classified,

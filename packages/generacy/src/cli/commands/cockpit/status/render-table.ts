@@ -15,12 +15,32 @@ function truncate(s: string, max: number): string {
   return `${s.slice(0, max - 1)}…`;
 }
 
+/**
+ * Renders a single row. Closed rows swap the state + source columns to convey
+ * "done" per `data-model.md`. The invariant carrier is `isDoneSnapshot`
+ * (`shared/is-done-snapshot.ts`) — the branch below is the single render-layer
+ * consumer of `StatusRow.issueState`.
+ *
+ * @see isDoneSnapshot
+ */
 function fmtRow(row: StatusRow, colorizer: Colorizer): string {
   const repoCol = row.repo.padEnd(COL_REPO);
   const numCol = `#${String(row.number).padStart(COL_NUMBER)}`;
-  const stateRaw = row.state.padEnd(COL_STATE);
-  const stateCol = colorizer.state(stateRaw, row.state);
-  const sourceCol = row.sourceLabel.padEnd(COL_SOURCE_LABEL);
+  let stateCol: string;
+  let sourceCol: string;
+  if (row.issueState === 'CLOSED') {
+    if (row.stateReason === 'NOT_PLANNED') {
+      stateCol = colorizer.doneNotPlanned('✗ closed'.padEnd(COL_STATE));
+      sourceCol = colorizer.doneNotPlanned('(not planned)'.padEnd(COL_SOURCE_LABEL));
+    } else {
+      stateCol = colorizer.doneMerged('✓ merged'.padEnd(COL_STATE));
+      sourceCol = colorizer.doneMerged('merged/closed'.padEnd(COL_SOURCE_LABEL));
+    }
+  } else {
+    const stateRaw = row.state.padEnd(COL_STATE);
+    stateCol = colorizer.state(stateRaw, row.state);
+    sourceCol = row.sourceLabel.padEnd(COL_SOURCE_LABEL);
+  }
   const prCol = `PR ${row.prNumber == null ? '-'.padStart(COL_PR_NUMBER) : String(row.prNumber).padStart(COL_PR_NUMBER)}`;
   const checksCol = row.checks.padEnd(COL_CHECKS);
   const titleCol = truncate(row.title, COL_TITLE);

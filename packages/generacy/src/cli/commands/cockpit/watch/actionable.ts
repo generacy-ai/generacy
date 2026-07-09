@@ -1,3 +1,4 @@
+import { isDoneSnapshot } from '../shared/is-done-snapshot.js';
 import type { Snapshot } from './snapshot.js';
 
 export const ACTIONABLE_EXACT_LABELS = new Set<string>([
@@ -18,8 +19,13 @@ export function isActionableLabel(label: string): boolean {
  * `completed:specify` and `waiting-for:clarification` is ranked terminal by the
  * classifier's tier precedence, and trusting `classified.state` would silently
  * skip the exact issues this sweep exists to surface (FR-011 / Q2).
+ *
+ * The `isDoneSnapshot` short-circuit MUST run first: a closed issue is done,
+ * never actionable, regardless of label residue (#873). See `isDoneSnapshot`
+ * JSDoc for the single-invariant carrier.
  */
 export function isActionableSnapshot(snap: Snapshot): boolean {
+  if (isDoneSnapshot(snap)) return false;
   if (snap.labels.some(isActionableLabel)) return true;
   if (snap.kind === 'pr' && snap.checksRollup === 'failure') return true;
   return false;

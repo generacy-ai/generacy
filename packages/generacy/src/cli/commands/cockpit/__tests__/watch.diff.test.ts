@@ -17,6 +17,7 @@ function map(...entries: Array<[string, ReturnType<typeof buildIssueSnapshot> | 
 function issueSnap(opts: {
   number?: number;
   state?: 'OPEN' | 'CLOSED';
+  stateReason?: 'COMPLETED' | 'NOT_PLANNED' | null;
   labels?: string[];
   classifiedState?: 'pending' | 'active' | 'waiting' | 'error' | 'terminal' | 'unknown';
   sourceLabel?: string;
@@ -28,6 +29,7 @@ function issueSnap(opts: {
       number,
       url: `https://github.com/o/r/issues/${number}`,
       state: opts.state ?? 'OPEN',
+      stateReason: opts.stateReason ?? null,
       labels: opts.labels ?? [],
     },
     {
@@ -41,6 +43,7 @@ function issueSnap(opts: {
 function prSnap(opts: {
   number?: number;
   state?: 'OPEN' | 'CLOSED';
+  stateReason?: 'COMPLETED' | 'NOT_PLANNED' | null;
   lifecycle?: 'open' | 'closed' | 'merged';
   labels?: string[];
   classifiedState?: 'pending' | 'active' | 'waiting' | 'error' | 'terminal' | 'unknown';
@@ -54,6 +57,7 @@ function prSnap(opts: {
       number,
       url: `https://github.com/o/r/pull/${number}`,
       state: opts.state ?? 'OPEN',
+      stateReason: opts.stateReason ?? null,
       labels: opts.labels ?? [],
     },
     {
@@ -186,7 +190,7 @@ describe('computeTransitions', () => {
       snapshotKey('o/r', 'pr', 5),
       buildPrSnapshot(
         'o/r',
-        { number: 5, url: 'https://github.com/o/r/pull/5', state: 'OPEN', labels: ['waiting-for:review'] },
+        { number: 5, url: 'https://github.com/o/r/pull/5', state: 'OPEN', stateReason: null, labels: ['waiting-for:review'] },
         { state: 'waiting', sourceLabel: 'waiting-for:review', labels: ['waiting-for:review'] },
         'open',
         'pending',
@@ -196,7 +200,7 @@ describe('computeTransitions', () => {
       snapshotKey('a/b', 'issue', 3),
       buildIssueSnapshot(
         'a/b',
-        { number: 3, url: 'https://github.com/a/b/issues/3', state: 'OPEN', labels: ['waiting-for:clarification'] },
+        { number: 3, url: 'https://github.com/a/b/issues/3', state: 'OPEN', stateReason: null, labels: ['waiting-for:clarification'] },
         { state: 'waiting', sourceLabel: 'waiting-for:clarification', labels: ['waiting-for:clarification'] },
       ),
     );
@@ -204,7 +208,7 @@ describe('computeTransitions', () => {
       snapshotKey('a/b', 'pr', 1),
       buildPrSnapshot(
         'a/b',
-        { number: 1, url: 'https://github.com/a/b/pull/1', state: 'OPEN', labels: ['waiting-for:review'] },
+        { number: 1, url: 'https://github.com/a/b/pull/1', state: 'OPEN', stateReason: null, labels: ['waiting-for:review'] },
         { state: 'waiting', sourceLabel: 'waiting-for:review', labels: ['waiting-for:review'] },
         'open',
         'pending',
@@ -340,5 +344,47 @@ describe('computeTransitions', () => {
     ]);
     const events = computeTransitions(prev, curr, ts);
     expect(events.map((e) => e.event)).toEqual(['label-change', 'pr-merged', 'pr-checks']);
+  });
+
+  it('#873: startup-sweep is silent for a CLOSED issue carrying completed:validate', () => {
+    const prev: SnapshotMap = new Map();
+    const curr = map([
+      snapshotKey('o/r', 'issue', 2),
+      issueSnap({
+        number: 2,
+        state: 'CLOSED',
+        labels: ['completed:validate'],
+        classifiedState: 'terminal',
+        sourceLabel: 'completed:validate',
+      }),
+    ]);
+    expect(computeTransitions(prev, curr, ts)).toEqual([]);
+  });
+
+  it('#873: live OPEN → CLOSED emits exactly one issue-closed event with to: terminal', () => {
+    const prev = map([
+      snapshotKey('o/r', 'issue', 2),
+      issueSnap({
+        number: 2,
+        state: 'OPEN',
+        labels: ['completed:validate'],
+        classifiedState: 'terminal',
+        sourceLabel: 'completed:validate',
+      }),
+    ]);
+    const curr = map([
+      snapshotKey('o/r', 'issue', 2),
+      issueSnap({
+        number: 2,
+        state: 'CLOSED',
+        labels: ['completed:validate'],
+        classifiedState: 'terminal',
+        sourceLabel: 'completed:validate',
+      }),
+    ]);
+    const events = computeTransitions(prev, curr, ts);
+    expect(events).toHaveLength(1);
+    expect(events[0]?.event).toBe('issue-closed');
+    expect(events[0]?.to).toBe('terminal');
   });
 });

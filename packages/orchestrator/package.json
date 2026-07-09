@@ -21,6 +21,7 @@
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest --config ../../vitest.integration.config.ts run",
     "lint": "eslint src tests --ext .ts",
     "typecheck": "tsc --noEmit"
   },

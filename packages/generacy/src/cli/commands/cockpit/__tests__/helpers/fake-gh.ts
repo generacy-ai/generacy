@@ -62,6 +62,7 @@ export class FakeGh implements GhWrapper {
       number,
       title: `Issue ${number}`,
       state: 'OPEN',
+      stateReason: null,
       labels: [],
       url: `https://github.com/${repo}/issues/${number}`,
       body,
@@ -218,6 +219,7 @@ export function makeIssue(overrides: Partial<Issue> & { number: number }): Issue
   return {
     title: `Issue ${overrides.number}`,
     state: 'OPEN',
+    stateReason: null,
     labels: [],
     url: `https://github.com/o/r/issues/${overrides.number}`,
     body: '',
@@ -230,6 +232,7 @@ export function makePr(overrides: Partial<Issue> & { number: number }): Issue {
   return {
     title: `PR ${overrides.number}`,
     state: 'OPEN',
+    stateReason: null,
     labels: [],
     url: `https://github.com/o/r/pull/${overrides.number}`,
     body: '',

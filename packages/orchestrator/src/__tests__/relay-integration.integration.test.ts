@@ -310,8 +310,8 @@ describe('Relay integration: event forwarding', () => {
     expect(eventSends).toHaveLength(1);
     expect(eventSends[0]).toMatchObject({
       type: 'event',
-      channel: 'workflows',
-      event: expect.objectContaining({
+      event: 'workflows',
+      data: expect.objectContaining({
         event: 'workflow:started',
         id: 'evt-fwd-1',
       }),

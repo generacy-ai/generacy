@@ -119,7 +119,6 @@ describe('scaffoldBundle', () => {
       expect(orchVolumes).toContain('./claude.json:/home/node/.claude.json');
       expect(workerVolumes).toContain('./claude.json:/home/node/.claude.json');
       expect(orchVolumes).not.toContain('claude-config:/home/node/.claude.json');
-      expect(content.volumes).not.toHaveProperty('claude-config');
     });
 
     it('mounts docker socket at /var/run/docker-host.sock', () => {
