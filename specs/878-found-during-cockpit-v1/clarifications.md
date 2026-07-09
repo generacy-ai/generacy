@@ -11,7 +11,7 @@
 - C: Retain `'cluster-identity'` as the canonical string, semantically re-scoped — keep the old string, note in a comment that it now means "self-authored via `viewerDidAuthor`." Zero downstream impact; the spec loses its "tidy the union" cleanup and the code reads inaccurately.
 - D: Rename plus a one-line CHANGELOG breaking-change note calling out the string change — hard rename, but publish the migration signal loudly so any external consumer sees it before upgrading.
 
-**Answer**: *Pending*
+**Answer**: D — hard rename with a breaking-change line in the changeset. The `'cluster-identity'` string is two days old and has only ever shipped on the preview channel — no dashboard or runbook can plausibly key on it, so B's dual-emit window is machinery for consumers that don't exist, and C keeps a name that lies about the mechanism (the exact anti-pattern this smoke test keeps finding). D is A plus one line of documentation the changeset needs anyway.
 
 ### Q2: Non-GraphQL / issue-comment self-recognition consumers
 **Context**: Assumption 3 asserts that "REST-only consumers of comment authorship do not exist on the pr-feedback surface" and Assumption 4 asserts that `resolveActingLogin()` / the normalization pipeline are "exclusive to the pr-feedback trust predicate." The migration works cleanly only if both are true. But GitHub PR feedback flows through three comment shapes — review-thread comments (GraphQL), top-level PR conversation comments (issue-comments REST/GraphQL), and reviews themselves — and the spec extends `viewerDidAuthor` on `getPRReviewThreads` only. If a `pr-feedback` code path today reads top-level PR comments or review bodies via REST and does its own self-recognition, that consumer will lose the check when `CLUSTER_ACTING_LOGIN` is deleted.
@@ -22,7 +22,7 @@
 - C: Drop the self-recognition rule on that path — keep the current PR scope; downgrade the discovered surface to association-tier trust only; open a follow-up if that breaks anything in practice. Smallest scope; accepts a temporary regression on that path.
 - D: Verify absence up front via grep-audit before implementation; if verified absent, ship the PR as-specified; if any consumer is found, halt and re-plan. Defers the choice to a design checkpoint rather than encoding it now.
 
-**Answer**: *Pending*
+**Answer**: D for the verification, B as the standing remedy — don't halt. Run the grep-audit up front; the expected result is *absent*, since #869 introduced `clusterIdentity` only into the shared predicate and its two populate sites (monitor + handler) are both on the thread-shaped client post-#861. If implementation turns up a self-recognition site anyway, apply B — migrate it to the thread-shaped client — rather than halting to re-plan; the spec's scope-boundary language already prescribes exactly that, so there is nothing left to decide at a checkpoint. Never C: silently downgrading a surface's trust is how this class of bug starts.
 
 ### Q3: Null / missing `viewerDidAuthor` from GraphQL
 **Context**: FR-002 says the predicate checks `viewerDidAuthor === true`. GraphQL's typed schema declares the field as `Boolean` (nullable) or `Boolean!` (non-null) depending on the type it hangs off; on `PullRequestReviewComment` it is `Boolean!`, but on the abstract `Comment` interface and on some edge shapes it can be nullable. In practice the field can also be absent from a cached response, come back as `null` in a partial-error case, or drop if GitHub deprecates it. The spec is silent on how the predicate should behave when the field is not the literal boolean `true` or `false`.
@@ -33,7 +33,7 @@
 - C: Treat as `true` (trusted) — assume the caller is authoritative; only used if the field-authoring API guarantees the field for review-thread comments. Widens trust on shape drift; probably wrong.
 - D: Log `warn` and treat as `false` — combine A's safety with an observable signal that the field was missing; lets us catch shape drift in dashboards without stalling the monitor.
 
-**Answer**: *Pending*
+**Answer**: D — treat as `false`, log `warn` with the comment id and observed value. Never widen trust on shape drift (kills C), never stall the poll loop on a GitHub schema hiccup (kills B), and never eat drift silently (kills A — silent degradation is this smoke test's recurring disease). Same degrade-safely-but-loudly shape as #874's Q4 answer.
 
 ### Q4: Stale `CLUSTER_ACTING_LOGIN` in existing-cluster `.env` / compose files
 **Context**: US1 acceptance criterion says "Existing clusters need no `.env` regeneration, no compose rewrite, and no wizard credentials re-push to gain the fix — only a redeploy of the orchestrator image." Correct — but the practical consequence is that every existing cluster will have a stale `CLUSTER_ACTING_LOGIN=…` line in `.env` and a matching entry in `docker-compose.yml` after this ships, referencing a variable no code reads. This is silently harmless (an unused env var costs nothing) but it invites operator confusion: "Why is this here? Do I still need it? Should I remove it?" The spec is silent on whether cleanup guidance is a deliverable.
@@ -44,7 +44,7 @@
 - C: Ship a startup `info` log line at boot if `CLUSTER_ACTING_LOGIN` is set — one line ("`CLUSTER_ACTING_LOGIN` is set but no longer used and may be removed"). Actively visible to operators tailing logs; couples the deletion PR to a small compat log path.
 - D: Ship a cleanup migration on `generacy up` / next scaffolder run — detect the stale var in `.env` / compose and remove it (or comment it out). More user-invisible; more code; risks touching a file the operator has edited.
 
-**Answer**: *Pending*
+**Answer**: B — changelog note only. The empirical twist from #877: the provisioning surfaces mostly *failed* to write this var (that was the finding), so the population of clusters carrying a stale `CLUSTER_ACTING_LOGIN` is approximately one hand-edited test cluster. A startup compat log line (C) is permanent code servicing an almost-empty set; auto-editing operator files (D) is risk with no payoff. One changelog line says "unused, safe to delete" and the scaffolder simply stops writing it.
 
 ### Q5: PR ordering & coordination with #874 and #877
 **Context**: The spec supersedes #874's FR-001/002/003/004 mechanism and reduces #877's scope to a trailing-newline fix. #874 has already landed (`packages/generacy/src/cli/commands/cluster/scaffolder.ts` and `identity.ts` contain live `CLUSTER_ACTING_LOGIN` code), and #877 is described as "in scope on #877" for its unrelated file-append safety fix. The spec's "Migration" section lists four steps (add `viewerDidAuthor`, replace predicate, remove env var, live-cluster fix works on redeploy) but doesn't say whether these steps ship as one PR or several, or how they coordinate with #877's separate merge.
@@ -55,4 +55,4 @@
 - C: Two PRs, delete-and-replace — PR1 reverts #874's `CLUSTER_ACTING_LOGIN` code (env var + resolution + scaffolder writes); PR2 lands the `viewerDidAuthor` predicate. Clean history via revert; leaves a window where self-recognition is broken (the #869 deadlock returns until PR2 ships).
 - D: Single PR + #877 coordination — same as A, and #877 is retitled/rescoped in a preamble to reflect that only the trailing-newline fix remains; #877 is not blocked on this PR merging but does not carry any `CLUSTER_ACTING_LOGIN` provisioning after the split. Explicit cross-issue signal.
 
-**Answer**: *Pending*
+**Answer**: D, noting the #877 half is already done — single atomic PR (add field → replace predicate → delete env-var code → update evidence) so the grep-audit holds at merge and no half-state hits develop. The cross-issue coordination D asks for happened on 2026-07-09: #877 has been retitled and its body rescoped to the trailing-newline fix with an explicit "do not implement the env-var plumbing" note, and it is not ordered against this PR. B's additive window hedges a rollback risk the preview channel doesn't have; C deliberately re-opens the #869 deadlock between two PRs.

@@ -50,78 +50,58 @@ GraphQL comments expose **`viewerDidAuthor: Boolean`** — true iff the comment 
 
 ## User Stories
 
-### US1: Self-recognition works on every cluster without provisioning
+### US1: Cluster self-recognition without configured identity
 
-**As an** operator of any cluster (local-scaffolded, cloud-deployed, or long-lived),
-**I want** the pr-feedback trust predicate to recognize the cluster's own PR comments via GitHub's authoritative `viewerDidAuthor` field, not a string comparison against a provisioned env var,
-**So that** the request-changes loop proceeds on the next deploy without any provisioning surface (scaffolder, cloud-deploy, wizard-env-writer) needing to be touched or diffed.
+**As a** cluster operator running the cockpit's request-changes loop,
+**I want** the pr-feedback trust predicate to recognize comments the cluster itself authored via GitHub's `viewerDidAuthor` primitive,
+**So that** the loop no longer deadlocks on cluster-authored comments and no per-cluster identity provisioning (env var, scaffolder mirror, wizard credential) is required.
 
 **Acceptance Criteria**:
-- [ ] On a pr-feedback review-thread poll, a comment with `viewerDidAuthor: true` and `author_association: NONE` is trusted with `reason: 'self-authored'`, and the enqueue fires.
-- [ ] The behaviour is invariant across bot-login format drift, App account rename, and installation-token rotation — nothing about the comment's `author.login` is consulted for self-recognition.
+- [ ] Trust rule fires on `comment.viewerDidAuthor === true` with reason `'self-authored'` on the pr-feedback surface.
+- [ ] `CLUSTER_ACTING_LOGIN` env var + resolution link + FR-006 startup error line are removed from `identity.ts`, scaffolder output, and docs.
+- [ ] `[bot]`-suffix / lowercase / trim normalization pipeline and its 16 fixture pairs are removed.
+- [ ] Skip-warn evidence records per-comment `viewerDidAuthor` in `untrustedCommentSkips` (replacing `clusterIdentity` / `normalizedClusterIdentity` fields).
 - [ ] Existing clusters need no `.env` regeneration, no compose rewrite, and no wizard credentials re-push to gain the fix — only a redeploy of the orchestrator image.
-
-### US2: Stranger comments stay untrusted
-
-**As an** operator relying on the association-tier trust rules for human reviewers,
-**I want** `viewerDidAuthor: false` comments to fall through to the existing `author_association` checks (OWNER/MEMBER/COLLABORATOR trusted; NONE untrusted),
-**So that** the self-authored rule replaces only the `cluster-identity` self-recognition rule and does not widen (or narrow) trust for anyone else.
-
-**Acceptance Criteria**:
-- [ ] `viewerDidAuthor: false` + `author_association: NONE` → untrusted (same outcome as today's `none-untrusted`).
-- [ ] `viewerDidAuthor: false` + `author_association: OWNER|MEMBER|COLLABORATOR` → trusted via association rules (unchanged).
-- [ ] The clarify surfaces' `botLogin` self-answer-exclusion rules (#842, #818) are not touched by this change.
-
-### US3: Skip-warn evidence stays diagnosable
-
-**As an** operator investigating a `PR has unresolved threads but every comment author is untrusted` warn,
-**I want** each entry in `untrustedCommentSkips` to include the per-comment `viewerDidAuthor` boolean instead of the now-removed `clusterIdentity` / `normalizedClusterIdentity` context fields,
-**So that** I can tell at a glance whether the self-authored rule was consulted and returned false, without needing to reproduce boot logs or cross-reference env vars.
-
-**Acceptance Criteria**:
-- [ ] Every entry in `untrustedCommentSkips` includes `viewerDidAuthor: boolean`.
-- [ ] The `clusterIdentity` and `normalizedClusterIdentity` context fields are removed from skip-warn evidence.
-- [ ] No `error`-level identity-resolution-failure line is emitted at process startup (nothing to resolve).
+- [ ] The clarify surfaces' `botLogin` rules (#842, #818) are left untouched.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Extend the review-thread GraphQL query (`getPRReviewThreads`, #861) to select `viewerDidAuthor` on each comment. Thread the field through the `ReviewThread` / `Comment` TypeScript shape so it is available to the trust predicate. | P1 | Single-field query addition; no new API call. |
-| FR-002 | Replace the `cluster-identity` self-recognition rule in the pr-feedback trust predicate with a `viewerDidAuthor === true` check. Rename the `TrustReason` union entry `'cluster-identity'` → `'self-authored'`. Association-tier rules for human comments are unchanged. | P1 | Scope: pr-feedback surface only. |
-| FR-003 | Delete the `CLUSTER_ACTING_LOGIN` env var and its `resolveActingLogin()` chain from `identity.ts` (added in #874). Delete the `[bot]`-suffix / lowercase / trim normalization pipeline and its 16-fixture regression matrix (#874 FR-002 / SC-002). | P1 | Nothing left to resolve or normalize. |
-| FR-004 | Delete the scaffolder write of `CLUSTER_ACTING_LOGIN` into `.env` and `docker-compose.yml` (#874 FR-003 in `packages/generacy/src/cli/commands/cluster/scaffolder.ts`). No cloud-deploy mirror obligation remains (#874 FR-004 tracking issue closes as won't-do). | P1 | Zero provisioning surfaces after this. |
-| FR-005 | Delete the FR-006 startup `error` line and its "chain link tried" enumeration (#874). Delete the `clusterIdentity` / `normalizedClusterIdentity` context fields from `untrustedCommentSkips` warn evidence. | P1 | No degraded-mode diagnostic needed. |
-| FR-006 | Add a per-comment `viewerDidAuthor: boolean` field to each entry in `untrustedCommentSkips` warn evidence, so the skip line documents whether the self-authored rule was consulted. | P1 | Replaces the removed `clusterIdentity` field. |
-| FR-007 | Scope constraint: this change touches the pr-feedback surface only. The clarify surfaces' `botLogin` rules (#842, #818's self-answer exclusion) MUST NOT be modified — they serve the opposite goal (the bot's own comments must NOT count as answers) and are a different mechanism. | P1 | Explicit non-goal to prevent accidental scope creep. |
-| FR-008 | Grep-audit gate: no reference to `CLUSTER_ACTING_LOGIN` remains in `src/` (or `packages/**/src/`) after the migration. Docs may retain a historical mention with an explanatory note. | P1 | Verifies #874's FR-001/002/003/004 are fully unwound on the pr-feedback surface. |
-| FR-009 | #877 reduces to its trailing-newline / append-corruption fix in `wizard-env-writer.ts`. The `CLUSTER_ACTING_LOGIN` provisioning scope of #877 disappears; the file-append safety fix stays in scope regardless. | P2 | Tracked as scope reduction on #877, not this issue's deliverable. |
+| FR-001 | Add `viewerDidAuthor` to `getPRReviewThreads` GraphQL query; thread it through the `ReviewThread` / `Comment` shape. | P1 | |
+| FR-002 | pr-feedback trust predicate treats `comment.viewerDidAuthor === true` as trusted with `TrustReason === 'self-authored'`. `null` / `undefined` / missing `viewerDidAuthor` → treat as `false` **and** log at `warn` with the comment id and the observed value. | P1 | Clarified Q3 — degrade safely but loudly. |
+| FR-003 | Hard-rename `TrustReason` union entry `'cluster-identity'` → `'self-authored'`. Emit only `'self-authored'` going forward; do not dual-emit. | P1 | Clarified Q1. |
+| FR-004 | Publish a one-line breaking-change note in the changeset calling out the `TrustReason` string rename. | P1 | Clarified Q1. |
+| FR-005 | Publish a one-line changelog note stating that `CLUSTER_ACTING_LOGIN` is unused and safe to delete from existing `.env` / `docker-compose.yml`. No startup compat log line, no auto-edit of operator files. | P2 | Clarified Q4. |
+| FR-006 | Remove `CLUSTER_ACTING_LOGIN` env var, its resolution in `identity.ts`, the scaffolder writer, the `[bot]`-strip / lowercase / trim normalization pipeline (+16 fixture pairs), and the FR-006 startup error line. Replace `clusterIdentity` / `normalizedClusterIdentity` skip-warn fields with per-comment `viewerDidAuthor`. | P1 | |
+| FR-007 | Before implementation, run a grep-audit for self-recognition consumers outside the review-thread GraphQL client on the pr-feedback surface. Expected result: absent. If a consumer is discovered, migrate it to the thread-shaped GraphQL client rather than halting to re-plan or downgrading the surface's trust. | P1 | Clarified Q2 — D-verify, B-remedy. |
+| FR-008 | Ship as a single atomic PR: (i) add `viewerDidAuthor` to `getPRReviewThreads`, (ii) replace the trust predicate, (iii) delete `CLUSTER_ACTING_LOGIN` from `identity.ts` + scaffolder + docs, (iv) update skip-warn evidence. #877 is already retitled and rescoped to its trailing-newline fix and is not ordered against this PR. | P1 | Clarified Q5. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Trust rule fires on any cluster without provisioning | 100% | Fixture test: `viewerDidAuthor: true` + `author_association: NONE` → trusted, `reason: 'self-authored'`, enqueue fires. Verified live on the #869 repro scenario, minus the env var. |
-| SC-002 | Stranger comments unchanged | 100% | Fixture matrix: `viewerDidAuthor: false` × `{NONE, OWNER, MEMBER, COLLABORATOR}` → trust outcome matches today's association-tier rules. |
-| SC-003 | Skip-warn evidence carries the new field | Every skip includes `viewerDidAuthor` | Log-window inspection: any 10-minute window with at least one skip contains `viewerDidAuthor: <bool>` in every entry; no `clusterIdentity` or `normalizedClusterIdentity` fields remain. |
-| SC-004 | No `CLUSTER_ACTING_LOGIN` remains in the source tree | Zero occurrences | `grep -R 'CLUSTER_ACTING_LOGIN' packages/**/src/` returns no matches after migration. |
-| SC-005 | No provisioning surface change required for existing clusters | Zero `.env` / compose / wizard-creds file changes needed | Verification: redeploy orchestrator image on a #869-repro cluster with no other change; assert the trust rule fires on the next PR-feedback poll. |
-| SC-006 | Clarify surfaces untouched | Zero diffs on `botLogin` predicate code | Code review: no changes to the clarify-surface trust logic or `botLogin` normalization added in #842 / #818. |
+| SC-001 | pr-feedback trust decision on a self-authored comment | Trusted with reason `'self-authored'` | Fixture thread where the only unresolved comment has `viewerDidAuthor: true`, `author_association: NONE` → enqueued, handler proceeds (the #869 live scenario, minus the env var). |
+| SC-002 | Non-self-authored stranger comments | Still untrusted | Fixture with `viewerDidAuthor: false` + `author_association: NONE` → untrusted, unchanged behavior. |
+| SC-003 | No residual `CLUSTER_ACTING_LOGIN` references | Zero matches | Grep-audit `src/` for `CLUSTER_ACTING_LOGIN` after migration; result must be empty. |
+| SC-004 | Skip-warn evidence shape | Per-comment `viewerDidAuthor` present | `untrustedCommentSkips` payloads emitted from the pr-feedback surface include a per-comment `viewerDidAuthor` field. |
+| SC-005 | Existing-cluster upgrade path | Zero provisioning changes required | Redeploying the orchestrator image on a cluster that never had `CLUSTER_ACTING_LOGIN` set exits the #869 deadlock. |
+| SC-006 | Behavior on missing `viewerDidAuthor` | Untrusted + one `warn` log per occurrence | Fixture with `viewerDidAuthor: null` / absent → predicate returns not-self-authored, `warn` log emitted carrying the comment id and observed value. |
 
 ## Assumptions
 
-- The pr-feedback monitor and handler already query review threads via the thread-shaped GraphQL client (#861); adding `viewerDidAuthor` is a single-field extension with no additional API surface.
-- `viewerDidAuthor` is stable across GitHub App installation-token rotations (hourly mints) because it keys on the authenticated App identity, not the token string.
-- REST-only consumers of comment authorship do not exist on the pr-feedback surface; if one appears in the future, it should migrate to the thread-shaped client rather than resurrect login comparison.
-- The #874 code being deleted has not been consumed by other surfaces — `resolveActingLogin()` and the normalization pipeline are exclusive to the pr-feedback trust predicate.
+- The review-thread GraphQL client (`getPRReviewThreads`, post-#861) is the sole self-recognition consumer on the pr-feedback surface. To be confirmed by FR-007's grep-audit before implementation.
+- `resolveActingLogin()` and its normalization pipeline are exclusive to the pr-feedback trust predicate; no other surface consumes them.
+- The `'cluster-identity'` `TrustReason` string has only shipped on the preview channel (two days) and is not keyed on by any external dashboard, alert, or runbook.
+- Installation tokens rotate hourly, but `viewerDidAuthor` keys on the authenticated App identity, so the check is stable across token mints.
 
 ## Out of Scope
 
-- Clarify-surface changes: `botLogin` rules (#842, #818's self-answer exclusion) serve the opposite goal (excluding the bot's own comments from answering clarifications) and are untouched.
-- Association-tier trust for human comments (OWNER/MEMBER/COLLABORATOR): unchanged; `viewerDidAuthor` replaces only the self-recognition rule.
-- #877's trailing-newline / append-corruption fix in `wizard-env-writer.ts`: still in scope on #877 (the file-append corruption is real regardless of what env vars are being written); tracked separately.
-- Migration path for non-GraphQL consumers of self-recognition: none exist today. If one appears, it migrates to the thread-shaped client — not addressed here.
-- Retention of `CLUSTER_ACTING_LOGIN` as a hidden fallback for operator override: no such fallback ships; the env var is fully removed.
+- The clarify surfaces' `botLogin` rules (#842, #818 self-answer exclusion) — different mechanism, opposite goal, untouched.
+- Association-tier trust for human comments (OWNER / MEMBER / COLLABORATOR) — unchanged.
+- Auto-cleanup of stale `CLUSTER_ACTING_LOGIN=…` lines in existing `.env` / `docker-compose.yml` files. A one-line changelog note (FR-005) is the only operator-facing signal.
+- #877's file-append trailing-newline fix. #877 is already retitled and rescoped and lands independently.
+- Migrating any non-thread-shaped consumer of comment authorship pre-emptively. Only performed reactively if FR-007's grep-audit surfaces one.
 
 ---
 
