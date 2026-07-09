@@ -17,7 +17,7 @@ Issue: [generacy-ai/generacy#891](https://github.com/generacy-ai/generacy/issues
 - C: Restore ALL gates listed for that phase in the label protocol (add each gate's `waiting-for:<gate>` + `completed:<gate>` pair). The label monitor's next poll picks whichever the detector matches first.
 - D: The verb only supports single-gate phases (clarify, tasks, validate); `failed:implement` is out of scope and treated as a refusal.
 
-**Answer**: *Pending*
+**Answer**: A, but with the mapping direction corrected and derived, not hardcoded. The pair to restore is **the nearest gate *preceding* the failed phase in the workflow definition** — not the phase's own gate. Mechanics observed live in T-S2: the pair `{waiting-for, completed}:implementation-review` makes the resolver pick `startPhase = validate` (the phase *after* the gate). So `failed:validate` → restore `implementation-review`; `failed:implement` → restore `tasks-review`; a first phase with no preceding gate (`failed:specify`) → refuse with evidence pointing at `process:*` re-queue. Mid-phase gates (`sibling-review`, `merge-conflicts`) are pauses *inside* implement, not entry points — they are never the restore target for re-entering the phase. Derive the mapping from the workflow config's phase/gate order so a workflow change can't silently break the verb.
 
 ---
 
@@ -32,7 +32,7 @@ Issue: [generacy-ai/generacy#891](https://github.com/generacy-ai/generacy/issues
 - B: Treat as no-op (FR-003 path) — without `agent:error` the issue isn't "in a failed state" the verb is designed to recover. Exit 0 with an explanatory line.
 - C: Treat as refusal (FR-004 path) — the label state is inconsistent (partial failure evidence); exit non-zero with an evidence line naming the missing `agent:error`.
 
-**Answer**: *Pending*
+**Answer**: A — `failed:<phase>` alone is a failed state the operator wants out of; remove whatever error markers are present (`agent:error` if there) and re-arm. C blocks recovery on a pedantic consistency check; B strands exactly the states that most need the verb.
 
 ---
 
@@ -48,7 +48,7 @@ Issue: [generacy-ai/generacy#891](https://github.com/generacy-ai/generacy/issues
 - C: **Remove** `phase:<phase>` to mirror `onGateHit`'s exact effect. The resume detector re-adds it when the issue is dequeued and the worker starts the phase.
 - D: Not the `resume` verb's concern — leave `phase:<phase>` in whatever state the failed phase left it. Planning phase confirms by reading the resolver.
 
-**Answer**: *Pending*
+**Answer**: C, which is a defensive no-op in practice — the error path already removes `phase:<phase>` (observed log: "Error in phase: removing phase:validate and agent:in-progress, adding failed:validate and agent:error"), so resume just removes any stray one, making the re-armed state byte-identical to a natural pause. The resolver keys off the pair; the worker re-adds `phase:*` itself at phase start.
 
 ---
 
@@ -63,7 +63,7 @@ Issue: [generacy-ai/generacy#891](https://github.com/generacy-ai/generacy/issues
 - B: No — only the four mutations in FR-002. The resume detector explicitly checks `waiting-for` + `completed` only; `agent:paused` is observability metadata for humans, not part of the detector predicate.
 - C: Only if the detector requires it. Planning phase reads the detector code and picks A or B accordingly. Spec assumption: whichever matches the poll-path resume detector's exact predicate.
 
-**Answer**: *Pending*
+**Answer**: A — apply `agent:paused` too. "Indistinguishable from a naturally-paused-then-completed gate" is the invariant that makes the verb future-proof against any detector predicate, now or later, and it costs one label in the same API call. C's read-the-detector deferral buys nothing once A holds.
 
 ---
 
@@ -78,6 +78,6 @@ Issue: [generacy-ai/generacy#891](https://github.com/generacy-ai/generacy/issues
 - B: `resume` does not touch prior-phase completions — but the worker's startPhase resolver is verified in FR-009 to pick `<phase>` on the re-armed issue. If the resolver walks the `completed:*` chain, preservation is implicit.
 - C: `resume` explicitly re-asserts prior-phase completions (idempotent re-add) so a stray label deletion elsewhere doesn't corrupt the re-arm. Adds robustness at the cost of extra `gh` calls.
 
-**Answer**: *Pending*
+**Answer**: A — the four (now six, with Q3+Q4) mutations are the *only* changes; preservation of prior `completed:*` markers is stated intent, enforced by FR-009's resolver-picks-`<phase>` test (B's mechanism as the check, A's wording in the spec). C re-asserts against a corruption no code path produces — skip it.
 
 ---
