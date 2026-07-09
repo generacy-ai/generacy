@@ -56,6 +56,17 @@ export interface EmitAggregateOptions {
 
 export function emitAggregate(event: AggregateEvent, opts: EmitAggregateOptions = {}): void {
   const out = opts.stdout ?? process.stdout;
-  const validated = opts.skipValidate === true ? event : AggregateEventSchema.parse(event);
+  const stamped = stampAggregateType(event);
+  const validated = opts.skipValidate === true ? stamped : AggregateEventSchema.parse(stamped);
   out.write(`${JSON.stringify(validated)}\n`);
+}
+
+function stampAggregateType(event: AggregateEvent): AggregateEvent {
+  const declared = (event as { type?: unknown }).type;
+  if (declared === 'phase-complete' || declared === 'epic-complete') {
+    return event;
+  }
+  const hasPhase = typeof (event as { phase?: unknown }).phase === 'string' && (event as { phase: string }).phase.length > 0;
+  const stampedType = hasPhase ? ('phase-complete' as const) : ('epic-complete' as const);
+  return { ...event, type: stampedType } as AggregateEvent;
 }
