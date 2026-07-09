@@ -123,12 +123,12 @@ describe('PrFeedbackMonitorService', () => {
         {
           rootCommentId: 101,
           isResolved: false,
-          comments: [{ id: 101, body: 'Fix this', author: 'r', created_at: '', updated_at: '', path: 'src/app.ts', line: 10 }],
+          comments: [{ id: 101, body: 'Fix this', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '', path: 'src/app.ts', line: 10 }],
         },
         {
           rootCommentId: 102,
           isResolved: false,
-          comments: [{ id: 102, body: 'Also fix this', author: 'r', created_at: '', updated_at: '', path: 'src/util.ts', line: 20 }],
+          comments: [{ id: 102, body: 'Also fix this', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '', path: 'src/util.ts', line: 20 }],
         },
       ]),
     });
@@ -358,8 +358,8 @@ describe('PrFeedbackMonitorService', () => {
 
     it('should emit rootCommentId per unresolved thread', async () => {
       (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { rootCommentId: 101, isResolved: false, comments: [{ id: 101, body: 'Root', author: 'r', created_at: '', updated_at: '' }] },
-        { rootCommentId: 103, isResolved: true, comments: [{ id: 103, body: 'Resolved', author: 'r', created_at: '', updated_at: '' }] },
+        { rootCommentId: 101, isResolved: false, comments: [{ id: 101, body: 'Root', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }] },
+        { rootCommentId: 103, isResolved: true, comments: [{ id: 103, body: 'Resolved', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }] },
       ]);
 
       const event = createPrReviewEvent();
@@ -1253,9 +1253,9 @@ describe('PrFeedbackMonitorService', () => {
 
     it('enqueues rootCommentIds when getPRReviewThreads returns unresolved threads', async () => {
       (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
-        { rootCommentId: 501, isResolved: false, comments: [{ id: 501, body: 'b', author: 'r', created_at: '', updated_at: '' }] },
-        { rootCommentId: 502, isResolved: true, comments: [{ id: 502, body: 'b', author: 'r', created_at: '', updated_at: '' }] },
-        { rootCommentId: 503, isResolved: false, comments: [{ id: 503, body: 'b', author: 'r', created_at: '', updated_at: '' }] },
+        { rootCommentId: 501, isResolved: false, comments: [{ id: 501, body: 'b', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }] },
+        { rootCommentId: 502, isResolved: true, comments: [{ id: 502, body: 'b', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }] },
+        { rootCommentId: 503, isResolved: false, comments: [{ id: 503, body: 'b', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }] },
       ]);
 
       const event = createPrReviewEvent();
@@ -1402,7 +1402,7 @@ describe('PrFeedbackMonitorService', () => {
 
         // Cycle 1: N > 0
         (mockClient.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
-          { rootCommentId: 601, isResolved: false, comments: [{ id: 601, body: 'x', author: 'r', created_at: '', updated_at: '' }] },
+          { rootCommentId: 601, isResolved: false, comments: [{ id: 601, body: 'x', author: 'r', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }] },
         ]);
         await service.processPrReviewEvent(event);
         vi.clearAllMocks();
@@ -1442,6 +1442,226 @@ describe('PrFeedbackMonitorService', () => {
           expect.stringContaining('skipping'),
         );
       });
+    });
+  });
+
+  // ==========================================================================
+  // #869 / FR-001..FR-005: trust-aware enqueue + zero-trusted notice
+  // ==========================================================================
+
+  describe('trust-aware enqueue + zero-trusted notice (#869)', () => {
+    function makeServiceWithIdentity(clusterId?: string): {
+      svc: PrFeedbackMonitorService;
+      client: ReturnType<typeof createMockGitHubClient>;
+    } {
+      const client = createMockGitHubClient({
+        // Ensure the assignee check passes: linked issue must be assigned to
+        // the cluster before the trust filter runs.
+        getIssue: vi.fn().mockResolvedValue({
+          number: 42,
+          title: 'Test issue',
+          body: '',
+          state: 'open',
+          labels: [{ name: 'agent:in-progress', color: '' }],
+          assignees: clusterId ? [clusterId] : [],
+          created_at: '',
+          updated_at: '',
+        }),
+        getPRReviewThreads: vi.fn().mockResolvedValue([]),
+        listPrCommentBodies: vi.fn().mockResolvedValue([]),
+        postPrComment: vi.fn().mockResolvedValue(undefined),
+      });
+      const factory = vi.fn().mockReturnValue(client);
+      const svc = new PrFeedbackMonitorService(
+        logger,
+        factory,
+        phaseTracker,
+        queueAdapter,
+        defaultConfig,
+        defaultRepos,
+        clusterId,
+      );
+      return { svc, client };
+    }
+
+    it('M1: enqueues when unresolved thread has a cluster-identity comment (NONE tier)', async () => {
+      const { svc, client } = makeServiceWithIdentity('cluster-app[bot]');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 700,
+          isResolved: false,
+          comments: [{ id: 700, body: 'issue', author: 'cluster-app[bot]', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+
+      const result = await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(phaseTracker.tryMarkProcessed).toHaveBeenCalled();
+      expect(queueAdapter.enqueue).toHaveBeenCalled();
+      expect(client.postPrComment).not.toHaveBeenCalled();
+      svc.stopPolling();
+    });
+
+    it('M2: zero-trusted → warn log + notice posted + no enqueue', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 800,
+          isResolved: false,
+          comments: [{ id: 800, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+
+      const result = await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      expect(phaseTracker.tryMarkProcessed).not.toHaveBeenCalled();
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          totalUnresolvedThreads: 1,
+          untrustedCommentSkips: expect.arrayContaining([
+            expect.objectContaining({ author: 'random-user', reason: 'none-untrusted' }),
+          ]),
+        }),
+        expect.stringContaining('every comment author is untrusted'),
+      );
+      expect(client.postPrComment).toHaveBeenCalledTimes(1);
+      const [, , , body] = (client.postPrComment as ReturnType<typeof vi.fn>).mock.calls[0]!;
+      expect(body).toContain('<!-- generacy:pr-feedback-untrusted-notice -->');
+      svc.stopPolling();
+    });
+
+    it('M3: marker present in prior comments → notice NOT posted', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 801,
+          isResolved: false,
+          comments: [{ id: 801, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+      (client.listPrCommentBodies as ReturnType<typeof vi.fn>).mockResolvedValue([
+        'unrelated body',
+        'earlier <!-- generacy:pr-feedback-untrusted-notice --> notice',
+      ]);
+
+      await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(client.postPrComment).not.toHaveBeenCalled();
+      svc.stopPolling();
+    });
+
+    it('M4: same PR two polls in a row zero-trusted → notice only on first', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 802,
+          isResolved: false,
+          comments: [{ id: 802, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+
+      await svc.processPrReviewEvent(createPrReviewEvent());
+      await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(client.postPrComment).toHaveBeenCalledTimes(1);
+      svc.stopPolling();
+    });
+
+    it('M5: zero-trusted → then trusted comment appears → lastZeroTrustedState resets and enqueues', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          rootCommentId: 803,
+          isResolved: false,
+          comments: [{ id: 803, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+      await svc.processPrReviewEvent(createPrReviewEvent());
+      expect(queueAdapter.enqueue).not.toHaveBeenCalled();
+
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          rootCommentId: 803,
+          isResolved: false,
+          comments: [{ id: 803, body: 'now legit', author: 'maintainer', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }],
+        },
+      ]);
+      const result = await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueue).toHaveBeenCalled();
+      svc.stopPolling();
+    });
+
+    it('M6: zero-trusted → then thread resolved / PR closed → state resets', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          rootCommentId: 804,
+          isResolved: false,
+          comments: [{ id: 804, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+      await svc.processPrReviewEvent(createPrReviewEvent());
+      expect(client.postPrComment).toHaveBeenCalledTimes(1);
+
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+      await svc.processPrReviewEvent(createPrReviewEvent());
+
+      // No second notice on the reset (Case C path).
+      expect(client.postPrComment).toHaveBeenCalledTimes(1);
+      svc.stopPolling();
+    });
+
+    it('M7: mixed-trust threads (one trusted, one fully untrusted) → Case A, no notice', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 900,
+          isResolved: false,
+          comments: [{ id: 900, body: 'legit', author: 'maintainer', authorAssociation: 'MEMBER', created_at: '', updated_at: '' }],
+        },
+        {
+          rootCommentId: 901,
+          isResolved: false,
+          comments: [{ id: 901, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+
+      const result = await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(true);
+      expect(queueAdapter.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          metadata: expect.objectContaining({ reviewThreadIds: [900] }),
+        }),
+      );
+      expect(client.postPrComment).not.toHaveBeenCalled();
+      svc.stopPolling();
+    });
+
+    it('M8: postPrComment throws → warn logged, poll continues', async () => {
+      const { svc, client } = makeServiceWithIdentity('other-cluster');
+      (client.getPRReviewThreads as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          rootCommentId: 910,
+          isResolved: false,
+          comments: [{ id: 910, body: 'attack', author: 'random-user', authorAssociation: 'NONE', created_at: '', updated_at: '' }],
+        },
+      ]);
+      (client.postPrComment as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('gh: rate limit'));
+
+      const result = await svc.processPrReviewEvent(createPrReviewEvent());
+
+      expect(result).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.stringContaining('gh: rate limit') }),
+        expect.stringContaining('untrusted-feedback notice'),
+      );
+      svc.stopPolling();
     });
   });
 });

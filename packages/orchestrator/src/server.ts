@@ -323,9 +323,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
+    // #869: worker-mode PhaseTracker for PrFeedbackHandler's dedupe-clear
+    // invariant. Shares the same Redis keyspace/layout as the full-mode
+    // instance so both sides invalidate the same keys.
+    const workerPhaseTracker = redisClient
+      ? new PhaseTrackerService(server.log, redisClient)
+      : undefined;
+
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
+      phaseTracker: workerPhaseTracker,
+      clusterIdentity: clusterGithubUsername,
     });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
