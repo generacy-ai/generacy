@@ -8,6 +8,26 @@ vi.mock('../control-plane-probe.js', () => ({
   probeControlPlaneSocket: vi.fn(async () => false),
 }));
 
+// collectMetadata() reads /run/generacy-control-plane/init-result.json via the
+// real node:fs/promises readFile. Under fake timers, real fs I/O completes on
+// the libuv thread pool as a macrotask whose timing is nondeterministic, so the
+// fixed-tick flushes below would occasionally observe sendMetadata() before it
+// finished (CI flake). Mock readFile to reject synchronously (as it does in CI,
+// where the file is absent) so the whole chain is microtask-deterministic.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...original,
+    readFile: vi.fn(async () => {
+      const err = new Error(
+        "ENOENT: no such file or directory, open '/run/generacy-control-plane/init-result.json'",
+      ) as NodeJS.ErrnoException;
+      err.code = 'ENOENT';
+      throw err;
+    }),
+  };
+});
+
 import { RelayBridge } from '../relay-bridge.js';
 import type { ClusterRelayClient, RelayMessage, RelayBridgeOptions } from '../../types/relay.js';
 import type { SSESubscriptionManager } from '../../sse/subscriptions.js';

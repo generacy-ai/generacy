@@ -13,11 +13,15 @@ vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
 }));
 
-// Mock fs
+// Mock fs. readdirSync must be provided because @generacy-ai/config's
+// scanForWorkspaceConfig() (reached on the no-repos/no-config fallback path)
+// calls it; without it the scan throws before resolveWorkspaceConfig() can
+// reach process.exit(1). Default to no subdirectories → zero configs found.
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
+  readdirSync: vi.fn(() => []),
 }));
 
 // Mock os.homedir
