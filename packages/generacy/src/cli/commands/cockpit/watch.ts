@@ -10,11 +10,18 @@ import {
 import { resolveIssueContext } from './resolver.js';
 import { runOnePoll } from './watch/poll-loop.js';
 import { emit } from './watch/emit.js';
+import { emitAggregate } from './watch/aggregate-emit.js';
+import {
+  computeAggregateEvents,
+  initialAggregateState,
+  type AggregateState,
+} from './watch/aggregate.js';
 import type { SnapshotMap } from './watch/snapshot.js';
 
 interface WatchOptions {
   interval?: string;
   safetyCap?: string;
+  exitOnEpicComplete?: boolean;
 }
 
 const DEFAULT_INTERVAL_MS = 30_000;
@@ -119,6 +126,14 @@ export async function runWatch(
     `cockpit watch: epic ${initialResolved.epic.repo}#${initialResolved.epic.number}; repos [${initialResolved.repos.join(', ')}]; interval=${interval}ms\n`,
   );
 
+  for (const phase of initialResolved.parsed.phases) {
+    if (phase.refs.length === 0) {
+      process.stderr.write(
+        `cockpit watch: phase "${phase.heading}" has no issue refs; treated as complete\n`,
+      );
+    }
+  }
+
   const controller = new AbortController();
   let stopped = false;
   const onStop = (): void => {
@@ -137,6 +152,8 @@ export async function runWatch(
 
   let prev: SnapshotMap = new Map();
   let firstTick = true;
+  let firstPoll = true;
+  let aggState: AggregateState = initialAggregateState();
   let currentResolved: ResolvedEpic = initialResolved;
 
   while (!stopped) {
@@ -166,7 +183,33 @@ export async function runWatch(
       for (const event of result.events) {
         emit(event);
       }
+      const aggregateResult = computeAggregateEvents({
+        curr: result.curr,
+        parsed: currentResolved.parsed,
+        epicRepo: currentResolved.epic.repo,
+        epicNumber: currentResolved.epic.number,
+        prevState: aggState,
+        initial: firstPoll,
+        now: () => new Date().toISOString(),
+      });
+      for (const event of aggregateResult.events) {
+        emitAggregate(event);
+      }
+      aggState = aggregateResult.nextState;
       prev = result.curr;
+      firstPoll = false;
+
+      if (options.exitOnEpicComplete === true) {
+        const emittedEpicComplete = aggregateResult.events.some(
+          (e) => e.type === 'epic-complete',
+        );
+        if (emittedEpicComplete) {
+          await new Promise<void>((resolve) => {
+            process.stdout.write('', () => resolve());
+          });
+          process.exit(0);
+        }
+      }
     } catch (err) {
       process.stderr.write(
         `cockpit watch: poll error: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -190,6 +233,7 @@ export function watchCommand(): Command {
     )
     .option('--interval <ms>', `Poll interval in ms (default ${DEFAULT_INTERVAL_MS}, floor ${INTERVAL_FLOOR_MS}).`)
     .option('--safety-cap <n>', `Warn when per-poll item count exceeds this (default ${DEFAULT_SAFETY_CAP}).`)
+    .option('--exit-on-epic-complete', 'Exit 0 after flushing the epic-complete NDJSON line.', false)
     .action(async (epicRef: string, options: WatchOptions) => {
       const code = await runWatch(epicRef, options);
       process.exit(code);

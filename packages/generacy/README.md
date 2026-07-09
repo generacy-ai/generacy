@@ -202,6 +202,62 @@ The worker handles SIGTERM and SIGINT for graceful shutdown:
 4. Unregisters from orchestrator
 5. Closes health server
 
+## `cockpit watch` — aggregate events
+
+`generacy cockpit watch <epic-ref>` streams one NDJSON event per line to stdout for every per-issue state transition (`issue-closed`, `pr-merged`, `pr-closed`, `label-change`, `pr-checks`), plus two engine-owned aggregate events derived from the same snapshot diff:
+
+### `phase-complete`
+
+Fires once per transition into a fully-closed phase (last open issue in the phase closes; `not_planned` closures count as done).
+
+```json
+{"type":"phase-complete","phase":"P1 — Foundation","epicRepo":"generacy-ai/generacy","epicNumber":885,"ts":"2026-07-09T14:23:11.041Z"}
+```
+
+- `phase` — the phase heading text, verbatim.
+- After a reopen that regresses the phase, re-completion fires the event again.
+- Empty phase (heading with `refs.length === 0`) never fires `phase-complete`. One stderr warning is emitted at watch startup instead: `cockpit watch: phase "<heading>" has no issue refs; treated as complete`.
+- Issues in the `(no phase)` bucket are excluded from `phase-complete`.
+- Phase-less epic (no phase headings) never fires `phase-complete`.
+
+### `epic-complete`
+
+Fires once when every ref in the epic is CLOSED, regardless of phase structure. Empty phases contribute nothing to the ref set, so they don't block the epic edge.
+
+```json
+{"type":"epic-complete","epicRepo":"generacy-ai/generacy","epicNumber":885,"ts":"2026-07-09T14:25:03.782Z"}
+```
+
+### `--exit-on-epic-complete`
+
+Boolean flag (default false). When set, watch drains stdout and exits `0` after emitting the `epic-complete` line. That line is guaranteed to be the final line ever written. Consumers on `stdin` see clean EOF after it.
+
+```bash
+generacy cockpit watch owner/repo#123 --exit-on-epic-complete | jq -c .
+```
+
+### Startup sweep
+
+If a phase or the whole epic is already complete at watch start, the corresponding event fires immediately with `"initial": true` so consumers can distinguish "this just happened" from "this was already true when I attached":
+
+```json
+{"type":"phase-complete","phase":"P1 — Foundation","epicRepo":"o/r","epicNumber":1,"ts":"…","initial":true}
+```
+
+### Ordering within a poll cycle
+
+When a single poll produces multiple events, ordering is deterministic:
+
+1. All per-issue events in existing order.
+2. All `phase-complete` events in body order.
+3. `epic-complete` last if firing.
+
+This guarantees cause precedes effect (the last `issue-closed` is always visible before the `phase-complete` it triggered) and — with `--exit-on-epic-complete` — that `epic-complete` is the final line on stdout before the process exits.
+
+### Payload discipline
+
+Aggregate events carry `epicRepo` and `epicNumber` for correlation. They do **not** carry `closedRefs`, `totalCount`, `suggestion`, or any per-issue field (`repo`, `kind`, `number`, `url`, `labels`, `sourceLabel`, `from`, `to`, `event`). Human-readable prose (celebration lines, next-step suggestions) is the watch plugin's responsibility, derived from the payload — not the engine's.
+
 ## License
 
 MIT
