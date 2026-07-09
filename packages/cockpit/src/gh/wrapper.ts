@@ -8,6 +8,7 @@ export interface Issue {
   number: number;
   title: string;
   state: 'OPEN' | 'CLOSED';
+  stateReason: 'COMPLETED' | 'NOT_PLANNED' | null;
   labels: string[];
   url: string;
   body: string;
@@ -155,6 +156,7 @@ const IssueRawSchema = z.object({
   number: z.number().int(),
   title: z.string(),
   state: z.string(),
+  stateReason: z.string().nullable().optional(),
   labels: z
     .array(
       z.union([
@@ -298,6 +300,14 @@ function normalizeIssueState(state: string): 'OPEN' | 'CLOSED' {
   return state.toUpperCase() === 'CLOSED' ? 'CLOSED' : 'OPEN';
 }
 
+function normalizeStateReason(
+  reason: string | null | undefined,
+): 'COMPLETED' | 'NOT_PLANNED' | null {
+  if (reason === 'COMPLETED') return 'COMPLETED';
+  if (reason === 'NOT_PLANNED') return 'NOT_PLANNED';
+  return null;
+}
+
 function normalizePullRequestState(state: string): 'OPEN' | 'CLOSED' | 'MERGED' {
   const upper = state.toUpperCase();
   if (upper === 'MERGED') return 'MERGED';
@@ -367,6 +377,7 @@ function parseIssues(stdout: string): Issue[] {
     number: raw.number,
     title: raw.title,
     state: normalizeIssueState(raw.state),
+    stateReason: normalizeStateReason(raw.stateReason),
     labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
     url: raw.url,
     body: raw.body ?? '',
@@ -517,6 +528,11 @@ export class GhCliWrapper implements GhWrapper {
     // into the first one's quoted value (e.g. `repo:"o/r is:open"`), producing an
     // invalid query. Tokenize on whitespace, keeping "quoted phrases" intact.
     const terms = query.match(/"[^"]*"|\S+/g) ?? [];
+    // `gh search issues` does NOT support `stateReason` on `--json` (verified
+    // by json-field-drift.test.ts against the real gh binary). Closed issues
+    // returned from search paths surface with `stateReason: null`; the render
+    // defaults to the merged/closed variant (see fmtRow). `getIssue` (via
+    // `gh issue view`) does accept `stateReason` and propagates it verbatim.
     const args = [
       'search',
       'issues',
@@ -542,7 +558,7 @@ export class GhCliWrapper implements GhWrapper {
       '--repo',
       repo,
       '--json',
-      'number,title,state,labels,url,body,author,createdAt',
+      'number,title,state,stateReason,labels,url,body,author,createdAt',
     ];
     const result = await this.runner('gh', args);
     failIfNonZero(result, 'issue view');
@@ -563,6 +579,7 @@ export class GhCliWrapper implements GhWrapper {
       number: raw.number,
       title: raw.title,
       state: normalizeIssueState(raw.state),
+      stateReason: normalizeStateReason(raw.stateReason),
       labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
       url: raw.url,
       body: raw.body ?? '',

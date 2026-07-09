@@ -16,6 +16,8 @@ function row(overrides: Partial<StatusRow> = {}): StatusRow {
     title: 'Hello',
     state: 'active',
     sourceLabel: 'phase:plan',
+    issueState: 'OPEN',
+    stateReason: null,
     prNumber: null,
     checks: 'none',
     url: 'https://github.com/o/r/issues/1',
@@ -188,6 +190,86 @@ describe('renderTable (plain non-TTY path)', () => {
   });
 });
 
+describe('#873: closed rows dominate label residue in render', () => {
+  const phases: ParsedPhase[] = [
+    {
+      heading: 'P1',
+      token: 'p1',
+      refs: [{ repo: 'o/r', number: 1 }],
+    },
+  ];
+
+  function renderRow(r: StatusRow): string {
+    const groups = groupRows([r], phases, 'o/r');
+    const out = renderTable(groups, {
+      tty: false,
+      json: false,
+      colorizer: identityColorizer,
+    });
+    return out.split('\n')[1]!;
+  }
+
+  it('closed + stateReason COMPLETED renders "✓ merged" + "merged/closed"', () => {
+    const line = renderRow(
+      row({
+        phase: 'p1',
+        state: 'terminal',
+        sourceLabel: 'completed:validate',
+        issueState: 'CLOSED',
+        stateReason: 'COMPLETED',
+      }),
+    );
+    expect(line).toContain('✓ merged');
+    expect(line).toContain('merged/closed');
+    expect(line).not.toContain('completed:validate');
+  });
+
+  it('closed + stateReason NOT_PLANNED renders "✗ closed" + "(not planned)"', () => {
+    const line = renderRow(
+      row({
+        phase: 'p1',
+        state: 'terminal',
+        sourceLabel: 'completed:validate',
+        issueState: 'CLOSED',
+        stateReason: 'NOT_PLANNED',
+      }),
+    );
+    expect(line).toContain('✗ closed');
+    expect(line).toContain('(not planned)');
+    expect(line).not.toContain('merged/closed');
+  });
+
+  it('closed + stateReason null defensively renders as merged/closed', () => {
+    const line = renderRow(
+      row({
+        phase: 'p1',
+        state: 'terminal',
+        sourceLabel: 'completed:validate',
+        issueState: 'CLOSED',
+        stateReason: null,
+      }),
+    );
+    expect(line).toContain('✓ merged');
+    expect(line).toContain('merged/closed');
+  });
+
+  it('open rows render existing state + sourceLabel unchanged (baseline)', () => {
+    const line = renderRow(
+      row({
+        phase: 'p1',
+        state: 'active',
+        sourceLabel: 'phase:plan',
+        issueState: 'OPEN',
+        stateReason: null,
+      }),
+    );
+    expect(line).toContain('active');
+    expect(line).toContain('phase:plan');
+    expect(line).not.toContain('✓ merged');
+    expect(line).not.toContain('✗ closed');
+  });
+});
+
 describe('renderJsonEnvelope', () => {
   it('returns a single-line JSON envelope with epic scope', () => {
     const json = renderJsonEnvelope(
@@ -238,5 +320,51 @@ describe('renderJsonEnvelope', () => {
       'p2',
       null,
     ]);
+  });
+
+  it('#873: envelope carries issueState + stateReason on each row (SC-002)', () => {
+    const rows: StatusRow[] = [
+      row({
+        number: 1,
+        state: 'terminal',
+        sourceLabel: 'completed:validate',
+        issueState: 'CLOSED',
+        stateReason: 'COMPLETED',
+      }),
+      row({
+        number: 2,
+        state: 'terminal',
+        sourceLabel: 'completed:validate',
+        issueState: 'CLOSED',
+        stateReason: 'NOT_PLANNED',
+      }),
+      row({
+        number: 3,
+        state: 'active',
+        sourceLabel: 'phase:plan',
+        issueState: 'OPEN',
+        stateReason: null,
+      }),
+    ];
+    const parsed = JSON.parse(
+      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, rows),
+    );
+    expect(parsed.rows).toHaveLength(3);
+    expect(parsed.rows[0]).toMatchObject({
+      state: 'terminal',
+      sourceLabel: 'completed:validate',
+      issueState: 'CLOSED',
+      stateReason: 'COMPLETED',
+    });
+    expect(parsed.rows[1]).toMatchObject({
+      issueState: 'CLOSED',
+      stateReason: 'NOT_PLANNED',
+    });
+    expect(parsed.rows[2]).toMatchObject({
+      issueState: 'OPEN',
+      stateReason: null,
+      state: 'active',
+      sourceLabel: 'phase:plan',
+    });
   });
 });
