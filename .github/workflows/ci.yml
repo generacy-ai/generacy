@@ -83,3 +83,8 @@ jobs:
 
       - name: Test (integration)
         run: pnpm -r --if-present run test:integration
+        env:
+          # gh-bound integration tests (e.g. cockpit watch-subprocess) read
+          # public epic fixtures via `gh`; provision the repo token so they run
+          # here rather than hard-failing on missing auth.
+          GH_TOKEN: ${{ github.token }}
