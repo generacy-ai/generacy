@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { GhAuthError } from '@generacy-ai/workflow-engine';
 import { PrFeedbackMonitorService } from '../../../src/services/pr-feedback-monitor-service.js';
 import type { AuthHealthSink } from '../../../src/services/label-monitor-service.js';
-import type { QueueAdapter, PhaseTracker } from '../../../src/types/index.js';
+import type { QueueManager } from '../../../src/types/index.js';
 import type { PrMonitorConfig, RepositoryConfig } from '../../../src/config/schema.js';
 
 function createMockLogger() {
@@ -14,12 +14,17 @@ function createMockLogger() {
   };
 }
 
-function createMockPhaseTracker(): PhaseTracker {
+function createMockQueueManager(): QueueManager {
   return {
-    isDuplicate: vi.fn().mockResolvedValue(false),
-    markProcessed: vi.fn().mockResolvedValue(undefined),
-    clear: vi.fn().mockResolvedValue(undefined),
-    tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    enqueue: vi.fn().mockResolvedValue(undefined),
+    enqueueIfAbsent: vi.fn().mockResolvedValue(true),
+    hasInFlight: vi.fn().mockResolvedValue(false),
+    claim: vi.fn().mockResolvedValue(null),
+    release: vi.fn().mockResolvedValue(undefined),
+    complete: vi.fn().mockResolvedValue(undefined),
+    getQueueDepth: vi.fn().mockResolvedValue(0),
+    getQueueItems: vi.fn().mockResolvedValue([]),
+    getActiveWorkerCount: vi.fn().mockResolvedValue(0),
   };
 }
 
@@ -35,14 +40,12 @@ const repos: RepositoryConfig[] = [{ owner: 'o', repo: 'r' }];
 
 describe('PrFeedbackMonitorService — 401 classification', () => {
   let logger: ReturnType<typeof createMockLogger>;
-  let phaseTracker: PhaseTracker;
-  let queueAdapter: QueueAdapter;
+  let queueManager: QueueManager;
   let authHealth: AuthHealthSink & { recordResult: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     logger = createMockLogger();
-    phaseTracker = createMockPhaseTracker();
-    queueAdapter = { enqueue: vi.fn().mockResolvedValue(undefined) };
+    queueManager = createMockQueueManager();
     authHealth = { recordResult: vi.fn() };
   });
 
@@ -56,8 +59,7 @@ describe('PrFeedbackMonitorService — 401 classification', () => {
     const service = new PrFeedbackMonitorService(
       logger as unknown as Parameters<typeof PrFeedbackMonitorService.prototype.constructor>[0],
       clientFactory,
-      phaseTracker,
-      queueAdapter,
+      queueManager,
       config,
       repos,
       undefined,
@@ -97,8 +99,7 @@ describe('PrFeedbackMonitorService — 401 classification', () => {
     const service = new PrFeedbackMonitorService(
       logger as unknown as Parameters<typeof PrFeedbackMonitorService.prototype.constructor>[0],
       clientFactory,
-      phaseTracker,
-      queueAdapter,
+      queueManager,
       config,
       repos,
       undefined,
@@ -123,8 +124,7 @@ describe('PrFeedbackMonitorService — 401 classification', () => {
     const service = new PrFeedbackMonitorService(
       logger as unknown as Parameters<typeof PrFeedbackMonitorService.prototype.constructor>[0],
       clientFactory,
-      phaseTracker,
-      queueAdapter,
+      queueManager,
       config,
       repos,
       undefined,

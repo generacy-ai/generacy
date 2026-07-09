@@ -83,6 +83,11 @@ export class InMemoryQueueAdapter implements QueueManager {
     const itemKey = buildItemKey(item);
 
     if (this.inFlightSet.has(itemKey)) {
+      // #879 / FR-009: structured drop signal for the in-flight-collision path.
+      this.logger.info(
+        { itemKey, reason: 'in-flight' },
+        'Dropping enqueue (item already in flight)',
+      );
       return false;
     }
 

@@ -8,8 +8,7 @@ import {
 import { JitTokenError } from '@generacy-ai/control-plane';
 import type {
   MonitorState,
-  QueueAdapter,
-  PhaseTracker,
+  QueueManager,
   QueueItem,
   PrReviewEvent,
   PrFeedbackMetadata,
@@ -34,7 +33,6 @@ export interface PrFeedbackMonitorOptions {
 }
 
 const WAITING_FOR_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
-const DEDUP_PHASE = 'address-pr-feedback';
 const MIN_POLL_INTERVAL_MS = 10000;
 /**
  * Adaptive polling divisor for PR feedback monitor.
@@ -53,8 +51,7 @@ export class PrFeedbackMonitorService {
   private readonly logger: Logger;
   private readonly createClient: GitHubClientFactory;
   private readonly tokenProvider?: () => Promise<string | undefined>;
-  private readonly phaseTracker: PhaseTracker;
-  private readonly queueAdapter: QueueAdapter;
+  private readonly queueManager: QueueManager;
   private readonly options: PrFeedbackMonitorOptions;
   private readonly prLinker: PrLinker;
   private readonly clusterGithubUsername: string | undefined;
@@ -76,8 +73,7 @@ export class PrFeedbackMonitorService {
   constructor(
     logger: Logger,
     createClient: GitHubClientFactory,
-    phaseTracker: PhaseTracker,
-    queueAdapter: QueueAdapter,
+    queueManager: QueueManager,
     config: PrMonitorConfig,
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
@@ -88,8 +84,7 @@ export class PrFeedbackMonitorService {
     this.logger = logger;
     this.createClient = createClient;
     this.tokenProvider = tokenProvider;
-    this.phaseTracker = phaseTracker;
-    this.queueAdapter = queueAdapter;
+    this.queueManager = queueManager;
     this.clusterGithubUsername = clusterGithubUsername;
     this.authHealth = authHealth ?? { recordResult: () => undefined };
     this.githubAppCredentialId = githubAppCredentialId;
@@ -325,22 +320,23 @@ export class PrFeedbackMonitorService {
     );
     this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
 
-    // 4. Atomic deduplication via tryMarkProcessed (SET NX)
-    const isNew = await this.phaseTracker.tryMarkProcessed(
-      owner, repo, issueNumber, DEDUP_PHASE,
-    );
-    if (!isNew) {
-      this.logger.info(
-        { owner, repo, issueNumber, prNumber },
-        'Skipping duplicate — PR feedback already enqueued for this issue',
+    // 4. #879 / FR-010: add the waiting-for label idempotently BEFORE enqueue so
+    // it survives an `enqueueIfAbsent → false` in-flight-collision drop. Label
+    // presence = "feedback pending"; enqueue is work scheduling. Failure to
+    // add is non-fatal warn.
+    try {
+      await client.addLabels(owner, repo, issueNumber, [WAITING_FOR_PR_FEEDBACK_LABEL]);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber },
+        'Failed to add waiting-for:address-pr-feedback label',
       );
-      return false;
     }
 
     // 5. Resolve workflow name from issue labels
     const workflowName = await this.resolveWorkflowName(owner, repo, issueNumber);
 
-    // 6. Build and enqueue queue item
+    // 6. Build queue item
     const metadata: PrFeedbackMetadata = {
       prNumber,
       reviewThreadIds: unresolvedThreadIds,
@@ -358,21 +354,27 @@ export class PrFeedbackMonitorService {
       queueReason: 'resume',
     };
 
-    await this.queueAdapter.enqueue(queueItem);
+    // 7. #879 / FR-001: atomic in-flight-checked enqueue. Replaces the pre-#879
+    // `phaseTracker.tryMarkProcessed` SET-NX dedupe. Self-clearing by
+    // construction: when the handler completes/fails/drops via
+    // `QueueManager.complete()` / `.release()`, the itemKey leaves the
+    // in-flight SET and the next trusted state re-enqueues on the following
+    // poll — no TTL wait, no per-surface bookkeeping.
+    const itemKey = `${owner}/${repo}#${issueNumber}`;
+    const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
+    if (!enqueued) {
+      // FR-009: monitor-side context log paired with the adapter-level line.
+      this.logger.info(
+        { itemKey, reason: 'in-flight', prNumber, issueNumber, owner, repo },
+        'Dropping PR-feedback enqueue (item already in flight)',
+      );
+      return false;
+    }
+
     this.logger.info(
       { owner, repo, issueNumber, prNumber, command: queueItem.command },
       'PR feedback work enqueued',
     );
-
-    // 7. Add waiting-for label to issue
-    try {
-      await client.addLabels(owner, repo, issueNumber, [WAITING_FOR_PR_FEEDBACK_LABEL]);
-    } catch (error) {
-      this.logger.warn(
-        { err: error, owner, repo, issueNumber },
-        'Failed to add waiting-for:address-pr-feedback label',
-      );
-    }
 
     return true;
   }

@@ -323,17 +323,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
-    // #869: worker-mode PhaseTracker for PrFeedbackHandler's dedupe-clear
-    // invariant. Shares the same Redis keyspace/layout as the full-mode
-    // instance so both sides invalidate the same keys.
-    const workerPhaseTracker = redisClient
-      ? new PhaseTrackerService(server.log, redisClient)
-      : undefined;
-
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
-      phaseTracker: workerPhaseTracker,
     });
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
@@ -389,12 +381,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
     }
 
-    // Initialize PR feedback monitor service (if enabled)
+    // Initialize PR feedback monitor service (if enabled). #879: in-flight
+    // dedupe via QueueManager.enqueueIfAbsent; no PhaseTracker dependency.
     if (config.prMonitor.enabled) {
       prFeedbackMonitorService = new PrFeedbackMonitorService(
         server.log,
         createGitHubClient,
-        phaseTracker,
         queueAdapter,
         config.prMonitor,
         config.repositories,

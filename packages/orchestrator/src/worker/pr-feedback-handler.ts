@@ -5,7 +5,7 @@ import {
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
 import type { Comment, GitHubClient } from '@generacy-ai/workflow-engine';
-import type { QueueItem, PrFeedbackMetadata, PhaseTracker } from '../types/index.js';
+import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
@@ -14,8 +14,6 @@ import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code'
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
-
-const DEDUP_PHASE = 'address-pr-feedback';
 
 /**
  * Handles the `address-pr-feedback` command.
@@ -74,7 +72,6 @@ export class PrFeedbackHandler {
     private readonly config: WorkerConfig,
     private readonly logger: Logger,
     private readonly agentLauncher: AgentLauncher,
-    private readonly phaseTracker: PhaseTracker,
     private readonly sseEmitter?: SSEEventEmitter,
   ) {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
@@ -101,18 +98,6 @@ export class PrFeedbackHandler {
       { prNumber, issueNumber, owner, repo },
       'Starting PR feedback addressing',
     );
-
-    // #869 / FR-006: clear the dedupe key on every terminal exit path, so
-    // that a persistently-failing handler re-enqueues on the next monitor
-    // poll instead of stranding on the 24h TTL.
-    const clearDedupe = (): Promise<void> => this.phaseTracker
-      .clear(owner, repo, issueNumber, DEDUP_PHASE)
-      .catch((err: unknown) => {
-        this.logger.warn(
-          { err: String(err), owner, repo, issueNumber },
-          'Failed to clear PR-feedback dedupe key — non-fatal',
-        );
-      });
 
     // Create GitHub client scoped to checkout path
     const github = createGitHubClient(checkoutPath);
@@ -236,7 +221,6 @@ export class PrFeedbackHandler {
           'No unresolved threads found — removing label and exiting',
         );
         await this.removeFeedbackLabel(github, owner, repo, issueNumber);
-        await clearDedupe(); // FR-006 exit path 1
         return;
       }
 
@@ -261,7 +245,6 @@ export class PrFeedbackHandler {
           },
           'Zero-trusted unresolved threads — retaining waiting-for:address-pr-feedback label (FR-002)',
         );
-        await clearDedupe(); // FR-006 exit path 2
         return;
       }
 
@@ -333,29 +316,23 @@ export class PrFeedbackHandler {
 
       // 9. Remove label (only if successful, otherwise keep for retry)
       // FR-013: Keep label on timeout/failure to enable retry
-      // #869 / FR-006: clear the dedupe key on BOTH branches (success and
-      // retry). Persistent failure re-enqueues on next monitor poll, bounded
-      // to the poll cadence and diagnosable via the CLI-warn line.
       if (success) {
         await this.removeFeedbackLabel(github, owner, repo, issueNumber);
         this.logger.info(
           { prNumber, issueNumber },
           'PR feedback addressing completed successfully',
         );
-        await clearDedupe(); // FR-006 exit path 3
       } else {
         this.logger.info(
           { prNumber, issueNumber, hasChanges },
           'Keeping waiting-for:address-pr-feedback label for retry (CLI did not complete successfully)',
         );
-        await clearDedupe(); // FR-006 exit path 4
       }
     } catch (error) {
       this.logger.error(
         { error: String(error), prNumber, issueNumber, owner, repo },
         'Error processing PR feedback — task failed',
       );
-      await clearDedupe(); // FR-006 exit path 5
       throw error;
     }
   }

@@ -297,7 +297,7 @@ describe('RedisQueueAdapter.enqueueIfAbsent', () => {
     );
   });
 
-  it('rejected enqueueIfAbsent (already in flight) does NOT emit info log', async () => {
+  it('rejected enqueueIfAbsent (already in flight) emits structured info drop log (FR-009)', async () => {
     const { redis } = createMockRedisWithState();
     const adapter = new RedisQueueAdapter(redis as unknown as import('ioredis').Redis, logger);
 
@@ -307,8 +307,11 @@ describe('RedisQueueAdapter.enqueueIfAbsent', () => {
     const second = await adapter.enqueueIfAbsent(sampleItem);
 
     expect(second).toBe(false);
-    // The underlying primitive stays quiet — the caller layer owns the drop log.
-    expect(logger.info).not.toHaveBeenCalled();
+    // #879 / FR-009: adapter-level drop signal. Distinct from Redis-error warn.
+    expect(logger.info).toHaveBeenCalledWith(
+      { itemKey: 'test-org/test-repo#42', reason: 'in-flight' },
+      'Dropping enqueue (item already in flight)',
+    );
   });
 
   it('hasInFlight returns false and logs warn on Redis error (fail-safe)', async () => {
