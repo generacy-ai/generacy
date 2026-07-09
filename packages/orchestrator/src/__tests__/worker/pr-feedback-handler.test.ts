@@ -89,7 +89,12 @@ describe('PrFeedbackHandler credentials', () => {
 
   it('should include credentials in launch request when credentialRole is set', async () => {
     const config = makeConfig({ credentialRole: 'developer' });
-    const handler = new PrFeedbackHandler(config, logger, launcher);
+    const handler = new PrFeedbackHandler(config, logger, launcher, {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
 
     const item: QueueItem = {
       owner: 'test-org',
@@ -118,7 +123,12 @@ describe('PrFeedbackHandler credentials', () => {
 
   it('should omit credentials in launch request when credentialRole is not set', async () => {
     const config = makeConfig();
-    const handler = new PrFeedbackHandler(config, logger, launcher);
+    const handler = new PrFeedbackHandler(config, logger, launcher, {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
 
     const item: QueueItem = {
       owner: 'test-org',

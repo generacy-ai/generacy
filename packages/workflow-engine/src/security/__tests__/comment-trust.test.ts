@@ -211,6 +211,64 @@ describe('isTrustedCommentAuthor', () => {
     });
   });
 
+  describe('cluster-identity (#869 / FR-001)', () => {
+    it('T1: trusts cluster-identity match with authorAssociation=NONE', () => {
+      for (const surface of SURFACES) {
+        const decision = isTrustedCommentAuthor(
+          makeComment({ author: 'cluster-app[bot]', authorAssociation: 'NONE' }),
+          surface,
+          ctx({ clusterIdentity: 'cluster-app[bot]' }),
+        );
+        expect(decision).toEqual({ trusted: true, reason: 'cluster-identity' });
+      }
+    });
+
+    it('T2: cluster-identity wins on decision-order over OWNER tier', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: 'cluster-app[bot]', authorAssociation: 'OWNER' }),
+        'pr-feedback',
+        ctx({ clusterIdentity: 'cluster-app[bot]' }),
+      );
+      expect(decision).toEqual({ trusted: true, reason: 'cluster-identity' });
+    });
+
+    it('T3: unrelated author with NONE tier still untrusted when clusterIdentity set', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: 'alice', authorAssociation: 'NONE' }),
+        'pr-feedback',
+        ctx({ clusterIdentity: 'cluster-app[bot]' }),
+      );
+      expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+    });
+
+    it('T4: clusterIdentity=undefined preserves pre-#869 behavior byte-for-byte', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: 'alice', authorAssociation: 'NONE' }),
+        'pr-feedback',
+        ctx({ clusterIdentity: undefined }),
+      );
+      expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+    });
+
+    it('T5: botLogin fires before clusterIdentity when only botLogin matches', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: 'mybot', authorAssociation: 'NONE' }),
+        'pr-feedback',
+        ctx({ botLogin: 'mybot', clusterIdentity: 'alice' }),
+      );
+      expect(decision).toEqual({ trusted: true, reason: 'bot' });
+    });
+
+    it('T6: botLogin wins deterministically when both match same author (collision)', () => {
+      const decision = isTrustedCommentAuthor(
+        makeComment({ author: 'mybot', authorAssociation: 'NONE' }),
+        'pr-feedback',
+        ctx({ botLogin: 'mybot', clusterIdentity: 'mybot' }),
+      );
+      expect(decision).toEqual({ trusted: true, reason: 'bot' });
+    });
+  });
+
   describe('config cannot narrow defaults', () => {
     it('OWNER/MEMBER/COLLABORATOR always trusted regardless of config shape', () => {
       // Even with a bizarre config that omits everything, defaults win.

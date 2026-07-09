@@ -17,6 +17,7 @@ export type TrustReason =
   | 'member'
   | 'collaborator'
   | 'bot'
+  | 'cluster-identity'
   | 'widened-tier'
   | 'widened-login'
   | 'none-untrusted'
@@ -34,6 +35,15 @@ export interface TrustDecision {
 
 export interface CommentTrustContext {
   botLogin?: string;
+  /**
+   * Resolved cluster GitHub identity — the acting account the cockpit posts
+   * reviews as. Distinct from `botLogin` so SC-005's grep audit can
+   * distinguish "trusted because cluster identity" from "trusted because
+   * bot". Populated by callers from `resolveClusterIdentity()`. May be
+   * `undefined` on degraded clusters — the predicate treats absence as
+   * "no cluster-identity trust rule fires".
+   */
+  clusterIdentity?: string;
   config?: CommentTrustConfig;
   logger: Logger;
 }
@@ -76,6 +86,13 @@ export function isTrustedCommentAuthor(
   // 1. Bot login match — always trusted, regardless of tier or unset field.
   if (ctx.botLogin && comment.author === ctx.botLogin) {
     return { trusted: true, reason: 'bot' };
+  }
+
+  // 1.5 Cluster-identity match (#869 / FR-001) — fires before the tier gate
+  //     so `author_association: NONE` on the cluster's own cockpit-posted
+  //     review is trusted.
+  if (ctx.clusterIdentity && comment.author === ctx.clusterIdentity) {
+    return { trusted: true, reason: 'cluster-identity' };
   }
 
   const tier = comment.authorAssociation;

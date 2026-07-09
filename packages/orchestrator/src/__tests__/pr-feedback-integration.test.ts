@@ -1827,6 +1827,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     // Create queue item
@@ -1992,6 +1999,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2047,6 +2061,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2112,6 +2133,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2180,6 +2208,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2262,6 +2297,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2293,5 +2335,110 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
 
     // Warnings should be logged for failed replies
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  // ==========================================================================
+  // #869 (T031): christrudelpw/sniplink#4 / PR #14 regression scenario.
+  // Cluster-identity author on an unresolved thread with author_association=NONE
+  // must be treated as trusted; the loop must enqueue and the handler must
+  // process it without emitting comment-skipped for that comment.
+  // ==========================================================================
+  it('#869: cluster-identity comment with NONE tier reaches the worker path', async () => {
+    // Trust-mock: simulate the real cluster-identity decision so the monitor's
+    // pre-enqueue trust filter treats the cluster author as trusted.
+    const workflowEngine = await import('@generacy-ai/workflow-engine');
+    const originalMock = (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).getMockImplementation();
+    (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(
+      (comment: { author: string; authorAssociation?: string }, _surface: string, ctx: { clusterIdentity?: string }) => {
+        if (ctx.clusterIdentity && comment.author === ctx.clusterIdentity) {
+          return { trusted: true, reason: 'cluster-identity' };
+        }
+        if (comment.authorAssociation && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(comment.authorAssociation)) {
+          return { trusted: true, reason: comment.authorAssociation.toLowerCase() };
+        }
+        return { trusted: false, reason: 'none-untrusted' };
+      },
+    );
+
+    const logger = createMockLogger();
+    const queueAdapter: QueueAdapter = {
+      enqueue: vi.fn().mockResolvedValue(undefined),
+    } as unknown as QueueAdapter;
+    const phaseTracker = {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    };
+    const clientFactory = vi.fn().mockReturnValue(mockGitHub);
+
+    mockGitHub.getIssue.mockResolvedValue({
+      number: 4,
+      title: 'sniplink test',
+      body: '',
+      state: 'open',
+      labels: [{ name: 'agent:in-progress', color: '' }],
+      assignees: ['cluster-app[bot]'],
+      created_at: '',
+      updated_at: '',
+    });
+    mockGitHub.getPRReviewThreads.mockResolvedValue([
+      {
+        rootCommentId: 999,
+        isResolved: false,
+        comments: [{
+          id: 999,
+          body: 'please tweak this',
+          author: 'cluster-app[bot]',
+          authorAssociation: 'NONE',
+          created_at: '',
+          updated_at: '',
+          path: 'src/x.ts',
+          line: 1,
+        }],
+      },
+    ]);
+    mockGitHub.addLabels.mockResolvedValue(undefined);
+
+    const svc = new PrFeedbackMonitorService(
+      logger,
+      clientFactory,
+      phaseTracker,
+      queueAdapter,
+      { enabled: true, pollIntervalMs: 60000, adaptivePolling: false, maxConcurrentPolls: 1 },
+      [{ owner: 'christrudelpw', repo: 'sniplink' }],
+      'cluster-app[bot]',
+    );
+
+    const result = await svc.processPrReviewEvent({
+      owner: 'christrudelpw',
+      repo: 'sniplink',
+      prNumber: 14,
+      prBody: 'Closes #4',
+      branchName: '4-add-tests',
+      source: 'webhook',
+    });
+
+    expect(result).toBe(true);
+    expect(queueAdapter.enqueue).toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.stringContaining('PR feedback work enqueued'),
+    );
+
+    // Cluster-identity author must NOT appear in comment-skipped log lines.
+    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
+    const skipped = infoCalls.find(([meta]) =>
+      typeof meta === 'object' && meta !== null && (meta as Record<string, unknown>).event === 'comment-skipped',
+    );
+    expect(skipped).toBeUndefined();
+
+    // Restore the blanket-trust mock for later tests.
+    if (originalMock) {
+      (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(originalMock);
+    } else {
+      (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockReturnValue({ trusted: true, reason: 'owner' });
+    }
+    svc.stopPolling();
   });
 });

@@ -200,6 +200,19 @@ export interface GitHubClient {
   listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
 
   /**
+   * List top-level (issue-comment) PR comment bodies for idempotency
+   * checks (#869 / FR-004). Does NOT return review-thread comment bodies
+   * (those come from `getPRReviewThreads`).
+   */
+  listPrCommentBodies(owner: string, repo: string, prNumber: number): Promise<string[]>;
+
+  /**
+   * Post a top-level PR comment (issue-comment API, not review-thread reply).
+   * Used by the PR-feedback monitor to post the untrusted-notice per FR-004.
+   */
+  postPrComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>;
+
+  /**
    * Find PR for the current branch
    */
   findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null>;

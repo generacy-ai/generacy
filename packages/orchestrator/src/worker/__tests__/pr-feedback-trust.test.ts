@@ -134,7 +134,12 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
     ]));
 
     const logger = makeLogger();
-    const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher());
+    const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher(), {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
     await handler.handle(
       {
         owner: 'test-owner',
@@ -167,7 +172,12 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
     ]));
 
     const logger = makeLogger();
-    const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher());
+    const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher(), {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
     await handler.handle(
       {
         owner: 'test-owner',
@@ -218,7 +228,12 @@ describe('PR-feedback author-trust gating (FR-006)', () => {
     ]));
 
     const logger = makeLogger();
-    const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher());
+    const handler = new PrFeedbackHandler(makeConfig(), logger, makeLauncher(), {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
     await handler.handle(
       {
         owner: 'test-owner',

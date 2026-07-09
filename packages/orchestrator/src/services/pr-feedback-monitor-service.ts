@@ -1,4 +1,10 @@
-import { GhAuthError, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import {
+  GhAuthError,
+  isTrustedCommentAuthor,
+  type GitHubClient,
+  type GitHubClientFactory,
+  type TrustReason,
+} from '@generacy-ai/workflow-engine';
 import { JitTokenError } from '@generacy-ai/control-plane';
 import type {
   MonitorState,
@@ -12,6 +18,13 @@ import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import { PrLinker, type PrLinkInput } from '../worker/pr-linker.js';
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
+
+/**
+ * #869 / FR-004 idempotency marker embedded in bot-authored top-level PR
+ * comments. Grep-checked against `gh pr view --json comments` before posting
+ * to guarantee one notice per zero-trusted episode.
+ */
+const UNTRUSTED_NOTICE_MARKER = '<!-- generacy:pr-feedback-untrusted-notice -->';
 
 export interface PrFeedbackMonitorOptions {
   repositories: RepositoryConfig[];
@@ -52,6 +65,11 @@ export class PrFeedbackMonitorService {
   // #861: state-transition tracking for zero-unresolved skip logging. Key is
   // `${owner}/${repo}#${prNumber}`. Never evicted (open PR set is bounded).
   private lastUnresolvedThreadCount: Map<string, number> = new Map();
+
+  // #869 / FR-004: transition-edge tracking for zero-trusted notice posting.
+  // Keyed as `${owner}/${repo}#${prNumber}`. Not persisted; monitor restart
+  // re-triggers the notice, which is idempotency-safe via the marker grep.
+  private lastZeroTrustedState: Map<string, boolean> = new Map();
 
   private state: MonitorState;
 
@@ -160,17 +178,54 @@ export class PrFeedbackMonitorService {
     // 3. Fetch review threads via GraphQL and filter for unresolved threads.
     // #861: replaces the REST-comment-based path — REST never returned
     // `.resolved`, so the previous filter always matched nothing.
-    // #842 audit: whitelist — collects only `rootCommentId` values
-    // (unresolvedThreadIds) for `waiting-for:address-pr-feedback` gating; body
-    // content is never surfaced to an agent. The downstream address-pr-feedback
-    // handler applies full author-trust gating before any body reaches the CLI.
+    // #869 / FR-005: trust-filter each unresolved thread's comments BEFORE
+    // enqueue. Zero-trusted PRs skip enqueue and emit the FR-003 warn +
+    // FR-004 top-level notice.
     let unresolvedThreadIds: number[];
+    let totalUnresolvedThreads: number;
+    let untrustedCommentSkips: Array<{
+      commentId: number;
+      author: string;
+      authorAssociation: string | undefined;
+      reason: TrustReason;
+    }>;
     let totalThreads: number;
     try {
       const threads = await client.getPRReviewThreads(owner, repo, prNumber);
       totalThreads = threads.length;
       const unresolvedThreads = threads.filter(t => !t.isResolved);
-      unresolvedThreadIds = unresolvedThreads.map(t => t.rootCommentId);
+      totalUnresolvedThreads = unresolvedThreads.length;
+
+      const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+      const trustedIds: number[] = [];
+      const skips: typeof untrustedCommentSkips = [];
+
+      for (const thread of unresolvedThreads) {
+        let threadHasTrusted = false;
+        for (const c of thread.comments) {
+          const decision = isTrustedCommentAuthor(c, 'pr-feedback', {
+            logger: this.logger,
+            ...(botLogin ? { botLogin } : {}),
+            ...(this.clusterGithubUsername ? { clusterIdentity: this.clusterGithubUsername } : {}),
+          });
+          if (decision.trusted) {
+            threadHasTrusted = true;
+          } else {
+            skips.push({
+              commentId: c.id,
+              author: c.author,
+              authorAssociation: c.authorAssociation,
+              reason: decision.reason,
+            });
+          }
+        }
+        if (threadHasTrusted) {
+          trustedIds.push(thread.rootCommentId);
+        }
+      }
+
+      unresolvedThreadIds = trustedIds;
+      untrustedCommentSkips = skips;
     } catch (error) {
       if (error instanceof GhAuthError) {
         if (this.githubAppCredentialId) {
@@ -199,7 +254,8 @@ export class PrFeedbackMonitorService {
 
     const stateKey = `${owner}/${repo}#${prNumber}`;
 
-    if (unresolvedThreadIds.length === 0) {
+    // Case C: no unresolved threads at all — reset both state maps.
+    if (totalUnresolvedThreads === 0) {
       // #861 state-transition logging: `info` on transition, `debug` on
       // steady-state. Bootstrap (previous === undefined) counts as a transition.
       const previous = this.lastUnresolvedThreadCount.get(stateKey);
@@ -218,8 +274,40 @@ export class PrFeedbackMonitorService {
           : 'No unresolved review threads — skipping',
       );
       this.lastUnresolvedThreadCount.set(stateKey, 0);
+      this.lastZeroTrustedState.set(stateKey, false);
       return false;
     }
+
+    // Case B: unresolved threads exist, but zero of them are trust-live.
+    // #869 / FR-002, FR-003, FR-004: skip enqueue, emit warn log naming the
+    // untrusted skips, and post a top-level notice on the transition edge.
+    if (unresolvedThreadIds.length === 0) {
+      this.logger.warn(
+        {
+          owner, repo, prNumber, issueNumber,
+          totalUnresolvedThreads,
+          untrustedCommentSkips,
+        },
+        'PR has unresolved threads but every comment author is untrusted',
+      );
+
+      const previousZeroTrusted = this.lastZeroTrustedState.get(stateKey);
+      if (previousZeroTrusted !== true) {
+        await this.maybePostUntrustedNotice(client, owner, repo, prNumber);
+      }
+      this.lastZeroTrustedState.set(stateKey, true);
+      this.lastUnresolvedThreadCount.set(stateKey, totalUnresolvedThreads);
+      return false;
+    }
+
+    // Case A: at least one thread is trust-live — proceed to enqueue.
+    if (untrustedCommentSkips.length > 0) {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, untrustedCommentSkips },
+        'Some unresolved comments were skipped by trust filter (mixed-trust PR)',
+      );
+    }
+    this.lastZeroTrustedState.set(stateKey, false);
 
     this.logger.info(
       { owner, repo, prNumber, issueNumber, linkMethod, unresolvedCount: unresolvedThreadIds.length },
@@ -277,6 +365,72 @@ export class PrFeedbackMonitorService {
     }
 
     return true;
+  }
+
+  // ==========================================================================
+  // Zero-trusted notice posting (#869 / FR-004)
+  // ==========================================================================
+
+  /**
+   * Post a single top-level PR comment notifying the operator that every
+   * unresolved review-thread comment is currently untrusted. Idempotent via
+   * the `UNTRUSTED_NOTICE_MARKER` grep against existing PR comments. Failures
+   * to list or post comments are non-fatal — logged and swallowed so they
+   * never break the poll cycle.
+   */
+  private async maybePostUntrustedNotice(
+    client: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<void> {
+    let existingComments: string[];
+    try {
+      existingComments = await client.listPrCommentBodies(owner, repo, prNumber);
+    } catch (err) {
+      this.logger.warn(
+        { err: String(err), owner, repo, prNumber },
+        'Failed to list PR comments for untrusted-notice idempotency check — skipping notice this cycle',
+      );
+      return;
+    }
+
+    if (existingComments.some(body => body.includes(UNTRUSTED_NOTICE_MARKER))) {
+      this.logger.debug(
+        { owner, repo, prNumber },
+        'Untrusted-notice marker already present — skipping notice post',
+      );
+      return;
+    }
+
+    const body = [
+      UNTRUSTED_NOTICE_MARKER,
+      '',
+      '⚠️ **Feedback requires a trusted author**',
+      '',
+      'This PR has unresolved review threads, but every comment author is currently',
+      'classified as untrusted by the PR-feedback loop\'s trust filter (see #842).',
+      '',
+      'The loop will not automatically address this feedback until either:',
+      '- A repository OWNER / MEMBER / COLLABORATOR replies to one of the threads, **or**',
+      '- The cluster identity is configured to match one of the comment authors',
+      '  (see the `CLUSTER_GITHUB_USERNAME` / `GH_USERNAME` chain).',
+      '',
+      'This is an automated notice from the PR-feedback monitor.',
+    ].join('\n');
+
+    try {
+      await client.postPrComment(owner, repo, prNumber, body);
+      this.logger.info(
+        { owner, repo, prNumber },
+        'Posted untrusted-feedback notice on PR (FR-004)',
+      );
+    } catch (err) {
+      this.logger.warn(
+        { err: String(err), owner, repo, prNumber },
+        'Failed to post untrusted-feedback notice — will retry on next transition',
+      );
+    }
   }
 
   // ==========================================================================

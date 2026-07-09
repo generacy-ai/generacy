@@ -636,6 +636,30 @@ export class GhCliGitHubClient implements GitHubClient {
     }));
   }
 
+  async listPrCommentBodies(owner: string, repo: string, prNumber: number): Promise<string[]> {
+    const result = await this.executeGh([
+      'pr', 'view', String(prNumber),
+      '--repo', `${owner}/${repo}`,
+      '--json', 'comments',
+      '--jq', '.comments[].body',
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list PR comments for ${owner}/${repo}#${prNumber}: ${result.stderr}`);
+    }
+    return result.stdout.split('\n').filter(l => l.length > 0);
+  }
+
+  async postPrComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+    const result = await this.executeGh([
+      'pr', 'comment', String(prNumber),
+      '--repo', `${owner}/${repo}`,
+      '--body', body,
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to post PR comment on ${owner}/${repo}#${prNumber}: ${result.stderr}`);
+    }
+  }
+
   async findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
     const result = await this.executeGh([
       'pr', 'list',

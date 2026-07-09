@@ -104,6 +104,16 @@ const defaultConfig: WorkerConfig = {
   gates: {},
 };
 
+// #869: stub PhaseTracker used by the handler's clearDedupe closure.
+function createStubPhaseTracker() {
+  return {
+    isDuplicate: vi.fn().mockResolvedValue(false),
+    markProcessed: vi.fn().mockResolvedValue(undefined),
+    clear: vi.fn().mockResolvedValue(undefined),
+    tryMarkProcessed: vi.fn().mockResolvedValue(true),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Helper Functions
 // ---------------------------------------------------------------------------
@@ -171,6 +181,8 @@ describe('PrFeedbackHandler', () => {
       defaultConfig,
       mockLogger,
       agentLauncher,
+      createStubPhaseTracker(),
+      undefined,
     );
 
     // Default mock implementations
@@ -780,6 +792,8 @@ describe('PrFeedbackHandler', () => {
         defaultConfig,
         mockLogger,
         agentLauncher,
+        createStubPhaseTracker(),
+        undefined,
       );
 
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
@@ -830,6 +844,8 @@ describe('PrFeedbackHandler', () => {
         defaultConfig,
         mockLogger,
         agentLauncher,
+        createStubPhaseTracker(),
+        undefined,
       );
 
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
@@ -857,6 +873,111 @@ describe('PrFeedbackHandler', () => {
         cwd,
       }));
       expect(snapshotRecords).toMatchSnapshot();
+    });
+  });
+
+  // ==========================================================================
+  // #869 / FR-006: dedupe-clear invariant + FR-007 degraded identity
+  // ==========================================================================
+  describe('dedupe-clear invariant (#869)', () => {
+    async function buildHandler(phaseTracker = createStubPhaseTracker(), clusterIdentity?: string) {
+      const launcherFactory = new RecordingProcessFactory(0);
+      const agentLauncher = new AgentLauncher(
+        new Map([['default', launcherFactory]]),
+      );
+      agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+      const localHandler = new PrFeedbackHandler(
+        defaultConfig,
+        mockLogger,
+        agentLauncher,
+        phaseTracker,
+        clusterIdentity,
+      );
+      return { handler: localHandler, phaseTracker };
+    }
+
+    it('H1: no unresolved threads → clear called + label removed + "No unresolved threads found" log', async () => {
+      const { handler: localHandler, phaseTracker } = await buildHandler();
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
+      await localHandler.handle(item, '/tmp/checkout');
+
+      expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
+      expect(mockGitHub.removeLabels).toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.stringContaining('No unresolved threads found'),
+      );
+    });
+
+    it('H2: zero-trusted → clear called + label NOT removed + no "No unresolved threads found" log', async () => {
+      const { isTrustedCommentAuthor } = await import('@generacy-ai/workflow-engine');
+      (isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
+        .mockReturnValue({ trusted: false, reason: 'none-untrusted' });
+
+      const { handler: localHandler, phaseTracker } = await buildHandler();
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      await localHandler.handle(item, '/tmp/checkout');
+
+      expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      const removeCallMessages = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
+        .map((c) => String(c[1] ?? ''));
+      expect(removeCallMessages.every((m) => !m.includes('No unresolved threads found'))).toBe(true);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ totalUnresolvedThreads: 1 }),
+        expect.stringContaining('Zero-trusted unresolved threads'),
+      );
+
+      // Restore mock for later tests.
+      (isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
+        .mockReturnValue({ trusted: true, reason: 'owner' });
+    });
+
+    it('H5: getPRReviewThreads throws → clear called + re-throws', async () => {
+      const { handler: localHandler, phaseTracker } = await buildHandler();
+      mockGitHub.getPRReviewThreads = vi.fn().mockRejectedValue(new Error('gh api boom'));
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+
+      await expect(localHandler.handle(item, '/tmp/checkout')).rejects.toThrow(/review threads/);
+      expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
+    });
+
+    it('H7: clusterIdentity undefined → error log naming the resolution chain', async () => {
+      const { handler: localHandler } = await buildHandler(createStubPhaseTracker(), undefined);
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
+      await localHandler.handle(item, '/tmp/checkout');
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          triedChain: ['config', 'CLUSTER_GITHUB_USERNAME', 'GH_USERNAME', 'gh api user'],
+        }),
+        expect.stringContaining('degraded FR-007 mode'),
+      );
+    });
+
+    it('H9: phaseTracker.clear throws → swallowed with warn log, no re-throw', async () => {
+      const phaseTracker = {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockRejectedValue(new Error('redis down')),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      };
+      const { handler: localHandler } = await buildHandler(phaseTracker);
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
+
+      // Must not throw.
+      await localHandler.handle(item, '/tmp/checkout');
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ err: expect.stringContaining('redis down') }),
+        expect.stringContaining('Failed to clear PR-feedback dedupe key'),
+      );
     });
   });
 });

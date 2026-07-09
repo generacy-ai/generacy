@@ -5,7 +5,7 @@ import {
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
 import type { Comment, GitHubClient } from '@generacy-ai/workflow-engine';
-import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
+import type { QueueItem, PrFeedbackMetadata, PhaseTracker } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
@@ -14,6 +14,8 @@ import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code'
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
+
+const DEDUP_PHASE = 'address-pr-feedback';
 
 /**
  * Handles the `address-pr-feedback` command.
@@ -72,6 +74,8 @@ export class PrFeedbackHandler {
     private readonly config: WorkerConfig,
     private readonly logger: Logger,
     private readonly agentLauncher: AgentLauncher,
+    private readonly phaseTracker: PhaseTracker,
+    private readonly clusterIdentity: string | undefined,
     private readonly sseEmitter?: SSEEventEmitter,
   ) {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
@@ -98,6 +102,32 @@ export class PrFeedbackHandler {
       { prNumber, issueNumber, owner, repo },
       'Starting PR feedback addressing',
     );
+
+    // #869 / FR-006: clear the dedupe key on every terminal exit path, so
+    // that a persistently-failing handler re-enqueues on the next monitor
+    // poll instead of stranding on the 24h TTL.
+    const clearDedupe = (): Promise<void> => this.phaseTracker
+      .clear(owner, repo, issueNumber, DEDUP_PHASE)
+      .catch((err: unknown) => {
+        this.logger.warn(
+          { err: String(err), owner, repo, issueNumber },
+          'Failed to clear PR-feedback dedupe key — non-fatal',
+        );
+      });
+
+    // #869 / FR-007: degraded-identity mode — if the cluster identity could
+    // not be resolved, log at error level naming the chain that was tried
+    // and continue. Association-tier trust still applies; cluster-identity
+    // match (decision 1.5) simply never fires.
+    if (!this.clusterIdentity) {
+      this.logger.error(
+        {
+          triedChain: ['config', 'CLUSTER_GITHUB_USERNAME', 'GH_USERNAME', 'gh api user'],
+          prNumber, owner, repo, issueNumber,
+        },
+        'Cluster identity unresolvable at handler runtime — degraded FR-007 mode: FR-002/FR-003 zero-trusted retention applies unconditionally to untrusted comments',
+      );
+    }
 
     // Create GitHub client scoped to checkout path
     const github = createGitHubClient(checkoutPath);
@@ -133,19 +163,30 @@ export class PrFeedbackHandler {
       // REST never populated `.resolved`, so the old filter always emitted []
       // and the handler no-op'd. GraphQL exposes thread-level resolution.
       let allComments: Comment[];
+      let unresolvedThreadCount: number;
       let unresolvedComments: Comment[];
+      let untrustedSkips: Array<{
+        commentId: number;
+        author: string;
+        authorAssociation: string | undefined;
+        reason: string;
+      }>;
       try {
         const threads = await github.getPRReviewThreads(owner, repo, prNumber);
         const unresolvedThreads = threads.filter(t => !t.isResolved);
         allComments = threads.flatMap(t => t.comments);
+        unresolvedThreadCount = unresolvedThreads.length;
         const unresolvedThreadComments = unresolvedThreads.flatMap(t => t.comments);
 
-        // Author-trust gating (#842). Log each skip and drop untrusted
+        // Author-trust gating (#842, #869). Log each skip and drop untrusted
         // comments before the CLI ever sees them. `pr-feedback` surface
-        // honors widen-config from .agency/comment-trust.yaml.
+        // honors widen-config from .agency/comment-trust.yaml. #869: also
+        // honors `clusterIdentity` so the cluster's own cockpit-posted
+        // reviews (author_association: NONE) are trusted.
         const trustConfig = tryLoadCommentTrustConfig(checkoutPath, this.logger);
         const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
         const trustedUnresolved: Comment[] = [];
+        const skips: typeof untrustedSkips = [];
         for (const c of unresolvedThreadComments) {
           const decision = isTrustedCommentAuthor(
             c,
@@ -153,12 +194,19 @@ export class PrFeedbackHandler {
             {
               logger: this.logger,
               ...(botLogin ? { botLogin } : {}),
+              ...(this.clusterIdentity ? { clusterIdentity: this.clusterIdentity } : {}),
               ...(trustConfig ? { config: trustConfig } : {}),
             },
           );
           if (decision.trusted) {
             trustedUnresolved.push(c);
           } else {
+            skips.push({
+              commentId: c.id,
+              author: c.author,
+              authorAssociation: c.authorAssociation,
+              reason: decision.reason,
+            });
             this.logger.info(
               {
                 event: 'comment-skipped',
@@ -174,6 +222,7 @@ export class PrFeedbackHandler {
         }
 
         unresolvedComments = trustedUnresolved;
+        untrustedSkips = skips;
 
         this.logger.info(
           {
@@ -192,13 +241,34 @@ export class PrFeedbackHandler {
         throw new Error(`Failed to fetch review threads for PR #${prNumber}: ${String(error)}`);
       }
 
-      // 4. If no unresolved threads, remove label and return early
-      if (unresolvedComments.length === 0) {
+      // 4. Case A (#869): no unresolved threads at all — remove label and
+      // clear dedupe key.
+      if (unresolvedThreadCount === 0) {
         this.logger.info(
           { prNumber, issueNumber },
           'No unresolved threads found — removing label and exiting',
         );
         await this.removeFeedbackLabel(github, owner, repo, issueNumber);
+        await clearDedupe(); // FR-006 exit path 1
+        return;
+      }
+
+      // 4b. Case B (#869 / FR-002): unresolved threads exist, but every
+      // comment is untrusted (race-window residue that the monitor didn't
+      // catch, or degraded-identity mode). Retain the waiting-for label
+      // (FR-002) and clear the dedupe key so the next monitor poll can
+      // re-enqueue if the situation changes. Do NOT emit the "No unresolved
+      // threads found" log line (SC-002).
+      if (unresolvedComments.length === 0) {
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            totalUnresolvedThreads: unresolvedThreadCount,
+            untrustedSkips,
+          },
+          'Zero-trusted unresolved threads — retaining waiting-for:address-pr-feedback label (FR-002)',
+        );
+        await clearDedupe(); // FR-006 exit path 2
         return;
       }
 
@@ -270,23 +340,29 @@ export class PrFeedbackHandler {
 
       // 9. Remove label (only if successful, otherwise keep for retry)
       // FR-013: Keep label on timeout/failure to enable retry
+      // #869 / FR-006: clear the dedupe key on BOTH branches (success and
+      // retry). Persistent failure re-enqueues on next monitor poll, bounded
+      // to the poll cadence and diagnosable via the CLI-warn line.
       if (success) {
         await this.removeFeedbackLabel(github, owner, repo, issueNumber);
         this.logger.info(
           { prNumber, issueNumber },
           'PR feedback addressing completed successfully',
         );
+        await clearDedupe(); // FR-006 exit path 3
       } else {
         this.logger.info(
           { prNumber, issueNumber, hasChanges },
           'Keeping waiting-for:address-pr-feedback label for retry (CLI did not complete successfully)',
         );
+        await clearDedupe(); // FR-006 exit path 4
       }
     } catch (error) {
       this.logger.error(
         { error: String(error), prNumber, issueNumber, owner, repo },
         'Error processing PR feedback — task failed',
       );
+      await clearDedupe(); // FR-006 exit path 5
       throw error;
     }
   }
