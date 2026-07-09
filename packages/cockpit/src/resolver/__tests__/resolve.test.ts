@@ -54,6 +54,7 @@ function makeIssue(overrides: Partial<Issue> & { number: number }): Issue {
   return {
     title: `Issue #${overrides.number}`,
     state: 'OPEN',
+    stateReason: null,
     labels: [],
     url: `https://github.com/owner/repo/issues/${overrides.number}`,
     body: '',

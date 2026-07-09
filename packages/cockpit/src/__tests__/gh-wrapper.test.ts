@@ -70,6 +70,7 @@ describe('GhCliWrapper', () => {
         number: 1,
         title: 'A',
         state: 'OPEN',
+        stateReason: null,
         labels: ['phase:plan', 'workflow:speckit-feature'],
         url: 'https://github.com/o/r/issues/1',
         body: 'body',
@@ -152,6 +153,138 @@ describe('GhCliWrapper', () => {
       const { runner } = stubRunner({ exitCode: 1, stderr: 'boom' });
       const wrapper = new GhCliWrapper(runner);
       await expect(wrapper.listIssues('q')).rejects.toThrow(/boom/);
+    });
+
+    it('#873: --json field list includes stateReason (getIssue)', async () => {
+      const { runner, calls } = stubRunner({
+        stdout: JSON.stringify({
+          number: 5,
+          title: 'A',
+          state: 'CLOSED',
+          stateReason: 'COMPLETED',
+          labels: [],
+          url: 'u',
+          body: '',
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      await wrapper.getIssue('o/r', 5);
+      const args = calls[0]?.args ?? [];
+      expect(args).toContain('--json');
+      expect(args).toContain(
+        'number,title,state,stateReason,labels,url,body,author,createdAt',
+      );
+    });
+
+    it("#873: stateReason 'COMPLETED' propagates verbatim through listIssues", async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          {
+            number: 1,
+            title: 'X',
+            state: 'CLOSED',
+            stateReason: 'COMPLETED',
+            labels: [],
+            url: 'u',
+            body: '',
+          },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.stateReason).toBe('COMPLETED');
+    });
+
+    it("#873: stateReason 'NOT_PLANNED' propagates verbatim through listIssues", async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          {
+            number: 1,
+            title: 'X',
+            state: 'CLOSED',
+            stateReason: 'NOT_PLANNED',
+            labels: [],
+            url: 'u',
+            body: '',
+          },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.stateReason).toBe('NOT_PLANNED');
+    });
+
+    it('#873: missing stateReason coerces to null', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          {
+            number: 1,
+            title: 'X',
+            state: 'OPEN',
+            labels: [],
+            url: 'u',
+            body: '',
+          },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.stateReason).toBeNull();
+    });
+
+    it('#873: null stateReason stays null', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          {
+            number: 1,
+            title: 'X',
+            state: 'OPEN',
+            stateReason: null,
+            labels: [],
+            url: 'u',
+            body: '',
+          },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.stateReason).toBeNull();
+    });
+
+    it('#873: unknown stateReason string coerces to null (degrades gracefully)', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify([
+          {
+            number: 1,
+            title: 'X',
+            state: 'CLOSED',
+            stateReason: 'SOME_FUTURE_REASON',
+            labels: [],
+            url: 'u',
+            body: '',
+          },
+        ]),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issues = await wrapper.listIssues('q');
+      expect(issues[0]?.stateReason).toBeNull();
+    });
+
+    it('#873: getIssue propagates stateReason verbatim', async () => {
+      const { runner } = stubRunner({
+        stdout: JSON.stringify({
+          number: 7,
+          title: 'Y',
+          state: 'CLOSED',
+          stateReason: 'NOT_PLANNED',
+          labels: [],
+          url: 'u',
+          body: '',
+        }),
+      });
+      const wrapper = new GhCliWrapper(runner);
+      const issue = await wrapper.getIssue('o/r', 7);
+      expect(issue.stateReason).toBe('NOT_PLANNED');
     });
   });
 

@@ -8,6 +8,8 @@ export interface StatusRow {
   title: string;
   state: CockpitState;
   sourceLabel: string;
+  issueState: 'OPEN' | 'CLOSED';
+  stateReason: 'COMPLETED' | 'NOT_PLANNED' | null;
   prNumber: number | null;
   checks: 'pending' | 'success' | 'failure' | 'none' | 'error';
   url: string;
@@ -16,7 +18,7 @@ export interface StatusRow {
 
 export function buildStatusRow(
   repo: string,
-  issue: Pick<Issue, 'number' | 'title' | 'url'>,
+  issue: Pick<Issue, 'number' | 'title' | 'url' | 'state' | 'stateReason'>,
   classified: ClassifiedIssue,
   kind: 'issue' | 'pr',
   prNumber: number | null,
@@ -30,6 +32,8 @@ export function buildStatusRow(
     title: issue.title,
     state: classified.state,
     sourceLabel: classified.sourceLabel,
+    issueState: issue.state,
+    stateReason: issue.stateReason,
     prNumber,
     checks,
     url: issue.url,
