@@ -35,7 +35,7 @@ function makeFailResult(phase: WorkflowPhase): PhaseResult {
     exitCode: 1,
     durationMs: 50,
     output: [],
-    error: { message: `${phase} failed`, stderr: '', phase },
+    error: { message: `${phase} failed`, output: '', phase },
   };
 }
 
@@ -754,7 +754,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
       output: [],
       error: {
         message: 'Phase "validate" failed with exit code 42',
-        stderr: 'ELIFECYCLE Command failed with exit code 42',
+        output: 'ELIFECYCLE Command failed with exit code 42',
         phase: 'validate',
       },
     };
@@ -767,7 +767,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     expect(errorCall.errorEvidence).toEqual({
       command: 'pnpm install',
       exitDescriptor: 'exit 42',
-      stderrTail: 'ELIFECYCLE Command failed with exit code 42',
+      outputTail: 'ELIFECYCLE Command failed with exit code 42',
     });
   });
 
@@ -785,7 +785,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     expect(errorCall).toBeDefined();
     expect(errorCall.errorEvidence.command).toBe('specify');
     expect(errorCall.errorEvidence.exitDescriptor).toBe('exit 1');
-    expect(errorCall.errorEvidence.stderrTail).toBe('(stderr empty)');
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
   });
 
   it('threads errorEvidence for a post-phase CLI failure (implement)', async () => {
@@ -800,7 +800,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
       output: [],
       error: {
         message: 'Phase "implement" failed with exit code 3',
-        stderr: 'compilation failed\n  at line 5',
+        output: 'compilation failed\n  at line 5',
         phase: 'implement',
       },
     };
@@ -814,7 +814,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     expect(errorCall.errorEvidence).toEqual({
       command: 'implement',
       exitDescriptor: 'exit 3',
-      stderrTail: 'compilation failed\n  at line 5',
+      outputTail: 'compilation failed\n  at line 5',
     });
   });
 
@@ -833,7 +833,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
       output: [],
       error: {
         message: 'Phase "validate" failed with exit code 1',
-        stderr: 'Tests failed: 2 of 5',
+        output: 'Tests failed: 2 of 5',
         phase: 'validate',
       },
     };
@@ -846,7 +846,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     expect(errorCall.errorEvidence).toEqual({
       command: 'npm test && npm run build',
       exitDescriptor: 'exit 1',
-      stderrTail: 'Tests failed: 2 of 5',
+      outputTail: 'Tests failed: 2 of 5',
     });
   });
 
@@ -862,7 +862,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
       output: [],
       error: {
         message: 'Phase "specify" timed out after 900000ms',
-        stderr: 'last log line before kill',
+        output: 'last log line before kill',
         phase: 'specify',
       },
     };
@@ -887,7 +887,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
       output: [],
       error: {
         message: 'Phase "specify" was aborted',
-        stderr: '',
+        output: '',
         phase: 'specify',
       },
     };
@@ -898,7 +898,68 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
 
     const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
     expect(errorCall.errorEvidence.exitDescriptor).toBe('aborted');
-    expect(errorCall.errorEvidence.stderrTail).toBe('(stderr empty)');
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+  });
+
+  it('synthesizes outputTail from type:text chunks for CLI phases (#890)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    const failResult: PhaseResult = {
+      phase: 'implement',
+      success: false,
+      exitCode: 3,
+      durationMs: 50,
+      output: [
+        { type: 'text', data: { text: 'line1' }, timestamp: '2026-07-09T00:00:00.000Z' },
+        { type: 'text', data: { text: 'line2' }, timestamp: '2026-07-09T00:00:01.000Z' },
+      ],
+      error: {
+        message: 'Phase "implement" failed with exit code 3',
+        output: '',
+        phase: 'implement',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.outputTail).toBe('line1\nline2');
+  });
+
+  it('surfaces stdout-only shell failure (SC-001: Next.js Type error synthetic)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm run build',
+    });
+
+    // Fixture models the christrudelpw/sniplink#6 scenario: Next.js writes the
+    // type-check failure to stdout only. The ring buffer in manageProcess
+    // captures it into error.output; buildErrorEvidence bounds it into outputTail.
+    const stdoutOnlyOutput = "Type error: Cannot find module '@/components/CopyButton'";
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: stdoutOnlyOutput,
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.outputTail).toContain("Type error: Cannot find module '@/components/CopyButton'");
   });
 });
 
@@ -988,7 +1049,7 @@ describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
       output: [],
       error: {
         message: 'Phase "validate" failed with exit code 1',
-        stderr: 'missing package.json',
+        output: 'missing package.json',
         phase: 'validate',
       },
     };
@@ -1021,7 +1082,7 @@ describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
       output: [],
       error: {
         message: 'Phase "validate" failed with exit code 1',
-        stderr: 'Tests failed',
+        output: 'Tests failed',
         phase: 'validate',
       },
     };
@@ -1084,7 +1145,7 @@ describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
     const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
     expect(errorCall).toBeDefined();
     expect(errorCall.errorEvidence).toBeDefined();
-    expect(errorCall.errorEvidence.stderrTail).toContain('no progress: tasks_remaining stayed at');
+    expect(errorCall.errorEvidence.outputTail).toContain('no progress: tasks_remaining stayed at');
 
     // postFailureAlert gets the same evidence object
     const alertSpy = deps.stageCommentManager.postFailureAlert as any;
