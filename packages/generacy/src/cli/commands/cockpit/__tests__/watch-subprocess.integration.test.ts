@@ -105,3 +105,134 @@ describe.skipIf(SKIP)('cockpit watch subprocess regression (#836)', () => {
     expect(exitCode).toBe(0);
   }, 60_000);
 });
+
+describe.skipIf(SKIP)('cockpit watch --exit-on-epic-complete (#885)', () => {
+  it('exits 0 after emitting epic-complete as the final stdout line', async () => {
+    if (!existsSync(CLI_PATH)) {
+      throw new Error(
+        `Compiled CLI not found at ${CLI_PATH}. Run \`pnpm --filter @generacy-ai/generacy build\` first.`,
+      );
+    }
+
+    const child = spawn(
+      process.execPath,
+      [
+        CLI_PATH,
+        'cockpit',
+        'watch',
+        FIXTURE_REF,
+        '--interval',
+        String(INTERVAL_FLOOR_MS),
+        '--exit-on-epic-complete',
+      ],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+
+    let stdoutBuf = '';
+    child.stdout.on('data', (chunk: Buffer) => {
+      stdoutBuf += chunk.toString('utf-8');
+    });
+
+    const closed = new Promise<number | null>((res, rej) => {
+      const closeTimer = setTimeout(() => {
+        rej(new Error(`Child did not exit within 45s`));
+      }, 45_000);
+      child.once('close', (code) => {
+        clearTimeout(closeTimer);
+        res(code);
+      });
+    });
+
+    const exitCode = await closed;
+    expect(exitCode).toBe(0);
+
+    const lines = stdoutBuf.split('\n').filter((l) => l.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    const lastLine = lines[lines.length - 1]!;
+    const lastParsed = JSON.parse(lastLine) as { type?: string };
+    expect(lastParsed.type).toBe('epic-complete');
+
+    // No `epic-complete` line may appear anywhere other than as the final line.
+    for (let i = 0; i < lines.length - 1; i++) {
+      const parsed = JSON.parse(lines[i]!) as { type?: string };
+      expect(parsed.type).not.toBe('epic-complete');
+    }
+  }, 60_000);
+
+  it('without --exit-on-epic-complete, keeps polling after epic-complete', async () => {
+    if (!existsSync(CLI_PATH)) {
+      throw new Error(
+        `Compiled CLI not found at ${CLI_PATH}. Run \`pnpm --filter @generacy-ai/generacy build\` first.`,
+      );
+    }
+
+    const child = spawn(
+      process.execPath,
+      [CLI_PATH, 'cockpit', 'watch', FIXTURE_REF, '--interval', String(INTERVAL_FLOOR_MS)],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+
+    let stdoutBuf = '';
+    let stderrBuf = '';
+    child.stdout.on('data', (c: Buffer) => {
+      stdoutBuf += c.toString('utf-8');
+    });
+    child.stderr.on('data', (c: Buffer) => {
+      stderrBuf += c.toString('utf-8');
+    });
+
+    let resolveStartup!: () => void;
+    let rejectStartup!: (err: Error) => void;
+    const startupSeen = new Promise<void>((res, rej) => {
+      resolveStartup = res;
+      rejectStartup = rej;
+    });
+    const stderrProbe = (): void => {
+      if (stderrBuf.includes('cockpit watch: epic ')) resolveStartup();
+    };
+    child.stderr.on('data', stderrProbe);
+
+    const startupTimer = setTimeout(() => {
+      rejectStartup(
+        new Error(`Startup line not seen within ${STARTUP_LINE_TIMEOUT_MS}ms`),
+      );
+    }, STARTUP_LINE_TIMEOUT_MS);
+    try {
+      await startupSeen;
+    } finally {
+      clearTimeout(startupTimer);
+    }
+
+    // Wait long enough for at least one poll cycle to complete and emit
+    // epic-complete, but not so long it exits normally (never does without flag).
+    await new Promise<void>((r) => setTimeout(r, 20_000));
+
+    expect(child.exitCode).toBeNull();
+    expect(child.killed).toBe(false);
+
+    // stdout should contain the epic-complete NDJSON line already
+    const lines = stdoutBuf.split('\n').filter((l) => l.length > 0);
+    const hasEpicComplete = lines.some((l) => {
+      try {
+        const p = JSON.parse(l) as { type?: string };
+        return p.type === 'epic-complete';
+      } catch {
+        return false;
+      }
+    });
+    expect(hasEpicComplete).toBe(true);
+
+    const closed = new Promise<number | null>((res, rej) => {
+      const closeTimer = setTimeout(() => {
+        rej(new Error(`Child did not close within ${CLOSE_TIMEOUT_MS}ms after SIGTERM`));
+      }, CLOSE_TIMEOUT_MS);
+      child.once('close', (code) => {
+        clearTimeout(closeTimer);
+        res(code);
+      });
+    });
+    child.kill('SIGTERM');
+    const exitCode = await closed;
+    expect(exitCode).toBe(0);
+  }, 60_000);
+});
