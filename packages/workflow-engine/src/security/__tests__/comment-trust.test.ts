@@ -19,14 +19,23 @@ function makeLogger(): Logger & { warn: ReturnType<typeof vi.fn> } {
 }
 
 function makeComment(overrides: Partial<Comment>): Comment {
-  return {
+  const base: Comment = {
     id: 1,
     body: 'irrelevant',
     author: 'someone',
     created_at: '2026-07-07T00:00:00Z',
     updated_at: '2026-07-07T00:00:00Z',
-    ...overrides,
+    // #878 default: `false` keeps decision 1.5 quiet in tests that don't
+    // exercise the self-authored path. Tests that need the warn behavior
+    // (S4 / S5) explicitly override to undefined / null.
+    viewerDidAuthor: false,
   };
+  const result = { ...base, ...overrides };
+  // Support explicit `undefined` override — spread copies the key.
+  if ('viewerDidAuthor' in overrides && overrides.viewerDidAuthor === undefined) {
+    delete (result as { viewerDidAuthor?: boolean }).viewerDidAuthor;
+  }
+  return result;
 }
 
 function ctx(overrides?: Partial<CommentTrustContext>): CommentTrustContext & { logger: ReturnType<typeof makeLogger> } {
@@ -212,103 +221,110 @@ describe('isTrustedCommentAuthor', () => {
     });
   });
 
-  describe('cluster-identity (#869 / FR-001)', () => {
-    it('T1: trusts cluster-identity match with authorAssociation=NONE', () => {
+  describe('self-authored via viewerDidAuthor (#878)', () => {
+    it('S1: viewerDidAuthor=true + NONE → trusted self-authored, no warn', () => {
       for (const surface of SURFACES) {
+        const c = ctx();
         const decision = isTrustedCommentAuthor(
-          makeComment({ author: 'cluster-app[bot]', authorAssociation: 'NONE' }),
+          makeComment({ viewerDidAuthor: true, authorAssociation: 'NONE' }),
           surface,
-          ctx({ clusterIdentity: 'cluster-app[bot]' }),
+          c,
         );
-        expect(decision).toEqual({ trusted: true, reason: 'cluster-identity' });
+        expect(decision).toEqual({ trusted: true, reason: 'self-authored' });
+        expect(c.logger.warn).not.toHaveBeenCalled();
       }
     });
 
-    it('T2: cluster-identity wins on decision-order over OWNER tier', () => {
+    it('S2: viewerDidAuthor=false + NONE → none-untrusted, no warn', () => {
+      const c = ctx();
       const decision = isTrustedCommentAuthor(
-        makeComment({ author: 'cluster-app[bot]', authorAssociation: 'OWNER' }),
+        makeComment({ viewerDidAuthor: false, authorAssociation: 'NONE' }),
         'pr-feedback',
-        ctx({ clusterIdentity: 'cluster-app[bot]' }),
-      );
-      expect(decision).toEqual({ trusted: true, reason: 'cluster-identity' });
-    });
-
-    it('T3: unrelated author with NONE tier still untrusted when clusterIdentity set', () => {
-      const decision = isTrustedCommentAuthor(
-        makeComment({ author: 'alice', authorAssociation: 'NONE' }),
-        'pr-feedback',
-        ctx({ clusterIdentity: 'cluster-app[bot]' }),
+        c,
       );
       expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+      expect(c.logger.warn).not.toHaveBeenCalled();
     });
 
-    it('T4: clusterIdentity=undefined preserves pre-#869 behavior byte-for-byte', () => {
+    it('S3: viewerDidAuthor=false + OWNER → owner (association tier still fires)', () => {
+      const c = ctx();
       const decision = isTrustedCommentAuthor(
-        makeComment({ author: 'alice', authorAssociation: 'NONE' }),
+        makeComment({ viewerDidAuthor: false, authorAssociation: 'OWNER' }),
         'pr-feedback',
-        ctx({ clusterIdentity: undefined }),
+        c,
+      );
+      expect(decision).toEqual({ trusted: true, reason: 'owner' });
+      expect(c.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('S4: viewerDidAuthor=undefined + NONE → none-untrusted + one warn', () => {
+      const c = ctx();
+      const decision = isTrustedCommentAuthor(
+        makeComment({ id: 4444, authorAssociation: 'NONE', viewerDidAuthor: undefined }),
+        'pr-feedback',
+        c,
       );
       expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+      expect(c.logger.warn).toHaveBeenCalledTimes(1);
+      const call = c.logger.warn.mock.calls[0]!;
+      expect(call[0]).toMatch(/viewerDidAuthor missing\/non-boolean/i);
+      expect(call[1]).toEqual({ commentId: 4444, observedValue: undefined });
     });
 
-    it('T5: botLogin fires before clusterIdentity when only botLogin matches', () => {
+    it('S5: viewerDidAuthor=null + NONE → none-untrusted + one warn', () => {
+      const c = ctx();
+      // Wire value may bleed through as null on partial-error paths.
+      const comment = makeComment({ id: 5555, authorAssociation: 'NONE' }) as Comment & {
+        viewerDidAuthor: null;
+      };
+      comment.viewerDidAuthor = null;
+      const decision = isTrustedCommentAuthor(comment, 'pr-feedback', c);
+      expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+      expect(c.logger.warn).toHaveBeenCalledTimes(1);
+      const call = c.logger.warn.mock.calls[0]!;
+      expect(call[0]).toMatch(/viewerDidAuthor missing\/non-boolean/i);
+      expect(call[1]).toEqual({ commentId: 5555, observedValue: null });
+    });
+
+    it('S6: botLogin wins over viewerDidAuthor=true (decision 1 fires first)', () => {
       const decision = isTrustedCommentAuthor(
-        makeComment({ author: 'mybot', authorAssociation: 'NONE' }),
+        makeComment({
+          author: 'mybot',
+          authorAssociation: 'NONE',
+          viewerDidAuthor: true,
+        }),
         'pr-feedback',
-        ctx({ botLogin: 'mybot', clusterIdentity: 'alice' }),
+        ctx({ botLogin: 'mybot' }),
       );
       expect(decision).toEqual({ trusted: true, reason: 'bot' });
     });
 
-    it('T6: botLogin wins deterministically when both match same author (collision)', () => {
+    it('S7: rule is surface-agnostic (answer-scanner still trusts self-authored)', () => {
       const decision = isTrustedCommentAuthor(
-        makeComment({ author: 'mybot', authorAssociation: 'NONE' }),
-        'pr-feedback',
-        ctx({ botLogin: 'mybot', clusterIdentity: 'mybot' }),
+        makeComment({ viewerDidAuthor: true, authorAssociation: 'NONE' }),
+        'answer-scanner',
+        ctx(),
       );
-      expect(decision).toEqual({ trusted: true, reason: 'bot' });
+      expect(decision).toEqual({ trusted: true, reason: 'self-authored' });
     });
   });
 
-  // SC-002 — 16-fixture normalization matrix from
-  // specs/874-…/contracts/normalize-login.contract.md. Every
-  // (provisioned, observed) pair must trust the observed comment via the
-  // `cluster-identity` reason (and via the `bot` reason when passed as
-  // botLogin). Also covers the 4 negative fixtures and the empty/edge
-  // inputs.
-  describe('SC-002 normalizeLogin fixture matrix (#874)', () => {
-    const POSITIVE_PAIRS: Array<[string, string]> = [
+  // normalizeLogin coverage — the bot-login path still uses it (decision 1).
+  // Cluster-identity fixture matrix (16 positive + 4 negative) removed in
+  // #878 with the login-comparison self-recognition path.
+  describe('normalizeLogin (bot-login path only after #878)', () => {
+    const BOT_POSITIVE_PAIRS: Array<[string, string]> = [
       ['generacy-ai', 'generacy-ai'],
       ['generacy-ai', 'generacy-ai[bot]'],
       ['generacy-ai[bot]', 'generacy-ai'],
       ['generacy-ai[bot]', 'generacy-ai[bot]'],
       ['Generacy-AI', 'generacy-ai'],
-      ['Generacy-AI', 'generacy-ai[bot]'],
-      ['Generacy-AI[bot]', 'generacy-ai'],
       ['Generacy-AI[bot]', 'generacy-ai[bot]'],
       [' generacy-ai ', 'generacy-ai'],
-      [' generacy-ai ', 'generacy-ai[bot]'],
-      [' generacy-ai[bot] ', 'generacy-ai'],
-      [' generacy-ai[bot] ', 'generacy-ai[bot]'],
-      [' Generacy-AI ', 'generacy-ai'],
-      [' Generacy-AI ', 'generacy-ai[bot]'],
-      [' Generacy-AI[bot] ', 'generacy-ai'],
       [' Generacy-AI[bot] ', 'generacy-ai[bot]'],
     ];
 
-    it.each(POSITIVE_PAIRS)(
-      'cluster-identity pair (%j, %j) resolves to trust reason cluster-identity',
-      (provisioned, observed) => {
-        const decision = isTrustedCommentAuthor(
-          makeComment({ author: observed, authorAssociation: 'NONE' }),
-          'pr-feedback',
-          ctx({ clusterIdentity: provisioned }),
-        );
-        expect(decision).toEqual({ trusted: true, reason: 'cluster-identity' });
-      },
-    );
-
-    it.each(POSITIVE_PAIRS)(
+    it.each(BOT_POSITIVE_PAIRS)(
       'botLogin pair (%j, %j) resolves to trust reason bot',
       (provisioned, observed) => {
         const decision = isTrustedCommentAuthor(
@@ -320,45 +336,14 @@ describe('isTrustedCommentAuthor', () => {
       },
     );
 
-    const NEGATIVE_PAIRS: Array<[string, string]> = [
-      ['generacy-ai', 'generacy-cloud'],
-      ['generacy-ai', 'generacy-ai-staging'],
-      ['generacy-ai[bot]', 'dependabot[bot]'],
-      ['generacy-ai', 'christrudelpw'],
-    ];
-
-    it.each(NEGATIVE_PAIRS)(
-      'cluster-identity negative pair (%j, %j) does not trust as cluster-identity',
-      (provisioned, observed) => {
-        const decision = isTrustedCommentAuthor(
-          makeComment({ author: observed, authorAssociation: 'NONE' }),
-          'pr-feedback',
-          ctx({ clusterIdentity: provisioned }),
-        );
-        expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
-      },
-    );
-
     it.each([
       ['', ''],
       ['   ', ''],
       ['[bot]', ''],
       [' [bot] ', ''],
-      // Contract note: .toLowerCase() runs before the regex, so 'A[BOT]'
-      // becomes 'a[bot]' and the strip fires — final result is 'a'.
       ['A[BOT]', 'a'],
     ])('normalizeLogin(%j) === %j', (input, expected) => {
       expect(normalizeLogin(input)).toBe(expected);
-    });
-
-    it('empty clusterIdentity after normalization does not fire cluster-identity branch', () => {
-      const decision = isTrustedCommentAuthor(
-        makeComment({ author: '', authorAssociation: 'NONE' }),
-        'pr-feedback',
-        ctx({ clusterIdentity: '[bot]' }),
-      );
-      // Both sides normalize to '' — must NOT trust via cluster-identity.
-      expect(decision.reason).not.toBe('cluster-identity');
     });
 
     it('empty botLogin after normalization does not fire bot branch', () => {

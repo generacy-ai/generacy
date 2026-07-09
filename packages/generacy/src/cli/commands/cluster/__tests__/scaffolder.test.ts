@@ -731,72 +731,20 @@ describe('scaffoldEnvFile', () => {
     expect(content).not.toContain('GENERACY_PRE_APPROVED_DEVICE_CODE');
   });
 
-  // #874 / FR-003 acting-login plumbing.
-  describe('CLUSTER_ACTING_LOGIN (#874)', () => {
-    it('omits CLUSTER_ACTING_LOGIN when actingLogin is absent', () => {
-      scaffoldEnvFile(dir, {
-        clusterId: 'c1',
-        projectId: 'p1',
-        orgId: 'o1',
-        cloudUrl: 'https://api.generacy.ai',
-        projectName: 'test',
-      });
-
-      const content = readFileSync(join(dir, '.env'), 'utf-8');
-      expect(content).not.toContain('CLUSTER_ACTING_LOGIN=');
+  // #878: CLUSTER_ACTING_LOGIN is dissolved. The generated .env must never
+  // reference the var — the mechanism it fed (`cluster-identity` trust rule)
+  // is replaced by GraphQL's `viewerDidAuthor` primitive.
+  it('never emits CLUSTER_ACTING_LOGIN in the generated .env (#878)', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
     });
 
-    it('writes a single CLUSTER_ACTING_LOGIN line directly under GENERACY_ORG_ID', () => {
-      scaffoldEnvFile(dir, {
-        clusterId: 'c1',
-        projectId: 'p1',
-        orgId: 'o1',
-        cloudUrl: 'https://api.generacy.ai',
-        projectName: 'test',
-        actingLogin: 'generacy-ai',
-      });
-
-      const content = readFileSync(join(dir, '.env'), 'utf-8');
-      const matches = content.match(/CLUSTER_ACTING_LOGIN=/g) ?? [];
-      expect(matches.length).toBe(1);
-      expect(content).toContain('CLUSTER_ACTING_LOGIN=generacy-ai');
-
-      // Ordering: CLUSTER_ACTING_LOGIN must appear directly under
-      // GENERACY_ORG_ID within the "Identity" section.
-      const lines = content.split('\n');
-      const orgIdx = lines.findIndex((l) => l.startsWith('GENERACY_ORG_ID='));
-      const actingIdx = lines.findIndex((l) => l.startsWith('CLUSTER_ACTING_LOGIN='));
-      expect(orgIdx).toBeGreaterThanOrEqual(0);
-      expect(actingIdx).toBe(orgIdx + 1);
-    });
-
-    it('writes raw actingLogin verbatim (normalization is a container-side concern)', () => {
-      scaffoldEnvFile(dir, {
-        clusterId: 'c1',
-        projectId: 'p1',
-        orgId: 'o1',
-        cloudUrl: 'https://api.generacy.ai',
-        projectName: 'test',
-        actingLogin: ' generacy-ai ',
-      });
-
-      const content = readFileSync(join(dir, '.env'), 'utf-8');
-      expect(content).toContain('CLUSTER_ACTING_LOGIN= generacy-ai ');
-    });
-
-    it('drops CLUSTER_ACTING_LOGIN when actingLogin is whitespace-only', () => {
-      scaffoldEnvFile(dir, {
-        clusterId: 'c1',
-        projectId: 'p1',
-        orgId: 'o1',
-        cloudUrl: 'https://api.generacy.ai',
-        projectName: 'test',
-        actingLogin: '   ',
-      });
-
-      const content = readFileSync(join(dir, '.env'), 'utf-8');
-      expect(content).not.toContain('CLUSTER_ACTING_LOGIN=');
-    });
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).not.toContain('CLUSTER_ACTING_LOGIN');
   });
 });
 

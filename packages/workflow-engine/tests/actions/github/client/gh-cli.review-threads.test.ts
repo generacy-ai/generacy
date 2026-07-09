@@ -29,6 +29,8 @@ describe('GhCliGitHubClient.getPRReviewThreads', () => {
       author?: { login: string } | null;
       authorAssociation?: string | null;
       replyTo?: { databaseId: number } | null;
+      viewerDidAuthor?: boolean | null;
+      omitViewerDidAuthor?: boolean;
     }>;
   }>) {
     return JSON.stringify({
@@ -39,17 +41,23 @@ describe('GhCliGitHubClient.getPRReviewThreads', () => {
               nodes: threads.map(t => ({
                 isResolved: t.isResolved,
                 comments: {
-                  nodes: t.comments.map(c => ({
-                    databaseId: c.databaseId,
-                    body: c.body ?? `placeholder body ${c.databaseId}`,
-                    path: c.path ?? null,
-                    line: c.line ?? null,
-                    createdAt: c.createdAt ?? '2026-07-08T00:00:00Z',
-                    updatedAt: c.updatedAt ?? '2026-07-08T00:00:00Z',
-                    author: c.author ?? { login: 'reviewer' },
-                    authorAssociation: c.authorAssociation ?? 'MEMBER',
-                    replyTo: c.replyTo ?? null,
-                  })),
+                  nodes: t.comments.map(c => {
+                    const node: Record<string, unknown> = {
+                      databaseId: c.databaseId,
+                      body: c.body ?? `placeholder body ${c.databaseId}`,
+                      path: c.path ?? null,
+                      line: c.line ?? null,
+                      createdAt: c.createdAt ?? '2026-07-08T00:00:00Z',
+                      updatedAt: c.updatedAt ?? '2026-07-08T00:00:00Z',
+                      author: c.author ?? { login: 'reviewer' },
+                      authorAssociation: c.authorAssociation ?? 'MEMBER',
+                      replyTo: c.replyTo ?? null,
+                    };
+                    if (!c.omitViewerDidAuthor) {
+                      node.viewerDidAuthor = c.viewerDidAuthor ?? null;
+                    }
+                    return node;
+                  }),
                 },
               })),
             },
@@ -186,6 +194,62 @@ describe('GhCliGitHubClient.getPRReviewThreads', () => {
     const threads = await client.getPRReviewThreads('o', 'r', 42);
     expect(threads[0]!.comments[0]!.in_reply_to_id).toBeUndefined();
     expect(threads[0]!.comments[1]!.in_reply_to_id).toBe(400);
+  });
+
+  it('propagates viewerDidAuthor: true onto the emitted Comment (#878)', async () => {
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      stdout: graphqlResponse([
+        { isResolved: false, comments: [{ databaseId: 700, viewerDidAuthor: true }] },
+      ]),
+      stderr: '',
+    });
+
+    const client = new GhCliGitHubClient('/tmp');
+    const threads = await client.getPRReviewThreads('o', 'r', 42);
+    expect(threads[0]!.comments[0]!.viewerDidAuthor).toBe(true);
+  });
+
+  it('propagates viewerDidAuthor: false onto the emitted Comment (#878)', async () => {
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      stdout: graphqlResponse([
+        { isResolved: false, comments: [{ databaseId: 701, viewerDidAuthor: false }] },
+      ]),
+      stderr: '',
+    });
+
+    const client = new GhCliGitHubClient('/tmp');
+    const threads = await client.getPRReviewThreads('o', 'r', 42);
+    expect(threads[0]!.comments[0]!.viewerDidAuthor).toBe(false);
+  });
+
+  it('leaves viewerDidAuthor undefined when the field is null (#878)', async () => {
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      stdout: graphqlResponse([
+        { isResolved: false, comments: [{ databaseId: 702, viewerDidAuthor: null }] },
+      ]),
+      stderr: '',
+    });
+
+    const client = new GhCliGitHubClient('/tmp');
+    const threads = await client.getPRReviewThreads('o', 'r', 42);
+    expect('viewerDidAuthor' in threads[0]!.comments[0]!).toBe(false);
+  });
+
+  it('leaves viewerDidAuthor undefined when the field is missing (#878)', async () => {
+    mockExecuteCommand.mockResolvedValue({
+      exitCode: 0,
+      stdout: graphqlResponse([
+        { isResolved: false, comments: [{ databaseId: 703, omitViewerDidAuthor: true }] },
+      ]),
+      stderr: '',
+    });
+
+    const client = new GhCliGitHubClient('/tmp');
+    const threads = await client.getPRReviewThreads('o', 'r', 42);
+    expect('viewerDidAuthor' in threads[0]!.comments[0]!).toBe(false);
   });
 
   it('does not populate Comment.resolved on emitted comments', async () => {

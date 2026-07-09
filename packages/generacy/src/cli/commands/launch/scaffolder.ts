@@ -111,7 +111,6 @@ export function scaffoldProject(
       ? { apiUrl: config.cloud.apiUrl, relayUrl: config.cloud.relayUrl }
       : undefined,
     preApprovedDeviceCode: config.preApprovedDeviceCode,
-    actingLogin: config.actingLogin,
   });
 
   preCreateClaudeJson();

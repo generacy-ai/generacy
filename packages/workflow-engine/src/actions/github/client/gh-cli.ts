@@ -494,6 +494,7 @@ export class GhCliGitHubClient implements GitHubClient {
               author { login }
               authorAssociation
               replyTo { databaseId }
+              viewerDidAuthor
             }
           }
         }
@@ -532,6 +533,7 @@ export class GhCliGitHubClient implements GitHubClient {
                     author: { login: string } | null;
                     authorAssociation: string | null;
                     replyTo: { databaseId: number } | null;
+                    viewerDidAuthor: boolean | null;
                   }>;
                 };
               }>;
@@ -563,6 +565,9 @@ export class GhCliGitHubClient implements GitHubClient {
         }
         if (c.authorAssociation !== null && c.authorAssociation !== undefined) {
           comment.authorAssociation = c.authorAssociation;
+        }
+        if (c.viewerDidAuthor !== null && c.viewerDidAuthor !== undefined) {
+          comment.viewerDidAuthor = c.viewerDidAuthor;
         }
         return comment;
       });

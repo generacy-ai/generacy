@@ -1,7 +1,6 @@
 import {
   createGitHubClient,
   isTrustedCommentAuthor,
-  normalizeLogin,
   tryLoadCommentTrustConfig,
   wrapUntrustedData,
 } from '@generacy-ai/workflow-engine';
@@ -76,7 +75,6 @@ export class PrFeedbackHandler {
     private readonly logger: Logger,
     private readonly agentLauncher: AgentLauncher,
     private readonly phaseTracker: PhaseTracker,
-    private readonly clusterIdentity: string | undefined,
     private readonly sseEmitter?: SSEEventEmitter,
   ) {
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
@@ -115,20 +113,6 @@ export class PrFeedbackHandler {
           'Failed to clear PR-feedback dedupe key — non-fatal',
         );
       });
-
-    // #869 / FR-007 (updated #874 / FR-006): degraded-identity mode — if
-    // the acting identity could not be resolved, log at error level
-    // naming the new single-source chain. Association-tier trust still
-    // applies; cluster-identity match (decision 1.5) simply never fires.
-    if (!this.clusterIdentity) {
-      this.logger.error(
-        {
-          triedChain: ['CLUSTER_ACTING_LOGIN'],
-          prNumber, owner, repo, issueNumber,
-        },
-        'Acting identity unresolvable at handler runtime — cluster-identity trust rule will not fire; tier-based trust still applies.',
-      );
-    }
 
     // Create GitHub client scoped to checkout path
     const github = createGitHubClient(checkoutPath);
@@ -171,6 +155,7 @@ export class PrFeedbackHandler {
         author: string;
         authorAssociation: string | undefined;
         reason: string;
+        viewerDidAuthor?: boolean;
       }>;
       try {
         const threads = await github.getPRReviewThreads(owner, repo, prNumber);
@@ -179,11 +164,11 @@ export class PrFeedbackHandler {
         unresolvedThreadCount = unresolvedThreads.length;
         const unresolvedThreadComments = unresolvedThreads.flatMap(t => t.comments);
 
-        // Author-trust gating (#842, #869). Log each skip and drop untrusted
-        // comments before the CLI ever sees them. `pr-feedback` surface
-        // honors widen-config from .agency/comment-trust.yaml. #869: also
-        // honors `clusterIdentity` so the cluster's own cockpit-posted
-        // reviews (author_association: NONE) are trusted.
+        // Author-trust gating (#842, #869, #878). Log each skip and drop
+        // untrusted comments before the CLI ever sees them. `pr-feedback`
+        // surface honors widen-config from .agency/comment-trust.yaml. #878:
+        // self-authorship comes from GraphQL's `viewerDidAuthor` field on
+        // each comment, not a login-comparison rule threaded via context.
         const trustConfig = tryLoadCommentTrustConfig(checkoutPath, this.logger);
         const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
         const trustedUnresolved: Comment[] = [];
@@ -195,7 +180,6 @@ export class PrFeedbackHandler {
             {
               logger: this.logger,
               ...(botLogin ? { botLogin } : {}),
-              ...(this.clusterIdentity ? { clusterIdentity: this.clusterIdentity } : {}),
               ...(trustConfig ? { config: trustConfig } : {}),
             },
           );
@@ -207,8 +191,8 @@ export class PrFeedbackHandler {
               author: c.author,
               authorAssociation: c.authorAssociation,
               reason: decision.reason,
+              viewerDidAuthor: c.viewerDidAuthor,
             });
-            // #874 / FR-005 Site 3: include normalized-form pair.
             this.logger.info(
               {
                 event: 'comment-skipped',
@@ -217,11 +201,7 @@ export class PrFeedbackHandler {
                 author: c.author,
                 authorAssociation: c.authorAssociation,
                 reason: decision.reason,
-                normalizedAuthor: normalizeLogin(c.author),
-                clusterIdentity: this.clusterIdentity ?? null,
-                normalizedClusterIdentity: this.clusterIdentity
-                  ? normalizeLogin(this.clusterIdentity)
-                  : null,
+                viewerDidAuthor: c.viewerDidAuthor ?? null,
               },
               'Skipped PR review comment from untrusted author',
             );
@@ -267,21 +247,16 @@ export class PrFeedbackHandler {
       // re-enqueue if the situation changes. Do NOT emit the "No unresolved
       // threads found" log line (SC-002).
       if (unresolvedComments.length === 0) {
-        // #874 / FR-005 Site 2: include normalized-form pair on the
-        // top-level context and per-skip normalizedAuthor.
-        const clusterIdentity = this.clusterIdentity ?? null;
-        const normalizedClusterIdentity = this.clusterIdentity
-          ? normalizeLogin(this.clusterIdentity)
-          : null;
         this.logger.warn(
           {
             prNumber, issueNumber, owner, repo,
             totalUnresolvedThreads: unresolvedThreadCount,
-            clusterIdentity,
-            normalizedClusterIdentity,
             untrustedSkips: untrustedSkips.map((s) => ({
-              ...s,
-              normalizedAuthor: normalizeLogin(s.author),
+              commentId: s.commentId,
+              author: s.author,
+              authorAssociation: s.authorAssociation,
+              reason: s.reason,
+              viewerDidAuthor: s.viewerDidAuthor ?? null,
             })),
           },
           'Zero-trusted unresolved threads — retaining waiting-for:address-pr-feedback label (FR-002)',
