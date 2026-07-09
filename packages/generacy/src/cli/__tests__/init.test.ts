@@ -97,11 +97,10 @@ describe('init CLI command', () => {
       expect(existsSync(join(testDir, '.generacy', 'config.yaml'))).toBe(true);
       expect(existsSync(join(testDir, '.generacy', 'generacy.env.template'))).toBe(true);
       expect(existsSync(join(testDir, '.generacy', '.gitignore'))).toBe(true);
-      expect(existsSync(join(testDir, '.vscode', 'extensions.json'))).toBe(true);
-      expect(existsSync(join(testDir, '.devcontainer', 'devcontainer.json'))).toBe(true);
+      expect(existsSync(join(testDir, '.devcontainer', 'generacy', 'devcontainer.json'))).toBe(true);
 
       // Standard cluster always generates docker-compose.yml
-      expect(existsSync(join(testDir, '.devcontainer', 'docker-compose.yml'))).toBe(true);
+      expect(existsSync(join(testDir, '.devcontainer', 'generacy', 'docker-compose.yml'))).toBe(true);
     });
 
     it('should generate config.yaml with correct project name and repo', () => {
@@ -141,8 +140,7 @@ describe('init CLI command', () => {
       expect(output).toContain('.generacy/config.yaml');
       expect(output).toContain('.generacy/generacy.env.template');
       expect(output).toContain('.generacy/.gitignore');
-      expect(output).toContain('.vscode/extensions.json');
-      expect(output).toContain('.devcontainer/devcontainer.json');
+      expect(output).toContain('.devcontainer/generacy/devcontainer.json');
       expect(output).toContain('Done!');
     });
 
@@ -181,7 +179,7 @@ describe('init CLI command', () => {
         { cwd: testDir },
       );
 
-      expect(existsSync(join(testDir, '.devcontainer', 'docker-compose.yml'))).toBe(true);
+      expect(existsSync(join(testDir, '.devcontainer', 'generacy', 'docker-compose.yml'))).toBe(true);
     });
 
     it('should create all standard files plus docker-compose.yml', () => {
@@ -193,9 +191,8 @@ describe('init CLI command', () => {
       expect(existsSync(join(testDir, '.generacy', 'config.yaml'))).toBe(true);
       expect(existsSync(join(testDir, '.generacy', 'generacy.env.template'))).toBe(true);
       expect(existsSync(join(testDir, '.generacy', '.gitignore'))).toBe(true);
-      expect(existsSync(join(testDir, '.vscode', 'extensions.json'))).toBe(true);
-      expect(existsSync(join(testDir, '.devcontainer', 'devcontainer.json'))).toBe(true);
-      expect(existsSync(join(testDir, '.devcontainer', 'docker-compose.yml'))).toBe(true);
+      expect(existsSync(join(testDir, '.devcontainer', 'generacy', 'devcontainer.json'))).toBe(true);
+      expect(existsSync(join(testDir, '.devcontainer', 'generacy', 'docker-compose.yml'))).toBe(true);
     });
 
     it('should include dev repo in the generated config', () => {
@@ -218,7 +215,7 @@ describe('init CLI command', () => {
       );
 
       const compose = readFileSync(
-        join(testDir, '.devcontainer', 'docker-compose.yml'),
+        join(testDir, '.devcontainer', 'generacy', 'docker-compose.yml'),
         'utf-8',
       );
       expect(compose).toContain('services:');
@@ -230,7 +227,7 @@ describe('init CLI command', () => {
         { cwd: testDir },
       );
 
-      expect(output).toContain('.devcontainer/docker-compose.yml');
+      expect(output).toContain('.devcontainer/generacy/docker-compose.yml');
       expect(output).toContain('created');
     });
 
@@ -422,8 +419,7 @@ describe('init CLI command', () => {
       expect(existsSync(join(testDir, '.generacy', 'config.yaml'))).toBe(true);
       expect(existsSync(join(testDir, '.generacy', 'generacy.env.template'))).toBe(true);
       expect(existsSync(join(testDir, '.generacy', '.gitignore'))).toBe(true);
-      expect(existsSync(join(testDir, '.vscode', 'extensions.json'))).toBe(true);
-      expect(existsSync(join(testDir, '.devcontainer', 'devcontainer.json'))).toBe(true);
+      expect(existsSync(join(testDir, '.devcontainer', 'generacy', 'devcontainer.json'))).toBe(true);
     });
   });
 

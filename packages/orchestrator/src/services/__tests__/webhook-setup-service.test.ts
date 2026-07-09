@@ -65,10 +65,11 @@ describe('WebhookSetupService', () => {
       ]);
 
       // Assert
-      expect(executeCommandMock).toHaveBeenCalledWith('gh', [
-        'api',
-        '/repos/testorg/testrepo/hooks',
-      ]);
+      expect(executeCommandMock).toHaveBeenCalledWith(
+        'gh',
+        ['api', '/repos/testorg/testrepo/hooks'],
+        expect.anything(),
+      );
       expect(result.total).toBe(1);
       expect(result.skipped).toBe(1); // Webhook already exists and is active
       expect(result.created).toBe(0);
@@ -418,7 +419,8 @@ describe('WebhookSetupService', () => {
           'api',
           'PATCH',
           '/repos/testorg/testrepo/hooks/123',
-        ])
+        ]),
+        expect.anything(),
       );
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -929,7 +931,8 @@ describe('WebhookSetupService', () => {
           'api',
           'PATCH',
           '/repos/testorg/testrepo/hooks/123',
-        ])
+        ]),
+        expect.anything(),
       );
       // Events should be deduplicated (issues + push)
       expect(mockLogger.info).toHaveBeenCalledWith(
@@ -1050,17 +1053,21 @@ describe('WebhookSetupService', () => {
       ]);
 
       // Assert - verify the exact PATCH command structure
-      expect(executeCommandMock).toHaveBeenCalledWith('gh', [
-        'api',
-        '-X', 'PATCH',
-        '/repos/testorg/testrepo/hooks/456',
-        '-F',
-        'active=true',
-        '-F',
-        'events[]=push',
-        '-F',
-        'events[]=issues',
-      ]);
+      expect(executeCommandMock).toHaveBeenCalledWith(
+        'gh',
+        [
+          'api',
+          '-X', 'PATCH',
+          '/repos/testorg/testrepo/hooks/456',
+          '-F',
+          'active=true',
+          '-F',
+          'events[]=push',
+          '-F',
+          'events[]=issues',
+        ],
+        expect.anything(),
+      );
     });
 
     it('should handle reactivation with duplicate events correctly', async () => {

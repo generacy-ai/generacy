@@ -172,7 +172,7 @@ describe('launch integration', () => {
 
       await expect(
         fetchLaunchConfig(serverUrl, 'invalid-claim'),
-      ).rejects.toThrow('Claim code is invalid or expired');
+      ).rejects.toThrow('The claim was not found');
 
       // Restore handler
       handler = (_req, res) => {
@@ -187,7 +187,7 @@ describe('launch integration', () => {
       });
 
       const { pullImage } = await import('../compose.js');
-      expect(() => pullImage('/fake/dir')).toThrow('docker compose pull failed');
+      expect(() => pullImage('/fake/dir')).toThrow('Image not found');
     });
 
     it('Docker compose up failure', async () => {

@@ -14,6 +14,16 @@
  * issue (has a `### Execution` heading with a ref-shaped task-list child).
  * Override via `WATCH_SUBPROCESS_FIXTURE_REF` if a different fixture is
  * preferred in CI.
+ *
+ * This is a network/gh-bound integration test (it drives `cockpit watch`,
+ * which fetches the epic from GitHub via `gh`). Per specs/871 it therefore
+ * lives under the `*.integration.test.ts` convention — excluded from the
+ * default unit suite and run only by the blocking `integration` CI job, which
+ * provisions `GH_TOKEN` (analogous to how the orchestrator integration tests
+ * are provisioned a Redis service). The skip guard keys off `GH_TOKEN` so the
+ * outcome is deterministic: it runs wherever GitHub auth is present and cleanly
+ * skips where it is not (e.g. a bare `pnpm test:integration` with no token),
+ * rather than hard-failing when `CI` is set but no auth was provisioned.
  */
 import { describe, it, expect } from 'vitest';
 import { spawn } from 'node:child_process';
@@ -25,7 +35,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 // bin/generacy.js is the real CLI entry — it dynamically imports dist/cli/index.js.
 const CLI_PATH = resolve(HERE, '../../../../../bin/generacy.js');
 const FIXTURE_REF = process.env['WATCH_SUBPROCESS_FIXTURE_REF'] ?? 'generacy-ai/latency#31';
-const SKIP = process.env['CI'] == null && process.env['GH_TOKEN'] == null;
+const SKIP = process.env['GH_TOKEN'] == null;
 
 const STARTUP_LINE_TIMEOUT_MS = 15_000;
 const ALIVE_CHECK_MS = 5_000;
