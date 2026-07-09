@@ -17,7 +17,7 @@ export type TrustReason =
   | 'member'
   | 'collaborator'
   | 'bot'
-  | 'cluster-identity'
+  | 'self-authored'
   | 'widened-tier'
   | 'widened-login'
   | 'none-untrusted'
@@ -35,15 +35,6 @@ export interface TrustDecision {
 
 export interface CommentTrustContext {
   botLogin?: string;
-  /**
-   * Resolved cluster GitHub identity — the acting account the cockpit posts
-   * reviews as. Distinct from `botLogin` so SC-005's grep audit can
-   * distinguish "trusted because cluster identity" from "trusted because
-   * bot". Populated by callers from `resolveClusterIdentity()`. May be
-   * `undefined` on degraded clusters — the predicate treats absence as
-   * "no cluster-identity trust rule fires".
-   */
-  clusterIdentity?: string;
   config?: CommentTrustConfig;
   logger: Logger;
 }
@@ -106,15 +97,22 @@ export function isTrustedCommentAuthor(
     }
   }
 
-  // 1.5 Cluster-identity match (#869 / FR-001) — fires before the tier gate
-  //     so `author_association: NONE` on the cluster's own cockpit-posted
-  //     review is trusted. Normalization mirrors the bot-login path.
-  if (ctx.clusterIdentity) {
-    const normalizedCluster = normalizeLogin(ctx.clusterIdentity);
-    const normalizedAuthor = normalizeLogin(comment.author);
-    if (normalizedCluster !== '' && normalizedCluster === normalizedAuthor) {
-      return { trusted: true, reason: 'cluster-identity' };
-    }
+  // 1.5 Self-authored comment (#878) — replaces the login-comparison
+  //     cluster-identity path from #869/#874. Uses GraphQL's viewerDidAuthor
+  //     primitive, which is keyed on the authenticated App identity and is
+  //     stable across installation-token rotation. The warn on non-boolean
+  //     values (Q3→D) is scoped to the `pr-feedback` surface per FR-002 —
+  //     only that surface populates the field via `getPRReviewThreads()`,
+  //     so a missing value on other surfaces is a by-design absence, not
+  //     shape drift.
+  if (comment.viewerDidAuthor === true) {
+    return { trusted: true, reason: 'self-authored' };
+  }
+  if (surface === 'pr-feedback' && comment.viewerDidAuthor !== false) {
+    ctx.logger.warn(
+      'viewerDidAuthor missing/non-boolean on comment; treating as not self-authored',
+      { commentId: comment.id, observedValue: comment.viewerDidAuthor },
+    );
   }
 
   const tier = comment.authorAssociation;

@@ -51,13 +51,6 @@ export interface ScaffoldEnvInput {
   orchestratorPort?: number;
   cloud?: { apiUrl: string; relayUrl: string };
   preApprovedDeviceCode?: string;
-  /**
-   * #874: App-bot login used by the `cluster-identity` trust rule. When
-   * set, `CLUSTER_ACTING_LOGIN=<value>` is written to `.env` under the
-   * identity section. When absent, no line is written — the orchestrator's
-   * FR-006 error log names the missing var at boot.
-   */
-  actingLogin?: string;
 }
 
 /**
@@ -341,21 +334,12 @@ export function scaffoldEnvFile(dir: string, input: ScaffoldEnvInput): void {
   const workers = input.workers ?? 1;
   const port = input.orchestratorPort ?? 3100;
 
-  // #874 FR-003: acting login is emitted only when set (post-trim). Empty /
-  // whitespace-only values are dropped; raw value is otherwise written
-  // verbatim (normalization is a container-side concern).
-  const actingLoginLines =
-    input.actingLogin && input.actingLogin.trim() !== ''
-      ? [`CLUSTER_ACTING_LOGIN=${input.actingLogin}`]
-      : [];
-
   const lines = [
     '# Identity (from cloud LaunchConfig — do not edit)',
     `GENERACY_CLUSTER_ID=${input.clusterId}`,
     ...(input.clusterName ? [`GENERACY_CLUSTER_NAME=${input.clusterName}`] : []),
     `GENERACY_PROJECT_ID=${input.projectId}`,
     `GENERACY_ORG_ID=${input.orgId}`,
-    ...actingLoginLines,
     `GENERACY_API_URL=${apiUrl}`,
     `GENERACY_RELAY_URL=${relayUrl}`,
     '',

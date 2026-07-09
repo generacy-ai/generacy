@@ -2338,30 +2338,20 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   });
 
   // ==========================================================================
-  // #869 (T031): christrudelpw/sniplink#4 / PR #14 regression scenario.
-  // Cluster-identity author on an unresolved thread with author_association=NONE
-  // must be treated as trusted; the loop must enqueue and the handler must
-  // process it without emitting comment-skipped for that comment.
+  // #878 SC-001: self-authored cluster comment (viewerDidAuthor:true) on an
+  // unresolved thread with author_association=NONE reaches the worker path.
+  // Direct replacement for the #869 login-comparison regression scenario —
+  // the mechanism is now GraphQL's viewerDidAuthor primitive.
   // ==========================================================================
-  it('#869: cluster-identity comment with NONE tier reaches the worker path', async () => {
-    // Trust-mock: simulate the real cluster-identity decision so the monitor's
-    // pre-enqueue trust filter treats the cluster author as trusted.
+  it('#878: self-authored (viewerDidAuthor:true) comment with NONE tier reaches the worker path', async () => {
+    // Trust-mock: simulate the real #878 decision — viewerDidAuthor:true
+    // trusts as 'self-authored', association-tier trust still applies.
     const workflowEngine = await import('@generacy-ai/workflow-engine');
     const originalMock = (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).getMockImplementation();
-    // #874: mirror the production predicate's normalization branch. Both
-    // sides of the cluster-identity equality go through the same
-    // `raw.trim().toLowerCase().replace(/\[bot\]$/, '')` pipeline. Empty
-    // result after normalization does not match.
-    const normalizeLoginLocal = (raw: string) =>
-      raw.trim().toLowerCase().replace(/\[bot\]$/, '');
     (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(
-      (comment: { author: string; authorAssociation?: string }, _surface: string, ctx: { clusterIdentity?: string }) => {
-        if (ctx.clusterIdentity) {
-          const normalizedCluster = normalizeLoginLocal(ctx.clusterIdentity);
-          const normalizedAuthor = normalizeLoginLocal(comment.author);
-          if (normalizedCluster !== '' && normalizedCluster === normalizedAuthor) {
-            return { trusted: true, reason: 'cluster-identity' };
-          }
+      (comment: { author: string; authorAssociation?: string; viewerDidAuthor?: boolean }) => {
+        if (comment.viewerDidAuthor === true) {
+          return { trusted: true, reason: 'self-authored' };
         }
         if (comment.authorAssociation && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(comment.authorAssociation)) {
           return { trusted: true, reason: comment.authorAssociation.toLowerCase() };
@@ -2401,6 +2391,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
           body: 'please tweak this',
           author: 'cluster-app[bot]',
           authorAssociation: 'NONE',
+          viewerDidAuthor: true,
           created_at: '',
           updated_at: '',
           path: 'src/x.ts',
@@ -2417,14 +2408,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       queueAdapter,
       { enabled: true, pollIntervalMs: 60000, adaptivePolling: false, maxConcurrentPolls: 1 },
       [{ owner: 'christrudelpw', repo: 'sniplink' }],
-      // clusterGithubUsername — assignee filtering. Kept as-is so the
-      // linked-issue assignee check passes.
-      'cluster-app[bot]',
-      undefined,
-      undefined,
-      undefined,
-      // #874: actingIdentity — trust context source. Must be set for the
-      // `cluster-identity` branch to fire.
       'cluster-app[bot]',
     );
 
@@ -2444,7 +2427,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       expect.stringContaining('PR feedback work enqueued'),
     );
 
-    // Cluster-identity author must NOT appear in comment-skipped log lines.
+    // Self-authored comment must NOT appear in comment-skipped log lines.
     const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
     const skipped = infoCalls.find(([meta]) =>
       typeof meta === 'object' && meta !== null && (meta as Record<string, unknown>).event === 'comment-skipped',
@@ -2452,113 +2435,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(skipped).toBeUndefined();
 
     // Restore the blanket-trust mock for later tests.
-    if (originalMock) {
-      (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(originalMock);
-    } else {
-      (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockReturnValue({ trusted: true, reason: 'owner' });
-    }
-    svc.stopPolling();
-  });
-
-  // #874: end-to-end normalization proof — provisioned identity has NO
-  // `[bot]` suffix (`generacy-ai`), REST-shaped author DOES (`generacy-ai[bot]`).
-  // The normalization pipeline must resolve equality and route through
-  // the enqueue path without any comment-skipped log line.
-  it('#874: [bot] suffix mismatch normalizes correctly end-to-end', async () => {
-    const workflowEngine = await import('@generacy-ai/workflow-engine');
-    const originalMock = (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).getMockImplementation();
-    const normalizeLoginLocal = (raw: string) =>
-      raw.trim().toLowerCase().replace(/\[bot\]$/, '');
-    (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(
-      (comment: { author: string; authorAssociation?: string }, _surface: string, ctx: { clusterIdentity?: string }) => {
-        if (ctx.clusterIdentity) {
-          const nc = normalizeLoginLocal(ctx.clusterIdentity);
-          const na = normalizeLoginLocal(comment.author);
-          if (nc !== '' && nc === na) {
-            return { trusted: true, reason: 'cluster-identity' };
-          }
-        }
-        return { trusted: false, reason: 'none-untrusted' };
-      },
-    );
-
-    const logger = createMockLogger();
-    const queueAdapter: QueueAdapter = {
-      enqueue: vi.fn().mockResolvedValue(undefined),
-    } as unknown as QueueAdapter;
-    const phaseTracker = {
-      isDuplicate: vi.fn().mockResolvedValue(false),
-      markProcessed: vi.fn().mockResolvedValue(undefined),
-      clear: vi.fn().mockResolvedValue(undefined),
-      tryMarkProcessed: vi.fn().mockResolvedValue(true),
-    };
-    const clientFactory = vi.fn().mockReturnValue(mockGitHub);
-
-    mockGitHub.getIssue.mockResolvedValue({
-      number: 4,
-      title: 'sniplink test',
-      body: '',
-      state: 'open',
-      labels: [{ name: 'agent:in-progress', color: '' }],
-      // Assignee filtering keys off `clusterGithubUsername` (unchanged
-      // pre-#874 behavior). Use a distinct login here to demonstrate the
-      // acting-identity vs. assignee separation.
-      assignees: ['christrudelpw'],
-      created_at: '',
-      updated_at: '',
-    });
-    mockGitHub.getPRReviewThreads.mockResolvedValue([
-      {
-        rootCommentId: 1000,
-        isResolved: false,
-        comments: [{
-          id: 1000,
-          body: 'REST-shaped author with [bot] suffix',
-          author: 'generacy-ai[bot]',
-          authorAssociation: 'NONE',
-          created_at: '',
-          updated_at: '',
-          path: 'src/x.ts',
-          line: 1,
-        }],
-      },
-    ]);
-    mockGitHub.addLabels.mockResolvedValue(undefined);
-
-    const svc = new PrFeedbackMonitorService(
-      logger,
-      clientFactory,
-      phaseTracker,
-      queueAdapter,
-      { enabled: true, pollIntervalMs: 60000, adaptivePolling: false, maxConcurrentPolls: 1 },
-      [{ owner: 'christrudelpw', repo: 'sniplink' }],
-      'christrudelpw',
-      undefined,
-      undefined,
-      undefined,
-      // Provisioned WITHOUT `[bot]` — the container-side value written by
-      // the scaffolder. REST author HAS `[bot]`. Both sides normalize to
-      // `generacy-ai` and the cluster-identity branch fires.
-      'generacy-ai',
-    );
-
-    const result = await svc.processPrReviewEvent({
-      owner: 'christrudelpw',
-      repo: 'sniplink',
-      prNumber: 14,
-      prBody: 'Closes #4',
-      branchName: '4-add-tests',
-      source: 'webhook',
-    });
-
-    expect(result).toBe(true);
-    expect(queueAdapter.enqueue).toHaveBeenCalled();
-    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
-    const skipped = infoCalls.find(([meta]) =>
-      typeof meta === 'object' && meta !== null && (meta as Record<string, unknown>).event === 'comment-skipped',
-    );
-    expect(skipped).toBeUndefined();
-
     if (originalMock) {
       (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(originalMock);
     } else {

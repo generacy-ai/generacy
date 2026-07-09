@@ -185,7 +185,6 @@ describe('PrFeedbackHandler', () => {
       mockLogger,
       agentLauncher,
       createStubPhaseTracker(),
-      undefined,
     );
 
     // Default mock implementations
@@ -796,7 +795,6 @@ describe('PrFeedbackHandler', () => {
         mockLogger,
         agentLauncher,
         createStubPhaseTracker(),
-        undefined,
       );
 
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
@@ -848,7 +846,6 @@ describe('PrFeedbackHandler', () => {
         mockLogger,
         agentLauncher,
         createStubPhaseTracker(),
-        undefined,
       );
 
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
@@ -880,10 +877,13 @@ describe('PrFeedbackHandler', () => {
   });
 
   // ==========================================================================
-  // #869 / FR-006: dedupe-clear invariant + FR-007 degraded identity
+  // #869 / FR-006: dedupe-clear invariant.
+  //   #878: the FR-007 degraded-identity error log block and the
+  //   cluster-identity constructor threading were both deleted. Tests
+  //   H7 / H7b that exercised the login-comparison chain are removed.
   // ==========================================================================
   describe('dedupe-clear invariant (#869)', () => {
-    async function buildHandler(phaseTracker = createStubPhaseTracker(), clusterIdentity?: string) {
+    async function buildHandler(phaseTracker = createStubPhaseTracker()) {
       const launcherFactory = new RecordingProcessFactory(0);
       const agentLauncher = new AgentLauncher(
         new Map([['default', launcherFactory]]),
@@ -894,7 +894,6 @@ describe('PrFeedbackHandler', () => {
         mockLogger,
         agentLauncher,
         phaseTracker,
-        clusterIdentity,
       );
       return { handler: localHandler, phaseTracker };
     }
@@ -930,10 +929,19 @@ describe('PrFeedbackHandler', () => {
       const removeCallMessages = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
         .map((c) => String(c[1] ?? ''));
       expect(removeCallMessages.every((m) => !m.includes('No unresolved threads found'))).toBe(true);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ totalUnresolvedThreads: 1 }),
-        expect.stringContaining('Zero-trusted unresolved threads'),
+      // #878 evidence shape: no top-level clusterIdentity /
+      // normalizedClusterIdentity; per-skip carries viewerDidAuthor.
+      const warnCall = (mockLogger.warn as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => typeof c[1] === 'string' && c[1].includes('Zero-trusted unresolved threads'),
       );
+      expect(warnCall).toBeDefined();
+      expect(warnCall![0]).toEqual(expect.objectContaining({ totalUnresolvedThreads: 1 }));
+      expect(warnCall![0]).not.toHaveProperty('clusterIdentity');
+      expect(warnCall![0]).not.toHaveProperty('normalizedClusterIdentity');
+      expect(warnCall![0].untrustedSkips[0]).toEqual(
+        expect.objectContaining({ viewerDidAuthor: null }),
+      );
+      expect(warnCall![0].untrustedSkips[0]).not.toHaveProperty('normalizedAuthor');
 
       // Restore mock for later tests.
       (isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
@@ -949,10 +957,9 @@ describe('PrFeedbackHandler', () => {
       expect(phaseTracker.clear).toHaveBeenCalledWith('test-owner', 'test-repo', 42, 'address-pr-feedback');
     });
 
-    it('H7b: `Generacy-AI` provisioned + REST/GraphQL author variants both resolve via cluster-identity (#874)', async () => {
-      // Use the real normalizeLogin-aware isTrustedCommentAuthor for this
-      // test so we exercise the normalization pipeline end-to-end. The
-      // mock at module scope must be restored after this test.
+    it('H7c: self-authored via viewerDidAuthor:true → trusted, no zero-trusted warn (#878)', async () => {
+      // Use the real trust predicate to exercise the viewerDidAuthor path
+      // end-to-end. Restore the module mock in finally.
       const workflowEngine = await import('@generacy-ai/workflow-engine');
       const real = await vi.importActual<typeof import('@generacy-ai/workflow-engine')>(
         '@generacy-ai/workflow-engine',
@@ -961,36 +968,18 @@ describe('PrFeedbackHandler', () => {
         .mockImplementation(real.isTrustedCommentAuthor);
 
       try {
-        const { handler: localHandler } = await buildHandler(
-          createStubPhaseTracker(),
-          'Generacy-AI',
-        );
+        const { handler: localHandler } = await buildHandler();
 
-        // Two review threads: one REST-shaped author, one GraphQL-shaped.
-        // Both should trust via cluster-identity (post-normalization equal
-        // to 'generacy-ai'), so we do NOT hit the zero-trusted retention
-        // warn.
         mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
           {
             rootCommentId: 401,
             isResolved: false,
             comments: [{
               id: 401,
-              body: 'REST shape',
-              author: 'generacy-ai[bot]',
-              authorAssociation: 'NONE',
-              created_at: '',
-              updated_at: '',
-            }],
-          },
-          {
-            rootCommentId: 402,
-            isResolved: false,
-            comments: [{
-              id: 402,
-              body: 'GraphQL shape',
+              body: 'cluster self-authored',
               author: 'generacy-ai',
               authorAssociation: 'NONE',
+              viewerDidAuthor: true,
               created_at: '',
               updated_at: '',
             }],
@@ -998,40 +987,22 @@ describe('PrFeedbackHandler', () => {
         ]);
         const item = createQueueItem({
           prNumber: 100,
-          reviewThreadIds: [401, 402],
+          reviewThreadIds: [401],
         });
 
         await localHandler.handle(item, '/tmp/checkout');
 
-        // Neither comment should have been dropped as untrusted — no
-        // "Skipped PR review comment from untrusted author" log line.
         const infoMessages = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
           .map((c) => String(c[1] ?? ''));
         expect(infoMessages.some((m) => m.includes('Skipped PR review comment'))).toBe(false);
 
-        // No zero-trusted retention warn.
         const warnMessages = (mockLogger.warn as ReturnType<typeof vi.fn>).mock.calls
           .map((c) => String(c[1] ?? ''));
         expect(warnMessages.some((m) => m.includes('Zero-trusted unresolved threads'))).toBe(false);
       } finally {
-        // Restore default mock for downstream tests.
         (workflowEngine.isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
           .mockReturnValue({ trusted: true, reason: 'owner' });
       }
-    });
-
-    it('H7: clusterIdentity undefined → error log naming the CLUSTER_ACTING_LOGIN chain (#874)', async () => {
-      const { handler: localHandler } = await buildHandler(createStubPhaseTracker(), undefined);
-      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
-      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
-      await localHandler.handle(item, '/tmp/checkout');
-
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          triedChain: ['CLUSTER_ACTING_LOGIN'],
-        }),
-        expect.stringContaining('Acting identity unresolvable at handler runtime'),
-      );
     });
 
     it('H9: phaseTracker.clear throws → swallowed with warn log, no re-throw', async () => {

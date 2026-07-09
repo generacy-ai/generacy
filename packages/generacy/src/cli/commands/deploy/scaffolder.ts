@@ -70,7 +70,6 @@ export function scaffoldBundle(
     channel: 'stable',
     workers: 1,
     preApprovedDeviceCode: config.preApprovedDeviceCode,
-    actingLogin: config.actingLogin,
   });
 
   return tmpDir;

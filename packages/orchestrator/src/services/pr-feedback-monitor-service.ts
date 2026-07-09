@@ -1,7 +1,6 @@
 import {
   GhAuthError,
   isTrustedCommentAuthor,
-  normalizeLogin,
   type GitHubClient,
   type GitHubClientFactory,
   type TrustReason,
@@ -59,13 +58,6 @@ export class PrFeedbackMonitorService {
   private readonly options: PrFeedbackMonitorOptions;
   private readonly prLinker: PrLinker;
   private readonly clusterGithubUsername: string | undefined;
-  /**
-   * #874: acting identity for the `cluster-identity` trust rule. Distinct
-   * from `clusterGithubUsername` (which is used only for assignee
-   * filtering). `undefined` in degraded mode — the trust rule then never
-   * fires; tier-based trust still applies.
-   */
-  private readonly actingIdentity: string | undefined;
   private readonly authHealth: AuthHealthSink;
   private readonly githubAppCredentialId: string | undefined;
   private abortController: AbortController | null = null;
@@ -92,7 +84,6 @@ export class PrFeedbackMonitorService {
     tokenProvider?: () => Promise<string | undefined>,
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
-    actingIdentity?: string,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -100,7 +91,6 @@ export class PrFeedbackMonitorService {
     this.phaseTracker = phaseTracker;
     this.queueAdapter = queueAdapter;
     this.clusterGithubUsername = clusterGithubUsername;
-    this.actingIdentity = actingIdentity;
     this.authHealth = authHealth ?? { recordResult: () => undefined };
     this.githubAppCredentialId = githubAppCredentialId;
     this.options = {
@@ -198,6 +188,7 @@ export class PrFeedbackMonitorService {
       author: string;
       authorAssociation: string | undefined;
       reason: TrustReason;
+      viewerDidAuthor: boolean | undefined;
     }>;
     let totalThreads: number;
     try {
@@ -216,8 +207,6 @@ export class PrFeedbackMonitorService {
           const decision = isTrustedCommentAuthor(c, 'pr-feedback', {
             logger: this.logger,
             ...(botLogin ? { botLogin } : {}),
-            // #874: acting identity, not the assignee/operator login.
-            ...(this.actingIdentity ? { clusterIdentity: this.actingIdentity } : {}),
           });
           if (decision.trusted) {
             threadHasTrusted = true;
@@ -227,6 +216,7 @@ export class PrFeedbackMonitorService {
               author: c.author,
               authorAssociation: c.authorAssociation,
               reason: decision.reason,
+              viewerDidAuthor: c.viewerDidAuthor,
             });
           }
         }
@@ -293,21 +283,19 @@ export class PrFeedbackMonitorService {
     // #869 / FR-002, FR-003, FR-004: skip enqueue, emit warn log naming the
     // untrusted skips, and post a top-level notice on the transition edge.
     if (unresolvedThreadIds.length === 0) {
-      // #874 / FR-005 skip-warn shape: extend context with raw +
-      // normalized clusterIdentity, and add per-skip normalizedAuthor.
-      const clusterIdentity = this.actingIdentity ?? null;
-      const normalizedClusterIdentity = this.actingIdentity
-        ? normalizeLogin(this.actingIdentity)
-        : null;
+      // #878 skip-warn shape: per-comment viewerDidAuthor replaces the
+      // clusterIdentity / normalizedClusterIdentity / normalizedAuthor
+      // fields from the #874 login-comparison scheme.
       this.logger.warn(
         {
           owner, repo, prNumber, issueNumber,
           totalUnresolvedThreads,
-          clusterIdentity,
-          normalizedClusterIdentity,
           untrustedCommentSkips: untrustedCommentSkips.map((s) => ({
-            ...s,
-            normalizedAuthor: normalizeLogin(s.author),
+            commentId: s.commentId,
+            author: s.author,
+            authorAssociation: s.authorAssociation,
+            reason: s.reason,
+            viewerDidAuthor: s.viewerDidAuthor ?? null,
           })),
         },
         'PR has unresolved threads but every comment author is untrusted',
