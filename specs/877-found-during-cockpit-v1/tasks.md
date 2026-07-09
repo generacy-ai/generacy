@@ -10,20 +10,20 @@
 
 ## Phase 1: Implementation
 
-- [ ] T001 [US1] Append `+ '\n'` to the non-empty return branch of `formatEnvFile()` in `packages/control-plane/src/services/wizard-env-writer.ts:85`. Empty-entries branch (line 84 `return '';`) unchanged per FR-002. No comment added — invariant is obvious.
+- [X] T001 [US1] Append `+ '\n'` to the non-empty return branch of `formatEnvFile()` in `packages/control-plane/src/services/wizard-env-writer.ts:85`. Empty-entries branch (line 84 `return '';`) unchanged per FR-002. No comment added — invariant is obvious.
 
 ## Phase 2: Regression Tests
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 -->
 
-- [ ] T002 [US1] Update the existing two-entry `formatEnvFile` assertion in `packages/control-plane/__tests__/services/wizard-env-writer.test.ts:372` from `'KEY1=val1\nKEY2=val2'` to `'KEY1=val1\nKEY2=val2\n'` (FR-001). Leave the empty-array test at line 364 unchanged (FR-002).
-- [ ] T003 [P] [US1] In `packages/control-plane/__tests__/services/wizard-env-writer.test.ts`, add a new test that mocks `credentials.yaml` + backend with two credentials, calls `writeWizardEnvFile()` against a temp path, reads the file, and asserts `contents.endsWith('\n')` (FR-004).
-- [ ] T004 [P] [US2] In `packages/control-plane/__tests__/services/wizard-env-writer.test.ts`, add a new regression test reproducing the sniplink corruption pattern: run `writeWizardEnvFile()`, then `fs.appendFile(envFilePath, 'NEW_KEY=value\n')`, then parse the file line-by-line (`\n`-split, split-on-first-`=`) and assert every original key retains its exact value AND `NEW_KEY` maps to `value` (FR-005, SC-003).
+- [X] T002 [US1] Update the existing two-entry `formatEnvFile` assertion in `packages/control-plane/__tests__/services/wizard-env-writer.test.ts:372` from `'KEY1=val1\nKEY2=val2'` to `'KEY1=val1\nKEY2=val2\n'` (FR-001). Leave the empty-array test at line 364 unchanged (FR-002).
+- [X] T003 [P] [US1] In `packages/control-plane/__tests__/services/wizard-env-writer.test.ts`, add a new test that mocks `credentials.yaml` + backend with two credentials, calls `writeWizardEnvFile()` against a temp path, reads the file, and asserts `contents.endsWith('\n')` (FR-004).
+- [X] T004 [P] [US2] In `packages/control-plane/__tests__/services/wizard-env-writer.test.ts`, add a new regression test reproducing the sniplink corruption pattern: run `writeWizardEnvFile()`, then `fs.appendFile(envFilePath, 'NEW_KEY=value\n')`, then parse the file line-by-line (`\n`-split, split-on-first-`=`) and assert every original key retains its exact value AND `NEW_KEY` maps to `value` (FR-005, SC-003).
 
 ## Phase 3: Validation
 <!-- Phase boundary: Complete Phase 2 before starting Phase 3 -->
 
-- [ ] T005 [US1] Run `pnpm --filter @generacy-ai/control-plane test wizard-env-writer` — must be green (SC-001).
-- [ ] T006 [US1] Run the full `@generacy-ai/control-plane` test suite — must be green, confirming zero behavioural regression for existing readers (SC-002).
+- [X] T005 [US1] Run `pnpm --filter @generacy-ai/control-plane test wizard-env-writer` — must be green (SC-001).
+- [X] T006 [US1] Run the full `@generacy-ai/control-plane` test suite — must be green, confirming zero behavioural regression for existing readers (SC-002).
 
 ## Dependencies & Execution Order
 
