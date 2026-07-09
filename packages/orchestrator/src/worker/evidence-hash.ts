@@ -31,8 +31,11 @@ export interface EvidenceHashResult {
  */
 function normalize(stdout: string): string {
   let out = stdout;
-  // 1. ANSI escapes (CSI + OSC).
+  // 1. ANSI escapes (CSI + OSC). Matching the ESC/BEL control chars is the
+  // whole point here, so the no-control-regex rule is intentionally disabled.
+  // eslint-disable-next-line no-control-regex
   out = out.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+  // eslint-disable-next-line no-control-regex
   out = out.replace(/\x1b\][^\x07]*\x07/g, '');
   // 2. ISO-8601 timestamps → <TS>.
   out = out.replace(
