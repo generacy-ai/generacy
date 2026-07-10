@@ -15,6 +15,16 @@ Every connected cluster in the cloud dashboard currently reports **Orchestrator:
 
 Net effect: `data['version']` is always `undefined` → `"0.0.0"` on every cluster.
 
+## Clarifications
+
+Resolved in Batch 1 (2026-07-10, GitHub issue #907):
+
+- **`"0.0.0"` guard applies to all sources** (Q1 → A). Any source — env var or `package.json` — that resolves to the literal string `"0.0.0"` is treated as "no real version resolved", and the handler emits the FR-005 sentinel instead. This prevents a stray `ORCHESTRATOR_VERSION=0.0.0`, or a workspace-default `"version": "0.0.0"` in `package.json`, from silently reproducing the pre-fix symptom.
+- **Sentinel string is `"unknown"`** (Q2 → A). The exact string is locked in both the handler and the FR-007 test to prevent drift.
+- **Canonical build-time env var is `ORCHESTRATOR_VERSION`** (Q3 → A). Orchestrator-scoped; the publish workflows will wire its VALUE (initially the `sha-<short>` identifier already computed at `.github/workflows/publish-cluster-base-image.yml:34`) at image build time. The env var NAME stays stable across future changes to the identifier scheme.
+- **No format contract on the `version` string** (Q4 → C). Any non-empty string that is not `"0.0.0"` is accepted by the handler. The recommended VALUE convention (non-binding on the handler) is the `sha-<short>` identifier the image is already tagged with, so operators get a 1:1 correlation between the dashboard string and the pullable image tag.
+- **Scope: `version` only** (Q5 → A). `channel` and `uptime` are explicitly out of scope. Rationale: the dashboard-facing `channel`/`uptime` values already flow through the orchestrator's own `collectMetadata` (from cluster YAML and `process.uptime()` respectively, in `packages/orchestrator/src/services/relay-bridge.ts:688,727-728`), not through `/health`. The `?? '0.0.0'` fallback on `version` is the only user-visible instance of the schema-strip bug. A `/health` channel/uptime-parity follow-up is optional and low-priority.
+
 ## Impact
 
 Cosmetic / observability only. No effect on connectivity, activation, or workflow execution. But:
@@ -52,18 +62,18 @@ Cosmetic / observability only. No effect on connectivity, activation, or workflo
 |----|-------------|----------|-------|
 | FR-001 | The `HealthResponse` TypeScript type in `packages/orchestrator/src/routes/health.ts` must declare a `version: string` field. | P1 | |
 | FR-002 | The Fastify response schema for `/health` (both 200 and 503 branches, matching current shape) must declare `version: { type: 'string' }`. | P1 | Fastify strips undeclared fields; both response codes must include it or reconnect/health-503 paths will regress. |
-| FR-003 | The `/health` handler must populate `version` with a real, non-empty identifier before returning. | P1 | Never emit the literal `"0.0.0"` from the handler when a real value is resolvable. |
-| FR-004 | The version source must be resolvable at container startup without a network call and must reflect the build actually running. | P1 | Preferred source: a build-time env var (e.g. `ORCHESTRATOR_VERSION`) baked into the image at publish time. Acceptable fallback: `package.json` version read at startup. Precedence and exact source strategy to be decided in `/plan`. |
-| FR-005 | If no version source is resolvable at startup (missing env var and unreadable package.json), the handler must emit a sentinel string that is clearly distinguishable from `"0.0.0"` (e.g. `"unknown"`) rather than falling back to the numeric sentinel. | P2 | Prevents future silent regressions from looking identical to the pre-fix behaviour. |
+| FR-003 | The `/health` handler must populate `version` with a real, non-empty identifier before returning. | P1 | Never emit the literal `"0.0.0"` from the handler. Any source (env var or `package.json`) that resolves to the literal string `"0.0.0"` is treated as "unresolved" and the handler emits the FR-005 sentinel instead (Q1 → A). |
+| FR-004 | The version source must be resolvable at container startup without a network call and must reflect the build actually running. | P1 | Canonical env var: `ORCHESTRATOR_VERSION` (Q3 → A) — orchestrator-scoped, name stable, VALUE chosen by the build (initially the `sha-<short>` identifier from `.github/workflows/publish-cluster-base-image.yml:34`). Acceptable fallback: `package.json` version read at startup. Precedence to be decided in `/plan`. |
+| FR-005 | If no version source is resolvable at startup (missing env var and unreadable `package.json`), OR if a source resolves to the literal string `"0.0.0"` (per FR-003), the handler must emit the exact sentinel string `"unknown"` (Q2 → A). | P2 | The sentinel string is locked at `"unknown"` in both the handler and the FR-007 test to prevent drift. |
 | FR-006 | Cluster-relay's `metadata.ts` fallback path (line ~57 and ~74) is not modified by this change. | P1 | The fix is orchestrator-side; the relay's defensive `?? '0.0.0'` stays as-is so relay behaviour is unchanged when the orchestrator is unreachable. |
-| FR-007 | The change ships with a test in `packages/orchestrator/src/__tests__/health-*.test.ts` that asserts the response body contains a non-empty `version` string, i.e. would fail against the current buggy code. | P2 | Guards against schema-strip regressions specifically. |
+| FR-007 | The change ships with a test in `packages/orchestrator/src/__tests__/health-*.test.ts` that asserts the response body contains a non-empty `version` string that is not `"0.0.0"`, i.e. would fail against the current buggy code. The test must also cover the sentinel path: when no source resolves, the handler emits exactly `"unknown"` (per FR-005). | P2 | Guards against schema-strip regressions and against sentinel-string drift. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
 | SC-001 | Connected clusters running the fixed orchestrator report a non-`"0.0.0"` `orchestratorVersion` in the cloud dashboard. | 100% of clusters on the fixed image. | Inspect Firestore cluster docs (or dashboard UI) for a sample of `preview`/`stable` clusters after the image rolls out. |
-| SC-002 | `GET /health` on a running fixed orchestrator returns JSON containing a `version` field with a non-empty string value. | Field present, value ≠ `""` and ≠ `"0.0.0"` (assuming a real source is configured). | Manual `curl` against a running container, plus the unit test in FR-007. |
+| SC-002 | `GET /health` on a running fixed orchestrator returns JSON containing a `version` field with a non-empty string value. No format contract is enforced by the handler (Q4 → C); any non-empty string ≠ `"0.0.0"` is accepted, or exactly `"unknown"` when no source resolves. | Field present, value ≠ `""` and ≠ `"0.0.0"` (assuming a real source is configured), or value === `"unknown"` (sentinel path). | Manual `curl` against a running container, plus the unit tests in FR-007. |
 | SC-003 | Cluster-relay's `metadata.ts` no longer hits its `?? '0.0.0'` fallback for connected clusters. | 0 occurrences in logs / observed metadata. | Log inspection or dashboard-value sampling post-rollout. |
 
 ## Assumptions
@@ -81,6 +91,7 @@ Cosmetic / observability only. No effect on connectivity, activation, or workflo
 - Version schemes for other cluster components (`credhelper-daemon`, `control-plane`, `code-server`, etc.). If a broader "component versions" surface is desired, that is a follow-up.
 - Rollout automation, canary policies, or version-gated feature flags.
 - Backfilling the reported version for clusters running old (pre-fix) images — they will keep reporting `"0.0.0"` until upgraded.
+- Adding `channel` and `uptime` to the `/health` response schema/handler (Q5 → A). The dashboard-facing values for these fields already flow through the orchestrator's own `collectMetadata` (cluster YAML + `process.uptime()`), so there is no user-visible bug to fix. A `/health`-parity follow-up is optional and low-priority.
 
 ---
 
