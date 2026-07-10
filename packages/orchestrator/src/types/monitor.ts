@@ -45,19 +45,29 @@ export interface PrFeedbackMetadata {
 /**
  * Metadata for the `resolve-merge-conflicts` command (#898).
  *
- * Both fields are advisory. The handler re-derives them independently:
- *   - `conflictedPathsAtPause` is captured by the monitor when the pause was
- *     detected. The handler re-computes conflicted paths from a fresh merge
- *     attempt because they can shift if base advanced between pause and
- *     handler invocation.
- *   - `prNumber` is the linked PR if the monitor was able to resolve it. The
- *     handler re-resolves via PrLinker if this field is missing.
+ * `conflictedPathsAtPause` and `prNumber` are advisory. The handler re-derives
+ * them independently. `phase` (added in #902) is the interrupted phase carried
+ * in-band from the phase-loop pause site — required at handler entry for the
+ * re-arm path; absence triggers fail-loud per FR-004.
  */
 export interface ResolveMergeConflictsMetadata {
   /** Advisory snapshot of conflicted paths at pause time. */
   conflictedPathsAtPause?: string[];
   /** Advisory PR number if monitor resolved it. */
   prNumber?: number;
+  /**
+   * NEW in #902 (FR-003).
+   * Interrupted phase carried in-band from the phase-loop pause site.
+   * Populated by the worker at handler dispatch (from the pause-context
+   * sidecar in the workflow state store).
+   *
+   * Absence at handler entry → fail-loud per FR-004 / #889 terminal path.
+   * MUST NOT be re-derived from labels.
+   *
+   * Optional at parse time because the monitor cannot construct it — only
+   * the worker (after reading the pause-context sidecar) populates it.
+   */
+  phase?: import('../worker/types.js').WorkflowPhase;
 }
 
 /**

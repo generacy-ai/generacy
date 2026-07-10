@@ -80,6 +80,7 @@ vi.mock('@generacy-ai/workflow-engine', async () => {
 // Now import the SUT.
 import { MergeConflictHandler } from '../merge-conflict-handler.js';
 import { AgentLauncher } from '../../launcher/agent-launcher.js';
+import { assertHandlerOutcomeMatchesWorld } from '../handler-outcome-assertion.js';
 
 const mockLogger = {
   info: vi.fn(),
@@ -134,7 +135,7 @@ const config: WorkerConfig = {
   gates: {},
 } as WorkerConfig;
 
-function createItem(): QueueItem {
+function createItem(overrides?: Partial<QueueItem>): QueueItem {
   return {
     owner: 'owner',
     repo: 'repo',
@@ -143,7 +144,11 @@ function createItem(): QueueItem {
     command: 'resolve-merge-conflicts',
     priority: Date.now(),
     enqueuedAt: new Date().toISOString(),
-    metadata: {},
+    // #902 FR-003: default fixture supplies pause-context phase so the
+    // re-armed path can complete. Individual tests override to `{}` when
+    // they need to exercise the fail-loud path (FR-004).
+    metadata: { phase: 'validate' },
+    ...overrides,
   };
 }
 
@@ -220,7 +225,7 @@ describe('MergeConflictHandler (#898 T013)', () => {
 
     const { launcher, launchMock } = createLauncher();
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     expect(launchMock).not.toHaveBeenCalled();
     expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -229,6 +234,19 @@ describe('MergeConflictHandler (#898 T013)', () => {
     );
     // waiting-for:merge-conflicts is NOT removed on the blocked path.
     expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+
+    // #902 FR-005: failed outcome with evidence citing "no linked PR".
+    expect(outcome.outcome).toBe('failed');
+    if (outcome.outcome === 'failed') {
+      expect(outcome.evidence.reason).toBe('no linked PR');
+    }
+
+    // #902 FR-006 assertion — the world (labels include blocked:*) matches
+    // the returned failed outcome.
+    const labelsAfter = ['waiting-for:merge-conflicts', 'agent:paused', 'blocked:stuck-merge-conflicts'];
+    const queueSnapshot = { inFlight: false, pendingItems: [] };
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, queueSnapshot);
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -248,18 +266,38 @@ describe('MergeConflictHandler (#898 T013)', () => {
 
     const { launcher, launchMock } = createLauncher();
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     expect(launchMock).not.toHaveBeenCalled();
-    // Success labels applied.
-    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
-      'owner', 'repo', 42,
-      ['completed:merge-conflicts'],
-    );
+    // #902 FR-005: no-op success returns re-armed with the metadata phase.
+    expect(outcome).toEqual({ outcome: 're-armed', startPhase: 'validate' });
+    // #902 FR-001/FR-007: combined `--remove-label` for all four
+    // ownership-transition labels. No `--add-label` — re-arm is direct enqueue.
+    expect(mockGitHub.addLabels).not.toHaveBeenCalled();
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'owner', 'repo', 42,
-      ['waiting-for:merge-conflicts', 'agent:paused'],
+      [
+        'completed:merge-conflicts',
+        'waiting-for:merge-conflicts',
+        'agent:in-progress',
+        'agent:paused',
+      ],
     );
+
+    // #902 FR-006 assertion helper — read the world, not the return.
+    const labelsAfter: string[] = []; // labels post-cleanup
+    const queueSnapshot = {
+      inFlight: false,
+      pendingItems: [
+        {
+          command: 'continue' as const,
+          workflowName: 'speckit-feature',
+          metadata: { startPhase: 'validate' },
+        },
+      ],
+    };
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, queueSnapshot);
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -308,22 +346,40 @@ describe('MergeConflictHandler (#898 T013)', () => {
     });
 
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     expect(launchMock).toHaveBeenCalledTimes(1);
-    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
-      'owner', 'repo', 42,
-      ['completed:merge-conflicts'],
-    );
+    expect(outcome).toEqual({ outcome: 're-armed', startPhase: 'validate' });
+    expect(mockGitHub.addLabels).not.toHaveBeenCalled();
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'owner', 'repo', 42,
-      ['waiting-for:merge-conflicts', 'agent:paused'],
+      [
+        'completed:merge-conflicts',
+        'waiting-for:merge-conflicts',
+        'agent:in-progress',
+        'agent:paused',
+      ],
     );
     // Push must have been called at least once
     const pushCalls = execFileMock.mock.calls.filter(
       (c) => c[0] === 'git' && (c[1] as string[])[0] === 'push',
     );
     expect(pushCalls.length).toBeGreaterThanOrEqual(1);
+
+    // #902 FR-006: assertion helper wraps terminal snapshot.
+    const labelsAfter: string[] = [];
+    const queueSnapshot = {
+      inFlight: false,
+      pendingItems: [
+        {
+          command: 'continue' as const,
+          workflowName: 'speckit-feature',
+          metadata: { startPhase: 'validate' },
+        },
+      ],
+    };
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, queueSnapshot);
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -359,7 +415,7 @@ describe('MergeConflictHandler (#898 T013)', () => {
 
     const { launcher, launchMock } = createLauncher(0);
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -373,6 +429,12 @@ describe('MergeConflictHandler (#898 T013)', () => {
       (c) => c[0] === 'git' && (c[1] as string[])[0] === 'push',
     );
     expect(pushCalls).toHaveLength(0);
+
+    // #902 FR-005: failed outcome. FR-006: assertion helper.
+    expect(outcome.outcome).toBe('failed');
+    const labelsAfter = ['waiting-for:merge-conflicts', 'agent:paused', 'blocked:stuck-merge-conflicts'];
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, { inFlight: false, pendingItems: [] });
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -459,13 +521,19 @@ describe('MergeConflictHandler (#898 T013)', () => {
     });
 
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     expect(pushCalls).toBe(1); // NO retry on NFF
     expect(mockGitHub.addLabels).toHaveBeenCalledWith(
       'owner', 'repo', 42,
       ['blocked:stuck-merge-conflicts'],
     );
+
+    // #902 FR-005/FR-006
+    expect(outcome.outcome).toBe('failed');
+    const labelsAfter = ['waiting-for:merge-conflicts', 'agent:paused', 'blocked:stuck-merge-conflicts'];
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, { inFlight: false, pendingItems: [] });
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -565,13 +633,32 @@ describe('MergeConflictHandler (#898 T013)', () => {
     });
 
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     expect(pushCalls).toBe(3); // 2 failures + 1 success
-    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+    expect(outcome).toEqual({ outcome: 're-armed', startPhase: 'validate' });
+    expect(mockGitHub.addLabels).not.toHaveBeenCalled();
+    expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'owner', 'repo', 42,
-      ['completed:merge-conflicts'],
+      [
+        'completed:merge-conflicts',
+        'waiting-for:merge-conflicts',
+        'agent:in-progress',
+        'agent:paused',
+      ],
     );
+    const queueSnapshot = {
+      inFlight: false,
+      pendingItems: [
+        {
+          command: 'continue' as const,
+          workflowName: 'speckit-feature',
+          metadata: { startPhase: 'validate' },
+        },
+      ],
+    };
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, [], queueSnapshot);
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -630,20 +717,35 @@ describe('MergeConflictHandler (#898 T013)', () => {
     });
 
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     // SC-002 assertions: full green pipeline
     expect(agentInvocations).toBe(1);       // exactly one attempt
     expect(pushCalls).toBe(1);              // pushed once, cleanly
-    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
-      'owner', 'repo', 42,
-      ['completed:merge-conflicts'],
-    );
+    expect(outcome).toEqual({ outcome: 're-armed', startPhase: 'validate' });
+    expect(mockGitHub.addLabels).not.toHaveBeenCalled();
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'owner', 'repo', 42,
-      ['waiting-for:merge-conflicts', 'agent:paused'],
+      [
+        'completed:merge-conflicts',
+        'waiting-for:merge-conflicts',
+        'agent:in-progress',
+        'agent:paused',
+      ],
     );
-    // waiting-for was cleared as part of success
+    // #902 FR-006 assertion helper on terminal state.
+    const queueSnapshot = {
+      inFlight: false,
+      pendingItems: [
+        {
+          command: 'continue' as const,
+          workflowName: 'speckit-feature',
+          metadata: { startPhase: 'validate' },
+        },
+      ],
+    };
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, [], queueSnapshot);
+    expect(assertion).toEqual({ ok: true });
   });
 
   // -------------------------------------------------------------------------
@@ -699,7 +801,7 @@ describe('MergeConflictHandler (#898 T013)', () => {
     });
 
     const handler = new MergeConflictHandler(config, mockLogger, launcher);
-    await handler.handle(createItem(), '/tmp/checkout');
+    const outcome = await handler.handle(createItem(), '/tmp/checkout');
 
     // SC-003 assertions: blocked once, no push, no retry
     expect(agentInvocations).toBe(1);       // one autonomous attempt
@@ -723,5 +825,14 @@ describe('MergeConflictHandler (#898 T013)', () => {
     const evidence = (blockedLog![0] as { evidence: { unresolvedPaths: string[] } }).evidence;
     expect(evidence.unresolvedPaths.length).toBeGreaterThan(0);
     expect(evidence.unresolvedPaths).toContain('CLAUDE.md');
+
+    // #902 FR-005/FR-006
+    expect(outcome.outcome).toBe('failed');
+    if (outcome.outcome === 'failed') {
+      expect(outcome.evidence.unresolvedPaths).toContain('CLAUDE.md');
+    }
+    const labelsAfter = ['waiting-for:merge-conflicts', 'agent:paused', 'blocked:stuck-merge-conflicts'];
+    const assertion = assertHandlerOutcomeMatchesWorld(outcome, labelsAfter, { inFlight: false, pendingItems: [] });
+    expect(assertion).toEqual({ ok: true });
   });
 });
