@@ -1,0 +1,17 @@
+> next build
+
+   ▲ Next.js 14.2.5
+
+Failed to compile.
+
+Type error: Property 'user' does not exist on type 'Session | null'.
+File: src/app/api/route.ts
+
+  10 |   const session = await auth()
+  11 |   return NextResponse.json({
+> 12 |     userId: session.user.id,
+     |             ^^^^^^^^^^^^
+  13 |   })
+  14 | }
+
+ ELIFECYCLE  Command failed with exit code 1.

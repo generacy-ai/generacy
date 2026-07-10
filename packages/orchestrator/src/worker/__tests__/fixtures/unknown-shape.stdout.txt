@@ -1,0 +1,4 @@
+Some non-standard build tool failed for reasons.
+Nothing here matches next build or vitest patterns.
+This exercises the fallback hash path.
+Exit code: 42

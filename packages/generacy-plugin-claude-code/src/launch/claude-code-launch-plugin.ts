@@ -1,4 +1,4 @@
-import type { ClaudeCodeIntent, PhaseIntent, PrFeedbackIntent, ConversationTurnIntent, InvokeIntent } from './types.js';
+import type { ClaudeCodeIntent, PhaseIntent, PrFeedbackIntent, ValidateFixIntent, ConversationTurnIntent, InvokeIntent } from './types.js';
 import { PHASE_TO_COMMAND, PTY_WRAPPER } from './constants.js';
 
 /**
@@ -34,7 +34,7 @@ interface OutputParser {
  */
 export class ClaudeCodeLaunchPlugin {
   readonly pluginId = 'claude-code';
-  readonly supportedKinds = ['phase', 'pr-feedback', 'conversation-turn', 'invoke'] as const;
+  readonly supportedKinds = ['phase', 'pr-feedback', 'validate-fix', 'conversation-turn', 'invoke'] as const;
 
   buildLaunch(intent: ClaudeCodeIntent): LaunchSpec {
     switch (intent.kind) {
@@ -42,6 +42,8 @@ export class ClaudeCodeLaunchPlugin {
         return this.buildPhaseLaunch(intent);
       case 'pr-feedback':
         return this.buildPrFeedbackLaunch(intent);
+      case 'validate-fix':
+        return this.buildValidateFixLaunch(intent);
       case 'conversation-turn':
         return this.buildConversationTurnLaunch(intent);
       case 'invoke':
@@ -87,6 +89,25 @@ export class ClaudeCodeLaunchPlugin {
   }
 
   private buildPrFeedbackLaunch(intent: PrFeedbackIntent): LaunchSpec {
+    const args = [
+      '-p',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
+      intent.prompt,
+    ];
+
+    return {
+      command: 'claude',
+      args,
+      stdioProfile: 'default',
+    };
+  }
+
+  private buildValidateFixLaunch(intent: ValidateFixIntent): LaunchSpec {
+    // Same shape as pr-feedback — one bounded agent turn with a prepared prompt.
+    // The `evidenceHash` on the intent is metadata for launcher observability,
+    // not CLI input. See specs/892-found-during-cockpit-v1/contracts/validate-fix-handler.md.
     const args = [
       '-p',
       '--output-format', 'stream-json',

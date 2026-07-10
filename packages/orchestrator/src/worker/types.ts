@@ -134,6 +134,14 @@ export interface ImplementPartialResult {
 export interface PhaseResult {
   /** Phase that was executed */
   phase: WorkflowPhase;
+  /**
+   * Raw stdout captured from the phase process, only populated by
+   * `runValidatePhase` (#892 evidence pipeline). Undefined for CLI phases,
+   * which surface output via `output: OutputChunk[]`.
+   */
+  capturedStdout?: string;
+  /** Raw stderr captured from the phase process (validate + install paths). */
+  capturedStderr?: string;
   /** Whether the phase completed successfully */
   success: boolean;
   /** CLI exit code (0 = success) */
@@ -358,6 +366,14 @@ export interface WorkerContext {
   siblingWorkdirs?: Record<string, string>;
   /** PRs opened in sibling repos during cross-repo fan-out (from WorkflowState) */
   linkedPRs?: LinkedPR[];
+  /**
+   * Why the worker was resumed (#892). Set by the resume path when the
+   * base-advance monitor enqueued the re-run. Gates ValidateFixHandler
+   * invocation in PhaseLoop's validate `catch` block (D7 ordering invariant).
+   */
+  resumeReason?: 'base-advance';
+  /** Base branch SHA that triggered the resume (#892). Surfaces in logs. */
+  baseSha?: string;
 }
 
 /**

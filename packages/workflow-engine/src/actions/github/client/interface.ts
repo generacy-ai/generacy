@@ -367,6 +367,28 @@ export interface GitHubClient {
   listBranches(owner: string, repo: string): Promise<string[]>;
 
   /**
+   * Returns the current head commit SHA of a branch or ref.
+   * Used by BaseAdvanceMonitorService to detect base-branch advances (#892).
+   *
+   * @param ref - Branch/ref name, e.g. "develop", "main", "release/v2".
+   * @returns Full 40-character lower-case hex SHA.
+   * @throws GhAuthError on HTTP 401 (feeds #762 auth-health backstop).
+   * @throws Error on malformed response (non-40-hex).
+   */
+  getRefHeadSha(owner: string, repo: string, ref: string): Promise<string>;
+
+  /**
+   * List the file names touched by a pull request via `gh pr diff --name-only`.
+   * Used by ValidateFixHandler's sibling-duplication guard (#892).
+   *
+   * @param ownerRepo - `owner/repo` slug (matches gh CLI's `--repo` flag shape).
+   * @param prNumber - Pull request number.
+   * @returns Repo-relative file paths; empty array if no changes.
+   * @throws Error on non-zero exit.
+   */
+  prDiffNames(ownerRepo: string, prNumber: number): Promise<string[]>;
+
+  /**
    * Create a PR (alias for createPullRequest)
    */
   createPR(owner: string, repo: string, data: PRCreate): Promise<PullRequest>;

@@ -1181,6 +1181,54 @@ export class GhCliGitHubClient implements GitHubClient {
   // Alias Methods (convenience wrappers)
   // ==========================================================================
 
+  /**
+   * Fetch the head commit SHA for a branch/ref (#892).
+   * Uses `gh api repos/{o}/{r}/commits/{ref} --jq .sha` and validates that the
+   * response is a 40-char lower-case hex SHA. Non-conforming output → throw.
+   * 401 → `GhAuthError` via `executeGh` (existing #762 path).
+   */
+  async getRefHeadSha(owner: string, repo: string, ref: string): Promise<string> {
+    const result = await this.executeGh([
+      'api',
+      `repos/${owner}/${repo}/commits/${ref}`,
+      '--jq', '.sha',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `getRefHeadSha ${owner}/${repo}@${ref} failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    const sha = result.stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      throw new Error(
+        `Invalid SHA for ${owner}/${repo}@${ref}: ${sha.slice(0, 80)}`,
+      );
+    }
+    return sha;
+  }
+
+  /**
+   * List file names touched by a PR (`gh pr diff --name-only`, #892).
+   * Non-zero exit → throw with stderr for visibility.
+   */
+  async prDiffNames(ownerRepo: string, prNumber: number): Promise<string[]> {
+    const result = await this.executeGh([
+      'pr', 'diff', String(prNumber),
+      '--repo', ownerRepo,
+      '--name-only',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `prDiffNames ${ownerRepo}#${prNumber} failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    return result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  }
+
   async listBranches(owner: string, repo: string): Promise<string[]> {
     // List remote branches using gh api
     const result = await this.executeGh([

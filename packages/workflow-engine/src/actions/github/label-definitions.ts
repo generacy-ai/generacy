@@ -102,4 +102,10 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
     description:
       'PR-feedback loop paused itself: last cycle could not advance the trigger. Remove this label to permit another attempt.',
   },
+  {
+    name: 'blocked:stuck-validate-fix',
+    color: 'D73A4A',
+    description:
+      'Validate-fix cycle paused itself (#892): duplicate evidence hash, no-diff after spawn, or sibling-file overlap. Remove this label after investigation to allow another attempt.',
+  },
 ];

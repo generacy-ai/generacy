@@ -6,8 +6,9 @@ import path from 'node:path';
 import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, findWorkspaceConfigPath } from '@generacy-ai/config';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
-import type { QueueItem } from '../types/index.js';
+import type { QueueItem, PhaseTracker } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
+import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
 import { applyRepoValidateOverrides } from './config.js';
@@ -111,6 +112,13 @@ export interface ClaudeCliWorkerDeps {
   jobEventEmitter?: JobEventEmitter;
   /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
   tokenProvider?: () => Promise<string | undefined>;
+  /**
+   * Optional PhaseTracker injected by the worker-mode wiring for #892's
+   * ValidateFixHandler dedupe. Also used by the #849 paired-clear callback.
+   * When absent, ValidateFixHandler is not constructed and the fix-cycle
+   * behavior degrades to "same as today" (base-advance re-runs still occur).
+   */
+  phaseTracker?: PhaseTracker;
 }
 
 /**
@@ -133,6 +141,7 @@ export class ClaudeCliWorker {
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly tokenProvider?: () => Promise<string | undefined>;
+  private readonly phaseTracker?: PhaseTracker;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -146,6 +155,7 @@ export class ClaudeCliWorker {
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
     this.tokenProvider = deps.tokenProvider;
+    this.phaseTracker = deps.phaseTracker;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -372,6 +382,12 @@ export class ClaudeCliWorker {
       }
 
       // 6. Build WorkerContext
+      // #892: surface resume identity so PhaseLoop's validate `catch` can gate
+      // the ValidateFixHandler on the base-advance path.
+      const md = (item.metadata ?? {}) as Record<string, unknown>;
+      const resumeReason = md['resumeReason'] === 'base-advance' ? 'base-advance' as const : undefined;
+      const baseSha = typeof md['baseSha'] === 'string' ? (md['baseSha'] as string) : undefined;
+
       const context: WorkerContext = {
         workerId,
         jobId,
@@ -385,6 +401,8 @@ export class ClaudeCliWorker {
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
         siblingWorkdirs,
+        ...(resumeReason ? { resumeReason } : {}),
+        ...(baseSha ? { baseSha } : {}),
       };
 
       // Helper to build job event base payload
@@ -495,6 +513,28 @@ export class ClaudeCliWorker {
       // 8. Execute the phase loop
       const phaseSequence = getPhaseSequence(item.workflowName);
       const phaseLoop = new PhaseLoop(workerLogger);
+
+      // #892: construct ValidateFixHandler only when PhaseTracker is available.
+      // The handler's dedupe surface requires it; without Redis the fix-cycle
+      // degrades to "same as today" (base-advance re-runs still occur).
+      const jobEmitter = this.jobEventEmitter;
+      const validateFixEmit = jobEmitter
+        ? (channel: string, payload: unknown): void => {
+            // Payload shape is always an object literal at the call site; cast
+            // it into the record shape the JobEventEmitter expects.
+            jobEmitter(channel, payload as Record<string, unknown>);
+          }
+        : undefined;
+      const validateFixHandler = this.phaseTracker
+        ? new ValidateFixHandler(
+            effectiveConfig,
+            this.agentLauncher,
+            this.phaseTracker,
+            workerLogger,
+            validateFixEmit,
+          )
+        : undefined;
+
       const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
@@ -504,6 +544,7 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
+        ...(validateFixHandler ? { validateFixHandler } : {}),
         phaseAfterHandlers: [
           // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
           async () => {

@@ -9,6 +9,7 @@ import type { CliSpawner } from './cli-spawner.js';
 import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import type { ValidateFixHandler } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
@@ -43,6 +44,12 @@ export interface PhaseLoopDeps {
    * that returns canned `BaseMergeResult` values without exercising real git.
    */
   baseMergeRunner?: BaseMergeRunner;
+  /**
+   * Bounded validate-fix cycle handler (#892). Invoked on the validate failure
+   * path ONLY when `context.resumeReason === 'base-advance'` — first-time reds
+   * continue to route through `LabelManager.onError('validate')` (D7).
+   */
+  validateFixHandler?: ValidateFixHandler;
 }
 
 /**
@@ -424,6 +431,50 @@ export class PhaseLoop {
             });
             i--;
             continue;
+          }
+        }
+
+        // #892: bounded validate-fix cycle. Fires ONLY on the resume-driven
+        // validate re-run (structurally gated on WorkerContext.resumeReason
+        // === 'base-advance'). First-time reds continue through onError.
+        if (
+          phase === 'validate'
+          && context.resumeReason === 'base-advance'
+          && deps.validateFixHandler
+          && prManager.getPrNumber() !== undefined
+        ) {
+          try {
+            // resolveBaseBranch returns `origin/<name>`; strip prefix to
+            // match the base-branch string used in listOpenPullRequests results.
+            const baseRefFull = await resolveBaseBranch(
+              context.github,
+              prManager,
+              context.checkoutPath,
+              context.item.owner,
+              context.item.repo,
+              this.logger,
+            );
+            const baseBranch = baseRefFull.startsWith('origin/')
+              ? baseRefFull.slice('origin/'.length)
+              : baseRefFull;
+            await deps.validateFixHandler.handle(
+              context.item,
+              context.checkoutPath,
+              { prNumber: prManager.getPrNumber()!, baseBranch },
+              {
+                stdout: result.capturedStdout ?? '',
+                // #890 renamed `error.stderr` → `error.output` (merged tail);
+                // fall back to it when the raw stderr buffer is empty.
+                stderr: result.capturedStderr ?? result.error?.output ?? '',
+                exitCode: result.exitCode,
+              },
+              context.github,
+            );
+          } catch (err) {
+            this.logger.warn(
+              { err: String(err), phase, issueNumber: context.item.issueNumber },
+              'validate-fix handler threw — falling through to standard onError path',
+            );
           }
         }
 

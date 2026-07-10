@@ -121,4 +121,50 @@ export class PhaseTrackerService implements PhaseTracker {
       );
     }
   }
+
+  /**
+   * Raw-key duplicate check (#892). Semantically identical to `isDuplicate`
+   * but with caller-owned key namespace. Enables `base-advance-tracker:` keys
+   * sitting alongside the phase-tracker namespace without an interface split.
+   */
+  async isDuplicateRaw(key: string): Promise<boolean> {
+    if (!this.redis) {
+      this.logger.warn('Redis unavailable for phase tracker, treating as not duplicate');
+      return false;
+    }
+
+    try {
+      const exists = await this.redis.exists(key);
+      if (exists) {
+        this.logger.info({ key }, 'Duplicate event detected (raw key)');
+      }
+      return exists === 1;
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in isDuplicateRaw, treating as not duplicate',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Raw-key mark-processed (#892). Caller-owned key namespace.
+   */
+  async markProcessedRaw(key: string): Promise<void> {
+    if (!this.redis) {
+      this.logger.warn('Redis unavailable for phase tracker, skipping markProcessedRaw');
+      return;
+    }
+
+    try {
+      await this.redis.set(key, '1', 'EX', this.ttlSeconds);
+      this.logger.info({ key, ttl: this.ttlSeconds }, 'Marked processed (raw key)');
+    } catch (error) {
+      this.logger.warn(
+        { err: error, key },
+        'Redis error in markProcessedRaw, deduplication may not work for this event',
+      );
+    }
+  }
 }

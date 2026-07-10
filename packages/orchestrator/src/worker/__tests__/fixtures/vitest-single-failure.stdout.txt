@@ -1,0 +1,13 @@
+
+ RUN  v1.6.0 /workspace/sniplink
+
+ ✓ src/lib/utils.test.ts (3)
+ ❯ src/lib/short-code.test.ts (1)
+   × generates short code with correct length 8ms
+
+ FAIL  src/lib/short-code.test.ts > generates short code with correct length
+AssertionError: expected 8 to be 7 // Object.is equality
+  ❯ src/lib/short-code.test.ts:12:32
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 3 passed (4)
