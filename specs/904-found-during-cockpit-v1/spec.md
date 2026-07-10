@@ -42,69 +42,58 @@ Check the shared resolver: the `pr-body` linkMethod is also used by `PrFeedbackM
 
 ## User Stories
 
-### US1: `cockpit merge` never merges (or fails against) a sibling PR
+### US1: Merge resolves to the right PR, or refuses loud
 
-**As an** auto-mode cockpit operator running P3 workflows where sibling PR bodies cross-reference each other's issues,
-**I want** `generacy cockpit merge <issue>` to resolve to *this* issue's PR — via GitHub's authoritative Development link (`closingIssuesReferences`) — never to a draft sibling that happens to mention the issue in its body,
-**So that** `gh pr merge failed: Pull Request is still a draft` stops firing when the real PR is ready, and I don't have to reverse-engineer the resolved target from a separate bogus-ref run to figure out which PR the verb picked.
-
-**Acceptance Criteria**:
-- [ ] For an issue with exactly one `closingIssuesReferences` PR, the merge verb resolves to that PR regardless of how many sibling drafts mention the issue in their bodies.
-- [ ] When resolution succeeds, the output/log emits `resolved PR #N via <method>` where `<method>` is one of `closing-refs | branch-name | pr-body`.
-- [ ] When resolution *fails* (unresolved, wrong-state PR, missing label, checks failing, etc.), the output/log still names the PR number the resolver picked and its `linkMethod` — no more "gh pr merge failed" without a PR ID.
-- [ ] Draft PRs are never selected by the `pr-body` mention-scan fallback; if the only candidates are drafts, the verb fails loud (`"only draft PRs reference this issue"`) with exit code 1 and does not call `gh pr merge`.
-- [ ] When the `pr-body` fallback finds more than one non-draft candidate, the verb fails loud listing the candidates and does not call `gh pr merge`.
-
-### US2: `PrFeedbackMonitorService` attaches feedback to the correct PR under sibling cross-references
-
-**As** the orchestrator wiring PR review feedback back to worker issues,
-**I want** the shared PR-to-issue link logic to prefer `closingIssuesReferences` over `pr-body` mention parsing,
-**So that** in P3-style topologies where PR bodies say "depends on #N" / "after #M merges", feedback never lands on a sibling's issue queue and re-triggers the wrong worker.
+**As an** auto-mode operator (or a developer running `generacy cockpit merge <issue-ref>` by hand),
+**I want** the resolver behind `merge` (and every other cockpit verb that shares it) to pick the *authoritatively* linked PR for the issue and, when authority is absent or ambiguous, refuse loudly with the resolved PR number and linkMethod visible,
+**So that** the cockpit's one irreversible verb never silently targets a draft sibling, a stale attempt, or a coincidentally-mentioned PR — and when it does refuse, I can see exactly which PR it looked at and why.
 
 **Acceptance Criteria**:
-- [ ] `PrLinker.linkPrToIssue` consults `closingIssuesReferences` (via `gh pr view --json closingIssuesReferences` or equivalent) as its first strategy, ahead of both body-keyword parsing and branch-name parsing.
-- [ ] The `linkMethod` field in `PrToIssueLink` gains a `'closing-refs'` variant; the emitted log line (`Linked PR #N to issue #M via <method>`) reports it.
-- [ ] Existing branch-name and pr-body strategies remain in place as fallbacks in the documented precedence order.
+- [ ] For every open issue with exactly one open non-draft PR in `closingIssuesReferences`, the resolver returns that PR with `linkMethod: 'closing-refs'` — no fall-through, no sibling contamination (repro: the sniplink incident's issues #9 and #10).
+- [ ] Draft PRs are never returned by the resolver as the *chosen* candidate. If the only PRs pointing at an issue are drafts, the resolver returns `{ kind: 'pr-is-draft', candidates: [...] }` — not a `null`, not a resolved-draft that `gh pr merge` will reject downstream with a nameless error.
+- [ ] Every merge attempt — success or failure — prints and emits `resolved PR #N via <linkMethod>` (or the ambiguous-candidate list) so an operator never has to reverse-engineer the target from a second bogus-ref run.
+- [ ] Ambiguity at any tier (>1 non-draft closing-ref, >1 non-draft branch-name match, >1 non-draft body mention) yields a discriminated `{ kind: 'ambiguous', candidates: [...], linkMethod }` result — merge exits non-zero without touching GitHub.
+- [ ] The precedence fix lives in the *shared* resolver, so `PrFeedbackMonitorService` (which today logs `Linked PR #N to issue #M via pr-body`) picks up the same guarantees and cannot attach feedback to a wrong sibling PR.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The issue-to-PR resolver (`GhWrapper.resolveIssueToPRRef` in `packages/cockpit/src/gh/wrapper.ts`) MUST consult `closingIssuesReferences` on the issue first, filter to `state == OPEN`, and — if exactly one such PR exists — return it directly. | P1 | Replaces today's `gh pr list --search linked:<N>` primary path, whose `linked:` query matches sibling drafts that only mention the issue via body cross-reference. |
-| FR-002 | When no closing-ref PR exists, the resolver MUST fall back to head-branch match (`^NNN-` naming), taking the single open PR whose head branch begins with `<issue>-`. | P1 | Existing branch-name-derived link, kept as second-choice. |
-| FR-003 | When neither closing refs nor branch names identify a candidate, the resolver MUST fall back to a `pr-body` mention scan that **excludes drafts**. If more than one non-draft candidate remains, the resolver MUST fail loud with the list of candidates and MUST NOT call `gh pr merge`. If only draft candidates exist, the resolver MUST fail loud with `"only draft PRs reference this issue"`. | P1 | Merge is the one irreversible verb in the cockpit; ambiguity is an error, not a coin flip. |
-| FR-004 | On both success and failure paths, `runMerge` (`packages/generacy/src/cli/commands/cockpit/merge.ts`) MUST emit a log line and include in stdout the resolved PR number and the `linkMethod` used (`closing-refs`/`branch-name`/`pr-body`). Existing `gh pr merge failed …` errors MUST be preceded by (or include) the resolved PR identity. | P1 | Sub-defect #1 in the finding. |
-| FR-005 | Draft PRs MUST NEVER be candidates in the `pr-body` fallback branch. The closing-refs and branch-name branches MAY surface draft PRs (because those PRs are authoritatively the issue's PR); when `runMerge` receives a draft, it MUST fail with reason `pr-is-draft` and emit `resolved PR #N via <method> — draft, cannot merge` rather than the current opaque `gh pr merge failed: still a draft`. | P1 | Sub-defect #2 in the finding. |
-| FR-006 | `PrLinker.linkPrToIssue` (`packages/orchestrator/src/worker/pr-linker.ts`) MUST consult `closingIssuesReferences` (via `gh pr view --json closingIssuesReferences` on the PR) as its first strategy, ahead of both `parsePrBody` and `parseBranchName`. When present and unambiguous, the resulting `PrToIssueLink.linkMethod` MUST be `'closing-refs'`. | P1 | Precedence fix lands in the shared link logic, not merge-only. |
-| FR-007 | The `PrToIssueLink['linkMethod']` union in `packages/orchestrator/src/types/monitor.ts` MUST gain a `'closing-refs'` variant, and every existing consumer (log lines, telemetry, tests) MUST accept it. | P1 | Type-level plumbing for FR-006. |
-| FR-008 | Failure exit paths in `runMerge` (unresolved, wrong-state, missing-label, checks-failing, ambiguous, draft) MUST include the resolved PR number and `linkMethod` in the emitted JSON payload (via `buildFailingCheckPayload` or an equivalent field on the failing-check schema). | P2 | Downstream: auto-mode's `finding` records now carry enough info to identify the wrong-PR class without a bogus-ref replay. |
+| FR-001 | `resolveIssueToPRRef` MUST first query `closingIssuesReferences` (GitHub's Development link). Filter to open non-drafts. If exactly one remains → return `{ kind: 'resolved', ref, linkMethod: 'closing-refs' }`. If ≥2 open non-drafts remain → return `{ kind: 'ambiguous', candidates, linkMethod: 'closing-refs' }` (do NOT fall through). If 0 open non-drafts but ≥1 open drafts → return `{ kind: 'pr-is-draft', candidates, linkMethod: 'closing-refs' }` (do NOT fall through). If 0 open PRs total → fall through to FR-002. | P1 | Q1-B. Closing-refs is GitHub's authoritative link and was correct for all five PRs in the sniplink incident. Falling through from an ambiguous strong signal to a weaker one converts "two good candidates" into "guess from worse data." |
+| FR-002 | Same shape as FR-001 against head-branch match `^<issue>-` (feature-branch naming). Filter open non-drafts. Exactly-one → `'resolved' via 'branch-name'`. ≥2 → `'ambiguous' via 'branch-name'` (no fall-through). Only drafts → `'pr-is-draft' via 'branch-name'` (no fall-through). Zero → fall through to FR-003. | P1 | Q2-B, symmetric with FR-001. |
+| FR-003 | Same shape as FR-001/FR-002 against `pr-body` mention-scan (open PRs whose body references the issue). Filter open non-drafts. Exactly-one → `'resolved' via 'pr-body'`. ≥2 → `'ambiguous' via 'pr-body'`. Only drafts → `'pr-is-draft' via 'pr-body'`. Zero → return `{ kind: 'unresolved' }`. | P1 | This is the tier where the sniplink incident manifested — P3 phase PRs cross-reference sibling issues. Drafts must be excluded here specifically, not "considered but flagged." |
+| FR-004 | Every merge attempt MUST log/emit `resolved PR #N via <linkMethod>` on the happy path *before* invoking `gh pr merge`, so the operator can see the target *even when the subsequent merge call fails*. The same field lands in stdout JSON as `pr: { number, url, linkMethod }`. | P1 | Bug: the incident's `gh pr merge failed: still a draft` printed no PR number, forcing reverse-engineering. Log line lands before the merge call so a subsequent failure doesn't erase the evidence. |
+| FR-005 | When `resolveIssueToPRRef` returns `{ kind: 'pr-is-draft', candidates, linkMethod }`, `runMerge` MUST NOT call `gh pr merge`. It emits a failing-check payload with `reason: 'pr-is-draft'` and top-level `linkMethod`, flattened per FR-008 (single candidate → `pr: { number, url, linkMethod }`; multi-candidate → `candidates: [...]`). Exit non-zero. Single-candidate and multi-candidate draft cases both use `'pr-is-draft'`. | P1 | Q3-C generalized. Operator action for one draft and several drafts is identical: the work isn't ready. |
+| FR-006 | When `resolveIssueToPRRef` returns `{ kind: 'ambiguous', candidates, linkMethod }`, `runMerge` MUST NOT call `gh pr merge`. It emits a failing-check payload with `reason: 'ambiguous-resolution'`, `candidates: [{ number, url, isDraft, headRefName }]`, and top-level `linkMethod` naming which tier produced the set. Exit non-zero. | P1 | Q3-C generalized. `linkMethod` disambiguates closing-refs / branch-name / pr-body ambiguity without multiplying enum values per tier. |
+| FR-007 | The precedence fix (FR-001..FR-003) MUST live in the shared resolver, not in `runMerge`. `PrFeedbackMonitorService` and any other current or future consumer of `resolveIssueToPRRef` MUST get the same guarantees. | P1 | Reasoning in the observation: same ambiguity that misdirected merge could misdirect PR-feedback attachment. |
+| FR-008 | The failing-check payload's `pr` field MUST be shaped `{ number, url, linkMethod } \| null` for single-PR outcomes (success, `missing-label`, `checks-failing`, single-candidate `pr-is-draft`). For multi-candidate ambiguous / draft outcomes, `pr` is `null` and the payload instead carries `candidates: [{ number, url, isDraft, headRefName }]` plus top-level `linkMethod`. | P1 | Q4-D. Keeps the `pr` key name (no rename churn); ambiguous responses carry the full candidate set so downstream consumers don't second-query. |
+| FR-009 | `IGh.resolveIssueToPRRef` return type MUST become a discriminated union: `\| { kind: 'resolved'; ref: PullRequestRef; linkMethod } \| { kind: 'ambiguous'; candidates: PullRequestRef[]; linkMethod } \| { kind: 'pr-is-draft'; candidates: PullRequestRef[]; linkMethod } \| { kind: 'unresolved' }`. `null` retires. | P1 | Q5-B. Ambiguity evidence flows back from the single resolution pass; no TOCTOU re-derivation, no exceptions-as-control-flow. Aligns with #902 Q4 and #889 Q2-D. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Wrong-PR resolution rate in P3-style fixtures (one closing-ref PR + N draft siblings whose bodies mention the issue) | 0 across the regression suite | Fixture: issue with `closingIssuesReferences=[PR#23]` plus 3 draft siblings whose bodies say `depends on #<issue>` — `resolveIssueToPRRef` must return PR#23. |
-| SC-002 | Merge-failure output naming the resolved PR | 100% of failure exit paths include `resolved PR #N via <method>` | Grep stdout of every failing test in `merge.test.ts` for `resolved PR #\d+ via (closing-refs|branch-name|pr-body)`. |
-| SC-003 | Draft-PR merge-attempt rate | 0 (drafts never reach `gh pr merge`) | New fixture: draft PR returned by closing-refs → runMerge fails with `pr-is-draft`, `gh.mergePullRequest` mock never called. |
-| SC-004 | Ambiguous `pr-body` fallback failure | Exit code 1, no merge attempted, stdout lists all candidate PR numbers | Fixture: no closing refs, no branch-name match, two non-draft PRs whose bodies mention the issue → verb fails loud, both PR numbers appear in output. |
-| SC-005 | `PrLinker` correctness on the same P3 topology | `linkMethod === 'closing-refs'` when closing refs exist and are unique | `pr-linker.test.ts` fixture: a PR whose body says `depends on #9` but whose `closingIssuesReferences=[{number: 4}]` → links to issue #4 via `closing-refs`, not to #9 via `pr-body`. |
-| SC-006 | Zero regressions in existing merge/link fixtures | 100% of pre-existing tests in `merge.test.ts` and `pr-linker.test.ts` pass unchanged | CI. |
+| SC-001 | Sniplink-incident regression fixture (one closing-ref PR + two sibling drafts whose bodies mention the issue) resolves to the closing-ref PR. | 100% (deterministic) | Regression test in the resolver's test file — reproduces sniplink #9/#10 shape, asserts `{ kind: 'resolved', linkMethod: 'closing-refs' }`. |
+| SC-002 | Draft-only candidates yield a `pr-is-draft` outcome with the full draft list; `gh pr merge` is never invoked. | 100% | Regression test with mocked `gh` — asserts `runMerge` never spawns `gh pr merge` and payload carries `reason: 'pr-is-draft'` + `candidates[]`. |
+| SC-003 | Multi-candidate ambiguity at any tier (closing-refs / branch-name / pr-body) yields `reason: 'ambiguous-resolution'` with the correct `linkMethod` naming the tier. | 100% | Three regression tests, one per tier, each seeding ≥2 open non-draft candidates. |
+| SC-004 | Every success path prints `resolved PR #N via <linkMethod>` before invoking `gh pr merge`; every failure path's stdout JSON carries the same `linkMethod` (or `candidates[]` for the multi-candidate kinds). | 100% | Snapshot test on stdout/log output for success + each failure kind. |
+| SC-005 | `PrFeedbackMonitorService` uses the same resolver decision (no independent code path for pr-body mention-scan). | 1 shared code path | Code-search assertion: only one implementation of the resolver; feedback service imports it. |
 
 ## Assumptions
 
-- GitHub's `closingIssuesReferences` (Development link) is populated by our workers on every PR they open — evidence: the finding notes it was "populated, unique, and correct for every PR in the repo." If a worker-produced PR ever lacks the Development link, the branch-name fallback (FR-002) catches it, so the fix is safe even in that edge case.
-- The `gh` CLI exposes `closingIssuesReferences` via `gh pr view --json closingIssuesReferences` and the reverse direction via `gh issue view --json closedByPullRequestsReferences` (already used in `resolveIssueToPRRef`'s current fallback path — this issue promotes it from fallback to primary).
-- The current `linked:<N>` search behaviour that surfaces sibling drafts is not GitHub bug-fixable; the fix is purely client-side query selection.
-- `PrFeedbackMonitorService` already treats `PrLinker.linkPrToIssue`'s output as authoritative; strengthening the resolver upgrades that service automatically without touching its own code.
-- No cross-repo issue↔PR links exist in scope; `closingIssuesReferences` is queried within the same repo the merge verb was invoked against.
+1. `gh pr view --json closingIssuesReferences` remains the canonical GraphQL surface for the Development link (as used in cluster-base's `gh` today). No new API access required.
+2. Draft state (`isDraft` in GraphQL, `draft` on `PullRequestRef`) is always populated on the PR objects we fetch — no "unknown draft" state to defend against.
+3. The three tiers (closing-refs → branch-name → pr-body) are exhaustive for v1. Future tiers (labels, commit-trailer, etc.) can be added by appending to the fall-through chain without changing the discriminated-union shape.
+4. Callers other than `runMerge` — notably `PrFeedbackMonitorService` — will adopt the new return type shape as part of the same change (single-atomic edit to the shared resolver + its consumers).
+5. Auto-mode's finding recorder in `tetrad-development` reads `reason` and `linkMethod` off the payload directly; the enum additions (`'pr-is-draft'`, `'ambiguous-resolution'`) are additive, so existing consumers of `'unresolved' | 'missing-label' | 'checks-failing'` do not break.
 
 ## Out of Scope
 
-- Cross-repo issue-PR linking (workflow currently constrains PR and issue to the same repo; a multi-repo topology is a separate concern).
-- Any rewrite of the `pr-body` closing-keyword parser itself (`Closes #N`, etc.) — its logic is fine; the issue is precedence, not parsing.
-- Fixing the *upstream* GitHub `linked:<N>` search behaviour — this spec sidesteps it, not resolves it.
-- A general-purpose "loud logging" audit across other cockpit verbs — the failing-check payload change (FR-008) is scoped to `runMerge` only in this issue.
-- Retroactively re-linking already-merged PRs whose historical `linkMethod` was `pr-body` — new links land through the new precedence; old records are frozen.
+- Auto-mode's *recovery* behavior when it encounters `pr-is-draft` or `ambiguous-resolution` (retry cadence, escalation to human, etc.) — that's tetrad-development-side and lives in a separate spec.
+- Any change to `gh pr merge` itself or its retry logic. This spec is the pre-flight resolver + payload shape; the merge call itself is unchanged.
+- New link tiers beyond closing-refs / branch-name / pr-body.
+- Cross-repo issue → PR resolution (e.g. issue in repo A closed by PR in repo B). Both today and after this fix, the resolver operates within one repo.
+- Removing the `pr-body` tier entirely. The incident argues for demoting it (drafts excluded, ambiguity is fatal), not deleting it — some workflows still rely on body mentions when closing-refs isn't populated.
 
 ---
 
