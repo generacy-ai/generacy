@@ -43,6 +43,7 @@
     "@generacy-ai/activation-client": "workspace:*",
     "@generacy-ai/cockpit": "workspace:*",
     "@generacy-ai/config": "workspace:*",
+    "@generacy-ai/orchestrator": "workspace:*",
     "@generacy-ai/orchestrator-types": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
     "chalk": "^5",
@@ -55,7 +56,6 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@generacy-ai/orchestrator": "workspace:*",
     "@types/diff": "^7",
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.13.0",

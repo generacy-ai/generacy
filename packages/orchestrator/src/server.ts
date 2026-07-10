@@ -376,7 +376,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           evidence: {
             command: `gh (${failureMetadata.labelOp})`,
             exitDescriptor: 'exited 1',
-            stderrTail: failureMetadata.ghStderr,
+            // #890 renamed CommandExitEvidence.stderrTail → outputTail.
+            outputTail: failureMetadata.ghStderr,
           },
         });
       } catch (err) {

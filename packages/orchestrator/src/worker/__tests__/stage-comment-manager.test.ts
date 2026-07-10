@@ -91,13 +91,13 @@ describe('StageCommentManager.renderStageComment', () => {
       errorEvidence: {
         command: 'pnpm install',
         exitDescriptor: 'exit 1',
-        stderrTail: 'ELIFECYCLE Command failed with exit code 1',
+        outputTail: 'ELIFECYCLE Command failed with exit code 1',
       },
     });
     expect(body).toContain('---');
     expect(body).toContain('**Failed command**: `pnpm install`');
     expect(body).toContain('**Exit**: exit 1');
-    expect(body).toContain('<details><summary>stderr (last 1 lines)</summary>');
+    expect(body).toContain('<details><summary>output (last 1 lines)</summary>');
     expect(body).toContain('```text\nELIFECYCLE Command failed with exit code 1\n```');
     expect(body).toContain('</details>');
   });
@@ -108,23 +108,25 @@ describe('StageCommentManager.renderStageComment', () => {
       errorEvidence: {
         command: 'pnpm test',
         exitDescriptor: 'killed (SIGTERM) after 300000ms',
-        stderrTail: 'still running…',
+        outputTail: 'still running…',
       },
     });
     expect(body).toContain('**Exit**: killed (SIGTERM) after 300000ms');
   });
 
-  it('renders an abort failure with empty-stderr literal inside the fenced block', async () => {
+  it('renders an abort failure with both-empty literal inside the fenced block', async () => {
     const body = await render({
       ...BASE_ERROR,
       errorEvidence: {
         command: 'validate',
         exitDescriptor: 'aborted',
-        stderrTail: '(stderr empty)',
+        outputTail: '(no output on either stream)',
       },
     });
     expect(body).toContain('**Exit**: aborted');
-    expect(body).toContain('```text\n(stderr empty)\n```');
+    expect(body).toContain('```text\n(no output on either stream)\n```');
+    // SC-003: no `(empty)` substring anywhere in the rendered body.
+    expect(body).not.toContain('(empty)');
   });
 
   it('surfaces a truncation marker as the first line of the fenced block', async () => {
@@ -134,20 +136,20 @@ describe('StageCommentManager.renderStageComment', () => {
       errorEvidence: {
         command: 'pnpm test',
         exitDescriptor: 'exit 1',
-        stderrTail: `${marker}\nline body`,
+        outputTail: `${marker}\nline body`,
       },
     });
     // The marker line appears immediately after the ```text opener.
     expect(body).toContain(`\`\`\`text\n${marker}\nline body\n\`\`\``);
   });
 
-  it('neutralizes backtick-poisoned stderr so the fenced block stays closed', async () => {
+  it('neutralizes backtick-poisoned output so the fenced block stays closed', async () => {
     const body = await render({
       ...BASE_ERROR,
       errorEvidence: {
         command: 'echo',
         exitDescriptor: 'exit 1',
-        stderrTail: 'before\n```\nafter',
+        outputTail: 'before\n```\nafter',
       },
     });
     // The literal ``` sequence must not appear inside the fenced block body
@@ -177,7 +179,7 @@ describe('StageCommentManager.renderStageComment', () => {
 
     const bodyError = await render({
       ...BASE_ERROR,
-      errorEvidence: { command: 'x', exitDescriptor: 'exit 1', stderrTail: 'y' },
+      errorEvidence: { command: 'x', exitDescriptor: 'exit 1', outputTail: 'y' },
     });
     expect(bodyError.split('\n')[0]).toBe(STAGE_MARKERS.implementation);
   });
@@ -220,7 +222,7 @@ const BASE_ALERT: FailureAlertData = {
   evidence: {
     command: 'pnpm test',
     exitDescriptor: 'exit 1',
-    stderrTail: 'npm error Missing script: "test"',
+    outputTail: 'npm error Missing script: "test"',
   },
 };
 
@@ -237,7 +239,7 @@ describe('StageCommentManager.postFailureAlert', () => {
       `<!-- generacy:failure-alert:implementation:${TEST_RUN_ID} -->`,
       '❌ **validate failed** — `pnpm test` exit 1.',
       '',
-      '<details><summary>stderr (last 1 lines)</summary>',
+      '<details><summary>output (last 1 lines)</summary>',
       '',
       '```text',
       'npm error Missing script: "test"',
@@ -274,7 +276,7 @@ describe('StageCommentManager.postFailureAlert', () => {
       evidence: {
         command: 'pnpm test',
         exitDescriptor: 'killed (SIGTERM) after 300000ms',
-        stderrTail: 'still running…',
+        outputTail: 'still running…',
       },
     });
 
@@ -283,7 +285,7 @@ describe('StageCommentManager.postFailureAlert', () => {
     );
   });
 
-  it('renders abort exitDescriptor + empty stderr inside the fenced block', async () => {
+  it('renders abort exitDescriptor + both-empty literal inside the fenced block', async () => {
     const { github, lastAddedBody } = makeAlertGithub();
     const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
 
@@ -292,16 +294,18 @@ describe('StageCommentManager.postFailureAlert', () => {
       evidence: {
         command: 'validate',
         exitDescriptor: 'aborted',
-        stderrTail: '(stderr empty)',
+        outputTail: '(no output on either stream)',
       },
     });
 
     const body = lastAddedBody();
     expect(body).toContain('❌ **validate failed** — `validate` aborted.');
-    expect(body).toContain('```text\n(stderr empty)\n```');
+    expect(body).toContain('```text\n(no output on either stream)\n```');
+    // SC-003: no `(empty)` substring anywhere in the rendered alert body.
+    expect(body).not.toContain('(empty)');
   });
 
-  it('neutralizes backtick-poisoned stderr so the outer fenced block stays closed', async () => {
+  it('neutralizes backtick-poisoned output so the outer fenced block stays closed', async () => {
     const { github, lastAddedBody } = makeAlertGithub();
     const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
 
@@ -310,7 +314,7 @@ describe('StageCommentManager.postFailureAlert', () => {
       evidence: {
         command: 'echo',
         exitDescriptor: 'exit 1',
-        stderrTail: 'before\n```\nafter',
+        outputTail: 'before\n```\nafter',
       },
     });
 
@@ -323,7 +327,7 @@ describe('StageCommentManager.postFailureAlert', () => {
     expect(inner).toContain('`​``');
   });
 
-  it('renders truncated stderr unchanged inside the fenced block', async () => {
+  it('renders truncated output unchanged inside the fenced block', async () => {
     const marker = '… truncated (kept last 30 lines / 4096 bytes) …';
     const { github, lastAddedBody } = makeAlertGithub();
     const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
@@ -333,7 +337,7 @@ describe('StageCommentManager.postFailureAlert', () => {
       evidence: {
         command: 'pnpm test',
         exitDescriptor: 'exit 1',
-        stderrTail: `${marker}\nline body`,
+        outputTail: `${marker}\nline body`,
       },
     });
 
@@ -361,7 +365,7 @@ describe('StageCommentManager.postFailureAlert', () => {
       errorEvidence: {
         command: 'pnpm test',
         exitDescriptor: 'exit 1',
-        stderrTail: 'oops',
+        outputTail: 'oops',
       },
     });
 
@@ -374,7 +378,7 @@ describe('StageCommentManager.postFailureAlert', () => {
       errorEvidence: {
         command: 'pnpm test',
         exitDescriptor: 'exit 1',
-        stderrTail: 'oops',
+        outputTail: 'oops',
       },
     });
 

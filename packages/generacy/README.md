@@ -293,6 +293,68 @@ for await (const line of readLines(childStdout)) {
 }
 ```
 
+## `cockpit resume` — re-arm a failed phase
+
+`generacy cockpit resume <issue>` is the engine-owned re-arm operation for a failed phase. On an issue carrying `failed:<phase>`, it applies the same label triple a naturally-paused-then-completed gate would have — the label monitor's next poll enqueues the issue, and the worker's phase resolver walks the preserved `completed:<earlier-phase>` chain to pick `<phase>` as the start phase. Failed-issue recovery becomes a one-liner instead of by-hand label surgery.
+
+### Accepted ref forms
+
+Same as every other cockpit verb (see [#822/#850](https://github.com/generacy-ai/generacy/pull/850) unified issue-ref grammar):
+
+- bare number: `42` — requires a resolvable GitHub `origin` in cwd
+- `owner/repo#N`: `generacy-ai/generacy#42`
+- full URL: `https://github.com/generacy-ai/generacy/issues/42`
+
+### Options
+
+| Flag | Description |
+|---|---|
+| `--workflow <name>` | Workflow-name override. Defaults to the issue's `workflow:<name>` label, or `speckit-feature` if absent. |
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Happy path (labels mutated) OR no-op (nothing to re-arm). |
+| `1` | Remote/transport failure — `gh` API call error mid-sequence. |
+| `2` | Argument error — missing `<issue>`, malformed ref, unresolvable bare number. |
+| `3` | Refusal — ambiguous or non-re-armable state. Stderr names the offending labels. |
+
+### Labels added / removed (happy path)
+
+**Added** (single API call, in order):
+- `waiting-for:<preceding-gate>`
+- `completed:<preceding-gate>`
+- `agent:paused`
+
+**Removed** (single API call, defensive):
+- `failed:<phase>` — always
+- `agent:error` — only if present
+- `phase:<phase>` — only if present
+
+`<preceding-gate>` is derived (not hardcoded) by inverting `GATE_MAPPING` from the orchestrator. For `speckit-feature` today: `failed:validate → implementation-review`, `failed:implement → tasks-review`, `failed:tasks → plan-review`, `failed:clarify → spec-review`. `failed:specify` and `failed:plan` have no preceding gate and fall to the refusal path.
+
+### Idempotency
+
+- No-op on non-failed issues: single-line stdout, zero mutations, exit 0.
+- Running `resume` twice on the same issue is safe — the second call either takes the no-op branch (if the failed set is already gone) or repeats the additions (GitHub's label add is idempotent).
+
+### Refusal semantics (all exit 3, zero mutations)
+
+| Branch | Trigger |
+|---|---|
+| Multiple failed labels | Fetched set contains ≥2 `failed:*` labels. |
+| Unknown phase | `failed:<phase>` where `<phase>` is not a workflow phase. |
+| No preceding gate | `<phase>` has no gate in the effective gate mapping — evidence points at `process:<workflow>` re-queue. |
+| Conflicting waiting | Existing `waiting-for:<other>` ≠ derived `<preceding-gate>`. |
+
+### Example
+
+```bash
+$ generacy cockpit resume generacy-ai/generacy#42
+resumed generacy-ai/generacy#42: re-armed phase=validate via preceding-gate=implementation-review; added=[waiting-for:implementation-review,completed:implementation-review,agent:paused] removed=[failed:validate,agent:error,phase:validate]
+```
+
 ## License
 
 MIT
