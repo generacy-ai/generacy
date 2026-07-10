@@ -47,9 +47,16 @@ function createMockLogger(): Logger {
 }
 
 function createMockGithub() {
+  // #910: `integrateClarificationAnswers` now calls
+  // `getIssueCommentsWithViewerAuth` (GraphQL). `postClarifications` still
+  // calls `getIssueComments` (REST) for dedup. Alias both mocks to the same
+  // vi.fn so existing tests that call `getIssueComments.mockResolvedValue()`
+  // continue to set the fixture for both call sites.
+  const getIssueComments = vi.fn().mockResolvedValue([]);
   return {
     addIssueComment: vi.fn().mockResolvedValue({ id: 99, body: '' }),
-    getIssueComments: vi.fn().mockResolvedValue([]),
+    getIssueComments,
+    getIssueCommentsWithViewerAuth: getIssueComments,
   };
 }
 

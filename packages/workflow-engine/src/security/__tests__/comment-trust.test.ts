@@ -268,7 +268,7 @@ describe('isTrustedCommentAuthor', () => {
       expect(c.logger.warn).toHaveBeenCalledTimes(1);
       const call = c.logger.warn.mock.calls[0]!;
       expect(call[0]).toMatch(/viewerDidAuthor missing\/non-boolean/i);
-      expect(call[1]).toEqual({ commentId: 4444, observedValue: undefined });
+      expect(call[1]).toEqual({ surface: 'pr-feedback', commentId: 4444, observedValue: undefined });
     });
 
     it('S5: viewerDidAuthor=null + NONE → none-untrusted + one warn', () => {
@@ -283,8 +283,76 @@ describe('isTrustedCommentAuthor', () => {
       expect(c.logger.warn).toHaveBeenCalledTimes(1);
       const call = c.logger.warn.mock.calls[0]!;
       expect(call[0]).toMatch(/viewerDidAuthor missing\/non-boolean/i);
-      expect(call[1]).toEqual({ commentId: 5555, observedValue: null });
+      expect(call[1]).toEqual({ surface: 'pr-feedback', commentId: 5555, observedValue: null });
     });
+
+    // #910: warn scope extended to answer-scanner and clarify-resume.
+    // These surfaces now fetch via getIssueCommentsWithViewerAuth (GraphQL),
+    // so the field is structurally required. Absence is a shape-drift alarm
+    // (SC-006 injected-drift case).
+    it.each(['answer-scanner', 'clarify-resume'] as const)(
+      'S4-#910: viewerDidAuthor=undefined on %s → warn fires with surface tag',
+      (surface) => {
+        const c = ctx();
+        const decision = isTrustedCommentAuthor(
+          makeComment({ id: 4477, authorAssociation: 'NONE', viewerDidAuthor: undefined }),
+          surface,
+          c,
+        );
+        expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+        expect(c.logger.warn).toHaveBeenCalledTimes(1);
+        const call = c.logger.warn.mock.calls[0]!;
+        expect(call[0]).toMatch(/viewerDidAuthor missing\/non-boolean/i);
+        expect(call[1]).toEqual({ surface, commentId: 4477, observedValue: undefined });
+      },
+    );
+
+    it.each(['answer-scanner', 'clarify-resume'] as const)(
+      'S5-#910: viewerDidAuthor=null on %s → warn fires with surface tag',
+      (surface) => {
+        const c = ctx();
+        const comment = makeComment({ id: 5577, authorAssociation: 'NONE' }) as Comment & {
+          viewerDidAuthor: null;
+        };
+        comment.viewerDidAuthor = null;
+        const decision = isTrustedCommentAuthor(comment, surface, c);
+        expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+        expect(c.logger.warn).toHaveBeenCalledTimes(1);
+        const call = c.logger.warn.mock.calls[0]!;
+        expect(call[0]).toMatch(/viewerDidAuthor missing\/non-boolean/i);
+        expect(call[1]).toEqual({ surface, commentId: 5577, observedValue: null });
+      },
+    );
+
+    // SC-006 healthy case: warn does NOT fire when the field is populated
+    // (either true or false) on the migrated surfaces.
+    it.each(['answer-scanner', 'clarify-resume', 'pr-feedback'] as const)(
+      'S6-#910: viewerDidAuthor=false on %s → no warn (healthy path)',
+      (surface) => {
+        const c = ctx();
+        const decision = isTrustedCommentAuthor(
+          makeComment({ authorAssociation: 'NONE', viewerDidAuthor: false }),
+          surface,
+          c,
+        );
+        expect(decision).toEqual({ trusted: false, reason: 'none-untrusted' });
+        expect(c.logger.warn).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['answer-scanner', 'clarify-resume', 'pr-feedback'] as const)(
+      'S7-#910: viewerDidAuthor=true on %s → trusted, no warn (healthy self-authored)',
+      (surface) => {
+        const c = ctx();
+        const decision = isTrustedCommentAuthor(
+          makeComment({ authorAssociation: 'NONE', viewerDidAuthor: true }),
+          surface,
+          c,
+        );
+        expect(decision).toEqual({ trusted: true, reason: 'self-authored' });
+        expect(c.logger.warn).not.toHaveBeenCalled();
+      },
+    );
 
     it('S6: botLogin wins over viewerDidAuthor=true (decision 1 fires first)', () => {
       const decision = isTrustedCommentAuthor(

@@ -130,14 +130,31 @@ export async function buildTrustedIssueCommentsBlock(
   const trustConfig = tryLoadCommentTrustConfig(workdir, context.logger);
   const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
 
+  // #910: switched from REST getIssueComments() to GraphQL
+  // getIssueCommentsWithViewerAuth() so App-identity clusters' own posts
+  // carry the viewerDidAuthor primitive and pass through the trust helper
+  // as `self-authored`. Retry once on transient failure; fail closed on
+  // second failure (FR-010 — no REST fallback). The final failure lands
+  // on the same `(no comments available)` string as before.
   let comments: Comment[];
   try {
     const client = createGitHubClient(workdir);
     const repoInfo = await client.getRepoInfo();
-    comments = await client.getIssueComments(repoInfo.owner, repoInfo.repo, issueNumber);
+    try {
+      comments = await client.getIssueCommentsWithViewerAuth(
+        repoInfo.owner, repoInfo.repo, issueNumber,
+      );
+    } catch (firstErr) {
+      context.logger.warn(
+        `getIssueCommentsWithViewerAuth failed for issue #${issueNumber}; retrying once: ${firstErr instanceof Error ? firstErr.message : String(firstErr)}`,
+      );
+      comments = await client.getIssueCommentsWithViewerAuth(
+        repoInfo.owner, repoInfo.repo, issueNumber,
+      );
+    }
   } catch (error) {
     context.logger.warn(
-      `Failed to fetch issue #${issueNumber} comments for clarify resume — proceeding with empty context: ${error instanceof Error ? error.message : String(error)}`,
+      `getIssueCommentsWithViewerAuth failed twice for issue #${issueNumber}; failing closed (no REST fallback): ${error instanceof Error ? error.message : String(error)}`,
     );
     return wrapUntrustedData('(no comments available)', `issue #${issueNumber} comments`);
   }

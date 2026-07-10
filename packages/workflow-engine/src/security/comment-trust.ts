@@ -74,6 +74,18 @@ const TIER_TO_UNTRUSTED_REASON: Record<string, TrustReason> = {
 };
 
 /**
+ * Surfaces whose fetch path populates `viewerDidAuthor` via GraphQL — a
+ * missing/non-boolean value on these surfaces is a shape-drift alarm
+ * (wrong-method trap for a future refactor that routes through REST). See
+ * #878 (pr-feedback) and #910 (answer-scanner + clarify-resume).
+ */
+const MIGRATED_SURFACES: ReadonlySet<TrustSurface> = new Set([
+  'pr-feedback',
+  'answer-scanner',
+  'clarify-resume',
+]);
+
+/**
  * Decide whether a comment author is trusted for the given ingestion surface.
  *
  * Pure function except for the SC-008 warn on unknown tier — no file I/O,
@@ -97,21 +109,23 @@ export function isTrustedCommentAuthor(
     }
   }
 
-  // 1.5 Self-authored comment (#878) — replaces the login-comparison
-  //     cluster-identity path from #869/#874. Uses GraphQL's viewerDidAuthor
-  //     primitive, which is keyed on the authenticated App identity and is
-  //     stable across installation-token rotation. The warn on non-boolean
-  //     values (Q3→D) is scoped to the `pr-feedback` surface per FR-002 —
-  //     only that surface populates the field via `getPRReviewThreads()`,
-  //     so a missing value on other surfaces is a by-design absence, not
-  //     shape drift.
+  // 1.5 Self-authored comment (#878, extended to answer-scanner + clarify-resume
+  //     in #910). Uses GraphQL's viewerDidAuthor primitive, keyed on the
+  //     authenticated App identity — stable across installation-token
+  //     rotation. The warn on non-boolean values (Q3→D) is scoped to the
+  //     migrated surfaces: pr-feedback (via `getPRReviewThreads()`),
+  //     answer-scanner and clarify-resume (via
+  //     `getIssueCommentsWithViewerAuth()`). On these fetch paths the field
+  //     is structurally required; absence is a shape-drift alarm — including
+  //     the case of a future caller that accidentally routes through the
+  //     REST `getIssueComments()` (wrong-method trap).
   if (comment.viewerDidAuthor === true) {
     return { trusted: true, reason: 'self-authored' };
   }
-  if (surface === 'pr-feedback' && comment.viewerDidAuthor !== false) {
+  if (MIGRATED_SURFACES.has(surface) && comment.viewerDidAuthor !== false) {
     ctx.logger.warn(
       'viewerDidAuthor missing/non-boolean on comment; treating as not self-authored',
-      { commentId: comment.id, observedValue: comment.viewerDidAuthor },
+      { surface, commentId: comment.id, observedValue: comment.viewerDidAuthor },
     );
   }
 
