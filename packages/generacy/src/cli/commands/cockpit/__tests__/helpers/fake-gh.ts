@@ -6,11 +6,13 @@ import type {
   IssueComment,
   IssueLabelsResult,
   IssueStateResult,
+  LinkMethod,
   ListIssuesOptions,
   MergeResult,
   OpenPrForBranch,
   PullRequestDetail,
   PullRequestRef,
+  PullRequestRefResolution,
   PullRequestSummary,
   RequiredChecksResult,
 } from '@generacy-ai/cockpit';
@@ -110,9 +112,9 @@ export class FakeGh implements GhWrapper {
     };
   }
 
-  async resolveIssueToPRRef(repo: string, issue: number): Promise<PullRequestRef | null> {
+  async resolveIssueToPRRef(repo: string, issue: number): Promise<PullRequestRefResolution> {
     this.calls.push({ method: 'resolveIssueToPRRef', args: [repo, issue] });
-    throw new Error('resolveIssueToPRRef not stubbed in FakeGh (watch/status sensor)');
+    return { kind: 'unresolved' };
   }
 
   async getPullRequestDetail(repo: string, prNumber: number): Promise<PullRequestDetail> {
@@ -226,6 +228,27 @@ export function makeIssue(overrides: Partial<Issue> & { number: number }): Issue
     createdAt: `2026-06-${String(overrides.number).padStart(2, '0')}T00:00:00Z`,
     ...overrides,
   };
+}
+
+export function fakeResolvedRef(
+  ref: PullRequestRef,
+  linkMethod: LinkMethod = 'closing-refs',
+): PullRequestRefResolution {
+  return { kind: 'resolved', ref, linkMethod };
+}
+
+export function fakePrIsDraft(
+  candidates: PullRequestRef[],
+  linkMethod: LinkMethod,
+): PullRequestRefResolution {
+  return { kind: 'pr-is-draft', candidates, linkMethod };
+}
+
+export function fakeAmbiguous(
+  candidates: PullRequestRef[],
+  linkMethod: LinkMethod,
+): PullRequestRefResolution {
+  return { kind: 'ambiguous', candidates, linkMethod };
 }
 
 export function makePr(overrides: Partial<Issue> & { number: number }): Issue {

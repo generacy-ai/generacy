@@ -11,11 +11,17 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { runQueue, type PlanFetcher } from '../queue.js';
-import { FakeGh } from './helpers/fake-gh.js';
-import type { GhWrapper, IssueStateResult, PullRequestRef } from '@generacy-ai/cockpit';
+import { FakeGh, fakeResolvedRef } from './helpers/fake-gh.js';
+import type {
+  GhWrapper,
+  IssueStateResult,
+  PullRequestRef,
+  PullRequestRefResolution,
+} from '@generacy-ai/cockpit';
 
 interface IssueSeed {
   state?: 'OPEN' | 'CLOSED';
+  stateReason?: 'COMPLETED' | 'NOT_PLANNED' | null;
   labels?: string[];
   assignees?: string[];
   title?: string;
@@ -34,7 +40,7 @@ function stubGhWrapper(
       if (seed?.notFound) throw new Error('not found');
       return {
         state: seed?.state ?? 'OPEN',
-        stateReason: null,
+        stateReason: seed?.stateReason ?? null,
         closedAt: null,
         labels: seed?.labels ?? [],
         assignees: seed?.assignees ?? [],
@@ -42,9 +48,15 @@ function stubGhWrapper(
       };
     }),
     resolveIssueToPRRef: vi.fn(
-      async (repo: string, n: number): Promise<PullRequestRef | null> => {
+      async (repo: string, n: number): Promise<PullRequestRefResolution> => {
         const seed = states[`${repo}#${n}`];
-        return seed?.prRef ?? null;
+        // Resolver returns only OPEN non-draft PRs. Non-OPEN PRs are surfaced via
+        // issue stateReason. Seeds with an OPEN prRef produce a `resolved` result;
+        // any other seed reports as `unresolved`.
+        if (seed?.prRef != null && seed.prRef.state === 'OPEN' && !seed.prRef.draft) {
+          return fakeResolvedRef(seed.prRef);
+        }
+        return { kind: 'unresolved' };
       },
     ),
     postIssueComment: vi.fn(),
@@ -154,6 +166,8 @@ describe('runQueue — plan.md dependency warnings (#864)', () => {
     const cockpitGh = stubGhWrapper({
       'owner/repo#2': {
         state: 'CLOSED',
+        // Merged deps close their linked issue with stateReason='COMPLETED'.
+        stateReason: 'COMPLETED',
         prRef: {
           number: 100,
           url: 'x',

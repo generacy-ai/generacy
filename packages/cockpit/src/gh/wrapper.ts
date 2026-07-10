@@ -46,6 +46,43 @@ export interface PullRequestRef {
   headRefName: string;
 }
 
+/**
+ * Named union of the three resolution tiers used by `resolveIssueToPRRef`.
+ * Consumers must not depend on the specific string values beyond equality — they
+ * are stable identifiers, not human copy. Serialized verbatim into JSON payloads.
+ */
+export type LinkMethod = 'closing-refs' | 'branch-name' | 'pr-body';
+
+/**
+ * Reduced-shape PR record for multi-candidate ambiguity/only-drafts payloads.
+ * Distinct from `PullRequestRef` (which has `state`) — the candidate list is
+ * always open-PRs-only, so `state` is implicit.
+ */
+export interface PrCandidate {
+  number: number;
+  url: string;
+  isDraft: boolean;
+  headRefName: string;
+}
+
+/**
+ * Discriminated-union result of `resolveIssueToPRRef`.
+ *
+ * Invariants (enforced by the resolver; callers may `assert`/exhaust but do
+ * not re-check):
+ *   I-1: `kind === 'ambiguous'`   ⇒ `candidates.length >= 2` ∧ ∀c: c.draft === false
+ *   I-2: `kind === 'pr-is-draft'` ⇒ `candidates.length >= 1` ∧ ∀c: c.draft === true
+ *   I-3: `kind === 'resolved'`    ⇒ `ref.draft === false` ∧ `ref.state === 'OPEN'`
+ *   I-4: `kind === 'unresolved'`  ⇒ no other fields present (zero-field variant)
+ *   I-5: `linkMethod` is one of 'closing-refs' | 'branch-name' | 'pr-body' —
+ *        never undefined on the three non-`unresolved` kinds.
+ */
+export type PullRequestRefResolution =
+  | { kind: 'resolved'; ref: PullRequestRef; linkMethod: LinkMethod }
+  | { kind: 'ambiguous'; candidates: PullRequestRef[]; linkMethod: LinkMethod }
+  | { kind: 'pr-is-draft'; candidates: PullRequestRef[]; linkMethod: LinkMethod }
+  | { kind: 'unresolved' };
+
 export interface PullRequestDetail {
   number: number;
   title: string;
@@ -125,7 +162,7 @@ export interface GhWrapper {
   getPullRequestCheckRuns(repo: string, prNumber: number): Promise<CheckRunSummary[]>;
   resolveIssueToPR(repo: string, issueNumber: number): Promise<number | null>;
   getPullRequest(repo: string, prNumber: number): Promise<PullRequestSummary>;
-  resolveIssueToPRRef(repo: string, issue: number): Promise<PullRequestRef | null>;
+  resolveIssueToPRRef(repo: string, issue: number): Promise<PullRequestRefResolution>;
   getPullRequestDetail(repo: string, prNumber: number): Promise<PullRequestDetail>;
   mergePullRequest(
     repo: string,
@@ -503,6 +540,24 @@ function parseCheckRuns(stdout: string): CheckRunSummary[] {
   }));
 }
 
+function evaluateTier(
+  candidates: PullRequestRef[],
+  linkMethod: LinkMethod,
+): PullRequestRefResolution | null {
+  const nonDrafts = candidates.filter((p) => !p.draft);
+  if (nonDrafts.length === 1) {
+    return { kind: 'resolved', ref: nonDrafts[0]!, linkMethod };
+  }
+  if (nonDrafts.length >= 2) {
+    return { kind: 'ambiguous', candidates: nonDrafts, linkMethod };
+  }
+  const drafts = candidates.filter((p) => p.draft);
+  if (drafts.length >= 1) {
+    return { kind: 'pr-is-draft', candidates: drafts, linkMethod };
+  }
+  return null;
+}
+
 function failIfNonZero(result: { stdout: string; stderr: string; exitCode: number }, op: string): void {
   if (result.exitCode !== 0) {
     throw new Error(`gh ${op} failed (exit ${result.exitCode}): ${result.stderr.trim()}`);
@@ -674,49 +729,27 @@ export class GhCliWrapper implements GhWrapper {
   async resolveIssueToPRRef(
     repo: string,
     issue: number,
-  ): Promise<PullRequestRef | null> {
-    const searchResult = await this.runner('gh', [
-      'pr',
-      'list',
-      '--repo',
-      repo,
-      '--search',
-      `linked:${issue}`,
-      '--state',
-      'open',
-      '--json',
-      'number,url,state,isDraft,headRefName',
-      '--limit',
-      '1',
-    ]);
-    failIfNonZero(searchResult, 'pr list (resolveIssueToPR search)');
+  ): Promise<PullRequestRefResolution> {
+    const tier1 = await this.queryTier1ClosingRefs(repo, issue);
+    const t1 = evaluateTier(tier1, 'closing-refs');
+    if (t1 != null) return t1;
 
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(searchResult.stdout);
-    } catch {
-      throw new Error(
-        `gh returned malformed JSON for resolveIssueToPR search: ${searchResult.stdout.slice(0, 200)}`,
-      );
-    }
-    const arr = z.array(PullRequestRefRawSchema).safeParse(parsed);
-    if (!arr.success) {
-      throw new Error(
-        `gh resolveIssueToPR search JSON shape mismatch: ${arr.error.message}`,
-      );
-    }
-    if (arr.data.length > 0) {
-      const raw = arr.data[0]!;
-      return {
-        number: raw.number,
-        url: raw.url,
-        state: normalizePullRequestState(raw.state),
-        draft: raw.isDraft ?? false,
-        headRefName: raw.headRefName,
-      };
-    }
+    const tier2 = await this.queryTier2BranchName(repo, issue);
+    const t2 = evaluateTier(tier2, 'branch-name');
+    if (t2 != null) return t2;
 
-    const fallbackResult = await this.runner('gh', [
+    const tier3 = await this.queryTier3PrBody(repo, issue);
+    const t3 = evaluateTier(tier3, 'pr-body');
+    if (t3 != null) return t3;
+
+    return { kind: 'unresolved' };
+  }
+
+  private async queryTier1ClosingRefs(
+    repo: string,
+    issue: number,
+  ): Promise<PullRequestRef[]> {
+    const result = await this.runner('gh', [
       'issue',
       'view',
       String(issue),
@@ -725,17 +758,17 @@ export class GhCliWrapper implements GhWrapper {
       '--json',
       'closedByPullRequestsReferences',
     ]);
-    failIfNonZero(fallbackResult, 'issue view (resolveIssueToPR fallback)');
+    failIfNonZero(result, 'issue view (resolveIssueToPRRef tier1 closing-refs)');
 
-    let fallbackParsed: unknown;
+    let parsed: unknown;
     try {
-      fallbackParsed = JSON.parse(fallbackResult.stdout);
+      parsed = JSON.parse(result.stdout);
     } catch {
       throw new Error(
-        `gh returned malformed JSON for resolveIssueToPR fallback: ${fallbackResult.stdout.slice(0, 200)}`,
+        `gh returned malformed JSON for resolveIssueToPRRef tier1: ${result.stdout.slice(0, 200)}`,
       );
     }
-    const fallbackShape = z
+    const shape = z
       .object({
         closedByPullRequestsReferences: z
           .array(
@@ -752,21 +785,87 @@ export class GhCliWrapper implements GhWrapper {
           .default([]),
       })
       .passthrough()
-      .safeParse(fallbackParsed);
-    if (!fallbackShape.success) {
+      .safeParse(parsed);
+    if (!shape.success) {
       throw new Error(
-        `gh resolveIssueToPR fallback JSON shape mismatch: ${fallbackShape.error.message}`,
+        `gh resolveIssueToPRRef tier1 JSON shape mismatch: ${shape.error.message}`,
       );
     }
-    const first = fallbackShape.data.closedByPullRequestsReferences[0];
-    if (!first) return null;
-    return {
-      number: first.number,
-      url: first.url,
-      state: normalizePullRequestState(first.state),
-      draft: first.isDraft ?? false,
-      headRefName: first.headRefName,
-    };
+    return shape.data.closedByPullRequestsReferences
+      .map<PullRequestRef>((raw) => ({
+        number: raw.number,
+        url: raw.url,
+        state: normalizePullRequestState(raw.state),
+        draft: raw.isDraft ?? false,
+        headRefName: raw.headRefName,
+      }))
+      .filter((p) => p.state === 'OPEN');
+  }
+
+  private async queryTier2BranchName(
+    repo: string,
+    issue: number,
+  ): Promise<PullRequestRef[]> {
+    return this.queryPrListSearch(
+      repo,
+      `head:${issue}-`,
+      'pr list (resolveIssueToPRRef tier2 branch-name)',
+    );
+  }
+
+  private async queryTier3PrBody(
+    repo: string,
+    issue: number,
+  ): Promise<PullRequestRef[]> {
+    return this.queryPrListSearch(
+      repo,
+      `${issue} in:body`,
+      'pr list (resolveIssueToPRRef tier3 pr-body)',
+    );
+  }
+
+  private async queryPrListSearch(
+    repo: string,
+    search: string,
+    op: string,
+  ): Promise<PullRequestRef[]> {
+    const result = await this.runner('gh', [
+      'pr',
+      'list',
+      '--repo',
+      repo,
+      '--state',
+      'open',
+      '--search',
+      search,
+      '--json',
+      'number,url,state,isDraft,headRefName',
+      '--limit',
+      '100',
+    ]);
+    failIfNonZero(result, op);
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      throw new Error(
+        `gh returned malformed JSON for ${op}: ${result.stdout.slice(0, 200)}`,
+      );
+    }
+    const arr = z.array(PullRequestRefRawSchema).safeParse(parsed);
+    if (!arr.success) {
+      throw new Error(`gh ${op} JSON shape mismatch: ${arr.error.message}`);
+    }
+    return arr.data
+      .map<PullRequestRef>((raw) => ({
+        number: raw.number,
+        url: raw.url,
+        state: normalizePullRequestState(raw.state),
+        draft: raw.isDraft ?? false,
+        headRefName: raw.headRefName,
+      }))
+      .filter((p) => p.state === 'OPEN');
   }
 
   async getPullRequestDetail(

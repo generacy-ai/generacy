@@ -120,14 +120,14 @@ function makeDefaultPlanFetcher(
   gh: GhWrapper,
 ): PlanFetcher {
   return async (ref: IssueRef): Promise<string | null> => {
-    let prRef;
+    let resolution;
     try {
-      prRef = await gh.resolveIssueToPRRef(ref.repo, ref.number);
+      resolution = await gh.resolveIssueToPRRef(ref.repo, ref.number);
     } catch {
       return null;
     }
-    if (prRef == null) return null;
-    const branch = prRef.headRefName;
+    if (resolution.kind !== 'resolved') return null;
+    const branch = resolution.ref.headRefName;
     const specDir = `specs/${branch}/plan.md`;
     const apiPath = `repos/${ref.repo}/contents/${encodeURIComponent(specDir).replace(/%2F/g, '/')}?ref=${encodeURIComponent(branch)}`;
     const result = await runner('gh', ['api', apiPath, '--jq', '.content']);
@@ -152,18 +152,20 @@ async function classifyDependency(
   gh: GhWrapper,
 ): Promise<DependencyWarningState | null> {
   const nwo = `${dep.owner}/${dep.repo}`;
-  let prRef;
+  let resolution;
   try {
-    prRef = await gh.resolveIssueToPRRef(nwo, dep.number);
+    resolution = await gh.resolveIssueToPRRef(nwo, dep.number);
   } catch {
     return 'unresolved';
   }
-  if (prRef != null) {
-    if (prRef.state === 'MERGED') return null;
-    if (prRef.state === 'CLOSED') return 'closed-unmerged';
+  // Resolver returns only OPEN, non-draft PRs, so a resolved/ambiguous/pr-is-draft
+  // result means the dep is still in flight. MERGED/CLOSED PRs are surfaced via
+  // the issue's stateReason below.
+  if (resolution.kind !== 'unresolved') {
     return 'unresolved';
   }
-  // No PR linked — fall back to the issue's state.
+  // No open PR linked — fall back to the issue's state. `stateReason` disambiguates
+  // merged deps (COMPLETED — no warning) from truly closed-unmerged ones.
   let issueState: IssueStateResult | null = null;
   try {
     issueState = await gh.fetchIssueState(nwo, dep.number);
@@ -171,7 +173,9 @@ async function classifyDependency(
     return 'unresolved';
   }
   if (issueState == null) return 'unresolved';
-  if (issueState.state === 'CLOSED') return 'closed-unmerged';
+  if (issueState.state === 'CLOSED') {
+    return issueState.stateReason === 'COMPLETED' ? null : 'closed-unmerged';
+  }
   return 'unresolved';
 }
 

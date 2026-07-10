@@ -29,7 +29,11 @@ const validate = ajv.compile(schema);
 function stubGh(overrides: Partial<GhWrapper> = {}): GhWrapper {
   const base: Partial<GhWrapper> = {
     fetchIssueLabels: vi.fn(async () => ({ labels: fixture.labels })),
-    resolveIssueToPRRef: vi.fn(async () => fixture.prRef),
+    resolveIssueToPRRef: vi.fn(async () => ({
+      kind: 'resolved',
+      ref: fixture.prRef,
+      linkMethod: 'closing-refs',
+    })),
     getPullRequestDetail: vi.fn(async () => fixture.prDetail),
     getPullRequestCheckRuns: vi.fn(async () => fixture.checks),
     listIssues: vi.fn(),
@@ -76,13 +80,74 @@ describe('cockpit context — implementation-review', () => {
   });
 
   it('exits 3 when the PR-scoped gate has no linked PR', async () => {
-    const gh = stubGh({ resolveIssueToPRRef: vi.fn(async () => null) });
+    const gh = stubGh({
+      resolveIssueToPRRef: vi.fn(async () => ({ kind: 'unresolved' })),
+    });
     await expect(
       runContext(fixture.issue, { gh, stdout: () => {} }),
     ).rejects.toMatchObject({
       name: 'CockpitExit',
       code: 3,
       message: expect.stringContaining('no linked PR resolved'),
+    });
+  });
+
+  it('exits 3 when the resolver reports pr-is-draft (single candidate)', async () => {
+    const gh = stubGh({
+      resolveIssueToPRRef: vi.fn(async () => ({
+        kind: 'pr-is-draft',
+        candidates: [
+          {
+            number: 22,
+            url: 'https://github.com/o/r/pull/22',
+            state: 'OPEN',
+            draft: true,
+            headRefName: '011-branch',
+          },
+        ],
+        linkMethod: 'pr-body',
+      })),
+    });
+    await expect(
+      runContext(fixture.issue, { gh, stdout: () => {} }),
+    ).rejects.toMatchObject({
+      name: 'CockpitExit',
+      code: 3,
+      message: expect.stringContaining('drafts (via pr-body): #22'),
+    });
+  });
+
+  it('exits 3 when the resolver reports ambiguous (multi-candidate)', async () => {
+    const gh = stubGh({
+      resolveIssueToPRRef: vi.fn(async () => ({
+        kind: 'ambiguous',
+        candidates: [
+          {
+            number: 42,
+            url: 'https://github.com/o/r/pull/42',
+            state: 'OPEN',
+            draft: false,
+            headRefName: '9-first-try',
+          },
+          {
+            number: 47,
+            url: 'https://github.com/o/r/pull/47',
+            state: 'OPEN',
+            draft: false,
+            headRefName: '9-do-it-properly',
+          },
+        ],
+        linkMethod: 'branch-name',
+      })),
+    });
+    await expect(
+      runContext(fixture.issue, { gh, stdout: () => {} }),
+    ).rejects.toMatchObject({
+      name: 'CockpitExit',
+      code: 3,
+      message: expect.stringContaining(
+        'multiple PRs match via branch-name: #42, #47',
+      ),
     });
   });
 
@@ -98,7 +163,9 @@ describe('cockpit context — implementation-review', () => {
   });
 
   it('throws CockpitExit (typed exception) not a generic Error', async () => {
-    const gh = stubGh({ resolveIssueToPRRef: vi.fn(async () => null) });
+    const gh = stubGh({
+      resolveIssueToPRRef: vi.fn(async () => ({ kind: 'unresolved' })),
+    });
     try {
       await runContext(fixture.issue, { gh, stdout: () => {} });
       throw new Error('should have thrown');
