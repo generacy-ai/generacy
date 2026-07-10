@@ -2,6 +2,12 @@
 
 Frontend application for Generacy.
 
+## Per-feature technology notes
+
+Per-feature technology, dependency, and integration notes live in
+`specs/<feature>/stack.md` on each feature branch. This file is not
+updated by `/plan` — see [#899](https://github.com/generacy-ai/generacy/issues/899).
+
 ## Development
 
 ```bash
