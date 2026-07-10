@@ -35,6 +35,7 @@ import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
+import type { HandlerOutcome } from './handler-outcome.js';
 import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { PrLinker, type PrLinkInput } from './pr-linker.js';
@@ -43,12 +44,21 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 
 const execFileAsync = promisify(execFile);
 
-/** Label added on the success path. */
+/**
+ * Operator-advance marker consumed on the success path (#902 FR-001).
+ * Removing this on success is what prevents the second-conflict-cycle
+ * insta-resume through the generic pair path.
+ */
 const COMPLETED_MERGE_CONFLICTS_LABEL = 'completed:merge-conflicts';
 /** Label that must be present + removed on success. */
 const WAITING_FOR_MERGE_CONFLICTS_LABEL = 'waiting-for:merge-conflicts';
 /** Label removed on success alongside `waiting-for:merge-conflicts`. */
 const AGENT_PAUSED_LABEL = 'agent:paused';
+/**
+ * Zombie-ownership label cleared on success (#902 FR-001). Left set by #898,
+ * caused sniplink#6/#7/#8 dead-park.
+ */
+const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
 /** Label added when the one autonomous attempt fails to resolve the conflict. */
 const BLOCKED_STUCK_MERGE_CONFLICTS_LABEL = 'blocked:stuck-merge-conflicts';
 
@@ -110,9 +120,18 @@ export class MergeConflictHandler {
   }
 
   /**
-   * Process a merge-conflict resolution task.
+   * Process a merge-conflict resolution task (#902 FR-005 return type).
+   *
+   * Returns a `HandlerOutcome` — the dispatcher (via `ClaudeCliWorker.handle`)
+   * routes on the discriminant to decide re-arm vs failed-terminal.
+   *
+   * Success/no-op/push-succeeded → `re-armed` with `startPhase` from
+   * `metadata.phase`. Blocked branches → `failed` with evidence. Missing
+   * `metadata.phase` at a would-be `re-armed` return → fail-loud path
+   * (FR-004): applies `blocked:stuck-merge-conflicts`, returns `failed` with
+   * evidence citing the missing pause-context.
    */
-  async handle(item: QueueItem, checkoutPath: string): Promise<void> {
+  async handle(item: QueueItem, checkoutPath: string): Promise<HandlerOutcome> {
     const { owner, repo, issueNumber } = item;
     const workflowId = `${owner}/${repo}#${issueNumber}`;
     const metadata = item.metadata as ResolveMergeConflictsMetadata | undefined;
@@ -154,21 +173,16 @@ export class MergeConflictHandler {
     }
 
     if (!pr) {
-      await this.applyBlockedDisposition(
-        github,
-        owner,
-        repo,
-        issueNumber,
-        {
-          unresolvedPaths: [],
-          partiallyResolvedPaths: [],
-          baseRef: '',
-          branchTipSha: '',
-          attemptedAt: new Date().toISOString(),
-          reason: 'no linked PR',
-        },
-      );
-      return;
+      const evidence: BlockedStuckMergeConflictsEvidence = {
+        unresolvedPaths: [],
+        partiallyResolvedPaths: [],
+        baseRef: '',
+        branchTipSha: '',
+        attemptedAt: new Date().toISOString(),
+        reason: 'no linked PR',
+      };
+      await this.applyBlockedDisposition(github, owner, repo, issueNumber, evidence);
+      return { outcome: 'failed', evidence };
     }
 
     const branchName = pr.head.ref;
@@ -206,15 +220,14 @@ export class MergeConflictHandler {
     }
 
     // Guard: no-op merge — the branch is already up-to-date with base. Clear
-    // labels and return success without spending the agent attempt.
+    // labels and return re-armed without spending the agent attempt.
     // `git merge-base --is-ancestor <base> HEAD` exit 0 => base is ancestor of HEAD.
     if (await this.baseIsAncestor(checkoutPath, baseRef)) {
       this.logger.info(
         { owner, repo, issueNumber, baseRef, branch: branchName },
         'MergeConflictHandler: no-op merge (branch already up to date) — clearing labels',
       );
-      await this.applySuccessDisposition(github, owner, repo, issueNumber);
-      return;
+      return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath);
     }
 
     // Step 7: git merge origin/<base>. Retry ONLY on env classes (index.lock,
@@ -251,8 +264,9 @@ export class MergeConflictHandler {
     if (mergeExitedCleanly) {
       // The merge command reported success but we thought there'd be a
       // conflict. Push the resulting merge commit and finish.
-      await this.pushAndSucceed(github, checkoutPath, branchName, owner, repo, issueNumber, baseRef);
-      return;
+      return this.pushAndSucceed(
+        github, checkoutPath, branchName, owner, repo, issueNumber, baseRef, metadata,
+      );
     }
 
     // Step 8: enumerate conflicted paths after the failed merge.
@@ -282,15 +296,16 @@ export class MergeConflictHandler {
       } catch {
         // best-effort
       }
-      await this.applyBlockedDisposition(github, owner, repo, issueNumber, {
+      const evidence: BlockedStuckMergeConflictsEvidence = {
         unresolvedPaths: [],
         partiallyResolvedPaths: [],
         baseRef,
         branchTipSha: await this.getBranchTipSha(checkoutPath),
         attemptedAt: new Date().toISOString(),
         reason: `git merge failed without conflicts: ${String(mergeAttemptError ?? 'unknown')}`,
-      });
-      return;
+      };
+      await this.applyBlockedDisposition(github, owner, repo, issueNumber, evidence);
+      return { outcome: 'failed', evidence };
     }
 
     // Steps 9-10: enumerate open PRs targeting the same base and cache their
@@ -356,18 +371,21 @@ export class MergeConflictHandler {
         // best-effort
       }
 
-      await this.applyBlockedDisposition(github, owner, repo, issueNumber, {
+      const evidence: BlockedStuckMergeConflictsEvidence = {
         unresolvedPaths: verification.unresolvedPaths,
         partiallyResolvedPaths,
         baseRef,
         branchTipSha: await this.getBranchTipSha(checkoutPath),
         attemptedAt: new Date().toISOString(),
-      });
-      return;
+      };
+      await this.applyBlockedDisposition(github, owner, repo, issueNumber, evidence);
+      return { outcome: 'failed', evidence };
     }
 
     // Step 14: push the merge commit.
-    await this.pushAndSucceed(github, checkoutPath, branchName, owner, repo, issueNumber, baseRef);
+    return this.pushAndSucceed(
+      github, checkoutPath, branchName, owner, repo, issueNumber, baseRef, metadata,
+    );
   }
 
   /**
@@ -535,7 +553,7 @@ export class MergeConflictHandler {
   /**
    * `git push origin <branch>` with 3× retry on transient network errors.
    * Non-fast-forward rejection does NOT retry — it escalates to blocked.
-   * On success, applies the completed labels and returns.
+   * On success, applies the combined label cleanup and returns re-armed.
    */
   private async pushAndSucceed(
     github: GitHubClient,
@@ -545,7 +563,8 @@ export class MergeConflictHandler {
     repo: string,
     issueNumber: number,
     baseRef: string,
-  ): Promise<void> {
+    metadata: ResolveMergeConflictsMetadata | undefined,
+  ): Promise<HandlerOutcome> {
     let pushed = false;
     let lastErr: unknown;
     for (let attempt = 0; attempt < RETRY_BACKOFFS_MS.length + 1; attempt++) {
@@ -579,20 +598,75 @@ export class MergeConflictHandler {
         { err: String(lastErr), branchName, owner, repo, issueNumber },
         'MergeConflictHandler: git push exhausted — blocked disposition',
       );
-      await this.applyBlockedDisposition(github, owner, repo, issueNumber, {
+      const evidence: BlockedStuckMergeConflictsEvidence = {
         unresolvedPaths: [],
         partiallyResolvedPaths: [],
         baseRef,
         branchTipSha: await this.getBranchTipSha(checkoutPath),
         attemptedAt: new Date().toISOString(),
         reason: `git push failed: ${String(lastErr ?? 'unknown')}`,
-      });
-      return;
+      };
+      await this.applyBlockedDisposition(github, owner, repo, issueNumber, evidence);
+      return { outcome: 'failed', evidence };
+    }
+
+    return this.finishSuccess(github, owner, repo, issueNumber, metadata, baseRef, checkoutPath);
+  }
+
+  /**
+   * Success-terminal branch (#902 FR-001, FR-004, FR-007).
+   *
+   * - FR-001: consume `completed:merge-conflicts` and clear `agent:in-progress` /
+   *   `agent:paused` residue so the next natural conflict pause is not
+   *   insta-resumed by the generic pair path.
+   * - FR-004: fail-loud if `metadata.phase` is missing — never re-derive from
+   *   labels. Applies `blocked:stuck-merge-conflicts`, returns `failed` with
+   *   evidence citing the missing pause-context.
+   * - FR-007: one combined `gh issue edit --remove-label …` invocation (via
+   *   `github.removeLabels` which already batches removes into a single call).
+   */
+  private async finishSuccess(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    metadata: ResolveMergeConflictsMetadata | undefined,
+    baseRef: string,
+    checkoutPath: string,
+  ): Promise<HandlerOutcome> {
+    // FR-004: fail-loud if pause-context is missing. Never re-derive from labels.
+    if (!metadata?.phase) {
+      const evidence: BlockedStuckMergeConflictsEvidence = {
+        unresolvedPaths: [],
+        partiallyResolvedPaths: [],
+        baseRef,
+        branchTipSha: await this.getBranchTipSha(checkoutPath),
+        attemptedAt: new Date().toISOString(),
+        reason: 'pause-context missing: phase',
+      };
+      this.logger.error(
+        { owner, repo, issueNumber },
+        'MergeConflictHandler: pause-context missing at success return — fail-loud (FR-004)',
+      );
+      await this.applyBlockedDisposition(github, owner, repo, issueNumber, evidence);
+      return { outcome: 'failed', evidence };
     }
 
     await this.applySuccessDisposition(github, owner, repo, issueNumber);
+    return { outcome: 're-armed', startPhase: metadata.phase };
   }
 
+  /**
+   * #902 FR-007: single combined `gh issue edit --remove-label …` for all four
+   * ownership-transition removes. No adds — re-arm is direct enqueue, not a
+   * resume-pair, so no `waiting-for:<gate>` / `completed:<gate>` labels are
+   * needed. The next `continue` item's normal in-progress labels are applied
+   * by `LabelManager.onResumeStart` when the phase loop enters.
+   *
+   * `github.removeLabels` batches all four `--remove-label` flags into one
+   * `gh issue edit` invocation — one HTTP round-trip, atomic at the label-set
+   * level (per contracts/handler-outcome.md §"Label edit shape").
+   */
   private async applySuccessDisposition(
     github: GitHubClient,
     owner: string,
@@ -600,27 +674,21 @@ export class MergeConflictHandler {
     issueNumber: number,
   ): Promise<void> {
     try {
-      await github.addLabels(owner, repo, issueNumber, [COMPLETED_MERGE_CONFLICTS_LABEL]);
-    } catch (err) {
-      this.logger.warn(
-        { err: String(err), issueNumber, label: COMPLETED_MERGE_CONFLICTS_LABEL },
-        'MergeConflictHandler: failed to add completed:merge-conflicts label',
-      );
-    }
-    try {
       await github.removeLabels(owner, repo, issueNumber, [
+        COMPLETED_MERGE_CONFLICTS_LABEL,
         WAITING_FOR_MERGE_CONFLICTS_LABEL,
+        AGENT_IN_PROGRESS_LABEL,
         AGENT_PAUSED_LABEL,
       ]);
     } catch (err) {
       this.logger.warn(
         { err: String(err), issueNumber },
-        'MergeConflictHandler: failed to remove waiting-for:merge-conflicts / agent:paused',
+        'MergeConflictHandler: failed to clear ownership-transition labels',
       );
     }
     this.logger.info(
       { owner, repo, issueNumber, disposition: 'success' },
-      'MergeConflictHandler: conflict resolved and pushed',
+      'MergeConflictHandler: conflict resolved — cleared ownership-transition labels',
     );
   }
 

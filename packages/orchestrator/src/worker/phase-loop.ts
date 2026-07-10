@@ -20,6 +20,7 @@ import { boundOutputTail } from './output-tail.js';
 import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
+import { writePauseContext } from './pause-context.js';
 import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
@@ -956,6 +957,18 @@ export class PhaseLoop {
           },
         },
       },
+    });
+
+    // #902 FR-003: persist pause-context BEFORE applying the pause label.
+    // The worker's MergeConflictHandler dispatch reads this to populate
+    // `metadata.phase` — the single source of truth for the interrupted phase.
+    // If the write throws, we do NOT apply the pause label — the pause simply
+    // doesn't materialize, preventing the dead-park class.
+    const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    await writePauseContext(context.checkoutPath, workflowId, {
+      phase,
+      writtenAt: new Date().toISOString(),
+      issueRef: workflowId,
     });
 
     await deps.labelManager.onGateHit(phase, gateLabel);

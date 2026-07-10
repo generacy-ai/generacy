@@ -24,6 +24,8 @@ import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
 import { MergeConflictHandler } from './merge-conflict-handler.js';
+import { readPauseContext, clearPauseContext } from './pause-context.js';
+import type { HandlerOutcome } from './handler-outcome.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { createAgentLauncher } from '../launcher/launcher-setup.js';
@@ -314,6 +316,27 @@ export class ClaudeCliWorker {
       if (item.command === 'resolve-merge-conflicts') {
         workerLogger.info('Routing to MergeConflictHandler for merge-conflict resolution');
 
+        // #902 FR-003: read the pause-context sidecar written by the phase-loop
+        // pause site. Populates `metadata.phase` — the single source of truth
+        // for the interrupted phase. Absence triggers the handler's fail-loud
+        // path (FR-004) — never re-derived from labels.
+        const pauseContext = await readPauseContext(checkoutPath, workflowId);
+        if (pauseContext) {
+          item.metadata = {
+            ...(item.metadata ?? {}),
+            phase: pauseContext.phase,
+          };
+          workerLogger.info(
+            { pausePhase: pauseContext.phase, writtenAt: pauseContext.writtenAt },
+            '#902: loaded pause-context sidecar — populated metadata.phase',
+          );
+        } else {
+          workerLogger.warn(
+            { workflowId },
+            '#902: pause-context sidecar missing — MergeConflictHandler will enter fail-loud path',
+          );
+        }
+
         const mergeConflictHandler = new MergeConflictHandler(
           this.config,
           workerLogger,
@@ -321,9 +344,12 @@ export class ClaudeCliWorker {
           this.sseEmitter,
         );
 
-        await mergeConflictHandler.handle(item, checkoutPath);
+        const outcome: HandlerOutcome = await mergeConflictHandler.handle(item, checkoutPath);
 
-        workerLogger.info('Merge-conflict resolution completed');
+        workerLogger.info(
+          { outcome: outcome.outcome },
+          'Merge-conflict resolution completed',
+        );
 
         this.sseEmitter?.({
           type: 'workflow:completed',
@@ -334,6 +360,44 @@ export class ClaudeCliWorker {
             totalPhases: 1,
           },
         });
+
+        // #902 FR-002/FR-008: on re-armed, build the rearm item and hand it to
+        // the dispatcher via `postComplete`. Dispatcher fires `enqueueIfAbsent`
+        // AFTER `queue.complete()` — the current itemKey is freed first, so no
+        // self-collision on the shared itemKey `<owner>/<repo>#<issue>`.
+        if (outcome.outcome === 're-armed') {
+          const rearmItem: QueueItem = {
+            owner: item.owner,
+            repo: item.repo,
+            issueNumber: item.issueNumber,
+            workflowName: item.workflowName,
+            command: 'continue',
+            priority: Date.now(),
+            enqueuedAt: new Date().toISOString(),
+            queueReason: 'resume',
+            userId: item.userId,
+            metadata: {
+              startPhase: outcome.startPhase,
+              resumeReason: 'merge-conflict-resolved',
+            },
+          };
+
+          // Best-effort sidecar cleanup — a stale file left behind is
+          // overwritten by the next pause (writes are unconditional).
+          try {
+            await clearPauseContext(checkoutPath, workflowId);
+          } catch (err) {
+            workerLogger.warn(
+              { err: String(err), workflowId },
+              '#902: failed to clear pause-context sidecar — will be overwritten on next pause',
+            );
+          }
+
+          return {
+            status: 'completed',
+            postComplete: { kind: 'rearm', rearmItem },
+          };
+        }
 
         return { status: 'completed' };
       }

@@ -387,6 +387,44 @@ export class WorkerDispatcher {
 
       // Success: complete the item
       await this.queue.complete(workerId, item);
+
+      // #902 FR-002/FR-008: fire post-complete side-effect AFTER queue.complete
+      // releases the itemKey — no self-collision with the source itemKey.
+      // Best-effort: transport errors + in-flight dedupe drops both recover
+      // via the next monitor poll cycle.
+      if (result.postComplete?.kind === 'rearm') {
+        try {
+          const enqueued = await this.queue.enqueueIfAbsent(result.postComplete.rearmItem);
+          if (!enqueued) {
+            this.logger.warn(
+              {
+                workerId,
+                owner: item.owner,
+                repo: item.repo,
+                issue: item.issueNumber,
+              },
+              'Rearm enqueue dropped (already in-flight) — deferred to next poll',
+            );
+          } else {
+            this.logger.info(
+              {
+                workerId,
+                owner: item.owner,
+                repo: item.repo,
+                issue: item.issueNumber,
+                rearmCommand: result.postComplete.rearmItem.command,
+              },
+              'Rearm item enqueued after queue.complete',
+            );
+          }
+        } catch (err) {
+          this.logger.error(
+            { err, workerId, owner: item.owner, repo: item.repo, issue: item.issueNumber },
+            'Rearm enqueue threw — pause labels intact for next poll',
+          );
+        }
+      }
+
       this.logger.info(
         { workerId, owner: item.owner, repo: item.repo, issue: item.issueNumber },
         'Worker completed successfully',
