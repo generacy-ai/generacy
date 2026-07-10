@@ -11,7 +11,7 @@ function stubGh(overrides: Partial<GhWrapper> = {}): GhWrapper {
     findOpenPrForBranch: vi.fn(async () => null),
     prDiffNames: vi.fn(async () => []),
     prDiffPatch: vi.fn(async () => ''),
-    resolveIssueToPRRef: vi.fn(async () => null),
+    resolveIssueToPRRef: vi.fn(async () => ({ kind: 'unresolved' })),
     getPullRequestDetail: vi.fn(),
     getPullRequestCheckRuns: vi.fn(async () => []),
     listIssues: vi.fn(),

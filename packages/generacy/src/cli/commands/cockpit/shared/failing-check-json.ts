@@ -1,6 +1,14 @@
+import type { LinkMethod, PrCandidate } from '@generacy-ai/cockpit';
 import type { FailingCheck } from './required-checks.js';
 
-export type RedReason = 'checks-failing' | 'missing-label' | 'unresolved';
+export type { LinkMethod, PrCandidate } from '@generacy-ai/cockpit';
+
+export type RedReason =
+  | 'checks-failing'
+  | 'missing-label'
+  | 'unresolved'
+  | 'pr-is-draft'
+  | 'ambiguous-resolution';
 
 export interface IssueRefWithState {
   owner: string;
@@ -13,14 +21,18 @@ export interface IssueRefWithState {
 export interface FailingCheckPayload {
   status: 'red';
   reason: RedReason;
-  pr: { number: number; url: string } | null;
+  pr: { number: number; url: string; linkMethod?: LinkMethod } | null;
+  candidates?: PrCandidate[];
+  linkMethod?: LinkMethod;
   failingChecks: FailingCheck[];
   issue?: IssueRefWithState;
 }
 
 export interface BuildFailingCheckInput {
   reason: RedReason;
-  pr: { number: number; url: string } | null;
+  pr: { number: number; url: string; linkMethod?: LinkMethod } | null;
+  candidates?: PrCandidate[];
+  linkMethod?: LinkMethod;
   failingChecks?: FailingCheck[];
   issue?: IssueRefWithState;
 }
@@ -28,7 +40,7 @@ export interface BuildFailingCheckInput {
 export function buildFailingCheckPayload(
   input: BuildFailingCheckInput,
 ): FailingCheckPayload {
-  const { reason, pr, failingChecks = [], issue } = input;
+  const { reason, pr, candidates, linkMethod, failingChecks = [], issue } = input;
 
   if (issue !== undefined) {
     // I-6: state and stateReason are paired — if state is set, stateReason
@@ -48,6 +60,23 @@ export function buildFailingCheckPayload(
   ): FailingCheckPayload =>
     issue === undefined ? payload : { ...payload, issue };
 
+  // I-10/I-11: `candidates` and top-level `linkMethod` MUST NOT be set for
+  // single-PR reasons.
+  const isSinglePrReason =
+    reason === 'unresolved' ||
+    reason === 'missing-label' ||
+    reason === 'checks-failing';
+  if (isSinglePrReason && candidates !== undefined) {
+    throw new Error(
+      `FailingCheckPayload invariant I-10: candidates MUST NOT be set for reason='${reason}'`,
+    );
+  }
+  if (isSinglePrReason && linkMethod !== undefined) {
+    throw new Error(
+      `FailingCheckPayload invariant I-11: top-level linkMethod MUST NOT be set for reason='${reason}'`,
+    );
+  }
+
   if (reason === 'unresolved') {
     if (failingChecks.length !== 0) {
       throw new Error(
@@ -61,6 +90,11 @@ export function buildFailingCheckPayload(
     if (pr == null) {
       throw new Error(
         "FailingCheckPayload invariant: reason='missing-label' requires non-null pr",
+      );
+    }
+    if (pr.linkMethod === undefined) {
+      throw new Error(
+        "FailingCheckPayload invariant I-9: reason='missing-label' requires pr.linkMethod to be set",
       );
     }
     if (failingChecks.length !== 0) {
@@ -77,12 +111,89 @@ export function buildFailingCheckPayload(
         "FailingCheckPayload invariant: reason='checks-failing' requires non-null pr",
       );
     }
+    if (pr.linkMethod === undefined) {
+      throw new Error(
+        "FailingCheckPayload invariant I-9: reason='checks-failing' requires pr.linkMethod to be set",
+      );
+    }
     if (failingChecks.length === 0) {
       throw new Error(
         "FailingCheckPayload invariant: reason='checks-failing' requires non-empty failingChecks",
       );
     }
     return applyIssue({ status: 'red', reason, pr, failingChecks });
+  }
+
+  if (reason === 'pr-is-draft') {
+    if (pr !== null) {
+      throw new Error(
+        "FailingCheckPayload invariant I-7: reason='pr-is-draft' requires pr === null",
+      );
+    }
+    if (!candidates || candidates.length < 1) {
+      throw new Error(
+        "FailingCheckPayload invariant I-7: reason='pr-is-draft' requires candidates.length >= 1",
+      );
+    }
+    if (candidates.some((c) => c.isDraft !== true)) {
+      throw new Error(
+        "FailingCheckPayload invariant I-7: reason='pr-is-draft' requires every candidate.isDraft === true",
+      );
+    }
+    if (linkMethod === undefined) {
+      throw new Error(
+        "FailingCheckPayload invariant I-7: reason='pr-is-draft' requires top-level linkMethod",
+      );
+    }
+    if (failingChecks.length !== 0) {
+      throw new Error(
+        "FailingCheckPayload invariant I-7: reason='pr-is-draft' must have empty failingChecks",
+      );
+    }
+    return applyIssue({
+      status: 'red',
+      reason,
+      pr: null,
+      candidates,
+      linkMethod,
+      failingChecks: [],
+    });
+  }
+
+  if (reason === 'ambiguous-resolution') {
+    if (pr !== null) {
+      throw new Error(
+        "FailingCheckPayload invariant I-8: reason='ambiguous-resolution' requires pr === null",
+      );
+    }
+    if (!candidates || candidates.length < 2) {
+      throw new Error(
+        "FailingCheckPayload invariant I-8: reason='ambiguous-resolution' requires candidates.length >= 2",
+      );
+    }
+    if (candidates.some((c) => c.isDraft !== false)) {
+      throw new Error(
+        "FailingCheckPayload invariant I-8: reason='ambiguous-resolution' requires every candidate.isDraft === false",
+      );
+    }
+    if (linkMethod === undefined) {
+      throw new Error(
+        "FailingCheckPayload invariant I-8: reason='ambiguous-resolution' requires top-level linkMethod",
+      );
+    }
+    if (failingChecks.length !== 0) {
+      throw new Error(
+        "FailingCheckPayload invariant I-8: reason='ambiguous-resolution' must have empty failingChecks",
+      );
+    }
+    return applyIssue({
+      status: 'red',
+      reason,
+      pr: null,
+      candidates,
+      linkMethod,
+      failingChecks: [],
+    });
   }
 
   throw new Error(`FailingCheckPayload: unknown reason ${reason as string}`);

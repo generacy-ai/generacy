@@ -8,7 +8,7 @@ import type {
   ListIssuesOptions,
   MergeResult,
   PullRequestDetail,
-  PullRequestRef,
+  PullRequestRefResolution,
   PullRequestSummary,
   RequiredChecksResult,
 } from '../../gh/wrapper.js';
@@ -36,8 +36,8 @@ class MockGhWrapper implements GhWrapper {
   async getPullRequest(): Promise<PullRequestSummary> {
     throw new Error('not used');
   }
-  async resolveIssueToPRRef(): Promise<PullRequestRef | null> {
-    return null;
+  async resolveIssueToPRRef(): Promise<PullRequestRefResolution> {
+    return { kind: 'unresolved' };
   }
   async getPullRequestDetail(): Promise<PullRequestDetail> {
     throw new Error('not used');

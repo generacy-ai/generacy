@@ -261,22 +261,41 @@ async function buildImplementationReviewBundle(
   issueRepr: string,
   gh: GhWrapper,
 ): Promise<ImplementationReviewBundle> {
-  let prRef;
+  let resolution;
   try {
-    prRef = await gh.resolveIssueToPRRef(ref.nwo, ref.number);
+    resolution = await gh.resolveIssueToPRRef(ref.nwo, ref.number);
   } catch (err) {
     throw new CockpitExit(
       1,
       `Error: cockpit context: gh pr resolve: ${(err as Error).message}`,
     );
   }
-  if (prRef == null) {
+  if (resolution.kind === 'pr-is-draft') {
+    const nums = resolution.candidates.map((c) => `#${c.number}`).join(', ');
+    throw new CockpitExit(
+      3,
+      `Error: cockpit context: gate refusal: issue ${issueRepr} at ` +
+        `${IMPLEMENTATION_REVIEW_GATE} but linked PR(s) are drafts ` +
+        `(via ${resolution.linkMethod}): ${nums}`,
+    );
+  }
+  if (resolution.kind === 'ambiguous') {
+    const nums = resolution.candidates.map((c) => `#${c.number}`).join(', ');
+    throw new CockpitExit(
+      3,
+      `Error: cockpit context: gate refusal: issue ${issueRepr} at ` +
+        `${IMPLEMENTATION_REVIEW_GATE} but multiple PRs match ` +
+        `via ${resolution.linkMethod}: ${nums}`,
+    );
+  }
+  if (resolution.kind === 'unresolved') {
     throw new CockpitExit(
       3,
       `Error: cockpit context: gate refusal: issue ${issueRepr} at ` +
         `${IMPLEMENTATION_REVIEW_GATE} but no linked PR resolved`,
     );
   }
+  const prRef = resolution.ref;
 
   let pr, checks;
   try {

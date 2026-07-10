@@ -12,9 +12,15 @@ import type {
   MergeResult,
   PullRequestDetail,
   PullRequestRef,
+  PullRequestRefResolution,
   RequiredChecksResult,
 } from '@generacy-ai/cockpit';
 import { runMerge } from '../merge.js';
+import {
+  fakeAmbiguous,
+  fakePrIsDraft,
+  fakeResolvedRef,
+} from './helpers/fake-gh.js';
 
 const schemaPath = resolve(
   __dirname,
@@ -26,7 +32,7 @@ addFormats(ajv);
 const validate = ajv.compile(schema);
 
 interface FakeOverrides {
-  resolveIssueToPR?: PullRequestRef | null;
+  resolveIssueToPR?: PullRequestRefResolution;
   getPullRequest?: PullRequestDetail;
   getRequiredCheckNames?: RequiredChecksResult;
   getPullRequestCheckRuns?: CheckRunSummary[];
@@ -63,7 +69,7 @@ function fakeGh(overrides: FakeOverrides = {}): {
     }),
     resolveIssueToPRRef: vi.fn(async () =>
       overrides.resolveIssueToPR === undefined
-        ? null
+        ? { kind: 'unresolved' as const }
         : overrides.resolveIssueToPR,
     ),
     getPullRequestDetail: vi.fn(async () => {
@@ -129,7 +135,7 @@ const expectedIssueRef = { owner: 'o', repo: 'r', number: 7 };
 describe('runMerge (SC-001/002/003)', () => {
   it('SC-001: green + completed:validate on ISSUE → calls mergePullRequest, exit 0, branch-deletion suffix stdout', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
@@ -146,7 +152,7 @@ describe('runMerge (SC-001/002/003)', () => {
   });
 
   it('SC-002 unresolved: resolveIssueToPR null → reason=unresolved, pr=null, issue ref present, no merge', async () => {
-    const { gh, calls } = fakeGh({ resolveIssueToPR: null });
+    const { gh, calls } = fakeGh({ resolveIssueToPR: { kind: 'unresolved' } });
     const result = await runMerge({
       gh,
       issue: 7,
@@ -166,9 +172,12 @@ describe('runMerge (SC-001/002/003)', () => {
     expect(validate(payload)).toBe(true);
   });
 
-  it('SC-002 unresolved: PR exists but state != OPEN → reason=unresolved with pr ref + issue ref', async () => {
+  it('SC-002 unresolved: resolver returns unresolved when only non-OPEN PRs exist → reason=unresolved with pr=null', async () => {
+    // Post-#904: the tiered resolver filters candidates to state === 'OPEN' inside
+    // each tier, so non-OPEN PRs never surface as a resolution. `runMerge` sees
+    // { kind: 'unresolved' } and emits `reason: 'unresolved'` with `pr: null`.
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: { ...openRef, state: 'CLOSED' },
+      resolveIssueToPR: { kind: 'unresolved' },
     });
     const result = await runMerge({
       gh,
@@ -180,17 +189,14 @@ describe('runMerge (SC-001/002/003)', () => {
     expect(calls.mergePullRequest).toBe(0);
     const payload = JSON.parse(result.stdout);
     expect(payload.reason).toBe('unresolved');
-    expect(payload.pr).toEqual({
-      number: 42,
-      url: 'https://github.com/o/r/pull/42',
-    });
+    expect(payload.pr).toBeNull();
     expect(payload.issue).toEqual(expectedIssueRef);
     expect(validate(payload)).toBe(true);
   });
 
   it('SC-002 missing-label: ISSUE without completed:validate → reason=missing-label, no merge', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       fetchIssueState: { ...defaultIssueState, labels: [] },
     });
@@ -207,6 +213,7 @@ describe('runMerge (SC-001/002/003)', () => {
     expect(payload.pr).toEqual({
       number: 42,
       url: 'https://github.com/o/r/pull/42',
+      linkMethod: 'closing-refs',
     });
     expect(payload.failingChecks).toEqual([]);
     expect(payload.issue).toEqual(expectedIssueRef);
@@ -215,7 +222,7 @@ describe('runMerge (SC-001/002/003)', () => {
 
   it('SC-002 checks-failing: failing check → reason=checks-failing, no merge, issue ref present', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [
@@ -244,7 +251,7 @@ describe('runMerge (SC-001/002/003)', () => {
 
   it('SC-002 checks-failing: pending check → reason=checks-failing with PENDING state', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'PENDING' }],
@@ -265,7 +272,7 @@ describe('runMerge (SC-001/002/003)', () => {
 
   it('SC-003 MISSING synthesis: required check absent → state=MISSING', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test', 'ci/extra'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
@@ -289,7 +296,7 @@ describe('runMerge (SC-001/002/003)', () => {
 
   it('fallback-pr-checks mode still gates merge on failing PR checks', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'FAILURE' }],
@@ -309,7 +316,7 @@ describe('runMerge (SC-001/002/003)', () => {
   it('short-circuits: missing-label is reported before checks are fetched', async () => {
     const checkRunsSpy = vi.fn();
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       fetchIssueState: { ...defaultIssueState, labels: [] },
     });
@@ -336,7 +343,7 @@ describe('runMerge FR-007 regression tests', () => {
     // of issueState.labels) makes this test fail because the PR fixture has
     // labels: [].
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: { ...greenPr, labels: [] },
       fetchIssueState: {
         ...defaultIssueState,
@@ -359,7 +366,7 @@ describe('runMerge FR-007 regression tests', () => {
   it('FR-007b (SC-002): ISSUE unlabeled → missing-label with issue ref in payload', async () => {
     // Deleting the `issue` field extension makes this test fail.
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: { ...greenPr, labels: ['completed:validate'] },
       fetchIssueState: { ...defaultIssueState, labels: [] },
     });
@@ -385,7 +392,7 @@ describe('runMerge FR-007 regression tests', () => {
   it('FR-007c (SC-003) CLOSED-issue guard: state=CLOSED → reason=unresolved with state/stateReason on issue', async () => {
     const checkRunsSpy = vi.fn();
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       fetchIssueState: {
         state: 'CLOSED',
@@ -428,7 +435,7 @@ describe('runMerge FR-007 regression tests', () => {
     const errorSpy = vi.spyOn(logger, 'error');
     const err = new Error('gh network error');
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       fetchIssueState: () => {
         throw err;
@@ -464,7 +471,7 @@ describe('runMerge FR-007 regression tests', () => {
 describe('runMerge #857 regression: no-checks is not RED', () => {
   it('(a) CI-less unprotected repo + completed:validate → merges with FR-003 stdout note, exit 0', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
       getPullRequestCheckRuns: [],
@@ -485,7 +492,7 @@ describe('runMerge #857 regression: no-checks is not RED', () => {
 
   it('(b) branch-protection with required contexts + empty actual → red naming missing contexts, exit 1', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: {
         source: 'branch-protection',
@@ -514,7 +521,7 @@ describe('runMerge #857 regression: no-checks is not RED', () => {
 
   it('(c) non-empty actual with a FAILURE state → red path unchanged, exit 1', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'FAILURE' }],
@@ -539,7 +546,7 @@ describe('runMerge #857 regression: no-checks is not RED', () => {
 describe('runMerge #859 regression: head-branch deletion after successful squash', () => {
   it('SC-101: same-owner + classify-passing + deleted → stdout "merged and branch deleted\\n"', async () => {
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
@@ -560,7 +567,7 @@ describe('runMerge #859 regression: head-branch deletion after successful squash
     const logger = pino({ level: 'silent' });
     const infoSpy = vi.spyOn(logger, 'info');
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
       getPullRequestCheckRuns: [],
@@ -591,7 +598,7 @@ describe('runMerge #859 regression: head-branch deletion after successful squash
       headRepositoryOwner: 'contributor42',
     };
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: forkPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
@@ -615,7 +622,7 @@ describe('runMerge #859 regression: head-branch deletion after successful squash
     const logger = pino({ level: 'silent' });
     const warnSpy = vi.spyOn(logger, 'warn');
     const { gh } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: greenPr,
       getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
       getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
@@ -652,7 +659,7 @@ describe('runMerge #859 regression: head-branch deletion after successful squash
       headRepositoryOwner: null,
     };
     const { gh, calls } = fakeGh({
-      resolveIssueToPR: openRef,
+      resolveIssueToPR: fakeResolvedRef(openRef),
       getPullRequest: nullHeadPr,
       getRequiredCheckNames: { source: 'fallback-pr-checks', names: null },
       getPullRequestCheckRuns: [],
@@ -669,6 +676,182 @@ describe('runMerge #859 regression: head-branch deletion after successful squash
       'no checks configured and none required — proceeding on completed:validate\nmerged and branch deleted\n',
     );
     expect(calls.deleteHeadRef).toEqual([['o/r', 'feature/x']]);
+  });
+});
+
+describe('runMerge #904 SC-001/002/003/004: tiered resolver + draft rejection + loud ambiguity', () => {
+  const draftCandidate = (n: number): PullRequestRef => ({
+    number: n,
+    url: `https://github.com/o/r/pull/${n}`,
+    state: 'OPEN',
+    draft: true,
+    headRefName: `${n}-branch`,
+  });
+
+  const nonDraftCandidate = (n: number): PullRequestRef => ({
+    number: n,
+    url: `https://github.com/o/r/pull/${n}`,
+    state: 'OPEN',
+    draft: false,
+    headRefName: `9-${n}-branch`,
+  });
+
+  it('SC-002: single-candidate draft → reason=pr-is-draft, gh.mergePullRequest NEVER invoked', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: fakePrIsDraft([draftCandidate(22)], 'pr-body'),
+    });
+    const result = await runMerge({
+      gh,
+      issue: 9,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(calls.mergePullRequest).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.reason).toBe('pr-is-draft');
+    expect(payload.pr).toBeNull();
+    expect(payload.linkMethod).toBe('pr-body');
+    expect(payload.candidates).toHaveLength(1);
+    expect(payload.candidates[0]).toEqual({
+      number: 22,
+      url: 'https://github.com/o/r/pull/22',
+      isDraft: true,
+      headRefName: '22-branch',
+    });
+    expect(validate(payload)).toBe(true);
+  });
+
+  it('SC-002: multi-candidate draft → reason=pr-is-draft with candidates array', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: fakePrIsDraft(
+        [draftCandidate(22), draftCandidate(24), draftCandidate(25)],
+        'pr-body',
+      ),
+    });
+    const result = await runMerge({
+      gh,
+      issue: 9,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(1);
+    expect(calls.mergePullRequest).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.reason).toBe('pr-is-draft');
+    expect(payload.candidates).toHaveLength(3);
+    expect(validate(payload)).toBe(true);
+  });
+
+  it.each([
+    { linkMethod: 'closing-refs' as const },
+    { linkMethod: 'branch-name' as const },
+    { linkMethod: 'pr-body' as const },
+  ])(
+    'SC-003: ambiguous at linkMethod=$linkMethod → reason=ambiguous-resolution, gh.mergePullRequest NEVER invoked',
+    async ({ linkMethod }) => {
+      const { gh, calls } = fakeGh({
+        resolveIssueToPR: fakeAmbiguous(
+          [nonDraftCandidate(42), nonDraftCandidate(47)],
+          linkMethod,
+        ),
+      });
+      const result = await runMerge({
+        gh,
+        issue: 9,
+        repo: 'o/r',
+        logger: silentLogger(),
+      });
+      expect(result.exitCode).toBe(1);
+      expect(calls.mergePullRequest).toBe(0);
+      const payload = JSON.parse(result.stdout);
+      expect(payload.reason).toBe('ambiguous-resolution');
+      expect(payload.pr).toBeNull();
+      expect(payload.linkMethod).toBe(linkMethod);
+      expect(payload.candidates).toHaveLength(2);
+      expect(payload.candidates.every((c: { isDraft: boolean }) => !c.isDraft)).toBe(
+        true,
+      );
+      expect(validate(payload)).toBe(true);
+    },
+  );
+
+  it('SC-004: green path logs `resolved PR #N via <linkMethod>` BEFORE gh.mergePullRequest', async () => {
+    const logger = pino({ level: 'trace' });
+    const infoSpy = vi.spyOn(logger, 'info');
+    const { gh } = fakeGh({
+      resolveIssueToPR: fakeResolvedRef(openRef, 'closing-refs'),
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
+      getPullRequestCheckRuns: [{ name: 'ci/test', state: 'SUCCESS' }],
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger,
+    });
+    expect(result.exitCode).toBe(0);
+    // Find the `resolved PR #N via ...` log line and the `PR merged` log line.
+    const resolvedCall = infoSpy.mock.calls.findIndex(
+      (call) =>
+        typeof call[1] === 'string' &&
+        call[1].startsWith('resolved PR #42 via closing-refs'),
+    );
+    const mergedCall = infoSpy.mock.calls.findIndex(
+      (call) => call[1] === 'PR merged',
+    );
+    expect(resolvedCall).toBeGreaterThanOrEqual(0);
+    expect(mergedCall).toBeGreaterThanOrEqual(0);
+    // FR-004: the resolved-PR log lands BEFORE the merge.
+    expect(resolvedCall).toBeLessThan(mergedCall);
+  });
+
+  it('SC-004: green path missing-label payload carries linkMethod', async () => {
+    const { gh } = fakeGh({
+      resolveIssueToPR: fakeResolvedRef(openRef, 'branch-name'),
+      getPullRequest: greenPr,
+      fetchIssueState: { ...defaultIssueState, labels: [] },
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.reason).toBe('missing-label');
+    expect(payload.pr).toEqual({
+      number: 42,
+      url: 'https://github.com/o/r/pull/42',
+      linkMethod: 'branch-name',
+    });
+    expect(validate(payload)).toBe(true);
+  });
+
+  it('SC-004: green path checks-failing payload carries linkMethod', async () => {
+    const { gh } = fakeGh({
+      resolveIssueToPR: fakeResolvedRef(openRef, 'pr-body'),
+      getPullRequest: greenPr,
+      getRequiredCheckNames: { source: 'branch-protection', names: ['ci/test'] },
+      getPullRequestCheckRuns: [{ name: 'ci/test', state: 'FAILURE' }],
+    });
+    const result = await runMerge({
+      gh,
+      issue: 7,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout);
+    expect(payload.reason).toBe('checks-failing');
+    expect(payload.pr).toEqual({
+      number: 42,
+      url: 'https://github.com/o/r/pull/42',
+      linkMethod: 'pr-body',
+    });
+    expect(validate(payload)).toBe(true);
   });
 });
 

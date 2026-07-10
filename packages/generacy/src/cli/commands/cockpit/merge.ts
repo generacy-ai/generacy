@@ -1,6 +1,11 @@
 import { Command } from 'commander';
 import type { Logger } from 'pino';
-import type { GhWrapper, PullRequestDetail } from '@generacy-ai/cockpit';
+import type {
+  GhWrapper,
+  LinkMethod,
+  PullRequestDetail,
+  PullRequestRef,
+} from '@generacy-ai/cockpit';
 import { getLogger } from '../../utils/logger.js';
 import { resolveIssueContext } from './resolver.js';
 import { classifyChecks } from './shared/required-checks.js';
@@ -9,6 +14,20 @@ import {
   serializeFailingCheckJson,
   type IssueRefWithState,
 } from './shared/failing-check-json.js';
+
+function toPrCandidates(refs: PullRequestRef[]): Array<{
+  number: number;
+  url: string;
+  isDraft: boolean;
+  headRefName: string;
+}> {
+  return refs.map((r) => ({
+    number: r.number,
+    url: r.url,
+    isDraft: r.draft,
+    headRefName: r.headRefName,
+  }));
+}
 
 // Workflow labels (`waiting-for:*`, `completed:*`) are issue-scoped per the
 // #807-Q2 label protocol. runMerge reads `completed:validate` from
@@ -82,8 +101,8 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
   const { gh, issue, repo, logger } = input;
   const issueRef = parseIssueRef(repo, issue);
 
-  const prRef = await gh.resolveIssueToPRRef(repo, issue);
-  if (prRef == null) {
+  const resolution = await gh.resolveIssueToPRRef(repo, issue);
+  if (resolution.kind === 'unresolved') {
     logger.error({ issue, repo }, 'No PR resolved for issue');
     return {
       exitCode: 1,
@@ -96,22 +115,60 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
       ),
     };
   }
-  if (prRef.state !== 'OPEN') {
+  if (resolution.kind === 'pr-is-draft') {
     logger.error(
-      { issue, repo, pr: prRef.number, state: prRef.state },
-      'PR is not OPEN',
+      {
+        issue,
+        repo,
+        linkMethod: resolution.linkMethod,
+        candidates: resolution.candidates.map((c) => c.number),
+      },
+      'Resolved PRs are drafts',
     );
     return {
       exitCode: 1,
       stdout: serializeFailingCheckJson(
         buildFailingCheckPayload({
-          reason: 'unresolved',
-          pr: { number: prRef.number, url: prRef.url },
+          reason: 'pr-is-draft',
+          pr: null,
+          candidates: toPrCandidates(resolution.candidates),
+          linkMethod: resolution.linkMethod,
           issue: issueRef,
         }),
       ),
     };
   }
+  if (resolution.kind === 'ambiguous') {
+    logger.error(
+      {
+        issue,
+        repo,
+        linkMethod: resolution.linkMethod,
+        candidates: resolution.candidates.map((c) => c.number),
+      },
+      'Multiple PRs resolved for issue',
+    );
+    return {
+      exitCode: 1,
+      stdout: serializeFailingCheckJson(
+        buildFailingCheckPayload({
+          reason: 'ambiguous-resolution',
+          pr: null,
+          candidates: toPrCandidates(resolution.candidates),
+          linkMethod: resolution.linkMethod,
+          issue: issueRef,
+        }),
+      ),
+    };
+  }
+  const prRef: PullRequestRef = resolution.ref;
+  const linkMethod: LinkMethod = resolution.linkMethod;
+  // FR-004: log the resolved PR + tier BEFORE any subsequent gh call so a
+  // later failure never erases the evidence of which PR was targeted.
+  logger.info(
+    { pr: prRef.number, linkMethod },
+    `resolved PR #${prRef.number} via ${linkMethod}`,
+  );
 
   const pr = await gh.getPullRequestDetail(repo, prRef.number);
 
@@ -168,7 +225,7 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
       stdout: serializeFailingCheckJson(
         buildFailingCheckPayload({
           reason: 'missing-label',
-          pr: { number: pr.number, url: pr.url },
+          pr: { number: pr.number, url: pr.url, linkMethod },
           issue: issueRef,
         }),
       ),
@@ -219,7 +276,7 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
       stdout: serializeFailingCheckJson(
         buildFailingCheckPayload({
           reason: 'checks-failing',
-          pr: { number: pr.number, url: pr.url },
+          pr: { number: pr.number, url: pr.url, linkMethod },
           failingChecks,
           issue: issueRef,
         }),

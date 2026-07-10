@@ -41,15 +41,23 @@ describe('buildFailingCheckPayload', () => {
     expect(validate(payload)).toBe(true);
   });
 
-  it('builds missing-label payload with pr ref and empty failingChecks', () => {
+  it('builds missing-label payload with pr ref (with linkMethod) and empty failingChecks', () => {
     const payload = buildFailingCheckPayload({
       reason: 'missing-label',
-      pr: { number: 7, url: 'https://github.com/o/r/pull/7' },
+      pr: {
+        number: 7,
+        url: 'https://github.com/o/r/pull/7',
+        linkMethod: 'closing-refs',
+      },
     });
     expect(payload).toEqual({
       status: 'red',
       reason: 'missing-label',
-      pr: { number: 7, url: 'https://github.com/o/r/pull/7' },
+      pr: {
+        number: 7,
+        url: 'https://github.com/o/r/pull/7',
+        linkMethod: 'closing-refs',
+      },
       failingChecks: [],
     });
     expect(validate(payload)).toBe(true);
@@ -58,7 +66,11 @@ describe('buildFailingCheckPayload', () => {
   it('builds checks-failing payload with non-empty failingChecks', () => {
     const payload = buildFailingCheckPayload({
       reason: 'checks-failing',
-      pr: { number: 9, url: 'https://github.com/o/r/pull/9' },
+      pr: {
+        number: 9,
+        url: 'https://github.com/o/r/pull/9',
+        linkMethod: 'branch-name',
+      },
       failingChecks: [
         { name: 'ci/test', state: 'FAILURE', url: 'https://x/run/1' },
         { name: 'ci/missing', state: 'MISSING' },
@@ -88,7 +100,11 @@ describe('buildFailingCheckPayload', () => {
     expect(() =>
       buildFailingCheckPayload({
         reason: 'checks-failing',
-        pr: { number: 1, url: 'https://github.com/o/r/pull/1' },
+        pr: {
+          number: 1,
+          url: 'https://github.com/o/r/pull/1',
+          linkMethod: 'closing-refs',
+        },
         failingChecks: [],
       }),
     ).toThrow(/checks-failing.*non-empty failingChecks/);
@@ -108,10 +124,228 @@ describe('buildFailingCheckPayload', () => {
     expect(() =>
       buildFailingCheckPayload({
         reason: 'missing-label',
-        pr: { number: 1, url: 'https://github.com/o/r/pull/1' },
+        pr: {
+          number: 1,
+          url: 'https://github.com/o/r/pull/1',
+          linkMethod: 'closing-refs',
+        },
         failingChecks: [{ name: 'x', state: 'FAILURE' }],
       }),
     ).toThrow(/missing-label.*empty failingChecks/);
+  });
+});
+
+describe('buildFailingCheckPayload I-7..I-11 invariants', () => {
+  it('I-7 happy path: pr-is-draft with 1 draft candidate', () => {
+    const payload = buildFailingCheckPayload({
+      reason: 'pr-is-draft',
+      pr: null,
+      candidates: [
+        {
+          number: 22,
+          url: 'https://github.com/o/r/pull/22',
+          isDraft: true,
+          headRefName: '011-branch',
+        },
+      ],
+      linkMethod: 'pr-body',
+    });
+    expect(payload).toEqual({
+      status: 'red',
+      reason: 'pr-is-draft',
+      pr: null,
+      candidates: [
+        {
+          number: 22,
+          url: 'https://github.com/o/r/pull/22',
+          isDraft: true,
+          headRefName: '011-branch',
+        },
+      ],
+      linkMethod: 'pr-body',
+      failingChecks: [],
+    });
+    expect(validate(payload)).toBe(true);
+  });
+
+  it('I-7 throws when pr-is-draft has non-null pr', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'pr-is-draft',
+        pr: {
+          number: 1,
+          url: 'https://github.com/o/r/pull/1',
+          linkMethod: 'pr-body',
+        },
+        candidates: [
+          {
+            number: 1,
+            url: 'https://github.com/o/r/pull/1',
+            isDraft: true,
+            headRefName: 'x',
+          },
+        ],
+        linkMethod: 'pr-body',
+      }),
+    ).toThrow(/I-7.*pr === null/);
+  });
+
+  it('I-7 throws when pr-is-draft has zero candidates', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'pr-is-draft',
+        pr: null,
+        candidates: [],
+        linkMethod: 'pr-body',
+      }),
+    ).toThrow(/I-7.*candidates.length >= 1/);
+  });
+
+  it('I-7 throws when pr-is-draft candidate has isDraft=false', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'pr-is-draft',
+        pr: null,
+        candidates: [
+          {
+            number: 1,
+            url: 'https://github.com/o/r/pull/1',
+            isDraft: false,
+            headRefName: 'x',
+          },
+        ],
+        linkMethod: 'pr-body',
+      }),
+    ).toThrow(/I-7.*isDraft === true/);
+  });
+
+  it('I-7 throws when pr-is-draft is missing linkMethod', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'pr-is-draft',
+        pr: null,
+        candidates: [
+          {
+            number: 1,
+            url: 'https://github.com/o/r/pull/1',
+            isDraft: true,
+            headRefName: 'x',
+          },
+        ],
+      }),
+    ).toThrow(/I-7.*linkMethod/);
+  });
+
+  it('I-8 happy path: ambiguous-resolution with 2 non-draft candidates', () => {
+    const payload = buildFailingCheckPayload({
+      reason: 'ambiguous-resolution',
+      pr: null,
+      candidates: [
+        {
+          number: 42,
+          url: 'https://github.com/o/r/pull/42',
+          isDraft: false,
+          headRefName: '9-first-try',
+        },
+        {
+          number: 47,
+          url: 'https://github.com/o/r/pull/47',
+          isDraft: false,
+          headRefName: '9-do-it-properly',
+        },
+      ],
+      linkMethod: 'branch-name',
+    });
+    expect(payload.linkMethod).toBe('branch-name');
+    expect(validate(payload)).toBe(true);
+  });
+
+  it('I-8 throws when ambiguous-resolution has fewer than 2 candidates', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'ambiguous-resolution',
+        pr: null,
+        candidates: [
+          {
+            number: 1,
+            url: 'https://github.com/o/r/pull/1',
+            isDraft: false,
+            headRefName: 'x',
+          },
+        ],
+        linkMethod: 'branch-name',
+      }),
+    ).toThrow(/I-8.*candidates.length >= 2/);
+  });
+
+  it('I-8 throws when ambiguous-resolution candidate has isDraft=true', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'ambiguous-resolution',
+        pr: null,
+        candidates: [
+          {
+            number: 1,
+            url: 'https://github.com/o/r/pull/1',
+            isDraft: false,
+            headRefName: 'x',
+          },
+          {
+            number: 2,
+            url: 'https://github.com/o/r/pull/2',
+            isDraft: true,
+            headRefName: 'y',
+          },
+        ],
+        linkMethod: 'branch-name',
+      }),
+    ).toThrow(/I-8.*isDraft === false/);
+  });
+
+  it('I-9 throws when missing-label has pr without linkMethod', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'missing-label',
+        pr: { number: 1, url: 'https://github.com/o/r/pull/1' },
+      }),
+    ).toThrow(/I-9.*missing-label.*linkMethod/);
+  });
+
+  it('I-9 throws when checks-failing has pr without linkMethod', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'checks-failing',
+        pr: { number: 1, url: 'https://github.com/o/r/pull/1' },
+        failingChecks: [{ name: 'ci/test', state: 'FAILURE' }],
+      }),
+    ).toThrow(/I-9.*checks-failing.*linkMethod/);
+  });
+
+  it('I-10 throws when unresolved is called with candidates', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'unresolved',
+        pr: null,
+        candidates: [
+          {
+            number: 1,
+            url: 'https://github.com/o/r/pull/1',
+            isDraft: false,
+            headRefName: 'x',
+          },
+        ],
+      }),
+    ).toThrow(/I-10.*candidates MUST NOT/);
+  });
+
+  it('I-11 throws when unresolved is called with top-level linkMethod', () => {
+    expect(() =>
+      buildFailingCheckPayload({
+        reason: 'unresolved',
+        pr: null,
+        linkMethod: 'closing-refs',
+      }),
+    ).toThrow(/I-11.*linkMethod MUST NOT/);
   });
 });
 

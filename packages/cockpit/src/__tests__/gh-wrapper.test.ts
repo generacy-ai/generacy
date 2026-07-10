@@ -478,97 +478,288 @@ describe('GhCliWrapper', () => {
     });
   });
 
-  describe('resolveIssueToPRRef', () => {
-    it('returns the first PR from gh pr list search', async () => {
-      const { runner, calls } = queuedRunner([
-        {
-          stdout: JSON.stringify([
-            {
-              number: 42,
-              url: 'https://github.com/o/r/pull/42',
-              state: 'OPEN',
-              isDraft: false,
-              headRefName: 'feature/x',
-            },
-          ]),
-        },
-      ]);
-      const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPRRef('o/r', 7);
-      expect(ref).toEqual({
-        number: 42,
-        url: 'https://github.com/o/r/pull/42',
-        state: 'OPEN',
-        draft: false,
-        headRefName: 'feature/x',
+  describe('resolveIssueToPRRef (#904 — three-tier deterministic resolver)', () => {
+    // Helper: build a fake PR JSON blob returned by gh
+    const rawPr = (overrides: {
+      number: number;
+      url?: string;
+      state?: 'OPEN' | 'CLOSED' | 'MERGED';
+      isDraft?: boolean;
+      headRefName?: string;
+    }): Record<string, unknown> => ({
+      number: overrides.number,
+      url: overrides.url ?? `https://github.com/o/r/pull/${overrides.number}`,
+      state: overrides.state ?? 'OPEN',
+      isDraft: overrides.isDraft ?? false,
+      headRefName: overrides.headRefName ?? `${overrides.number}-branch`,
+    });
+
+    const tier1Response = (
+      prs: ReturnType<typeof rawPr>[],
+    ): { stdout: string } => ({
+      stdout: JSON.stringify({ closedByPullRequestsReferences: prs }),
+    });
+
+    const tier2Or3Response = (
+      prs: ReturnType<typeof rawPr>[],
+    ): { stdout: string } => ({
+      stdout: JSON.stringify(prs),
+    });
+
+    const emptyTier1 = tier1Response([]);
+    const emptyTier2Or3 = tier2Or3Response([]);
+
+    describe('Tier 1: closing-refs (gh issue view --json closedByPullRequestsReferences)', () => {
+      it('exactly-one non-draft OPEN candidate → resolved', async () => {
+        const { runner, calls } = queuedRunner([
+          tier1Response([rawPr({ number: 23 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result).toEqual({
+          kind: 'resolved',
+          ref: {
+            number: 23,
+            url: 'https://github.com/o/r/pull/23',
+            state: 'OPEN',
+            draft: false,
+            headRefName: '23-branch',
+          },
+          linkMethod: 'closing-refs',
+        });
+        // Tier 2 and Tier 3 must NOT be called.
+        expect(calls).toHaveLength(1);
+        const args = calls[0]?.args ?? [];
+        expect(args.slice(0, 5)).toEqual(['issue', 'view', '9', '--repo', 'o/r']);
+        expect(args).toContain('closedByPullRequestsReferences');
       });
-      const args = calls[0]?.args ?? [];
-      expect(args.slice(0, 4)).toEqual(['pr', 'list', '--repo', 'o/r']);
-      expect(args).toContain('--search');
-      expect(args).toContain('linked:7');
-      expect(args).toContain('--state');
-      expect(args).toContain('open');
-      expect(args).toContain('--limit');
-      expect(args).toContain('1');
-    });
 
-    it('falls back to issue view closedByPullRequestsReferences', async () => {
-      const { runner, calls } = queuedRunner([
-        { stdout: '[]' },
-        {
-          stdout: JSON.stringify({
-            closedByPullRequestsReferences: [
-              {
-                number: 99,
-                url: 'https://github.com/o/r/pull/99',
-                state: 'MERGED',
-                isDraft: false,
-                headRefName: 'feature/y',
-              },
-            ],
-          }),
-        },
-      ]);
-      const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPRRef('o/r', 11);
-      expect(ref).toEqual({
-        number: 99,
-        url: 'https://github.com/o/r/pull/99',
-        state: 'MERGED',
-        draft: false,
-        headRefName: 'feature/y',
+      it('≥2 non-drafts at Tier 1 → ambiguous', async () => {
+        const { runner, calls } = queuedRunner([
+          tier1Response([rawPr({ number: 23 }), rawPr({ number: 24 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('ambiguous');
+        if (result.kind === 'ambiguous') {
+          expect(result.candidates.map((c) => c.number)).toEqual([23, 24]);
+          expect(result.linkMethod).toBe('closing-refs');
+        }
+        expect(calls).toHaveLength(1);
       });
-      expect(calls).toHaveLength(2);
-      const args = calls[1]?.args ?? [];
-      expect(args.slice(0, 5)).toEqual(['issue', 'view', '11', '--repo', 'o/r']);
-    });
 
-    it('returns null when neither path yields a PR', async () => {
-      const { runner } = queuedRunner([
-        { stdout: '[]' },
-        { stdout: JSON.stringify({ closedByPullRequestsReferences: [] }) },
-      ]);
-      const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPRRef('o/r', 1);
-      expect(ref).toBeNull();
-    });
+      it('zero non-drafts + ≥1 drafts at Tier 1 → pr-is-draft', async () => {
+        const { runner, calls } = queuedRunner([
+          tier1Response([rawPr({ number: 22, isDraft: true })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('pr-is-draft');
+        if (result.kind === 'pr-is-draft') {
+          expect(result.candidates.map((c) => c.number)).toEqual([22]);
+          expect(result.linkMethod).toBe('closing-refs');
+        }
+        expect(calls).toHaveLength(1);
+      });
 
-    it('normalizes lowercase state to uppercase', async () => {
-      const { runner } = queuedRunner([
-        {
-          stdout: JSON.stringify([
-            {
-              number: 1,
-              url: 'u',
-              state: 'open',
-              headRefName: 'h',
-            },
+      it('zero PRs at Tier 1 → falls through to Tier 2', async () => {
+        const { runner, calls } = queuedRunner([
+          emptyTier1,
+          tier2Or3Response([rawPr({ number: 42 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('resolved');
+        expect(calls).toHaveLength(2);
+        const t2Args = calls[1]?.args ?? [];
+        expect(t2Args.slice(0, 4)).toEqual(['pr', 'list', '--repo', 'o/r']);
+        expect(t2Args).toContain('head:9-');
+      });
+
+      it('Tier 1 CLOSED PRs are filtered out before evaluateTier', async () => {
+        // A CLOSED candidate + an OPEN candidate — the CLOSED one is filtered
+        // out; the single OPEN remainder yields `resolved`, not `ambiguous`.
+        const { runner } = queuedRunner([
+          tier1Response([
+            rawPr({ number: 99, state: 'CLOSED' }),
+            rawPr({ number: 42 }),
           ]),
-        },
-      ]);
-      const wrapper = new GhCliWrapper(runner);
-      const ref = await wrapper.resolveIssueToPRRef('o/r', 1);
-      expect(ref?.state).toBe('OPEN');
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('resolved');
+        if (result.kind === 'resolved') {
+          expect(result.ref.number).toBe(42);
+        }
+      });
+    });
+
+    describe('Tier 2: branch-name (gh pr list --search head:<n>-)', () => {
+      it('exactly-one non-draft at Tier 2 → resolved', async () => {
+        const { runner, calls } = queuedRunner([
+          emptyTier1,
+          tier2Or3Response([rawPr({ number: 42 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('resolved');
+        if (result.kind === 'resolved') {
+          expect(result.linkMethod).toBe('branch-name');
+        }
+        expect(calls).toHaveLength(2);
+      });
+
+      it('≥2 non-drafts at Tier 2 → ambiguous with linkMethod=branch-name', async () => {
+        const { runner, calls } = queuedRunner([
+          emptyTier1,
+          tier2Or3Response([rawPr({ number: 42 }), rawPr({ number: 47 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('ambiguous');
+        if (result.kind === 'ambiguous') {
+          expect(result.linkMethod).toBe('branch-name');
+        }
+        expect(calls).toHaveLength(2);
+      });
+
+      it('drafts-only at Tier 2 → pr-is-draft with linkMethod=branch-name', async () => {
+        const { runner } = queuedRunner([
+          emptyTier1,
+          tier2Or3Response([rawPr({ number: 22, isDraft: true })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('pr-is-draft');
+        if (result.kind === 'pr-is-draft') {
+          expect(result.linkMethod).toBe('branch-name');
+        }
+      });
+
+      it('zero PRs at Tier 2 → falls through to Tier 3', async () => {
+        const { runner, calls } = queuedRunner([
+          emptyTier1,
+          emptyTier2Or3,
+          tier2Or3Response([rawPr({ number: 100 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('resolved');
+        expect(calls).toHaveLength(3);
+        const t3Args = calls[2]?.args ?? [];
+        expect(t3Args.slice(0, 4)).toEqual(['pr', 'list', '--repo', 'o/r']);
+        expect(t3Args).toContain('9 in:body');
+      });
+    });
+
+    describe('Tier 3: pr-body (gh pr list --search <n> in:body)', () => {
+      it('exactly-one non-draft at Tier 3 → resolved with linkMethod=pr-body', async () => {
+        const { runner } = queuedRunner([
+          emptyTier1,
+          emptyTier2Or3,
+          tier2Or3Response([rawPr({ number: 100 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('resolved');
+        if (result.kind === 'resolved') {
+          expect(result.linkMethod).toBe('pr-body');
+        }
+      });
+
+      it('≥2 non-drafts at Tier 3 → ambiguous with linkMethod=pr-body', async () => {
+        const { runner } = queuedRunner([
+          emptyTier1,
+          emptyTier2Or3,
+          tier2Or3Response([rawPr({ number: 100 }), rawPr({ number: 101 })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('ambiguous');
+        if (result.kind === 'ambiguous') {
+          expect(result.linkMethod).toBe('pr-body');
+        }
+      });
+
+      it('drafts-only at Tier 3 → pr-is-draft with linkMethod=pr-body', async () => {
+        const { runner } = queuedRunner([
+          emptyTier1,
+          emptyTier2Or3,
+          tier2Or3Response([rawPr({ number: 22, isDraft: true })]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('pr-is-draft');
+        if (result.kind === 'pr-is-draft') {
+          expect(result.linkMethod).toBe('pr-body');
+        }
+      });
+
+      it('zero PRs at all three tiers → unresolved', async () => {
+        const { runner, calls } = queuedRunner([
+          emptyTier1,
+          emptyTier2Or3,
+          emptyTier2Or3,
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result).toEqual({ kind: 'unresolved' });
+        expect(calls).toHaveLength(3);
+      });
+    });
+
+    describe('SC-001 sniplink fixture (Tier 1 short-circuits)', () => {
+      it('Tier 1 returns [#23] → resolved via closing-refs; Tier 2/3 NEVER invoked', async () => {
+        // The core SC-001 fixture: Tier 1 has a single non-draft candidate #23,
+        // Tier 3 would return [#23, #22-draft, #24-draft, #25-draft] but must not
+        // be queried because Tier 1 short-circuits.
+        const { runner, calls } = queuedRunner([
+          tier1Response([rawPr({ number: 23 })]),
+          // These would be for Tier 2 / Tier 3 but must not be consumed.
+          tier2Or3Response([
+            rawPr({ number: 23 }),
+            rawPr({ number: 22, isDraft: true }),
+            rawPr({ number: 24, isDraft: true }),
+            rawPr({ number: 25, isDraft: true }),
+          ]),
+          tier2Or3Response([
+            rawPr({ number: 23 }),
+            rawPr({ number: 22, isDraft: true }),
+            rawPr({ number: 24, isDraft: true }),
+            rawPr({ number: 25, isDraft: true }),
+          ]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 9);
+        expect(result.kind).toBe('resolved');
+        if (result.kind === 'resolved') {
+          expect(result.ref.number).toBe(23);
+          expect(result.linkMethod).toBe('closing-refs');
+        }
+        // SC-001 fall-through spy: only Tier 1 was queried.
+        expect(calls).toHaveLength(1);
+      });
+    });
+
+    describe('state normalization', () => {
+      it('normalizes lowercase state to uppercase', async () => {
+        const { runner } = queuedRunner([
+          emptyTier1,
+          tier2Or3Response([{
+            number: 1,
+            url: 'u',
+            state: 'open',
+            isDraft: false,
+            headRefName: 'h',
+          }]),
+        ]);
+        const wrapper = new GhCliWrapper(runner);
+        const result = await wrapper.resolveIssueToPRRef('o/r', 1);
+        expect(result.kind).toBe('resolved');
+        if (result.kind === 'resolved') {
+          expect(result.ref.state).toBe('OPEN');
+        }
+      });
     });
   });
 

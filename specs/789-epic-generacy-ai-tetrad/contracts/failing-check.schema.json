@@ -5,7 +5,6 @@
   "description": "JSON written to stdout by `generacy cockpit merge <issue>` on any red outcome (Q2).",
   "type": "object",
   "required": ["status", "reason", "pr", "failingChecks"],
-  "additionalProperties": false,
   "properties": {
     "status": {
       "type": "string",
@@ -14,12 +13,13 @@
     },
     "reason": {
       "type": "string",
-      "enum": ["checks-failing", "missing-label", "unresolved"],
+      "enum": ["checks-failing", "missing-label", "unresolved", "pr-is-draft", "ambiguous-resolution"],
       "description": "Discriminator. Routes the consumer to the right next action (fixer, label, fail-loud)."
     },
     "pr": {
-      "description": "PR identifiers. Null only when reason='unresolved' AND the issue had no associated PR.",
+      "description": "PR identifiers. Null when reason='unresolved' AND the issue had no associated PR, or for multi-candidate reasons (pr-is-draft, ambiguous-resolution) where the PR set lives on `candidates` instead.",
       "oneOf": [
+        { "type": "null" },
         {
           "type": "object",
           "required": ["number", "url"],
@@ -29,8 +29,37 @@
             "url":    { "type": "string", "format": "uri" }
           }
         },
-        { "type": "null" }
+        {
+          "type": "object",
+          "required": ["number", "url", "linkMethod"],
+          "additionalProperties": false,
+          "properties": {
+            "number":     { "type": "integer", "minimum": 1 },
+            "url":        { "type": "string", "format": "uri" },
+            "linkMethod": { "type": "string", "enum": ["closing-refs", "branch-name", "pr-body"] }
+          }
+        }
       ]
+    },
+    "linkMethod": {
+      "type": "string",
+      "enum": ["closing-refs", "branch-name", "pr-body"],
+      "description": "Present only when reason ∈ { pr-is-draft, ambiguous-resolution }."
+    },
+    "candidates": {
+      "type": "array",
+      "description": "Present only when reason ∈ { pr-is-draft, ambiguous-resolution }.",
+      "items": {
+        "type": "object",
+        "required": ["number", "url", "isDraft", "headRefName"],
+        "additionalProperties": false,
+        "properties": {
+          "number":      { "type": "integer", "minimum": 1 },
+          "url":         { "type": "string", "format": "uri" },
+          "isDraft":     { "type": "boolean" },
+          "headRefName": { "type": "string", "minLength": 1 }
+        }
+      }
     },
     "failingChecks": {
       "type": "array",
@@ -89,6 +118,28 @@
       "if": { "properties": { "reason": { "const": "unresolved" } } },
       "then": {
         "properties": {
+          "failingChecks": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "pr-is-draft" } } },
+      "then": {
+        "required": ["candidates", "linkMethod"],
+        "properties": {
+          "pr":         { "type": "null" },
+          "candidates": { "minItems": 1, "items": { "properties": { "isDraft": { "const": true } } } },
+          "failingChecks": { "maxItems": 0 }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "reason": { "const": "ambiguous-resolution" } } },
+      "then": {
+        "required": ["candidates", "linkMethod"],
+        "properties": {
+          "pr":         { "type": "null" },
+          "candidates": { "minItems": 2, "items": { "properties": { "isDraft": { "const": false } } } },
           "failingChecks": { "maxItems": 0 }
         }
       }
