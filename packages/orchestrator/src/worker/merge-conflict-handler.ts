@@ -786,7 +786,7 @@ export class MergeConflictHandler {
   private isNonFastForward(err: unknown): boolean {
     const s = String((err as { stderr?: string } | undefined)?.stderr ?? '') +
       String((err as Error)?.message ?? '');
-    return /non-fast-forward|\!\s*\[rejected\]/i.test(s);
+    return /non-fast-forward|!\s*\[rejected\]/i.test(s);
   }
 
   private async baseIsAncestor(checkoutPath: string, baseRef: string): Promise<boolean> {
