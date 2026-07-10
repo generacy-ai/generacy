@@ -211,6 +211,7 @@ export const HealthResponseSchema = z.object({
   status: HealthStatusSchema,
   timestamp: z.string().datetime(),
   services: z.record(ServiceStatusSchema),
+  version: z.string(),
   codeServerReady: z.boolean().optional(),
   controlPlaneReady: z.boolean().optional(),
   displayName: z.string().optional(),
