@@ -89,13 +89,15 @@ describe('LabelManager.ensureRepoLabelsExist (FR-002)', () => {
 
     // Every WORKFLOW_LABELS entry should be created
     expect(github.createLabel).toHaveBeenCalledTimes(WORKFLOW_LABELS.length);
-    // Spot-check the newly added one (FR-001)
+    // Spot-check the newly added one (FR-001). #898 T006 updated the
+    // description to reference the self-describing pause comment; test
+    // asserts current copy verbatim.
     expect(github.createLabel).toHaveBeenCalledWith(
       'test-owner',
       'test-repo',
       'waiting-for:merge-conflicts',
       'FBCA04',
-      'Waiting for base-merge conflict resolution',
+      'Base-merge conflict. See stage comment for the manual remedy.',
     );
   });
 

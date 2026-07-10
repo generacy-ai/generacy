@@ -205,16 +205,96 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
           'mergeConflict' in c[0].errorEvidence,
       );
       expect(mergeConflictCall).toBeDefined();
-      expect(mergeConflictCall[0].errorEvidence.mergeConflict).toEqual({
-        baseRef: 'origin/main',
-        conflictedPaths: ['CLAUDE.md', 'package.json', 'package-lock.json'],
-      });
+      // #898 Ship 1: mergeConflict now carries `manualRemedy` too.
+      expect(mergeConflictCall[0].errorEvidence.mergeConflict.baseRef).toBe('origin/main');
+      expect(mergeConflictCall[0].errorEvidence.mergeConflict.conflictedPaths).toEqual([
+        'CLAUDE.md',
+        'package.json',
+        'package-lock.json',
+      ]);
 
       // Stage comment status is in_progress (a pause, not an error)
       expect(mergeConflictCall[0].status).toBe('in_progress');
 
       // No CLI spawn happened (pause fired before phase execution)
       expect(deps.cliSpawner.spawnPhase).not.toHaveBeenCalled();
+    });
+
+    // #898 T005 — Ship 1: self-describing pause remedy carried in the payload.
+    it('includes manualRemedy with substituted branch/base/issue-ref (FR-011/FR-012)', async () => {
+      const { runner } = makeFakeRunner([
+        {
+          ok: false,
+          baseRef: 'origin/develop',
+          conflictedPaths: ['CLAUDE.md', 'src/foo.ts'],
+        },
+      ]);
+      const deps = createMockDeps(runner);
+      const context = createMockContext('implement');
+
+      const result = await loop.executeLoop(context, createConfig(), deps, ['implement']);
+
+      expect(result.gateHit).toBe(true);
+
+      const updateCalls = (deps.stageCommentManager.updateStageComment as any).mock.calls;
+      const mergeConflictCall = updateCalls.find(
+        (c: any[]) =>
+          c[0]?.errorEvidence &&
+          'mergeConflict' in c[0].errorEvidence,
+      );
+      expect(mergeConflictCall).toBeDefined();
+      const evidence = mergeConflictCall[0].errorEvidence.mergeConflict;
+
+      expect(evidence.conflictedPaths).toEqual(['CLAUDE.md', 'src/foo.ts']);
+      expect(evidence.manualRemedy).toBeDefined();
+      expect(evidence.manualRemedy.steps).toHaveLength(3);
+
+      // Step 1: <branch> and <base> substituted
+      expect(evidence.manualRemedy.steps[0]).toContain('864-found-during-cockpit-v1');
+      expect(evidence.manualRemedy.steps[0]).toContain('origin/develop');
+      // Step 2: contains generacy cockpit advance and --gate merge-conflicts
+      expect(evidence.manualRemedy.steps[1]).toContain('generacy cockpit advance');
+      expect(evidence.manualRemedy.steps[1]).toContain('--gate merge-conflicts');
+      // Step 3: mentions re-runs
+      expect(evidence.manualRemedy.steps[2]).toContain('re-runs');
+
+      // Warning contains re-pause substring
+      expect(evidence.manualRemedy.warning).toContain('re-pause');
+    });
+
+    // #898 T005 SC-005 — advance-without-resolve → re-pause preserves paths.
+    it('re-pause on second run also names the conflicted paths (SC-005)', async () => {
+      // Runner returns the same conflict twice — simulates advance-without-
+      // resolve: operator ran `cockpit advance` without fixing the branch,
+      // phase re-ran, pre-merge re-hit the same conflict.
+      const conflictedPaths = ['CLAUDE.md'];
+      const { runner } = makeFakeRunner([
+        { ok: false, baseRef: 'origin/main', conflictedPaths },
+        { ok: false, baseRef: 'origin/main', conflictedPaths },
+      ]);
+      const deps = createMockDeps(runner);
+      const context = createMockContext('implement');
+
+      // First pause
+      await loop.executeLoop(context, createConfig(), deps, ['implement']);
+      // Second pause (advance-without-resolve replay)
+      await loop.executeLoop(context, createConfig(), deps, ['implement']);
+
+      const updateCalls = (deps.stageCommentManager.updateStageComment as any).mock.calls;
+      const mergeConflictCalls = updateCalls.filter(
+        (c: any[]) =>
+          c[0]?.errorEvidence && 'mergeConflict' in c[0].errorEvidence,
+      );
+      expect(mergeConflictCalls.length).toBeGreaterThanOrEqual(2);
+
+      const first = mergeConflictCalls[0][0].errorEvidence.mergeConflict;
+      const second = mergeConflictCalls[mergeConflictCalls.length - 1][0].errorEvidence.mergeConflict;
+      expect(first.conflictedPaths).toEqual(conflictedPaths);
+      expect(second.conflictedPaths).toEqual(conflictedPaths);
+      // Both pauses carry a manualRemedy — the pause is self-describing on
+      // every re-run, not only the first.
+      expect(first.manualRemedy).toBeDefined();
+      expect(second.manualRemedy).toBeDefined();
     });
   });
 

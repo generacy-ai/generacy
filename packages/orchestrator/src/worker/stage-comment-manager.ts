@@ -218,6 +218,9 @@ export class StageCommentManager {
    *
    * See specs/864-found-during-cockpit-v1/contracts/merge-conflict-evidence-block.md
    * §"Byte layout (variant B)" for the exact layout.
+   *
+   * #898 Ship 1: when `mergeConflict.manualRemedy` is present, also render the
+   * self-describing three-step remedy section per contracts/pause-comment-schema.md.
    */
   private appendMergeConflictBlock(
     lines: string[],
@@ -242,6 +245,33 @@ export class StageCommentManager {
     }
     lines.push('');
     lines.push('</details>');
+
+    // #898 Ship 1 (FR-011/FR-012): self-describing remedy section. Optional at
+    // the type level so pre-Ship-1 evidence blobs still render (historical
+    // stage-comment reads via cockpit status). Post-Ship-1 the phase-loop
+    // pause site always sets manualRemedy.
+    const remedy = mergeConflict.manualRemedy;
+    if (remedy && remedy.steps.length > 0) {
+      lines.push('');
+      lines.push('## \u{26A0}\u{FE0F} Merge conflict on base-merge');
+      lines.push('');
+      lines.push('Conflicted paths:');
+      if (paths.length === 0) {
+        lines.push('- (no paths reported)');
+      } else {
+        for (const path of paths) {
+          lines.push(`- \`${escapePath(path)}\``);
+        }
+      }
+      lines.push('');
+      lines.push('### To resolve manually:');
+      lines.push('');
+      for (let i = 0; i < remedy.steps.length; i++) {
+        lines.push(`${i + 1}. ${remedy.steps[i]}`);
+      }
+      lines.push('');
+      lines.push(`> **${remedy.warning}**`);
+    }
   }
 
   /**

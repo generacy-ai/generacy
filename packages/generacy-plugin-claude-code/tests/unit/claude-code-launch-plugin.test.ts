@@ -12,8 +12,8 @@ describe('ClaudeCodeLaunchPlugin', () => {
       expect(plugin.pluginId).toBe('claude-code');
     });
 
-    it('supports phase, pr-feedback, validate-fix, conversation-turn, and invoke kinds', () => {
-      expect(plugin.supportedKinds).toEqual(['phase', 'pr-feedback', 'validate-fix', 'conversation-turn', 'invoke']);
+    it('supports phase, pr-feedback, validate-fix, merge-conflict, conversation-turn, and invoke kinds', () => {
+      expect(plugin.supportedKinds).toEqual(['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'conversation-turn', 'invoke']);
     });
   });
 

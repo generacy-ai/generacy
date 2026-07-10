@@ -18,8 +18,8 @@ export interface QueueItem {
   issueNumber: number;
   /** Workflow name parsed from label (e.g., "speckit-feature") */
   workflowName: string;
-  /** Command type: "process" for new, "continue" for resume, "address-pr-feedback" for PR review feedback */
-  command: 'process' | 'continue' | 'address-pr-feedback';
+  /** Command type: "process" for new, "continue" for resume, "address-pr-feedback" for PR review feedback, "resolve-merge-conflicts" for #898 bounded conflict resolution */
+  command: 'process' | 'continue' | 'address-pr-feedback' | 'resolve-merge-conflicts';
   /** Priority score (timestamp for FIFO, lower = higher priority) */
   priority: number;
   /** When this item was enqueued */
@@ -40,6 +40,24 @@ export interface PrFeedbackMetadata {
   prNumber: number;
   /** IDs of unresolved review threads at detection time */
   reviewThreadIds: number[];
+}
+
+/**
+ * Metadata for the `resolve-merge-conflicts` command (#898).
+ *
+ * Both fields are advisory. The handler re-derives them independently:
+ *   - `conflictedPathsAtPause` is captured by the monitor when the pause was
+ *     detected. The handler re-computes conflicted paths from a fresh merge
+ *     attempt because they can shift if base advanced between pause and
+ *     handler invocation.
+ *   - `prNumber` is the linked PR if the monitor was able to resolve it. The
+ *     handler re-resolves via PrLinker if this field is missing.
+ */
+export interface ResolveMergeConflictsMetadata {
+  /** Advisory snapshot of conflicted paths at pause time. */
+  conflictedPathsAtPause?: string[];
+  /** Advisory PR number if monitor resolved it. */
+  prNumber?: number;
 }
 
 /**

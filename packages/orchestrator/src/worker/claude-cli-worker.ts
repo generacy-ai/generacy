@@ -23,6 +23,7 @@ import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
+import { MergeConflictHandler } from './merge-conflict-handler.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { createAgentLauncher } from '../launcher/launcher-setup.js';
@@ -302,6 +303,34 @@ export class ClaudeCliWorker {
           data: {
             command: 'address-pr-feedback',
             lastPhase: 'address-pr-feedback',
+            totalPhases: 1,
+          },
+        });
+
+        return { status: 'completed' };
+      }
+
+      // 2b. #898: route resolve-merge-conflicts to MergeConflictHandler.
+      if (item.command === 'resolve-merge-conflicts') {
+        workerLogger.info('Routing to MergeConflictHandler for merge-conflict resolution');
+
+        const mergeConflictHandler = new MergeConflictHandler(
+          this.config,
+          workerLogger,
+          this.agentLauncher,
+          this.sseEmitter,
+        );
+
+        await mergeConflictHandler.handle(item, checkoutPath);
+
+        workerLogger.info('Merge-conflict resolution completed');
+
+        this.sseEmitter?.({
+          type: 'workflow:completed',
+          workflowId,
+          data: {
+            command: 'resolve-merge-conflicts',
+            lastPhase: 'resolve-merge-conflicts',
             totalPhases: 1,
           },
         });

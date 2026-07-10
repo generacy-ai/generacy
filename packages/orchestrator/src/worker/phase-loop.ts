@@ -19,6 +19,7 @@ import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './pr
 import { boundOutputTail } from './output-tail.js';
 import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
+import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
 import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
@@ -926,6 +927,19 @@ export class PhaseLoop {
       gateLabel,
     });
 
+    // #898 FR-011/FR-012: substitute the manual-remedy template with the
+    // concrete branch / bare base / issue-ref for this pause. Keeps the
+    // renderer content-agnostic — it just prints the strings as given.
+    const bareBase = mergeResult.baseRef.replace(/^origin\//, '');
+    const branchName = context.branch ?? '<branch>';
+    const issueRef = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    const substitutedSteps = MERGE_CONFLICT_REMEDY.steps.map((step) =>
+      step
+        .replace(/<branch>/g, branchName)
+        .replace(/<base>/g, bareBase)
+        .replace(/<issue-ref>/g, issueRef),
+    );
+
     await deps.stageCommentManager.updateStageComment({
       stage,
       status: 'in_progress',
@@ -936,6 +950,10 @@ export class PhaseLoop {
         mergeConflict: {
           baseRef: mergeResult.baseRef,
           conflictedPaths: mergeResult.conflictedPaths,
+          manualRemedy: {
+            steps: substitutedSteps,
+            warning: MERGE_CONFLICT_REMEDY.warning,
+          },
         },
       },
     });
