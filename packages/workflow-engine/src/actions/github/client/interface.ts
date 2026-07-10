@@ -134,6 +134,26 @@ export interface GitHubClient {
   getIssueComments(owner: string, repo: string, number: number): Promise<Comment[]>;
 
   /**
+   * Fetch issue comments via GraphQL with `viewerDidAuthor` populated per
+   * comment. Sibling to `getIssueComments()` (REST) and mirror of
+   * `getPRReviewThreads()` (existing GraphQL precedent from #878).
+   *
+   * Callers that pass results through `isTrustedCommentAuthor(c, surface, ctx)`
+   * MUST use this method — REST does not surface `viewerDidAuthor`, so
+   * App-identity clusters cannot self-recognize their own posts and the
+   * trust helper rejects them at tier NONE. Consumed by
+   * `integrateClarificationAnswers` (answer-scanner surface) and
+   * `buildTrustedIssueCommentsBlock` (clarify-resume surface).
+   *
+   * Returns the first page (`first: 100`) only — matches
+   * `getPRReviewThreads()` pagination posture. See #910.
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on any other non-zero exit.
+   */
+  getIssueCommentsWithViewerAuth(owner: string, repo: string, number: number): Promise<Comment[]>;
+
+  /**
    * Update a comment
    */
   updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>;

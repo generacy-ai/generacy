@@ -11,9 +11,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { ActionContext } from '../../../../../types/index.js';
 
 // Mock the GitHub client factory.
+// #910: `buildTrustedIssueCommentsBlock` now calls
+// `getIssueCommentsWithViewerAuth` (GraphQL) instead of `getIssueComments`
+// (REST). Alias both to the same vi.fn so existing fixtures that call
+// `mockClient.getIssueComments.mockResolvedValue()` continue to configure
+// the migrated code path.
+const mockGetIssueComments = vi.fn();
 const mockClient = {
   getRepoInfo: vi.fn(),
-  getIssueComments: vi.fn(),
+  getIssueComments: mockGetIssueComments,
+  getIssueCommentsWithViewerAuth: mockGetIssueComments,
 };
 
 vi.mock('../../../../github/client/index.js', () => ({

@@ -52,10 +52,20 @@ function createMockLogger(): Logger {
 }
 
 function createMockGithub(overrides: Record<string, unknown> = {}) {
+  // #910: alias both getIssueComments (REST) and
+  // getIssueCommentsWithViewerAuth (GraphQL) to a single vi.fn so existing
+  // fixtures that mock `getIssueComments` continue to feed
+  // `integrateClarificationAnswers`, which now uses the GraphQL variant.
+  const getIssueComments =
+    (overrides as { getIssueComments?: ReturnType<typeof vi.fn> }).getIssueComments
+    ?? vi.fn().mockResolvedValue([]);
   return {
     addIssueComment: vi.fn().mockResolvedValue({ id: 999, body: '' }),
-    getIssueComments: vi.fn().mockResolvedValue([]),
+    getIssueComments,
+    getIssueCommentsWithViewerAuth: getIssueComments,
     ...overrides,
+    // ensure the alias survives spread if overrides only touched getIssueComments
+    ...(overrides.getIssueComments ? { getIssueCommentsWithViewerAuth: overrides.getIssueComments } : {}),
   };
 }
 

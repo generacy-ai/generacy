@@ -315,6 +315,82 @@ export class GhCliGitHubClient implements GitHubClient {
     }));
   }
 
+  async getIssueCommentsWithViewerAuth(
+    owner: string,
+    repo: string,
+    number: number,
+  ): Promise<Comment[]> {
+    const query = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      comments(first: 100) {
+        nodes {
+          databaseId
+          body
+          createdAt
+          updatedAt
+          author { login }
+          authorAssociation
+          viewerDidAuthor
+        }
+      }
+    }
+  }
+}`;
+
+    const result = await this.executeGh([
+      'api', 'graphql',
+      '-f', `query=${query}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `number=${number}`,
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to get issue comments for issue #${number}: ${result.stderr}`);
+    }
+
+    const parsed = parseJSONSafe(result.stdout) as {
+      data?: {
+        repository?: {
+          issue?: {
+            comments?: {
+              nodes?: Array<{
+                databaseId: number;
+                body: string;
+                createdAt: string;
+                updatedAt: string;
+                author: { login: string } | null;
+                authorAssociation: string | null;
+                viewerDidAuthor: boolean | null;
+              }>;
+            };
+          };
+        };
+      };
+    } | null;
+
+    const nodes = parsed?.data?.repository?.issue?.comments?.nodes;
+    if (!nodes) return [];
+
+    return nodes.map((c) => {
+      const comment: Comment = {
+        id: c.databaseId,
+        body: c.body,
+        author: c.author?.login ?? '',
+        created_at: c.createdAt,
+        updated_at: c.updatedAt,
+      };
+      if (c.authorAssociation !== null && c.authorAssociation !== undefined) {
+        comment.authorAssociation = c.authorAssociation;
+      }
+      if (c.viewerDidAuthor !== null && c.viewerDidAuthor !== undefined) {
+        comment.viewerDidAuthor = c.viewerDidAuthor;
+      }
+      return comment;
+    });
+  }
+
   async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
     // gh CLI doesn't have a direct command to edit comments, use API
     const result = await this.executeGh([

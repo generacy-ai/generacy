@@ -557,6 +557,38 @@ async function postUntrustedAnswerExplainers(opts: {
 }
 
 /**
+ * Fetch issue comments via GraphQL, retrying once on transient failure and
+ * failing closed on the second failure (FR-010, #910). No REST fallback —
+ * falling back would silently reproduce the pre-fix defect where
+ * App-identity clusters cannot self-recognize their own answers.
+ */
+async function getIssueCommentsWithRetry(
+  github: WorkerContext['github'],
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  logger: Logger,
+): Promise<TrustComment[]> {
+  try {
+    return await github.getIssueCommentsWithViewerAuth(owner, repo, issueNumber);
+  } catch (firstErr) {
+    logger.warn(
+      { error: firstErr instanceof Error ? firstErr.message : String(firstErr) },
+      'getIssueCommentsWithViewerAuth failed; retrying once',
+    );
+    try {
+      return await github.getIssueCommentsWithViewerAuth(owner, repo, issueNumber);
+    } catch (secondErr) {
+      logger.warn(
+        { error: secondErr instanceof Error ? secondErr.message : String(secondErr) },
+        'getIssueCommentsWithViewerAuth failed twice; failing closed (no REST fallback)',
+      );
+      throw secondErr;
+    }
+  }
+}
+
+/**
  * Integrate clarification answers from GitHub issue comments into the local
  * clarifications.md file.
  *
@@ -597,10 +629,15 @@ export async function integrateClarificationAnswers(
 
   const pendingNumbers = pendingQuestions.map((q) => q.number);
 
-  // 3. Fetch GitHub issue comments and parse answers
+  // 3. Fetch GitHub issue comments and parse answers.
+  // #910: switched from REST getIssueComments() to GraphQL
+  // getIssueCommentsWithViewerAuth() so App-identity clusters can
+  // self-recognize their own answer posts via `viewerDidAuthor`. Retry
+  // once on transient failure; fail closed on second failure (no REST
+  // fallback — FR-010).
   let comments: TrustComment[];
   try {
-    comments = await github.getIssueComments(owner, repo, issueNumber);
+    comments = await getIssueCommentsWithRetry(github, owner, repo, issueNumber, logger);
   } catch (error) {
     logger.warn(
       { error: error instanceof Error ? error.message : String(error) },
