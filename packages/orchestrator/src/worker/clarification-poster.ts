@@ -14,6 +14,10 @@ import {
   type CommentTrustContext,
 } from '@generacy-ai/workflow-engine';
 import type { Comment as TrustComment } from '@generacy-ai/workflow-engine';
+import {
+  commentCarriesQuestionMarker,
+  matchClarificationQuestionMarker,
+} from './clarification-markers.js';
 import type { WorkerContext, Logger } from './types.js';
 
 /**
@@ -208,12 +212,10 @@ function splitByQuestionHeading(body: string): string[] {
  * these markers.
  */
 export function isQuestionComment(body: string): boolean {
-  // Orchestrator-posted clarification comment
-  if (body.includes(MARKER_PREFIX)) return true;
-  // CLI-posted clarification comment
-  if (body.includes('<!-- generacy-clarification:')) return true;
-  // Stage tracking comment
-  if (body.includes('<!-- generacy-stage:')) return true;
+  // FR-101 / FR-108 / FR-109 — engine-authored questions markers.
+  // Delegated to the single-source predicate in clarification-markers.ts;
+  // adding a new dialect only touches that file.
+  if (commentCarriesQuestionMarker(body)) return true;
   // Clarify operation's direct posting (with or without emoji).
   // Negative lookahead excludes answer headings like
   // "## Answers to Clarification Questions".
@@ -539,7 +541,7 @@ async function postUntrustedAnswerExplainers(opts: {
 
     const tier = c.authorAssociation ?? 'unknown';
     const body = `${marker}
-> Answers from @${c.author} were not applied (association tier: \`${tier}\`). A trusted member (OWNER/MEMBER/COLLABORATOR) must post or confirm the answers.`;
+> Answers from @${c.author} were not applied (association tier: \`${tier}\`). A trusted member (OWNER/MEMBER/COLLABORATOR) must re-post the answers themselves in the \`Q1: <answer>\` format for the batch to integrate.`;
 
     try {
       await github.addIssueComment(owner, repo, issueNumber, body);
@@ -609,9 +611,32 @@ export async function integrateClarificationAnswers(
     return { integrated: 0, reason: 'no-answers' };
   }
 
-  // 3a. Author-trust gating (#842). Every comment goes through the shared
-  // helper before we treat it as an answer source. Answer-scanner surface
-  // ignores widen-config (FR-008).
+  // FR-102 / FR-103: filter engine-authored questions BEFORE the trust check.
+  // The trust filter must never receive an engine questions comment as input —
+  // under #910 the cluster's own identity is trusted, and the trust check
+  // would wave those through to the parser.
+  const scanCandidates: TrustComment[] = [];
+  for (const c of comments) {
+    const markerPrefix = matchClarificationQuestionMarker(c.body);
+    if (markerPrefix !== undefined) {
+      logger.debug(
+        {
+          event: 'clarification-answer-scanner-marker-excluded',
+          commentId: c.id,
+          author: c.author,
+          markerPrefix,
+          issueNumber,
+        },
+        'Excluded from answer-scanner via question marker',
+      );
+      continue;
+    }
+    scanCandidates.push(c);
+  }
+
+  // 3a. Author-trust gating (#842). Every marker-cleared comment goes through
+  // the shared helper before we treat it as an answer source. Answer-scanner
+  // surface ignores widen-config (FR-008).
   const botLogin = resolveBotLoginFromEnv();
   const trustConfig = tryLoadCommentTrustConfig(checkoutPath, toEngineLogger(logger));
   const trustCtx: CommentTrustContext = {
@@ -622,7 +647,7 @@ export async function integrateClarificationAnswers(
 
   const trustedComments: TrustComment[] = [];
   const skippedForExplainer: TrustComment[] = [];
-  for (const c of comments) {
+  for (const c of scanCandidates) {
     const decision = isTrustedCommentAuthor(c, 'answer-scanner', trustCtx);
     if (decision.trusted) {
       trustedComments.push(c);
@@ -636,11 +661,10 @@ export async function integrateClarificationAnswers(
     }
   }
 
-  // Filter out comments that contain the clarification questions themselves.
-  // Without this, parseAnswersFromComments matches Q patterns from the bot's
-  // own questions comment (e.g., "### Q1: Topic") and treats the topic text
-  // as an answer, causing the gate to incorrectly see all questions as answered.
-  const answerComments = trustedComments.filter((c) => !isQuestionComment(c.body));
+  // FR-102 pre-filter has already dropped engine-authored questions comments;
+  // parseAnswersFromComments's FR-002 content sniff still catches unmarked
+  // question-shaped text as a second line of defense (FR-106).
+  const answerComments = trustedComments;
 
   // Post explainer comments for untrusted Q<N>: answers, before parsing.
   // Fire-and-forget: failures are non-fatal.

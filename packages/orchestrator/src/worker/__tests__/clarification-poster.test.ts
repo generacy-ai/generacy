@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+import { dirname as pathDirname, join as pathJoin } from 'node:path';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import {
   parseClarifications,
@@ -8,6 +10,11 @@ import {
   integrateClarificationAnswers,
   isQuestionComment,
 } from '../clarification-poster.js';
+import {
+  CLARIFICATION_QUESTION_MARKERS,
+  commentCarriesQuestionMarker,
+} from '../clarification-markers.js';
+import { isTrustedCommentAuthor } from '@generacy-ai/workflow-engine';
 import type { WorkerContext, Logger } from '../types.js';
 
 // ---------------------------------------------------------------------------
@@ -31,6 +38,17 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   tryLoadCommentTrustConfig: vi.fn(() => undefined),
   wrapUntrustedData: vi.fn((content: string) => content),
 }));
+
+// Marker predicate module — real implementation preserved via importOriginal,
+// but `commentCarriesQuestionMarker` is a spy so we can verify FR-109
+// delegation from `isQuestionComment`.
+vi.mock('../clarification-markers.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../clarification-markers.js')>();
+  return {
+    ...actual,
+    commentCarriesQuestionMarker: vi.fn(actual.commentCarriesQuestionMarker),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -679,8 +697,20 @@ describe('isQuestionComment', () => {
     expect(isQuestionComment('<!-- generacy-clarification:batch-1 -->\n## Questions')).toBe(true);
   });
 
-  it('detects stage tracking comment', () => {
-    expect(isQuestionComment('<!-- generacy-stage:specification -->\n## Specification Stage')).toBe(true);
+  it('detects clarification-stage tracking comment', () => {
+    // #909: marker set narrowed to the clarification family — only
+    // `<!-- generacy-stage:clarification` (and its `-batch-N` variants)
+    // indicate a question comment. Non-clarification stage markers
+    // (specification/planning/implementation) are a different family and
+    // are covered by the "does not flag" case below.
+    expect(isQuestionComment('<!-- generacy-stage:clarification -->\n## Clarification')).toBe(true);
+    expect(isQuestionComment('<!-- generacy-stage:clarification-batch-1 -->\n### Q1: Topic')).toBe(true);
+  });
+
+  it('does not flag non-clarification stage tracking comment (#909 narrowing)', () => {
+    expect(isQuestionComment('<!-- generacy-stage:specification -->\n## Specification Stage')).toBe(false);
+    expect(isQuestionComment('<!-- generacy-stage:planning -->\n## Planning Stage')).toBe(false);
+    expect(isQuestionComment('<!-- generacy-stage:implementation -->\n## Implementation Stage')).toBe(false);
   });
 
   it('detects clarify operation direct posting (plain heading)', () => {
@@ -1260,5 +1290,428 @@ Q3: some overridden text`,
       const payload = call[0] as Record<string, unknown> | undefined;
       expect(payload?.code).not.toBe('TRANSITION_WITH_QUESTION_HEADINGS');
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #909 — Marker-based exclusion in clarification answer-scanner
+// ---------------------------------------------------------------------------
+
+const SNAPPOLL_4_FIXTURE_BODY = `<!-- generacy-stage:clarification-batch-1 -->
+
+## ❓ Clarification Questions — Batch 1
+
+The following questions were identified during spec analysis.
+
+### Q1: Authentication method
+Which authentication method should be used? OAuth vs JWT vs session-based.
+
+### Q2: Database choice
+Multiple databases could work — PostgreSQL vs MongoDB.
+`;
+
+const SAMPLE_CLARIFICATIONS_909 = `# Clarification Questions
+
+## Status: Pending
+
+## Questions
+
+### Q1: Authentication method
+**Context**: The spec mentions user auth but doesn't specify OAuth vs JWT.
+**Question**: Which authentication method should be used?
+
+**Answer**: *Pending*
+
+### Q2: Database choice
+**Context**: Multiple databases could work for this use case.
+**Question**: Should we use PostgreSQL or MongoDB?
+
+**Answer**: *Pending*
+`;
+
+// ---------------------------------------------------------------------------
+// T006: parseAnswersFromComments — marker exclusion (SC-001..SC-004, SC-008)
+// ---------------------------------------------------------------------------
+describe('parseAnswersFromComments — marker exclusion (#909)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS_909);
+  });
+
+  it('returns no answers for the snappoll#4 engine-authored questions comment (SC-001)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 4938943909,
+        body: SNAPPOLL_4_FIXTURE_BODY,
+        author: 'generacy-ai[bot]',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['OWNER'],
+    ['MEMBER'],
+    ['CONTRIBUTOR'],
+  ])(
+    'returns no answers for the snappoll#4 fixture even when authorAssociation is %s (SC-002 at parser level)',
+    async (tier) => {
+      (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: 4938943909,
+          body: SNAPPOLL_4_FIXTURE_BODY,
+          author: 'generacy-ai[bot]',
+          authorAssociation: tier,
+          created_at: '',
+          updated_at: '',
+        },
+      ]);
+
+      const result = await integrateClarificationAnswers(context, logger);
+
+      expect(result.integrated).toBe(0);
+      expect(result.reason).toBe('no-answers');
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    },
+  );
+
+  it('integrates trusted `Q1: A\\nQ2: B` with no marker (SC-003)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 2,
+        body: 'Q1: A\nQ2: B',
+        author: 'human',
+        authorAssociation: 'OWNER',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+    expect(writtenContent).toContain('**Answer**: B');
+  });
+
+  it('integrates answers when a human quotes the questions comment with `> ` (SC-004 / US4)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 3,
+        body: '> <!-- generacy-stage:clarification -->\n> ### Q1: Topic\n\nQ1: A\nQ2: B',
+        author: 'human',
+        authorAssociation: 'OWNER',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(2);
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: A');
+    expect(writtenContent).toContain('**Answer**: B');
+  });
+
+  it('emits exactly one FR-107 debug log per excluded comment, with no body field (SC-008)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 4938943909,
+        body: SNAPPOLL_4_FIXTURE_BODY,
+        author: 'generacy-ai[bot]',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    await integrateClarificationAnswers(context, logger);
+
+    const debugCalls = (logger.debug as ReturnType<typeof vi.fn>).mock.calls;
+    const markerLogs = debugCalls.filter(
+      ([first]) =>
+        typeof first === 'object' &&
+        first !== null &&
+        (first as Record<string, unknown>).event ===
+          'clarification-answer-scanner-marker-excluded',
+    );
+    expect(markerLogs).toHaveLength(1);
+
+    const [meta, msg] = markerLogs[0]!;
+    const m = meta as Record<string, unknown>;
+    expect(m.commentId).toBe(4938943909);
+    expect(m.author).toBe('generacy-ai[bot]');
+    expect(m.markerPrefix).toBe('<!-- generacy-stage:clarification');
+    expect(m.issueNumber).toBe(42);
+    expect(m.body).toBeUndefined();
+    expect(m.content).toBeUndefined();
+    expect(m.text).toBeUndefined();
+    expect(msg).toBe('Excluded from answer-scanner via question marker');
+    const serialized = JSON.stringify(meta);
+    expect(serialized).not.toContain('Authentication method');
+    expect(serialized).not.toContain('Database choice');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T007: integrateClarificationAnswers — marker exclusion + trust independence
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers — marker exclusion + trust independence (#909, FR-110)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS_909);
+  });
+
+  it('runs the trust check on the marker-filtered scanCandidates set, not on raw comments (FR-102)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 4938943909,
+        body: SNAPPOLL_4_FIXTURE_BODY,
+        author: 'generacy-ai[bot]',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+      {
+        id: 100,
+        body: 'Q1: A\nQ2: B',
+        author: 'alice',
+        authorAssociation: 'OWNER',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    await integrateClarificationAnswers(context, logger);
+
+    const trustSpy = isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>;
+    // The engine questions comment (id 4938943909) must NEVER reach the trust check.
+    for (const call of trustSpy.mock.calls) {
+      const comment = call[0] as { id: number };
+      expect(comment.id).not.toBe(4938943909);
+    }
+    // The human answer (id 100) must have been evaluated.
+    const seenIds = trustSpy.mock.calls.map((c) => (c[0] as { id: number }).id);
+    expect(seenIds).toContain(100);
+  });
+
+  it('does not post an untrusted-answer explainer for the engine-authored questions comment (FR-103)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 4938943909,
+        body: SNAPPOLL_4_FIXTURE_BODY,
+        author: 'generacy-ai[bot]',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    await integrateClarificationAnswers(context, logger);
+
+    const addIssueComment = context.github.addIssueComment as ReturnType<typeof vi.fn>;
+    for (const call of addIssueComment.mock.calls) {
+      const body = call[3] as string;
+      expect(body).not.toContain('not applied');
+      expect(body).not.toContain('association tier');
+    }
+  });
+
+  it('integrated remains 0 and no explainer is posted even when trust says the bot IS trusted (#910 guard)', async () => {
+    // Simulate what #910 will do to the cluster: the bot's own identity becomes
+    // trusted on the answer-scanner surface. Without marker exclusion, the
+    // trust check would wave the engine questions comment through to the
+    // parser and it would silently self-answer.
+    const trustSpy = isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>;
+    trustSpy.mockImplementation(() => ({ trusted: true, reason: 'owner' }));
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 4938943909,
+        body: SNAPPOLL_4_FIXTURE_BODY,
+        author: 'generacy-ai[bot]',
+        authorAssociation: 'OWNER',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(result.reason).toBe('no-answers');
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    const addIssueComment = context.github.addIssueComment as ReturnType<typeof vi.fn>;
+    for (const call of addIssueComment.mock.calls) {
+      const body = call[3] as string;
+      expect(body).not.toContain('not applied');
+      expect(body).not.toContain('association tier');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T008: untrusted-answer explainer copy (SC-005, SC-006, FR-104)
+// ---------------------------------------------------------------------------
+describe('untrusted-answer explainer copy (#909)', () => {
+  let context: WorkerContext;
+  let logger: Logger;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    context = createWorkerContext();
+    logger = createMockLogger();
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS_909);
+
+    // Force NONE-authored to be untrusted so the explainer path fires.
+    const trustSpy = isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>;
+    trustSpy.mockImplementation((comment: { authorAssociation?: string }) => {
+      if (comment.authorAssociation === 'NONE') {
+        return { trusted: false, reason: 'none-untrusted' };
+      }
+      return { trusted: true, reason: 'owner' };
+    });
+  });
+
+  it('body names the re-post remediation in the `Q1: <answer>` format (SC-006)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 555,
+        body: 'Q1: my answer',
+        author: 'eve',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    await integrateClarificationAnswers(context, logger);
+
+    const addIssueComment = context.github.addIssueComment as ReturnType<typeof vi.fn>;
+    expect(addIssueComment).toHaveBeenCalled();
+    const body = addIssueComment.mock.calls[0]![3] as string;
+    expect(body).toContain('re-post the answers themselves');
+    expect(body).toContain('`Q1: <answer>`');
+    expect(body).toContain('OWNER/MEMBER/COLLABORATOR');
+  });
+
+  it('body contains zero /confirm/i matches (SC-005)', async () => {
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 556,
+        body: 'Q1: some drive-by answer',
+        author: 'mallory',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    await integrateClarificationAnswers(context, logger);
+
+    const addIssueComment = context.github.addIssueComment as ReturnType<typeof vi.fn>;
+    const body = addIssueComment.mock.calls[0]![3] as string;
+    expect(body).not.toMatch(/confirm/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T009: SC-007 — no hardcoded markers outside clarification-markers.ts
+// ---------------------------------------------------------------------------
+describe('SC-007 — no hardcoded question markers outside clarification-markers.ts (#909)', () => {
+  // (file, prefix) pairs allowed to contain the marker. Any occurrence
+  // elsewhere in the worker directory fails the test.
+  //
+  // Rationale: `MARKER_PREFIX` and `cliMarkerPrefix` in clarification-poster.ts
+  // are posting-marker constants for `postClarifications`'s own dedup surface —
+  // a distinct concern from answer-scanning. See plan.md §"Files NOT changing".
+  const ALLOWLIST: readonly { file: string; prefix: string; reason: string }[] = [
+    {
+      file: 'clarification-poster.ts',
+      prefix: '<!-- generacy-clarifications:',
+      reason: 'posting-marker constant (MARKER_PREFIX) + JSDoc reference',
+    },
+    {
+      file: 'clarification-poster.ts',
+      prefix: '<!-- generacy-clarification:',
+      reason: 'CLI posting-marker constant (cliMarkerPrefix) + JSDoc reference',
+    },
+  ] as const;
+
+  it('fails if any of the four question-marker prefixes leak into a worker file (except allowlist)', async () => {
+    const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const testDir = pathDirname(fileURLToPath(import.meta.url));
+    const workerDir = pathJoin(testDir, '..');
+
+    const files = fs
+      .readdirSync(workerDir, { withFileTypes: true })
+      .filter((d) => d.isFile() && d.name.endsWith('.ts'))
+      .map((d) => d.name)
+      .filter((n) => n !== 'clarification-markers.ts');
+
+    const violations: string[] = [];
+    for (const file of files) {
+      const content = fs.readFileSync(pathJoin(workerDir, file), 'utf8');
+      for (const prefix of CLARIFICATION_QUESTION_MARKERS) {
+        if (!content.includes(prefix)) continue;
+        const allowed = ALLOWLIST.some(
+          (entry) => entry.file === file && entry.prefix === prefix,
+        );
+        if (!allowed) {
+          violations.push(`${file}: hardcoded marker ${JSON.stringify(prefix)}`);
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T010: isQuestionComment delegates to commentCarriesQuestionMarker (FR-109)
+// ---------------------------------------------------------------------------
+describe('isQuestionComment — FR-109 delegation to commentCarriesQuestionMarker (#909)', () => {
+  it('calls commentCarriesQuestionMarker when a marker is present', () => {
+    const spy = commentCarriesQuestionMarker as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    const result = isQuestionComment('<!-- generacy-clarifications:42 -->\n');
+
+    expect(result).toBe(true);
+    expect(spy).toHaveBeenCalled();
+  });
+
+  it('calls commentCarriesQuestionMarker even when the body is a non-marker (content-shape branch fallback)', () => {
+    const spy = commentCarriesQuestionMarker as unknown as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+
+    isQuestionComment('Q1: A\nQ2: B');
+
+    // Marker branch runs first (returns false), then content-shape branches
+    // run. The delegation must have been consulted.
+    expect(spy).toHaveBeenCalled();
   });
 });
