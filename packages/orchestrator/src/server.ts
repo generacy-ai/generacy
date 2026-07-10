@@ -19,6 +19,7 @@ import { AgentRegistry } from './services/agent-registry.js';
 import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
+import { MergeConflictMonitorService } from './services/merge-conflict-monitor-service.js';
 import { BaseAdvanceMonitorService } from './services/base-advance-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
@@ -423,6 +424,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize label monitor service (full mode only)
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
+  let mergeConflictMonitorService: MergeConflictMonitorService | null = null;
   let baseAdvanceMonitorService: BaseAdvanceMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
@@ -464,6 +466,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     // dedupe via QueueManager.enqueueIfAbsent; no PhaseTracker dependency.
     if (config.prMonitor.enabled) {
       prFeedbackMonitorService = new PrFeedbackMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
+      );
+
+      // #898: Merge-conflict monitor reuses the PR-monitor config for poll
+      // cadence (same order of magnitude). Enqueues `resolve-merge-conflicts`
+      // items when the pause label pair (`waiting-for:merge-conflicts` +
+      // `agent:paused`) is detected on an assigned open issue.
+      mergeConflictMonitorService = new MergeConflictMonitorService(
         server.log,
         createGitHubClient,
         queueAdapter,
@@ -747,6 +765,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      if (mergeConflictMonitorService) {
+        mergeConflictMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Merge-conflict monitor polling failed');
+        });
+      }
+
       if (baseAdvanceMonitorService) {
         baseAdvanceMonitorService.startPolling().catch((error) => {
           server.log.error({ err: error }, 'Base-advance monitor polling failed');
@@ -813,6 +837,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (prFeedbackMonitorService) {
             prFeedbackMonitorService.stopPolling();
+          }
+          if (mergeConflictMonitorService) {
+            mergeConflictMonitorService.stopPolling();
           }
           if (baseAdvanceMonitorService) {
             await baseAdvanceMonitorService.stopPolling();

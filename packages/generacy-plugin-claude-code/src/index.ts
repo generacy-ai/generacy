@@ -96,6 +96,7 @@ export type {
   PhaseIntent,
   PrFeedbackIntent,
   ValidateFixIntent,
+  MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,
   ClaudeCodeIntent,

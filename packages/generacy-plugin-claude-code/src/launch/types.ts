@@ -32,6 +32,20 @@ export interface PrFeedbackIntent {
 }
 
 /**
+ * Intent for a bounded merge-conflict resolution agent attempt (#898).
+ * Routes through the same launcher plumbing as `pr-feedback` — no new
+ * plugin needed. The handler produces a structured prompt tagging sibling-
+ * owned paths and forbidding `--theirs`/`--ours` on them.
+ */
+export interface MergeConflictIntent {
+  kind: 'merge-conflict';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full prompt (built by MergeConflictHandler via buildMergeConflictPrompt) */
+  prompt: string;
+}
+
+/**
  * Intent for a bounded validate-fix agent attempt (#892). Routes through the
  * same launcher plumbing as `pr-feedback` — no new plugin needed. The
  * `evidenceHash` surfaces in launcher observability + PhaseTracker dedupe key.
@@ -81,5 +95,6 @@ export type ClaudeCodeIntent =
   | PhaseIntent
   | PrFeedbackIntent
   | ValidateFixIntent
+  | MergeConflictIntent
   | ConversationTurnIntent
   | InvokeIntent;

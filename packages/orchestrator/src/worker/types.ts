@@ -276,6 +276,19 @@ export interface StageCommentData {
           baseRef: string;
           /** Paths reported by `git diff --name-only --diff-filter=U`. */
           conflictedPaths: string[];
+          /**
+           * #898 FR-011/FR-012 Ship 1: three-step manual remedy rendered into
+           * the pause comment. Optional to preserve backwards compatibility
+           * with pre-Ship-1 evidence blobs (queue admin views, cockpit status
+           * reads from historical comments). Post-Ship-1 the phase-loop pause
+           * site always populates this.
+           */
+          manualRemedy?: {
+            /** 3 strings, template-substituted at build time. */
+            steps: string[];
+            /** Callout warning under the numbered list. */
+            warning: string;
+          };
         };
       };
 }

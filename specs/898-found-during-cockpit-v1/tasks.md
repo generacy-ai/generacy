@@ -10,33 +10,33 @@
 
 ## Phase 1: Ship 1 — Self-describing pause (P0 unblocker, lands first in commit history)
 
-- [ ] T001 [US3] Add `MERGE_CONFLICT_REMEDY` module-level constant and `MergeConflictRemedy` interface at `packages/orchestrator/src/worker/merge-conflict-remedy.ts` (new file). Steps tuple + warning string per `data-model.md` §"`MergeConflictRemedy`". Use TypeScript literal string types so the constant is test-provable.
+- [X] T001 [US3] Add `MERGE_CONFLICT_REMEDY` module-level constant and `MergeConflictRemedy` interface at `packages/orchestrator/src/worker/merge-conflict-remedy.ts` (new file). Steps tuple + warning string per `data-model.md` §"`MergeConflictRemedy`". Use TypeScript literal string types so the constant is test-provable.
 
-- [ ] T002 [P] [US3] Add unit test `packages/orchestrator/src/worker/__tests__/merge-conflict-remedy.test.ts` asserting the constant literal-string types match the shape in `data-model.md` (3 steps, non-empty warning, warning contains substring `re-pause`).
+- [X] T002 [P] [US3] Add unit test `packages/orchestrator/src/worker/__tests__/merge-conflict-remedy.test.ts` asserting the constant literal-string types match the shape in `data-model.md` (3 steps, non-empty warning, warning contains substring `re-pause`).
 
-- [ ] T003 [US3] Extend `errorEvidence.mergeConflict` payload construction at `packages/orchestrator/src/worker/phase-loop.ts:929-941`: after the existing `baseRef` + `conflictedPaths` fields, add a `manualRemedy` sub-field. Substitute `<branch>` (from `context.branch`), `<base>` (from `mergeResult.baseRef.replace(/^origin\//, '')`), and `<owner>/<repo>#<issue>` (from `context.item.owner/repo/issueNumber`) into the `MERGE_CONFLICT_REMEDY.steps` template before passing to `stageCommentManager.updateStageComment`.
+- [X] T003 [US3] Extend `errorEvidence.mergeConflict` payload construction at `packages/orchestrator/src/worker/phase-loop.ts:929-941`: after the existing `baseRef` + `conflictedPaths` fields, add a `manualRemedy` sub-field. Substitute `<branch>` (from `context.branch`), `<base>` (from `mergeResult.baseRef.replace(/^origin\//, '')`), and `<owner>/<repo>#<issue>` (from `context.item.owner/repo/issueNumber`) into the `MERGE_CONFLICT_REMEDY.steps` template before passing to `stageCommentManager.updateStageComment`.
 
-- [ ] T004 [US3] Extend `StageCommentManager` renderer to emit the `## ⚠️ Merge conflict on base-merge` markdown section per `contracts/pause-comment-schema.md` when `errorEvidence.mergeConflict.manualRemedy` is present. Format: conflicted paths as bullets, 3-step numbered list, warning as blockquote callout. Keep `manualRemedy` optional at the type level so pre-Ship-1 evidence blobs still render.
+- [X] T004 [US3] Extend `StageCommentManager` renderer to emit the `## ⚠️ Merge conflict on base-merge` markdown section per `contracts/pause-comment-schema.md` when `errorEvidence.mergeConflict.manualRemedy` is present. Format: conflicted paths as bullets, 3-step numbered list, warning as blockquote callout. Keep `manualRemedy` optional at the type level so pre-Ship-1 evidence blobs still render.
 
-- [ ] T005 [US3, US4] Extend `packages/orchestrator/src/worker/__tests__/phase-loop.merge.test.ts` (existing test at line 177): assert `errorEvidence.mergeConflict.manualRemedy` present in the `updateStageComment` call; `manualRemedy.steps` length is 3; `steps[1]` contains substrings `generacy cockpit advance` and `--gate merge-conflicts`; `warning` contains `re-pause`; `conflictedPaths` matches `mergeResult.conflictedPaths`. Add a second pass simulating advance-without-resolve → re-pause and assert the second stage comment contains the same/similar path list (SC-005).
+- [X] T005 [US3, US4] Extend `packages/orchestrator/src/worker/__tests__/phase-loop.merge.test.ts` (existing test at line 177): assert `errorEvidence.mergeConflict.manualRemedy` present in the `updateStageComment` call; `manualRemedy.steps` length is 3; `steps[1]` contains substrings `generacy cockpit advance` and `--gate merge-conflicts`; `warning` contains `re-pause`; `conflictedPaths` matches `mergeResult.conflictedPaths`. Add a second pass simulating advance-without-resolve → re-pause and assert the second stage comment contains the same/similar path list (SC-005).
 
-- [ ] T006 [P] [US3] Update `waiting-for:merge-conflicts` `description` at `packages/workflow-engine/src/actions/github/label-definitions.ts:43` to the 62-char form: `'Base-merge conflict. See stage comment for the manual remedy.'` (per `contracts/pause-comment-schema.md` §"Label description update"). This is the FR-013 docs half.
+- [X] T006 [P] [US3] Update `waiting-for:merge-conflicts` `description` at `packages/workflow-engine/src/actions/github/label-definitions.ts:43` to the 62-char form: `'Base-merge conflict. See stage comment for the manual remedy.'` (per `contracts/pause-comment-schema.md` §"Label description update"). This is the FR-013 docs half.
 
 ## Phase 2: Ship 2 — Foundational types (P1)
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 -->
 
-- [ ] T007 [P] [US1] Insert `blocked:stuck-merge-conflicts` label definition at `packages/workflow-engine/src/actions/github/label-definitions.ts` after line 111 (next to `blocked:stuck-feedback-loop` at :101 and `blocked:stuck-validate-fix` at :107). Color `D73A4A`, description mirroring the two existing entries.
+- [X] T007 [P] [US1] Insert `blocked:stuck-merge-conflicts` label definition at `packages/workflow-engine/src/actions/github/label-definitions.ts` after line 111 (next to `blocked:stuck-feedback-loop` at :101 and `blocked:stuck-validate-fix` at :107). Color `D73A4A`, description mirroring the two existing entries.
 
-- [ ] T008 [US1, US2] Extend `QueueItem.command` discriminated union at `packages/orchestrator/src/types/monitor.ts:22` to add `'resolve-merge-conflicts'` as the fourth discriminant: `command: 'process' | 'continue' | 'address-pr-feedback' | 'resolve-merge-conflicts'`. Add and export `ResolveMergeConflictsMetadata` next to `PrFeedbackMetadata` per `data-model.md` §"`ResolveMergeConflictsMetadata`" (fields `conflictedPathsAtPause?`, `prNumber?`, both optional).
+- [X] T008 [US1, US2] Extend `QueueItem.command` discriminated union at `packages/orchestrator/src/types/monitor.ts:22` to add `'resolve-merge-conflicts'` as the fourth discriminant: `command: 'process' | 'continue' | 'address-pr-feedback' | 'resolve-merge-conflicts'`. Add and export `ResolveMergeConflictsMetadata` next to `PrFeedbackMetadata` per `data-model.md` §"`ResolveMergeConflictsMetadata`" (fields `conflictedPathsAtPause?`, `prNumber?`, both optional).
 
-- [ ] T009 [P] [US1] Add `MergeConflictIntent` interface at `packages/generacy-plugin-claude-code/src/launch/types.ts` after `PrFeedbackIntent` (line 26): `{ kind: 'merge-conflict'; issueNumber: number; prompt: string }`. Update the `ClaudeCodeIntent` union at line 80 to add `| MergeConflictIntent`.
+- [X] T009 [P] [US1] Add `MergeConflictIntent` interface at `packages/generacy-plugin-claude-code/src/launch/types.ts` after `PrFeedbackIntent` (line 26): `{ kind: 'merge-conflict'; issueNumber: number; prompt: string }`. Update the `ClaudeCodeIntent` union at line 80 to add `| MergeConflictIntent`.
 
-- [ ] T010 [US1] Create bounded conflict-resolution prompt builder at `packages/orchestrator/src/worker/merge-conflict-prompt.ts` (new file). Pure function `buildMergeConflictPrompt(input: { conflictedPaths: string[]; siblingOwnedPaths: string[]; baseRef: string; branch: string }): string`. Emits structured prompt with: conflicted-path list, sibling-owned tagging paragraph (per `handler-contract.md` §"Sibling-owned path constraint"), explicit prohibition on `git checkout --theirs`/`--ours` for sibling-owned paths, and success predicate (must produce conflict-free committed merge).
+- [X] T010 [US1] Create bounded conflict-resolution prompt builder at `packages/orchestrator/src/worker/merge-conflict-prompt.ts` (new file). Pure function `buildMergeConflictPrompt(input: { conflictedPaths: string[]; siblingOwnedPaths: string[]; baseRef: string; branch: string }): string`. Emits structured prompt with: conflicted-path list, sibling-owned tagging paragraph (per `handler-contract.md` §"Sibling-owned path constraint"), explicit prohibition on `git checkout --theirs`/`--ours` for sibling-owned paths, and success predicate (must produce conflict-free committed merge).
 
 ## Phase 3: Ship 2 — Handler implementation (P1)
 <!-- Phase boundary: Complete Phase 2 before starting Phase 3 -->
 
-- [ ] T011 [US1, US2] Create `MergeConflictHandler` class at `packages/orchestrator/src/worker/merge-conflict-handler.ts` (new file). Shape mirrors `pr-feedback-handler.ts:55`. Constructor signature per `handler-contract.md` §"Public surface". Implements the 17-step flow from `handler-contract.md` §"Flow":
+- [X] T011 [US1, US2] Create `MergeConflictHandler` class at `packages/orchestrator/src/worker/merge-conflict-handler.ts` (new file). Shape mirrors `pr-feedback-handler.ts:55`. Constructor signature per `handler-contract.md` §"Public surface". Implements the 17-step flow from `handler-contract.md` §"Flow":
   - Steps 1-3: parse item, create GitHubClient, resolve PR via `PrLinker` (mirror `pr-feedback-handler.ts:94-106`); on no PR → apply `blocked:stuck-merge-conflicts` + `no-linked-PR` evidence and return.
   - Step 4: `switchBranch(checkoutPath, branchName)` with 3× retry (250ms/500ms/1000ms backoff).
   - Step 5: reuse `resolveBaseBranch()` from `base-merge.ts:67`.
@@ -51,9 +51,9 @@
   - Step 17 (blocked): compute `unresolvedPaths` + `partiallyResolvedPaths`, define + populate `BlockedStuckMergeConflictsEvidence` per `data-model.md`, emit evidence into stage comment, `addLabels(['blocked:stuck-merge-conflicts'])`, leave `waiting-for:merge-conflicts` + `agent:paused` in place, one warn log summary.
   Handler must not throw on valid blocked dispositions — return normally after label mutation + evidence emission.
 
-- [ ] T012 [US1] Add `MergeConflictIntent` dispatch branch at `packages/generacy-plugin-claude-code/src/claude-code-launch-plugin.ts` (peer of the `PrFeedbackIntent` branch). Reuse the same launcher plumbing — different prompt content only.
+- [X] T012 [US1] Add `MergeConflictIntent` dispatch branch at `packages/generacy-plugin-claude-code/src/claude-code-launch-plugin.ts` (peer of the `PrFeedbackIntent` branch). Reuse the same launcher plumbing — different prompt content only.
 
-- [ ] T013 [US1, US2] Unit tests at `packages/orchestrator/src/worker/__tests__/merge-conflict-handler.test.ts` covering T1-T8 from `handler-contract.md` §"Test coverage":
+- [X] T013 [US1, US2] Unit tests at `packages/orchestrator/src/worker/__tests__/merge-conflict-handler.test.ts` covering T1-T8 from `handler-contract.md` §"Test coverage":
   - **T1**: happy path — synthetic single-file `CLAUDE.md` conflict in scratch git repo (`os.tmpdir()`); mock `AgentLauncher.launch` writes resolved file + commits → assert `git push` called, `completed:merge-conflicts` added, `waiting-for:merge-conflicts` + `agent:paused` removed.
   - **T2**: agent produces no resolution → assert `.git/MERGE_HEAD` still present → `blocked:stuck-merge-conflicts` added, `BlockedStuckMergeConflictsEvidence` emitted, `waiting-for:merge-conflicts` preserved.
   - **T3**: sibling-owned enumeration — mock `listOpenPullRequests` returns 2 open siblings, one touching the conflicted path → assert prompt string contains `sibling-owned` and forbids `--theirs`/`--ours` on that path.
@@ -66,7 +66,7 @@
 ## Phase 4: Ship 2 — Monitor implementation (P1)
 <!-- Phase boundary: Can run in parallel with Phase 3 (different files, no dep) -->
 
-- [ ] T014 [P] [US1] Create `MergeConflictMonitorService` class at `packages/orchestrator/src/services/merge-conflict-monitor-service.ts` (new file). Shape mirrors `pr-feedback-monitor-service.ts:50`. Constructor signature per `monitor-contract.md` §"Public surface". Implements the 7-step flow from `monitor-contract.md` §"Flow":
+- [X] T014 [P] [US1] Create `MergeConflictMonitorService` class at `packages/orchestrator/src/services/merge-conflict-monitor-service.ts` (new file). Shape mirrors `pr-feedback-monitor-service.ts:50`. Constructor signature per `monitor-contract.md` §"Public surface". Implements the 7-step flow from `monitor-contract.md` §"Flow":
   - Poll cycle: for each `RepositoryConfig`, call `GitHubClient.listIssuesWithLabel(owner, repo, 'waiting-for:merge-conflicts')`, filter via `filterByAssignee` (`identity.ts`, matches `label-monitor-service.ts:493`), build `MergeConflictEvent` per issue.
   - `processMergeConflictEvent`: precondition — MUST have both `waiting-for:merge-conflicts` AND `agent:paused` (drop debug on missing `agent:paused`).
   - Blocked-label skip: if any label starts with `blocked:` → skip, info log with `reason: 'blocked-label-present'`, return `false` (mirrors `pr-feedback-monitor-service.ts:317-346`).
@@ -77,7 +77,7 @@
   - Error handling: `JitTokenError` → skip cycle; `GhAuthError` → `authHealth.recordResult({ ok: false, statusCode: 401 })`, skip cycle; any other → warn log, continue.
   - No thread-count state maps, no `waiting-for` pre-emptive add, no untrusted-notice.
 
-- [ ] T015 [P] [US1] Unit tests at `packages/orchestrator/src/services/__tests__/merge-conflict-monitor-service.test.ts` covering T1-T6 from `monitor-contract.md` §"Test coverage":
+- [X] T015 [P] [US1] Unit tests at `packages/orchestrator/src/services/__tests__/merge-conflict-monitor-service.test.ts` covering T1-T6 from `monitor-contract.md` §"Test coverage":
   - **T1**: poll finds one paused issue → `enqueueIfAbsent` returns `true` → info log emitted.
   - **T2**: paused issue with `blocked:stuck-merge-conflicts` present → skip, log `reason: 'blocked-label-present'`, no `enqueueIfAbsent` call.
   - **T3**: assignee ≠ cluster user → skip via `filterByAssignee`.
@@ -88,16 +88,16 @@
 ## Phase 5: Ship 2 — Wiring (P1)
 <!-- Phase boundary: Complete Phases 3 + 4 before starting Phase 5 (needs handler + monitor + intent to exist) -->
 
-- [ ] T016 [US1] Add `'resolve-merge-conflicts'` dispatch branch at `packages/orchestrator/src/worker/claude-cli-worker.ts:285` (peer of the `'address-pr-feedback'` case). Route to `MergeConflictHandler.handle(item, checkoutPath)`. Ensure existing exhaustive-switch checks accommodate the new discriminant.
+- [X] T016 [US1] Add `'resolve-merge-conflicts'` dispatch branch at `packages/orchestrator/src/worker/claude-cli-worker.ts:285` (peer of the `'address-pr-feedback'` case). Route to `MergeConflictHandler.handle(item, checkoutPath)`. Ensure existing exhaustive-switch checks accommodate the new discriminant.
 
-- [ ] T017 [US1] Wire `MergeConflictMonitorService` construction and `startPolling()` in `packages/orchestrator/src/server.ts` alongside `PrFeedbackMonitorService`. Reuse `config.monitor.prFeedback` for now (per `monitor-contract.md` §"Wiring"). Register `stopPolling()` in the graceful shutdown block used by other monitors.
+- [X] T017 [US1] Wire `MergeConflictMonitorService` construction and `startPolling()` in `packages/orchestrator/src/server.ts` alongside `PrFeedbackMonitorService`. Reuse `config.monitor.prFeedback` for now (per `monitor-contract.md` §"Wiring"). Register `stopPolling()` in the graceful shutdown block used by other monitors.
 
 ## Phase 6: Integration polish (P1)
 <!-- Phase boundary: Complete Phase 5 before starting Phase 6 (integration lands only after wiring compiles) -->
 
-- [ ] T018 [P] [US1, US2] Regression fixture in `packages/orchestrator/src/worker/__tests__/merge-conflict-handler.test.ts` for SC-002 (tractable auto-resolve): scratch git repo, synthetic single-file `CLAUDE.md` conflict shape from #6/#7/#8 replay; mock `AgentLauncher.launch` applies a real resolution; assert full pipeline (fetch → merge → agent → push → labels) runs green.
+- [X] T018 [P] [US1, US2] Regression fixture in `packages/orchestrator/src/worker/__tests__/merge-conflict-handler.test.ts` for SC-002 (tractable auto-resolve): scratch git repo, synthetic single-file `CLAUDE.md` conflict shape from #6/#7/#8 replay; mock `AgentLauncher.launch` applies a real resolution; assert full pipeline (fetch → merge → agent → push → labels) runs green.
 
-- [ ] T019 [P] [US2] Regression fixture in the same file for SC-003 (irreconcilable conflict): scratch git repo with same-line incompatible edits; mock `AgentLauncher.launch` exits without producing a merge commit; assert `blocked:stuck-merge-conflicts` applied exactly once, `BlockedStuckMergeConflictsEvidence.unresolvedPaths` non-empty, no retry, `waiting-for:merge-conflicts` preserved.
+- [X] T019 [P] [US2] Regression fixture in the same file for SC-003 (irreconcilable conflict): scratch git repo with same-line incompatible edits; mock `AgentLauncher.launch` exits without producing a merge commit; assert `blocked:stuck-merge-conflicts` applied exactly once, `BlockedStuckMergeConflictsEvidence.unresolvedPaths` non-empty, no retry, `waiting-for:merge-conflicts` preserved.
 
 ## Dependencies & Execution Order
 

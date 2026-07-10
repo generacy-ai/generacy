@@ -63,6 +63,10 @@ vi.mock('../pr-feedback-handler.js', () => ({
   PrFeedbackHandler: vi.fn(),
 }));
 
+vi.mock('../merge-conflict-handler.js', () => ({
+  MergeConflictHandler: vi.fn(),
+}));
+
 vi.mock('../epic-post-tasks.js', () => ({
   EpicPostTasks: vi.fn(),
 }));
