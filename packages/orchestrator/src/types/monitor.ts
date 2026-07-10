@@ -255,9 +255,17 @@ export interface WorkerInfo {
 }
 
 /**
- * Callback signature for processing queue items
+ * Callback signature for processing queue items.
+ *
+ * Returns a `WorkerResult` discriminant that the dispatcher branches on:
+ * - `'completed'` — happy path; queue.complete()
+ * - `'failed-terminal'` — label-op exhaustion or similar caught terminal failure;
+ *   queue.complete() (NOT released) + best-effort recovery via terminalFailureHandler
+ *
+ * Non-`WorkerResult` throws still propagate; the dispatcher catches them and
+ * releases the item back to the queue (unchanged behavior for generic errors).
  */
-export type WorkerHandler = (item: QueueItem) => Promise<void>;
+export type WorkerHandler = (item: QueueItem) => Promise<import('../worker/worker-result.js').WorkerResult>;
 
 /**
  * Phase tracker interface for deduplication

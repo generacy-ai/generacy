@@ -7,6 +7,11 @@ const mockGithub = {
   getIssue: vi.fn(),
   addLabels: vi.fn(),
   removeLabels: vi.fn(),
+  // #889: LabelManager.ensureRepoLabelsExist calls listLabels/createLabel on
+  // first use per (owner, repo). Provide no-op mocks so tests focused on the
+  // add/remove path aren't derailed by the ensure-pass boundary net.
+  listLabels: vi.fn(),
+  createLabel: vi.fn(),
 };
 
 const mockLogger = {
@@ -33,15 +38,24 @@ describe('LabelManager', () => {
     mockGithub.getIssue.mockReset();
     mockGithub.addLabels.mockReset();
     mockGithub.removeLabels.mockReset();
+    mockGithub.listLabels.mockReset();
+    mockGithub.createLabel.mockReset();
     mockLogger.info.mockReset();
     mockLogger.warn.mockReset();
     mockLogger.error.mockReset();
     mockLogger.debug.mockReset();
 
+    // #889: reset per-process ensure-pass memoization so each test drives
+    // the boundary net from a clean slate.
+    LabelManager.resetEnsureCacheForTests();
+
     // Default: all GitHub calls succeed
     mockGithub.getIssue.mockResolvedValue({ labels: [] });
     mockGithub.addLabels.mockResolvedValue(undefined);
     mockGithub.removeLabels.mockResolvedValue(undefined);
+    // Repo already fully provisioned by default (ensure-pass is a no-op)
+    mockGithub.listLabels.mockResolvedValue([]);
+    mockGithub.createLabel.mockResolvedValue(undefined);
   });
 
   describe('onPhaseStart', () => {

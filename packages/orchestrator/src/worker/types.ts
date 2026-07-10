@@ -268,16 +268,33 @@ export type CommandExitEvidence = Extract<
  * crypto.randomUUID(). See specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
  */
 export interface FailureAlertData {
-  /** Which stage the failing phase belongs to (used in the marker). */
-  stage: StageType;
+  /**
+   * The stage/kind the failure belongs to.
+   *
+   * - `StageType` (specification | planning | implementation) — phase-level
+   *   failures rendered inside the stage comment marker.
+   * - `'label-op'` (#889) — GitHub label-operation exhaustion terminal failure,
+   *   emitted by `WorkerDispatcher` on `WorkerResult.status === 'failed-terminal'`.
+   *   Uses its own marker suffix and a different summary line.
+   */
+  stage: StageType | 'label-op';
   /** Stable per-runPhaseLoop-invocation UUID (dedup key inside the marker). */
   runId: string;
-  /** The failing phase name (used in the summary line). */
-  phase: WorkflowPhase;
+  /**
+   * The failing phase name (used in the summary line). For `stage === 'label-op'`
+   * this carries the `TerminalLabelOpSite` string ("gate-hit", "phase-start", …)
+   * rather than a `WorkflowPhase` — the site is what surfaces in the alert body.
+   */
+  phase: WorkflowPhase | string;
   /**
    * Verbatim reuse of buildErrorEvidence output. NO re-derivation.
    */
   evidence: CommandExitEvidence;
+  /**
+   * Only populated when `stage === 'label-op'` (#889). The `labelOp` field is
+   * copied verbatim from `WorkerResult.failureMetadata.labelOp`.
+   */
+  labelOp?: string;
 }
 
 /**

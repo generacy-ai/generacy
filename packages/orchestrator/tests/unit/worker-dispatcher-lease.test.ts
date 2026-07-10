@@ -87,7 +87,7 @@ describe('WorkerDispatcher lease integration', () => {
   beforeEach(() => {
     logger = createMockLogger();
     queue = createMockQueueManager();
-    handler = vi.fn<WorkerHandler>().mockResolvedValue(undefined);
+    handler = vi.fn<WorkerHandler>().mockResolvedValue({ status: 'completed' });
     // Use null redis (in-memory heartbeat mode) to avoid Redis mock complexity
     dispatcher = new WorkerDispatcher(queue, null, logger, testConfig, handler);
     leaseManager = createMockLeaseManager();
@@ -222,7 +222,9 @@ describe('WorkerDispatcher lease integration', () => {
       // Handler that never resolves so the worker stays active
       let resolveHandler!: () => void;
       handler.mockImplementation(
-        () => new Promise<void>((resolve) => { resolveHandler = resolve; }),
+        () => new Promise<{ status: 'completed' }>((resolve) => {
+          resolveHandler = () => resolve({ status: 'completed' });
+        }),
       );
 
       (queue.claim as ReturnType<typeof vi.fn>)
@@ -288,7 +290,9 @@ describe('WorkerDispatcher lease integration', () => {
     it('should skip re-enqueue when duplicate already exists in queue', async () => {
       let resolveHandler!: () => void;
       handler.mockImplementation(
-        () => new Promise<void>((resolve) => { resolveHandler = resolve; }),
+        () => new Promise<{ status: 'completed' }>((resolve) => {
+          resolveHandler = () => resolve({ status: 'completed' });
+        }),
       );
 
       (queue.claim as ReturnType<typeof vi.fn>)

@@ -327,12 +327,82 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
     });
+
+    // #889: terminal-failure recovery handler. On WorkerResult.failed-terminal:
+    //   (a) best-effort agent:error label add via a fresh LabelManager;
+    //   (b) post the stage: 'label-op' failure alert via StageCommentManager.
+    // All steps swallowed independently so a downstream failure never releases.
+    const terminalFailureHandler = async (
+      item: import('./types/index.js').QueueItem,
+      failureMetadata: import('./worker/worker-result.js').FailureMetadata,
+    ): Promise<void> => {
+      const { LabelManager } = await import('./worker/label-manager.js');
+      const { StageCommentManager } = await import('./worker/stage-comment-manager.js');
+      const github = createGitHubClient();
+
+      try {
+        const labelManager = new LabelManager(
+          github,
+          item.owner,
+          item.repo,
+          item.issueNumber,
+          server.log,
+        );
+        // Best-effort: fire agent:error via onError('implement') as a stand-in
+        // — the site is already in failureMetadata; we're not repeating the
+        // phase, just applying agent:error.
+        await labelManager.onError('implement');
+      } catch (err) {
+        server.log.warn(
+          { err, owner: item.owner, repo: item.repo, issue: item.issueNumber },
+          'Best-effort agent:error label add failed on terminal failure (non-fatal)',
+        );
+      }
+
+      try {
+        const stageCommentManager = new StageCommentManager(
+          github,
+          item.owner,
+          item.repo,
+          item.issueNumber,
+          server.log,
+        );
+        const runId = crypto.randomUUID();
+        await stageCommentManager.postFailureAlert({
+          stage: 'label-op',
+          runId,
+          phase: failureMetadata.site,
+          labelOp: failureMetadata.labelOp,
+          evidence: {
+            command: `gh (${failureMetadata.labelOp})`,
+            exitDescriptor: 'exited 1',
+            stderrTail: failureMetadata.ghStderr,
+          },
+        });
+      } catch (err) {
+        server.log.error(
+          {
+            err,
+            site: failureMetadata.site,
+            labelOp: failureMetadata.labelOp,
+            ghStderr: failureMetadata.ghStderr,
+            owner: item.owner,
+            repo: item.repo,
+            issue: item.issueNumber,
+          },
+          'Failed to post label-op failure alert comment',
+        );
+      }
+    };
+
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
       redisClient,
       server.log,
       config.dispatch,
       cliWorker.handle.bind(cliWorker),
+      undefined,
+      terminalFailureHandler,
     );
 
     // Wire lease manager into dispatcher (if relay client is available)

@@ -19,6 +19,8 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   createFeature: vi.fn(),
   registerProcessLauncher: vi.fn(),
   clearProcessLauncher: vi.fn(),
+  // #889: LabelManager imports WORKFLOW_LABELS for its ensure-pass.
+  WORKFLOW_LABELS: [],
 }));
 
 function makeFakeLogger() {
