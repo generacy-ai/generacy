@@ -1,4 +1,4 @@
-# Feature Specification: MergeConflictHandler success path dead-parks the workflow — clears the pause but never re-arms the phase; leaves agent:in-progress + completed:merge-conflicts residue
+# Feature Specification: Found during the cockpit v1
 
 **Branch**: `902-found-during-cockpit-v1` | **Date**: 2026-07-10 | **Status**: Draft
 
@@ -28,8 +28,9 @@ Then nothing, forever. Resulting label state on all three issues: `completed:spe
 
 On the success path (resolved by agent OR no-op because already resolved), the handler MUST:
 - remove `completed:merge-conflicts` (consume the marker) and `agent:in-progress`/`agent:paused` residue;
-- **re-arm the interrupted phase** — either apply the resume pair for the gate preceding it (the #891 mapping, derived from workflow config) or directly enqueue a continue item with the correct `startPhase` (in-flight dedupe #879 makes this safe);
-- exit with the issue in a state some detector matches. Codify the invariant: **every handler terminal outcome maps to exactly one of: re-armed (queued/pair), gated (`waiting-for:*` present), failed (`failed:*` + evidence), or done (closed/merged)** — "none of the above" is a bug by definition, and a cheap post-exit assertion can enforce it in tests.
+- **re-arm the interrupted phase** by returning a terminal outcome `{outcome: 're-armed', startPhase}` to the dispatcher; the **dispatcher** (single authority per #889 Q2-D) completes the handler's own claim, then enqueues the `continue` item with the correct `startPhase`. The handler itself never touches the queue — its item is still claimed at success-path time, so a handler-side `enqueueIfAbsent` would self-deadlock against #879's single-in-flight rule (Q1);
+- source `startPhase` from `ResolveMergeConflictsMetadata.phase`, threaded in-band from the phase-loop pause site (Q2). If metadata is missing, **fail loud** with evidence per the #889 terminal path — never re-derive from labels (the protocol writes no `completed:implement` marker after an `implementation-review` pair is consumed, so label-derivation is a wrong-answer generator);
+- exit with the issue in a state some detector matches. Codify the invariant: **every handler terminal outcome maps to exactly one of: re-armed (queued), gated (`waiting-for:*` present), failed (`failed:*` + evidence), or done (closed/merged)** — "none of the above" is a bug by definition, and a post-exit runtime assertion (reading the *real* label set + queue state, not the handler's own return value) enforces it in tests.
 
 ## Regression tests (this time asserting the loop, not the handler)
 
@@ -42,94 +43,58 @@ On the success path (resolved by agent OR no-op because already resolved), the h
 
 For #6/#7/#8: removed `agent:in-progress` + `completed:merge-conflicts`, applied the natural-pause resume state (`waiting-for:implementation-review` + `completed:implementation-review` + `agent:paused`, per #891 Q4's indistinguishability rule) so the pair path resumes each into validate on the next poll.
 
+
 ## User Stories
 
-### US1: Merge-conflict handler success path re-arms the interrupted phase
+### US1: Auto-mode conflict pause self-resolves without dead-parking
 
-**As an** operator watching cockpit auto-mode,
-**I want** the `MergeConflictHandler`'s success path to re-arm the interrupted phase so it re-runs and completes,
-**So that** a resolved merge conflict (whether resolved by the agent or already resolved by an operator) does not dead-park the workflow at a state no detector matches. #898's spec promised this re-arm; the implementation missed it, and the auto session stalled indefinitely on #6/#7/#8.
-
-**Acceptance Criteria**:
-- [ ] After a successful `MergeConflictHandler` invocation (agent-resolved OR no-op because branch already up-to-date), the interrupted phase re-runs to completion (or pauses at its next natural gate).
-- [ ] The re-arm mechanism is either (a) the #891 resume pair (`waiting-for:<preceding-gate>` + `completed:<preceding-gate>` + `agent:paused`) mapped via the workflow config so label-monitor's next poll enqueues a continue item, or (b) direct enqueue of a continue item with the correct `startPhase` (in-flight dedupe from #879 makes either safe).
-- [ ] End-to-end regression fixture asserts the phase-loop re-entry, not merely the handler's exit code.
-
-### US2: Handler terminal outcomes are always truthful about ownership
-
-**As an** operator or auto session dispatcher reading label state,
-**I want** `agent:in-progress` to reflect actual worker ownership on every handler exit path,
-**So that** zombie ownership signals do not cause dispatchers to wait indefinitely on a state no worker owns.
+**As an** auto-mode operator watching cockpit,
+**I want** a `waiting-for:merge-conflicts` pause that resolves (by the handler OR because the branch is already clean) to re-arm the interrupted phase automatically,
+**So that** the workflow re-enters the phase loop on the same tick — no zombie `agent:in-progress`, no stale `completed:merge-conflicts`, no need for the manual repair applied to sniplink#6/#7/#8.
 
 **Acceptance Criteria**:
-- [ ] On any `MergeConflictHandler` terminal outcome (success, failure, or bail-out), `agent:in-progress` MUST NOT remain set unless a fresh worker has been dispatched to continue processing the issue.
-- [ ] On the success path with re-arm via resume pair: `agent:paused` is applied (matching the natural pause protocol); `agent:in-progress` is removed.
-- [ ] On the success path with direct enqueue: labels reflect the queued state (whatever labels the queue path already writes on enqueue); `agent:in-progress` is not left dangling.
-
-### US3: Consumed operator-advance markers do not enable instant-skip on the next pause
-
-**As an** operator whose issue may pause at `waiting-for:merge-conflicts` a second time,
-**I want** the previous cycle's `completed:merge-conflicts` marker to be consumed by the handler on success,
-**So that** the next pause does not instantly resume through the generic pair-path before any resolution has happened — a loop that would spin the pause/insta-resume cycle and burn credits without progress.
-
-**Acceptance Criteria**:
-- [ ] On any `MergeConflictHandler` success path, `completed:merge-conflicts` is removed before the handler exits.
-- [ ] Regression fixture: a second conflict pause after a first successful cycle triggers the handler again (no stale-marker insta-resume through the generic pair path).
-
-### US4: Every handler terminal outcome maps to a detector-matching state
-
-**As a** developer of orchestrator handlers,
-**I want** the invariant "every handler terminal outcome maps to exactly one of: re-armed / gated / failed / done" codified and enforced in tests,
-**So that** "none of the above" states — the dead-park class that produced this bug — are structurally impossible to ship.
-
-**Acceptance Criteria**:
-- [ ] The four terminal outcomes are named in shared code (enum, discriminated union, or equivalent) and every handler exit path returns/asserts one of them.
-- [ ] A cheap post-exit assertion (available in the test infrastructure) reads the resulting label set and confirms it matches exactly one detector's shape: re-armed (queue item present OR resume pair labels present), gated (`waiting-for:*` present without a stale `completed:<same>`), failed (`failed:*` + evidence), or done (issue closed/merged).
-- [ ] The assertion runs in every handler's regression fixtures, not only `MergeConflictHandler`'s.
+- [ ] After `MergeConflictHandler` returns success, the next label snapshot on the issue has no `agent:in-progress` and no `completed:merge-conflicts`.
+- [ ] The worker picks the issue back up and the interrupted phase runs to completion (or the next natural pause) — the phase-loop re-entry is observable in worker logs, not merely inferred from handler exit code.
+- [ ] The no-op branch (branch was already conflict-free at handler entry) produces identical downstream state to the resolved-by-agent branch.
+- [ ] A second conflict pause after a first successful cycle triggers the handler again — no stale-marker insta-resume.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | On the `MergeConflictHandler` success path (agent-resolved conflict-free committed merge pushed, OR no-op because branch already up-to-date with base), the handler MUST re-arm the interrupted phase such that a worker re-runs it. | P0 | Missed in #898. The whole point of the handler. |
-| FR-002 | Re-arm MUST use one of: (a) the #891 resume pair — apply `waiting-for:<preceding-gate>` + `completed:<preceding-gate>` + `agent:paused`, gate name derived from the workflow config's inverted gate mapping for the interrupted phase, so label-monitor's next poll enqueues a continue item; or (b) direct enqueue of a continue item with the correct `startPhase` (in-flight dedupe from #879 makes either safe). Choice of mechanism is an implementation detail; the observable outcome is that the phase re-runs. | P0 | Both mechanisms exist in the codebase (#891 pair, #879 dedupe); implementation picks whichever is cleanest. |
-| FR-003 | On the success path, `completed:merge-conflicts` MUST be removed before the handler exits. The label is an operator-advance marker; leaving it set enables a stale insta-skip on the next pause at `waiting-for:merge-conflicts`. | P0 | Sub-defect 3. |
-| FR-004 | On the success path, `agent:in-progress` MUST NOT remain set unless a fresh worker has been dispatched. When re-arm uses the resume pair, apply `agent:paused` and remove `agent:in-progress`. When re-arm uses direct enqueue, follow whatever labels the queue path writes on enqueue. | P0 | Sub-defect 2. |
-| FR-005 | The handler MUST codify the terminal-outcome invariant: every exit path maps to exactly one of {re-armed, gated, failed, done}. The four outcomes SHOULD be named in shared code (enum or discriminated union) reachable from every handler in the orchestrator, not only `MergeConflictHandler`. | P1 | Structural fix — makes the "none of the above" dead-park class impossible to ship. |
-| FR-006 | A cheap post-exit assertion helper MUST be available in the test infrastructure that reads the resulting label set (plus queue state, if reachable) and confirms it matches exactly one of the four detector shapes: re-armed (queue item present OR resume pair labels present), gated (`waiting-for:*` present without a stale `completed:<same>`), failed (`failed:*` + evidence), or done (issue closed/merged). | P1 | Enforces FR-005 in regression fixtures. |
-| FR-007 | Regression fixture: end-to-end pause → `MergeConflictHandler` success (agent-resolved) → the interrupted phase re-runs and completes (or pauses at its next natural gate). Assertion is on phase-loop re-entry, not merely handler exit code. | P0 | Directly addresses the tests-encode-assumptions failure mode named in the issue. |
-| FR-008 | Regression fixture: no-op success path (branch already conflict-free at handler entry) exhibits identical re-arm behavior to the agent-resolved path. | P0 | The observed defect entered via this path (#6/#7/#8: operator resolved first). |
-| FR-009 | Regression fixture: post-`MergeConflictHandler`-success label snapshot contains no `agent:in-progress`, no `completed:merge-conflicts`, and satisfies FR-006's terminal-outcome invariant. | P0 | Directly asserts sub-defects 2 and 3. |
-| FR-010 | Regression fixture: a second conflict pause at `waiting-for:merge-conflicts` after a first successful cycle triggers the handler again (no stale-marker insta-resume through the generic pair path). | P0 | Directly asserts sub-defect 3's consequence. |
-| FR-011 | The FR-006 post-exit assertion SHOULD be applied to the regression fixtures of every existing handler in `packages/orchestrator/src/worker/` (`PrFeedbackHandler`, and any others that write labels on exit) to catch the same class of dead-park bug in siblings. | P2 | Prophylactic; scope this to what's cheap. Discovery of a sibling bug via this assertion is a separate follow-up, not blocking this issue. |
+| FR-001 | On the `MergeConflictHandler` success path (agent-resolved or no-op), the handler MUST remove `completed:merge-conflicts` and `agent:in-progress` from the issue. | P1 | Handler-side; consumes operator-advance marker. |
+| FR-002 | The handler MUST return a terminal outcome `{outcome: 're-armed', startPhase}` to the dispatcher; the dispatcher (single queue authority per #889 Q2-D) completes the handler's claim and enqueues a `continue` item with `startPhase`. Handler MUST NOT call the queue directly. | P1 | Q1 = B (direct enqueue, at the dispatcher). Avoids self-deadlock against #879's single-in-flight rule. |
+| FR-003 | `ResolveMergeConflictsMetadata` MUST carry a `phase: WorkflowPhase` field, populated at the pause site in the phase loop. The handler reads `startPhase` from this field. | P1 | Q2 = A. In-band, canonical, one point of truth. |
+| FR-004 | If `ResolveMergeConflictsMetadata.phase` is missing at handler exit, the handler MUST fail loud with evidence per the #889 terminal path — MUST NOT re-derive `startPhase` from the issue's `completed:<phase>` labels. | P1 | Q2 rejects B/C. Label-derivation is a wrong-answer generator after an `implementation-review` pair has been consumed. |
+| FR-005 | A discriminated-union `HandlerOutcome` type (`re-armed | gated | failed | done`) MUST live in `packages/orchestrator/src/worker/` and be the return type of `MergeConflictHandler.handle`. | P1 | Q4 = A. Orchestrator-local until a second package needs it (YAGNI on `@generacy-ai/workflow-engine`). |
+| FR-006 | A post-exit runtime assertion helper MUST verify the actual label set + queue state matches the returned `HandlerOutcome`. This is the **load-bearing** enforcement half — the type alone cannot catch this bug class (compile-time exhaustiveness would have passed the broken handler). | P1 | Q4. Reads the world, not the handler's claim. |
+| FR-007 | Label mutations on the ownership transition MUST use a single combined `gh issue edit --add-label … --remove-label …` invocation. Where calls must split, add-before-remove ordering applies (per #849's paired-clear reasoning). | P1 | Q5 favours option C's shape; A applies as fallback. B is disqualified. |
+| FR-008 | The dispatcher MUST enqueue the `continue` item **before** any label cleanup on the issue. A crash after enqueue leaves stale pause labels (harmlessly removed by the worker's existing resume-cleanup, shielded from double-fire by in-flight dedupe); a crash before enqueue leaves the pause state intact and re-triggerable. Never both cleared. | P1 | Q5 invariant: every intermediate state must be detector-matched or over-labelled, never under-labelled. |
+| FR-009 | The terminal-outcome invariant (re-armed | gated | failed | done) applies to every handler exit path. `PrFeedbackHandler` gains fixture-level assertion coverage in this issue — no rewrite. | P2 | FR-011 in prior draft; renumbered. Assertion-only application. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Issues at `completed:merge-conflicts` + `agent:in-progress` (no `waiting-for:*`, no `failed:*`, no in-flight queue item) for > 5 minutes post handler success. | 0 | Per auto-mode run, scan issue label state at run end; count issues in this dead-park shape. |
-| SC-002 | Successful `MergeConflictHandler` invocations (agent-resolved or no-op) that result in the interrupted phase re-running. | 100% | Regression fixture: run the E2E pause → resolve → re-run flow; assert phase-loop re-entry. |
-| SC-003 | Second `waiting-for:merge-conflicts` pauses in a session that trigger the handler (not instant-skip through the generic pair path). | 100% | Regression fixture: two pause/resolve cycles on the same issue; assert handler invoked on both. |
-| SC-004 | `MergeConflictHandler` exit paths that map to exactly one of {re-armed, gated, failed, done}. | 100% | Post-exit assertion (FR-006) runs in every handler regression fixture and passes. |
-| SC-005 | Zombie `agent:in-progress` labels persisting on issues with no dispatched worker. | 0 | Snapshot in regression fixtures; scan-and-count in production auto-mode runs. |
+| SC-001 | Post-handler dead-park rate on `MergeConflictHandler` success path | 0 across the end-to-end + no-op regression fixtures | Regression suite asserts label snapshot + queue state via FR-006 helper. |
+| SC-002 | Phase re-entry latency after handler success | Same tick (no poll-cycle wait) | Worker log shows phase-loop entry with correct `startPhase` immediately following dispatcher enqueue. |
+| SC-003 | Second-conflict cycle correctness | Second pause triggers handler again (no insta-resume) | Regression fixture: two conflicts on the same issue, each hits the handler; no stale-marker fast-path fires between them. |
+| SC-004 | No regression in existing paused/gated/failed/done paths for `MergeConflictHandler` and `PrFeedbackHandler` | 100% of existing fixtures pass with FR-006 assertion attached | Fixture snapshot diffs. |
 
 ## Assumptions
 
-- The #891 resume-pair mechanism (`waiting-for:<gate>` + `completed:<gate>` + `agent:paused` triggers label-monitor to enqueue a continue item) is the established primitive for re-arming from a paused state and is directly reusable here. The inverted gate mapping (`resolvePrecedingGate` from `packages/generacy/src/cli/commands/cockpit/gate-vocabulary.ts`, or its orchestrator-side equivalent) determines the correct preceding gate for the interrupted phase.
-- The #879 in-flight dedupe protects against duplicate work if the handler re-arms via direct enqueue and the label-monitor also observes the state (webhook+poll races collapse).
-- `MergeConflictHandler` has enough context (interrupted phase identity, workflow config) at its success exit point to derive the correct re-arm state. If it doesn't, that plumbing (threading `phase` through to the handler) is in scope for this fix.
-- The dead-park state observed on #6/#7/#8 (`completed:specify/clarify/plan/tasks` + `agent:in-progress` + `completed:merge-conflicts` + no `waiting-for:*` / `failed:*` / queue item) is exhaustively described by the three sub-defects listed; no fourth latent problem is hiding in this label shape.
-- The tests-encode-assumptions failure mode named in the issue (regression named in #898 evidently passed without the phase re-running) is addressed by asserting phase-loop re-entry (FR-007), not merely handler exit code. The existing regression is expected to be updated in place, not merely supplemented.
-- Handlers other than `MergeConflictHandler` (e.g. `PrFeedbackHandler`) may already satisfy the terminal-outcome invariant; the FR-011 prophylactic scan is scoped to running the FR-006 assertion against their existing fixtures, not rewriting their behavior.
+- The phase-loop pause site already knows the interrupted phase (`phase: WorkflowPhase` is in scope at the point `waiting-for:merge-conflicts` is applied). Threading it into `ResolveMergeConflictsMetadata` is a small plumbing change, not a new lookup.
+- The dispatcher is the single queue-transition authority per #889 Q2-D, and #879's single-in-flight dedupe is trusted to collapse any label-monitor/webhook race the dispatcher-side enqueue creates.
+- The worker's existing resume-cleanup handles stale pause labels harmlessly when a `continue` item arrives with the labels still present (crash-after-enqueue path).
+- `PrFeedbackHandler` is the only other handler in scope for FR-009's assertion-only application; future handlers are out of scope.
 
 ## Out of Scope
 
-- **Changes to `waiting-for:merge-conflicts` semantics or the pre-phase base-merge in #864.** This spec builds on #898/#864 as shipped; only the success-path re-arm is in scope.
-- **Rewriting `PrFeedbackHandler` or other handlers.** FR-011 applies the FR-006 assertion to their fixtures; if a sibling handler fails the assertion, the fix is a follow-up issue, not blocking this one.
-- **Cockpit CLI verb changes.** The manual repair on #6/#7/#8 used existing label surgery; no new verb is required. (If auto-mode discovers a recurring class of manual repair, that's a separate spec — see also #891's `resume` verb, which is orthogonal.)
-- **Multi-attempt agent resolution or escalation flows beyond #898's one-attempt discipline.** The fix is at the *end* of the success path; the attempt-scoping from #898 FR-004 is unchanged.
-- **Cross-repo / linked-PR coordination on merge conflicts.** #898's FR-005 sibling scope guard is unchanged; this spec fixes only the terminal state, not the resolution behavior.
-- **Retroactively cleaning up existing dead-parked issues in production.** The manual repair described in the issue body is one-shot operator work; this spec makes the class of bug not recur, not sweep existing residue.
+- Extracting `resolvePrecedingGate` / preceding-gate mapping into a shared package (Q3 = N/A under Q1-B; do this only when a real second consumer appears).
+- Moving `HandlerOutcome` to `@generacy-ai/workflow-engine` (YAGNI until a non-orchestrator handler exists).
+- Any resume-pair (label-plane) rewrite of the handler's re-arm path — direct enqueue is canonical here.
+- Retrofitting `PrFeedbackHandler` to return a `HandlerOutcome` (FR-009 is assertion-only — no handler signature change).
+- Broader "every handler" invariant sweep beyond `MergeConflictHandler` + `PrFeedbackHandler`.
 
 ---
 
