@@ -1,5 +1,6 @@
 import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageType, CommandExitEvidence } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
+import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs } from './config.js';
 import type { LabelManager } from './label-manager.js';
@@ -53,6 +54,17 @@ export interface PhaseLoopDeps {
 }
 
 /**
+ * Discriminator for `PhaseLoopResult` (#889 additive extension).
+ *
+ * - `'completed'`: legacy shape (`completed: true`).
+ * - `'gate-hit'`: legacy shape (`gateHit: true`).
+ * - `'phase-failed'`: legacy shape (a phase produced `!result.success`).
+ * - `'failed-terminal'`: NEW in #889 — a `LabelManager` retry exhausted and
+ *   raised `TerminalLabelOpError`. `failureMetadata` carries the alert payload.
+ */
+export type PhaseLoopStatus = 'completed' | 'gate-hit' | 'phase-failed' | 'failed-terminal';
+
+/**
  * Result of a complete phase loop execution.
  */
 export interface PhaseLoopResult {
@@ -64,6 +76,20 @@ export interface PhaseLoopResult {
   lastPhase: string;
   /** Whether the loop was stopped by a gate */
   gateHit: boolean;
+  /**
+   * #889 additive discriminator. Backwards-compatible with existing readers
+   * of `completed` / `gateHit` / `lastPhase`.
+   */
+  status?: PhaseLoopStatus;
+  /**
+   * Only populated when `status === 'failed-terminal'` (#889). Copied from the
+   * thrown `TerminalLabelOpError` and forwarded to the dispatcher.
+   */
+  failureMetadata?: {
+    site: TerminalLabelOpSite;
+    labelOp: string;
+    ghStderr: string;
+  };
 }
 
 /**
@@ -92,6 +118,44 @@ export class PhaseLoop {
    *   Defaults to the global PHASE_SEQUENCE for backward compatibility.
    */
   async executeLoop(
+    context: WorkerContext,
+    config: WorkerConfig,
+    deps: PhaseLoopDeps,
+    phaseSequence?: WorkflowPhase[],
+  ): Promise<PhaseLoopResult> {
+    try {
+      return await this.executeLoopInner(context, config, deps, phaseSequence);
+    } catch (error) {
+      // #889: LabelManager retry exhaustion. Translate the terminal error into
+      // a `failed-terminal` PhaseLoopResult so the worker can surface a bounded
+      // alert instead of re-throwing and crash-looping the queue.
+      if (isTerminalLabelOpError(error)) {
+        this.logger.error(
+          {
+            site: error.site,
+            labelOp: error.labelOp,
+            ghStderr: error.ghStderr,
+          },
+          'Phase loop caught TerminalLabelOpError — surfacing as failed-terminal',
+        );
+        return {
+          results: [],
+          completed: false,
+          lastPhase: context.startPhase,
+          gateHit: false,
+          status: 'failed-terminal',
+          failureMetadata: {
+            site: error.site,
+            labelOp: error.labelOp,
+            ghStderr: error.ghStderr,
+          },
+        };
+      }
+      throw error;
+    }
+  }
+
+  private async executeLoopInner(
     context: WorkerContext,
     config: WorkerConfig,
     deps: PhaseLoopDeps,

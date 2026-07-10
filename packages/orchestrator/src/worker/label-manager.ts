@@ -1,5 +1,25 @@
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger } from './types.js';
+import { TerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
+
+/**
+ * Callback invoked from `onGateHit` after a pause label pair
+ * (`waiting-for:<gate>` + `agent:paused`) has been successfully applied.
+ * Used by callers wired to `PhaseTrackerService` to invalidate the paired
+ * `resume:<gate>` dedupe key so a subsequent resume can pass through. See #849.
+ */
+export type ClearResumeDedupeCallback = (gate: string) => Promise<void>;
+
+interface RetryContext {
+  site: TerminalLabelOpSite;
+  labelOp: string;
+}
+
+function extractStderr(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
 
 /**
  * Manages label transitions on GitHub issues throughout the worker's phase loop.
@@ -13,12 +33,33 @@ import type { WorkflowPhase, Logger } from './types.js';
  * - `agent:in-progress` — the agent is actively processing
  */
 export class LabelManager {
+  /**
+   * Per-process cache of repos whose workflow labels have been ensured.
+   * Key: `"owner/repo"`. Shared across every `LabelManager` instance in the
+   * process — one boundary ensure-pass per repo per process lifetime.
+   */
+  private static readonly ensuredRepos = new Set<string>();
+
+  /**
+   * In-flight-Promise dedupe for concurrent first-callers on the same repo.
+   * Key: `"owner/repo"`. Ensures the ensure-pass runs at most once
+   * concurrently even if multiple issues in the same repo fire simultaneously.
+   */
+  private static readonly ensureInFlight = new Map<string, Promise<void>>();
+
+  /** Test-only: reset the class-level memoization caches. */
+  static resetEnsureCacheForTests(): void {
+    LabelManager.ensuredRepos.clear();
+    LabelManager.ensureInFlight.clear();
+  }
+
   constructor(
     private readonly github: GitHubClient,
     private readonly owner: string,
     private readonly repo: string,
     private readonly issueNumber: number,
     private readonly logger: Logger,
+    private readonly clearResumeDedupe?: ClearResumeDedupeCallback,
   ) {}
 
   /**
@@ -27,9 +68,10 @@ export class LabelManager {
    * Adds `phase:<current>` label and removes any previous `phase:*` labels.
    */
   async onPhaseStart(phase: WorkflowPhase): Promise<void> {
+    const phaseLabel = `phase:${phase}`;
     await this.retryWithBackoff(async () => {
+      await this.ensureRepoLabelsExist();
       const currentLabels = await this.getCurrentPhaseLabels();
-      const phaseLabel = `phase:${phase}`;
 
       // Remove any existing phase labels that aren't the new one
       const labelsToRemove = currentLabels.filter((l) => l !== phaseLabel);
@@ -47,7 +89,7 @@ export class LabelManager {
         `Adding phase label: ${phaseLabel}`,
       );
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
-    });
+    }, { site: 'phase-start', labelOp: `addLabels([${phaseLabel}])` });
   }
 
   /**
@@ -56,9 +98,10 @@ export class LabelManager {
    * Adds `completed:<current>` label and removes `phase:<current>` label.
    */
   async onPhaseComplete(phase: WorkflowPhase): Promise<void> {
+    const phaseLabel = `phase:${phase}`;
+    const completedLabel = `completed:${phase}`;
     await this.retryWithBackoff(async () => {
-      const phaseLabel = `phase:${phase}`;
-      const completedLabel = `completed:${phase}`;
+      await this.ensureRepoLabelsExist();
 
       this.logger.info(
         { phase, issue: this.issueNumber },
@@ -67,7 +110,7 @@ export class LabelManager {
 
       await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, [completedLabel]);
-    });
+    }, { site: 'phase-complete', labelOp: `addLabels([${completedLabel}])` });
   }
 
   /**
@@ -76,9 +119,10 @@ export class LabelManager {
    * Adds `waiting-for:<gate>` and `agent:paused` labels, removes `phase:<current>`.
    */
   async onGateHit(phase: WorkflowPhase, gateLabel: string): Promise<void> {
+    const phaseLabel = `phase:${phase}`;
+    const completedLabel = `completed:${phase}`;
     await this.retryWithBackoff(async () => {
-      const phaseLabel = `phase:${phase}`;
-      const completedLabel = `completed:${phase}`;
+      await this.ensureRepoLabelsExist();
 
       this.logger.info(
         { phase, gateLabel, issue: this.issueNumber },
@@ -93,7 +137,32 @@ export class LabelManager {
         gateLabel,
         'agent:paused',
       ]);
-    });
+    }, { site: 'gate-hit', labelOp: `addLabels([${gateLabel}, agent:paused])` });
+
+    // #849: clear paired resume:<gate> dedupe on successful pause.
+    // Best-effort — swallow failures so a Redis blip cannot fail the pause.
+    if (this.clearResumeDedupe) {
+      const gateSuffix = gateLabel.replace(/^waiting-for:/, '');
+      try {
+        await this.clearResumeDedupe(gateSuffix);
+        this.logger.info(
+          { phase, gateLabel, owner: this.owner, repo: this.repo, issueNumber: this.issueNumber },
+          'Cleared paired resume dedupe on pause',
+        );
+      } catch (err) {
+        this.logger.warn(
+          {
+            err: String(err),
+            phase,
+            gateLabel,
+            owner: this.owner,
+            repo: this.repo,
+            issueNumber: this.issueNumber,
+          },
+          'Failed to clear paired resume dedupe on pause (non-fatal)',
+        );
+      }
+    }
   }
 
   /**
@@ -102,10 +171,10 @@ export class LabelManager {
    * Adds `agent:error` label and removes `phase:<current>`.
    */
   async onError(phase: WorkflowPhase): Promise<void> {
+    const phaseLabel = `phase:${phase}`;
+    const failedLabel = `failed:${phase}`;
     await this.retryWithBackoff(async () => {
-      const phaseLabel = `phase:${phase}`;
-
-      const failedLabel = `failed:${phase}`;
+      await this.ensureRepoLabelsExist();
 
       this.logger.info(
         { phase, issue: this.issueNumber },
@@ -117,7 +186,7 @@ export class LabelManager {
         'agent:in-progress',
       ]);
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, [failedLabel, 'agent:error']);
-    });
+    }, { site: 'error', labelOp: `addLabels([${failedLabel}, agent:error])` });
   }
 
   /**
@@ -127,6 +196,8 @@ export class LabelManager {
    */
   async onWorkflowComplete(): Promise<void> {
     await this.retryWithBackoff(async () => {
+      await this.ensureRepoLabelsExist();
+
       this.logger.info(
         { issue: this.issueNumber },
         'Workflow complete: removing agent:in-progress',
@@ -135,7 +206,7 @@ export class LabelManager {
       await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [
         'agent:in-progress',
       ]);
-    });
+    }, { site: 'workflow-complete', labelOp: 'removeLabels([agent:in-progress])' });
   }
 
   /**
@@ -147,6 +218,7 @@ export class LabelManager {
    */
   async onResumeStart(): Promise<void> {
     await this.retryWithBackoff(async () => {
+      await this.ensureRepoLabelsExist();
       const issue = await this.github.getIssue(this.owner, this.repo, this.issueNumber);
       const currentLabels = issue.labels.map((l) =>
         typeof l === 'string' ? l : l.name,
@@ -183,7 +255,7 @@ export class LabelManager {
         'Resume: adding agent:in-progress label',
       );
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, ['agent:in-progress']);
-    });
+    }, { site: 'resume-start', labelOp: 'addLabels([agent:in-progress])' });
   }
 
   /**
@@ -211,7 +283,7 @@ export class LabelManager {
         );
         await this.retryWithBackoff(async () => {
           await this.github.removeLabels(this.owner, this.repo, this.issueNumber, labelsToRemove);
-        });
+        }, { site: 'error', labelOp: `removeLabels(${JSON.stringify(labelsToRemove)})` });
       }
     } catch (error) {
       // Never throw from cleanup — log and move on
@@ -219,6 +291,67 @@ export class LabelManager {
         { error: String(error), issue: this.issueNumber },
         'Failed to ensure label cleanup (non-fatal)',
       );
+    }
+  }
+
+  /**
+   * Ensures every label in `WORKFLOW_LABELS` exists on the target repo.
+   *
+   * Memoized per-process, keyed on `"owner/repo"`. First caller on a given
+   * repo runs the pass; concurrent callers await the shared in-flight Promise;
+   * subsequent callers return immediately. This is the load-bearing safety net
+   * that catches labels not proactively provisioned by `LabelSyncService`.
+   */
+  private async ensureRepoLabelsExist(): Promise<void> {
+    const key = `${this.owner}/${this.repo}`;
+    if (LabelManager.ensuredRepos.has(key)) return;
+
+    const inFlight = LabelManager.ensureInFlight.get(key);
+    if (inFlight) {
+      await inFlight;
+      return;
+    }
+
+    const promise = (async () => {
+      const existing = await this.github.listLabels(this.owner, this.repo);
+      const existingNames = new Set(existing.map((l) => l.name));
+      const missing = WORKFLOW_LABELS.filter((l) => !existingNames.has(l.name));
+
+      for (const label of missing) {
+        try {
+          await this.github.createLabel(
+            this.owner,
+            this.repo,
+            label.name,
+            label.color,
+            label.description,
+          );
+          this.logger.info(
+            { label: label.name, owner: this.owner, repo: this.repo },
+            'Created missing workflow label',
+          );
+        } catch (err) {
+          // Create-race with a sibling worker on the same repo is expected and
+          // safe — the label exists after our attempt regardless of who wrote it.
+          this.logger.warn(
+            {
+              label: label.name,
+              owner: this.owner,
+              repo: this.repo,
+              err: String(err),
+            },
+            'Failed to create workflow label (non-fatal, may already exist)',
+          );
+        }
+      }
+    })();
+
+    LabelManager.ensureInFlight.set(key, promise);
+    try {
+      await promise;
+      LabelManager.ensuredRepos.add(key);
+    } finally {
+      LabelManager.ensureInFlight.delete(key);
     }
   }
 
@@ -236,9 +369,15 @@ export class LabelManager {
    * Retry an async operation with exponential backoff.
    *
    * Attempts the operation up to 3 times with delays of 1000ms, 2000ms, and 4000ms
-   * between attempts. The final attempt's error is re-thrown.
+   * between attempts. On final-attempt failure, throws `TerminalLabelOpError`
+   * carrying the `{ site, labelOp, ghStderr, cause }` context so callers can
+   * translate to `WorkerResult.status === 'failed-terminal'` without releasing
+   * the item back to the queue (#889 crash-loop fix).
    */
-  private async retryWithBackoff<T>(fn: () => Promise<T>): Promise<T> {
+  private async retryWithBackoff<T>(
+    fn: () => Promise<T>,
+    context: RetryContext,
+  ): Promise<T> {
     const maxAttempts = 3;
     const delays = [1000, 2000, 4000];
 
@@ -248,10 +387,15 @@ export class LabelManager {
       } catch (error) {
         if (attempt === maxAttempts) {
           this.logger.error(
-            { attempt, error: String(error), issue: this.issueNumber },
+            { attempt, error: String(error), issue: this.issueNumber, site: context.site, labelOp: context.labelOp },
             `Label operation failed after ${maxAttempts} attempts`,
           );
-          throw error;
+          throw new TerminalLabelOpError({
+            site: context.site,
+            labelOp: context.labelOp,
+            ghStderr: extractStderr(error),
+            cause: error,
+          });
         }
 
         const delay = delays[attempt - 1]!;

@@ -291,6 +291,10 @@ export class StageCommentManager {
    * Render the failure-alert body per contract §"Alert body layout".
    * Byte-exact: marker line, summary line, blank, <details> wrapper, fenced
    * text block with backtick-neutralized output, closing </details>.
+   *
+   * For `stage === 'label-op'` (#889), the summary line references the failing
+   * label operation and site rather than a phase name.
+   * See specs/889-found-during-cockpit-v1/contracts/failure-alert-label-op.md.
    */
   private renderFailureAlert(marker: string, data: FailureAlertData): string {
     const evidence = data.evidence;
@@ -298,9 +302,15 @@ export class StageCommentManager {
     // Same ZWSP substitution used by appendEvidenceBlock — neutralize any
     // ``` sequence inside outputTail so the outer fenced block stays closed.
     const safeOutput = evidence.outputTail.replace(/```/g, '`​``');
+
+    const summaryLine =
+      data.stage === 'label-op'
+        ? `❌ **label operation failed** — \`${data.labelOp ?? evidence.command}\` at site \`${data.phase}\` (${evidence.exitDescriptor}).`
+        : `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`;
+
     return [
       marker,
-      `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`,
+      summaryLine,
       '',
       `<details><summary>output (last ${lineCount} lines)</summary>`,
       '',

@@ -31,6 +31,8 @@ import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
 import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
 import { JitTokenError } from '@generacy-ai/control-plane';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
+import type { WorkerResult } from './worker-result.js';
+import { isTerminalLabelOpError } from './terminal-label-op-error.js';
 
 /**
  * Load linkedPRs from workflow state files in the checkout directory.
@@ -219,8 +221,18 @@ export class ClaudeCliWorker {
    * - Creates a WorkerContext
    * - Resolves the starting phase from issue labels
    * - Runs the phase loop to completion (or gate/error)
+   *
+   * Returns a `WorkerResult` discriminated union:
+   * - `{ status: 'completed' }` — happy path (incl. gate hits and phase failures
+   *   that self-terminated cleanly).
+   * - `{ status: 'failed-terminal', failureMetadata }` — a `TerminalLabelOpError`
+   *   was caught inside the phase loop or the outer catch. The dispatcher marks
+   *   the item completed (not released) and emits the `stage: 'label-op'` alert.
+   *
+   * All other unhandled throws propagate; the dispatcher catches them and
+   * releases the item (unchanged behavior for generic errors).
    */
-  async handle(item: QueueItem): Promise<void> {
+  async handle(item: QueueItem): Promise<WorkerResult> {
     const workerId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
     const workflowId = `${item.owner}/${item.repo}#${item.issueNumber}`;
@@ -254,6 +266,7 @@ export class ClaudeCliWorker {
     let labelManager: LabelManager | undefined;
     let phasesCompleted = false;
     let gateHit = false;
+    let workerResult: WorkerResult = { status: 'completed' };
 
     try {
       // 1. Clone the default branch first (always works, even on first run)
@@ -293,7 +306,7 @@ export class ClaudeCliWorker {
           },
         });
 
-        return;
+        return { status: 'completed' };
       }
 
       // 3. Get issue details and resolve description
@@ -506,7 +519,7 @@ export class ClaudeCliWorker {
             currentStep: 'tasks',
           });
 
-          return;
+          return { status: 'completed' };
         }
       }
 
@@ -575,6 +588,21 @@ export class ClaudeCliWorker {
           },
         ],
       }, phaseSequence);
+
+      // 9. Handle terminal label-op failure (#889): translate into WorkerResult
+      //    so the dispatcher completes the item instead of releasing it. The
+      //    dispatcher's terminalFailureHandler emits the operator-facing alert.
+      if (loopResult.status === 'failed-terminal' && loopResult.failureMetadata) {
+        workerLogger.error(
+          { failureMetadata: loopResult.failureMetadata },
+          'Phase loop returned failed-terminal — surfacing as WorkerResult.failed-terminal',
+        );
+        workerResult = {
+          status: 'failed-terminal',
+          failureMetadata: loopResult.failureMetadata,
+        };
+        return workerResult;
+      }
 
       // 9. Handle completion
       if (loopResult.completed) {
@@ -680,6 +708,22 @@ export class ClaudeCliWorker {
             'Post-completion step failed (all phases completed successfully)',
           );
         }
+      } else if (isTerminalLabelOpError(error)) {
+        // #889: LabelManager retry exhaustion outside the phase loop (e.g. in
+        // onResumeStart or onWorkflowComplete). Translate into WorkerResult so
+        // the dispatcher completes the item instead of releasing it.
+        workerLogger.error(
+          { site: error.site, labelOp: error.labelOp, ghStderr: error.ghStderr },
+          'Worker caught TerminalLabelOpError — surfacing as WorkerResult.failed-terminal',
+        );
+        workerResult = {
+          status: 'failed-terminal',
+          failureMetadata: {
+            site: error.site,
+            labelOp: error.labelOp,
+            ghStderr: error.ghStderr,
+          },
+        };
       } else {
         workerLogger.error(
           { error: String(error) },
@@ -719,6 +763,8 @@ export class ClaudeCliWorker {
         await labelManager.ensureCleanup();
       }
     }
+
+    return workerResult;
   }
 
 }

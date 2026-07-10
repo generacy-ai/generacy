@@ -77,7 +77,7 @@ describe('WorkerDispatcher', () => {
     logger = createMockLogger();
     queue = createMockQueueManager();
     redis = createMockRedis();
-    handler = vi.fn<WorkerHandler>().mockResolvedValue(undefined);
+    handler = vi.fn<WorkerHandler>().mockResolvedValue({ status: 'completed' });
     dispatcher = new WorkerDispatcher(queue, redis, logger, testConfig, handler);
   });
 
@@ -154,12 +154,13 @@ describe('WorkerDispatcher', () => {
 
   describe('concurrency limit', () => {
     it('should not claim when already processing a job', async () => {
-      const blockers: Array<{ resolve: () => void }> = [];
+      type Resolver = () => void;
+      const blockers: Array<{ resolve: Resolver }> = [];
 
       handler.mockImplementation(
         () =>
-          new Promise<void>((resolve) => {
-            blockers.push({ resolve });
+          new Promise<{ status: 'completed' }>((resolve) => {
+            blockers.push({ resolve: () => resolve({ status: 'completed' }) });
           }),
       );
 
@@ -203,7 +204,7 @@ describe('WorkerDispatcher', () => {
         .mockResolvedValueOnce(item)
         .mockResolvedValue(null);
 
-      handler.mockResolvedValue(undefined);
+      handler.mockResolvedValue({ status: 'completed' });
 
       const startPromise = dispatcher.start();
       await tick();
@@ -276,7 +277,7 @@ describe('WorkerDispatcher', () => {
 
     it('should release remaining items when shutdown timeout expires', async () => {
       // Handler that never resolves (stuck worker)
-      handler.mockImplementation(() => new Promise<void>(() => {}));
+      handler.mockImplementation(() => new Promise<never>(() => {}));
 
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -314,7 +315,7 @@ describe('WorkerDispatcher', () => {
       dispatcher = new WorkerDispatcher(queue, redis, logger, testConfig, handler, labelCleanup);
 
       // Handler that never resolves so the worker stays active
-      handler.mockImplementation(() => new Promise<void>(() => {}));
+      handler.mockImplementation(() => new Promise<never>(() => {}));
 
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -354,7 +355,7 @@ describe('WorkerDispatcher', () => {
       dispatcher = new WorkerDispatcher(queue, redis, logger, testConfig, handler, labelCleanup);
 
       // Handler that never resolves so the worker stays active
-      handler.mockImplementation(() => new Promise<void>(() => {}));
+      handler.mockImplementation(() => new Promise<never>(() => {}));
 
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -405,7 +406,7 @@ describe('WorkerDispatcher', () => {
       // dispatcher already created without labelCleanup in beforeEach
 
       // Handler that never resolves so the worker stays active
-      handler.mockImplementation(() => new Promise<void>(() => {}));
+      handler.mockImplementation(() => new Promise<never>(() => {}));
 
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -453,7 +454,7 @@ describe('WorkerDispatcher', () => {
   describe('reaper', () => {
     it('should release items whose heartbeat has expired', async () => {
       // Handler that never resolves so the worker stays active
-      handler.mockImplementation(() => new Promise<void>(() => {}));
+      handler.mockImplementation(() => new Promise<never>(() => {}));
 
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -494,8 +495,8 @@ describe('WorkerDispatcher', () => {
       let resolveHandler!: () => void;
       handler.mockImplementation(
         () =>
-          new Promise<void>((resolve) => {
-            resolveHandler = resolve;
+          new Promise<{ status: 'completed' }>((resolve) => {
+            resolveHandler = () => resolve({ status: 'completed' });
           }),
       );
 
@@ -566,7 +567,7 @@ describe('WorkerDispatcher', () => {
         .mockResolvedValueOnce({ ...sampleItem })
         .mockResolvedValue(null);
 
-      handler.mockResolvedValue(undefined);
+      handler.mockResolvedValue({ status: 'completed' });
 
       const startPromise = memDispatcher.start();
       await tick();
@@ -591,7 +592,9 @@ describe('WorkerDispatcher', () => {
     it('should keep workers alive via in-memory heartbeat', async () => {
       let resolveHandler!: () => void;
       handler.mockImplementation(
-        () => new Promise<void>((resolve) => { resolveHandler = resolve; }),
+        () => new Promise<{ status: 'completed' }>((resolve) => {
+          resolveHandler = () => resolve({ status: 'completed' });
+        }),
       );
 
       (queue.claim as ReturnType<typeof vi.fn>)

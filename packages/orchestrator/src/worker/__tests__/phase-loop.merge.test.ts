@@ -346,4 +346,74 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
       expect(context.github.getDefaultBranch).toHaveBeenCalled();
     });
   });
+
+  // FR-005 (#889): pre-existing repo without waiting-for:merge-conflicts must
+  // still pause successfully — the LabelManager's memoized ensure-pass creates
+  // the missing label just before addLabels fires. Uses a real LabelManager
+  // wired to a fake GitHubClient rather than the vi.fn() mock deps above.
+  describe('pre-existing repo without waiting-for:merge-conflicts label (FR-005)', () => {
+    it('creates the missing label and pauses successfully', async () => {
+      const { LabelManager } = await import('../label-manager.js');
+      const { WORKFLOW_LABELS } = await import('@generacy-ai/workflow-engine');
+
+      LabelManager.resetEnsureCacheForTests();
+
+      const calls: string[] = [];
+      const existingLabels = WORKFLOW_LABELS.filter(
+        (l) => l.name !== 'waiting-for:merge-conflicts',
+      );
+      const fakeGithub = {
+        getIssue: vi.fn().mockImplementation(async () => {
+          calls.push('getIssue');
+          return { labels: [] };
+        }),
+        listLabels: vi.fn().mockImplementation(async () => {
+          calls.push('listLabels');
+          return existingLabels;
+        }),
+        createLabel: vi.fn().mockImplementation(async (_o, _r, name) => {
+          calls.push(`createLabel:${name}`);
+        }),
+        addLabels: vi.fn().mockImplementation(async (_o, _r, _i, labels) => {
+          calls.push(`addLabels:${labels.join(',')}`);
+        }),
+        removeLabels: vi.fn().mockImplementation(async () => {
+          calls.push('removeLabels');
+        }),
+      };
+
+      const lm = new LabelManager(
+        fakeGithub as any,
+        'test',
+        'repo',
+        864,
+        mockLogger,
+      );
+
+      // Runner reports a conflict → phase-loop calls onGateHit(implement, waiting-for:merge-conflicts)
+      const { runner } = makeFakeRunner([
+        {
+          ok: false,
+          baseRef: 'origin/main',
+          conflictedPaths: ['CLAUDE.md'],
+        },
+      ]);
+      const deps = createMockDeps(runner);
+      deps.labelManager = lm as any;
+      const context = createMockContext('implement');
+
+      const result = await loop.executeLoop(context, createConfig(), deps, ['implement']);
+
+      expect(result.gateHit).toBe(true);
+
+      // Sequence assertion — listLabels → createLabel('waiting-for:merge-conflicts', ...) → addLabels([waiting-for:merge-conflicts, agent:paused])
+      const listIdx = calls.indexOf('listLabels');
+      const createIdx = calls.indexOf('createLabel:waiting-for:merge-conflicts');
+      const addIdx = calls.findIndex((c) => c.startsWith('addLabels:waiting-for:merge-conflicts'));
+
+      expect(listIdx).toBeGreaterThanOrEqual(0);
+      expect(createIdx).toBeGreaterThan(listIdx);
+      expect(addIdx).toBeGreaterThan(createIdx);
+    });
+  });
 });

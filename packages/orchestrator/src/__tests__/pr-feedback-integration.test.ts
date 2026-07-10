@@ -79,6 +79,8 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   wrapUntrustedData: vi.fn((content: string) => content),
   // #883: short SHA lookup for reply-body interpolation.
   executeCommand: vi.fn(async () => ({ exitCode: 0, stdout: 'abc1234\n', stderr: '' })),
+  // #889: LabelManager imports WORKFLOW_LABELS for its ensure-pass.
+  WORKFLOW_LABELS: [],
 }));
 
 // ==========================================================================
