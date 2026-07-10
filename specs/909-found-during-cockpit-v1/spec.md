@@ -1,122 +1,124 @@
-# Feature Specification: Marker-based exclusion in clarification answer-scanner + explainer copy fix
+# Feature Specification: Found during the cockpit v1
 
 **Branch**: `909-found-during-cockpit-v1` | **Date**: 2026-07-10 | **Status**: Draft
-**Source**: [generacy-ai/generacy#909](https://github.com/generacy-ai/generacy/issues/909) — found during cockpit v1.5 auto-mode integration smoke test (generacy-ai/tetrad-development#92, finding #51)
 
 ## Summary
 
-The clarification answer-scanner in `packages/orchestrator/src/worker/clarification-poster.ts` treats the engine's own **questions** comment (posted by the bot with `<!-- generacy-stage:clarification -->` marker and `### Q<n>: <topic>` headings) as a source of candidate **answers**. Today this produces a misleading operator-facing explainer ("Answers from @generacy-ai[bot] were not applied…must post or confirm"). Once finding #52 lands (App-identity clusters become trusted on the answer-scanner surface), the same mis-parse becomes trusted — the engine will silently self-answer clarification gates using its own question text. Today's trust rejection is the only thing masking a latent silent-corruption bug.
+Found during the cockpit v1.5 auto-mode integration smoke test (generacy-ai/tetrad-development#92), finding #51 — first clarification gate on the fresh snappoll cluster (christrudelpw/snappoll, App-auth scaffold). Companion to finding #52 (bot login unresolvable on App-identity clusters); **the two mask each other — see the ordering warning before fixing either alone.**
 
-Companion to finding #52 (bot login unresolvable on App-identity clusters). **Ordering constraint**: this issue MUST land before #52. Bot-trust + marker-blind scanning = engine trusts its own questions comment and silently self-answers.
+## Observed (christrudelpw/snappoll#4)
 
-## Observed Behavior (christrudelpw/snappoll#4)
+The clarification answer-scanner (`packages/orchestrator/src/worker/clarification-poster.ts`) parsed the engine's **own questions comment** as candidate answers. Comment 4938943909 is the workflow's "## ❓ Clarification Questions — Batch 1" comment (`<!-- generacy-stage:clarification -->` marker, authored by the cluster App identity `generacy-ai[bot]`), formatted with `### Q<n>: <topic>` headings and prose/backtick question bodies. The scanner's `Q<n>:` regex captured 4 "answers" (topic + question text) from it:
 
-- Comment `4938943909` is the workflow's "## ❓ Clarification Questions — Batch 1" comment, marker `<!-- generacy-stage:clarification -->`, author `generacy-ai[bot]` (cluster App identity), body uses `### Q<n>: <topic>` headings with prose/backtick question bodies (no `**Question**:` / `**Context**:` bold markup).
-- Author-trust check rejects the comment (tier `NONE` — see finding #52). Because the body matches `commentMatchesAnswerPattern` (`Q<N>:` at line start), the comment is pushed onto `skippedForExplainer` **before** any marker check runs.
-- `postUntrustedAnswerExplainers` posts: *"Answers from @generacy-ai[bot] were not applied (association tier: `NONE`). A trusted member (OWNER/MEMBER/COLLABORATOR) must post or confirm the answers."*
-- The cockpit auto session reads the explainer as authoritative and escalates the whole P1 clarification batch (Q1/Q2/Q3) to the operator.
+- The FR-002 defense-in-depth sniff only skips captures containing `**Question**:` or `**Context**:` — this comment variant contains neither (the *formal* `<!-- generacy-clarifications:N -->` comment does, and is caught). Content sniffing is pinned to one comment dialect while the engine itself emits at least two.
+- The comment-trust check then rejected the batch (author tier `NONE` — see finding #52) and posted the explainer: *"Answers from @generacy-ai[bot] were not applied (association tier: `NONE`). A trusted member (OWNER/MEMBER/COLLABORATOR) must post or confirm the answers."*
 
-### Three harms
+Two harms today, one latent:
 
-1. **Misleading explainer** — no answers were ever posted by anyone; the "rejected answers" were the engine's own questions. Operator receives a false claim of a rejected answer set.
-2. **Explainer copy references a nonexistent affordance** — "must post or **confirm**": grep confirms no confirm mechanism exists anywhere in the codebase. The only working path is a trusted member re-posting the answers. Same class as label-protocol "names that lie" findings.
-3. **Latent silent corruption** — the moment finding #52 lands (bot login resolvable → cluster identity trusted on answer-scanner), this same mis-parse becomes *trusted*. Question topic text integrates into `clarifications.md` as answers and the clarification gate self-answers with garbage, no human in the loop. Today's trust rejection is the only thing stopping it.
+1. **Misleading explainer** — no answers were ever posted by anyone; the "rejected answers" were the engine's own questions. The cockpit auto session read the explainer as authoritative and concluded the cluster cannot post clarification answers at all, escalating the whole P1 batch (#2/#3/#4) to the operator.
+2. **Explainer copy references a nonexistent affordance** — "must post or **confirm**": grep confirms no confirm mechanism exists anywhere in the codebase; the only working path is a trusted member re-posting the answers. Operator-facing copy must not offer verbs the system cannot honor (same class as the label-protocol "names that lie" findings).
+3. **Latent silent corruption** — the moment finding #52 lands (bot login resolvable → cluster identity trusted via comment-trust rule #1), this same mis-parse becomes *trusted*: question text integrates into `clarifications.md` as answers and the clarification gate self-answers with garbage, no human in the loop. Today's trust rejection is the only thing stopping it.
+
+## Fix
+
+1. **Marker-based exclusion before parsing**: skip any comment whose body carries a question-side marker (`<!-- generacy-stage:clarification -->`, `<!-- generacy-clarifications:`, `<!-- generacy-cockpit:clarifications-batch:`) — the engine knows its own wire format; excluding by marker is deterministic where content sniffing is dialect-fragile. Keep FR-002's sniff as defense-in-depth for unmarked question-shaped text.
+2. **Fix the explainer copy**: state the real remediation — a trusted member (OWNER/MEMBER/COLLABORATOR) must post the answers themselves (`Q1: …` format) — and drop "or confirm" until a confirm mechanism exists.
+
+## Ordering warning
+
+Do not ship finding #52 (make the cluster's own identity trusted on the answer-scanner surface) before this issue's marker exclusion: bot-trust + marker-blind scanning = the engine trusts its own questions comment and silently self-answers clarification gates.
+
+## Regression tests
+
+- Fixture: the informal batch comment (`generacy-stage:clarification`, `### Q<n>:` headings, no bold markers) → zero candidate answers parsed, no explainer posted.
+- Same fixture with a trusted/self-authored author → still zero (marker exclusion is trust-independent).
+- Trusted human comment `Q1: A` → integrated (unchanged).
+- Explainer body (when a genuinely untrusted human posts answers) names the re-post path only.
+
 
 ## User Stories
 
-### US1: Operator receives no false "rejected answers" explainer (P1)
+### US1: Engine questions are never mis-parsed as answers
 
-**As an** operator running an auto-mode session on an App-identity cluster,
-**I want** the clarification-poster to never post an "untrusted answers" explainer when the "answers" it detected were actually the engine's own questions comment,
-**So that** I am not misled into escalating a batch that has no human-posted answers to review.
-
-**Acceptance Criteria**:
-- [ ] For the snappoll#4 fixture (informal batch comment, `<!-- generacy-stage:clarification -->` marker, `### Q<n>:` headings, no bold markup), zero explainer comments are posted regardless of author-trust decision.
-- [ ] For an untrusted human comment matching `Q<N>:` (no engine marker), an explainer is still posted (existing behavior preserved).
-
-### US2: Operator explainer copy names only affordances that exist (P1)
-
-**As an** operator reading the "untrusted answer" explainer,
-**I want** the copy to state only the real remediation path — a trusted member (OWNER/MEMBER/COLLABORATOR) must post the answers themselves in `Q1: A` format — and not offer a "confirm" verb the system cannot honor,
-**So that** I am not directed to attempt an affordance that does not exist.
+**As a** cockpit auto-mode operator,
+**I want** the clarification answer-scanner to skip comments the engine authored as questions,
+**So that** a fresh cluster's own "Batch N" questions comment can never be captured as answer text — today (rejected by trust) or tomorrow (silently trusted once the cluster's own identity becomes trusted per finding #52).
 
 **Acceptance Criteria**:
-- [ ] Explainer body text does not contain the substring "confirm".
-- [ ] Explainer body text names the concrete re-post path with the `Q1: <answer>` format hint.
+- [ ] Given a comment whose body contains any FR-101 marker at column 0 of any line, the scanner produces zero candidate answers from that comment and posts no rejection explainer.
+- [ ] Behavior is trust-independent — the exclusion fires even if the comment author is OWNER/MEMBER/COLLABORATOR or the cluster's own identity.
+- [ ] The snappoll#4 fixture (`<!-- generacy-stage:clarification-batch-1 -->` + `### Q<n>:` headings, no bold markers) yields zero candidate answers.
 
-### US3: Once bot identity is trusted, engine cannot self-answer its own questions (P1, latent)
+### US2: Explainer copy names only affordances the system honors
 
-**As a** future cluster where the bot identity is trusted on the answer-scanner surface (post finding #52),
-**I want** the engine's own clarification-questions comment to be excluded from the answer-parsing pipeline by deterministic marker match, not content sniff,
-**So that** the engine cannot integrate its own question topics into `clarifications.md` as answers and self-close the clarification gate.
-
-**Acceptance Criteria**:
-- [ ] Same fixture as US1 with a trusted/self-authored author → zero answers parsed, zero updates to `clarifications.md`, gate remains open.
-- [ ] Marker exclusion is trust-independent (identical result for trusted and untrusted authors).
-
-### US4: Human-posted answers still integrate (P1, regression guard)
-
-**As an** operator posting `Q1: A` on a clarification issue,
-**I want** my answer integrated into `clarifications.md` as it is today,
-**So that** the fix does not regress the primary happy path.
+**As a** cockpit operator reading a "rejected answers" explainer,
+**I want** the explainer to name only remediations that actually exist,
+**So that** I don't waste time hunting for a "confirm" mechanism that isn't wired anywhere in the codebase.
 
 **Acceptance Criteria**:
-- [ ] Trusted human comment `Q1: A` → integrated into `clarifications.md`, gate advances (unchanged from today).
+- [ ] The explainer body names re-posting by a trusted member (OWNER/MEMBER/COLLABORATOR) as the sole path.
+- [ ] No occurrence of "or confirm" (or any confirm-verb variant) in the explainer template.
+
+### US3: Trusted human answers still integrate
+
+**As a** repo MEMBER answering a clarification batch,
+**I want** my `Q1: A` / `Q2: B` reply to be integrated as before,
+**So that** the exclusion doesn't regress the happy path.
+
+**Acceptance Criteria**:
+- [ ] A trusted human comment with `Q1: <answer>` lines and no engine marker is parsed and integrated exactly as today.
+
+### US4: Quoted-marker human replies still integrate
+
+**As a** repo MEMBER whose reply quotes the questions comment (`> <!-- ... -->` + `> ### Q1: ...`) above the actual answers,
+**I want** my answers integrated,
+**So that** the natural GitHub reply-with-quote pattern doesn't cause silent answer loss.
+
+**Acceptance Criteria**:
+- [ ] Markers are matched only at column 0 of a line; `> `-quoted markers do not trigger exclusion.
+- [ ] The reply's `Q<n>: <answer>` lines below the quoted block are parsed and integrated.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-101 | Introduce a `commentCarriesQuestionMarker(body)` predicate that returns true iff the body contains any of: `<!-- generacy-stage:clarification -->`, `<!-- generacy-clarifications:`, `<!-- generacy-cockpit:clarifications-batch:`. | P1 | Deterministic marker match. Complements existing `isQuestionComment` (content-shape sniff). |
-| FR-102 | On the answer-scanner surface (`integrateClarificationAnswers`), exclude any comment satisfying FR-101 **before** the author-trust decision — trust-independent and explainer-independent. | P1 | Prevents both the misleading explainer today (harm 1) and the silent self-answer post-#52 (harm 3). |
-| FR-103 | Comments excluded by FR-102 must not be added to `skippedForExplainer` and must not receive an "untrusted answer" explainer comment. | P1 | Fixes harm 1 (misleading operator escalation). |
-| FR-104 | Comments excluded by FR-102 must not enter `parseAnswersFromComments` regardless of trust tier. | P1 | Fixes harm 3 (latent silent corruption post-#52). |
-| FR-105 | Update the untrusted-answer explainer copy: remove "or confirm"; state the real remediation (trusted member OWNER/MEMBER/COLLABORATOR must post the answers themselves in `Q1: <answer>` format). | P1 | Fixes harm 2 (names that lie). |
-| FR-106 | Preserve FR-002 defense-in-depth: the `**Question**:`/`**Context**:` content-sniff inside `parseAnswersFromComments` remains for unmarked question-shaped text. | P1 | Belt-and-suspenders for future comment dialects that ship without the standard marker. |
-| FR-107 | Emit a structured log line when a comment is excluded via FR-102, including `commentId`, `author`, and matched marker prefix. Body content is never logged (SC-007 discipline from existing surface). | P2 | Observability for near-misses without leaking issue content. |
-| FR-108 | The FR-101 marker set must be represented as a single exported constant (or a single predicate) so future marker additions land in one place. | P2 | Ends the "multiple dialects, multiple check sites" drift called out in the bug body. |
+| FR-101 | Introduce a marker set covering every engine-authored question dialect: `<!-- generacy-stage:clarification`, `<!-- generacy-clarifications:`, `<!-- generacy-cockpit:clarifications-batch:`. Match by **prefix substring** (case-sensitive, ASCII) so future variants like `-batch-1` are covered by construction (clarify Q1 → B). | P1 | Explicit dialects observed: `generacy-stage:clarification`, `generacy-stage:clarification-batch-1`, `generacy-clarifications:`, `generacy-cockpit:clarifications-batch:`. |
+| FR-102 | The answer-scanner in `clarification-poster.ts` MUST skip any comment whose body carries any FR-101 marker **at column 0 of any line** — before any candidate-answer regex runs. | P1 | Column-0 rule (clarify Q3 → B) admits human `> `-quoted markers while excluding engine-authored bodies. |
+| FR-103 | Exclusion in FR-102 is **trust-independent**: it fires regardless of comment `author_association`, including when the cluster's own identity becomes trusted (finding #52 landing). | P1 | Blocks the "silent self-answer" latent harm. |
+| FR-104 | The rejection explainer template MUST name only the re-post remediation (a trusted member OWNER/MEMBER/COLLABORATOR posting the answers as `Q1: …`) and MUST NOT contain "or confirm" or any confirm-verb variant. | P1 | Copy-only change; no new affordance. |
+| FR-105 | Ship this marker-exclusion change **before** finding #52 (bot-trust) lands — the ordering warning in the Fix section is a build-order constraint, not commentary. | P1 | Enforced by co-ordination between #909 and generacy-ai/generacy#910. |
+| FR-106 | Preserve the existing content-shape sniff (FR-002 style) inside `parseAnswersFromComments` as belt-and-suspenders for unmarked question-shaped text. | P2 | Marker exclusion is primary; content sniff is defense-in-depth. |
+| FR-107 | Emit one structured log line on marker-based exclusion at **debug** level, shape: `logger.debug({ event: 'clarification-answer-scanner-marker-excluded', commentId, author, markerPrefix, issueNumber }, 'Excluded from answer-scanner via question marker')`. Comment body is never logged. | P2 | Debug level (clarify Q5 → B) because exclusion is steady-state per poll cycle; info would flood logs. |
+| FR-108 | The marker set + predicate live in a new dedicated module `packages/orchestrator/src/worker/clarification-markers.ts`, exporting `CLARIFICATION_QUESTION_MARKERS` and `commentCarriesQuestionMarker(body)`. Future marker additions land in exactly one place. | P1 | Clarify Q4 → B. Named upcoming consumer: #910 clarify-resume surface. No cross-package lift yet. |
+| FR-109 | `isQuestionComment` at `clarification-poster.ts:210-233` MUST call `commentCarriesQuestionMarker(body)` as its first branch; the three inline `.includes()` calls at lines 212–216 are deleted. Content-shape branches (`### Q<n>:` split + `**Question**:` etc.) stay. | P1 | Clarify Q2 → B (delegate). Makes FR-108's "single source" true of the whole file. |
+| FR-110 | Regression coverage MUST assert wiring at the `parseAnswersFromComments` integration seam — not only the predicate in isolation — because this finding exists precisely because `isQuestionComment` existed but wasn't called on the scan path. | P1 | Prevents recurrence-by-oversight. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | For the snappoll#4-shape fixture (informal batch, `generacy-stage:clarification` marker, `### Q<n>:` headings, no bold markers), untrusted author → number of explainer comments posted | 0 | Unit test on `integrateClarificationAnswers` with a mock `github` client counting `addIssueComment` calls that include the `generacy-untrusted-answer:` marker. |
-| SC-002 | Same fixture, trusted (or self-authored) author → number of answers integrated into `clarifications.md` | 0 | Unit test asserts `writeFileSync` is not called and `IntegrationResult.integrated === 0` with `reason === 'no-answers'`. |
-| SC-003 | Trusted human comment `Q1: A` (no engine marker) → answer integrated | 1 | Existing behavior regression test — asserts `IntegrationResult.integrated === 1` and `clarifications.md` gains the answer. |
-| SC-004 | Untrusted human comment `Q1: A` (no engine marker) → explainer posted | 1 | Existing behavior regression test — asserts `addIssueComment` called once with the `generacy-untrusted-answer:` marker. |
-| SC-005 | The substring `confirm` in the explainer body | 0 occurrences | grep the string constant / snapshot test on the composed explainer body. |
-| SC-006 | The explainer body includes the `Q1: <answer>`-style format hint | Present | String match on the composed explainer body. |
-| SC-007 | Number of new call sites that hardcode a marker string (bypassing FR-108's single source) | 0 | Code review / grep for `<!-- generacy-` in `packages/orchestrator/src/worker/`. |
-| SC-008 | Ordering invariant: `isTrustedCommentAuthor` on the answer-scanner surface is never invoked with a comment satisfying FR-101 | Enforced | Unit test with a spy on the trust helper — asserts it is not called for the marker-carrying fixture. |
+| SC-001 | snappoll#4 fixture (informal batch comment: `generacy-stage:clarification-batch-1` marker + `### Q<n>:` headings, no `**Question**:` bold markers) yields **zero** candidate answers. | 0 candidates | Unit test in `clarification-poster.test.ts` asserting `parseAnswersFromComments(fixture)` returns `[]`. |
+| SC-002 | Same fixture with author association set to OWNER/MEMBER (or the cluster's own identity when trusted) still yields zero candidate answers and posts no explainer. | 0 candidates, 0 explainers | Trust-independence unit test. |
+| SC-003 | Trusted human comment `Q1: A\nQ2: B` with no engine marker is integrated exactly as before this change. | 2 answers integrated | Regression test against pre-change behavior. |
+| SC-004 | Trusted human comment quoting the questions (`> <!-- generacy-stage:clarification -->\n> ### Q1: Topic\n\nQ1: A\nQ2: B`) has its `Q1: A` / `Q2: B` answers integrated (not silently dropped by exclusion). | 2 answers integrated | US4 regression test. |
+| SC-005 | The rejection explainer body contains zero occurrences of "or confirm" or any confirm-verb variant. | 0 matches | grep guard in tests. |
+| SC-006 | The explainer names the trusted-member re-post path as the sole remediation. | Present | Snapshot/string test on explainer template. |
+| SC-007 | No file under `packages/orchestrator/src/worker/` hardcodes a marker string from FR-101 outside of `clarification-markers.ts`; `isQuestionComment` no longer contains the three inline `.includes()` at lines 212–216. | 0 offending call sites | grep guard in a lint-style test. |
+| SC-008 | On exclusion, exactly one debug log line is emitted with fields `event`, `commentId`, `author`, `markerPrefix`, `issueNumber`; no field carries the comment body. | 1 line, correct shape | Logger spy in unit test. |
 
 ## Assumptions
 
-- The three marker prefixes named in FR-101 (`generacy-stage:clarification`, `generacy-clarifications:`, `generacy-cockpit:clarifications-batch:`) enumerate every current in-cluster clarification-question dialect. If a fourth marker exists, the FR-108 single-source constant makes it a one-line addition.
-- The existing `isQuestionComment` check on `answerComments` (line 643 today) stays as a downstream belt for future dialects. FR-102 is the load-bearing early exclusion; `isQuestionComment` becomes redundant for marker-carrying comments (that's fine — cheap check).
-- Finding #52 lands **after** this issue. If they merge in the wrong order, harm 3 becomes an active production bug on any App-identity cluster.
-- No configuration surface (`.agency/comment-trust.yaml` widen list, per FR-008 of #842) affects the FR-102 exclusion — it is trust-agnostic and config-agnostic.
-- The `clarify-resume` and `pr-feedback` surfaces (other callers of the trust helper) are **out of scope** here. Their existing behavior is unchanged. If they gain a similar "engine-authored questions comment" surface, they can adopt the FR-101 predicate as a follow-up.
+- Comment-trust check and downstream `Q<n>:` parsing behavior for trusted human answers remain unchanged.
+- Marker prefixes are stable engine-emitted constants; no cross-repo/cross-locale variants exist.
+- The clarify-resume surface (#910) will consume the FR-108 exports directly rather than duplicating the predicate.
+- Column-0 line detection uses standard `\n`-split; markdown block-quote (`>`) is the only realistic quoted-marker source.
 
 ## Out of Scope
 
-- Fixing finding #52 (bot login resolution on App-identity clusters) — separate issue, ordering warning documented above.
-- Adding a "confirm" mechanism (e.g., reaction-based approval of untrusted answers). The FR-105 fix removes the phantom verb from copy; adding the affordance is a separate design.
-- Refactoring `isQuestionComment` to unify with the new FR-101 predicate. `isQuestionComment` covers content-shape sniff (no-marker fallback); FR-101 covers explicit-marker match. They have distinct semantics.
-- Extending FR-101 marker exclusion to `clarify-resume` or `pr-feedback` surfaces.
-- Backfilling a runtime schema for the marker set. String constants are sufficient at this scale.
-
-## Regression Test Matrix
-
-Follows the four cases from the bug body:
-
-| # | Fixture | Author | Expected explainer | Expected integration |
-|---|---------|--------|--------------------|-----------------------|
-| 1 | Informal batch (`generacy-stage:clarification`, `### Q<n>:` headings, no `**Question**:` / `**Context**:` markup) | untrusted (App identity) | 0 | 0 |
-| 2 | Same fixture as (1) | trusted / self-authored | 0 | 0 |
-| 3 | Human `Q1: A` (no marker) | trusted (OWNER/MEMBER/COLLABORATOR) | 0 | 1 |
-| 4 | Human `Q1: A` (no marker) | untrusted (NONE) | 1 | 0 |
-
-All four cases must pass in a single unit test file to prevent the two-comment-dialect drift from re-emerging.
+- Introducing an actual "confirm" affordance (would require new UI/protocol surface — deferred).
+- Making the cluster's own identity trusted on the answer-scanner surface (that is finding #52 / generacy-ai/generacy#910; this issue's exclusion MUST land first per FR-105).
+- Refactoring the posting-marker constant (`MARKER_PREFIX` used by `clarificationMarker()`) — separate marker family, left in place.
+- Lifting the marker constant/predicate to `@generacy-ai/workflow-engine` or a new shared package (revisit when a second package needs it).
 
 ---
 
