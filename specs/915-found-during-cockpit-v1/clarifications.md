@@ -10,7 +10,7 @@
 - B: Add an explicit `classifier?: string` parameter to `buildErrorEvidence`. Presence of the parameter is the sole discriminator; `error.output` is left free-form on every path (no code churn at the no-progress site's `error.output`).
 - C: Both signals — the explicit `classifier` parameter is the primary discriminator; dev-mode assertion fails loudly if a caller passes `classifier` while `error.output` is non-empty, so the two signals stay in sync.
 
-**Answer**: *Pending*
+**Answer**: B — explicit `classifier?` parameter as the sole discriminator. Empty-output-as-signal (A) encodes meaning in a side channel and forces the no-progress site to *stop* putting legitimate content in `output` just to satisfy an inference rule — the same derived-signal fragility this arc has rejected repeatedly (#889 Q2, #902 Q4, #904 Q5: outcomes as explicit discriminated values, never inferred). C's dev-assertion enforces a false invariant — "classifier present ⇒ output empty" is not a law (a future classifier can legitimately carry both a reason and an output tail), and an assertion on a non-invariant is a time bomb.
 
 ### Q2: Reason rendering rules for long / multi-line messages
 **Context**: The product-diff `error.message` is a single ~150-char sentence (`Phase "implement" produced no product-code changes — all changed files are under excluded prefixes [specs/]. Implement must modify at least one non-excluded file.`), safe to inline. The catch-block sites set `message: String(error)` — arbitrary caller-thrown text that may contain embedded newlines, a stack-trace excerpt, or thousands of characters. FR-004 dictates the format as `**Reason**: <reason>` on its own line, but doesn't specify what happens when `<reason>` breaks that assumption. Choice here fixes the regression fixtures (FR-008) and the byte layout in `appendEvidenceBlock` / `renderFailureAlert`.
@@ -21,7 +21,7 @@
 - C: Verbatim inline — no newline substitution, no cap; render as `**Reason**: <reason>` even when multi-line.
 - D: Inline, cap only — pass newlines through (they'll render as spaces in markdown), cap at 1 KiB with `…`.
 
-**Answer**: *Pending*
+**Answer**: B — single-line reasons inline; multi-line reasons in a capped (1 KiB) fenced block. Catch-block reasons are `String(error)` — stacks and newlines are the expected case, and A's `; `-joining makes stack excerpts unreadable while C's uncapped verbatim invites 50 KB comments. B reuses the exact rendering idiom `outputTail` already established (fence + cap), and the fence neutralizes markdown-hostile content for free, which composes with Q4.
 
 ### Q3: Classifier names for the catch-block sites
 **Context**: FR-003 names three concrete classifiers — `'no-product-code-changes'`, `'no-progress'`, `'catch-block'` — but there are (at least) two distinct catch-block synthetic-result sites in `phase-loop.ts`: the unexpected-spawn-error catch at ~:360–373 and the product-diff-detection-error catch at ~:588–599. Whether both use the literal `'catch-block'` string, or each gets its own name, determines the summary-line readability and the regression-fixture assertion strings (FR-008).
@@ -31,7 +31,7 @@
 - B: Each catch-block site passes a site-specific name — `'spawn-error'` for the unexpected-spawn catch (~:373), `'product-diff-error'` for the product-diff-detection catch (~:600). No shared string.
 - C: Family-prefixed names — `'catch-block:spawn'` and `'catch-block:product-diff'` — so log filters can group all catch-block failures by prefix while still distinguishing the site.
 
-**Answer**: *Pending*
+**Answer**: B — site-specific names: `'spawn-error'`, `'product-diff-error'`. A classifier name should say what failed, not which control-flow construct caught it — `'catch-block'` is a name that tells the operator nothing. C's prefix grouping organizes by implementation detail no consumer filters on.
 
 ### Q4: Backtick / markdown safety on the rendered `reason`
 **Context**: `outputTail` is neutralized against fence-breakout via the ZWSP substitution `replace(/```/g, '`​``')` (`stage-comment-manager.ts:200` / :334). The `reason` line is rendered **inline** (`**Reason**: <reason>`), not inside a fenced block, so triple-backticks don't break a fence — but a single stray backtick or unbalanced backtick pair in `String(error)` output can still break the surrounding bold-label markdown or turn the message into inline code accidentally.
@@ -41,7 +41,7 @@
 - B: ZWSP-escape single backticks (`` ` `` → `` `​ ``) in `reason` before rendering, matching the treatment already used for `outputTail`.
 - C: Wrap the rendered value in inline code (`` **Reason**: `<reason>` ``) and ZWSP-escape any embedded backticks, so single backticks in the source never break formatting and the value renders monospaced.
 
-**Answer**: *Pending*
+**Answer**: B — ZWSP-escape backticks in `reason`, matching the existing `outputTail` treatment. One sanitization idiom across both fields, already proven in this file. C additionally restyles every reason as inline code — a visual change with no safety increment over B once Q2-B puts multi-line content in fences. A is trusting `String(error)` not to contain backticks, which is trusting arbitrary thrown text.
 
 ### Q5: In-scope callsites for the classifier parameter
 **Context**: FR-006 enumerates six `buildErrorEvidence` callsites and groups three of them as catch-block sites: `:294`, `:373`, `:548`. But `:294` (pre-validate install failure, inside `if (!installResult.success)`) and `:548` (post-phase failure, inside `if (!result.success)`) are **shell/CLI process-failure paths** — the `result.error.output` is the ring-buffer tail from a real command with a real non-zero exit code. Under FR-002's discriminator these are process paths and must NOT render a `reason` (US2 / FR-009). The FR-006 grouping therefore either (a) has stale line numbers, (b) is only listing which callsites need any code change (even if just a `classifier: undefined` argument), or (c) is asking the fix to widen scope and render `reason` on process paths too when `error.message` is human-readable.
@@ -51,4 +51,4 @@
 - B: All six callsites pass a `classifier` argument, but the shell-path callsites (`:294`, `:548`) pass `undefined` so their rendered output is unchanged (satisfies US2 by discriminator, not by call-site omission).
 - C: All six callsites render a `reason` — `:294` and `:548` on genuine shell failures pull `reason` from `result.error.message` too (widens the fix to include human-readable process-path failures). US2's "unchanged shape" is interpreted as "no phantom reason injected from **shell output**" rather than "no reason line at all".
 
-**Answer**: *Pending*
+**Answer**: B — all six call sites pass the parameter explicitly; the shell-path sites (`:294`, `:548`) pass `undefined`. The FR-006 grouping error gets corrected either way, but B makes every site's path-classification a visible, grep-auditable statement rather than an omission a reader must interpret — with an optional parameter, "didn't pass it" and "decided it's a process path" are indistinguishable at the call site; `classifier: undefined` states the decision. US2 stays satisfied through the discriminator, and process paths keep their unchanged shape (C widens scope to render redundant "command failed with exit 1" reasons over the output tail that already is the evidence).
