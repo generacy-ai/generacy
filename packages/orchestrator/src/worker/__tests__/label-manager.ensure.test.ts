@@ -101,7 +101,7 @@ describe('LabelManager.ensureRepoLabelsExist (FR-002)', () => {
     );
   });
 
-  it('does not abort ensure-pass on per-label create failure', async () => {
+  it('does not abort ensure-pass on per-label create failure (race path)', async () => {
     const github = makeGithub();
     github.listLabels.mockResolvedValue([]);
     // First createLabel throws (simulates concurrent create-race with sibling worker)
@@ -114,13 +114,28 @@ describe('LabelManager.ensureRepoLabelsExist (FR-002)', () => {
 
     // All WORKFLOW_LABELS should still have been attempted
     expect(github.createLabel).toHaveBeenCalledTimes(WORKFLOW_LABELS.length);
-    // The failure should have been logged at warn
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ label: expect.any(String), err: expect.stringContaining('already exists') }),
-      expect.stringContaining('Failed to create workflow label'),
+    // #916 FR-007: race path is debug-level, not warn — healthy multi-worker
+    // startup races on every boot, so warn+ would train operators to ignore warns.
+    expect(mockLogger.debug).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: expect.any(String),
+        err: expect.stringContaining('already exists'),
+      }),
+      expect.stringContaining('Workflow label already exists (race)'),
     );
     // The outer addLabels must still succeed
     expect(github.addLabels).toHaveBeenCalled();
+    // #916 FR-007: race still populates the ensured-repos cache and does NOT
+    // write a lineage entry.
+    expect(
+      (LabelManager as unknown as {
+        ensuredRepos: Set<string>;
+      }).ensuredRepos.has('test-owner/test-repo'),
+    ).toBe(true);
+    const lineage = (LabelManager as unknown as {
+      provisioningFailures: Map<string, Map<string, unknown>>;
+    }).provisioningFailures.get('test-owner/test-repo');
+    expect(lineage === undefined || lineage.size === 0).toBe(true);
   });
 
   it('returns early on repeat calls (no listLabels or createLabel on second use)', async () => {
@@ -152,5 +167,80 @@ describe('LabelManager.ensureRepoLabelsExist (FR-002)', () => {
 
     expect(gh1.listLabels).toHaveBeenCalledTimes(1);
     expect(gh2.listLabels).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * #916 FR-006 regression: classified provisioning failures on the ensure-pass.
+ *
+ * Asserts the anti-swallowing contract: a 422 that pre-#916 was mislabeled as
+ * "may already exist" now emits an error-level log naming the actual cause,
+ * writes a lineage entry, and leaves `ensuredRepos` unmarked so a subsequent
+ * caller retries.
+ */
+describe('classifies provisioning failures (#916 FR-006)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    mockLogger.info.mockReset();
+    mockLogger.warn.mockReset();
+    mockLogger.error.mockReset();
+    mockLogger.debug.mockReset();
+    LabelManager.resetEnsureCacheForTests();
+  });
+
+  it('logs error, writes lineage, and leaves ensuredRepos unmarked on 422', async () => {
+    const github = makeGithub();
+    github.listLabels.mockResolvedValue([]);
+    github.createLabel.mockImplementation(async (_owner, _repo, name: string) => {
+      if (name.startsWith('blocked:stuck-')) {
+        throw new Error(
+          `Failed to create label ${name}: HTTP 422: Validation Failed\ndescription is too long (maximum is 100 characters)`,
+        );
+      }
+    });
+
+    const lm = createLabelManager(github);
+    await lm.onPhaseComplete('plan');
+
+    // (a) three error-level entries, one per blocked:stuck-* label, naming
+    // the actual cause via structured fields.
+    const stuckErrorCalls = mockLogger.error.mock.calls.filter(
+      ([fields, msg]) =>
+        typeof msg === 'string' &&
+        msg === 'Failed to create workflow label (provisioning error)' &&
+        (fields as Record<string, unknown>).statusCode === 422 &&
+        typeof (fields as Record<string, unknown>).cause === 'string' &&
+        ((fields as Record<string, unknown>).cause as string).includes('description is too long'),
+    );
+    expect(stuckErrorCalls).toHaveLength(3);
+
+    // (b) The lying "may already exist" line is never emitted.
+    const misleadingWarn = mockLogger.warn.mock.calls.find(
+      ([, msg]) => typeof msg === 'string' && msg.includes('may already exist'),
+    );
+    expect(misleadingWarn).toBeUndefined();
+
+    // (c) The outer addLabels still runs — the ensure-pass never throws.
+    expect(github.addLabels).toHaveBeenCalled();
+
+    // (d) The cache stays unmarked so the next non-concurrent caller retries.
+    expect(
+      (LabelManager as unknown as { ensuredRepos: Set<string> }).ensuredRepos.has(
+        'test-owner/test-repo',
+      ),
+    ).toBe(false);
+
+    // (e) Lineage map has one entry per failed label.
+    const lineage = (LabelManager as unknown as {
+      provisioningFailures: Map<string, Map<string, unknown>>;
+    }).provisioningFailures.get('test-owner/test-repo');
+    expect(lineage?.size).toBe(3);
+
+    // (f) A subsequent onPhaseComplete on the same manager re-runs the pass.
+    github.listLabels.mockClear();
+    github.createLabel.mockClear();
+    await lm.onPhaseComplete('specify');
+    expect(github.listLabels).toHaveBeenCalled();
+    expect(github.createLabel).toHaveBeenCalled();
   });
 });
