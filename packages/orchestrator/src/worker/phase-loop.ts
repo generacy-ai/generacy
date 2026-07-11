@@ -200,6 +200,12 @@ export class PhaseLoop {
     for (let i = startIndex; i < sequence.length; i++) {
       const phase = sequence[i]!;
 
+      // #914: per-iteration guard enforcing at-most-one pre-phase base-merge
+      // per cycle. Block-scoped `let` inside the for-body is load-bearing —
+      // it re-initializes on every iteration (including retry re-entries via
+      // `i--; continue;`), keeping the retry semantics of Q3-A intact.
+      let hasBaseMergedThisCycle = false;
+
       // Check abort signal before starting each phase
       if (context.signal.aborted) {
         this.logger.warn({ phase }, 'Abort signal detected, stopping phase loop');
@@ -240,7 +246,12 @@ export class PhaseLoop {
       // On {ok:false} the workflow pauses with the merge-conflict gate; on {ok:true}
       // execution proceeds normally. Non-conflict git failures throw and are caught
       // in the same try/catch as phase execution below.
-      if (phase === 'implement') {
+      //
+      // #914: the `hasBaseMergedThisCycle` guard enforces the at-most-once
+      // invariant. Symmetry immunization per Q5-B — even the implement path,
+      // which historically never double-merged, is wrapped so a future edit
+      // cannot reintroduce the buggy shape by accident.
+      if (phase === 'implement' && !hasBaseMergedThisCycle) {
         const baseMergeOutcome = await this.runPreImplementBaseMerge(
           context,
           deps,
@@ -255,26 +266,35 @@ export class PhaseLoop {
         if (baseMergeOutcome !== undefined) {
           return baseMergeOutcome;
         }
+        hasBaseMergedThisCycle = true;
       }
 
       // 3. Execute the phase
       let result: PhaseResult;
       try {
         if (phase === 'validate') {
-          // 3a. Pre-phase base-merge for pre-validate (#864) — ephemeral.
-          const preValidateMergeOutcome = await this.runPreValidateBaseMerge(
-            context,
-            deps,
-            baseMergeRunner,
-            phase,
-            stage,
-            sequence,
-            startIndex,
-            i,
-            phaseTimestamps,
-          );
-          if (preValidateMergeOutcome !== undefined) {
-            return preValidateMergeOutcome;
+          // 3a. Pre-phase base-merge for the validate cycle (#864, #914) —
+          // ephemeral. Runs ONCE before the first spawned command of the
+          // cycle (install, or validate itself if no preValidateCommand).
+          // The second between-install-and-validate call site (#864 original)
+          // was deleted in #914 — its `git reset --hard` + `git clean -fd`
+          // was destroying the freshly-installed toolchain (snappoll#4).
+          if (!hasBaseMergedThisCycle) {
+            const preValidateMergeOutcome = await this.runPreValidateBaseMerge(
+              context,
+              deps,
+              baseMergeRunner,
+              phase,
+              stage,
+              sequence,
+              startIndex,
+              i,
+              phaseTimestamps,
+            );
+            if (preValidateMergeOutcome !== undefined) {
+              return preValidateMergeOutcome;
+            }
+            hasBaseMergedThisCycle = true;
           }
 
           // Pre-validate: install dependencies if configured
@@ -306,22 +326,6 @@ export class PhaseLoop {
               await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
-          }
-
-          // 3b. Pre-phase base-merge for validate (#864) — ephemeral.
-          const validateMergeOutcome = await this.runPreValidateBaseMerge(
-            context,
-            deps,
-            baseMergeRunner,
-            phase,
-            stage,
-            sequence,
-            startIndex,
-            i,
-            phaseTimestamps,
-          );
-          if (validateMergeOutcome !== undefined) {
-            return validateMergeOutcome;
           }
 
           // Validate phase — run test command
