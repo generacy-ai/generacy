@@ -11,7 +11,7 @@
 - C: `maxWaitMs=10000`, `coalesceWindowMs=750` — tighter defaults, prioritizes latency-to-first-batch over burst grouping.
 - D: Defer — pick defaults empirically during implementation from the snappoll ledger burst-spacing histogram, record chosen values in `plan.md` and lock via SC-006 fixture.
 
-**Answer**: *Pending*
+**Answer**: B — `maxWaitMs=55000`, `coalesceWindowMs=3000`. A's keepalive rationale doesn't apply: this is a stdio server on the same container — there is no network path to keep alive, which removes the one argument for shorter waits. Given that, lazier defaults win: 55s halves idle wakeups versus 25s (each wakeup is a paid agent turn), and 3s covers not just single-issue label bursts (~1–2s) but the near-simultaneous sibling clusters the snappoll ledger shows at phase boundaries. Latency cost is trivial against gate-bound wall clock, and both remain per-call tunable. D's empiricism is already satisfied — the ledger data informed these numbers; lock them in the SC-006 fixture.
 
 ### Q2: Worker-role identification env var
 **Context**: FR-012 requires `generacy cockpit mcp` to refuse to start "when a cluster-role env marks the container as a worker", and the Assumptions section claims "A cluster-role env var identifying worker vs orchestrator already exists (or is trivially added)". Reading the scaffolder (`packages/generacy/src/cli/commands/cluster/scaffolder.ts` lines 213-250), the compose file distinguishes the two services **only by `command:`** (`entrypoint-orchestrator.sh` vs `entrypoint-worker.sh`). `GENERACY_CLUSTER_ID`, `DEPLOYMENT_MODE`, `CLUSTER_VARIANT` are set on both services identically. There is no env-level role marker today. This blocks writing the FR-012 startup check and the SC-004 smoke test.
@@ -22,7 +22,7 @@
 - C: Detect via absence of a well-known orchestrator-only artifact (e.g. `ORCHESTRATOR_INTERNAL_API_KEY` from #594, or `/run/generacy-control-plane/control.sock`). No new env var.
 - D: Skip the FR-012 backstop entirely for v1; rely on the primary control (workers never register the server) and document that starting `cockpit mcp` in a worker is undefined behavior.
 
-**Answer**: *Pending*
+**Answer**: A — new `GENERACY_CLUSTER_ROLE` env var. Good catch that the spec's assumption was false. A names the thing explicitly, and a role marker is broadly useful beyond this backstop. B infers role from a variable whose presence-semantics are someone else's contract (the credhelper audit var — nothing guarantees its absence on orchestrators forever); C is inference-by-absence, which fails open under misconfiguration. One binding constraint on the implementation: the scaffolder and cloud-deploy compose generation must land this in lockstep — that pair has a documented history of silent divergence breaking cloud clusters.
 
 ### Q3: Unknown / invalid cursor behavior
 **Context**: FR-008 says the cursor is "server-side-opaque and idempotent" and "passing the same cursor returns the same tail", but does not say what `cockpit_await_events` does when it receives a cursor value the server does not recognize — never-issued, malformed, or referring to a position the server has since discarded (retention TTL, restart). SC-008's crash-safety fixture depends on this behavior being explicit. Implementations diverge widely: return typed error, silently reset to "connect-time position", advance to head, etc. Each choice has different agent-visible consequences.
@@ -33,7 +33,7 @@
 - C: Advance to head (return only events emitted after the call) and mark the returned cursor as `{resetFrom: "unknown"}` for observability.
 - D: Distinguish: malformed / never-issued → error (A); expired / discarded → reset-to-head with a signal (C).
 
-**Answer**: *Pending*
+**Answer**: D — discriminate: malformed/never-issued → typed `invalid-cursor` error; expired/discarded → reset-to-head with an explicit `resetFrom` signal. The two cases have different owners: a malformed cursor is a caller bug that must fail loud, while an expired cursor is routine infrastructure lifecycle (server restart, retention TTL) that the caller must *handle*, not crash on — and the signal is load-bearing, because "events may have been missed" is exactly the condition that triggers the existing recovery mechanism (startup sweep). B's silent reset hides the gap — the agency#394 lesson in cursor form.
 
 ### Q4: Registration conflict handling in the orchestrator entrypoint
 **Context**: FR-010 requires the scaffolder's `entrypoint-orchestrator.sh` to register the MCP server idempotently at user scope (`claude mcp add --scope user cockpit -- generacy cockpit mcp` or equivalent `~/.claude.json` write), with "repeat runs do not duplicate the entry". Unspecified: what happens on entrypoint boot when `~/.claude.json` already contains a `cockpit` entry whose command differs from the one this version of `generacy` wants to write (e.g. after an image upgrade that changed the invocation path, or a manual user edit inside the orchestrator container). Overwrite silently, refuse, or preserve determines whether upgrades self-heal or require manual reconciliation.
@@ -44,7 +44,7 @@
 - C: Never overwrite — write only when the entry is absent. Rely on `cluster destroy` / `rebuild` for reconciliation. Log a warning on skip.
 - D: Overwrite + emit a `cluster.bootstrap` relay event with `{status: "reconciled", entry: "cockpit", prior, next}` so cloud can surface the change to the operator.
 
-**Answer**: *Pending*
+**Answer**: A — overwrite unconditionally, with an idempotent log line. The entrypoint is the source of truth; cluster upgrades must self-heal (`generacy update` changes invocation paths, and a stale entry after upgrade is a wedged cockpit). Hand-edits inside an orchestrator container are edits to a rebuildable artifact — preserving them (B/C) creates the "why didn't my upgrade take?" mystery class. D's relay event is plumbing for an audience (cloud surfacing of bootstrap reconciliation) that doesn't exist yet.
 
 ### Q5: Batch size cap for `cockpit_await_events`
 **Context**: FR-006 / FR-007 say `cockpit_await_events` "drains any additional events emitted in that window into the same batch" with no cap. In pathological cases (relabel storm, phase chain that fires hundreds of events, catch-up after a long disconnect where the cursor points far behind head), a single batch could contain thousands of events. Every event is a JSON payload; a very large batch inverts the very cost the batching is supposed to reduce (context bloat vs. round count). Conversely, capping the batch shifts one of SC-006's fixture assumptions ("one call returns a batch of N events"). This decision affects both server memory and agent-side context growth.
@@ -55,4 +55,4 @@
 - C: Hard cap with explicit signal (e.g. 512 events + `{truncated: true}` field in the result). Caller decides whether to continue or checkpoint.
 - D: Caller-controlled via a new optional `maxBatchSize` parameter with a server default (say 256); soft-cap semantics as in B.
 
-**Answer**: *Pending*
+**Answer**: D — caller-controlled `maxBatchSize`, server default 256, soft-cap semantics as in B. Soft-cap chunking is the loss-free answer — close the batch early, cursor points at the next undelivered event, ordering and verbatim guarantees intact, caller re-arms — and the primary consumer (the auto session) is precisely the caller with a context budget worth tuning, so the knob has a named user on day one. A inverts the feature's purpose on catch-up after a gap; C's `truncated` flag makes the caller reason about a lossy-looking signal when the cursor already carries the continuation.
