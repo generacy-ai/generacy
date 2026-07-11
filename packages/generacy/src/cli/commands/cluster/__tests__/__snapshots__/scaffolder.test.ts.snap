@@ -30,6 +30,7 @@ services:
       - DEPLOYMENT_MODE=local
       - CLUSTER_VARIANT=cluster-base
       - GENERACY_INITIAL_WORKERS=\${WORKER_COUNT}
+      - GENERACY_CLUSTER_ROLE=orchestrator
     env_file: &a2
       - path: .env
       - path: .env.local
@@ -71,6 +72,7 @@ services:
       - HEALTH_PORT=9001
       - DEPLOYMENT_MODE=local
       - CLUSTER_VARIANT=cluster-base
+      - GENERACY_CLUSTER_ROLE=worker
     env_file: *a2
     healthcheck:
       test:

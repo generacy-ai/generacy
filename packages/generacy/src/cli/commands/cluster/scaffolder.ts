@@ -216,6 +216,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           `DEPLOYMENT_MODE=${deploymentMode}`,
           `CLUSTER_VARIANT=${variant}`,
           'GENERACY_INITIAL_WORKERS=${WORKER_COUNT}',
+          'GENERACY_CLUSTER_ROLE=orchestrator',
         ],
         env_file: envFile,
         healthcheck: {
@@ -247,6 +248,7 @@ export function scaffoldDockerCompose(dir: string, input: ScaffoldComposeInput):
           'HEALTH_PORT=9001',
           `DEPLOYMENT_MODE=${deploymentMode}`,
           `CLUSTER_VARIANT=${variant}`,
+          'GENERACY_CLUSTER_ROLE=worker',
         ],
         env_file: envFile,
         healthcheck: {

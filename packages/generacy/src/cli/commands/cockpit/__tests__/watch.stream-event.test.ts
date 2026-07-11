@@ -100,6 +100,11 @@ describe('CockpitStreamEventSchema — lint-style caller enumeration', () => {
         'watch/emit.ts',
         'watch/aggregate-emit.ts',
         'watch.ts',
+        // MCP stdio transport (#917) — replays the same event source into an
+        // in-process event bus for `cockpit_await_events`. Bus-side emit is a
+        // method, not stdout NDJSON, but the regex still matches.
+        'mcp/event-bus.ts',
+        'mcp/event-bus-registry.ts',
       ].map((rel) => resolve(COCKPIT_DIR, rel)),
     );
     const found = new Set<string>();
