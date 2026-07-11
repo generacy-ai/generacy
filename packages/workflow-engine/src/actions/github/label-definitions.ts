@@ -101,19 +101,16 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   {
     name: 'blocked:stuck-feedback-loop',
     color: 'D73A4A',
-    description:
-      'PR-feedback loop paused itself: last cycle could not advance the trigger. Remove this label to permit another attempt.',
+    description: 'PR-feedback loop paused: last cycle could not advance the trigger. Remove to retry.',
   },
   {
     name: 'blocked:stuck-validate-fix',
     color: 'D73A4A',
-    description:
-      'Validate-fix cycle paused itself (#892): duplicate evidence hash, no-diff after spawn, or sibling-file overlap. Remove this label after investigation to allow another attempt.',
+    description: 'Validate-fix paused (#892): duplicate evidence, no-diff, or sibling overlap. Remove to retry.',
   },
   {
     name: 'blocked:stuck-merge-conflicts',
     color: 'D73A4A',
-    description:
-      'Merge-conflict resolver (#898) exhausted its one autonomous attempt without producing a conflict-free merge. Remove this label after manual resolution to allow another attempt.',
+    description: 'Merge-conflict resolver (#898) exhausted its one autonomous attempt. Remove to retry.',
   },
 ];

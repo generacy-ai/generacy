@@ -92,6 +92,12 @@ export type { GitHubClient, GitHubClientFactory } from './actions/github/client/
 // Label definitions (shared)
 export { WORKFLOW_LABELS, type LabelDefinition } from './actions/github/label-definitions.js';
 
+// Label-provisioning error classification (shared across LabelManager + LabelSyncService)
+export {
+  classifyLabelProvisioningError,
+  type ProvisioningErrorClassification,
+} from './actions/github/classify-label-provisioning-error.js';
+
 // Speckit operations (for direct invocation from orchestrator)
 export { executeTasksToIssues } from './actions/builtin/speckit/operations/tasks-to-issues.js';
 export { createFeature } from './actions/builtin/speckit/lib/feature.js';

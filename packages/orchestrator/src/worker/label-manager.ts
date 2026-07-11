@@ -1,7 +1,10 @@
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
-import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
+import { WORKFLOW_LABELS, classifyLabelProvisioningError } from '@generacy-ai/workflow-engine';
 import type { WorkflowPhase, Logger } from './types.js';
 import { TerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
+import type { ProvisioningError } from './provisioning-failure.js';
+
+const WORKFLOW_LABEL_NAMES = new Set(WORKFLOW_LABELS.map((l) => l.name));
 
 /**
  * Callback invoked from `onGateHit` after a pause label pair
@@ -47,10 +50,22 @@ export class LabelManager {
    */
   private static readonly ensureInFlight = new Map<string, Promise<void>>();
 
+  /**
+   * Lineage map of classified provisioning failures — `"owner/repo"` → labelName → error.
+   *
+   * Written by the error branch of `ensureRepoLabelsExist` (per FR-008 / #916).
+   * Read by `addLabels` on apply-time 404 to enrich the thrown error's message
+   * with the provisioning cause so the operator sees inline what actually broke.
+   * Per-label entries evict when a subsequent ensure-pass succeeds or races on
+   * the same label; whole-repo clear happens on `resetEnsureCacheForTests`.
+   */
+  private static readonly provisioningFailures = new Map<string, Map<string, ProvisioningError>>();
+
   /** Test-only: reset the class-level memoization caches. */
   static resetEnsureCacheForTests(): void {
     LabelManager.ensuredRepos.clear();
     LabelManager.ensureInFlight.clear();
+    LabelManager.provisioningFailures.clear();
   }
 
   constructor(
@@ -88,7 +103,7 @@ export class LabelManager {
         { label: phaseLabel, issue: this.issueNumber },
         `Adding phase label: ${phaseLabel}`,
       );
-      await this.github.addLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
+      await this.applyLabels([phaseLabel]);
     }, { site: 'phase-start', labelOp: `addLabels([${phaseLabel}])` });
   }
 
@@ -109,7 +124,7 @@ export class LabelManager {
       );
 
       await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [phaseLabel]);
-      await this.github.addLabels(this.owner, this.repo, this.issueNumber, [completedLabel]);
+      await this.applyLabels([completedLabel]);
     }, { site: 'phase-complete', labelOp: `addLabels([${completedLabel}])` });
   }
 
@@ -133,10 +148,7 @@ export class LabelManager {
         phaseLabel,
         completedLabel,
       ]);
-      await this.github.addLabels(this.owner, this.repo, this.issueNumber, [
-        gateLabel,
-        'agent:paused',
-      ]);
+      await this.applyLabels([gateLabel, 'agent:paused']);
     }, { site: 'gate-hit', labelOp: `addLabels([${gateLabel}, agent:paused])` });
 
     // #849: clear paired resume:<gate> dedupe on successful pause.
@@ -185,7 +197,7 @@ export class LabelManager {
         phaseLabel,
         'agent:in-progress',
       ]);
-      await this.github.addLabels(this.owner, this.repo, this.issueNumber, [failedLabel, 'agent:error']);
+      await this.applyLabels([failedLabel, 'agent:error']);
     }, { site: 'error', labelOp: `addLabels([${failedLabel}, agent:error])` });
   }
 
@@ -254,7 +266,7 @@ export class LabelManager {
         { issue: this.issueNumber },
         'Resume: adding agent:in-progress label',
       );
-      await this.github.addLabels(this.owner, this.repo, this.issueNumber, ['agent:in-progress']);
+      await this.applyLabels(['agent:in-progress']);
     }, { site: 'resume-start', labelOp: 'addLabels([agent:in-progress])' });
   }
 
@@ -312,7 +324,9 @@ export class LabelManager {
       return;
     }
 
-    const promise = (async () => {
+    const promise = (async (): Promise<{ hadNonRaceFailure: boolean }> => {
+      let hadNonRaceFailure = false;
+      const succeededOrRaced = new Set<string>();
       const existing = await this.github.listLabels(this.owner, this.repo);
       const existingNames = new Set(existing.map((l) => l.name));
       const missing = WORKFLOW_LABELS.filter((l) => !existingNames.has(l.name));
@@ -330,28 +344,112 @@ export class LabelManager {
             { label: label.name, owner: this.owner, repo: this.repo },
             'Created missing workflow label',
           );
+          succeededOrRaced.add(label.name);
         } catch (err) {
-          // Create-race with a sibling worker on the same repo is expected and
-          // safe — the label exists after our attempt regardless of who wrote it.
-          this.logger.warn(
-            {
-              label: label.name,
-              owner: this.owner,
-              repo: this.repo,
-              err: String(err),
-            },
-            'Failed to create workflow label (non-fatal, may already exist)',
-          );
+          const classification = classifyLabelProvisioningError(err);
+          if (classification.kind === 'already-exists') {
+            // Create-race with a sibling worker on the same repo is expected and
+            // safe — the label exists after our attempt regardless of who wrote
+            // it. Log at debug so healthy multi-worker startup does not spam warns.
+            this.logger.debug(
+              {
+                label: label.name,
+                owner: this.owner,
+                repo: this.repo,
+                err: String(err),
+              },
+              'Workflow label already exists (race)',
+            );
+            succeededOrRaced.add(label.name);
+          } else {
+            // Real provisioning failure (422 validation, 401 auth, 403 permission,
+            // 5xx). Log loud so the operator can act before the first apply 404s.
+            this.logger.error(
+              {
+                label: label.name,
+                owner: this.owner,
+                repo: this.repo,
+                err: String(err),
+                statusCode: classification.statusCode,
+                cause: classification.cause,
+              },
+              'Failed to create workflow label (provisioning error)',
+            );
+            const repoMap =
+              LabelManager.provisioningFailures.get(key) ?? new Map<string, ProvisioningError>();
+            repoMap.set(label.name, {
+              cause: classification.cause,
+              statusCode: classification.statusCode,
+              classifiedAt: Date.now(),
+            });
+            LabelManager.provisioningFailures.set(key, repoMap);
+            hadNonRaceFailure = true;
+          }
         }
       }
+
+      // Clear stale lineage for labels that succeeded or raced in this pass —
+      // a subsequent successful/raced attempt supersedes the earlier failure.
+      const repoLineage = LabelManager.provisioningFailures.get(key);
+      if (repoLineage) {
+        for (const name of succeededOrRaced) {
+          repoLineage.delete(name);
+        }
+        if (repoLineage.size === 0) {
+          LabelManager.provisioningFailures.delete(key);
+        }
+      }
+
+      return { hadNonRaceFailure };
     })();
 
-    LabelManager.ensureInFlight.set(key, promise);
+    // Share only the void-resolution shape with concurrent awaiters (Q3→A —
+    // the shared Promise resolves normally regardless of hadNonRaceFailure so
+    // one optional label's 422 does not fail every concurrent phase run).
+    LabelManager.ensureInFlight.set(key, promise.then(() => undefined));
     try {
-      await promise;
-      LabelManager.ensuredRepos.add(key);
+      const { hadNonRaceFailure } = await promise;
+      if (!hadNonRaceFailure) {
+        LabelManager.ensuredRepos.add(key);
+      }
     } finally {
       LabelManager.ensureInFlight.delete(key);
+    }
+  }
+
+  /**
+   * Wrap `github.addLabels` with lineage-map enrichment.
+   *
+   * On apply-time 404 for a label that failed provisioning in the same process,
+   * splice `label "<name>": <cause> (HTTP <statusCode>)` into the thrown error's
+   * message so the operator sees the provisioning cause inline instead of a
+   * bare 404. Cross-process gaps (map miss) rethrow the raw 404 unchanged —
+   * `ensureRepoLabelsExist`'s error log is the trace surface (FR-003 floor).
+   *
+   * All other error shapes rethrow unchanged.
+   */
+  private async applyLabels(labels: string[]): Promise<void> {
+    try {
+      await this.github.addLabels(this.owner, this.repo, this.issueNumber, labels);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!/HTTP\s+404|Not\s+Found/.test(message)) throw err;
+
+      const key = `${this.owner}/${this.repo}`;
+      const repoLineage = LabelManager.provisioningFailures.get(key);
+      if (!repoLineage || repoLineage.size === 0) throw err;
+
+      const enrichments: string[] = [];
+      for (const name of labels) {
+        if (!WORKFLOW_LABEL_NAMES.has(name)) continue;
+        const entry = repoLineage.get(name);
+        if (!entry) continue;
+        const status = entry.statusCode !== undefined ? ` (HTTP ${entry.statusCode})` : '';
+        enrichments.push(`label "${name}": ${entry.cause}${status}`);
+      }
+      if (enrichments.length === 0) throw err;
+
+      throw new Error(`${enrichments.join('\n')}\n${message}`);
     }
   }
 
