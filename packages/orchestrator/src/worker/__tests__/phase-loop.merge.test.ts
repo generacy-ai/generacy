@@ -171,6 +171,29 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
 
       expect(events.indexOf('base-merge')).toBeLessThan(events.indexOf('cli-spawn'));
     });
+
+    // #914 T005 — implement phase — single merge (symmetry case per Q5-B).
+    // Guards against a future edit that mirrors a "pre-install-for-implement"
+    // hook and reintroduces a double-merge shape on the committed-merge path.
+    it('implement — single merge (symmetry case per Q5-B)', async () => {
+      const events: string[] = [];
+      const runner: BaseMergeRunner = async (_c, _b, baseRef) => {
+        events.push('base-merge');
+        return { ok: true, baseRef, mergeSha: 'abc123' };
+      };
+      const deps = createMockDeps(runner);
+      (deps.cliSpawner.spawnPhase as any) = vi.fn(async () => {
+        events.push('implement-spawn');
+        return makeSuccessResult('implement');
+      });
+      const context = createMockContext('implement');
+
+      await loop.executeLoop(context, createConfig(), deps, ['implement']);
+
+      const baseMergeCount = events.filter((e) => e === 'base-merge').length;
+      expect(baseMergeCount).toBe(1);
+      expect(events).toEqual(['base-merge', 'implement-spawn']);
+    });
   });
 
   describe('implement — conflict', () => {
@@ -299,9 +322,11 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
   });
 
   describe('validate — clean merge (pre-validate and validate)', () => {
-    it('passes { commit: false } on both pre-validate and validate runs', async () => {
+    it('passes { commit: false } on the single validate-cycle merge', async () => {
+      // #914 flipped this from asserting 2 calls (buggy) to 1 call. The
+      // ephemeral discriminant `commit: false` is the load-bearing part —
+      // it distinguishes the validate cycle from implement's committed merge.
       const { runner, calls } = makeFakeRunner([
-        { ok: true, baseRef: 'origin/main' },
         { ok: true, baseRef: 'origin/main' },
       ]);
       const deps = createMockDeps(runner);
@@ -309,9 +334,8 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
 
       await loop.executeLoop(context, createConfig(), deps, ['validate']);
 
-      expect(calls).toHaveLength(2);
+      expect(calls).toHaveLength(1);
       expect(calls[0]!.commit).toBe(false);
-      expect(calls[1]!.commit).toBe(false);
     });
 
     it('runs pre-validate base-merge BEFORE pre-validate install', async () => {
@@ -339,7 +363,7 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
       expect(firstBaseMergeIdx).toBeLessThan(preValidateInstallIdx);
     });
 
-    it('runs a second base-merge before the validate command itself', async () => {
+    it('runs a single base-merge before the pre-validate install', async () => {
       const events: string[] = [];
       const runner: BaseMergeRunner = async (_c, _b, baseRef) => {
         events.push('base-merge');
@@ -359,11 +383,105 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
       await loop.executeLoop(context, createConfig(), deps, ['validate']);
 
       const baseMergeCount = events.filter((e) => e === 'base-merge').length;
+      expect(baseMergeCount).toBe(1);
+      // Event order: [base-merge, install, validate] — one merge, then both
+      // commands run against the same merged tree.
+      expect(events).toEqual(['base-merge', 'pre-validate-install', 'validate-cmd']);
+    });
+
+    // #914 T002 — install artifacts survive to validate (SC-001).
+    // Reproduces snappoll#4 at unit scope: a second base-merge between
+    // install and validate would `git clean -fd` the install output. The
+    // fix guarantees at most one merge per cycle, so the install marker
+    // survives into the validate step.
+    it('install artifacts survive to validate', async () => {
+      let installArtifactPresent = false;
+      let validateSawInstallArtifact: boolean | undefined;
+      const events: string[] = [];
+      const runner: BaseMergeRunner = async (_c, _b, baseRef) => {
+        events.push('base-merge');
+        // Simulate `git reset --hard origin/<branch>` + `git clean -fd`
+        // discarding untracked install output.
+        installArtifactPresent = false;
+        return { ok: true, baseRef };
+      };
+      const deps = createMockDeps(runner);
+      (deps.cliSpawner.runPreValidateInstall as any) = vi.fn(async () => {
+        events.push('pre-validate-install');
+        installArtifactPresent = true;
+        return makeSuccessResult('validate');
+      });
+      (deps.cliSpawner.runValidatePhase as any) = vi.fn(async () => {
+        events.push('validate-cmd');
+        validateSawInstallArtifact = installArtifactPresent;
+        return makeSuccessResult('validate');
+      });
+      const context = createMockContext('validate');
+
+      const result = await loop.executeLoop(context, createConfig(), deps, ['validate']);
+
+      expect(result.completed).toBe(true);
+      // The load-bearing assertion — validate must see the install output.
+      expect(validateSawInstallArtifact).toBe(true);
+      const baseMergeCount = events.filter((e) => e === 'base-merge').length;
+      expect(baseMergeCount).toBe(1);
+      expect(events).toEqual(['base-merge', 'pre-validate-install', 'validate-cmd']);
+    });
+
+    // #914 T003 — up-to-date branch: single merge, unchanged behavior (FR-003).
+    it('up-to-date branch — single merge, unchanged behavior', async () => {
+      const { runner, calls } = makeFakeRunner([
+        { ok: true, baseRef: 'origin/main' },
+      ]);
+      const deps = createMockDeps(runner);
+      const installFake = vi.fn(async () => makeSuccessResult('validate'));
+      const validateFake = vi.fn(async () => makeSuccessResult('validate'));
+      (deps.cliSpawner.runPreValidateInstall as any) = installFake;
+      (deps.cliSpawner.runValidatePhase as any) = validateFake;
+      const context = createMockContext('validate');
+
+      await loop.executeLoop(context, createConfig(), deps, ['validate']);
+
+      expect(calls).toHaveLength(1);
+      expect(installFake).toHaveBeenCalledTimes(1);
+      expect(validateFake).toHaveBeenCalledTimes(1);
+    });
+
+    // #914 T004 — retry re-runs install AND merge (clarification Q3-A).
+    // A same-phase retry is a new for-loop iteration, so the per-iteration
+    // `hasBaseMergedThisCycle` guard re-initializes and the merge fires again.
+    // Simulated here by driving the loop with `['validate', 'validate']` —
+    // each iteration is an independent cycle and should merge exactly once.
+    it('retry re-runs install AND merge', async () => {
+      const events: string[] = [];
+      const runner: BaseMergeRunner = async (_c, _b, baseRef) => {
+        events.push('base-merge');
+        return { ok: true, baseRef };
+      };
+      const deps = createMockDeps(runner);
+      const installFake = vi.fn(async () => {
+        events.push('pre-validate-install');
+        return makeSuccessResult('validate');
+      });
+      const validateFake = vi.fn(async () => {
+        events.push('validate-cmd');
+        return makeSuccessResult('validate');
+      });
+      (deps.cliSpawner.runPreValidateInstall as any) = installFake;
+      (deps.cliSpawner.runValidatePhase as any) = validateFake;
+      const context = createMockContext('validate');
+
+      await loop.executeLoop(context, createConfig(), deps, ['validate', 'validate']);
+
+      const baseMergeCount = events.filter((e) => e === 'base-merge').length;
       expect(baseMergeCount).toBe(2);
-      const lastBaseMergeIdx = events.lastIndexOf('base-merge');
-      const validateIdx = events.indexOf('validate-cmd');
-      expect(lastBaseMergeIdx).toBeLessThan(validateIdx);
-      expect(lastBaseMergeIdx).toBeGreaterThan(events.indexOf('pre-validate-install'));
+      expect(installFake).toHaveBeenCalledTimes(2);
+      // Each attempt travels [merge, install, validate] together — the
+      // guard resets on iteration boundary, not on the whole loop.
+      expect(events).toEqual([
+        'base-merge', 'pre-validate-install', 'validate-cmd',
+        'base-merge', 'pre-validate-install', 'validate-cmd',
+      ]);
     });
   });
 
@@ -386,26 +504,11 @@ describe('PhaseLoop pre-phase base-merge (#864)', () => {
       expect(deps.cliSpawner.runPreValidateInstall).not.toHaveBeenCalled();
     });
 
-    it('conflict in validate (second call, post pre-validate) still pauses', async () => {
-      const { runner } = makeFakeRunner([
-        { ok: true, baseRef: 'origin/main' }, // pre-validate: clean
-        { ok: false, baseRef: 'origin/main', conflictedPaths: ['x.ts'] }, // validate: conflict
-      ]);
-      const deps = createMockDeps(runner);
-      const context = createMockContext('validate');
-
-      const result = await loop.executeLoop(context, createConfig(), deps, ['validate']);
-
-      expect(result.gateHit).toBe(true);
-      expect(deps.labelManager.onGateHit).toHaveBeenCalledWith(
-        'validate',
-        'waiting-for:merge-conflicts',
-      );
-      // Pre-validate install DID run (pre-validate merge was clean)
-      expect(deps.cliSpawner.runPreValidateInstall).toHaveBeenCalled();
-      // Validate command DID NOT run (paused before it)
-      expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
-    });
+    // #914 deleted the "conflict in validate (second call, post pre-validate)
+    // still pauses" test — its premise (a second base-merge call between
+    // install and validate) no longer exists. The only pre-phase merge fires
+    // before install, so the "conflict in pre-validate pauses" case above is
+    // the sole conflict-in-validate scenario.
   });
 
   describe('resolveBaseBranch fallback', () => {
