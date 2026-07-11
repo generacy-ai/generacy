@@ -295,6 +295,7 @@ export class PhaseLoop {
                 config.preValidateCommand,
                 installResult,
                 DEFAULT_INSTALL_TIMEOUT_MS,
+                undefined,
               );
               await stageCommentManager.updateStageComment({
                 stage,
@@ -374,6 +375,8 @@ export class PhaseLoop {
         const evidence = this.buildErrorEvidence(
           phase === 'validate' ? config.validateCommand : phase,
           syntheticResult,
+          undefined,
+          'spawn-error',
         );
         await stageCommentManager.updateStageComment({
           stage,
@@ -426,7 +429,12 @@ export class PhaseLoop {
             output: `no progress: tasks_remaining stayed at ${tasksRemaining} across two increments`,
             phase,
           };
-          const evidence = this.buildErrorEvidence('implement (no-progress guard)', result);
+          const evidence = this.buildErrorEvidence(
+            'implement (no-progress guard)',
+            result,
+            undefined,
+            'no-progress',
+          );
           await labelManager.onError(phase);
           await stageCommentManager.updateStageComment({
             stage,
@@ -551,6 +559,7 @@ export class PhaseLoop {
           phase === 'validate'
             ? DEFAULT_VALIDATE_TIMEOUT_MS
             : resolvePhaseTimeoutMs(config, phase as Exclude<WorkflowPhase, 'validate'>),
+          undefined,
         );
         await stageCommentManager.updateStageComment({
           stage,
@@ -600,6 +609,8 @@ export class PhaseLoop {
           const evidence = this.buildErrorEvidence(
             phase === 'validate' ? config.validateCommand : phase,
             result,
+            undefined,
+            'product-diff-error',
           );
           await stageCommentManager.updateStageComment({
             stage,
@@ -630,6 +641,8 @@ export class PhaseLoop {
           const evidence = this.buildErrorEvidence(
             phase === 'validate' ? config.validateCommand : phase,
             result,
+            undefined,
+            'no-product-code-changes',
           );
           await stageCommentManager.updateStageComment({
             stage,
@@ -990,10 +1003,12 @@ export class PhaseLoop {
     command: string,
     result: PhaseResult,
     resolvedTimeoutMs?: number,
+    classifier?: string,
   ): CommandExitEvidence {
     const message = result.error?.message ?? '';
-    const exitDescriptor =
-      message.includes('timed out') && resolvedTimeoutMs !== undefined
+    const exitDescriptor = classifier
+      ? `failed post-exit: ${classifier} (process exit ${result.exitCode})`
+      : message.includes('timed out') && resolvedTimeoutMs !== undefined
         ? `killed (SIGTERM) after ${resolvedTimeoutMs}ms`
         : message.includes('was aborted')
         ? 'aborted'
@@ -1007,7 +1022,12 @@ export class PhaseLoop {
     const outputTail = rawOutput.length > 0
       ? boundOutputTail(rawOutput)
       : synthesizeOutputTail(result.output);
-    return { command, exitDescriptor, outputTail };
+    return {
+      command,
+      exitDescriptor,
+      outputTail,
+      ...(classifier ? { reason: message } : {}),
+    };
   }
 
   /**

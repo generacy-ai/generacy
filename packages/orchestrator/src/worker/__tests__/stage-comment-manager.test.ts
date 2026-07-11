@@ -385,3 +385,269 @@ describe('StageCommentManager.postFailureAlert', () => {
     expect(after).toBe(before);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #915: classifier-reason block rendering (both surfaces, lockstep invariant)
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract the reason-block substring from a rendered body — bytes from the
+ * `**Reason**` line through (but excluding) the blank line preceding
+ * `<details>`. Used by the lockstep invariant test to prove both renderers
+ * emit identical bytes for the same evidence.
+ */
+function extractReasonBlock(body: string): string {
+  const start = body.indexOf('**Reason**');
+  if (start === -1) return '';
+  const detailsIdx = body.indexOf('<details>', start);
+  // The two lines immediately preceding `<details>` are (a) the trailing line
+  // of the reason block and (b) the blank separator. Slice up to the blank.
+  const blankBeforeDetails = body.lastIndexOf('\n\n', detailsIdx);
+  return body.slice(start, blankBeforeDetails);
+}
+
+describe('#915 — stage comment reason block (appendEvidenceBlock)', () => {
+  it('renders a single-line reason inline between **Exit** and <details>', async () => {
+    const body = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'implement',
+        exitDescriptor: 'failed post-exit: no-progress (process exit 0)',
+        outputTail: 'no progress: tasks_remaining stayed at 5 across two increments',
+        reason: 'Implement increment made no progress — aborting to prevent infinite loop',
+      },
+    });
+    expect(body).toContain(
+      '**Exit**: failed post-exit: no-progress (process exit 0)\n' +
+        '**Reason**: Implement increment made no progress — aborting to prevent infinite loop\n' +
+        '\n' +
+        '<details>',
+    );
+    // Regression: exit descriptor is honest (not `exit 0`).
+    expect(body).not.toContain('**Exit**: exit 0');
+  });
+
+  it('renders a multi-line reason as a fenced ```text``` block above <details>', async () => {
+    const multiLine = 'first line\nsecond line\nthird line';
+    const body = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'implement',
+        exitDescriptor: 'failed post-exit: product-diff-error (process exit 0)',
+        outputTail: '(no output on either stream)',
+        reason: multiLine,
+      },
+    });
+    // The `**Reason**:` line stands alone, followed by blank + fenced block.
+    expect(body).toContain(
+      '**Exit**: failed post-exit: product-diff-error (process exit 0)\n' +
+        '**Reason**:\n' +
+        '\n' +
+        '```text\n' +
+        multiLine +
+        '\n```\n' +
+        '\n' +
+        '<details>',
+    );
+  });
+
+  it('caps a >1 KiB multi-line reason at 1024 bytes with a … marker before the closing fence', async () => {
+    // Force multi-line: 32 lines × ~40 chars = 1280+ bytes.
+    const line = 'padding padding padding padding padding\n';
+    const raw = line.repeat(40); // > 1 KiB and multi-line
+    expect(Buffer.byteLength(raw, 'utf8')).toBeGreaterThan(1024);
+
+    const body = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'implement',
+        exitDescriptor: 'failed post-exit: product-diff-error (process exit 0)',
+        outputTail: '(no output on either stream)',
+        reason: raw,
+      },
+    });
+
+    // Reason block must end with `…\n\`\`\`\n` per contract §Rendering normalization.
+    // Extract the fenced text block that follows `**Reason**:`.
+    const reasonStart = body.indexOf('**Reason**:');
+    const fenceOpen = body.indexOf('```text', reasonStart);
+    const fenceClose = body.indexOf('\n```', fenceOpen + '```text'.length);
+    const fencedBody = body.slice(fenceOpen + '```text\n'.length, fenceClose);
+    // Byte length of the sliced text (before the trailing … marker) must be ≤ 1024.
+    // The truncation marker `…` sits on its own line at the tail.
+    expect(fencedBody.endsWith('\n…')).toBe(true);
+    const beforeMarker = fencedBody.slice(0, -2); // strip '\n…'
+    expect(Buffer.byteLength(beforeMarker, 'utf8')).toBeLessThanOrEqual(1024);
+  });
+
+  it('ZWSP-escapes backticks in reason so the reason line stays inside markdown-safe bytes', async () => {
+    const reason = 'a `token` in the middle';
+    const body = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'implement',
+        exitDescriptor: 'failed post-exit: no-progress (process exit 0)',
+        outputTail: 'x',
+        reason,
+      },
+    });
+    // Backtick → backtick + ZWSP. Raw literal backtick is not preserved as-is.
+    expect(body).toContain('**Reason**: a `​token`​ in the middle');
+  });
+
+  it('omits the reason block entirely for absent reason — output byte-identical to #890 shape', async () => {
+    const withoutReason = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'exit 1',
+        outputTail: 'oops',
+      },
+    });
+    const withUndefined = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'exit 1',
+        outputTail: 'oops',
+        reason: undefined,
+      },
+    });
+    const withEmpty = await render({
+      ...BASE_ERROR,
+      errorEvidence: {
+        command: 'pnpm test',
+        exitDescriptor: 'exit 1',
+        outputTail: 'oops',
+        reason: '',
+      },
+    });
+    // All three renderings must be byte-identical (invariant 4 of the contract).
+    expect(withUndefined).toBe(withoutReason);
+    expect(withEmpty).toBe(withoutReason);
+    // And the reason marker must not appear at all.
+    expect(withoutReason).not.toContain('**Reason**');
+  });
+});
+
+describe('#915 — failure alert reason block (renderFailureAlert)', () => {
+  it('renders a single-line reason inline between the summary and <details>', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      phase: 'implement',
+      evidence: {
+        command: 'implement (no-progress guard)',
+        exitDescriptor: 'failed post-exit: no-progress (process exit 0)',
+        outputTail: 'no progress: tasks_remaining stayed at 5 across two increments',
+        reason: 'Implement increment made no progress — aborting to prevent infinite loop',
+      },
+    });
+
+    const body = lastAddedBody();
+    expect(body).toContain(
+      '❌ **implement failed** — `implement (no-progress guard)` failed post-exit: no-progress (process exit 0).\n' +
+        '**Reason**: Implement increment made no progress — aborting to prevent infinite loop\n' +
+        '\n' +
+        '<details>',
+    );
+    expect(body).not.toContain('exit 0.\n');
+  });
+
+  it('renders a multi-line reason fenced above the outputTail block', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+    const multiLine = 'line-a\nline-b';
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence: {
+        command: 'implement',
+        exitDescriptor: 'failed post-exit: product-diff-error (process exit 0)',
+        outputTail: '(no output on either stream)',
+        reason: multiLine,
+      },
+    });
+
+    const body = lastAddedBody();
+    expect(body).toContain('**Reason**:\n\n```text\n' + multiLine + '\n```\n\n<details>');
+  });
+
+  it('omits the reason block entirely for absent reason — output byte-identical to #865 shape', async () => {
+    const { github, lastAddedBody: getA } = makeAlertGithub();
+    const managerA = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+    await managerA.postFailureAlert(BASE_ALERT);
+    const withoutReason = getA();
+
+    const { github: gh2, lastAddedBody: getB } = makeAlertGithub();
+    const managerB = new StageCommentManager(gh2, 'owner', 'repo', 42, makeLogger());
+    await managerB.postFailureAlert({
+      ...BASE_ALERT,
+      evidence: { ...BASE_ALERT.evidence, reason: undefined },
+    });
+    const withUndefined = getB();
+
+    expect(withUndefined).toBe(withoutReason);
+    expect(withoutReason).not.toContain('**Reason**');
+  });
+});
+
+describe('#915 — lockstep invariant across both renderers', () => {
+  it('appendEvidenceBlock and renderFailureAlert emit byte-identical reason-block substrings', async () => {
+    // Same evidence fed through both surfaces — the reason-block bytes (from
+    // `**Reason**` through the pre-<details> blank line) must match exactly.
+    const evidence = {
+      command: 'implement',
+      exitDescriptor: 'failed post-exit: no-product-code-changes (process exit 0)',
+      outputTail: '(no output on either stream)',
+      reason:
+        'Phase "implement" produced no product-code changes — all changed files are under excluded prefixes [specs/].',
+    };
+
+    const stageBody = await render({
+      ...BASE_ERROR,
+      errorEvidence: evidence,
+    });
+
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence,
+    });
+    const alertBody = lastAddedBody();
+
+    const stageBlock = extractReasonBlock(stageBody);
+    const alertBlock = extractReasonBlock(alertBody);
+    expect(stageBlock).not.toBe('');
+    expect(alertBlock).toBe(stageBlock);
+  });
+
+  it('appendEvidenceBlock and renderFailureAlert produce identical multi-line + capped reason blocks', async () => {
+    const line = 'padding padding padding padding\n';
+    const reason = line.repeat(40);
+    const evidence = {
+      command: 'implement',
+      exitDescriptor: 'failed post-exit: product-diff-error (process exit 0)',
+      outputTail: '(no output on either stream)',
+      reason,
+    };
+
+    const stageBody = await render({
+      ...BASE_ERROR,
+      errorEvidence: evidence,
+    });
+
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      evidence,
+    });
+    const alertBody = lastAddedBody();
+
+    expect(extractReasonBlock(alertBody)).toBe(extractReasonBlock(stageBody));
+  });
+});
