@@ -771,7 +771,7 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     });
   });
 
-  it('threads errorEvidence for unexpected spawn error catch (synthetic PhaseResult)', async () => {
+  it('threads errorEvidence for unexpected spawn error catch (synthetic PhaseResult, #915 classifier=spawn-error)', async () => {
     const context = createMockContext('specify');
     const config = createConfig();
 
@@ -784,8 +784,12 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
     const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
     expect(errorCall).toBeDefined();
     expect(errorCall.errorEvidence.command).toBe('specify');
-    expect(errorCall.errorEvidence.exitDescriptor).toBe('exit 1');
+    // #915: synthetic classifier reworded exit descriptor.
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: spawn-error (process exit 1)');
+    // outputTail unchanged — synthetic PhaseResult carries no output.
     expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+    // #915: reason surfaces the caught error's message.
+    expect(errorCall.errorEvidence.reason).toBe('Error: spawn ENOENT');
   });
 
   it('threads errorEvidence for a post-phase CLI failure (implement)', async () => {
@@ -964,6 +968,189 @@ describe('PhaseLoop - errorEvidence threading (#847)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// #915: classifier reason surfacing across buildErrorEvidence callsites
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - #915 classifier reason surfacing', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  // -- Synthetic classifier sites: reason populated + descriptor reworded ----
+
+  it('no-progress guard (:429) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(0, 7))
+      .mockResolvedValueOnce(makePartialResult(0, 7)); // guard fires
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: no-progress (process exit 0)');
+    expect(errorCall.errorEvidence.reason).toBe(
+      'Implement increment made no progress — aborting to prevent infinite loop',
+    );
+    expect(errorCall.errorEvidence.outputTail).toBe('no progress: tasks_remaining stayed at 7 across two increments');
+    // Invariant 5: exit descriptor never reads the bare literal `exit 0` on a
+    // post-exit classifier failure with exitCode 0.
+    expect(errorCall.errorEvidence.exitDescriptor).not.toBe('exit 0');
+    // SC assertion: rendered surface can't collapse to just the both-empty literal.
+    expect(errorCall.errorEvidence.reason.length).toBeGreaterThan(0);
+  });
+
+  it('no-product-code-changes guard (:630) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('implement');
+    // Override github to return ONLY excluded (spec) files → guard fires.
+    context.github = {
+      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getFilesChangedBetween: vi.fn().mockResolvedValue([
+        'specs/915-found-during-cockpit-v1/tasks.md',
+        'specs/915-found-during-cockpit-v1/plan.md',
+      ]),
+    } as any;
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: 'https://github.com/pr/1', hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe(
+      'failed post-exit: no-product-code-changes (process exit 0)',
+    );
+    expect(errorCall.errorEvidence.reason).toContain('produced no product-code changes');
+    expect(errorCall.errorEvidence.reason).toContain('specs/');
+    // outputTail is the both-empty literal on this synthetic path.
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+    // Invariant 5: not the bare `exit 0` literal.
+    expect(errorCall.errorEvidence.exitDescriptor).not.toBe('exit 0');
+  });
+
+  it('spawn-error catch (:373) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockRejectedValue(new Error('spawn EACCES'));
+
+    await expect(
+      phaseLoop.executeLoop(context, config, deps, ['specify']),
+    ).rejects.toThrow('spawn EACCES');
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: spawn-error (process exit 1)');
+    expect(errorCall.errorEvidence.reason).toBe('Error: spawn EACCES');
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+  });
+
+  it('product-diff-error catch (:600) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('implement');
+    // resolveBaseRef → throws via getDefaultBranch rejection.
+    context.github = {
+      getDefaultBranch: vi.fn().mockRejectedValue(new Error('network unreachable')),
+      getFilesChangedBetween: vi.fn(),
+    } as any;
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe(
+      'failed post-exit: product-diff-error (process exit 0)',
+    );
+    expect(errorCall.errorEvidence.reason).toContain('product-diff detection failed');
+    expect(errorCall.errorEvidence.reason).toContain('network unreachable');
+    // outputTail is the both-empty literal (result.error.output = '').
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+  });
+
+  // -- Process-path regression sites: reason absent, descriptor unchanged ----
+
+  it('pre-validate install failure (:294) keeps pre-#915 shape — reason undefined', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+
+    const installResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 42,
+      durationMs: 100,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 42',
+        output: 'ELIFECYCLE Command failed with exit code 42',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(installResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    // Pre-#915 shape: exact three-field object, no reason field.
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'pnpm install',
+      exitDescriptor: 'exit 42',
+      outputTail: 'ELIFECYCLE Command failed with exit code 42',
+    });
+    expect(errorCall.errorEvidence.reason).toBeUndefined();
+    // Descriptor is not the reworded synthetic form.
+    expect(errorCall.errorEvidence.exitDescriptor).not.toMatch(/failed post-exit:/);
+  });
+
+  it('post-phase process failure (:548) keeps pre-#915 shape — reason undefined', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm test',
+    });
+
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: 'Tests failed: 2 of 5',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'npm test',
+      exitDescriptor: 'exit 1',
+      outputTail: 'Tests failed: 2 of 5',
+    });
+    expect(errorCall.errorEvidence.reason).toBeUndefined();
+    expect(errorCall.errorEvidence.exitDescriptor).not.toMatch(/failed post-exit:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Failure-alert bottom-of-thread comment (#865)
 // ---------------------------------------------------------------------------
 
@@ -1129,7 +1316,7 @@ describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
     expect(spy.mock.calls[0][0].phase).toBe('implement');
   });
 
-  it('no-progress site emits evidence via updateStageComment AND postFailureAlert with same evidence (T025)', async () => {
+  it('no-progress site emits evidence via updateStageComment AND postFailureAlert with same evidence (T025, #915 classifier=no-progress)', async () => {
     const context = createMockContext('implement');
     const config = createConfig();
 
@@ -1146,6 +1333,11 @@ describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
     expect(errorCall).toBeDefined();
     expect(errorCall.errorEvidence).toBeDefined();
     expect(errorCall.errorEvidence.outputTail).toContain('no progress: tasks_remaining stayed at');
+    // #915: synthetic classifier reworded exit descriptor + reason surfaces the guard message.
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: no-progress (process exit 0)');
+    expect(errorCall.errorEvidence.reason).toBe(
+      'Implement increment made no progress — aborting to prevent infinite loop',
+    );
 
     // postFailureAlert gets the same evidence object
     const alertSpy = deps.stageCommentManager.postFailureAlert as any;

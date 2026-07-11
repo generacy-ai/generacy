@@ -268,6 +268,22 @@ export interface StageCommentData {
          *   chunks via `synthesizeOutputTail` (also bounder-capped).
          */
         outputTail: string;
+        /**
+         * #915: Optional classifier reason — the human-readable message that
+         * explains why a synthetic post-exit failure was raised (product-diff
+         * guard, no-progress guard, spawn-error catch, product-diff-error
+         * catch). Sourced from `result.error.message` when the
+         * `buildErrorEvidence` caller passed an explicit `classifier` argument.
+         *
+         * Absent on process-failure paths (shell/CLI real non-zero exit) —
+         * the outputTail already carries the diagnostic surface.
+         *
+         * Rendering: single-line reasons appear inline as `**Reason**: <r>`;
+         * multi-line reasons appear as `**Reason**:` on its own line followed
+         * by a fenced ```text``` block, capped at 1 KiB with a trailing `…`
+         * marker. Backticks are ZWSP-escaped before render, matching outputTail.
+         */
+        reason?: string;
       }
     | {
         /** Base-sync merge conflict variant (#864). */
