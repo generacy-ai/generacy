@@ -500,6 +500,26 @@ describe('GhCliWrapper', () => {
       stdout: JSON.stringify({ closedByPullRequestsReferences: prs }),
     });
 
+    // Post-#913 — the tier-1 follow-up graphql call returns aliased-fields
+    // per requested PR number. Build a matching payload from the same rawPr
+    // helper so tests can express "issue view returned [X,Y]; graphql returned
+    // {pr0: X, pr1: Y}" concisely.
+    const tier1FollowupResponse = (
+      prs: ReturnType<typeof rawPr>[],
+    ): { stdout: string } => {
+      const repo: Record<string, unknown> = {};
+      prs.forEach((p, i) => {
+        repo[`pr${i}`] = {
+          number: p.number,
+          state: p.state,
+          headRefName: p.headRefName,
+          isDraft: p.isDraft,
+          url: p.url,
+        };
+      });
+      return { stdout: JSON.stringify({ data: { repository: repo } }) };
+    };
+
     const tier2Or3Response = (
       prs: ReturnType<typeof rawPr>[],
     ): { stdout: string } => ({
@@ -511,8 +531,10 @@ describe('GhCliWrapper', () => {
 
     describe('Tier 1: closing-refs (gh issue view --json closedByPullRequestsReferences)', () => {
       it('exactly-one non-draft OPEN candidate → resolved', async () => {
+        const pr23 = rawPr({ number: 23 });
         const { runner, calls } = queuedRunner([
-          tier1Response([rawPr({ number: 23 })]),
+          tier1Response([pr23]),
+          tier1FollowupResponse([pr23]),
         ]);
         const wrapper = new GhCliWrapper(runner);
         const result = await wrapper.resolveIssueToPRRef('o/r', 9);
@@ -527,16 +549,22 @@ describe('GhCliWrapper', () => {
           },
           linkMethod: 'closing-refs',
         });
-        // Tier 2 and Tier 3 must NOT be called.
-        expect(calls).toHaveLength(1);
-        const args = calls[0]?.args ?? [];
-        expect(args.slice(0, 5)).toEqual(['issue', 'view', '9', '--repo', 'o/r']);
-        expect(args).toContain('closedByPullRequestsReferences');
+        // Tier 2 and Tier 3 must NOT be called. Two calls now:
+        // (1) `gh issue view` initial, (2) `gh api graphql` follow-up.
+        expect(calls).toHaveLength(2);
+        const initialArgs = calls[0]?.args ?? [];
+        expect(initialArgs.slice(0, 5)).toEqual(['issue', 'view', '9', '--repo', 'o/r']);
+        expect(initialArgs).toContain('closedByPullRequestsReferences');
+        const followupArgs = calls[1]?.args ?? [];
+        expect(followupArgs.slice(0, 2)).toEqual(['api', 'graphql']);
       });
 
       it('≥2 non-drafts at Tier 1 → ambiguous', async () => {
+        const pr23 = rawPr({ number: 23 });
+        const pr24 = rawPr({ number: 24 });
         const { runner, calls } = queuedRunner([
-          tier1Response([rawPr({ number: 23 }), rawPr({ number: 24 })]),
+          tier1Response([pr23, pr24]),
+          tier1FollowupResponse([pr23, pr24]),
         ]);
         const wrapper = new GhCliWrapper(runner);
         const result = await wrapper.resolveIssueToPRRef('o/r', 9);
@@ -545,12 +573,14 @@ describe('GhCliWrapper', () => {
           expect(result.candidates.map((c) => c.number)).toEqual([23, 24]);
           expect(result.linkMethod).toBe('closing-refs');
         }
-        expect(calls).toHaveLength(1);
+        expect(calls).toHaveLength(2);
       });
 
       it('zero non-drafts + ≥1 drafts at Tier 1 → pr-is-draft', async () => {
+        const pr22 = rawPr({ number: 22, isDraft: true });
         const { runner, calls } = queuedRunner([
-          tier1Response([rawPr({ number: 22, isDraft: true })]),
+          tier1Response([pr22]),
+          tier1FollowupResponse([pr22]),
         ]);
         const wrapper = new GhCliWrapper(runner);
         const result = await wrapper.resolveIssueToPRRef('o/r', 9);
@@ -559,7 +589,7 @@ describe('GhCliWrapper', () => {
           expect(result.candidates.map((c) => c.number)).toEqual([22]);
           expect(result.linkMethod).toBe('closing-refs');
         }
-        expect(calls).toHaveLength(1);
+        expect(calls).toHaveLength(2);
       });
 
       it('zero PRs at Tier 1 → falls through to Tier 2', async () => {
@@ -578,12 +608,14 @@ describe('GhCliWrapper', () => {
 
       it('Tier 1 CLOSED PRs are filtered out before evaluateTier', async () => {
         // A CLOSED candidate + an OPEN candidate — the CLOSED one is filtered
-        // out; the single OPEN remainder yields `resolved`, not `ambiguous`.
+        // out (post-#913: filtered based on the graphql follow-up state, not
+        // the initial payload's inline state); the single OPEN remainder
+        // yields `resolved`, not `ambiguous`.
+        const closed = rawPr({ number: 99, state: 'CLOSED' });
+        const open = rawPr({ number: 42 });
         const { runner } = queuedRunner([
-          tier1Response([
-            rawPr({ number: 99, state: 'CLOSED' }),
-            rawPr({ number: 42 }),
-          ]),
+          tier1Response([closed, open]),
+          tier1FollowupResponse([closed, open]),
         ]);
         const wrapper = new GhCliWrapper(runner);
         const result = await wrapper.resolveIssueToPRRef('o/r', 9);
@@ -713,8 +745,10 @@ describe('GhCliWrapper', () => {
         // The core SC-001 fixture: Tier 1 has a single non-draft candidate #23,
         // Tier 3 would return [#23, #22-draft, #24-draft, #25-draft] but must not
         // be queried because Tier 1 short-circuits.
+        const pr23 = rawPr({ number: 23 });
         const { runner, calls } = queuedRunner([
-          tier1Response([rawPr({ number: 23 })]),
+          tier1Response([pr23]),
+          tier1FollowupResponse([pr23]),
           // These would be for Tier 2 / Tier 3 but must not be consumed.
           tier2Or3Response([
             rawPr({ number: 23 }),
@@ -736,8 +770,8 @@ describe('GhCliWrapper', () => {
           expect(result.ref.number).toBe(23);
           expect(result.linkMethod).toBe('closing-refs');
         }
-        // SC-001 fall-through spy: only Tier 1 was queried.
-        expect(calls).toHaveLength(1);
+        // SC-001 fall-through spy: only Tier 1 was queried (initial + graphql).
+        expect(calls).toHaveLength(2);
       });
     });
 
