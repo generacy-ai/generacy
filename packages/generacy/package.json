@@ -46,6 +46,7 @@
     "@generacy-ai/orchestrator": "workspace:*",
     "@generacy-ai/orchestrator-types": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "chalk": "^5",
     "commander": "^12.0.0",
     "diff": "^7",
