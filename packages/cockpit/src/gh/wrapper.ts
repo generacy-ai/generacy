@@ -99,6 +99,25 @@ export interface PullRequestDetail {
   diffTruncated: boolean;
 }
 
+/**
+ * PR detail selection-set fetched via `gh api graphql`. Used by the `cockpit
+ * merge --pr <n>` escape hatch. Distinct from `PullRequestDetail` because the
+ * `--json` serializer is the exact contract class #913 is escaping.
+ */
+export interface PullRequestGraphqlDetail {
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  headRefName: string;
+  isDraft: boolean;
+  /** GitHub `MergeStateStatus` — captured for future gates, not consumed today. */
+  mergeStateStatus: string;
+  /** Every issue this PR declares as a closing target — FR-006a linkage source. */
+  closingIssuesReferences: Array<{
+    number: number;
+    /** `owner/name` — for cross-repo comparison to `<ref>`. */
+    nameWithOwner: string;
+  }>;
+}
+
 export interface DeleteHeadRefResult {
   outcome: 'deleted' | 'already-gone' | 'delete-failed';
   stderr?: string;
@@ -164,6 +183,10 @@ export interface GhWrapper {
   getPullRequest(repo: string, prNumber: number): Promise<PullRequestSummary>;
   resolveIssueToPRRef(repo: string, issue: number): Promise<PullRequestRefResolution>;
   getPullRequestDetail(repo: string, prNumber: number): Promise<PullRequestDetail>;
+  getPullRequestGraphqlDetail(
+    repo: string,
+    prNumber: number,
+  ): Promise<PullRequestGraphqlDetail>;
   mergePullRequest(
     repo: string,
     prNumber: number,
@@ -231,6 +254,142 @@ const PullRequestRefRawSchema = z
     headRefName: z.string(),
   })
   .passthrough();
+
+// FR-004 — 2.96.0 minimal shape tolerance for tier-1 initial parse.
+// Only `number` and `url` are read; both `.optional()` so gh 2.96.0's
+// `{id, number, repository, url}` and gh 2.95.x's rich shape both parse.
+// `.passthrough()` — extra fields present in gh 2.95.x are silently accepted.
+const Tier1InitialRefSchema = z
+  .object({
+    number: z.number().int().optional(),
+    url: z.string().optional(),
+  })
+  .passthrough();
+
+const Tier1InitialResponseSchema = z
+  .object({
+    closedByPullRequestsReferences: z.array(Tier1InitialRefSchema).default([]),
+  })
+  .passthrough();
+
+// FR-002 — per-PR nodes returned by the tier-1 follow-up graphql query.
+// Not `.passthrough()` — the query selects exactly these fields; extras
+// would signal server-side drift worth flagging.
+const Tier1FollowupRefSchema = z.object({
+  number: z.number().int(),
+  state: z.string(),
+  headRefName: z.string(),
+  isDraft: z.boolean(),
+  url: z.string(),
+});
+
+const Tier1FollowupResponseSchema = z.object({
+  data: z.object({
+    repository: z
+      .object({})
+      .catchall(Tier1FollowupRefSchema.nullable()),
+  }),
+});
+
+// FR-006 — return shape of getPullRequestGraphqlDetail.
+const PrGraphqlDetailSchema = z.object({
+  data: z.object({
+    repository: z.object({
+      pullRequest: z
+        .object({
+          state: z.string(),
+          headRefName: z.string(),
+          isDraft: z.boolean(),
+          mergeStateStatus: z.string(),
+          closingIssuesReferences: z.object({
+            nodes: z.array(
+              z.object({
+                number: z.number().int(),
+                repository: z.object({ nameWithOwner: z.string() }),
+              }),
+            ),
+          }),
+        })
+        .nullable(),
+    }),
+  }),
+});
+
+// FR-002a — single-shot retry backoff. Module-level so tests can spy on the
+// gap between attempt 1 and attempt 2.
+const TIER1_RETRY_BACKOFF_MS = 1000;
+
+// FR-009 — payload excerpt cap per clarify Q2→B (fits 2–3 minimal-shape refs).
+const SHAPE_MISMATCH_EXCERPT_CHARS = 512;
+
+// FR-006 — explicit graphql selection set for the `--pr` PR detail fetch.
+const PR_DETAIL_QUERY = /* graphql */ `
+  query CockpitPrDetail($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        state
+        headRefName
+        isDraft
+        mergeStateStatus
+        closingIssuesReferences(first: 20) {
+          nodes {
+            number
+            repository { nameWithOwner }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// FR-002 — dynamic aliased-fields builder for the tier-1 follow-up query.
+// One aliased selection per requested PR number: `pr0: pullRequest(number: N0) { ... }`.
+// See contracts/graphql-selection-set.md §2. Numbers come from a zod-validated
+// integer parse of gh's own output; injection surface is zero.
+function buildTier1FollowupQuery(numbers: number[]): string {
+  const selections = numbers
+    .map(
+      (n, i) =>
+        `    pr${i}: pullRequest(number: ${n}) { number state headRefName isDraft url }`,
+    )
+    .join('\n');
+  return `query CockpitTier1Followup($owner: String!, $repo: String!) {
+  repository(owner: $owner, name: $repo) {
+${selections}
+  }
+}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// FR-010 — reads first line of `gh --version`, degrades to `'unknown'` on
+// non-zero exit or thrown runner. Never throws.
+async function captureGhVersion(runner: CommandRunner): Promise<string> {
+  try {
+    const r = await runner('gh', ['--version']);
+    if (r.exitCode !== 0) return 'unknown';
+    const firstLine = r.stdout.split('\n')[0] ?? '';
+    return firstLine.trim() || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+// FR-009 — single-line message with 512-char payload excerpt and gh version.
+function formatShapeMismatchError(
+  siteLabel: string,
+  rawPayload: string,
+  errorMessage: string,
+  ghVersion: string,
+): Error {
+  const excerpt = rawPayload.slice(0, SHAPE_MISMATCH_EXCERPT_CHARS);
+  return new Error(
+    `gh ${siteLabel} JSON shape mismatch: ${errorMessage} ` +
+      `(gh version: ${ghVersion}; payload excerpt: ${excerpt})`,
+  );
+}
 
 const PullRequestDetailRawSchema = z
   .object({
@@ -749,7 +908,15 @@ export class GhCliWrapper implements GhWrapper {
     repo: string,
     issue: number,
   ): Promise<PullRequestRef[]> {
-    const result = await this.runner('gh', [
+    const [owner, name] = repo.split('/');
+    if (!owner || !name) {
+      throw new Error(
+        `queryTier1ClosingRefs: repo must be "owner/name", got: ${repo}`,
+      );
+    }
+
+    // (1) FR-004 — initial call: parse only what the 2.96.0 minimal shape guarantees.
+    const initial = await this.runner('gh', [
       'issue',
       'view',
       String(issue),
@@ -758,48 +925,153 @@ export class GhCliWrapper implements GhWrapper {
       '--json',
       'closedByPullRequestsReferences',
     ]);
-    failIfNonZero(result, 'issue view (resolveIssueToPRRef tier1 closing-refs)');
+    failIfNonZero(initial, 'issue view (resolveIssueToPRRef tier1 initial)');
+
+    let initialParsed: unknown;
+    try {
+      initialParsed = JSON.parse(initial.stdout);
+    } catch {
+      const ghVer = await captureGhVersion(this.runner);
+      throw formatShapeMismatchError(
+        'resolveIssueToPRRef tier1 initial JSON.parse',
+        initial.stdout,
+        'malformed JSON',
+        ghVer,
+      );
+    }
+
+    const initialShape = Tier1InitialResponseSchema.safeParse(initialParsed);
+    if (!initialShape.success) {
+      const ghVer = await captureGhVersion(this.runner);
+      throw formatShapeMismatchError(
+        'resolveIssueToPRRef tier1 initial shape',
+        initial.stdout,
+        initialShape.error.message,
+        ghVer,
+      );
+    }
+
+    // Extract PR numbers (number-first, url-fallback per parseResolveIssueToPr pattern).
+    const numbers: number[] = [];
+    for (const ref of initialShape.data.closedByPullRequestsReferences) {
+      if (typeof ref.number === 'number') {
+        numbers.push(ref.number);
+        continue;
+      }
+      const fromUrl = extractPrNumberFromUrl(ref.url);
+      if (fromUrl != null) numbers.push(fromUrl);
+    }
+
+    // Fast path: no closing refs → tier-1 returns no candidates, resolver falls
+    // through to tier-2 as it always has. (This is NOT the FR-002a hard-fail
+    // path — no follow-up call is made, no failure occurred.)
+    if (numbers.length === 0) return [];
+
+    // (2) FR-002 — follow-up graphql call with FR-002a single-shot retry.
+    const perPr = await this.queryTier1FollowupGraphql(owner, name, numbers);
+
+    // (3) FR-003 — filter to OPEN before returning refs to the merge caller.
+    const refs: PullRequestRef[] = [];
+    for (const n of numbers) {
+      const detail = perPr.get(n);
+      if (detail == null) continue; // graphql omitted / null-aliased (deleted PR).
+      if (normalizePullRequestState(detail.state) !== 'OPEN') continue;
+      refs.push({
+        number: detail.number,
+        url: detail.url,
+        state: 'OPEN',
+        draft: detail.isDraft,
+        headRefName: detail.headRefName,
+      });
+    }
+    return refs;
+  }
+
+  // FR-002a — one retry with TIER1_RETRY_BACKOFF_MS backoff, then hard-fail.
+  // Never falls through to tier-2 (would risk selecting a different PR);
+  // never filters to a "successful subset" (silent-wrong outcome).
+  private async queryTier1FollowupGraphql(
+    owner: string,
+    name: string,
+    numbers: number[],
+  ): Promise<
+    Map<
+      number,
+      { number: number; state: string; headRefName: string; isDraft: boolean; url: string }
+    >
+  > {
+    try {
+      return await this.tier1FollowupOnce(owner, name, numbers);
+    } catch {
+      await sleep(TIER1_RETRY_BACKOFF_MS);
+      try {
+        return await this.tier1FollowupOnce(owner, name, numbers);
+      } catch (second) {
+        throw new Error(
+          `gh resolveIssueToPRRef tier1 follow-up graphql failed after 1 retry: ${
+            (second as Error).message
+          }`,
+        );
+      }
+    }
+  }
+
+  private async tier1FollowupOnce(
+    owner: string,
+    name: string,
+    numbers: number[],
+  ): Promise<
+    Map<
+      number,
+      { number: number; state: string; headRefName: string; isDraft: boolean; url: string }
+    >
+  > {
+    const query = buildTier1FollowupQuery(numbers);
+    const result = await this.runner('gh', [
+      'api',
+      'graphql',
+      '-F',
+      `owner=${owner}`,
+      '-F',
+      `repo=${name}`,
+      '-f',
+      `query=${query}`,
+    ]);
+    failIfNonZero(result, 'api graphql (resolveIssueToPRRef tier1 follow-up)');
 
     let parsed: unknown;
     try {
       parsed = JSON.parse(result.stdout);
     } catch {
-      throw new Error(
-        `gh returned malformed JSON for resolveIssueToPRRef tier1: ${result.stdout.slice(0, 200)}`,
+      const ghVer = await captureGhVersion(this.runner);
+      throw formatShapeMismatchError(
+        'resolveIssueToPRRef tier1 follow-up JSON.parse',
+        result.stdout,
+        'malformed JSON',
+        ghVer,
       );
     }
-    const shape = z
-      .object({
-        closedByPullRequestsReferences: z
-          .array(
-            z
-              .object({
-                number: z.number().int(),
-                url: z.string(),
-                state: z.string(),
-                isDraft: z.boolean().optional(),
-                headRefName: z.string(),
-              })
-              .passthrough(),
-          )
-          .default([]),
-      })
-      .passthrough()
-      .safeParse(parsed);
+
+    const shape = Tier1FollowupResponseSchema.safeParse(parsed);
     if (!shape.success) {
-      throw new Error(
-        `gh resolveIssueToPRRef tier1 JSON shape mismatch: ${shape.error.message}`,
+      const ghVer = await captureGhVersion(this.runner);
+      throw formatShapeMismatchError(
+        'resolveIssueToPRRef tier1 follow-up shape',
+        result.stdout,
+        shape.error.message,
+        ghVer,
       );
     }
-    return shape.data.closedByPullRequestsReferences
-      .map<PullRequestRef>((raw) => ({
-        number: raw.number,
-        url: raw.url,
-        state: normalizePullRequestState(raw.state),
-        draft: raw.isDraft ?? false,
-        headRefName: raw.headRefName,
-      }))
-      .filter((p) => p.state === 'OPEN');
+
+    const out = new Map<
+      number,
+      { number: number; state: string; headRefName: string; isDraft: boolean; url: string }
+    >();
+    for (const value of Object.values(shape.data.data.repository)) {
+      if (value == null) continue;
+      out.set(value.number, value);
+    }
+    return out;
   }
 
   private async queryTier2BranchName(
@@ -925,6 +1197,72 @@ export class GhCliWrapper implements GhWrapper {
       labels: extractLabelNames(detail.data.labels),
       diff,
       diffTruncated,
+    };
+  }
+
+  async getPullRequestGraphqlDetail(
+    repo: string,
+    prNumber: number,
+  ): Promise<PullRequestGraphqlDetail> {
+    const [owner, name] = repo.split('/');
+    if (!owner || !name) {
+      throw new Error(
+        `getPullRequestGraphqlDetail: repo must be "owner/name", got: ${repo}`,
+      );
+    }
+
+    const result = await this.runner('gh', [
+      'api',
+      'graphql',
+      '-F',
+      `owner=${owner}`,
+      '-F',
+      `repo=${name}`,
+      '-F',
+      `number=${prNumber}`,
+      '-f',
+      `query=${PR_DETAIL_QUERY}`,
+    ]);
+    failIfNonZero(result, 'api graphql (getPullRequestGraphqlDetail)');
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      const ghVer = await captureGhVersion(this.runner);
+      throw formatShapeMismatchError(
+        'getPullRequestGraphqlDetail JSON.parse',
+        result.stdout,
+        'malformed JSON',
+        ghVer,
+      );
+    }
+
+    const shape = PrGraphqlDetailSchema.safeParse(parsed);
+    if (!shape.success) {
+      const ghVer = await captureGhVersion(this.runner);
+      throw formatShapeMismatchError(
+        'getPullRequestGraphqlDetail shape',
+        result.stdout,
+        shape.error.message,
+        ghVer,
+      );
+    }
+
+    const pr = shape.data.data.repository.pullRequest;
+    if (pr == null) {
+      throw new Error(`PR #${prNumber} not found in ${repo}`);
+    }
+
+    return {
+      state: normalizePullRequestState(pr.state),
+      headRefName: pr.headRefName,
+      isDraft: pr.isDraft,
+      mergeStateStatus: pr.mergeStateStatus,
+      closingIssuesReferences: pr.closingIssuesReferences.nodes.map((n) => ({
+        number: n.number,
+        nameWithOwner: n.repository.nameWithOwner,
+      })),
     };
   }
 

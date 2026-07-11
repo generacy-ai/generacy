@@ -11,6 +11,7 @@ import type {
   MergeResult,
   OpenPrForBranch,
   PullRequestDetail,
+  PullRequestGraphqlDetail,
   PullRequestRef,
   PullRequestRefResolution,
   PullRequestSummary,
@@ -120,6 +121,14 @@ export class FakeGh implements GhWrapper {
   async getPullRequestDetail(repo: string, prNumber: number): Promise<PullRequestDetail> {
     this.calls.push({ method: 'getPullRequestDetail', args: [repo, prNumber] });
     throw new Error('getPullRequestDetail not stubbed in FakeGh (watch/status sensor)');
+  }
+
+  async getPullRequestGraphqlDetail(
+    repo: string,
+    prNumber: number,
+  ): Promise<PullRequestGraphqlDetail> {
+    this.calls.push({ method: 'getPullRequestGraphqlDetail', args: [repo, prNumber] });
+    throw new Error('getPullRequestGraphqlDetail not stubbed in FakeGh');
   }
 
   async mergePullRequest(
