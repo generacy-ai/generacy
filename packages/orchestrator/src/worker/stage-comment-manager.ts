@@ -9,6 +9,50 @@ type MergeConflictEvidence = Extract<
 >['mergeConflict'];
 
 /**
+ * #915: Reason block byte cap (multi-line only). Defensive bound against
+ * `String(error)` producing multi-KB stack excerpts. Single-line reasons are
+ * not capped — production classifiers emit < 300 chars.
+ */
+const REASON_MULTILINE_BYTE_CAP = 1024;
+
+/**
+ * #915: Format the classifier-reason block for injection into both
+ * `appendEvidenceBlock` and `renderFailureAlert`. Returns an empty array when
+ * `reason` is absent or empty. Single-line reasons render inline as one line
+ * (`**Reason**: <safeReason>`); multi-line reasons render as `**Reason**:`,
+ * blank line, fenced ```text``` block. Backticks are ZWSP-escaped (matching
+ * the outputTail idiom). Multi-line body is capped at 1 KiB by
+ * `Buffer.byteLength`; on truncation, `…` is appended before the closing fence.
+ *
+ * The returned lines are inserted between the header lines (`**Exit**` for
+ * stage comment, summary line for failure alert) and the blank line preceding
+ * the `<details>` wrapper — both callers already emit that blank. See
+ * contracts/failure-reason-block.md §Rendering normalization.
+ */
+function formatReasonBlock(reason: string | undefined): string[] {
+  if (!reason) {
+    return [];
+  }
+  // ZWSP after every backtick — mirror the outputTail sanitization idiom
+  // already used at appendEvidenceBlock (~:200) and renderFailureAlert (~:334).
+  const safeReason = reason.replace(/`/g, '`​');
+  const isMultiLine = safeReason.includes('\n');
+
+  if (!isMultiLine) {
+    return [`**Reason**: ${safeReason}`];
+  }
+
+  // Multi-line: cap body at 1 KiB (bytes) with a `…` marker on truncate.
+  const bytes = Buffer.byteLength(safeReason, 'utf8');
+  if (bytes > REASON_MULTILINE_BYTE_CAP) {
+    const buf = Buffer.from(safeReason, 'utf8');
+    const sliced = buf.subarray(0, REASON_MULTILINE_BYTE_CAP).toString('utf8');
+    return ['**Reason**:', '', '```text', sliced, '…', '```'];
+  }
+  return ['**Reason**:', '', '```text', safeReason, '```'];
+}
+
+/**
  * Stage display titles with emoji prefixes
  */
 const STAGE_TITLES: Record<StageType, string> = {
@@ -203,6 +247,11 @@ export class StageCommentManager {
     lines.push('---');
     lines.push(`**Failed command**: \`${evidence.command}\``);
     lines.push(`**Exit**: ${evidence.exitDescriptor}`);
+    // #915: reason block sits between **Exit** and the blank line preceding
+    // <details>. Empty for pre-#915 inputs (byte-identical to #890).
+    for (const line of formatReasonBlock(evidence.reason)) {
+      lines.push(line);
+    }
     lines.push('');
     lines.push(`<details><summary>output (last ${lineCount} lines)</summary>`);
     lines.push('');
@@ -338,9 +387,13 @@ export class StageCommentManager {
         ? `❌ **label operation failed** — \`${data.labelOp ?? evidence.command}\` at site \`${data.phase}\` (${evidence.exitDescriptor}).`
         : `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`;
 
+    // #915: reason block sits between the summary line and the blank line
+    // preceding <details>. Empty array (spread expands to nothing) for pre-#915
+    // inputs (byte-identical to #865/#890).
     return [
       marker,
       summaryLine,
+      ...formatReasonBlock(evidence.reason),
       '',
       `<details><summary>output (last ${lineCount} lines)</summary>`,
       '',

@@ -54,6 +54,7 @@ export {
   type LinkMethod,
   type PrCandidate,
   type PullRequestDetail,
+  type PullRequestGraphqlDetail,
   type MergeResult,
   type DeleteHeadRefResult,
   type RequiredChecksResult,

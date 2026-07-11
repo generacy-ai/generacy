@@ -23,6 +23,7 @@ import { contextCommand } from './context.js';
 import { cockpitMergeCommand } from './merge.js';
 import { queueCommand } from './queue.js';
 import { resumeCommand } from './resume.js';
+import { cockpitMcpCommand } from './mcp/index.js';
 
 export function cockpitCommand(): Command {
   const command = new Command('cockpit');
@@ -35,6 +36,7 @@ export function cockpitCommand(): Command {
   command.addCommand(cockpitMergeCommand());
   command.addCommand(queueCommand());
   command.addCommand(resumeCommand());
+  command.addCommand(cockpitMcpCommand());
 
   return command;
 }

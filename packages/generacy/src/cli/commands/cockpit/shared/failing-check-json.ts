@@ -8,7 +8,12 @@ export type RedReason =
   | 'missing-label'
   | 'unresolved'
   | 'pr-is-draft'
-  | 'ambiguous-resolution';
+  | 'ambiguous-resolution'
+  | 'pr-flag-linkage-refused'
+  | 'pr-flag-closed-unmerged';
+
+/** FR-006a — sub-kind for `pr-flag-linkage-refused` refusals. */
+export type PrFlagLinkageKind = 'empty-refs' | 'mismatch';
 
 export interface IssueRefWithState {
   owner: string;
@@ -26,6 +31,10 @@ export interface FailingCheckPayload {
   linkMethod?: LinkMethod;
   failingChecks: FailingCheck[];
   issue?: IssueRefWithState;
+  /** FR-006a — sub-kind for `pr-flag-linkage-refused` refusals. */
+  kind?: PrFlagLinkageKind;
+  /** Human-readable remediation string for pr-flag refusals. */
+  message?: string;
 }
 
 export interface BuildFailingCheckInput {
@@ -35,12 +44,16 @@ export interface BuildFailingCheckInput {
   linkMethod?: LinkMethod;
   failingChecks?: FailingCheck[];
   issue?: IssueRefWithState;
+  /** Only for `pr-flag-linkage-refused`. */
+  kind?: PrFlagLinkageKind;
+  /** Only for `pr-flag-linkage-refused` and `pr-flag-closed-unmerged`. */
+  message?: string;
 }
 
 export function buildFailingCheckPayload(
   input: BuildFailingCheckInput,
 ): FailingCheckPayload {
-  const { reason, pr, candidates, linkMethod, failingChecks = [], issue } = input;
+  const { reason, pr, candidates, linkMethod, failingChecks = [], issue, kind, message } = input;
 
   if (issue !== undefined) {
     // I-6: state and stateReason are paired — if state is set, stateReason
@@ -65,7 +78,9 @@ export function buildFailingCheckPayload(
   const isSinglePrReason =
     reason === 'unresolved' ||
     reason === 'missing-label' ||
-    reason === 'checks-failing';
+    reason === 'checks-failing' ||
+    reason === 'pr-flag-linkage-refused' ||
+    reason === 'pr-flag-closed-unmerged';
   if (isSinglePrReason && candidates !== undefined) {
     throw new Error(
       `FailingCheckPayload invariant I-10: candidates MUST NOT be set for reason='${reason}'`,
@@ -194,6 +209,54 @@ export function buildFailingCheckPayload(
       linkMethod,
       failingChecks: [],
     });
+  }
+
+  if (reason === 'pr-flag-linkage-refused') {
+    if (pr == null) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-flag-linkage-refused' requires non-null pr",
+      );
+    }
+    if (kind !== 'empty-refs' && kind !== 'mismatch') {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-flag-linkage-refused' requires kind ∈ { 'empty-refs' | 'mismatch' }",
+      );
+    }
+    if (failingChecks.length !== 0) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-flag-linkage-refused' must have empty failingChecks",
+      );
+    }
+    const base: FailingCheckPayload = {
+      status: 'red',
+      reason,
+      pr,
+      failingChecks: [],
+      kind,
+    };
+    if (message !== undefined) base.message = message;
+    return applyIssue(base);
+  }
+
+  if (reason === 'pr-flag-closed-unmerged') {
+    if (pr == null) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-flag-closed-unmerged' requires non-null pr",
+      );
+    }
+    if (failingChecks.length !== 0) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-flag-closed-unmerged' must have empty failingChecks",
+      );
+    }
+    const base: FailingCheckPayload = {
+      status: 'red',
+      reason,
+      pr,
+      failingChecks: [],
+    };
+    if (message !== undefined) base.message = message;
+    return applyIssue(base);
   }
 
   throw new Error(`FailingCheckPayload: unknown reason ${reason as string}`);
