@@ -17,7 +17,7 @@
 - C: Different default value (specify).
 - D: Configured via a different mechanism — config file, CLI flag, etc. (specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — 600_000 ms default, env override `COCKPIT_MCP_BUS_IDLE_TTL_MS`. It's the pattern the same module already established for the LRU bounds (`COCKPIT_MCP_EVENT_RETENTION_*`), so it's one idiom, not two; tests get tiny TTLs without rebuild games, and operators get a tuning surface for free. B removes tunability for no gain; D invents a second config mechanism inside a module that already has one.
 
 ### Q2: What counts as activity that holds/resets the idle-TTL clock?
 
@@ -31,7 +31,7 @@
 - C: Union of A and B — any of `acquire`, `waitFor`, `emit` resets the clock.
 - D: Only `release()` at refcount 0 arms the clock; any subsequent `acquire()` disarms it (poll-events and empty waitFors don't matter).
 
-**Answer**: *Pending*
+**Answer**: **D** — the clock arms at `release()`-to-refcount-0 and disarms on `acquire()`; emits and waiter internals are irrelevant. The TTL exists to bound resources for *abandoned* epics, and abandonment is defined by caller absence, nothing else. Invariant: a bus is alive iff refcount > 0 or its armed clock is younger than the TTL. B and C let a busy-but-abandoned epic (events firing, nobody polling) live forever — a leak with a heartbeat. A converges to D in practice (a `waitFor` only exists inside a call, so refcount is already > 0), but D names the mechanism precisely, which is what the fixture assertions need.
 
 ### Q3: Backward compatibility for cursor tokens issued before the instance-nonce change
 
@@ -45,7 +45,7 @@
 - C: Treat missing-nonce as `never-issued` — matches today's misclassification behavior for this case (not recommended, but explicit).
 - D: Add a cursor schema version field; legacy = missing version = `discarded` (same effect as A but explicit versioning story).
 
-**Answer**: *Pending*
+**Answer**: **A** — missing nonce classifies as `discarded`/reset with `resetFrom`. Semantically the legacy cursor's issuing instance no longer exists — identical to cross-instance, so it takes the same class. Critically *not* B: routing a routine upgrade artifact into the `invalid-cursor` caller-bug class would trip agency#408's circuit breaker (and under strict fail-loud, abort runs) on the first post-deploy call — the exact misclassification this fix exists to end. D's version field buys nothing the nonce doesn't already provide (missing nonce *is* the v1 discriminant) — speculative versioning for short-lived in-memory-era tokens.
 
 ### Q4: Poller cadence while the bus is alive but has no active callers
 
@@ -59,7 +59,7 @@
 - C: Slower cadence (e.g., 2×–5× default) when refcount=0; snap back to full rate on next `acquire()`. Between-call events still delivered but with higher latency.
 - D: Pause the poller entirely at refcount=0; recover between-call events via a one-shot catch-up poll at the next `acquire()`. Trades continuous-observer semantics for cost.
 
-**Answer**: *Pending*
+**Answer**: **D** — pause the poller at refcount 0; one catch-up poll on the next `acquire()`. Key point: the bus now *retains its snapshot map* across the gap, so the catch-up poll diffs against the last-known state and captures everything that changed while no one was listening — and delivers it exactly when a listener exists to receive it. Observable semantics match continuous polling up to the same netting quantization poll-based watch already has (a label added and removed within one 30s tick is invisible today too; D just widens that window to the inter-call gap, which for the sequential auto session is seconds). Full rate resumes whenever a waiter is in flight. C is the worst of both worlds — background API cost *and* added latency; A/B pay continuous GitHub API traffic per idle bus for events nobody can consume yet.
 
 ### Q5: Cap on concurrent live buses
 
@@ -73,4 +73,4 @@
 - C: Hard cap; new `acquire()` fails when at cap (returns a typed error; caller decides how to react).
 - D: Cap by env var (default unlimited), LRU eviction behavior when configured.
 
-**Answer**: *Pending*
+**Answer**: **B** — soft cap (default 100), LRU eviction, evicted cursors classify as `discarded`. With Q4-D an idle bus is nearly free, but "nearly free × unbounded" is how long-lived servers leak — bounded-by-default is the right posture, and the eviction is non-silent by construction because the discarded classification reaches the evicted caller through the existing taxonomy (the no-silent-caps principle satisfied structurally). C's hard-fail punishes the *new* epic for old epics' idleness — backwards. Follow the Q1 env pattern for the override (`COCKPIT_MCP_BUS_MAX` or similar).

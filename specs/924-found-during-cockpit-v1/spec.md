@@ -1,10 +1,8 @@
-# Feature Specification: cockpit_await_events — bus survives between calls; cursors typed by lifetime
+# Feature Specification: Found during the cockpit v1
 
 **Branch**: `924-found-during-cockpit-v1` | **Date**: 2026-07-12 | **Status**: Draft
 
 ## Summary
-
-`cockpit_await_events` currently destroys its per-epic bus at the end of every call (refcount-0 teardown in `finally`), so any cursor returned by call N is classified as `never-issued` by call N+1 and the whole session degrades to a startup-sweep per batch. This spec fixes the two structural bugs behind that: (1) decouple bus lifetime from call lifetime with an idle TTL so the poller keeps running between sequential calls, and (2) instance-tag cursors so that server-restart and TTL-eviction produce a `discarded`/reset signal rather than `never-issued`. Together these restore the FR-008 contract ("passing the same cursor returns the same tail") and the SC-003 dispatch-round win the tool exists to deliver.
 
 Found during the cockpit v1.5 auto-mode integration smoke test (generacy-ai/tetrad-development#92), finding #58 — first MCP-path run (snappoll-1). Companion agency finding covers the playbook-side circuit breaker.
 
@@ -43,79 +41,61 @@ Two consequences, the second subtler:
 
 ## User Stories
 
-### US1: Cursor survives across sequential await calls (P1)
+### US1: Sequential auto-session cursor reuse
 
-**As an** auto-mode cockpit session (single sequential caller via MCP),
-**I want** the cursor I received from call N to be accepted by call N+1 and return only newer events,
-**So that** I get the incremental dispatch-round semantics `cockpit_await_events` was designed for — not a per-batch full-state sweep.
-
-**Acceptance Criteria**:
-- [ ] Two back-to-back `cockpit_await_events` calls with the second passing the cursor returned by the first succeed with `status !== 'error'`.
-- [ ] The second call returns only events that occurred *after* the first call returned (no re-delivery of previously seen events).
-- [ ] An event emitted between the two calls (while no waiter is in flight) appears in the second call's batch.
-
-### US2: TTL eviction and process restart produce a typed reset, not a caller-bug error (P1)
-
-**As an** auto-mode session whose held cursor is no longer valid because the bus was idle-evicted or the server restarted,
-**I want** the response to say `discarded` (or the equivalent reset-to-head class, with `resetFrom` populated),
-**So that** my playbook's strict fail-loud posture on `never-issued` stays trustworthy — a `never-issued` reply again means "genuine caller bug", not "server did routine housekeeping".
+**As a** cockpit auto-mode session driving one epic through `cockpit_await_events`,
+**I want** the cursor returned by batch N to be accepted by batch N+1,
+**So that** each subsequent call returns only newer events and the SC-003 dispatch-round win the tool exists to deliver is not erased by a per-batch recovery sweep.
 
 **Acceptance Criteria**:
-- [ ] Cursor issued before an idle-TTL eviction yields the reset/`resetFrom` class, not `invalid-cursor`/`never-issued`.
-- [ ] Cursor issued by a prior server instance (nonce mismatch) yields the reset/`resetFrom` class, not `never-issued`.
-- [ ] Cursor with same instance nonce but position `>= nextCursor` (impossible position for this instance) still yields `never-issued`.
+- [ ] Two sequential `cockpit_await_events` calls: cursor from call 1 is accepted by call 2 and returns only newer events (no `invalid-cursor`).
+- [ ] An event emitted between two calls (no waiter in flight) is delivered by the second call.
 
-### US3: Idle epics don't leak resources (P2)
+### US2: Correct cursor-lifetime classification across TTL eviction and process restart
 
-**As** the server process hosting many transient epics,
-**I want** the bus for an epic with no waiter and no drain activity to be torn down after an idle TTL,
-**So that** abandoned epics don't accumulate pollers and LRU buffers indefinitely.
+**As a** downstream caller (playbook, agency circuit breaker) that treats `never-issued` as a fail-loud caller bug,
+**I want** cursors invalidated by TTL eviction OR by server restart to classify as `discarded` (with `resetFrom`) rather than `never-issued`,
+**So that** routine lifecycle events do not trip strict fail-loud paths and `never-issued` remains a trustworthy caller-bug signal.
 
 **Acceptance Criteria**:
-- [ ] Bus with refcount 0 and no waiter/drain activity is torn down after the configured idle TTL.
-- [ ] Bus with refcount 0 but still within TTL keeps its poller running (event emitted while no call is in flight is delivered by the next call).
+- [ ] Idle-TTL eviction: a post-eviction cursor yields the reset/`resetFrom` path, not `invalid-cursor`.
+- [ ] Cross-instance cursor (nonce mismatch) yields `discarded`/reset, not `never-issued`.
+- [ ] Same-instance out-of-range cursor still yields `never-issued` (genuine caller bug preserved).
+- [ ] Legacy (no-nonce) cursor tokens classify as `discarded`/reset with `resetFrom` on the first post-deploy call.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Bus lifetime is decoupled from call lifetime: `release()` at refcount 0 MUST NOT immediately tear down subscription, cursor counter, LRU buffer, or poller. | P1 | Root fix for cross-call cursor validity. |
-| FR-002 | An acquired bus persists until an idle TTL expires (no waiter and no drain activity for the configured window). | P1 | Default TTL: ~10 min (tunable). |
-| FR-003 | While the bus is alive, its monotonic cursor counter, LRU event buffer, poller, and snapshot state are preserved across calls. | P1 | Required for FR-008 "same cursor returns the same tail" contract. |
-| FR-004 | Cursor tokens embed a per-process instance nonce generated once at server start. | P1 | Enables the cross-instance discrimination in FR-005/FR-006. |
-| FR-005 | Cursors presented with a matching instance nonce and position >= `nextCursor` classify as `never-issued`. | P1 | Preserves the caller-bug signal the playbook relies on. |
-| FR-006 | Cursors presented with a non-matching instance nonce classify as `discarded` (or equivalent reset class), with the response carrying a reset-to-head signal (`resetFrom` or equivalent). | P1 | Covers server-restart case. |
-| FR-007 | Cursors presented after their bus was idle-TTL-evicted classify as `discarded`/reset with `resetFrom`, not as `never-issued`. | P1 | Covers TTL-eviction case. Reuses the existing Q3-D eviction taxonomy. |
-| FR-008 | Two sequential `cockpit_await_events` calls, where the second reuses the first's returned cursor, MUST return only events newer than the first call's tail. | P1 | Contract restoration — this is FR-008 from the original tool spec being made to hold again. |
-| FR-009 | Concurrent-caller acquire/release bookkeeping continues to work correctly (multiple concurrent callers still share one bus/poller). | P2 | Regression guard — the original design goal for the refcount pattern still holds. |
-| FR-010 | The idle-TTL window and the instance-nonce format are internal implementation details, not part of the public MCP tool contract. | P3 | Callers only observe the class discrimination via response `class`/`resetFrom`. |
+| FR-001 | The per-epic event bus MUST persist for the server-process lifetime once acquired, decoupled from individual `cockpit_await_events` call lifetimes. `release()` at refcount 0 MUST NOT destroy the bus, its monotonic cursor counter, LRU buffer, or snapshot state. | P1 | Root cause of the observed bug. |
+| FR-002 | The bus registry MUST evict a bus after a configurable idle-TTL window with no callers. Default: 600_000 ms (10 min), configurable via env var `COCKPIT_MCP_BUS_IDLE_TTL_MS`. Matches the existing `COCKPIT_MCP_EVENT_RETENTION_*` pattern. | P1 | Clarified Q1-A. |
+| FR-003 | The idle-TTL clock MUST arm at `release()`-to-refcount-0 and disarm on `acquire()`. Poller `emit()` and internal `waitFor` invocations MUST NOT reset the clock. Invariant: a bus is alive iff refcount > 0 or its armed clock is younger than the TTL. | P1 | Clarified Q2-D. Prevents busy-but-abandoned-epic leaks. |
+| FR-004 | The per-epic poller MUST pause when the bus is at refcount 0. On the next `acquire()`, the bus MUST perform a one-shot catch-up poll that diffs against the last-known snapshot, capturing every change that occurred while no caller was listening. Full-rate polling resumes whenever a waiter is in flight. | P1 | Clarified Q4-D. The bus retains its snapshot map across the gap. |
+| FR-005 | Cursor tokens MUST embed a per-process instance nonce. Cursor classification MUST become: (a) same-instance + in-range → valid; (b) same-instance + out-of-range → `never-issued` (genuine caller bug); (c) different-instance → `discarded` with `resetFrom` (server restart or TTL eviction). | P1 | Restores `never-issued` as a trustworthy caller-bug class. |
+| FR-006 | Legacy cursor tokens (issued before the nonce change, no `nonce` field on decode) MUST classify as `discarded` with `resetFrom`, not as `never-issued` or `malformed`. Callers experience a one-time silent reset on their first post-deploy call. | P1 | Clarified Q3-A. Prevents upgrade artifacts from tripping agency#408 circuit breaker. |
+| FR-007 | The bus registry MUST enforce a soft cap on concurrent live buses. Default: 100, configurable via env var (e.g. `COCKPIT_MCP_BUS_MAX`). On new `acquire()` at cap, the least-recently-active bus MUST be evicted. Evicted-bus cursors MUST classify as `discarded` (same taxonomy as TTL eviction), so eviction is non-silent by construction. | P2 | Clarified Q5-B. Bounded-by-default; no hard fail on new epic. |
+| FR-008 | `cockpit_await_events` MUST honor the contract "passing the same cursor returns the same tail" across sequential calls within the same server-process instance and within the idle-TTL window. | P1 | Restored core contract. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Cross-call cursor acceptance rate in a single auto session | 100% of same-instance, in-window cursors accepted (no `invalid-cursor` for the sequential-caller pattern) | Run auto session against a snappoll-style epic; count `invalid-cursor` responses across N sequential `cockpit_await_events` calls; expect 0. |
-| SC-002 | Dispatch-round win restored | Second and subsequent calls deliver only newer events (no per-batch startup-sweep degradation) | Compare batch payloads across calls; assert absence of re-delivered events; assert absence of the "recovery sweep every batch" pattern in session logs. |
-| SC-003 | Between-call event delivery | 100% of events emitted while no waiter is in flight are delivered by the next call | Regression test: emit event between calls, assert it appears in the next batch. |
-| SC-004 | `never-issued` becomes a trustworthy caller-bug signal | 0 false-positive `never-issued` responses caused by TTL eviction or server restart | Regression tests for TTL eviction and cross-instance cursors both yield `discarded`/reset, not `never-issued`. |
-| SC-005 | Idle-epic resource bound | Bus resources released within one idle-TTL window after last waiter/drain | Regression test: after last call + idle TTL, `registry.has(key) === false` and poller stopped. |
+| SC-001 | Sequential-cursor acceptance rate in auto-mode runs | 100% (no `invalid-cursor` for cursor from prior call within same instance + TTL) | Integration test: two sequential `cockpit_await_events` calls, cursor N accepted by call N+1. |
+| SC-002 | Between-call event delivery (no in-flight waiter) | 100% (event emitted between calls appears in next batch) | Regression test asserts event delivery through the catch-up poll path. |
+| SC-003 | Dispatch-round efficiency in auto sessions | Sweeps no longer required per batch (revert of the "sweep per batch" degradation observed in snappoll-1 run 8) | Auto-session smoke test: batch count of recovery sweeps drops to at most one per session (startup only). |
+| SC-004 | Cursor classification correctness | 0 misclassifications of TTL-evicted / cross-instance / legacy cursors as `never-issued` | Regression test matrix covers all three cases; agency#408 circuit breaker does not trip on routine lifecycle events. |
 
 ## Assumptions
 
-- The dominant real-world caller pattern is a single auto-mode session calling `cockpit_await_events` sequentially, not multiple concurrent callers. The refcounted acquire/release pattern was correct for the latter; the fix must not break it while making the former work.
-- The existing `parseCursor` classification taxonomy already models an "expired/discarded" (reset-to-head + `resetFrom`) class distinct from `never-issued` (Q3-D taxonomy noted in the source). Instance-nonce and TTL-eviction paths route into that existing class rather than a new class.
-- LRU buffer bounds already exist and bound memory per bus, so an idle-TTL of ~10 min is a resource-safety upper bound, not a correctness requirement.
-- The MCP server's process lifetime is the natural upper bound on cursor validity; process restart is expected to reset held cursors (via the `discarded` class, not `never-issued`).
-- The companion playbook-side circuit breaker (agency finding) will land alongside so that `never-issued` becomes fail-loud again once this fix makes the class trustworthy.
+- The MCP server is a single in-memory process; no cross-process cursor sharing is required. Cursor nonces are per-process instance identifiers, not global.
+- The existing LRU event buffer bounds memory per bus; the idle-TTL and soft cap bound the number of live buses.
+- The 30 s poller cadence and `COCKPIT_MCP_EVENT_RETENTION_*` env-var idiom are the correct references for new tunables.
 
 ## Out of Scope
 
-- Persisting bus state or cursors across server restarts (restart is a `discarded` event by design).
-- Cross-process/cross-instance cursor portability.
-- Changing the MCP tool's public request/response schema beyond what's necessary to preserve the existing class/`resetFrom` discrimination.
-- Playbook-side changes to how `cockpit_await_events` failures are handled (companion agency finding).
-- Tuning-UI for the idle TTL (internal constant / env-var only for v1).
-- Instrumentation/observability for bus lifetime beyond structured logs sufficient for the regression tests.
+- Persistent (on-disk) cursors surviving across server restarts. Cross-instance cursors remain `discarded`; durable subscription is not in this bugfix.
+- Playbook / agency-side circuit-breaker changes. Companion agency finding covers that side; this spec restores the classification the playbook relies on.
+- Changes to the `cockpit_await_events` public wire shape beyond the added nonce field in the cursor token payload.
 
 ---
 
