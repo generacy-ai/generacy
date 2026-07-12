@@ -5,9 +5,11 @@
  * coalesces bursts within `coalesceWindowMs`; soft-cap at `maxBatchSize`
  * (returned cursor is the continuation).
  *
- * Cursor classes (Q3-D):
+ * Cursor classes:
  *   - malformed / never-issued / wrong-epic → typed `invalid-cursor` error
  *   - expired → silent reset to head with `resetFrom: "expired"`
+ *   - discarded → silent reset to head with `resetFrom: "discarded"`
+ *     (nonce missing, cross-instance, or bus evicted)
  *   - valid → normal path
  */
 import type { CommandRunner } from '@generacy-ai/cockpit';
@@ -16,12 +18,12 @@ import { normalizeIssueRef } from '../ref-input.js';
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import { AwaitEventsInputSchema, type AwaitEventsInput } from '../schemas.js';
 import { acquireEpicBus, type Acquired } from '../event-bus-registry.js';
-import { encodeCursor, type EpicEventBus } from '../event-bus.js';
+import { encodeCursor, INSTANCE_NONCE, type EpicEventBus } from '../event-bus.js';
 
 export interface CockpitAwaitEventsData {
   events: CockpitStreamEvent[];
   cursor: string;
-  resetFrom?: 'expired';
+  resetFrom?: 'expired' | 'discarded';
 }
 
 export interface CockpitAwaitEventsDeps {
@@ -83,7 +85,7 @@ async function drainOrWait(
 ): Promise<ToolResult<CockpitAwaitEventsData>> {
   const parseResult = bus.parseCursor(args.cursor);
 
-  let resetFrom: 'expired' | undefined;
+  let resetFrom: 'expired' | 'discarded' | undefined;
   let sinceCursor: number;
   switch (parseResult.kind) {
     case 'malformed':
@@ -111,6 +113,10 @@ async function drainOrWait(
       resetFrom = 'expired';
       sinceCursor = 0;
       break;
+    case 'discarded':
+      resetFrom = 'discarded';
+      sinceCursor = 0;
+      break;
     case 'valid':
       sinceCursor = parseResult.position;
       break;
@@ -124,7 +130,12 @@ async function drainOrWait(
   });
 
   if (result.entries.length === 0) {
-    const cursorStr = args.cursor ?? encodeCursor(bus.epic, sinceCursor);
+    // When we reset (expired/discarded), always issue a fresh nonce-carrying
+    // cursor rather than echoing the caller's invalid token.
+    const cursorStr =
+      resetFrom == null && args.cursor != null
+        ? args.cursor
+        : encodeCursor(bus.epic, sinceCursor, INSTANCE_NONCE, bus.busNonce);
     return {
       status: 'ok',
       data: {
@@ -140,7 +151,7 @@ async function drainOrWait(
     status: 'ok',
     data: {
       events: result.entries.map((e) => e.event),
-      cursor: encodeCursor(bus.epic, last.cursor),
+      cursor: encodeCursor(bus.epic, last.cursor, INSTANCE_NONCE, bus.busNonce),
       ...(resetFrom != null ? { resetFrom } : {}),
     },
   };

@@ -5,17 +5,21 @@
  * uses (poll loop + aggregate emits). Monotonic cursor; LRU buffer bounded
  * by `retentionCount` AND `retentionMs` (whichever hits first).
  *
- * Cursor is base64-encoded JSON `{epic, position}` — opaque to callers.
- * Distinct cursor classes (Q3-D):
+ * Cursor is base64-encoded JSON `{epic, position, pnonce, bnonce}` — opaque
+ * to callers. `pnonce` is a per-process instance nonce (16 hex chars);
+ * `bnonce` is a per-bus-instance nonce (16 hex chars). Distinct classes:
  *   - `valid`         → normal path
  *   - `expired`       → position below the low-watermark; return `resetFrom: "expired"`
+ *   - `discarded`     → nonce missing (legacy) or mismatched (cross-instance / evicted);
+ *                       reset to head with `resetFrom: "discarded"`
  *   - `malformed`     → not base64 / not JSON / bad shape
- *   - `never-issued`  → shape ok but position outside issued range (0 or > next)
+ *   - `never-issued`  → shape ok, nonces match, but position outside issued range
  *   - `wrong-epic`    → cursor was issued for a different epic
  *
  * Retention env knobs: `COCKPIT_MCP_EVENT_RETENTION_COUNT` (default 10_000),
  * `COCKPIT_MCP_EVENT_RETENTION_MS` (default 600_000).
  */
+import crypto from 'node:crypto';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
 
 export interface EventBusEntry {
@@ -41,6 +45,7 @@ export interface WaitForResult {
 export type CursorParseResult =
   | { kind: 'valid'; position: number }
   | { kind: 'expired'; requestedPosition: number }
+  | { kind: 'discarded'; reason: 'legacy' | 'cross-instance' | 'evicted' }
   | { kind: 'malformed' }
   | { kind: 'never-issued' }
   | { kind: 'wrong-epic'; requestedEpic: string; boundEpic: string };
@@ -50,6 +55,8 @@ export interface EpicEventBusOptions {
   retentionCount?: number;
   retentionMs?: number;
   now?: () => number;
+  /** Test seam: override the per-bus nonce. Defaults to a fresh random. */
+  nonce?: string;
 }
 
 interface Waiter {
@@ -57,12 +64,28 @@ interface Waiter {
   resolve: (entries: EventBusEntry[]) => void;
 }
 
-export function encodeCursor(epic: string, position: number): string {
-  const json = JSON.stringify({ epic, position });
+/**
+ * Per-process nonce generated once at module load. Embedded in every cursor
+ * token so cross-instance cursors (server restart) classify as `discarded`
+ * rather than `never-issued`.
+ */
+export const INSTANCE_NONCE: string = crypto.randomBytes(8).toString('hex');
+
+const NONCE_SHAPE = /^[0-9a-f]{16}$/;
+
+export function encodeCursor(
+  epic: string,
+  position: number,
+  pnonce: string,
+  bnonce: string,
+): string {
+  const json = JSON.stringify({ epic, position, pnonce, bnonce });
   return Buffer.from(json, 'utf-8').toString('base64');
 }
 
-export function decodeCursor(str: string): { epic: string; position: number } | null {
+export function decodeCursor(
+  str: string,
+): { epic: string; position: number; pnonce?: string; bnonce?: string } | null {
   let buf: Buffer;
   try {
     buf = Buffer.from(str, 'base64');
@@ -80,11 +103,22 @@ export function decodeCursor(str: string): { epic: string; position: number } | 
   const record = parsed as Record<string, unknown>;
   if (typeof record.epic !== 'string' || typeof record.position !== 'number') return null;
   if (!Number.isInteger(record.position) || record.position < 0) return null;
-  return { epic: record.epic, position: record.position };
+  const out: { epic: string; position: number; pnonce?: string; bnonce?: string } = {
+    epic: record.epic,
+    position: record.position,
+  };
+  if (typeof record.pnonce === 'string' && NONCE_SHAPE.test(record.pnonce)) {
+    out.pnonce = record.pnonce;
+  }
+  if (typeof record.bnonce === 'string' && NONCE_SHAPE.test(record.bnonce)) {
+    out.bnonce = record.bnonce;
+  }
+  return out;
 }
 
 export class EpicEventBus {
   readonly epic: string;
+  readonly busNonce: string;
   private buffer: EventBusEntry[] = [];
   private nextCursor = 1;
   private waiters: Waiter[] = [];
@@ -97,6 +131,7 @@ export class EpicEventBus {
     this.retentionCount = options.retentionCount ?? 10_000;
     this.retentionMs = options.retentionMs ?? 600_000;
     this.clock = options.now ?? Date.now;
+    this.busNonce = options.nonce ?? crypto.randomBytes(8).toString('hex');
   }
 
   emit(event: CockpitStreamEvent): EventBusEntry {
@@ -116,8 +151,17 @@ export class EpicEventBus {
     if (str == null) return { kind: 'valid', position: 0 };
     const decoded = decodeCursor(str);
     if (decoded == null) return { kind: 'malformed' };
+    if (decoded.pnonce == null || decoded.bnonce == null) {
+      return { kind: 'discarded', reason: 'legacy' };
+    }
     if (decoded.epic !== this.epic) {
       return { kind: 'wrong-epic', requestedEpic: decoded.epic, boundEpic: this.epic };
+    }
+    if (decoded.pnonce !== INSTANCE_NONCE) {
+      return { kind: 'discarded', reason: 'cross-instance' };
+    }
+    if (decoded.bnonce !== this.busNonce) {
+      return { kind: 'discarded', reason: 'evicted' };
     }
     if (decoded.position === 0) return { kind: 'valid', position: 0 };
     if (decoded.position >= this.nextCursor) return { kind: 'never-issued' };
