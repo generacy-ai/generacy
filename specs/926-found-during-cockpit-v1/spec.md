@@ -54,28 +54,33 @@ Alternative considered: re-cycling the review pair (remove `waiting-for:implemen
 - [ ] Removing `waiting-for:address-pr-feedback` (with `waiting-for:implementation-review` still present) emits exactly one `issue-transition` event with `to = waiting-for:implementation-review`.
 - [ ] End-to-end: request-changes → server-side feedback loop → completion → a `watch` / `cockpit_await_events` consumer receives the completion transition (the auto re-review trigger).
 
-### US3: Terminal label state is clean after a feedback cycle
+### US3: Terminal label state is clean after any handler return
 
-**As a** downstream observer (auto playbook, cockpit state classifier, human on the cockpit UI) reading labels after a completed PR-feedback cycle,
-**I want** `agent:in-progress` cleared alongside `waiting-for:address-pr-feedback` when the handler finishes,
-**So that** the resulting label set (`waiting-for:implementation-review` + `agent:paused`) is a clean, D.3-ready gate — not a `agent:paused` + stale `agent:in-progress` coexistence in the #902 under-cleaned-terminal-state family.
+**As a** downstream observer (auto playbook, cockpit state classifier, human on the cockpit UI) reading labels after the PR-feedback handler has returned,
+**I want** `agent:in-progress` cleared on **every** terminal return from `pr-feedback-handler.ts` (happy path, no-unresolved-threads, all-comments-untrusted, and `blocked:stuck-feedback-loop` disposition),
+**So that** the resulting label set is never a lying pair of "`agent:in-progress` + `agent:paused`" or "`agent:in-progress` + `blocked:stuck-feedback-loop`" — the #902 under-cleaned-terminal-state family is closed for this handler regardless of which exit path fired.
 
 **Acceptance Criteria**:
-- [ ] After the PR-feedback handler completes, `agent:in-progress` is absent from the issue's label set.
-- [ ] After the PR-feedback handler completes, `waiting-for:implementation-review` and `agent:paused` remain (fresh D.3-ready gate).
-- [ ] The handler's completion label edit is a single combined edit (add-before-remove / atomicity conventions), not two sequential writes.
+- [ ] After the PR-feedback handler completes via the happy path, `agent:in-progress` is absent and `waiting-for:implementation-review` + `agent:paused` remain (fresh D.3-ready gate).
+- [ ] After the PR-feedback handler completes via the Case A path (no unresolved threads), `agent:in-progress` is absent.
+- [ ] After the PR-feedback handler completes via the Case B path (all comments untrusted, `waiting-for:address-pr-feedback` retained), `agent:in-progress` is absent.
+- [ ] After the PR-feedback handler exits via a `blocked:stuck-feedback-loop` disposition, `agent:in-progress` is absent (and `blocked:stuck-feedback-loop` + `waiting-for:address-pr-feedback` are present, as designed).
+- [ ] The `agent:in-progress` clear is implemented **once** as a shared exit path / `finally`, not per-site — a future fifth terminal return cannot reintroduce the leak.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `WAITING_PIPELINE_ORDER` in `packages/cockpit/src/state/precedence.ts` MUST rank `waiting-for:address-pr-feedback` **ahead of** `waiting-for:implementation-review`, following the precedent #883 set for `blocked:stuck-feedback-loop` ("surface the more-specific active state first when both coexist"). | P1 | Root cause fix — one-line ordering change. |
+| FR-001 | `WAITING_PIPELINE_ORDER` in `packages/cockpit/src/state/precedence.ts` MUST rank `waiting-for:address-pr-feedback` at **index 1**, immediately after `blocked:stuck-feedback-loop` and ahead of every other `waiting-for:*` gate. Follows #883's precedent ("surface the more-specific active state first when both coexist") applied verbatim: an actively-rewriting-code state outranks any passive review gate, not just its documented co-occurrent. | P1 | Root cause fix — one-line ordering change. Resolves Q1 (Answer: A). |
 | FR-002 | With both `waiting-for:implementation-review` and `waiting-for:address-pr-feedback` labels present on an issue, the curated state MUST be `waiting-for:address-pr-feedback`. | P1 | Direct consequence of FR-001; testable at the classifier boundary. |
 | FR-003 | The add edge (`waiting-for:address-pr-feedback` applied while `waiting-for:implementation-review` is set) MUST produce exactly one `issue-transition` event on the event plane, with `to = waiting-for:address-pr-feedback`. | P1 | Restores the D.4 engage trigger. |
 | FR-004 | The remove edge (`waiting-for:address-pr-feedback` removed while `waiting-for:implementation-review` is set) MUST produce exactly one `issue-transition` event, with `to = waiting-for:implementation-review`. | P1 | Restores the D.3 re-review trigger — the specific signal the auto playbook needs. |
-| FR-005 | `pr-feedback-handler.ts` on cycle completion MUST clear `agent:in-progress` alongside `waiting-for:address-pr-feedback` in a single combined label edit (add-before-remove / atomicity conventions). | P1 | Handler label-hygiene fix. |
-| FR-006 | Fix MUST NOT require any change to the auto playbook's dispatch table (auto.md D.3 / D.4). The precedence change alone MUST make the existing dispatch rules fire correctly. | P1 | Non-negotiable — the fix's whole point is zero-playbook-change. |
-| FR-007 | Fix MUST NOT re-cycle the review pair (i.e. MUST NOT remove `waiting-for:implementation-review` at engage and re-add at completion) — the alternative considered and rejected in the issue. | P2 | Preserve minimum-writes, minimum-intermediate-states property. |
+| FR-005 | `pr-feedback-handler.ts` MUST clear `agent:in-progress` on **every** terminal return — happy path (line 357), Case A (line 222, no unresolved threads), Case B (line 232, all comments untrusted), and both `blocked:stuck-feedback-loop` dispositions (lines 302 and 337). The clear MUST be implemented **structurally** as a single shared exit path (e.g., `try/finally` or a single exit point), not as per-site edits at each of the four returns. | P1 | Resolves Q2 (Answer: C). Hoisting the clear guarantees a future fifth return cannot reintroduce the leak. |
+| FR-006 | The `agent:in-progress` clear on the happy-path exit (which also removes `waiting-for:address-pr-feedback`) MUST be a **single `removeLabels(['waiting-for:address-pr-feedback', 'agent:in-progress'])` call** — one client invocation expressing one intent. The contract is "one client invocation, fewest intermediate states" — GitHub's label API has no true atomic multi-label edit, so a partial-failure window is unavoidable at this layer and no worse than two sequential calls with a crash between them. | P1 | Resolves Q3 (Answer: A). Note: this relaxes the earlier "atomicity" wording — see Q3 clarification. |
+| FR-007 | Fix MUST NOT require any change to the auto playbook's dispatch table (auto.md D.3 / D.4). The precedence change alone MUST make the existing dispatch rules fire correctly. | P1 | Non-negotiable — the fix's whole point is zero-playbook-change. |
+| FR-008 | Fix MUST NOT re-cycle the review pair (i.e. MUST NOT remove `waiting-for:implementation-review` at engage and re-add at completion) — the alternative considered and rejected in the issue. | P2 | Preserve minimum-writes, minimum-intermediate-states property. |
+| FR-009 | Fix MUST NOT promote any of the other unlisted `waiting-for:*` gates (`pr-feedback`, `clarification-review`, `sibling-review`, `children-complete`, `epic-approval`, `dependencies`) into `WAITING_PIPELINE_ORDER` in this PR. Only `address-pr-feedback` is promoted here. | P1 | Resolves Q4 (Answer: A). Prevents assigning arbitrary precedence positions to gates whose co-occurrence semantics have not been established. |
+| FR-010 | The **plan phase** MUST produce an audit deliverable: for each of the six other unlisted `waiting-for:*` gates named in `packages/cockpit/src/state/precedence.ts:22-24`, grep the writers of that gate and record whether it *can* co-occur with any gate listed in `WAITING_PIPELINE_ORDER`. Any gate for which co-occurrence is demonstrated MUST get its own follow-up issue with its own co-occurrence analysis; gates with no demonstrated co-occurrence stay as-is with the finding recorded. | P1 | Resolves Q4 amendment. Applies the finding-#52 lesson (fix one surface, verifiably-identical siblings must not stay broken) with the right evidence bar. |
 
 ## Success Criteria
 
@@ -84,20 +89,24 @@ Alternative considered: re-cycling the review pair (remove `waiting-for:implemen
 | SC-001 | Curated-state correctness during a live PR-feedback cycle | Curated state is `waiting-for:address-pr-feedback` for the entire duration of the cycle | Classifier unit test: labels `{implementation-review, address-pr-feedback}` → `waiting-for:address-pr-feedback`; removing `address-pr-feedback` → `waiting-for:implementation-review`. |
 | SC-002 | Event emission on engage and complete edges | Exactly one `issue-transition` event per edge, with correct from/to | Event-stream test drives both label writes and asserts event count + payload. |
 | SC-003 | End-to-end auto re-review trigger | The auto session's `cockpit_await_events` consumer receives the completion transition and dispatches D.3 without operator intervention | End-to-end fixture: request-changes → server-side feedback loop → completion → assert consumer sees the completion event within one polling cadence. |
-| SC-004 | Terminal label-set hygiene | 0 occurrences of `agent:in-progress` coexisting with `agent:paused` after PR-feedback cycle completion | Handler completion test: assert `agent:in-progress` absent and `waiting-for:implementation-review` + `agent:paused` present after handler exits. |
+| SC-004 | Terminal label-set hygiene across all exit paths | 0 occurrences of `agent:in-progress` remaining on the issue after any of the four terminal returns from `pr-feedback-handler.ts` | Handler-completion tests, one per exit path (happy, Case A, Case B, blocked-stuck): assert `agent:in-progress` absent after handler exits; assert the surviving label set matches the path's designed post-state. |
+| SC-005 | Structural single-point clear | Exactly one code site clears `agent:in-progress` in `pr-feedback-handler.ts` | Static check / code review: the `removeLabels(..., 'agent:in-progress', ...)` call appears at a single shared exit point (e.g. `finally`), not at N return sites. Grep for the label name inside the handler shows one write occurrence. |
+| SC-006 | Plan-phase audit deliverable exists | `plan.md` (or a sibling artifact under `specs/926-found-during-cockpit-v1/`) contains a table of the six other unlisted `waiting-for:*` gates with each row recording writer location, demonstrated co-occurrence (yes/no), evidence, and follow-up issue link (or "no follow-up needed") | Documentation check: reviewer inspects the plan artifact and confirms all six gates are addressed. |
 
 ## Assumptions
 
 - `packages/cockpit/src/state/precedence.ts` `WAITING_PIPELINE_ORDER` is the sole precedence source used by the classifier for `waiting-for:*` label ranking; no shadow list needs to be kept in sync.
 - The auto playbook's D.3 / D.4 dispatch rules are already keyed on the curated `waiting-for:address-pr-feedback` and `waiting-for:implementation-review` states — no rule additions are required.
-- `pr-feedback-handler.ts` already writes labels through the atomic add-before-remove combined-edit path; adding `agent:in-progress` to the remove set is a one-line extension, not a new I/O pattern.
-- The #883 `blocked:stuck-feedback-loop` precedent is the correct pattern to follow — "surface the more-specific active state first when both coexist" applies identically here.
+- The #883 `blocked:stuck-feedback-loop` precedent — "surface the more-specific active state first when both coexist" — is the correct pattern to follow. Under Q1's answer, that principle generalises: an actively-rewriting-code state outranks **any** coexisting passive gate, and the only ordering that must still win (`blocked:stuck-feedback-loop` outranking `address-pr-feedback` — pause trumps activity) is preserved by placing `address-pr-feedback` at index 1.
+- `pr-feedback-handler.ts` has four terminal returns (line 222 Case A, line 232 Case B, lines 302/337 blocked-stuck, line 357 happy). #879's single-in-flight rule guarantees no other process legitimately holds `agent:in-progress` on the issue when this handler returns — so clearing `agent:in-progress` at every return is safe (it cannot race a concurrent legitimate writer).
+- The GitHub REST label API does not expose an atomic multi-label edit; "single combined edit" throughout this spec means "one client-side invocation, fewest intermediate states," not "atomic on the server." Partial failure is possible but no worse than the two-sequential-call alternative.
 
 ## Out of Scope
 
 - Retroactively fixing snappoll-1 run 9 or any other completed run. This spec restores the signal for future runs only.
 - Any change to the pre-#403 "re-check live state on every event" behavior. That masking mechanism is gone by design (efficiency contract); this fix restores the *actual* signal instead of reintroducing incidental redundancy.
-- Cleanup of other `agent:in-progress` under-cleaned-terminal-state sites in the #902 family — handled per-handler in their own issues; this spec only fixes the PR-feedback handler.
+- Cleanup of `agent:in-progress` under-cleaned-terminal-state sites in the #902 family in handlers **other than** `pr-feedback-handler.ts`. Those are handled per-handler in their own issues.
+- Promoting any of the six other unlisted `waiting-for:*` gates (`pr-feedback`, `clarification-review`, `sibling-review`, `children-complete`, `epic-approval`, `dependencies`) into `WAITING_PIPELINE_ORDER` in this PR (see FR-009). Follow-up issues are opened per-gate only when the plan-phase audit (FR-010) demonstrates real co-occurrence.
 - Any change to the wire shape of `cockpit_await_events` or the `issue-transition` event payload.
 
 ---
