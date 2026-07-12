@@ -1,20 +1,30 @@
 /**
  * `cockpit_merge` MCP tool handler.
  *
- * Wraps `runMerge`. Unlike other tools, this one accepts a *PR ref* — an
- * issue number passed here is a `wrong-kind` schema-level rejection.
- * (The CLI's `runMerge` today takes an issue number and resolves it to a PR,
- * but the MCP contract per spec § 4 is symmetric: PR-in, PR-out.)
+ * Wraps `runMerge` (or `runMergeWithExplicitPr` when `pr` is supplied). Takes
+ * an issue ref, resolves it to a linked PR, and squash-merges IFF the PR is
+ * green and the issue carries `completed:validate`. Fully symmetric with the
+ * CLI verb `cockpit merge <issue>` — the same contract on both transports.
+ *
+ * If the caller's `issue` resolves to a *PR* node (rather than an issue), the
+ * resolver returns `{ kind: 'pr-number' }` and the CLI emits exit-2 with
+ * `reason: 'pr-number'`. `toMcpResult` maps that to `class: 'wrong-kind'`
+ * with the guidance hint carried over verbatim.
+ *
+ * Optional `pr: <number>` mirrors the CLI's `--pr <number>` escape hatch:
+ * skips resolution but keeps every safety precondition (linkage verification,
+ * completed:validate, checks green). Never a resolution bypass of safety.
  */
 import type { CommandRunner, GhWrapper } from '@generacy-ai/cockpit';
-import { runMerge } from '../../merge.js';
-import { normalizeIssueRef } from '../ref-input.js';
+import { runMerge, runMergeWithExplicitPr } from '../../merge.js';
+import { assertQualifiedString, normalizeIssueRef } from '../ref-input.js';
 import { getLogger } from '../../../../utils/logger.js';
-import { wrapToolBoundary, type ToolResult } from '../errors.js';
+import { toMcpResult, wrapToolBoundary, type ToolResult } from '../errors.js';
 import { CockpitMergeInputSchema, type IssueRefInput } from '../schemas.js';
 
 export interface CockpitMergeInput {
-  pr: IssueRefInput;
+  issue: IssueRefInput;
+  pr?: number;
 }
 
 export interface CockpitMergeData {
@@ -38,6 +48,18 @@ export function cockpitMerge(
   return wrapToolBoundary(async () => {
     const parsed = CockpitMergeInputSchema.safeParse(input);
     if (!parsed.success) {
+      // Q5 → B: preserve the old-field-name redirection. If the caller sent
+      // a `pr` key whose value is NOT a positive integer (i.e. they meant
+      // the pre-#928 shape where `pr` carried the issue ref), surface the
+      // renamed-field guidance instead of Zod's raw unknown-key diagnosis.
+      if (isPrLikelyOldFieldName(input)) {
+        return {
+          status: 'error',
+          class: 'invalid-args',
+          detail:
+            "the 'pr' field was renamed to 'issue'; pass the issue ref, not the PR number",
+        };
+      }
       return {
         status: 'error',
         class: 'invalid-args',
@@ -45,30 +67,56 @@ export function cockpitMerge(
       };
     }
 
-    const normalized = await normalizeIssueRef(parsed.data.pr, {
-      expects: 'pr',
+    // Q1 → A: bare strings on the MCP transport must be qualified refs.
+    if (typeof parsed.data.issue === 'string') {
+      const qualified = assertQualifiedString(parsed.data.issue);
+      if (!qualified.ok) {
+        return { status: 'error', class: 'invalid-args', detail: qualified.error };
+      }
+    }
+
+    const normalized = await normalizeIssueRef(parsed.data.issue, {
+      expects: 'issue',
       ...(deps.runner != null ? { runner: deps.runner } : {}),
       ...(deps.gh != null ? { gh: deps.gh } : {}),
     });
     if (!normalized.ok) return normalized.error;
 
     const logger = getLogger();
-    const result = await runMerge({
-      gh: deps.gh ?? normalized.value.gh,
-      issue: normalized.value.ref.number,
-      repo: normalized.value.ref.nwo,
-      logger,
-    });
+    const nwo = normalized.value.ref.nwo;
+    const issueNumber = normalized.value.ref.number;
+    const gh = deps.gh ?? normalized.value.gh;
 
-    const url = `https://github.com/${normalized.value.ref.nwo}/pull/${normalized.value.ref.number}`;
+    const result =
+      parsed.data.pr != null
+        ? await runMergeWithExplicitPr({
+            gh,
+            issue: issueNumber,
+            repo: nwo,
+            prNumber: parsed.data.pr,
+            logger,
+          })
+        : await runMerge({
+            gh,
+            issue: issueNumber,
+            repo: nwo,
+            logger,
+          });
+
+    // Successful merge → synthesize a MCP payload. The CLI emits either an
+    // empty stdout (no notes) or a note followed by a branch-deletion suffix
+    // on success — neither is JSON. `result.prNumber` carries the resolved
+    // PR (or the caller's explicit `--pr <n>`).
     if (result.exitCode === 0) {
+      const prNumber = result.prNumber ?? parsed.data.pr ?? issueNumber;
+      const url = `https://github.com/${nwo}/pull/${prNumber}`;
       return {
         status: 'ok',
         data: {
           pr: {
             owner: normalized.value.ref.owner,
             repo: normalized.value.ref.repo,
-            number: normalized.value.ref.number,
+            number: prNumber,
             url,
           },
           action: 'merged',
@@ -77,25 +125,20 @@ export function cockpitMerge(
       };
     }
 
-    let raw: unknown = null;
-    try {
-      raw = JSON.parse(result.stdout);
-    } catch {
-      // fall through — non-JSON stdout, treat opaquely
-    }
-    const reason = extractReason(raw) ?? result.stdout.trim().split('\n')[0] ?? 'merge blocked';
-
-    return {
-      status: 'error',
-      class: 'gate-refusal',
-      detail: reason,
-    };
+    return toMcpResult<CockpitMergeData>(result.stdout, result.exitCode);
   });
 }
 
-function extractReason(raw: unknown): string | null {
-  if (raw == null || typeof raw !== 'object') return null;
-  const r = raw as { reason?: unknown };
-  if (typeof r.reason === 'string') return r.reason;
-  return null;
+/**
+ * Detects the pre-#928 field shape: a `pr` key whose value is NOT a positive
+ * integer (i.e. either a string, object, or non-integer number). Used to
+ * emit the renamed-field guidance instead of Zod's default error.
+ */
+function isPrLikelyOldFieldName(raw: unknown): boolean {
+  if (raw == null || typeof raw !== 'object') return false;
+  const r = raw as Record<string, unknown>;
+  if (!('pr' in r)) return false;
+  const pr = r.pr;
+  if (typeof pr === 'number' && Number.isInteger(pr) && pr > 0) return false;
+  return true;
 }

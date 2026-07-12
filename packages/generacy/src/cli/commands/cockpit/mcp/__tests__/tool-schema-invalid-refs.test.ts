@@ -48,8 +48,32 @@ describe('tool input schemas: invalid refs', () => {
     expect(result.success).toBe(false);
   });
 
-  it('cockpit_merge: rejects missing pr', () => {
-    expect(CockpitMergeInputSchema.safeParse({ issue: 1 }).success).toBe(false);
+  it('cockpit_merge: rejects missing issue', () => {
+    // #928: field renamed from `pr` to `issue`; bare number is rejected because
+    // IssueRefInputSchema requires either a qualified string or an object.
+    expect(CockpitMergeInputSchema.safeParse({}).success).toBe(false);
+    expect(
+      CockpitMergeInputSchema.safeParse({
+        pr: 15,
+      }).success,
+    ).toBe(false);
+  });
+
+  it('cockpit_merge: accepts { issue: <object>, pr: <positive int> }', () => {
+    expect(
+      CockpitMergeInputSchema.safeParse({
+        issue: { owner: 'a', repo: 'b', number: 2 },
+        pr: 15,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('cockpit_merge: accepts issue-only', () => {
+    expect(
+      CockpitMergeInputSchema.safeParse({
+        issue: { owner: 'a', repo: 'b', number: 2 },
+      }).success,
+    ).toBe(true);
   });
 
   it('GateNameInputSchema is built from a non-empty gate vocabulary', () => {

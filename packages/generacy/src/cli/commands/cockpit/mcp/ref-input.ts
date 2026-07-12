@@ -17,6 +17,45 @@ import type { ToolErrorResult } from './errors.js';
 import { IssueRefObjectSchema, type IssueRefInput } from './schemas.js';
 import { GhCliWrapper } from '@generacy-ai/cockpit';
 
+/** #928 Q1 — MCP transport accepts only qualified refs; bare digits and
+ * numeric shortcuts are rejected at the tool boundary with a typed message
+ * naming the accepted forms. cwd-based inference at the MCP layer would
+ * depend on the accident of the entrypoint's spawn cwd (per #850). */
+const QUALIFIED_SHORT_FORM = /^([^/\s]+)\/([^/\s#]+)#(\d+)$/;
+const ISSUE_OR_PR_URL = /^https?:\/\/github\.com\/([^/\s]+)\/([^/\s]+)\/(?:issues|pull)\/(\d+)(?:[/?#].*)?$/;
+
+export interface AssertQualifiedOk {
+  ok: true;
+  form: 'short' | 'url';
+}
+export interface AssertQualifiedError {
+  ok: false;
+  error: string;
+}
+
+/**
+ * Verify that a string ref is in one of the MCP-accepted qualified forms
+ * (owner/repo#N or a github.com issue/pull URL). Bare digits are rejected
+ * with a typed message. Shared across the seven MCP tools.
+ */
+export function assertQualifiedString(
+  value: string,
+): AssertQualifiedOk | AssertQualifiedError {
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, error: 'ref must not be empty' };
+  }
+  if (QUALIFIED_SHORT_FORM.test(trimmed)) return { ok: true, form: 'short' };
+  if (ISSUE_OR_PR_URL.test(trimmed)) return { ok: true, form: 'url' };
+  return {
+    ok: false,
+    error:
+      `MCP requires a qualified ref, got: "${value}". ` +
+      `Accepted forms: "<owner>/<repo>#<n>", a full GitHub issue/PR URL, ` +
+      `or the structured object { owner, repo, number }.`,
+  };
+}
+
 export interface NormalizedRef {
   ref: IssueRef;
   gh: GhWrapper;

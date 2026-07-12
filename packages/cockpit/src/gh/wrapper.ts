@@ -76,12 +76,20 @@ export interface PrCandidate {
  *   I-4: `kind === 'unresolved'`  ⇒ no other fields present (zero-field variant)
  *   I-5: `linkMethod` is one of 'closing-refs' | 'branch-name' | 'pr-body' —
  *        never undefined on the three non-`unresolved` kinds.
+ *   I-6: `kind === 'pr-number'`   ⇒ no other fields present (zero-field variant,
+ *        matches `unresolved`). The offending number is the caller's `issue`
+ *        argument; the resolver does not repeat it.
+ *   I-7: `resolveIssueToPRRef` returns `'pr-number'` ONLY from tier-1's
+ *        classification path. Tiers 2 (branch-name) and 3 (pr-body) do not
+ *        classify — if tier-1 returned no `pr-number` signal, the downstream
+ *        tiers cannot invent one.
  */
 export type PullRequestRefResolution =
   | { kind: 'resolved'; ref: PullRequestRef; linkMethod: LinkMethod }
   | { kind: 'ambiguous'; candidates: PullRequestRef[]; linkMethod: LinkMethod }
   | { kind: 'pr-is-draft'; candidates: PullRequestRef[]; linkMethod: LinkMethod }
-  | { kind: 'unresolved' };
+  | { kind: 'unresolved' }
+  | { kind: 'pr-number' };
 
 export interface PullRequestDetail {
   number: number;
@@ -341,6 +349,34 @@ const PR_DETAIL_QUERY = /* graphql */ `
     }
   }
 `;
+
+// #928 I-6/I-7 — classification query invoked only when the tier-1 initial
+// `gh issue view` fails with a "not an Issue"-shaped error. Distinguishes
+// "input is a PR number" from "issue does not exist" without an extra RTT
+// in the common (input-is-an-issue) case.
+const TIER1_PR_CLASSIFY_QUERY = /* graphql */ `
+  query CockpitTier1PrClassify($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) { __typename }
+    }
+  }
+`;
+
+const Tier1PrClassifySchema = z.object({
+  data: z.object({
+    repository: z.object({
+      pullRequest: z
+        .object({ __typename: z.string() })
+        .passthrough()
+        .nullable(),
+    }),
+  }),
+});
+
+// Regex matches gh 2.9x's "could not resolve to an Issue with the number of N"
+// error, plus tolerant variants ("no issue found", "not an issue"). Used to
+// short-circuit into the pr-number classification path.
+const GH_ISSUE_VIEW_PR_ERROR = /could not resolve to an issue|no issue found|not an issue/i;
 
 // FR-002 — dynamic aliased-fields builder for the tier-1 follow-up query.
 // One aliased selection per requested PR number: `pr0: pullRequest(number: N0) { ... }`.
@@ -890,7 +926,10 @@ export class GhCliWrapper implements GhWrapper {
     issue: number,
   ): Promise<PullRequestRefResolution> {
     const tier1 = await this.queryTier1ClosingRefs(repo, issue);
-    const t1 = evaluateTier(tier1, 'closing-refs');
+    // #928 I-7: the pr-number arm may ONLY come from tier-1's classification
+    // path — tiers 2 and 3 cannot classify and never invent this signal.
+    if (tier1.kind === 'pr-number') return { kind: 'pr-number' };
+    const t1 = evaluateTier(tier1.refs, 'closing-refs');
     if (t1 != null) return t1;
 
     const tier2 = await this.queryTier2BranchName(repo, issue);
@@ -907,7 +946,7 @@ export class GhCliWrapper implements GhWrapper {
   private async queryTier1ClosingRefs(
     repo: string,
     issue: number,
-  ): Promise<PullRequestRef[]> {
+  ): Promise<{ kind: 'pr-number' } | { kind: 'refs'; refs: PullRequestRef[] }> {
     const [owner, name] = repo.split('/');
     if (!owner || !name) {
       throw new Error(
@@ -925,7 +964,17 @@ export class GhCliWrapper implements GhWrapper {
       '--json',
       'closedByPullRequestsReferences',
     ]);
-    failIfNonZero(initial, 'issue view (resolveIssueToPRRef tier1 initial)');
+    // #928 I-6/I-7 — before propagating the failure, distinguish "input is a
+    // PR number" from any other cause. Only path where `pr-number` may be
+    // emitted; adds a single RTT ONLY on the failure path (issues succeed
+    // and skip the classification call entirely).
+    if (initial.exitCode !== 0) {
+      if (GH_ISSUE_VIEW_PR_ERROR.test(initial.stderr)) {
+        const isPr = await this.classifyIsPullRequest(owner, name, issue);
+        if (isPr) return { kind: 'pr-number' };
+      }
+      failIfNonZero(initial, 'issue view (resolveIssueToPRRef tier1 initial)');
+    }
 
     let initialParsed: unknown;
     try {
@@ -965,7 +1014,7 @@ export class GhCliWrapper implements GhWrapper {
     // Fast path: no closing refs → tier-1 returns no candidates, resolver falls
     // through to tier-2 as it always has. (This is NOT the FR-002a hard-fail
     // path — no follow-up call is made, no failure occurred.)
-    if (numbers.length === 0) return [];
+    if (numbers.length === 0) return { kind: 'refs', refs: [] };
 
     // (2) FR-002 — follow-up graphql call with FR-002a single-shot retry.
     const perPr = await this.queryTier1FollowupGraphql(owner, name, numbers);
@@ -984,7 +1033,41 @@ export class GhCliWrapper implements GhWrapper {
         headRefName: detail.headRefName,
       });
     }
-    return refs;
+    return { kind: 'refs', refs };
+  }
+
+  // #928 — verifies that `<number>` is a PR in `<owner>/<name>`. Called ONLY
+  // from the tier-1 failure path when the initial `gh issue view` reports a
+  // "not an Issue"-shaped error. Returns `false` on any failure (unknown
+  // number, transport error, malformed response) so the caller then
+  // propagates the original `gh issue view` error verbatim.
+  private async classifyIsPullRequest(
+    owner: string,
+    name: string,
+    number: number,
+  ): Promise<boolean> {
+    const result = await this.runner('gh', [
+      'api',
+      'graphql',
+      '-F',
+      `owner=${owner}`,
+      '-F',
+      `repo=${name}`,
+      '-F',
+      `number=${number}`,
+      '-f',
+      `query=${TIER1_PR_CLASSIFY_QUERY}`,
+    ]);
+    if (result.exitCode !== 0) return false;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(result.stdout);
+    } catch {
+      return false;
+    }
+    const shape = Tier1PrClassifySchema.safeParse(parsed);
+    if (!shape.success) return false;
+    return shape.data.data.repository.pullRequest != null;
   }
 
   // FR-002a — one retry with TIER1_RETRY_BACKOFF_MS backoff, then hard-fail.

@@ -10,7 +10,8 @@ export type RedReason =
   | 'pr-is-draft'
   | 'ambiguous-resolution'
   | 'pr-flag-linkage-refused'
-  | 'pr-flag-closed-unmerged';
+  | 'pr-flag-closed-unmerged'
+  | 'pr-number';
 
 /** FR-006a — sub-kind for `pr-flag-linkage-refused` refusals. */
 export type PrFlagLinkageKind = 'empty-refs' | 'mismatch';
@@ -35,6 +36,8 @@ export interface FailingCheckPayload {
   kind?: PrFlagLinkageKind;
   /** Human-readable remediation string for pr-flag refusals. */
   message?: string;
+  /** #928 — human-readable remediation string for `reason: 'pr-number'`. */
+  hint?: string;
 }
 
 export interface BuildFailingCheckInput {
@@ -48,12 +51,14 @@ export interface BuildFailingCheckInput {
   kind?: PrFlagLinkageKind;
   /** Only for `pr-flag-linkage-refused` and `pr-flag-closed-unmerged`. */
   message?: string;
+  /** #928 — required for `reason: 'pr-number'`. Guidance copy for the caller. */
+  hint?: string;
 }
 
 export function buildFailingCheckPayload(
   input: BuildFailingCheckInput,
 ): FailingCheckPayload {
-  const { reason, pr, candidates, linkMethod, failingChecks = [], issue, kind, message } = input;
+  const { reason, pr, candidates, linkMethod, failingChecks = [], issue, kind, message, hint } = input;
 
   if (issue !== undefined) {
     // I-6: state and stateReason are paired — if state is set, stateReason
@@ -80,7 +85,8 @@ export function buildFailingCheckPayload(
     reason === 'missing-label' ||
     reason === 'checks-failing' ||
     reason === 'pr-flag-linkage-refused' ||
-    reason === 'pr-flag-closed-unmerged';
+    reason === 'pr-flag-closed-unmerged' ||
+    reason === 'pr-number';
   if (isSinglePrReason && candidates !== undefined) {
     throw new Error(
       `FailingCheckPayload invariant I-10: candidates MUST NOT be set for reason='${reason}'`,
@@ -236,6 +242,32 @@ export function buildFailingCheckPayload(
     };
     if (message !== undefined) base.message = message;
     return applyIssue(base);
+  }
+
+  if (reason === 'pr-number') {
+    // #928 — the caller's `<issue>` argument is itself a PR node.
+    if (pr !== null) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-number' requires pr === null",
+      );
+    }
+    if (typeof hint !== 'string' || hint.length === 0) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-number' requires a non-empty hint",
+      );
+    }
+    if (failingChecks.length !== 0) {
+      throw new Error(
+        "FailingCheckPayload invariant: reason='pr-number' must have empty failingChecks",
+      );
+    }
+    return applyIssue({
+      status: 'red',
+      reason,
+      pr: null,
+      failingChecks: [],
+      hint,
+    });
   }
 
   if (reason === 'pr-flag-closed-unmerged') {
