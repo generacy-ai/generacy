@@ -855,6 +855,32 @@ describe('runMerge #904 SC-001/002/003/004: tiered resolver + draft rejection + 
   });
 });
 
+describe('runMerge #928 pr-number: input number is itself a PR node', () => {
+  it('resolver returns { kind: "pr-number" } → exitCode 2, reason "pr-number", guidance hint, no merge (also closes #906)', async () => {
+    const { gh, calls } = fakeGh({
+      resolveIssueToPR: { kind: 'pr-number' },
+    });
+    const result = await runMerge({
+      gh,
+      issue: 15,
+      repo: 'o/r',
+      logger: silentLogger(),
+    });
+    expect(result.exitCode).toBe(2);
+    expect(calls.mergePullRequest).toBe(0);
+    const payload = JSON.parse(result.stdout);
+    expect(payload).toMatchObject({
+      status: 'red',
+      reason: 'pr-number',
+      pr: null,
+      failingChecks: [],
+    });
+    expect(payload.issue).toEqual({ owner: 'o', repo: 'r', number: 15 });
+    expect(payload.hint).toContain('pull request');
+    expect(payload.hint).toContain('#15');
+  });
+});
+
 describe('SC-004 meta-guard: no PullRequestDetail fixture asserts completed:validate as merge precondition', () => {
   // If a future contributor re-encodes the tests-encode-the-bug pattern
   // (#800/#826/#836) by setting labels: ['completed:validate'] on a

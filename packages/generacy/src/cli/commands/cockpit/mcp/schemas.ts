@@ -83,4 +83,16 @@ export const CockpitResumeInputSchema = z.object({ issue: IssueRefInputSchema })
 export const CockpitQueueInputSchema = z
   .object({ epic: EpicRefInputSchema, phase: z.string().min(1) })
   .strict();
-export const CockpitMergeInputSchema = z.object({ pr: IssueRefInputSchema }).strict();
+/**
+ * #928 — `cockpit_merge` accepts an **issue ref** (matching the CLI verb),
+ * with an optional `pr: <number>` escape hatch mirroring CLI `--pr <number>`.
+ * Field name change from `pr` (old, inverted) to `issue`; the old-field-name
+ * redirection message is emitted at the tool handler when a `pr` key with a
+ * non-numeric value is seen (per clarifications Q5 → B).
+ */
+export const CockpitMergeInputSchema = z
+  .object({
+    issue: IssueRefInputSchema,
+    pr: z.number().int().positive().optional(),
+  })
+  .strict();

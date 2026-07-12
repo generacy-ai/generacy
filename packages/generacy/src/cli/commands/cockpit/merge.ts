@@ -45,6 +45,13 @@ export interface RunMergeInput {
 export interface RunMergeResult {
   exitCode: 0 | 1 | 2 | 3;
   stdout: string;
+  /**
+   * #928 — the PR number the CLI operated on. Set on exit-0 (the PR that was
+   * merged), on the pr-flag paths (mirrors the caller's `--pr <n>`), and on
+   * the resolver's non-terminal red paths where a PR was identified. Absent
+   * on `unresolved` / `pr-number` (no PR to name).
+   */
+  prNumber?: number;
 }
 
 export interface RunMergeWithExplicitPrInput {
@@ -269,6 +276,7 @@ async function assertCompletedValidateAndMerge(
       stdout:
         'no checks configured and none required — proceeding on completed:validate\n' +
         deletionSuffix,
+      prNumber: pr.number,
     };
   }
 
@@ -303,7 +311,7 @@ async function assertCompletedValidateAndMerge(
     issueRef,
     logger,
   });
-  return { exitCode: 0, stdout: deletionSuffix };
+  return { exitCode: 0, stdout: deletionSuffix, prNumber: pr.number };
 }
 
 export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
@@ -320,6 +328,28 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
           reason: 'unresolved',
           pr: null,
           issue: issueRef,
+        }),
+      ),
+    };
+  }
+  // #928 — the caller's `<issue>` argument is itself a PR node. Emit a
+  // typed refusal at exit-2 with guidance copy; the MCP envelope maps this
+  // reason to `class: 'wrong-kind'`. Closes #906 on the CLI at the same time.
+  if (resolution.kind === 'pr-number') {
+    logger.error(
+      { issue, repo },
+      `#${issue} is a pull request, not an issue`,
+    );
+    return {
+      exitCode: 2,
+      stdout: serializeFailingCheckJson(
+        buildFailingCheckPayload({
+          reason: 'pr-number',
+          pr: null,
+          issue: issueRef,
+          hint:
+            `#${issue} is a pull request; pass the issue number ` +
+            `(e.g. the issue whose closing PR is #${issue}).`,
         }),
       ),
     };
@@ -370,6 +400,11 @@ export async function runMerge(input: RunMergeInput): Promise<RunMergeResult> {
       ),
     };
   }
+  // Exhaustiveness guard — after the branches above, resolution.kind is
+  // 'resolved'. Adding a new arm to PullRequestRefResolution surfaces here
+  // at build time.
+  const _exhaustive: 'resolved' = resolution.kind;
+  void _exhaustive;
   const prRef: PullRequestRef = resolution.ref;
   const linkMethod: LinkMethod = resolution.linkMethod;
   // FR-004: log the resolved PR + tier BEFORE any subsequent gh call so a
@@ -438,6 +473,7 @@ export async function runMergeWithExplicitPr(
     return {
       exitCode: 0,
       stdout: `PR #${prNumber} already merged, no-op\n`,
+      prNumber,
     };
   }
   if (pr.state === 'CLOSED') {

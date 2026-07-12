@@ -295,7 +295,17 @@ async function buildImplementationReviewBundle(
         `${IMPLEMENTATION_REVIEW_GATE} but no linked PR resolved`,
     );
   }
+  if (resolution.kind === 'pr-number') {
+    throw new CockpitExit(
+      3,
+      `Error: cockpit context: gate refusal: ${issueRepr} is a pull request; ` +
+        `pass the issue number (e.g. the issue whose closing PR is #${ref.number}).`,
+    );
+  }
   const prRef = resolution.ref;
+  // Exhaustiveness guard — a new kind on PullRequestRefResolution surfaces here at build time.
+  const _exhaustive: 'resolved' = resolution.kind;
+  void _exhaustive;
 
   let pr, checks;
   try {

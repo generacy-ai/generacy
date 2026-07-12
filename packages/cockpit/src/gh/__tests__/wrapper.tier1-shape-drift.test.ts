@@ -241,6 +241,71 @@ describe('queryTier1ClosingRefs — FR-009 parse-failure includes gh version (FR
   });
 });
 
+describe('queryTier1ClosingRefs — #928 pr-number classification', () => {
+  it('returns { kind: "pr-number" } when the initial gh issue view errors with "not an Issue" and the pullRequest classify graphql confirms the PR exists', async () => {
+    const isClassifyGraphql = (cmd: string, args: string[]): boolean =>
+      isApiGraphql(cmd, args) &&
+      // The classify graphql call embeds "CockpitTier1PrClassify" in its query text.
+      args.some((a) => a.includes('CockpitTier1PrClassify'));
+    const { runner, calls } = routedRunner([
+      {
+        match: isIssueView,
+        reply: {
+          stdout: '',
+          stderr: 'GraphQL: could not resolve to an Issue with the number of 15',
+          exitCode: 1,
+        },
+      },
+      {
+        match: isClassifyGraphql,
+        reply: {
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: { __typename: 'PullRequest' },
+              },
+            },
+          }),
+        },
+      },
+    ]);
+    const wrapper = new GhCliWrapper(runner);
+    const resolution = await wrapper.resolveIssueToPRRef('x/y', 15);
+
+    expect(resolution).toEqual({ kind: 'pr-number' });
+    // Tier-2/3 must NOT fire — invariant I-7.
+    expect(calls.filter((c) => isPrListSearch(c.cmd, c.args))).toHaveLength(0);
+  });
+
+  it('propagates the original gh issue view error when the pullRequest classify graphql reports no PR either', async () => {
+    const isClassifyGraphql = (cmd: string, args: string[]): boolean =>
+      isApiGraphql(cmd, args) &&
+      args.some((a) => a.includes('CockpitTier1PrClassify'));
+    const { runner } = routedRunner([
+      {
+        match: isIssueView,
+        reply: {
+          stdout: '',
+          stderr: 'GraphQL: could not resolve to an Issue with the number of 999999',
+          exitCode: 1,
+        },
+      },
+      {
+        match: isClassifyGraphql,
+        reply: {
+          stdout: JSON.stringify({
+            data: { repository: { pullRequest: null } },
+          }),
+        },
+      },
+    ]);
+    const wrapper = new GhCliWrapper(runner);
+    await expect(wrapper.resolveIssueToPRRef('x/y', 999999)).rejects.toThrow(
+      /issue view.*failed/,
+    );
+  });
+});
+
 describe('queryTier1ClosingRefs — payload excerpt cap = 512 chars', () => {
   it('trims the malformed-payload excerpt to exactly 512 characters', async () => {
     const bigPayload = 'x'.repeat(10 * 1024); // 10KB of garbage.
