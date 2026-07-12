@@ -1972,12 +1972,12 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_1');
     expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_2');
 
-    // Verify label was removed
+    // #926 FR-006: happy-path coalesces both labels into one removeLabels call.
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       42,
-      ['waiting-for:address-pr-feedback'],
+      ['waiting-for:address-pr-feedback', 'agent:in-progress'],
     );
   });
 
@@ -2277,10 +2277,22 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockGitHub.commit).not.toHaveBeenCalled();
     expect(mockGitHub.push).not.toHaveBeenCalled();
 
-    // #883: no-diff → Disposition B → no replies, no resolves, no label removal
+    // #883: no-diff → Disposition B → no replies, no resolves, no waiting-for
+    // removal. #926 SC-004: `finally` still clears `agent:in-progress`.
     expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
     expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
-    expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+    expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+      'test-org',
+      'test-repo',
+      42,
+      expect.arrayContaining(['waiting-for:address-pr-feedback']),
+    );
+    expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+      'test-org',
+      'test-repo',
+      42,
+      ['agent:in-progress'],
+    );
 
     // #883: blocked:stuck-feedback-loop is added
     expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -2374,12 +2386,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(3);
     expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(3);
 
-    // FR-006 strict-decrease met (2 of 3 resolves succeeded) → label removed
+    // FR-006 strict-decrease met (2 of 3 resolves succeeded) → label removed.
+    // #926 FR-006: happy-path coalesces both labels into one removeLabels call.
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       42,
-      ['waiting-for:address-pr-feedback'],
+      ['waiting-for:address-pr-feedback', 'agent:in-progress'],
     );
 
     // FR-010: warn emitted for the persistently-failed resolve

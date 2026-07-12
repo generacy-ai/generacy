@@ -19,14 +19,18 @@ export const TIER_RANK: Record<CockpitState, number> = {
  * Earlier index wins. Gates not listed here sort after all listed gates.
  *
  * Note: `clarification-review`, `sibling-review`, `pr-feedback`,
- * `address-pr-feedback`, `children-complete`, `epic-approval`,
- * `dependencies`, and `needs:*` labels also exist but fall back to
- * `WORKFLOW_LABELS` index when not listed here (see classifier).
+ * `children-complete`, `epic-approval`, `dependencies`, and `needs:*`
+ * labels also exist but fall back to `WORKFLOW_LABELS` index when not
+ * listed here (see classifier).
  */
 export const WAITING_PIPELINE_ORDER: string[] = [
   // #883: `blocked:stuck-feedback-loop` sorts ahead of every waiting-for:*
   // gate so cockpit surfaces the pause first when both labels coexist.
   'blocked:stuck-feedback-loop',
+  // #926: `waiting-for:address-pr-feedback` outranks every waiting-for:*
+  // gate — an actively-rewriting-code state is more-specific than any
+  // passive gate it can coexist with (Q1→A, following #883's precedent).
+  'waiting-for:address-pr-feedback',
   'waiting-for:spec-review',
   'waiting-for:clarification',
   'waiting-for:plan-review',
