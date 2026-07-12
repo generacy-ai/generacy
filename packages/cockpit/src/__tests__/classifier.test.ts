@@ -222,6 +222,62 @@ describe('classify()', () => {
     });
   });
 
+  describe('#926: waiting-for:address-pr-feedback is a promoted waiting gate', () => {
+    it('outranks waiting-for:implementation-review when both coexist (FR-002, SC-001)', () => {
+      expect(
+        classify(['waiting-for:implementation-review', 'waiting-for:address-pr-feedback']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'waiting-for:address-pr-feedback',
+      });
+    });
+
+    it('reverts to waiting-for:implementation-review after address-pr-feedback removed', () => {
+      expect(classify(['waiting-for:implementation-review'])).toEqual({
+        state: 'waiting',
+        sourceLabel: 'waiting-for:implementation-review',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop outranks address-pr-feedback (Q1 invariant preserved)', () => {
+      expect(
+        classify(['blocked:stuck-feedback-loop', 'waiting-for:address-pr-feedback']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop outranks both address-pr-feedback and implementation-review', () => {
+      expect(
+        classify([
+          'blocked:stuck-feedback-loop',
+          'waiting-for:address-pr-feedback',
+          'waiting-for:implementation-review',
+        ]),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('waiting-for:address-pr-feedback alone wins its own bucket', () => {
+      expect(classify(['waiting-for:address-pr-feedback'])).toEqual({
+        state: 'waiting',
+        sourceLabel: 'waiting-for:address-pr-feedback',
+      });
+    });
+
+    it('active > passive: address-pr-feedback outranks spec-review (Q1→A generalised)', () => {
+      expect(
+        classify(['waiting-for:address-pr-feedback', 'waiting-for:spec-review']),
+      ).toEqual({
+        state: 'waiting',
+        sourceLabel: 'waiting-for:address-pr-feedback',
+      });
+    });
+  });
+
   describe('empty / unknown-only input (f)', () => {
     it('empty iterable → unknown with empty sourceLabel', () => {
       expect(classify([])).toEqual({ state: 'unknown', sourceLabel: '' });

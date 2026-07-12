@@ -319,12 +319,13 @@ describe('PrFeedbackHandler', () => {
       expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_1');
       expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_2');
 
-      // Should remove label
+      // #926 FR-006: happy-path coalesces `waiting-for:*` and `agent:in-progress`
+      // into a single removeLabels call.
       expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
-        ['waiting-for:address-pr-feedback'],
+        ['waiting-for:address-pr-feedback', 'agent:in-progress'],
       );
 
       // Should NOT add blocked label on the happy path
@@ -362,7 +363,21 @@ describe('PrFeedbackHandler', () => {
       // #883: NO replies, NO resolves, NO waiting-for removal
       expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
       expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
-      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      // #926 SC-004: waiting-for is retained on the blocked-stuck path, but
+      // the `finally` clear removes `agent:in-progress` on every terminal
+      // exit — so `removeLabels` IS called (with just the in-progress label).
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
 
       // #883: blocked:stuck-feedback-loop is added
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -444,8 +459,20 @@ describe('PrFeedbackHandler', () => {
       // FR-013: Should NOT post replies (CLI didn't complete)
       expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
 
-      // FR-013: Should NOT remove label (keep for retry)
-      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      // FR-013: Should NOT remove waiting-for label (keep for retry).
+      // #926 SC-004: `finally` clear still runs for `agent:in-progress`.
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
 
       // #883: timeout → Disposition B → blocked label added
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -479,10 +506,23 @@ describe('PrFeedbackHandler', () => {
 
       await handler.handle(item, checkoutPath);
 
-      // Should NOT post replies, resolves, or remove label
+      // Should NOT post replies, resolves.
       expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
       expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
-      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      // #926 SC-004: waiting-for retained on blocked-stuck; `finally` clears
+      // `agent:in-progress`.
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
 
       // #883: blocked:stuck-feedback-loop is added
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -534,12 +574,13 @@ describe('PrFeedbackHandler', () => {
         warnMessages.some((m) => m.includes('resolveReviewThread persistently failed after retries')),
       ).toBe(true);
 
-      // Should remove waiting-for:address-pr-feedback (strict decrease met)
+      // Should remove waiting-for:address-pr-feedback + agent:in-progress
+      // (strict decrease met, happy-path coalesced clear — #926 FR-006).
       expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
         'test-owner',
         'test-repo',
         42,
-        ['waiting-for:address-pr-feedback'],
+        ['waiting-for:address-pr-feedback', 'agent:in-progress'],
       );
 
       // Should NOT add blocked (R ≥ 1)
@@ -573,8 +614,20 @@ describe('PrFeedbackHandler', () => {
       expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(1);
       expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(1);
 
-      // Should NOT remove waiting-for label
-      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      // #926 SC-004: waiting-for retained on FR-006 tail; `finally` clears
+      // `agent:in-progress`.
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
 
       // Should add blocked:stuck-feedback-loop
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -645,8 +698,20 @@ describe('PrFeedbackHandler', () => {
       expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
       expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
 
-      // Should NOT remove waiting-for label
-      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      // #926 SC-004: waiting-for retained on push-failure blocked-stuck;
+      // `finally` clears `agent:in-progress`.
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
 
       // Should add blocked label
       expect(mockGitHub.addLabels).toHaveBeenCalledWith(
@@ -1015,7 +1080,20 @@ describe('PrFeedbackHandler', () => {
       const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
       await localHandler.handle(item, '/tmp/checkout');
 
-      expect(mockGitHub.removeLabels).not.toHaveBeenCalled();
+      // #926 SC-004: waiting-for retained on Case B (FR-002); `finally`
+      // clears `agent:in-progress` on every terminal exit.
+      expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        expect.arrayContaining(['waiting-for:address-pr-feedback']),
+      );
+      expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['agent:in-progress'],
+      );
       const removeCallMessages = (mockLogger.info as ReturnType<typeof vi.fn>).mock.calls
         .map((c) => String(c[1] ?? ''));
       expect(removeCallMessages.every((m) => !m.includes('No unresolved threads found'))).toBe(true);
@@ -1094,5 +1172,159 @@ describe('PrFeedbackHandler', () => {
       }
     });
 
+  });
+
+  // ==========================================================================
+  // #926 SC-004: structural clear of `agent:in-progress` on every terminal
+  // return. Four scenarios, one per exit path — each asserts the post-return
+  // label set. Fifth assertion pins the FR-006 coalescing on the happy path.
+  // ==========================================================================
+  describe('#926 SC-004: agent:in-progress cleared on every terminal return', () => {
+    /**
+     * Returns the label-name arrays that would remain "removed" after the
+     * handler exits — i.e., the union of every `removeLabels` argument-array
+     * observed on the mock. Used to assert both what WAS and WASN'T cleared.
+     */
+    function collectRemovedLabels(): string[] {
+      const calls = (mockGitHub.removeLabels as unknown as ReturnType<typeof vi.fn>).mock.calls;
+      return calls.flatMap((c) => c[3] as string[]);
+    }
+
+    it('happy path: coalesced single call clears both labels, `agent:in-progress` absent (SC-004 line 1, FR-006)', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+      });
+
+      await handler.handle(item, '/tmp/workspace/test-owner/test-repo');
+
+      // FR-006 coalescing: happy path invokes `removeLabels` with BOTH labels
+      // in a single call. `finally` no-ops (both already absent).
+      const happyPathCalls = (mockGitHub.removeLabels as ReturnType<typeof vi.fn>).mock.calls.filter(
+        (c) => Array.isArray(c[3]) && (c[3] as string[]).includes('waiting-for:address-pr-feedback'),
+      );
+      expect(happyPathCalls).toHaveLength(1);
+      expect(happyPathCalls[0]?.[3]).toEqual([
+        'waiting-for:address-pr-feedback',
+        'agent:in-progress',
+      ]);
+
+      // Terminal state: both labels have been removed.
+      const removed = collectRemovedLabels();
+      expect(removed).toContain('waiting-for:address-pr-feedback');
+      expect(removed).toContain('agent:in-progress');
+    });
+
+    it('Case A (no unresolved threads): `agent:in-progress` absent, waiting-for removed (SC-004 line 2)', async () => {
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [] });
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([]);
+
+      await handler.handle(item, '/tmp/workspace/test-owner/test-repo');
+
+      const removed = collectRemovedLabels();
+      // Case A calls `removeFeedbackLabel` explicitly, then `finally` clears
+      // `agent:in-progress` — both labels end up removed via distinct calls.
+      expect(removed).toContain('waiting-for:address-pr-feedback');
+      expect(removed).toContain('agent:in-progress');
+    });
+
+    it('Case B (all comments untrusted): `agent:in-progress` absent, waiting-for retained by design (SC-004 line 3, FR-002)', async () => {
+      const { isTrustedCommentAuthor } = await import('@generacy-ai/workflow-engine');
+      (isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
+        .mockReturnValue({ trusted: false, reason: 'none-untrusted' });
+
+      try {
+        const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+        mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+          createMockComment(1, false),
+        ]);
+
+        await handler.handle(item, '/tmp/workspace/test-owner/test-repo');
+
+        const removed = collectRemovedLabels();
+        // FR-002: `waiting-for:address-pr-feedback` MUST be retained on this
+        // exit path (Case B). Only `agent:in-progress` is cleared.
+        expect(removed).not.toContain('waiting-for:address-pr-feedback');
+        expect(removed).toContain('agent:in-progress');
+      } finally {
+        (isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>)
+          .mockReturnValue({ trusted: true, reason: 'owner' });
+      }
+    });
+
+    it('blocked-stuck (CLI failed or no-diff): `agent:in-progress` absent, blocked + waiting-for retained (SC-004 line 4, both dispositions)', async () => {
+      // Disposition B via CLI failure (no-diff path).
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+      const { handle } = createMockProcess(1, 50); // CLI exits non-zero
+      spawnFn.mockReturnValue(handle);
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: false, staged: [], unstaged: [], untracked: [],
+      });
+
+      await handler.handle(item, '/tmp/workspace/test-owner/test-repo');
+
+      const removed = collectRemovedLabels();
+      expect(removed).not.toContain('waiting-for:address-pr-feedback');
+      expect(removed).toContain('agent:in-progress');
+      // `blocked:stuck-feedback-loop` was added, not removed — assert the add.
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:stuck-feedback-loop'],
+      );
+    });
+
+    it('blocked-stuck via zero-resolve tail (FR-006 tail at ~line 337): same post-state as CLI-failure disposition', async () => {
+      // Second blocked-stuck exit path — commit landed but every resolve
+      // failed. Same SC-004 assertion as the previous test but via the
+      // ~line 337 return, not the ~line 302 return.
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      mockGitHub.getPRReviewThreads = vi.fn().mockResolvedValue([
+        createMockComment(1, false),
+      ]);
+      const { handle } = createMockProcess(0, 50);
+      spawnFn.mockReturnValue(handle);
+      mockGitHub.getStatus = vi.fn().mockResolvedValue({
+        has_changes: true, staged: ['src/index.ts'], unstaged: [], untracked: [],
+      });
+      mockGitHub.resolveReviewThread = vi.fn().mockRejectedValue(new Error('API error'));
+
+      await handler.handle(item, '/tmp/workspace/test-owner/test-repo');
+
+      const removed = collectRemovedLabels();
+      expect(removed).not.toContain('waiting-for:address-pr-feedback');
+      expect(removed).toContain('agent:in-progress');
+      expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+        'test-owner',
+        'test-repo',
+        42,
+        ['blocked:stuck-feedback-loop'],
+      );
+    });
+
+    it('thrown-error path: `finally` still clears `agent:in-progress` even when the try block throws', async () => {
+      // Not one of the four documented terminal returns, but the `try/finally`
+      // structural clear must also cover the thrown-error path — that is the
+      // whole point of using `finally` (SC-004 invariant: no terminal path
+      // leaves the label pinned).
+      const item = createQueueItem({ prNumber: 100, reviewThreadIds: [1] });
+      mockGitHub.getPullRequest = vi.fn().mockRejectedValue(new Error('boom'));
+
+      await expect(
+        handler.handle(item, '/tmp/workspace/test-owner/test-repo'),
+      ).rejects.toThrow(/Failed to fetch PR/);
+
+      const removed = collectRemovedLabels();
+      expect(removed).toContain('agent:in-progress');
+    });
   });
 });

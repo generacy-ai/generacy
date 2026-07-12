@@ -19,6 +19,17 @@ import { buildLaunchCredentials } from './credentials-helper.js';
 /** Label added by the handler when the fix cycle cannot advance (#883). */
 const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
 
+/**
+ * `agent:in-progress` label — cleared structurally at the single shared exit
+ * path (#926 SC-004/SC-005). Extracted to a module constant so the literal
+ * appears at exactly one code site: the coalesced happy-path removal and the
+ * `clearInProgressLabel` fallback both reference this constant.
+ */
+const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
+
+/** Waiting gate cleared alongside `agent:in-progress` on the happy path. */
+const WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
+
 type OutcomeResult = { ok: true } | { ok: false; error: string };
 
 interface PerThreadOutcome {
@@ -86,9 +97,16 @@ export class PrFeedbackHandler {
       'Starting PR feedback addressing',
     );
 
-    // Create GitHub client scoped to checkout path
+    // Create GitHub client scoped to checkout path. Hoisted above the try so
+    // the `finally` clear can call it on every exit path (#926 SC-004).
     const github = createGitHubClient(checkoutPath);
 
+    // #926 SC-004: `agent:in-progress` is cleared structurally at a single
+    // shared exit path so no terminal return can leave the label pinned.
+    // Idempotency-safe: happy path already coalesces the clear into its own
+    // `removeLabels` call; this `finally` is a backstop for the four other
+    // exit paths (Cases A/B, both blocked-stuck dispositions, and thrown
+    // errors). Non-fatal on failure — mirrors `removeFeedbackLabel` shape.
     try {
       // 1. Fetch the PR to get branch name
       let pr;
@@ -353,8 +371,26 @@ export class PrFeedbackHandler {
         );
       }
 
-      // 10. Label-clear LAST (Q4 tail).
-      await this.removeFeedbackLabel(github, owner, repo, issueNumber);
+      // 10. Label-clear LAST (Q4 tail). #926 FR-006: coalesce the happy-path
+      // clear into a single `removeLabels` call so `waiting-for:*` and
+      // `agent:in-progress` disappear in one request — no intermediate state
+      // where cockpit / auto observers see one label without the other.
+      // The `finally` clear becomes a no-op on this path (idempotent remove).
+      try {
+        await github.removeLabels(owner, repo, issueNumber, [
+          WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL,
+          AGENT_IN_PROGRESS_LABEL,
+        ]);
+        this.logger.info(
+          { issueNumber },
+          'Removed waiting-for:address-pr-feedback + agent:in-progress labels (coalesced)',
+        );
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'Failed to remove happy-path labels — non-fatal, finally will re-attempt in-progress clear',
+        );
+      }
       this.logger.info(
         {
           prNumber, issueNumber,
@@ -370,6 +406,11 @@ export class PrFeedbackHandler {
         'Error processing PR feedback — task failed',
       );
       throw error;
+    } finally {
+      // #926 SC-004: structural single-point clear. Every terminal exit
+      // (Case A, Case B, both blocked-stuck dispositions, happy path, and
+      // thrown errors) flows through here. Non-fatal on failure.
+      await this.clearInProgressLabel(github, owner, repo, issueNumber);
     }
   }
 
@@ -716,12 +757,36 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
     issueNumber: number,
   ): Promise<void> {
     try {
-      await github.removeLabels(owner, repo, issueNumber, ['waiting-for:address-pr-feedback']);
+      await github.removeLabels(owner, repo, issueNumber, [WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL]);
       this.logger.info({ issueNumber }, 'Removed waiting-for:address-pr-feedback label');
     } catch (error) {
       this.logger.warn(
         { error: String(error), issueNumber },
         'Failed to remove waiting-for:address-pr-feedback label — non-fatal',
+      );
+    }
+  }
+
+  /**
+   * Structural clear of `agent:in-progress` on the linked issue (#926 SC-004).
+   * Called from the shared `finally` block in `handle()` — runs on every
+   * terminal exit path (Cases A/B, both blocked-stuck dispositions, happy
+   * path, and thrown errors). Idempotent: GitHub's `removeLabels` is a no-op
+   * when the label is already absent, so the happy-path coalesced removal +
+   * this `finally` clear together produce at most one truthful post-state.
+   */
+  private async clearInProgressLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.removeLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'Failed to remove agent:in-progress label — non-fatal',
       );
     }
   }
