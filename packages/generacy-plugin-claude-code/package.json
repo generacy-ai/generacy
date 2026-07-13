@@ -27,7 +27,6 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
-    "@generacy-ai/orchestrator": "workspace:^",
     "@types/dockerode": "^3.3.0",
     "@types/node": "^20.0.0",
     "typescript": "^5.6.0",

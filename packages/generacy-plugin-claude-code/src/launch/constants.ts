@@ -1,4 +1,4 @@
-import type { PhaseIntent } from '@generacy-ai/orchestrator/launcher/types';
+import type { PhaseIntent } from './types.js';
 
 /**
  * Map each CLI-backed phase to its Claude CLI slash command.

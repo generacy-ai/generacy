@@ -99,4 +99,4 @@ export type {
   MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,
-} from '@generacy-ai/orchestrator/launcher/types';
+} from './launch/types.js';

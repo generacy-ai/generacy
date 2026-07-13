@@ -1,21 +1,13 @@
 import type {
+  ClaudeCodeIntent,
   PhaseIntent,
   PrFeedbackIntent,
   ValidateFixIntent,
   MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,
-} from '@generacy-ai/orchestrator/launcher/types';
+} from './types.js';
 import { PHASE_TO_COMMAND, PTY_WRAPPER } from './constants.js';
-
-/** Provider-scoped alias for the six agent intent kinds handled by ClaudeCodeLaunchPlugin. */
-type ClaudeCodeIntent =
-  | PhaseIntent
-  | PrFeedbackIntent
-  | ValidateFixIntent
-  | MergeConflictIntent
-  | ConversationTurnIntent
-  | InvokeIntent;
 
 /**
  * Structurally compatible with orchestrator's LaunchSpec.
