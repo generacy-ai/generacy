@@ -1,5 +1,22 @@
 import { z } from 'zod';
-import { WorkspaceConfigSchema } from '@generacy-ai/config';
+import {
+  WorkspaceConfigSchema,
+  AgentEntrySchema,
+  WorkflowAgentEntriesSchema,
+  AgentsConfigSchema,
+} from '@generacy-ai/config';
+
+/**
+ * Re-export the agent selector schemas + types from `@generacy-ai/config`.
+ * The CLI-facing shape stays structurally identical to the target-repo shape;
+ * we do NOT redefine.
+ */
+export { AgentEntrySchema, WorkflowAgentEntriesSchema, AgentsConfigSchema };
+export type {
+  AgentEntry,
+  WorkflowAgentEntries,
+  AgentsConfig,
+} from '@generacy-ai/config';
 
 /**
  * Project configuration schema
@@ -125,6 +142,12 @@ export const OrchestratorSettingsSchema = z.object({
     .min(1, 'Worker count must be at least 1')
     .max(20, 'Worker count cannot exceed 20')
     .optional(),
+
+  /**
+   * Per-repo `{ provider, model }` selection for speckit workflow phases and
+   * pr-feedback (bound to `implement`). See `AgentsConfigSchema`.
+   */
+  agents: AgentsConfigSchema.optional(),
 });
 
 export type OrchestratorSettings = z.infer<typeof OrchestratorSettingsSchema>;

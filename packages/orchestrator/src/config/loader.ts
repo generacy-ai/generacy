@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type OrchestratorConfig, validateConfig } from './schema.js';
-import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadDefaultsRole, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, tryLoadDefaultsRole, tryLoadDefaultsAgent, getMonitoredRepos, findWorkspaceConfigPath } from '@generacy-ai/config';
 
 /**
  * Environment variable prefix for configuration
@@ -252,6 +252,35 @@ function loadFromEnv(): Record<string, unknown> {
       config.worker = {};
     }
     (config.worker as Record<string, unknown>).credentialRole = credentialRole;
+  }
+
+  // Agent selection env plumbing (#814): WORKER_AGENT_PROVIDER / WORKER_AGENT_MODEL
+  // set the cluster default for the resolver chain (below `agents.default` on
+  // the target repo). Each writes independently — either may be set alone.
+  const agentProvider = process.env['WORKER_AGENT_PROVIDER'] ?? process.env[`${ENV_PREFIX}WORKER_AGENT_PROVIDER`];
+  const agentModel = process.env['WORKER_AGENT_MODEL'] ?? process.env[`${ENV_PREFIX}WORKER_AGENT_MODEL`];
+  if (agentProvider || agentModel) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    const worker = config.worker as Record<string, unknown>;
+    if (!worker.agents) worker.agents = {};
+    const agents = worker.agents as Record<string, unknown>;
+    if (!agents.default) agents.default = {};
+    const def = agents.default as Record<string, unknown>;
+    if (agentProvider) def.provider = agentProvider;
+    if (agentModel) def.model = agentModel;
+  }
+
+  // Repo-level `defaults.agent` (sibling of `tryLoadDefaultsRole` at ~line 249).
+  // Feeds `WorkerConfig.defaultsAgent`, consumed as the provider-only tier
+  // below `agents.default` in `resolveAgentForPhase`.
+  const defaultsAgent = configPath ? tryLoadDefaultsAgent(configPath) : null;
+  if (defaultsAgent) {
+    if (!config.worker) {
+      config.worker = {};
+    }
+    (config.worker as Record<string, unknown>).defaultsAgent = defaultsAgent;
   }
 
   // Smee config (SMEE_CHANNEL_URL takes precedence, falls back to ORCHESTRATOR_SMEE_CHANNEL_URL)

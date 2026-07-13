@@ -2,7 +2,7 @@ import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
 import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
 import type { WorkerConfig } from './config.js';
-import { resolvePhaseTimeoutMs } from './config.js';
+import { resolvePhaseTimeoutMs, resolveAgentForPhase } from './config.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
@@ -177,6 +177,11 @@ export class PhaseLoop {
     // so Claude CLI can reuse the conversation (keeping MCP servers warm and
     // carrying forward accumulated context).
     let currentSessionId: string | undefined;
+    // #814: track the resolved provider + model across phases. `currentProvider`
+    // gates the session-drop-on-provider-switch behavior (FR-011); `currentModel`
+    // feeds the `agent.model.transition` log line on same-provider model change.
+    let currentProvider: string | undefined;
+    let currentModel: string | undefined;
     let implementRetryCount = 0;
 
     // Track last seen tasks_remaining for the implement increment guard.
@@ -347,6 +352,45 @@ export class PhaseLoop {
             ? `${siblingBlock}\n\n${context.issueUrl}`
             : context.issueUrl;
           const cliPhase = phase as Exclude<typeof phase, 'validate'>;
+
+          // #814: resolve provider+model for this phase. Provider always defined
+          // (built-in fallback). Model optional (undefined = no `--model` arg).
+          const { provider: nextProvider, model: nextModel } = resolveAgentForPhase(
+            config,
+            context.item.workflowName,
+            cliPhase,
+          );
+
+          // Drop session on provider switch (FR-011). Sessions are provider-scoped;
+          // reusing one across providers would try to resume against a session ID
+          // the new provider doesn't know.
+          if (currentProvider !== undefined && currentProvider !== nextProvider) {
+            this.logger.info(
+              { phase: cliPhase, prevProvider: currentProvider, nextProvider },
+              'Provider switch detected — dropping session for fresh start',
+            );
+            currentSessionId = undefined;
+          }
+
+          // Emit model-transition log line on same-provider model change (Q2→C).
+          // Only meaningful when we actually saw a prior phase with the same
+          // provider AND both models are defined (a switch from undefined→X or
+          // X→undefined is not a "transition" — either the config just started
+          // or just stopped naming a model).
+          if (
+            currentProvider === nextProvider &&
+            currentModel !== undefined &&
+            nextModel !== undefined &&
+            currentModel !== nextModel
+          ) {
+            this.logger.info(
+              { provider: nextProvider, prevModel: currentModel, nextModel },
+              'agent.model.transition',
+            );
+          }
+
+          const previousModel = currentProvider === nextProvider ? currentModel : undefined;
+
           result = await cliSpawner.spawnPhase(
             cliPhase,
             {
@@ -357,9 +401,16 @@ export class PhaseLoop {
               signal: context.signal,
               resumeSessionId: currentSessionId,
               siblingWorkdirs: context.siblingWorkdirs,
+              provider: nextProvider,
+              ...(nextModel !== undefined ? { model: nextModel } : {}),
+              ...(previousModel !== undefined ? { previousModel } : {}),
             },
             outputCapture,
           );
+
+          // Update trackers post-spawn so failures don't strand state.
+          currentProvider = nextProvider;
+          currentModel = nextModel;
         }
       } catch (error) {
         // Unexpected error during spawning

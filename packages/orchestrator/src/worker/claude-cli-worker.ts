@@ -11,7 +11,7 @@ import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEven
 import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
-import { applyRepoValidateOverrides } from './config.js';
+import { applyRepoValidateOverrides, applyRepoAgentOverrides } from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
 import { LabelManager } from './label-manager.js';
 import { StageCommentManager } from './stage-comment-manager.js';
@@ -476,14 +476,18 @@ export class ClaudeCliWorker {
       // shape (e.g. a single-package Astro site with no `test` script) override
       // them so the validate phase doesn't fail on a missing script.
       const orchSettings = configPath ? tryLoadOrchestratorSettings(configPath) : null;
-      const effectiveConfig = applyRepoValidateOverrides(this.config, orchSettings);
+      const effectiveConfig = applyRepoAgentOverrides(
+        applyRepoValidateOverrides(this.config, orchSettings),
+        orchSettings,
+      );
       if (effectiveConfig !== this.config) {
         workerLogger.info(
           {
             validateCommand: effectiveConfig.validateCommand,
             preValidateCommand: effectiveConfig.preValidateCommand,
+            agents: effectiveConfig.agents,
           },
-          'Applied per-repo validate-command override from .generacy/config.yaml',
+          'Applied per-repo overrides from .generacy/config.yaml',
         );
       }
 
