@@ -46,10 +46,50 @@ describe('cockpit_queue parity', () => {
     );
     expect(result.status).toBe('ok');
     if (result.status !== 'ok') return;
+    if (!('phase' in result.data)) throw new Error('expected phase form');
     expect(result.data.phase).toBe('specify');
     expect(result.data.queued.length + result.data.skipped.length).toBe(2);
     expect(
       result.data.skipped.some((s) => s.number === 1 && s.reason === 'already-labeled'),
     ).toBe(true);
+  });
+
+  it('#935 issue form: `{ issue }` drives single-row mutation pair', async () => {
+    const gh = new FakeGh({});
+    (gh as unknown as { fetchIssueState: (r: string, n: number) => Promise<unknown> }).fetchIssueState =
+      async (_r: string, n: number) => ({
+        state: 'OPEN' as const,
+        stateReason: null,
+        title: `Issue ${n}`,
+        labels: [],
+        assignees: [],
+      });
+    const result = await cockpitQueue(
+      { issue: { owner: 'owner', repo: 'repo', number: 7 } },
+      { gh, cockpitGh: gh, loadConfig: stubLoadConfig as never },
+    );
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    if (!('issue' in result.data)) throw new Error('expected issue form');
+    expect(result.data.issue).toEqual({ owner: 'owner', repo: 'repo', number: 7 });
+    expect(result.data.outcome).toBe('queued');
+    expect(result.data.workflowLabel).toBe('process:speckit-feature');
+    expect(gh.calls.some((c) => c.method === 'addLabel')).toBe(true);
+    expect(gh.calls.some((c) => c.method === 'addAssignees')).toBe(true);
+  });
+
+  it('#935 union type validation: `{ epic, phase, issue }` is not accepted (both branches strict)', async () => {
+    const gh = new FakeGh({});
+    const result = await cockpitQueue(
+      {
+        epic: { owner: 'owner', repo: 'epic', number: 1 },
+        phase: 'specify',
+        issue: { owner: 'owner', repo: 'repo', number: 2 },
+      } as never,
+      { gh, cockpitGh: gh, loadConfig: stubLoadConfig as never },
+    );
+    expect(result.status).toBe('error');
+    if (result.status !== 'error') return;
+    expect(result.class).toBe('invalid-args');
   });
 });

@@ -19,6 +19,8 @@ import { cockpitResume } from './tools/cockpit_resume.js';
 import { cockpitQueue } from './tools/cockpit_queue.js';
 import { cockpitMerge } from './tools/cockpit_merge.js';
 import { cockpitAwaitEvents } from './tools/cockpit_await_events.js';
+import { cockpitScopeAdd } from './tools/cockpit_scope_add.js';
+import { cockpitScopeRemove } from './tools/cockpit_scope_remove.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -26,6 +28,8 @@ import {
   CockpitResumeInputSchema,
   CockpitQueueInputSchema,
   CockpitMergeInputSchema,
+  CockpitScopeAddInputSchema,
+  CockpitScopeRemoveInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
@@ -104,6 +108,26 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
       inputSchema: CockpitMergeInputSchema,
     },
     async (args) => toCallToolResult(await cockpitMerge(args as never, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_scope_add',
+    {
+      description:
+        "Append a task-list ref to a scope (epic or tracking) issue's body. Concurrency-safe with bounded retry.",
+      inputSchema: CockpitScopeAddInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitScopeAdd(args as never, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_scope_remove',
+    {
+      description:
+        "Remove a task-list ref line from a scope issue's body. Concurrency-safe with bounded retry.",
+      inputSchema: CockpitScopeRemoveInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitScopeRemove(args as never, deps)),
   );
 
   server.registerTool(

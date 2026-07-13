@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { runQueue } from '../queue.js';
+import { runQueue, runQueueSingleIssue } from '../queue.js';
 import { CockpitExit } from '../exit.js';
 import { FakeGh } from './helpers/fake-gh.js';
 import type { CommandRunner, GhWrapper, IssueStateResult } from '@generacy-ai/cockpit';
@@ -304,5 +304,92 @@ describe('runQueue', () => {
     expect(cx.message).toContain('cockpit.assignee');
     expect(cx.message).toContain('CLUSTER_GITHUB_USERNAME');
     expect(cx.message).toContain('GH_USERNAME');
+  });
+});
+
+describe('runQueueSingleIssue (#935)', () => {
+  const loadConfig = vi.fn(async () => ({
+    config: { assignee: 'octocat' },
+    source: 'defaults' as const,
+    warnings: [],
+  }));
+
+  it('happy path: eligible → applies assignee + label, exit 0', async () => {
+    const cockpitGh = stubGhWrapper({});
+    const out: string[] = [];
+    const result = await runQueueSingleIssue(
+      'owner/repo#7',
+      { yes: true },
+      { cockpitGh, loadConfig, stdout: (l) => out.push(l), env: {} },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.row.eligibility.kind).toBe('eligible');
+    expect(cockpitGh.addLabel).toHaveBeenCalledWith('owner/repo', 7, 'process:speckit-feature');
+    expect(cockpitGh.addAssignees).toHaveBeenCalledWith('owner/repo', 7, ['octocat']);
+    expect(out.some((l) => l.includes('cockpit queue --issue'))).toBe(true);
+  });
+
+  it('closed issue → skipped, no mutation, exit 0', async () => {
+    const cockpitGh = stubGhWrapper({
+      'owner/repo#7': { state: 'CLOSED' },
+    });
+    const out: string[] = [];
+    const result = await runQueueSingleIssue(
+      'owner/repo#7',
+      { yes: true },
+      { cockpitGh, loadConfig, stdout: (l) => out.push(l), env: {} },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.row.eligibility.kind).toBe('skip');
+    if (result.row.eligibility.kind === 'skip') {
+      expect(result.row.eligibility.reason).toBe('closed');
+    }
+    expect(cockpitGh.addLabel).not.toHaveBeenCalled();
+    expect(cockpitGh.addAssignees).not.toHaveBeenCalled();
+  });
+
+  it('already-labeled → skipped', async () => {
+    const cockpitGh = stubGhWrapper({
+      'owner/repo#7': { labels: ['process:speckit-feature'] },
+    });
+    const result = await runQueueSingleIssue(
+      'owner/repo#7',
+      { yes: true },
+      { cockpitGh, loadConfig, stdout: () => {}, env: {} },
+    );
+    expect(result.row.eligibility.kind).toBe('skip');
+    if (result.row.eligibility.kind === 'skip') {
+      expect(result.row.eligibility.reason).toBe('already-labeled');
+    }
+  });
+
+  it('not-found → skipped', async () => {
+    const cockpitGh = stubGhWrapper({
+      'owner/repo#7': { notFound: true },
+    });
+    const result = await runQueueSingleIssue(
+      'owner/repo#7',
+      { yes: true },
+      { cockpitGh, loadConfig, stdout: () => {}, env: {} },
+    );
+    expect(result.row.eligibility.kind).toBe('skip');
+    if (result.row.eligibility.kind === 'skip') {
+      expect(result.row.eligibility.reason).toBe('not-found');
+    }
+  });
+
+  it('malformed ref → CockpitExit(2)', async () => {
+    let thrown: unknown = null;
+    try {
+      await runQueueSingleIssue(
+        'garbage-ref',
+        { yes: true },
+        { cockpitGh: stubGhWrapper(), loadConfig, stdout: () => {}, env: {} },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CockpitExit);
+    expect((thrown as CockpitExit).code).toBe(2);
   });
 });

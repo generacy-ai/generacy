@@ -5,6 +5,9 @@ import type { IssueRef, ParsedEpicBody, ParsedPhase } from './types.js';
 const HEADING_L3_RE = /^###\s+(.+?)\s*$/;
 const HEADING_L4_PLUS_RE = /^####+\s+/;
 const HEADING_L2_RE = /^##\s+/;
+// Case-insensitive first-token match: closes current phase (parses like L4+),
+// and marks subsequent refs as adhoc rather than dropped.
+const AD_HOC_HEADING_RE = /^##\s+ad-hoc\s*$/i;
 const TASK_LIST_RE = /^\s*-\s*\[[ xX]\]\s+(.+?)\s*$/;
 const REF_SHAPED_RE =
   /(?:^|[\s(])(?:#\d+|\[#?\d+\]|\[[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#\d+\]|[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+#\d+|https:\/\/github\.com\/[A-Za-z0-9._\-\/]+)/;
@@ -57,6 +60,8 @@ export function parseEpicBody(body: string): ParsedEpicBody {
   const phases: ParsedPhase[] = [];
   const warnings: string[] = [];
   const globalRefs = new Map<string, IssueRef>();
+  const adhocRefs: IssueRef[] = [];
+  const adhocSeen = new Set<string>();
 
   let current: ParsedPhase | null = null;
   let currentSeen = new Set<string>();
@@ -67,6 +72,13 @@ export function parseEpicBody(body: string): ParsedEpicBody {
     const lineNumber = i + 1;
 
     if (HEADING_L4_PLUS_RE.test(line)) {
+      current = null;
+      currentSeen = new Set();
+      continue;
+    }
+
+    // Adhoc heading must be checked before generic L2 (which would skip).
+    if (AD_HOC_HEADING_RE.test(line)) {
       current = null;
       currentSeen = new Set();
       continue;
@@ -110,9 +122,22 @@ export function parseEpicBody(body: string): ParsedEpicBody {
       continue;
     }
 
-    if (current == null) continue;
-
     const key = dedupKey(ref);
+
+    if (current == null) {
+      // Adhoc collection: refs outside any phase (preamble, `## Ad-hoc`,
+      // or post-`####+` terminator). Dedup within adhoc AND against globalRefs
+      // to avoid duplicate emission if the same ref later appears in a phase.
+      if (!adhocSeen.has(key)) {
+        adhocSeen.add(key);
+        adhocRefs.push(ref);
+      }
+      if (!globalRefs.has(key)) {
+        globalRefs.set(key, ref);
+      }
+      continue;
+    }
+
     if (!currentSeen.has(key)) {
       currentSeen.add(key);
       current.refs.push(ref);
@@ -124,5 +149,5 @@ export function parseEpicBody(body: string): ParsedEpicBody {
 
   const allRefs = sortRefs(globalRefs.values());
 
-  return { phases, allRefs, warnings };
+  return { phases, adhocRefs, allRefs, warnings };
 }

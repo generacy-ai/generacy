@@ -169,12 +169,16 @@ describe('parseEpicBody', () => {
       { repo: 'owner/repo', number: 1 },
     ]);
 
+    // #935: refs after `####+` terminator are now collected as adhoc rather
+    // than silently dropped, so #99 joins allRefs and adhocRefs.
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 99 }]);
     expect(result.allRefs).toEqual([
       { repo: 'owner/other-repo', number: 4 },
       { repo: 'owner/repo', number: 1 },
       { repo: 'owner/repo', number: 2 },
       { repo: 'owner/repo', number: 3 },
       { repo: 'owner/repo', number: 5 },
+      { repo: 'owner/repo', number: 99 },
     ]);
 
     expect(result.warnings).toEqual([]);
@@ -243,14 +247,15 @@ describe('parseEpicBody', () => {
     expect(result.warnings[0]).toContain("'#8'");
   });
 
-  it('empty body returns { phases: [], allRefs: [], warnings: [] }', () => {
+  it('empty body returns { phases: [], adhocRefs: [], allRefs: [], warnings: [] }', () => {
     const result = parseEpicBody('');
     expect(result.phases).toEqual([]);
+    expect(result.adhocRefs).toEqual([]);
     expect(result.allRefs).toEqual([]);
     expect(result.warnings).toEqual([]);
   });
 
-  it('task-list items outside a phase are ignored', () => {
+  it('task-list items in the preamble (before first phase) become adhocRefs and appear in allRefs (#935)', () => {
     const body = [
       '- [ ] owner/repo#1',
       '### S1',
@@ -259,6 +264,86 @@ describe('parseEpicBody', () => {
     const result = parseEpicBody(body);
     expect(result.phases).toHaveLength(1);
     expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 2 }]);
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    expect(result.allRefs).toEqual([
+      { repo: 'owner/repo', number: 1 },
+      { repo: 'owner/repo', number: 2 },
+    ]);
+  });
+
+  it('flat body (no ### headings) collects refs into adhocRefs and allRefs (#935)', () => {
+    const body = ['- [ ] owner/repo#3', '- [ ] owner/repo#4'].join('\n');
+    const result = parseEpicBody(body);
+    expect(result.phases).toEqual([]);
+    expect(result.adhocRefs).toEqual([
+      { repo: 'owner/repo', number: 3 },
+      { repo: 'owner/repo', number: 4 },
+    ]);
+    expect(result.allRefs).toEqual([
+      { repo: 'owner/repo', number: 3 },
+      { repo: 'owner/repo', number: 4 },
+    ]);
+  });
+
+  it('## Ad-hoc heading (case-insensitive) closes the current phase and collects following refs as adhoc (#935)', () => {
+    const body = [
+      '### Phase 1',
+      '- [ ] owner/repo#1',
+      '## Ad-hoc',
+      '- [ ] owner/repo#9',
+    ].join('\n');
+    const result = parseEpicBody(body);
+    expect(result.phases).toHaveLength(1);
+    expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 9 }]);
+    expect(result.allRefs).toEqual([
+      { repo: 'owner/repo', number: 1 },
+      { repo: 'owner/repo', number: 9 },
+    ]);
+  });
+
+  it('## AD-HOC and lowercase variants match case-insensitively (#935)', () => {
+    const body = ['## AD-HOC', '- [ ] owner/repo#1'].join('\n');
+    const result = parseEpicBody(body);
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    const body2 = ['## ad-hoc', '- [ ] owner/repo#2'].join('\n');
+    const r2 = parseEpicBody(body2);
+    expect(r2.adhocRefs).toEqual([{ repo: 'owner/repo', number: 2 }]);
+  });
+
+  it('refs after a ####+ terminator become adhoc (#935)', () => {
+    const body = [
+      '### Phase 1',
+      '- [ ] owner/repo#1',
+      '#### notes',
+      '- [ ] owner/repo#77',
+    ].join('\n');
+    const result = parseEpicBody(body);
+    expect(result.phases).toHaveLength(1);
+    expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 77 }]);
+  });
+
+  it('a ref that appears in both a phase and adhoc dedups in allRefs; each container keeps its own copy (#935 I-4)', () => {
+    const body = [
+      '### Phase 1',
+      '- [ ] owner/repo#5',
+      '## Ad-hoc',
+      '- [ ] owner/repo#5',
+    ].join('\n');
+    const result = parseEpicBody(body);
+    // Mirrors existing cross-phase behavior: each container lists the ref
+    // once, and allRefs dedupes across the union.
+    expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 5 }]);
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 5 }]);
+    expect(result.allRefs).toEqual([{ repo: 'owner/repo', number: 5 }]);
+  });
+
+  it('adhoc refs dedup within adhoc (I-1)', () => {
+    const body = ['- [ ] owner/repo#1', '- [x] owner/repo#1'].join('\n');
+    const result = parseEpicBody(body);
+    expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+    expect(result.allRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
   });
 
   // T004 (#826): titled house-style lines resolve for every accepted shape × both

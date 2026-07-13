@@ -20,7 +20,14 @@ export interface ParsedPhase {
 export interface ParsedEpicBody {
   /** In body order. */
   phases: ParsedPhase[];
-  /** Deduped union across phases, sorted by `(repo, number)`. */
+  /**
+   * Task-list refs collected outside any phase — appearing before the first
+   * `### ` heading, under a `## Ad-hoc` L2 section, or after a `####+`
+   * terminator. First-appearance order, deduped within adhoc. Empty when
+   * no adhoc/preamble refs are present.
+   */
+  adhocRefs: IssueRef[];
+  /** Deduped union across phases + adhoc, sorted by `(repo, number)`. */
   allRefs: IssueRef[];
   /** Ref-shaped lines that couldn't be resolved (FR-003 warnings). */
   warnings: string[];

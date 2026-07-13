@@ -174,4 +174,77 @@ describe('runStatus', () => {
     expect(runner).toHaveBeenCalledTimes(1);
     expect(out.join('\n')).toContain('— S2 — cohort —');
   });
+
+  // #935 SC-003: flat-list scope bodies render as a single Ad-hoc group with
+  // scope header `(flat, N refs)`.
+  it('flat body renders single Ad-hoc group with `(flat, N refs)` header (#935 SC-003)', async () => {
+    const body = ['- [ ] owner/repo#1', '- [ ] owner/repo#2'].join('\n');
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/scope#42': body },
+      issuesByQuery: (): Issue[] => [
+        makeIssue({ number: 1, url: 'https://github.com/owner/repo/issues/1' }),
+        makeIssue({ number: 2, url: 'https://github.com/owner/repo/issues/2' }),
+      ],
+    });
+    const out: string[] = [];
+    const code = await runStatus(
+      'owner/scope#42',
+      {},
+      { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    const joined = out.join('\n');
+    expect(joined).toContain('Scope: owner/scope#42');
+    expect(joined).toContain('(flat, 2 refs)');
+    expect(joined).toContain('— Ad-hoc —');
+    expect(joined).not.toContain('— (no phase) —');
+  });
+
+  it('phased body with `## Ad-hoc` section renders both phase groups and Ad-hoc group (#935)', async () => {
+    const body = [
+      '### S1 alpha',
+      '- [ ] owner/repo#1',
+      '## Ad-hoc',
+      '- [ ] owner/repo#9',
+    ].join('\n');
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/epic#42': body },
+      issuesByQuery: (): Issue[] => [
+        makeIssue({ number: 1, url: 'https://github.com/owner/repo/issues/1' }),
+        makeIssue({ number: 9, url: 'https://github.com/owner/repo/issues/9' }),
+      ],
+    });
+    const out: string[] = [];
+    const code = await runStatus(
+      'owner/epic#42',
+      {},
+      { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    const joined = out.join('\n');
+    expect(joined).toContain('(phased, 2 refs)');
+    expect(joined).toContain('— S1 alpha —');
+    expect(joined).toContain('— Ad-hoc —');
+  });
+
+  it('phased body with empty adhocRefs does NOT emit an Ad-hoc group (#935)', async () => {
+    const body = ['### S1 alpha', '- [ ] owner/repo#1'].join('\n');
+    const gh = new FakeGh({
+      bodyByIssue: { 'owner/epic#42': body },
+      issuesByQuery: (): Issue[] => [
+        makeIssue({ number: 1, url: 'https://github.com/owner/repo/issues/1' }),
+      ],
+    });
+    const out: string[] = [];
+    const code = await runStatus(
+      'owner/epic#42',
+      {},
+      { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+    );
+    expect(code).toBe(0);
+    const joined = out.join('\n');
+    expect(joined).toContain('(phased, 1 refs)');
+    expect(joined).toContain('— S1 alpha —');
+    expect(joined).not.toContain('— Ad-hoc —');
+  });
 });

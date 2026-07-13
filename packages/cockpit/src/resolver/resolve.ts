@@ -54,9 +54,9 @@ export async function resolveEpic(
     for (const w of parsed.warnings) options.logger.warn(w);
   }
 
-  if (parsed.phases.length === 0) {
-    throw new LoudResolverError('NO_PHASE_HEADINGS');
-  }
+  // Flat-list mode: bodies with task-list refs but no `### Phase` headings are
+  // valid — the monitored set is exactly `parsed.allRefs`. `NO_REFS` still
+  // fires when there are no refs at all.
   if (parsed.allRefs.length === 0) {
     throw new LoudResolverError('NO_REFS');
   }
