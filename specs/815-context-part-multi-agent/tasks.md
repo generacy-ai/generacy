@@ -30,7 +30,7 @@ Plus one in-repo docs edit (US3).
 
 ## Phase 2: In-repo docs deliverable
 
-- [ ] T005 [US3] Edit `packages/generacy/examples/config-full.yaml` — replace the commented-out `# agents:` block (currently lines ~57–82) with a **live, uncommented, three-layer** example matching the shape recommended in `quickstart.md` "The single file edit landed by this PR": `default.model` = `sonnet-4-6`, `workflows.speckit-feature.default.model` = `sonnet-4-5`, `workflows.speckit-feature.phases.implement` = `{ provider: claude-code, model: opus-4-7 }`. Keep the existing precedence-chain header comment (lines ~48–56) unchanged. Add inline comments describing each layer. Satisfies FR-008 / SC-005.
+- [X] T005 [US3] Edit `packages/generacy/examples/config-full.yaml` — replace the commented-out `# agents:` block (currently lines ~57–82) with a **live, uncommented, three-layer** example matching the shape recommended in `quickstart.md` "The single file edit landed by this PR": `default.model` = `sonnet-4-6`, `workflows.speckit-feature.default.model` = `sonnet-4-5`, `workflows.speckit-feature.phases.implement` = `{ provider: claude-code, model: opus-4-7 }`. Keep the existing precedence-chain header comment (lines ~48–56) unchanged. Add inline comments describing each layer. Satisfies FR-008 / SC-005.
 
 ## Phase 3: Configured verification (Track 1 — US1)
 
