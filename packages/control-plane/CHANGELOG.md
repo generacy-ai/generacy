@@ -1,5 +1,32 @@
 # @generacy-ai/control-plane
 
+## 0.7.1
+
+### Patch Changes
+
+- aef8f58: Fix the VS Code tunnel device-code timeout orphaning the code-tunnel child (#825).
+
+  When a tunnel start reached the 30s device-code timeout, `VsCodeTunnelProcessManager`
+  set `status = "error"` but left `this.child` alive, so every later `start()` (the
+  cloud "Restart tunnel" button, which is start-only) hit the early-return and silently
+  no-oped until the control-plane process restarted. The timeout handler now kills the
+  child (SIGTERM with a SIGKILL backstop) so the exit handler clears `this.child`, and
+  `start()` is hardened to stop-then-respawn when it finds a stale child resting in an
+  `error` / `disconnected` / `stopped` status instead of returning. A `timedOut` flag
+  routes the exit-handler cascade past the pending branch so the timeout emits exactly
+  one `error` event rather than a second misleading "code tunnel exited" event.
+
+- 09e6d94: Terminate `wizard-credentials.env` with a trailing newline.
+
+  `formatEnvFile()` joined entries with `\n` but omitted a final newline, so any
+  later append (by an operator, a script, or a future writer) concatenated onto
+  the last key/value pair — corrupting the existing key and silently dropping the
+  appended one. The writer now ends the file with `\n`, matching the POSIX
+  convention that entrypoints rely on when sourcing the file.
+
+- Updated dependencies [e829db2]
+  - @generacy-ai/config@0.3.0
+
 ## 0.7.0
 
 ### Minor Changes

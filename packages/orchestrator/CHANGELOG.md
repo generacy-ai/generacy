@@ -1,5 +1,523 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- de0a6bd: Replace `CLUSTER_ACTING_LOGIN` self-recognition with GraphQL `viewerDidAuthor` on the pr-feedback surface.
+
+  The pr-feedback trust predicate now recognizes cluster-authored comments via
+  GitHub GraphQL's `viewerDidAuthor` primitive instead of comparing normalized
+  author logins to a provisioned `CLUSTER_ACTING_LOGIN` value. `getPRReviewThreads()`
+  threads the field onto every `Comment` returned; decision 1.5 in
+  `isTrustedCommentAuthor()` fires on `comment.viewerDidAuthor === true`. All
+  `resolveActingIdentity()` / `normalizeLogin()`-based cluster-identity plumbing
+  (orchestrator + scaffolders) is removed.
+
+  **Breaking change (FR-004):** the `TrustReason` union entry `'cluster-identity'`
+  is renamed to `'self-authored'` on the pr-feedback surface. Hard rename with
+  no dual-emit; the string was two days old and preview-channel-only.
+
+  **Operator note (FR-005):** `CLUSTER_ACTING_LOGIN` is unused and safe to remove
+  from existing `.env` and `docker-compose.yml`. No auto-cleanup, no startup
+  compat log — a redeploy of the orchestrator image is the only action required
+  to gain the fix.
+
+- 3af070c: Add the `generacy cockpit resume <issue-ref>` verb to re-arm a failed phase (#891).
+
+  This is the engine-owned re-arm primitive the auto-mode escalation gate's
+  "Requeue" action needs — without it, every `agent:error` / `failed:*` escalation
+  degraded to Skip and a run with any failed issue could never reach
+  `epic-complete`. `resume` performs label surgery per the protocol: it clears
+  `agent:error`, `failed:<phase>`, and any stray `phase:<phase>`, then restores the
+  `waiting-for:<preceding-gate>` + `completed:<preceding-gate>` + `agent:paused`
+  triple of a naturally-paused-then-completed gate (the gate that _precedes_
+  `<phase>` in the workflow definition), preserving prior `completed:<earlier-phase>`
+  labels so the resolver restarts at `<phase>` rather than from specify. It routes
+  through the unified `resolveIssueContext` grammar (bare number or full URL), is
+  idempotent (clear no-op when the issue isn't failed), and exits non-zero with
+  evidence when the state can't be re-armed (no preceding gate, unknown phase
+  suffix, conflicting labels).
+
+  `@generacy-ai/orchestrator` now exports its phase-resolution surface
+  (`PhaseResolver`, `GATE_MAPPING`, `WORKFLOW_GATE_MAPPING`, `PHASE_SEQUENCE`,
+  `WORKFLOW_PHASE_SEQUENCES`, `getPhaseSequence`, `WorkflowPhase`) so the verb can
+  compute the preceding gate from the active workflow definition.
+
+- f5b162a: Re-validate on base advance and add a bounded validate-fix cycle (#892).
+
+  Two red classes were stranding issues at `failed:validate` with no recovery, so
+  an auto run could never reach `epic-complete`:
+
+  - **Stale integration reds (a).** A new base-advance monitor polls each PR's base
+    branch head SHA on the existing ~60s cadence; when it advances (a sibling PR
+    merges, an external PR merges, or a direct push lands), every open speckit
+    issue sitting at `failed:validate` against that base is re-armed via `cockpit
+resume`. Dependency-ordered merges unlock dependents one at a time with no
+    membership machinery; `(issue, new base SHA)` is the natural re-arm key and the
+    #879 in-flight dedupe collapses storms. `getRefHeadSha` is added to the
+    workflow-engine GitHub client for the SHA poll.
+  - **Genuine code reds (b).** A red that persists on a fresh merge-preview gets one
+    autonomous `ValidateFixHandler` attempt on the branch — a new
+    `ValidateFixIntent` in the claude-code plugin, sharing the PrFeedbackHandler
+    spawn→commit→push→re-check plumbing with the #883 termination discipline (the
+    attempt must change the tree or stop). Attempt identity is a SHA-256 evidence
+    hash over the normalized failing-test/module set + first error line (ANSI,
+    timestamps, absolute paths, and per-run identifiers stripped), so the same red
+    never triggers a second autonomous attempt — further attempts only via the
+    escalation gate. Still red after the attempt → `failed:validate` + alert.
+
+- 186a92a: Add the bounded merge-conflict resolution handler #864 deferred (#898).
+
+  `#864` shipped the pre-phase base-merge guardrail and the
+  `waiting-for:merge-conflicts` pause but deferred the actual resolver to a
+  follow-up that was never filed — so issues that paused at that gate could never
+  transition. This ships both halves:
+
+  - **Self-describing pause surface.** The merge-conflict pause comment now
+    documents the manual escalation path (resolve on the branch, push, then
+    advance) and stays load-bearing as the `blocked:stuck-merge-conflicts`
+    escalation surface.
+  - **Bounded autonomous resolver.** A merge-conflict monitor enqueues a resolution
+    item for issues sitting at `waiting-for:merge-conflicts`, and a new
+    `MergeConflictHandler` (shaped like `PrFeedbackHandler`, driven by a new
+    claude-code `MergeConflictIntent`) makes exactly one autonomous CLI attempt on
+    the branch with #883-style termination discipline: pre-agent git/network flakes
+    get bounded 3× retries, the agent runs at most once, and `git push` retries only
+    network errors — a non-fast-forward rejection escalates to
+    `blocked:stuck-merge-conflicts` rather than looping. On success it applies
+    `completed:merge-conflicts` and clears the pause; on failure it preserves the
+    gate and emits an evidence block. Adds the `blocked:stuck-merge-conflicts` label
+    to the workflow-engine vocabulary.
+
+- 0ceafb2: Surface a real orchestrator version on `/health` so connected clusters stop reporting `v0.0.0` (#907).
+
+  The `/health` route never emitted a `version` field, so cluster-relay's metadata
+  collector fell back to the literal `"0.0.0"` and forwarded that to the cloud
+  dashboard for every cluster. A new `resolveOrchestratorVersion()` service resolves
+  the build identifier from `ORCHESTRATOR_VERSION` (the canonical build-time env var),
+  falling back to the package's `package.json` version, and finally to the sentinel
+  `"unknown"` — with the literal `"0.0.0"` treated as "no real version" from either
+  source so a stray env var or workspace-default cannot reproduce the symptom. The
+  handler now emits `version`, and it is declared on both the Fastify response schema
+  and the Zod `HealthResponseSchema` (required `z.string()`) so Fastify no longer
+  strips it on serialization.
+
+- e829db2: feat(orchestrator): per-repo validate command overrides via .generacy/config.yaml
+
+  The validate-phase commands (`validateCommand` / `preValidateCommand`) were
+  orchestrator-global and monorepo-shaped (`pnpm test && pnpm build`). A single
+  orchestrator serves many repos, so a single-package repo with a different shape
+  (e.g. an Astro site with no `test` script) failed validate on every issue —
+  `pnpm test` exits non-zero before the build runs.
+
+  The target repo's `.generacy/config.yaml` `orchestrator` block can now set
+  `validateCommand` / `preValidateCommand`, which are merged onto the global
+  worker config per-job before the phase loop runs.
+
+  - `@generacy-ai/config`: `OrchestratorSettingsSchema` gains optional
+    `validateCommand` / `preValidateCommand`.
+  - `@generacy-ai/orchestrator`: new pure helper `applyRepoValidateOverrides`
+    (preserves an explicit empty `preValidateCommand` = skip install); the worker
+    loads the repo's orchestrator settings at the existing per-job config hook and
+    passes the merged config to the phase loop. Backward-compatible — repos
+    without the block keep the global defaults.
+
+- 2d3b73f: fix: assert a product diff before a phase requiring changes can pass (#820)
+
+  An implement phase that produced no product code — only `specs/` artifacts —
+  previously passed validate and merged silently. The worker now computes the
+  product diff for phases that require changes (`git diff --name-only base...HEAD`,
+  excluding the `specs/` path prefix) and fails the phase when no product files
+  changed.
+
+  Adds `GitHubClient.getFilesChangedBetween(base, head)` (merge-base/triple-dot
+  semantics) to `@generacy-ai/workflow-engine` and its gh-cli implementation, plus
+  the `product-diff` helper and `PrManager.getPrNumber()` in
+  `@generacy-ai/orchestrator`.
+
+### Patch Changes
+
+- b3bad08: Resume the VS Code tunnel and code-server on cluster restart (#824).
+
+  `generacy stop` explicitly stops the VS Code tunnel and code-server, but on the next
+  boot neither was ever restarted: the sole auto-start site is the control-plane
+  `bootstrap-complete` handler, which the orchestrator only replays when
+  `PostActivationRetryService` reports `needsRetry === true`. On a healthy,
+  already-activated cluster (`activated && postActivationComplete`) `needsRetry` is
+  false, so `bootstrap-complete` never replayed and the tunnel/code-server stayed dead
+  until a full re-activation. A new `BootResumeService` now runs in `server.ts`'s
+  existing-API-key branch when the cluster is already activated, firing best-effort,
+  concurrent `vscode-tunnel-start` and `code-server-start` lifecycle POSTs (both
+  managers are idempotent). Failures surface per-service on the `cluster.bootstrap`
+  channel without marking the cluster degraded; it runs after the relay bridge is
+  initialized so the first `starting` events reach the cloud.
+
+- 1d6c1b3: Fire boot-resume on wizard-provisioned clusters, not just the env-key branch (#834).
+
+  The #824 boot-resume fix only ran in `createServer()`'s existing-API-key branch, but
+  wizard-provisioned clusters boot with `config.relay.apiKey` empty (the key is persisted
+  to `/var/lib/generacy/cluster-api-key` and reloaded during activation), so they always
+  take the `activateInBackground` path — which handled only the `PostActivationRetryService`
+  retry case and never constructed `BootResumeService`. Net effect: on every dev cluster
+  the VS Code tunnel and code-server stayed down after a `stop`/`start`. The shared
+  "check post-activation state → retry (`needsRetry`) or resume (`activated &&
+postActivationComplete`)" logic is now hoisted into `runPostActivationBranch`, which both
+  the synchronous existing-key branch and `activateInBackground` call, so the two startup
+  paths can no longer drift. A regression test drives the `activateInBackground` path with
+  `activated && postActivationComplete` state and asserts the resume branch fires.
+
+- 8b5e483: Author-trust gating for workflow-ingested GitHub comments (#842).
+
+  Three ingestion surfaces — the clarify answer-scanner, the clarify resume prompt,
+  and the PR-feedback reader — previously treated every human-authored comment on an
+  issue or PR as trusted agent input, with no filter on who wrote it. On a public
+  repo this is a live prompt-injection / supply-chain vector: a drive-by account
+  (`author_association: NONE`) can attach "apply this patch" or a hostile link and
+  have an autonomous worker ingest it as requirements or context. A new shared
+  comment-trust helper now gates ingestion by `author_association`: `OWNER`,
+  `MEMBER`, and `COLLABORATOR` are trusted by default; `NONE`,
+  `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `MANNEQUIN`, and `CONTRIBUTOR` are
+  excluded from agent context. The `gh` client and `Comment` type now carry
+  `author_association` so the decision is possible, an untrusted-data fence wraps
+  comment bodies that still reach a prompt, and each skipped comment is logged with
+  author, tier, comment ID, and surface (metadata only — no body content) so a
+  repo owner can widen the allowlist deliberately via config rather than silently
+  lose a legitimate collaborator's answer. All three surfaces share the one trust
+  helper rather than three parallel implementations.
+
+- f18ea20: Fix orchestrator resume dedupe stranding legitimate same-gate re-visits (#849).
+
+  The ~12h resume dedupe TTL was surviving across a pause, so a second resume
+  event for the same gate (e.g. the re-review loop after `address-pr-feedback`)
+  was deduped away and never enqueued. `LabelManager.onGateHit` now invalidates
+  the paired `resume:<gate>` dedupe key immediately after the pause labels land
+  on GitHub, via a best-effort worker-mode `PhaseTrackerService.clear` callback.
+  The clear is one-shot and only runs once the `waiting-for:<gate>` label is
+  confirmed applied, so a dedupe is never cleared for a pause that didn't
+  manifest.
+
+- b1fb790: Re-enable the orchestrator and generacy test suites in CI and add a dedicated integration job, surfacing tests that were silently excluded (#871).
+
+  CI's `Test (packages)` step previously filtered out `@generacy-ai/orchestrator` and `@generacy-ai/generacy`, hiding their failures on develop. The filter is removed so both suites run, a new `integration` job runs `test:integration` across packages against a Redis service, and the launcher classes (`AgentLauncher`, `GenericSubprocessPlugin`) are now exported as runtime values from `@generacy-ai/orchestrator` (previously type-only) so cross-package spawn-snapshot parity tests can construct them. The red tests this exposed are fixed: the `health-code-server` test now passes config via the `{ config }` options shape, the `relay-bridge` metadata test mocks `node:fs/promises` so `collectMetadata()` is deterministic under fake timers, and the `setup workspace` no-config test mocks `readdirSync` so the workspace scan reaches the intended `exit(1)`.
+
+- a951c1f: Provision the cluster's acting identity so the #869 cluster-identity trust rule actually fires (#874).
+
+  The #869 trust machinery shipped correctly but was inert: it compared PR-feedback comment authors against a cluster identity that was never provisioned. On a scaffolded cluster with App credentials, `resolveClusterIdentity()` returns nothing (`gh api user` 403s on App installation tokens), so the trust predicate ran its degraded mode permanently and every first-party comment authored by the App bot was classified untrusted. This introduces a distinct **acting login** (the App bot account that authors the cluster's own comments) separate from the assignee-identity chain (whose issues the cluster works), normalizes the `[bot]` suffix so REST-form (`generacy-ai[bot]`) and GraphQL-form (`generacy-ai`) author logins compare equal, has both the local scaffolder and cloud-deploy write it, and makes the degraded mode observable — `clusterIdentity` is included in every `untrustedCommentSkips` warn and a single identity-resolution-failure error is emitted per process start when resolution fails.
+
+- 4f817e0: Fix the clarification answer-scanner treating engine-authored question
+  comments as answers (#909). `integrateClarificationAnswers` now filters
+  comments carrying a clarification-question marker _before_ the author-trust
+  check, so a cluster's own question comment can no longer pass the trust gate
+  (under #910 the cluster identity is trusted) and be parsed as `Q<n>:` answers
+  — which caused the gate to see all questions as already answered. The four
+  engine question-marker dialects are consolidated into a single
+  `clarification-markers.ts` (`CLARIFICATION_QUESTION_MARKERS`,
+  `commentCarriesQuestionMarker`, `matchClarificationQuestionMarker`) with
+  line-anchored, case-sensitive matching so `> `-quoted markers in human answers
+  still integrate, and `isQuestionComment` delegates to the same predicate. The
+  untrusted-answer explainer now tells authors to re-post answers themselves in
+  the `Q1: <answer>` format.
+- a179720: Fix App-identity clusters failing to self-recognize their own clarification
+  answer posts (#910). The answer-scanner (`integrateClarificationAnswers`) and
+  the clarify-resume context builder (`buildTrustedIssueCommentsBlock`) now fetch
+  issue comments through a new GraphQL client method
+  `getIssueCommentsWithViewerAuth()` instead of the REST `getIssueComments()`,
+  so each comment carries the `viewerDidAuthor` primitive keyed on the
+  authenticated App identity (stable across installation-token rotation). Both
+  call sites retry once on transient failure and fail closed on the second
+  failure — no REST fallback, which would silently reproduce the pre-fix defect.
+  The comment-trust helper's self-authored shape-drift warning is extended from
+  `pr-feedback` to a `MIGRATED_SURFACES` set (`pr-feedback`, `answer-scanner`,
+  `clarify-resume`), so a future caller that accidentally routes a migrated
+  surface through REST trips the wrong-method alarm instead of silently
+  rejecting the cluster's own comments at tier NONE.
+- c39e1fa: Fix the orchestrator phase-loop running the pre-phase base-merge twice per
+  validate cycle (#914). The second call site (between `install` and `validate`,
+  added in #864) re-ran `git reset --hard` + `git clean -fd` and destroyed the
+  freshly-installed toolchain, breaking the validate step. The base-merge now
+  runs at most once per cycle: a block-scoped `hasBaseMergedThisCycle` guard is
+  set after the single pre-`install` merge, the redundant between-install-and-
+  validate call site is removed, and the `implement` path is wrapped in the same
+  guard (symmetry immunization) so a future edit cannot reintroduce a double
+  merge. The guard re-initializes on every loop iteration, preserving the
+  existing retry semantics (`i--; continue;`).
+- daec0ee: Surface classifier reason in failure evidence so alerts stop lying about exit 0 (#915).
+
+  `CommandExitEvidence` gains an optional `reason?: string` field, populated from
+  `result.error.message` when the caller passes an explicit `classifier` argument to
+  `PhaseLoop.buildErrorEvidence`. On synthetic post-exit failures (product-diff guard,
+  no-progress guard, spawn-error catch, product-diff-error catch), the exit descriptor
+  is reworded from the bare `exit <N>` literal to
+  `failed post-exit: <classifier> (process exit <N>)` and the reason string appears
+  above the output tail in both the stage-comment evidence block and the
+  bottom-of-thread failure alert. Backticks are ZWSP-escaped and multi-line reasons
+  render as a fenced `text` block capped at 1 KiB with a `…` truncation marker.
+
+  Purely additive: process-failure callsites (`:294` pre-validate install, `:548`
+  post-phase process failure) pass `classifier: undefined`, so their evidence shape
+  and rendering are byte-identical to pre-#915. Pre-fix serialized `errorEvidence`
+  blobs deserialize unchanged (the new field is optional).
+
+- 3d718e5: Fix the two label-provisioning surfaces classifying create-races and real
+  failures inconsistently, and stop over-long label descriptions failing
+  provisioning (#916).
+
+  - `@generacy-ai/workflow-engine`: add a shared `classifyLabelProvisioningError`
+    helper (exported, with the `ProvisioningErrorClassification` type) so
+    `LabelManager.ensureRepoLabelsExist` (per-worker ensure-pass) and
+    `LabelSyncService.syncRepo` (boot-time bulk sync) distinguish a benign
+    `already exists` create-race from a real failure (422/401/403/5xx) from one
+    home instead of drifting apart. Shorten the `paused:*` / merge-conflict
+    `WORKFLOW_LABELS` descriptions that exceeded GitHub's label-description length
+    limit and triggered 422s on create.
+  - `@generacy-ai/orchestrator`: `LabelSyncService.syncRepo` now catches per-label
+    errors — races count as `unchanged` (no longer flip the repo to failed) while
+    real failures are logged with cause/status and fail the repo; a `listLabels`
+    failure remains fatal for that repo. `LabelManager` records a
+    provisioning-failure lineage map and routes all label applies through
+    `applyLabels`, so an apply-time 404 on a workflow label is enriched with the
+    provisioning cause the operator needs.
+
+- d27b61e: Fix two pr-feedback defects surfaced during cockpit v1 (#926).
+
+  - `@generacy-ai/cockpit`: `waiting-for:address-pr-feedback` now outranks every
+    other `waiting-for:*` gate in the classifier precedence order — an
+    actively-rewriting-code state is more specific than any passive gate it can
+    coexist with, so a PR mid-feedback no longer classifies as the coexisting
+    passive gate.
+  - `@generacy-ai/orchestrator`: the pr-feedback handler now clears
+    `agent:in-progress` at a single shared `finally` exit path, so no terminal
+    return (Cases A/B, either blocked-stuck disposition, or a thrown error) can
+    leave the label pinned. The happy path coalesces the
+    `waiting-for:address-pr-feedback` + `agent:in-progress` removal into one
+    `removeLabels` call so cockpit/auto observers never see one label without the
+    other; the `finally` clear is an idempotent backstop and stays non-fatal on
+    failure.
+
+- ff9da3a: fix(orchestrator): boot-resume never fired on wizard clusters — `await relayBridge.start()` stranded the post-activation dispatch
+
+  The `#834` boot-resume was placed after `await relayBridge.start()` in
+  `activateInBackground` (the startup path every wizard-provisioned cluster takes,
+  since the relay API key is reloaded from disk rather than present in the process
+  env). `RelayBridge.start()` awaits `client.connect()`, which is a long-lived
+  reconnect loop that only resolves on disconnect — so on a healthy relay the
+  `await` never returns and `runPostActivationBranch()` was unreachable dead code.
+  The VS Code tunnel therefore never auto-resumed after a `generacy stop`/`start`.
+
+  Start the relay bridge fire-and-forget (`relayBridge.start().catch(...)`),
+  mirroring the synchronous existing-key path, so the post-activation dispatch
+  runs. Verified end-to-end on a live cluster: after an orchestrator restart the
+  boot-resume fires and the tunnel reconnects with no manual intervention.
+
+  The `#834` regression test could not catch this: its relay-client mock resolved
+  `connect()` immediately and its control-plane mock omitted `DockerEngineClient`
+  (making `relayBridge` null), so the blocking `start()` path was never exercised.
+  The test now keeps `connect()` pending and constructs a non-null bridge, and
+  fails if the fix is reverted.
+
+- a7e4333: fix: don't let the clarify phase skip its pause on a misparsed answer (#818)
+
+  The clarify gate could complete without pausing on `waiting-for:clarification`
+  when the bot's own question comment (or leaked question-side markup) was parsed
+  as if it were a human answer. Hardens clarification answer detection in the
+  worker:
+
+  - `isQuestionComment` now also recognizes the variant `### Q<n>:` heading shape
+    when a section carries question-side markup (`**Question**:` / `**Context**:` /
+    `**Options**:`).
+  - `parseAnswersFromComments` anchors the `Q<n>:` opener at line start so mid-prose
+    references ("as per Q1: yes") no longer capture as answers, and skips (with a
+    `SKIPPED_SUSPICIOUS_ANSWER` warning) any captured answer that still contains
+    question-side markup.
+
+- 780b8c8: Fix single-package repos failing validate, and surface phase-failure evidence to
+  the issue (#847).
+
+  Two related worker gaps observed when a scaffolded single-package repo hit
+  `failed:validate`:
+
+  - **Default `preValidateCommand` hard-failed single-package repos.** The default
+    ran `pnpm install && pnpm -r --filter './packages/*' build`; on a repo with no
+    `packages/` directory the filter matched zero projects, pnpm exited 1, and the
+    phase died with "Pre-validate install failed" before `validateCommand` ever
+    ran. The default now degrades — it runs the `--filter './packages/*' build`
+    half only when a `pnpm-workspace.yaml` and at least one `packages/*/package.json`
+    are present, so single-package repos install and validate normally without
+    needing a per-repo `orchestrator` override.
+
+  - **`failed:<phase>` posted no diagnostic to the issue.** A failed phase flipped
+    its stage comment to an error state with no command, exit code, or stderr — the
+    detail lived only in worker container logs. Failed phases now post a bounded
+    failure-evidence block (failing command, exit code, and a stderr tail capped to
+    the last 30 lines / 4096 bytes) to the issue so it is visible from GitHub and
+    the cockpit.
+
+- 121e84b: Fix the PR feedback loop never firing because `Comment.resolved` was never populated (#861).
+
+  Thread resolution is a GraphQL-only concept — the REST endpoint underlying
+  `getPRComments()` never exposed it, so `Comment.resolved` was always `undefined`
+  and the preflight / read-pr-feedback / orchestrator feedback loop treated every
+  thread as unresolved (or silently skipped it). Adds `getPRReviewThreads()`, which
+  fetches review threads with their `isResolved` state via GraphQL, and rewires
+  `preflight`, `read-pr-feedback`, and the orchestrator PR-feedback handler to use
+  it. `getPRComments()` and `Comment.resolved` are deprecated and slated for removal.
+
+- 9d03505: Fix orchestrator resume dedupe stranding issues by keying on in-flight queue state instead of history (#862).
+
+  The previous dedupe keyed on `(issue, gate)` history via a phase-tracker key, so
+  its correctness depended on every pause path routing #849's paired-clear callback,
+  on no pre-fix keys surviving under the TTL, and on TTL races never landing wrong —
+  which produced a second live stranding after #849 shipped. Replaces it with a
+  queue-level idempotency check (`enqueueIfAbsent` keyed on the per-issue queue
+  itemKey, cleared when the item completes/fails), which is exactly scoped to the
+  real purpose — collapsing webhook/poll double-enqueue of the same occurrence — and
+  removes the paired-clear obligations and TTL tuning entirely.
+
+- c0753bb: Fix feature branches never syncing with their base, so validate ran on stale trees and conflicts surfaced only at merge (#864).
+
+  Nothing in the pipeline merged the base branch into a feature branch — not at
+  implement start, not before validate — so staleness and conflicts surfaced only
+  at merge time, after review and validate had already passed against a tree that
+  would not exist post-merge (vacuous green). The worker now performs a base-merge
+  of `origin/<base>` into the workspace (committed for implement, ephemeral for
+  pre-validate/validate) so validation tests the real post-merge tree; merge
+  conflicts fail loud with a merge-conflict evidence block and gate label listing
+  the conflicted paths. `cockpit queue` additionally warns when an implement
+  phase's plan.md declares a dependency on an issue whose PR is not yet merged.
+
+- 6a817e1: Fix phase-failure evidence being invisible because it was rendered as an in-place edit to an hours-old stage comment (#865).
+
+  The #847 failure-evidence block worked but nobody saw it: `StageCommentManager`
+  rendered it by editing the existing stage comment in place — a comment posted when
+  the workflow started, mid-thread — which generates no GitHub notification and no
+  new activity at the bottom of the thread. On failure the orchestrator now also
+  posts a fresh alert comment at the end of the thread so watchers are actually
+  notified, rather than relying solely on the buried in-place edit.
+
+- 33c9f11: Trust the cluster's own identity in the PR-feedback loop so cockpit request-changes feedback can be auto-addressed (#869).
+
+  The #842 author-trust filter and the cockpit's request-changes path were mutually
+  deadlocked: feedback the cockpit posts through its own human-gated gate is authored
+  by the cluster's GitHub identity, which GitHub reports as `author_association: NONE`,
+  so the handler classified its own first-party payload as untrusted and discarded it.
+  The trust predicate now treats the resolved cluster identity as trusted in addition
+  to `OWNER`/`MEMBER`/`COLLABORATOR`, and both the monitor and the handler evaluate the
+  same shared predicate. A zero-trusted exit (unresolved threads present but none
+  trusted) no longer removes the label, log "No unresolved threads found", or exit
+  silently — it retains state, logs at `warn` with the skipped authors/reasons, and the
+  enqueue-dedupe state is settled so a later trusted comment re-triggers the loop.
+
+- 65ce4cf: Migrate the PR-feedback enqueue to in-flight queue-state dedupe, completing #862 (#879).
+
+  The pr-feedback surface still deduped via `PhaseTracker.tryMarkProcessed` (a
+  `phase-tracker:<owner>:<repo>:<issue>:address-pr-feedback` SET NX with a ~12–24h
+  TTL), so a stale key from a prior handler era — or any crash-shaped gap between
+  mark and settle — could silently block the first trusted enqueue after a deploy
+  and then spontaneously "heal" at TTL expiry. The enqueue now dedupes against
+  in-flight queue state (`enqueueIfAbsent` on the per-issue itemKey, the same
+  atomic layer the resume path uses post-#862), which self-clears when the item
+  completes/fails/is dropped. The `DEDUP_PHASE` / `tryMarkProcessed` usage and
+  #869 FR-006's clear-on-exit settlement obligations are removed — one dedupe
+  mechanism across both surfaces, no TTL tuning, and the PhaseTracker machinery
+  becomes fully deletable as #862 intended.
+
+- af34d75: Terminate the PR-feedback loop on its own trigger; stop the runaway reply churn (#883).
+
+  The monitor triggers on `unresolvedThreads > 0`, but the handler treated "reply
+  posted" as done and never resolved the threads — so a successful cycle left its
+  own trigger unchanged and re-fired at poll cadence forever, stacking a duplicate
+  "I've addressed this feedback" reply (one per comment, doubling each round) and
+  burning a full Claude CLI run every ~5 minutes.
+
+  - **workflow-engine**: adds a `resolveReviewThread(threadId)` GraphQL mutation
+    (App-token-capable, 3× backoff retry, no retry on auth failure), a thread `id`
+    on the #861 `ReviewThread` shape, and a `blocked:stuck-feedback-loop` label
+    definition.
+  - **orchestrator**: after a fix cycle pushes a commit and posts one reply per
+    _root_ thread, the handler resolves every thread it addressed before clearing
+    the label — the termination edge. No-diff cycles now post no replies, log a
+    `warn` that the trigger persists, and exit without the success line instead of
+    churning. The monitor skips issues carrying the `blocked:` pause.
+  - **cockpit**: classifies `blocked:*` labels as the `waiting` state and sorts
+    `blocked:stuck-feedback-loop` ahead of the `waiting-for:*` gates so the pause
+    surfaces first.
+
+- 242b950: Stop the label-op crash-loop and provision missing protocol labels on demand (#889).
+
+  Two composing defects made the #864 pre-implement base-merge pause path
+  crash-loop the worker on repos provisioned before the `waiting-for:merge-conflicts`
+  label existed:
+
+  - **Missing label provisioning.** `gh issue edit --add-label` hard-fails when the
+    label doesn't exist, so the pause failed on every pre-#864 repo. Labels the
+    orchestrator can apply are now ensured to exist (created on demand) before they
+    are applied — generalizing to any future protocol-vocabulary addition, with no
+    operator `gh label create` step. A label-protocol audit test fails if a label is
+    added to the engine vocabulary without being in the provisioning source of truth.
+  - **Label-op failure crash-looped the fleet.** After `LabelManager`'s 3-attempt
+    retry was exhausted, the error propagated unhandled and `WorkerDispatcher`
+    released the item back to `pending`; the next worker re-claimed, hit the same
+    missing label, and released again — indefinitely. A label-op failure is now a
+    terminal failure of the _individual item_ (`agent:error`, left in place, not
+    re-queued) with a #865-style alert naming the failing label operation and site
+    and including the underlying `gh` error as evidence. The worker keeps processing
+    other items — no unhandled throw escapes `ClaudeCliWorker.processItem`.
+
+- 38afb3a: Capture stdout in worker error evidence, not just stderr (#890).
+
+  `buildErrorEvidence` tailed only stderr, but Next.js, vitest, and npm write most
+  failure detail to stdout — so a `validate` failure like `next build`'s type error
+  surfaced in alerts as `stderr: (empty)`, stranding the auto-mode escalation gate
+  with nothing to diagnose. The spawn layer now merges stdout+stderr chunks in
+  arrival order into a bounded ring buffer (~8 KiB) when no explicit capture is
+  attached, and Claude-CLI phases synthesize the tail from the retained `text`
+  chunks. `buildErrorEvidence` renders a single interleaved `output` block (keeping
+  the 4 KiB byte bound; `CommandExitEvidence.stderrTail` renamed `outputTail`), and
+  collapses the both-empty case to one `(no output on either stream)` line instead
+  of a misleading `(empty)` marker.
+
+- 747e6bc: Re-arm the interrupted phase after a merge-conflict resolution and leave labels truthful (#902).
+
+  #898's `MergeConflictHandler` success path (agent-resolved or no-op when the
+  branch was already clean) never re-armed the paused phase and left
+  `agent:in-progress` and `completed:merge-conflicts` set — a state no detector
+  matches, so the issue dead-parked forever. The success path now:
+
+  - returns a terminal `{ outcome: 're-armed', startPhase }` to the dispatcher,
+    which (as the single queue authority per #889) completes the handler's own
+    claim and enqueues the `continue` item — the handler never touches the queue
+    itself, avoiding a self-deadlock against #879's single-in-flight rule;
+  - sources `startPhase` from `ResolveMergeConflictsMetadata.phase` threaded in-band
+    from the pause site, and fails loud with #889-style evidence if it's missing
+    rather than re-deriving from labels;
+  - consumes the `completed:merge-conflicts` operator-advance marker and clears
+    `agent:in-progress`/`agent:paused` residue so a later pause can't insta-resume.
+
+  Codifies the invariant that every handler terminal outcome maps to exactly one of
+  re-armed / gated / failed / done, enforced by a post-exit runtime assertion that
+  reads the real label set + queue state (not the handler's return value).
+
+- Updated dependencies [aef8f58]
+- Updated dependencies [8b5e483]
+- Updated dependencies [a951c1f]
+- Updated dependencies [09e6d94]
+- Updated dependencies [de0a6bd]
+- Updated dependencies [f5b162a]
+- Updated dependencies [186a92a]
+- Updated dependencies [a179720]
+- Updated dependencies [3d718e5]
+- Updated dependencies [e829db2]
+- Updated dependencies [2d3b73f]
+- Updated dependencies [121e84b]
+- Updated dependencies [33c9f11]
+- Updated dependencies [af34d75]
+- Updated dependencies [242b950]
+  - @generacy-ai/control-plane@0.7.1
+  - @generacy-ai/workflow-engine@0.3.0
+  - @generacy-ai/generacy-plugin-claude-code@0.2.0
+  - @generacy-ai/config@0.3.0
+
 ## 0.6.0
 
 ### Minor Changes
