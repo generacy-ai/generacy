@@ -12,6 +12,7 @@ describe('cockpit command tree', () => {
       'merge',
       'queue',
       'resume',
+      'scope',
       'status',
       'watch',
     ]);

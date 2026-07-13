@@ -218,6 +218,11 @@ export interface GhWrapper {
   findOpenPrForBranch(repo: string, branch: string): Promise<OpenPrForBranch | null>;
   prDiffNames(repo: string, prNumber: number): Promise<string[]>;
   prDiffPatch(repo: string, prNumber: number): Promise<string>;
+  /**
+   * Overwrite the body of an issue. Not conditional — callers implement
+   * their own read-modify-verify loop for concurrent-safe append/remove.
+   */
+  updateIssueBody(repo: string, issue: number, body: string): Promise<void>;
 }
 
 const IssueRawSchema = z.object({
@@ -1711,6 +1716,21 @@ export class GhCliWrapper implements GhWrapper {
     ]);
     failIfNonZero(result, 'pr diff (patch)');
     return result.stdout;
+  }
+
+  async updateIssueBody(
+    repo: string,
+    issue: number,
+    body: string,
+  ): Promise<void> {
+    // `--body-file -` reads from stdin: avoids argv-length limits and
+    // shell-metachar hazards for large or mixed-content bodies.
+    const result = await this.runner(
+      'gh',
+      ['issue', 'edit', String(issue), '--repo', repo, '--body-file', '-'],
+      { stdin: body },
+    );
+    failIfNonZero(result, 'issue edit (body)');
   }
 }
 

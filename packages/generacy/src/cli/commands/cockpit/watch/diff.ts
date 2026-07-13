@@ -153,8 +153,12 @@ function computeInitialSweep(curr: SnapshotMap, ts: string): CockpitEvent[] {
  *
  * First-poll (prev empty): emits one line per actionable snapshot in `curr`,
  * each marked `initial: true`. Non-actionable snapshots stay silent.
- * If a specific key is absent from `prev` on polls 2..N, that key is treated
- * as baseline and emits nothing.
+ *
+ * Mid-stream first-sight (#935): on polls 2..N, a key present in `curr` but
+ * absent from `prev` (e.g. `cockpit scope add` appended a new ref to the epic
+ * body) emits one `label-change` event with `initial: true` if actionable —
+ * matching `computeInitialSweep`'s per-key shape. Non-actionable snapshots
+ * stay silent. Removals stay silent (mirrors FR-002 "removal emits nothing").
  */
 export function computeTransitions(
   prev: SnapshotMap,
@@ -166,7 +170,22 @@ export function computeTransitions(
   const out: CockpitEvent[] = [];
   for (const [key, currSnap] of curr) {
     const prevSnap = prev.get(key);
-    if (prevSnap == null) continue;
+    if (prevSnap == null) {
+      if (isActionableSnapshot(currSnap)) {
+        out.push(
+          makeEvent(
+            currSnap,
+            'label-change',
+            null,
+            currSnap.classified.state,
+            currSnap.classified.sourceLabel,
+            ts,
+            { initial: true },
+          ),
+        );
+      }
+      continue;
+    }
     if (prevSnap.kind === 'issue' && currSnap.kind === 'issue') {
       diffIssue(prevSnap, currSnap, ts, out);
     } else if (prevSnap.kind === 'pr' && currSnap.kind === 'pr') {

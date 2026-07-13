@@ -12,7 +12,7 @@ import { listAllIssues } from './shared/pagination.js';
 import { classifyIssue } from './shared/classify-issue.js';
 import { rollup } from './watch/check-rollup.js';
 import { buildStatusRow, type StatusRow } from './status/row.js';
-import { groupRows } from './status/group.js';
+import { ADHOC_PHASE_TOKEN, groupRows } from './status/group.js';
 import { renderTable, renderJsonEnvelope } from './status/render-table.js';
 import { chalkColorizer, identityColorizer } from './status/color.js';
 
@@ -92,6 +92,15 @@ export async function runStatus(
       else membershipByKey.set(key, [phase.token]);
     }
   }
+  // #935: adhoc refs contribute their own membership entry so they render in
+  // the Ad-hoc group. A ref that appears in BOTH a phase and adhoc gets two
+  // rows (mirroring the existing multi-phase-membership behavior).
+  for (const ref of resolved.parsed.adhocRefs) {
+    const key = `${ref.repo}#${ref.number}`;
+    const memberships = membershipByKey.get(key);
+    if (memberships != null) memberships.push(ADHOC_PHASE_TOKEN);
+    else membershipByKey.set(key, [ADHOC_PHASE_TOKEN]);
+  }
 
   const rows: StatusRow[] = [];
   for (const { repo, query } of repoBatches) {
@@ -146,7 +155,12 @@ export async function runStatus(
     }
   }
 
-  const groups = groupRows(rows, resolved.parsed.phases, resolved.epic.repo);
+  const groups = groupRows(
+    rows,
+    resolved.parsed.phases,
+    resolved.epic.repo,
+    resolved.parsed.adhocRefs,
+  );
   const orderedRows = groups.flatMap((g) => g.rows);
 
   if (options.json === true) {
@@ -161,6 +175,12 @@ export async function runStatus(
 
   const tty = process.stdout.isTTY === true;
   const colorizer = tty ? chalkColorizer : identityColorizer;
+  // #935: scope header line — indicates flat vs phased mode and ref count.
+  const shape = resolved.parsed.phases.length === 0 ? 'flat' : 'phased';
+  stdout(
+    `Scope: ${resolved.epic.repo}#${resolved.epic.number}  (${shape}, ${resolved.parsed.allRefs.length} refs)`,
+  );
+  stdout('');
   const table = renderTable(groups, { tty, json: false, colorizer });
   stdout(table);
   return 0;
