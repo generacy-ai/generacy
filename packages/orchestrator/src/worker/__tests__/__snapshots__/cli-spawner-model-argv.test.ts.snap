@@ -1,0 +1,70 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CliSpawner.spawnPhase — --model argv snapshots > (a) pushes --model at the correct position when options.model is set 1`] = `
+[
+  {
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--model",
+      "sonnet-4-6",
+      "/implement https://github.com/org/repo/issues/42",
+    ],
+    "command": "claude",
+    "cwd": "/workspace/repo",
+    "env": {
+      "CLAUDE_CODE_MAX_TURNS": "50",
+      "PATH": "/usr/bin",
+    },
+  },
+]
+`;
+
+exports[`CliSpawner.spawnPhase — --model argv snapshots > (a-bis) --model precedes --resume when resumeSessionId is also set 1`] = `
+[
+  {
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--model",
+      "opus-4-7",
+      "--resume",
+      "ses-abc-123",
+      "/plan https://github.com/org/repo/issues/42",
+    ],
+    "command": "claude",
+    "cwd": "/workspace/repo",
+    "env": {
+      "CLAUDE_CODE_MAX_TURNS": "50",
+      "PATH": "/usr/bin",
+    },
+  },
+]
+`;
+
+exports[`CliSpawner.spawnPhase — --model argv snapshots > (b) no-config parity — --model absent when options.model is undefined 1`] = `
+[
+  {
+    "args": [
+      "-p",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "/implement https://github.com/org/repo/issues/42",
+    ],
+    "command": "claude",
+    "cwd": "/workspace/repo",
+    "env": {
+      "CLAUDE_CODE_MAX_TURNS": "50",
+      "PATH": "/usr/bin",
+    },
+  },
+]
+`;

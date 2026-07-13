@@ -239,6 +239,42 @@ exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapsho
 }
 `;
 
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase with model AND sessionId — --model precedes --resume 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "--model",
+    "opus-4-7",
+    "--resume",
+    "abc-123-session",
+    "/plan https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase with model set 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "--model",
+    "sonnet-4-6",
+    "/implement https://github.com/org/repo/issues/123",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
 exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > phase intent > snapshot for phase with sessionId (resume path) 1`] = `
 {
   "args": [
@@ -264,6 +300,23 @@ exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > pr-feedback intent > s
     "stream-json",
     "--dangerously-skip-permissions",
     "--verbose",
+    "Please address the review feedback on PR #42.",
+  ],
+  "command": "claude",
+  "stdioProfile": "default",
+}
+`;
+
+exports[`ClaudeCodeLaunchPlugin > buildLaunch snapshots > pr-feedback intent > snapshot for pr-feedback with model set (Q1→B: pr-feedback binds to implement) 1`] = `
+{
+  "args": [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    "--verbose",
+    "--model",
+    "opus-4-7",
     "Please address the review feedback on PR #42.",
   ],
   "command": "claude",

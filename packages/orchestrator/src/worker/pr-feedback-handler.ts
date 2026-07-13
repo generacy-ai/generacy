@@ -9,6 +9,7 @@ import type { Comment, GitHubClient, ReviewThread } from '@generacy-ai/workflow-
 import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
+import { resolveAgentForPhase } from './config.js';
 import type { SSEEventEmitter } from './output-capture.js';
 import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { PrFeedbackIntent } from '@generacy-ai/generacy-plugin-claude-code';
@@ -274,6 +275,7 @@ export class PrFeedbackHandler {
         prompt,
         workflowId,
         prNumber,
+        item.workflowName,
       );
 
       // 7. Commit and push changes (even on timeout — partial completion strategy)
@@ -466,9 +468,15 @@ Please proceed with addressing the feedback.`;
     prompt: string,
     workflowId: string,
     prNumber: number,
+    workflowName: string,
   ): Promise<boolean> {
+    // #814 / Q1→B: pr-feedback resolves `{ provider, model }` against the
+    // `implement` phase — pr-feedback revises the code `implement` produced,
+    // so the same agent/model that wrote the code should address review on it.
+    const { provider, model } = resolveAgentForPhase(this.config, workflowName, 'implement');
+
     this.logger.info(
-      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs },
+      { cwd: checkoutPath, timeoutMs: this.config.phaseTimeoutMs, provider, model },
       'Spawning Claude CLI for PR feedback',
     );
 
@@ -479,10 +487,12 @@ Please proceed with addressing the feedback.`;
           kind: 'pr-feedback',
           prNumber,
           prompt,
+          ...(model !== undefined ? { model } : {}),
         } as PrFeedbackIntent,
         cwd: checkoutPath,
         env: {},
         credentials: buildLaunchCredentials(this.config.credentialRole),
+        provider,
       });
       child = handle.process;
     } catch (error) {

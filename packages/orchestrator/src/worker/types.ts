@@ -211,6 +211,26 @@ export interface CliSpawnOptions {
   resumeSessionId?: string;
   /** Sibling repository working directories (repo name → absolute path) */
   siblingWorkdirs?: Record<string, string>;
+  /**
+   * Resolved agent provider from `resolveAgentForPhase`. Threaded into
+   * `LaunchRequest.provider`. Undefined when no `agents` block is configured
+   * and callers rely on the built-in `claude-code` fallback (in that case the
+   * launcher dispatches to the default provider path).
+   */
+  provider?: string;
+  /**
+   * Resolved agent model from `resolveAgentForPhase`. Threaded into
+   * `PhaseIntent.model` / `PrFeedbackIntent.model`. Undefined when no tier
+   * of the precedence chain sets a model — no built-in default.
+   */
+  model?: string;
+  /**
+   * Model from the previous phase, if any. Only meaningful when
+   * `resumeSessionId` is also set (session preserved across the transition
+   * because provider did not change). Used by the phase-loop to emit the
+   * `agent.model.transition` log line on same-provider model change.
+   */
+  previousModel?: string;
 }
 
 /**

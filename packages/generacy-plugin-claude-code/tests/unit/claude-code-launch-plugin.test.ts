@@ -112,6 +112,37 @@ describe('ClaudeCodeLaunchPlugin', () => {
         };
         expect(plugin.buildLaunch(intent)).toMatchSnapshot();
       });
+
+      // T021 / #814: `--model` argv position — immediately after `--verbose`,
+      // before `--resume <sessionId>` and the prompt payload.
+      it('snapshot for phase with model set', () => {
+        const intent: PhaseIntent = {
+          kind: 'phase',
+          phase: 'implement',
+          prompt: 'https://github.com/org/repo/issues/123',
+          model: 'sonnet-4-6',
+        };
+        const spec = plugin.buildLaunch(intent);
+        expect(spec).toMatchSnapshot();
+        // Explicit position assertion. Order: -p, --output-format, stream-json,
+        // --dangerously-skip-permissions, --verbose, --model, <model>, /implement <prompt>
+        const modelIdx = spec.args.indexOf('--model');
+        expect(modelIdx).toBe(spec.args.indexOf('--verbose') + 1);
+        expect(spec.args[modelIdx + 1]).toBe('sonnet-4-6');
+      });
+
+      it('snapshot for phase with model AND sessionId — --model precedes --resume', () => {
+        const intent: PhaseIntent = {
+          kind: 'phase',
+          phase: 'plan',
+          prompt: 'https://github.com/org/repo/issues/123',
+          model: 'opus-4-7',
+          sessionId: 'abc-123-session',
+        };
+        const spec = plugin.buildLaunch(intent);
+        expect(spec).toMatchSnapshot();
+        expect(spec.args.indexOf('--model')).toBeLessThan(spec.args.indexOf('--resume'));
+      });
     });
 
     describe('pr-feedback intent', () => {
@@ -122,6 +153,27 @@ describe('ClaudeCodeLaunchPlugin', () => {
           prompt: 'Please address the review feedback on PR #42.',
         };
         expect(plugin.buildLaunch(intent)).toMatchSnapshot();
+      });
+
+      // T021 + T022 / #814: `--model` argv position for pr-feedback — after
+      // `--verbose`, before the prompt payload. Fixture uses opus-4-7 to
+      // stand in for the plan.md Acceptance Gate #6 pr-feedback picks up
+      // `phases.implement.model` scenario.
+      it('snapshot for pr-feedback with model set (Q1→B: pr-feedback binds to implement)', () => {
+        const intent: PrFeedbackIntent = {
+          kind: 'pr-feedback',
+          prNumber: 42,
+          prompt: 'Please address the review feedback on PR #42.',
+          model: 'opus-4-7',
+        };
+        const spec = plugin.buildLaunch(intent);
+        expect(spec).toMatchSnapshot();
+        // Position assertion: --model is right after --verbose, and the last
+        // arg is the prompt.
+        const modelIdx = spec.args.indexOf('--model');
+        expect(modelIdx).toBe(spec.args.indexOf('--verbose') + 1);
+        expect(spec.args[modelIdx + 1]).toBe('opus-4-7');
+        expect(spec.args[spec.args.length - 1]).toBe(intent.prompt);
       });
     });
 

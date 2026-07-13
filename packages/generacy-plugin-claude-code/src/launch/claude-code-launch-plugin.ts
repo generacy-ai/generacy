@@ -85,6 +85,10 @@ export class ClaudeCodeLaunchPlugin {
       '--verbose',
     ];
 
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
     if (intent.sessionId) {
       args.push('--resume', intent.sessionId);
     }
@@ -105,8 +109,13 @@ export class ClaudeCodeLaunchPlugin {
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
       '--verbose',
-      intent.prompt,
     ];
+
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
+    args.push(intent.prompt);
 
     return {
       command: 'claude',

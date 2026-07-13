@@ -116,6 +116,27 @@ export function tryLoadDefaultsRole(configPath: string): string | null {
   }
 }
 
+/**
+ * Attempt to load `defaults.agent` from a `.generacy/config.yaml` file.
+ * Returns `null` if the file does not exist, has no `defaults` key, or
+ * `defaults.agent` is not a string. Sibling of `tryLoadDefaultsRole`.
+ */
+export function tryLoadDefaultsAgent(configPath: string): string | null {
+  if (!existsSync(configPath)) return null;
+  try {
+    const raw = readFileSync(configPath, 'utf-8');
+    const parsed: unknown = parseYaml(raw);
+    if (parsed == null || typeof parsed !== 'object') return null;
+    const doc = parsed as Record<string, unknown>;
+    const defaults = doc['defaults'];
+    if (defaults == null || typeof defaults !== 'object') return null;
+    const agent = (defaults as Record<string, unknown>)['agent'];
+    return typeof agent === 'string' ? agent : null;
+  } catch {
+    return null;
+  }
+}
+
 export function scanForWorkspaceConfig(
   parentDir: string,
   configDirName = '.generacy',
