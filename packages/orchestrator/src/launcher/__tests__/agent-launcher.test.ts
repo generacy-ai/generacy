@@ -1,7 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { AgentLauncher } from '../agent-launcher.js';
 import { CredhelperUnavailableError } from '../credhelper-errors.js';
-import type { CredhelperClient, BeginSessionResult } from '../credhelper-client.js';
+import {
+  DuplicatePluginRegistrationError,
+  UnknownProviderError,
+} from '../errors.js';
+import { GenericSubprocessPlugin } from '../generic-subprocess-plugin.js';
+import type { CredhelperClient } from '../credhelper-client.js';
 import type {
   AgentLaunchPlugin,
   LaunchRequest,
@@ -13,6 +18,7 @@ import type { ProcessFactory } from '../../worker/types.js';
 function createMockPlugin(overrides: Partial<AgentLaunchPlugin> = {}): AgentLaunchPlugin {
   return {
     pluginId: 'test-plugin',
+    provider: 'claude-code',
     supportedKinds: ['test-kind'],
     buildLaunch: vi.fn<(intent: any) => LaunchSpec>().mockReturnValue({
       command: 'echo',
@@ -69,7 +75,7 @@ describe('AgentLauncher', () => {
       expect(handle).toBeDefined();
     });
 
-    it('throws on duplicate kind registration', () => {
+    it('throws DuplicatePluginRegistrationError on duplicate (provider, kind)', () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
 
@@ -78,14 +84,23 @@ describe('AgentLauncher', () => {
 
       launcher.registerPlugin(plugin1);
 
-      expect(() => launcher.registerPlugin(plugin2)).toThrow(
-        'Intent kind "shared-kind" already registered by plugin "plugin-1"',
-      );
+      let caught: unknown;
+      try {
+        launcher.registerPlugin(plugin2);
+      } catch (err) {
+        caught = err;
+      }
+
+      expect(caught).toBeInstanceOf(DuplicatePluginRegistrationError);
+      const err = caught as DuplicatePluginRegistrationError;
+      expect(err.provider).toBe('claude-code');
+      expect(err.kind).toBe('shared-kind');
+      expect(err.existingPluginId).toBe('plugin-1');
     });
   });
 
   describe('launch', () => {
-    it('throws descriptive error for unknown intent kind', async () => {
+    it('throws plain Error for unknown kind when provider is known', async () => {
       const factory = createMockFactory();
       const launcher = new AgentLauncher(new Map([['default', factory]]));
 
@@ -98,8 +113,27 @@ describe('AgentLauncher', () => {
       };
 
       await expect(launcher.launch(request)).rejects.toThrow(
-        'Unknown intent kind "unknown". Available kinds: known-a, known-b',
+        'Unknown intent kind "unknown" for provider "claude-code". Known kinds for this provider: known-a, known-b',
       );
+      await expect(launcher.launch(request)).rejects.not.toBeInstanceOf(UnknownProviderError);
+    });
+
+    it('falls back to system provider for system-only kinds when provider is omitted', async () => {
+      const factory = createMockFactory();
+      const launcher = new AgentLauncher(new Map([['default', factory]]));
+      launcher.registerPlugin(new GenericSubprocessPlugin());
+
+      const handle = await launcher.launch({
+        intent: {
+          kind: 'generic-subprocess',
+          command: 'echo',
+          args: ['hi'],
+        },
+        cwd: '/tmp',
+      });
+
+      expect(handle.metadata.pluginId).toBe('generic-subprocess');
+      expect(handle.metadata.intentKind).toBe('generic-subprocess');
     });
 
     it('throws descriptive error for unknown stdio profile', async () => {

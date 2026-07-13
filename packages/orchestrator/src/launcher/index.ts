@@ -11,9 +11,19 @@ export {
   applyCredentials,
 } from './credentials-interceptor.js';
 export type { InterceptorResult } from './credentials-interceptor.js';
+export {
+  UnknownProviderError,
+  DuplicatePluginRegistrationError,
+} from './errors.js';
 export type {
   GenericSubprocessIntent,
   ShellIntent,
+  PhaseIntent,
+  PrFeedbackIntent,
+  ValidateFixIntent,
+  MergeConflictIntent,
+  ConversationTurnIntent,
+  InvokeIntent,
   LaunchIntent,
   LaunchRequest,
   LaunchSpec,

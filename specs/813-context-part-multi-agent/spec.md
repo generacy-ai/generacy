@@ -26,11 +26,11 @@ This issue makes the launcher capable of hosting multiple agent plugins, with ze
 
 ## Acceptance criteria
 
-- [ ] Existing argv snapshot tests pass byte-identical (no-config parity).
-- [ ] A test registers a fake second plugin for the `phase` kind under provider `test-agent` and dispatches to it by `provider`.
-- [ ] Launching with an unknown provider produces a typed error (`instanceof UnknownProviderError`).
-- [ ] Registering two plugins under the same `(provider, kind)` throws `DuplicatePluginRegistrationError` (typed).
-- [ ] `packages/orchestrator/src/launcher/types.ts` has no import from `generacy-plugin-claude-code`.
+- [X] Existing argv snapshot tests pass byte-identical (no-config parity).
+- [X] A test registers a fake second plugin for the `phase` kind under provider `test-agent` and dispatches to it by `provider`.
+- [X] Launching with an unknown provider produces a typed error (`instanceof UnknownProviderError`).
+- [X] Registering two plugins under the same `(provider, kind)` throws `DuplicatePluginRegistrationError` (typed).
+- [X] `packages/orchestrator/src/launcher/types.ts` has no import from `generacy-plugin-claude-code`.
 
 ## Clarifications
 

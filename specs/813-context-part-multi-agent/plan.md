@@ -69,11 +69,11 @@ No `.specify/memory/constitution.md` present in the repo. Skipped.
 
 ## Acceptance Gate (from spec)
 
-- [ ] Existing argv snapshot tests pass byte-identical (no-config parity).
-- [ ] Test registers a fake second plugin for `phase` under provider `test-agent`; dispatch by `provider` works.
-- [ ] Unknown provider produces `UnknownProviderError` (`instanceof` true).
-- [ ] Duplicate `(provider, kind)` produces `DuplicatePluginRegistrationError` (`instanceof` true).
-- [ ] `packages/orchestrator/src/launcher/types.ts` has zero imports from `@generacy-ai/generacy-plugin-claude-code`.
+- [X] Existing argv snapshot tests pass byte-identical (no-config parity).
+- [X] Test registers a fake second plugin for `phase` under provider `test-agent`; dispatch by `provider` works.
+- [X] Unknown provider produces `UnknownProviderError` (`instanceof` true).
+- [X] Duplicate `(provider, kind)` produces `DuplicatePluginRegistrationError` (`instanceof` true).
+- [X] `packages/orchestrator/src/launcher/types.ts` has zero imports from `@generacy-ai/generacy-plugin-claude-code`.
 
 ## Next Step
 

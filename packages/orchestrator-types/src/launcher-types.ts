@@ -62,6 +62,7 @@ export interface LaunchRequest {
   signal?: AbortSignal;
   detached?: boolean;
   credentials?: unknown;
+  provider?: string;
 }
 
 /**
@@ -80,6 +81,7 @@ export interface LaunchSpec {
  */
 export interface AgentLaunchPlugin {
   readonly pluginId: string;
+  readonly provider: string;
   readonly supportedKinds: readonly string[];
   buildLaunch(intent: LaunchIntent): LaunchSpec;
   createOutputParser(intent: LaunchIntent): OutputParser;
