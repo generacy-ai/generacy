@@ -30,6 +30,15 @@ No provider or model can be configured for workflow phases today; the only model
 - [ ] No-config parity snapshot unchanged.
 - [ ] Provider-switch unit test (using the fake plugin from Phase 1 issue 1) proves resume drops on switch.
 
+## Clarifications
+
+### Batch 1 — 2026-07-13
+
+- **pr-feedback resolution (Q1 → B)**: `pr-feedback` intents resolve `{ provider, model }` by binding to the `implement` phase — the pr-feedback call site invokes `resolveAgentForPhase(config, workflowName, 'implement')`. No new config key; no pseudo-phase in the schema. A dedicated `agents.prFeedback` slot may be layered later with `implement` as its absent-case fallback.
+- **Session drop on model change (Q2 → C)**: When only the **model** changes between phases (provider unchanged), preserve the stored `sessionId`. Only a provider change drops the session. The spawn log records the model transition (e.g., `agent.model.transition prev=<model> next=<model>`) for observability.
+- **Partial env-var configuration (Q3 → A)**: `WORKER_AGENT_PROVIDER` and `WORKER_AGENT_MODEL` resolve **independently** at the env tier, uniform with FR-008. Either may be set alone; the other falls through the precedence chain. No paired-config check.
+- **Model ID validation (Q4 → A)**: Model IDs are **opaque pass-through**. The Zod schema requires a non-empty string; no allowlist, no format check. Unknown/invalid model IDs surface at spawn time via the existing stage-comment error path — the same channel FR-012 uses for unknown providers.
+- **Custom workflow phase keys (Q5 → A)**: `agents.workflows.<name>.phases` keys are a **closed set** restricted to the `WorkflowPhase` enum (`specify` | `clarify` | `plan` | `tasks` | `implement` | `validate`), matching `PhaseTimeoutOverridesSchema`. Typoed keys fail Zod validation at config load. Custom-workflow phase names are out of scope for this issue.
 
 ## User Stories
 
