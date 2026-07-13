@@ -325,11 +325,11 @@ function getQuickActionsSection(organization: OrgDashboardData['organization']):
     <section class="card">
       <h2>Quick Actions</h2>
       <div class="quick-actions">
-        <button class="action-btn" onclick="openLink('https://generacy.ai/settings')">
+        <button class="action-btn" onclick="openLink('https://app.generacy.ai/settings')">
           <span class="action-icon">&#x2699;</span>
           <span>Settings</span>
         </button>
-        <button class="action-btn" onclick="openLink('https://generacy.ai/integrations')">
+        <button class="action-btn" onclick="openLink('https://app.generacy.ai/integrations')">
           <span class="action-icon">&#x1F517;</span>
           <span>Integrations</span>
         </button>
