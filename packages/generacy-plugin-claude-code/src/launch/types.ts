@@ -1,9 +1,16 @@
 /**
  * Claude Code-specific launch intent types.
  *
- * These intents are handled by ClaudeCodeLaunchPlugin and represent
- * the three ways Claude CLI is invoked: phase execution, PR feedback,
- * and interactive conversation turns.
+ * The orchestrator OWNS the canonical agent intent types (see
+ * `@generacy-ai/orchestrator` `src/launcher/types.ts`). These are structural
+ * mirrors defined locally so the plugin does not take a build-time dependency
+ * on the orchestrator's compiled `.d.ts` — the two packages form a workspace
+ * cycle, so `pnpm -r build` compiles them concurrently and a cross-package
+ * type import races the producer's `dist/`. TypeScript structural typing keeps
+ * these compatible with the orchestrator-owned types at the registration seam.
+ * Same rationale as the local `LaunchSpec`/`OutputParser` in
+ * `claude-code-launch-plugin.ts`. (Issue #813 permits importing or structurally
+ * matching the orchestrator-owned intent types.)
  */
 
 /**
@@ -18,6 +25,8 @@ export interface PhaseIntent {
   prompt: string;
   /** Resume a previous Claude session (for MCP server warmth + context carry) */
   sessionId?: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
 }
 
 /**
@@ -29,6 +38,8 @@ export interface PrFeedbackIntent {
   prNumber: number;
   /** Full prompt text (pre-built by caller via buildFeedbackPrompt()) */
   prompt: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
 }
 
 /**
