@@ -93,6 +93,8 @@ export class UpdateStageAction extends BaseAction {
       );
 
       // Find existing stage comment
+      // #842 audit: whitelist — reads only for STAGE_MARKERS to dedupe bot's
+      // own stage-comment postings; body content is not surfaced to an agent.
       const comments = await client.getIssueComments(repoInfo.owner, repoInfo.repo, issueNumber);
       const marker = STAGE_MARKERS[stage];
       const existingComment = comments.find(c => c.body.includes(marker));

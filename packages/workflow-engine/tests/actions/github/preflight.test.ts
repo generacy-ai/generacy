@@ -26,7 +26,7 @@ const mockGitHubClient = {
   getCurrentBranch: vi.fn(),
   branchExists: vi.fn(),
   findPRForBranch: vi.fn(),
-  getPRComments: vi.fn(),
+  getPRReviewThreads: vi.fn(),
   getStatus: vi.fn(),
 };
 
@@ -141,6 +141,7 @@ describe('PreflightAction', () => {
       mockGitHubClient.getCurrentBranch.mockResolvedValue('123-test-issue');
       mockGitHubClient.branchExists.mockResolvedValue(true);
       mockGitHubClient.findPRForBranch.mockResolvedValue(null);
+      mockGitHubClient.getPRReviewThreads.mockResolvedValue([]);
       mockGitHubClient.getStatus.mockResolvedValue({
         branch: '123-test-issue',
         has_changes: false,
@@ -292,6 +293,58 @@ describe('PreflightAction', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toContain('rate limit');
+    });
+
+    // #861: unresolved_threads counting via getPRReviewThreads
+    describe('unresolved_threads (thread-shaped review API)', () => {
+      it('counts unresolved review threads when PR exists', async () => {
+        mockGitHubClient.findPRForBranch.mockResolvedValue({ number: 55 });
+        mockGitHubClient.getPRReviewThreads.mockResolvedValue([
+          { id: 'PRRT_1', rootCommentId: 1, isResolved: false, comments: [] },
+          { id: 'PRRT_2', rootCommentId: 2, isResolved: true, comments: [] },
+          { id: 'PRRT_3', rootCommentId: 3, isResolved: false, comments: [] },
+        ]);
+
+        const step = createStep({
+          issue_url: 'https://github.com/owner/repo/issues/123',
+        });
+        const context = createMockContext();
+
+        const result = await action.execute(step, context);
+
+        expect(result.success).toBe(true);
+        expect((result.output as Record<string, unknown>).unresolved_threads).toBe(2);
+      });
+
+      it('reports 0 unresolved_threads when no PR number is available', async () => {
+        mockGitHubClient.findPRForBranch.mockResolvedValue(null);
+
+        const step = createStep({
+          issue_url: 'https://github.com/owner/repo/issues/123',
+        });
+        const context = createMockContext();
+
+        const result = await action.execute(step, context);
+
+        expect(result.success).toBe(true);
+        expect((result.output as Record<string, unknown>).unresolved_threads).toBe(0);
+        expect(mockGitHubClient.getPRReviewThreads).not.toHaveBeenCalled();
+      });
+
+      it('reports 0 unresolved_threads when getPRReviewThreads throws (preserves swallow behavior)', async () => {
+        mockGitHubClient.findPRForBranch.mockResolvedValue({ number: 55 });
+        mockGitHubClient.getPRReviewThreads.mockRejectedValue(new Error('graphql error'));
+
+        const step = createStep({
+          issue_url: 'https://github.com/owner/repo/issues/123',
+        });
+        const context = createMockContext();
+
+        const result = await action.execute(step, context);
+
+        expect(result.success).toBe(true);
+        expect((result.output as Record<string, unknown>).unresolved_threads).toBe(0);
+      });
     });
   });
 });

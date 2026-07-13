@@ -40,6 +40,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'waiting-for:children-complete', color: 'FBCA04', description: 'Waiting for child issues to complete' },
   { name: 'waiting-for:epic-approval', color: 'FBCA04', description: 'Epic rollup PR awaiting approval' },
   { name: 'waiting-for:dependencies', color: 'FBCA04', description: 'Waiting for blocking issues' },
+  { name: 'waiting-for:merge-conflicts', color: 'FBCA04', description: 'Base-merge conflict. See stage comment for the manual remedy.' },
 
   // Completed labels
   { name: 'completed:spec-review', color: '0E8A16', description: 'Spec review completed' },
@@ -49,6 +50,7 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'completed:tasks-review', color: '0E8A16', description: 'Tasks review completed' },
   { name: 'completed:implementation-review', color: '0E8A16', description: 'Implementation review completed' },
   { name: 'completed:manual-validation', color: '0E8A16', description: 'Manual validation completed' },
+  { name: 'completed:merge-conflicts', color: '0E8A16', description: 'Merge-conflict resolution completed (#898)' },
   { name: 'completed:setup', color: '0E8A16', description: 'Setup phase completed' },
   { name: 'completed:specify', color: '0E8A16', description: 'Specification phase completed' },
   { name: 'completed:clarify', color: '0E8A16', description: 'Clarification phase completed' },
@@ -94,4 +96,21 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
 
   // Relationship labels
   { name: 'epic-child', color: 'bfd4f2', description: 'Child issue of an epic' },
+
+  // Blocked labels
+  {
+    name: 'blocked:stuck-feedback-loop',
+    color: 'D73A4A',
+    description: 'PR-feedback loop paused: last cycle could not advance the trigger. Remove to retry.',
+  },
+  {
+    name: 'blocked:stuck-validate-fix',
+    color: 'D73A4A',
+    description: 'Validate-fix paused (#892): duplicate evidence, no-diff, or sibling overlap. Remove to retry.',
+  },
+  {
+    name: 'blocked:stuck-merge-conflicts',
+    color: 'D73A4A',
+    description: 'Merge-conflict resolver (#898) exhausted its one autonomous attempt. Remove to retry.',
+  },
 ];

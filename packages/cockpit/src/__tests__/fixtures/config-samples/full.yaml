@@ -1,0 +1,5 @@
+cockpit:
+  owner: alice
+  repos:
+    - generacy-ai/generacy
+    - generacy-ai/generacy-extension

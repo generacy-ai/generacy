@@ -83,6 +83,27 @@ Everything else uses sensible defaults. The `defaults` and `orchestrator` blocks
 Run `generacy validate` at any time to check your config for errors. See [Verify Setup](./verify-setup.md) for details.
 :::
 
+### Validate Phase Commands
+
+Under the `orchestrator` block you can override two shell commands the worker runs during the `validate` phase:
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `preValidateCommand` | Auto-degrading pnpm install (see below) | Runs before `validateCommand` to install dependencies. Set to `""` (empty string) to skip. |
+| `validateCommand` | `pnpm test && pnpm build` | Runs your project's tests and build. |
+
+The default `preValidateCommand` **always** runs `pnpm install`, then runs `pnpm -r --filter './packages/*' build` **only** when both a `pnpm-workspace.yaml` file exists at the repo root **and** at least one `packages/*/package.json` exists. On a single-package repo (Next.js, Astro, Vite, and similar scaffolds), the build half is skipped and the phase proceeds to your `validateCommand`.
+
+If you want a non-pnpm stack (npm, yarn, bun) or a different install strategy, set the override in your `.generacy/config.yaml`:
+
+```yaml title=".generacy/config.yaml"
+orchestrator:
+  validateCommand: "npm test && npm run build"
+  preValidateCommand: "npm ci"
+```
+
+The override replaces the default wholesale. An explicit empty `preValidateCommand: ""` means "skip install entirely" — useful for repos that keep `node_modules` committed or don't need a install step at all.
+
 For the full schema reference including all fields, validation rules, and multi-repo configuration, see the [Configuration Reference](/docs/reference/config/generacy).
 
 ## `.generacy/generacy.env`

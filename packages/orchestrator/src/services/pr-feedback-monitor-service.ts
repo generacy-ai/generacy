@@ -1,9 +1,14 @@
-import { GhAuthError, type GitHubClientFactory } from '@generacy-ai/workflow-engine';
+import {
+  GhAuthError,
+  isTrustedCommentAuthor,
+  type GitHubClient,
+  type GitHubClientFactory,
+  type TrustReason,
+} from '@generacy-ai/workflow-engine';
 import { JitTokenError } from '@generacy-ai/control-plane';
 import type {
   MonitorState,
-  QueueAdapter,
-  PhaseTracker,
+  QueueManager,
   QueueItem,
   PrReviewEvent,
   PrFeedbackMetadata,
@@ -13,6 +18,13 @@ import { PrLinker, type PrLinkInput } from '../worker/pr-linker.js';
 import type { Logger } from '../worker/types.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 
+/**
+ * #869 / FR-004 idempotency marker embedded in bot-authored top-level PR
+ * comments. Grep-checked against `gh pr view --json comments` before posting
+ * to guarantee one notice per zero-trusted episode.
+ */
+const UNTRUSTED_NOTICE_MARKER = '<!-- generacy:pr-feedback-untrusted-notice -->';
+
 export interface PrFeedbackMonitorOptions {
   repositories: RepositoryConfig[];
   pollIntervalMs: number;
@@ -21,7 +33,6 @@ export interface PrFeedbackMonitorOptions {
 }
 
 const WAITING_FOR_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
-const DEDUP_PHASE = 'address-pr-feedback';
 const MIN_POLL_INTERVAL_MS = 10000;
 /**
  * Adaptive polling divisor for PR feedback monitor.
@@ -40,8 +51,7 @@ export class PrFeedbackMonitorService {
   private readonly logger: Logger;
   private readonly createClient: GitHubClientFactory;
   private readonly tokenProvider?: () => Promise<string | undefined>;
-  private readonly phaseTracker: PhaseTracker;
-  private readonly queueAdapter: QueueAdapter;
+  private readonly queueManager: QueueManager;
   private readonly options: PrFeedbackMonitorOptions;
   private readonly prLinker: PrLinker;
   private readonly clusterGithubUsername: string | undefined;
@@ -49,13 +59,21 @@ export class PrFeedbackMonitorService {
   private readonly githubAppCredentialId: string | undefined;
   private abortController: AbortController | null = null;
 
+  // #861: state-transition tracking for zero-unresolved skip logging. Key is
+  // `${owner}/${repo}#${prNumber}`. Never evicted (open PR set is bounded).
+  private lastUnresolvedThreadCount: Map<string, number> = new Map();
+
+  // #869 / FR-004: transition-edge tracking for zero-trusted notice posting.
+  // Keyed as `${owner}/${repo}#${prNumber}`. Not persisted; monitor restart
+  // re-triggers the notice, which is idempotency-safe via the marker grep.
+  private lastZeroTrustedState: Map<string, boolean> = new Map();
+
   private state: MonitorState;
 
   constructor(
     logger: Logger,
     createClient: GitHubClientFactory,
-    phaseTracker: PhaseTracker,
-    queueAdapter: QueueAdapter,
+    queueManager: QueueManager,
     config: PrMonitorConfig,
     repositories: RepositoryConfig[],
     clusterGithubUsername?: string,
@@ -66,8 +84,7 @@ export class PrFeedbackMonitorService {
     this.logger = logger;
     this.createClient = createClient;
     this.tokenProvider = tokenProvider;
-    this.phaseTracker = phaseTracker;
-    this.queueAdapter = queueAdapter;
+    this.queueManager = queueManager;
     this.clusterGithubUsername = clusterGithubUsername;
     this.authHealth = authHealth ?? { recordResult: () => undefined };
     this.githubAppCredentialId = githubAppCredentialId;
@@ -153,28 +170,178 @@ export class PrFeedbackMonitorService {
       }
     }
 
-    // 3. Fetch review comments and filter for unresolved threads
+    // 3. Fetch review threads via GraphQL and filter for unresolved threads.
+    // #861: replaces the REST-comment-based path — REST never returned
+    // `.resolved`, so the previous filter always matched nothing.
+    // #869 / FR-005: trust-filter each unresolved thread's comments BEFORE
+    // enqueue. Zero-trusted PRs skip enqueue and emit the FR-003 warn +
+    // FR-004 top-level notice.
     let unresolvedThreadIds: number[];
+    let totalUnresolvedThreads: number;
+    let untrustedCommentSkips: Array<{
+      commentId: number;
+      author: string;
+      authorAssociation: string | undefined;
+      reason: TrustReason;
+      viewerDidAuthor: boolean | undefined;
+    }>;
+    let totalThreads: number;
     try {
-      const comments = await client.getPRComments(owner, repo, prNumber);
-      // Filter for root-level unresolved comments (not replies)
-      const unresolvedComments = comments.filter(
-        (c) => c.resolved === false && !c.in_reply_to_id,
-      );
-      unresolvedThreadIds = unresolvedComments.map((c) => c.id);
+      const threads = await client.getPRReviewThreads(owner, repo, prNumber);
+      totalThreads = threads.length;
+      const unresolvedThreads = threads.filter(t => !t.isResolved);
+      totalUnresolvedThreads = unresolvedThreads.length;
+
+      const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+      const trustedIds: number[] = [];
+      const skips: typeof untrustedCommentSkips = [];
+
+      for (const thread of unresolvedThreads) {
+        let threadHasTrusted = false;
+        for (const c of thread.comments) {
+          const decision = isTrustedCommentAuthor(c, 'pr-feedback', {
+            logger: this.logger,
+            ...(botLogin ? { botLogin } : {}),
+          });
+          if (decision.trusted) {
+            threadHasTrusted = true;
+          } else {
+            skips.push({
+              commentId: c.id,
+              author: c.author,
+              authorAssociation: c.authorAssociation,
+              reason: decision.reason,
+              viewerDidAuthor: c.viewerDidAuthor,
+            });
+          }
+        }
+        if (threadHasTrusted) {
+          trustedIds.push(thread.rootCommentId);
+        }
+      }
+
+      unresolvedThreadIds = trustedIds;
+      untrustedCommentSkips = skips;
     } catch (error) {
-      this.logger.error(
-        { err: error, owner, repo, prNumber },
-        'Failed to fetch PR comments',
+      if (error instanceof GhAuthError) {
+        if (this.githubAppCredentialId) {
+          this.authHealth.recordResult(
+            this.githubAppCredentialId,
+            { ok: false, statusCode: error.statusCode },
+          );
+        }
+        this.logger.error(
+          { err: error, owner, repo, prNumber, statusCode: error.statusCode },
+          'GraphQL review-threads call failed (auth)',
+        );
+        return false;
+      }
+      this.logger.warn(
+        { error: error instanceof Error ? error.message : String(error), owner, repo, prNumber },
+        'GraphQL review-threads call failed (transient)',
       );
       return false;
     }
 
-    if (unresolvedThreadIds.length === 0) {
-      this.logger.debug(
-        { owner, repo, prNumber, issueNumber },
-        'No unresolved review threads — skipping',
+    // Successful call — mark auth-health OK for this credential.
+    if (this.githubAppCredentialId) {
+      this.authHealth.recordResult(this.githubAppCredentialId, { ok: true });
+    }
+
+    const stateKey = `${owner}/${repo}#${prNumber}`;
+
+    // Case C: no unresolved threads at all — reset both state maps.
+    if (totalUnresolvedThreads === 0) {
+      // #861 state-transition logging: `info` on transition, `debug` on
+      // steady-state. Bootstrap (previous === undefined) counts as a transition.
+      const previous = this.lastUnresolvedThreadCount.get(stateKey);
+      const isTransition = previous === undefined || previous !== 0;
+      const logFn = isTransition ? this.logger.info : this.logger.debug;
+      logFn.call(
+        this.logger,
+        {
+          owner, repo, prNumber, issueNumber,
+          totalThreads,
+          unresolvedThreads: 0,
+          previousUnresolvedThreads: previous ?? null,
+        },
+        isTransition
+          ? 'No unresolved review threads (state change)'
+          : 'No unresolved review threads — skipping',
       );
+      this.lastUnresolvedThreadCount.set(stateKey, 0);
+      this.lastZeroTrustedState.set(stateKey, false);
+      return false;
+    }
+
+    // Case B: unresolved threads exist, but zero of them are trust-live.
+    // #869 / FR-002, FR-003, FR-004: skip enqueue, emit warn log naming the
+    // untrusted skips, and post a top-level notice on the transition edge.
+    if (unresolvedThreadIds.length === 0) {
+      // #878 skip-warn shape: per-comment viewerDidAuthor replaces the
+      // clusterIdentity / normalizedClusterIdentity / normalizedAuthor
+      // fields from the #874 login-comparison scheme.
+      this.logger.warn(
+        {
+          owner, repo, prNumber, issueNumber,
+          totalUnresolvedThreads,
+          untrustedCommentSkips: untrustedCommentSkips.map((s) => ({
+            commentId: s.commentId,
+            author: s.author,
+            authorAssociation: s.authorAssociation,
+            reason: s.reason,
+            viewerDidAuthor: s.viewerDidAuthor ?? null,
+          })),
+        },
+        'PR has unresolved threads but every comment author is untrusted',
+      );
+
+      const previousZeroTrusted = this.lastZeroTrustedState.get(stateKey);
+      if (previousZeroTrusted !== true) {
+        await this.maybePostUntrustedNotice(client, owner, repo, prNumber);
+      }
+      this.lastZeroTrustedState.set(stateKey, true);
+      this.lastUnresolvedThreadCount.set(stateKey, totalUnresolvedThreads);
+      return false;
+    }
+
+    // Case A: at least one thread is trust-live — proceed to enqueue.
+    if (untrustedCommentSkips.length > 0) {
+      this.logger.debug(
+        { owner, repo, prNumber, issueNumber, untrustedCommentSkips },
+        'Some unresolved comments were skipped by trust filter (mixed-trust PR)',
+      );
+    }
+    this.lastZeroTrustedState.set(stateKey, false);
+
+    // Case A tail (#883): before enqueue, check for any `blocked:*` label on
+    // the linked issue. The handler adds `blocked:stuck-feedback-loop` when
+    // its fix cycle can't advance; the operator removes the label to permit
+    // another attempt. Any `blocked:*` prefix is the contract — no allow-list.
+    let issueLabels: string[];
+    try {
+      issueLabels = await client.getIssueLabels(owner, repo, issueNumber);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber },
+        'Failed to fetch issue labels for blocked:* skip check — proceeding without skip',
+      );
+      issueLabels = [];
+    }
+    const blockedLabel = issueLabels.find(l => l.startsWith('blocked:'));
+    if (blockedLabel) {
+      this.logger.info(
+        {
+          owner, repo, prNumber, issueNumber,
+          blockedLabel,
+          unresolvedThreads: unresolvedThreadIds.length,
+          reason: 'blocked-label-present',
+        },
+        'Skipping PR-feedback enqueue while blocked:* label is present',
+      );
+      // Idempotent-state hygiene: keep the transition-log map fresh so the
+      // next non-blocked poll doesn't look like a fresh transition.
+      this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
       return false;
     }
 
@@ -182,23 +349,25 @@ export class PrFeedbackMonitorService {
       { owner, repo, prNumber, issueNumber, linkMethod, unresolvedCount: unresolvedThreadIds.length },
       `Found ${unresolvedThreadIds.length} unresolved review thread(s)`,
     );
+    this.lastUnresolvedThreadCount.set(stateKey, unresolvedThreadIds.length);
 
-    // 4. Atomic deduplication via tryMarkProcessed (SET NX)
-    const isNew = await this.phaseTracker.tryMarkProcessed(
-      owner, repo, issueNumber, DEDUP_PHASE,
-    );
-    if (!isNew) {
-      this.logger.info(
-        { owner, repo, issueNumber, prNumber },
-        'Skipping duplicate — PR feedback already enqueued for this issue',
+    // 4. #879 / FR-010: add the waiting-for label idempotently BEFORE enqueue so
+    // it survives an `enqueueIfAbsent → false` in-flight-collision drop. Label
+    // presence = "feedback pending"; enqueue is work scheduling. Failure to
+    // add is non-fatal warn.
+    try {
+      await client.addLabels(owner, repo, issueNumber, [WAITING_FOR_PR_FEEDBACK_LABEL]);
+    } catch (error) {
+      this.logger.warn(
+        { err: error, owner, repo, issueNumber },
+        'Failed to add waiting-for:address-pr-feedback label',
       );
-      return false;
     }
 
     // 5. Resolve workflow name from issue labels
     const workflowName = await this.resolveWorkflowName(owner, repo, issueNumber);
 
-    // 6. Build and enqueue queue item
+    // 6. Build queue item
     const metadata: PrFeedbackMetadata = {
       prNumber,
       reviewThreadIds: unresolvedThreadIds,
@@ -216,23 +385,95 @@ export class PrFeedbackMonitorService {
       queueReason: 'resume',
     };
 
-    await this.queueAdapter.enqueue(queueItem);
+    // 7. #879 / FR-001: atomic in-flight-checked enqueue. Replaces the pre-#879
+    // `phaseTracker.tryMarkProcessed` SET-NX dedupe. Self-clearing by
+    // construction: when the handler completes/fails/drops via
+    // `QueueManager.complete()` / `.release()`, the itemKey leaves the
+    // in-flight SET and the next trusted state re-enqueues on the following
+    // poll — no TTL wait, no per-surface bookkeeping.
+    const itemKey = `${owner}/${repo}#${issueNumber}`;
+    const enqueued = await this.queueManager.enqueueIfAbsent(queueItem);
+    if (!enqueued) {
+      // FR-009: monitor-side context log paired with the adapter-level line.
+      this.logger.info(
+        { itemKey, reason: 'in-flight', prNumber, issueNumber, owner, repo },
+        'Dropping PR-feedback enqueue (item already in flight)',
+      );
+      return false;
+    }
+
     this.logger.info(
       { owner, repo, issueNumber, prNumber, command: queueItem.command },
       'PR feedback work enqueued',
     );
 
-    // 7. Add waiting-for label to issue
+    return true;
+  }
+
+  // ==========================================================================
+  // Zero-trusted notice posting (#869 / FR-004)
+  // ==========================================================================
+
+  /**
+   * Post a single top-level PR comment notifying the operator that every
+   * unresolved review-thread comment is currently untrusted. Idempotent via
+   * the `UNTRUSTED_NOTICE_MARKER` grep against existing PR comments. Failures
+   * to list or post comments are non-fatal — logged and swallowed so they
+   * never break the poll cycle.
+   */
+  private async maybePostUntrustedNotice(
+    client: GitHubClient,
+    owner: string,
+    repo: string,
+    prNumber: number,
+  ): Promise<void> {
+    let existingComments: string[];
     try {
-      await client.addLabels(owner, repo, issueNumber, [WAITING_FOR_PR_FEEDBACK_LABEL]);
-    } catch (error) {
+      existingComments = await client.listPrCommentBodies(owner, repo, prNumber);
+    } catch (err) {
       this.logger.warn(
-        { err: error, owner, repo, issueNumber },
-        'Failed to add waiting-for:address-pr-feedback label',
+        { err: String(err), owner, repo, prNumber },
+        'Failed to list PR comments for untrusted-notice idempotency check — skipping notice this cycle',
       );
+      return;
     }
 
-    return true;
+    if (existingComments.some(body => body.includes(UNTRUSTED_NOTICE_MARKER))) {
+      this.logger.debug(
+        { owner, repo, prNumber },
+        'Untrusted-notice marker already present — skipping notice post',
+      );
+      return;
+    }
+
+    const body = [
+      UNTRUSTED_NOTICE_MARKER,
+      '',
+      '⚠️ **Feedback requires a trusted author**',
+      '',
+      'This PR has unresolved review threads, but every comment author is currently',
+      'classified as untrusted by the PR-feedback loop\'s trust filter (see #842).',
+      '',
+      'The loop will not automatically address this feedback until either:',
+      '- A repository OWNER / MEMBER / COLLABORATOR replies to one of the threads, **or**',
+      '- The cluster identity is configured to match one of the comment authors',
+      '  (see the `CLUSTER_GITHUB_USERNAME` / `GH_USERNAME` chain).',
+      '',
+      'This is an automated notice from the PR-feedback monitor.',
+    ].join('\n');
+
+    try {
+      await client.postPrComment(owner, repo, prNumber, body);
+      this.logger.info(
+        { owner, repo, prNumber },
+        'Posted untrusted-feedback notice on PR (FR-004)',
+      );
+    } catch (err) {
+      this.logger.warn(
+        { err: String(err), owner, repo, prNumber },
+        'Failed to post untrusted-feedback notice — will retry on next transition',
+      );
+    }
   }
 
   // ==========================================================================

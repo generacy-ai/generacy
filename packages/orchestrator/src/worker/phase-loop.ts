@@ -1,17 +1,27 @@
-import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler } from './types.js';
+import type { WorkerContext, PhaseResult, Logger, WorkflowPhase, JobEventEmitter, PhaseAfterHandler, StageType, CommandExitEvidence } from './types.js';
 import { PHASE_SEQUENCE, PHASE_TO_STAGE } from './types.js';
+import { isTerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
 import type { WorkerConfig } from './config.js';
 import { resolvePhaseTimeoutMs } from './config.js';
 import type { LabelManager } from './label-manager.js';
 import type { StageCommentManager } from './stage-comment-manager.js';
 import type { GateChecker } from './gate-checker.js';
 import type { CliSpawner } from './cli-spawner.js';
+import { DEFAULT_INSTALL_TIMEOUT_MS, DEFAULT_VALIDATE_TIMEOUT_MS } from './cli-spawner.js';
 import type { OutputCapture } from './output-capture.js';
 import type { PrManager } from './pr-manager.js';
+import type { ValidateFixHandler } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
+import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
+import { boundOutputTail } from './output-tail.js';
+import { synthesizeOutputTail } from './output-tail-synthesis.js';
+import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
+import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
+import { writePauseContext } from './pause-context.js';
+import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
@@ -31,7 +41,30 @@ export interface PhaseLoopDeps {
   jobEventEmitter?: JobEventEmitter;
   /** Optional callbacks invoked after each phase completes, before gate check */
   phaseAfterHandlers?: PhaseAfterHandler[];
+  /**
+   * Injected base-merge runner used by the pre-phase base-merge hook (#864).
+   * Defaults to `performBaseMerge` from `./base-merge.js`. Tests inject a fake
+   * that returns canned `BaseMergeResult` values without exercising real git.
+   */
+  baseMergeRunner?: BaseMergeRunner;
+  /**
+   * Bounded validate-fix cycle handler (#892). Invoked on the validate failure
+   * path ONLY when `context.resumeReason === 'base-advance'` — first-time reds
+   * continue to route through `LabelManager.onError('validate')` (D7).
+   */
+  validateFixHandler?: ValidateFixHandler;
 }
+
+/**
+ * Discriminator for `PhaseLoopResult` (#889 additive extension).
+ *
+ * - `'completed'`: legacy shape (`completed: true`).
+ * - `'gate-hit'`: legacy shape (`gateHit: true`).
+ * - `'phase-failed'`: legacy shape (a phase produced `!result.success`).
+ * - `'failed-terminal'`: NEW in #889 — a `LabelManager` retry exhausted and
+ *   raised `TerminalLabelOpError`. `failureMetadata` carries the alert payload.
+ */
+export type PhaseLoopStatus = 'completed' | 'gate-hit' | 'phase-failed' | 'failed-terminal';
 
 /**
  * Result of a complete phase loop execution.
@@ -45,6 +78,20 @@ export interface PhaseLoopResult {
   lastPhase: string;
   /** Whether the loop was stopped by a gate */
   gateHit: boolean;
+  /**
+   * #889 additive discriminator. Backwards-compatible with existing readers
+   * of `completed` / `gateHit` / `lastPhase`.
+   */
+  status?: PhaseLoopStatus;
+  /**
+   * Only populated when `status === 'failed-terminal'` (#889). Copied from the
+   * thrown `TerminalLabelOpError` and forwarded to the dispatcher.
+   */
+  failureMetadata?: {
+    site: TerminalLabelOpSite;
+    labelOp: string;
+    ghStderr: string;
+  };
 }
 
 /**
@@ -78,9 +125,52 @@ export class PhaseLoop {
     deps: PhaseLoopDeps,
     phaseSequence?: WorkflowPhase[],
   ): Promise<PhaseLoopResult> {
+    try {
+      return await this.executeLoopInner(context, config, deps, phaseSequence);
+    } catch (error) {
+      // #889: LabelManager retry exhaustion. Translate the terminal error into
+      // a `failed-terminal` PhaseLoopResult so the worker can surface a bounded
+      // alert instead of re-throwing and crash-looping the queue.
+      if (isTerminalLabelOpError(error)) {
+        this.logger.error(
+          {
+            site: error.site,
+            labelOp: error.labelOp,
+            ghStderr: error.ghStderr,
+          },
+          'Phase loop caught TerminalLabelOpError — surfacing as failed-terminal',
+        );
+        return {
+          results: [],
+          completed: false,
+          lastPhase: context.startPhase,
+          gateHit: false,
+          status: 'failed-terminal',
+          failureMetadata: {
+            site: error.site,
+            labelOp: error.labelOp,
+            ghStderr: error.ghStderr,
+          },
+        };
+      }
+      throw error;
+    }
+  }
+
+  private async executeLoopInner(
+    context: WorkerContext,
+    config: WorkerConfig,
+    deps: PhaseLoopDeps,
+    phaseSequence?: WorkflowPhase[],
+  ): Promise<PhaseLoopResult> {
     const sequence = phaseSequence ?? PHASE_SEQUENCE;
     const { labelManager, stageCommentManager, gateChecker, cliSpawner, outputCapture, prManager, conversationLogger, jobEventEmitter } = deps;
+    const baseMergeRunner: BaseMergeRunner = deps.baseMergeRunner ?? performBaseMerge;
     const results: PhaseResult[] = [];
+
+    // Mint a stable per-invocation runId used inside the failure-alert marker.
+    // See specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
+    const runId = randomUUID();
 
     // Track session ID across phases for conversation resume.
     // When a CLI phase completes, its session ID is passed to the next phase
@@ -100,7 +190,7 @@ export class PhaseLoop {
     }
 
     this.logger.info(
-      { startPhase: context.startPhase, startIndex, totalPhases: sequence.length },
+      { startPhase: context.startPhase, startIndex, totalPhases: sequence.length, runId },
       'Starting phase loop',
     );
 
@@ -109,6 +199,12 @@ export class PhaseLoop {
 
     for (let i = startIndex; i < sequence.length; i++) {
       const phase = sequence[i]!;
+
+      // #914: per-iteration guard enforcing at-most-one pre-phase base-merge
+      // per cycle. Block-scoped `let` inside the for-body is load-bearing —
+      // it re-initializes on every iteration (including retry re-entries via
+      // `i--; continue;`), keeping the retry semantics of Q3-A intact.
+      let hasBaseMergedThisCycle = false;
 
       // Check abort signal before starting each phase
       if (context.signal.aborted) {
@@ -146,10 +242,61 @@ export class PhaseLoop {
         startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
       });
 
+      // 2b. Pre-phase base-merge (#864) — implement, pre-validate, validate only.
+      // On {ok:false} the workflow pauses with the merge-conflict gate; on {ok:true}
+      // execution proceeds normally. Non-conflict git failures throw and are caught
+      // in the same try/catch as phase execution below.
+      //
+      // #914: the `hasBaseMergedThisCycle` guard enforces the at-most-once
+      // invariant. Symmetry immunization per Q5-B — even the implement path,
+      // which historically never double-merged, is wrapped so a future edit
+      // cannot reintroduce the buggy shape by accident.
+      if (phase === 'implement' && !hasBaseMergedThisCycle) {
+        const baseMergeOutcome = await this.runPreImplementBaseMerge(
+          context,
+          deps,
+          baseMergeRunner,
+          phase,
+          stage,
+          sequence,
+          startIndex,
+          i,
+          phaseTimestamps,
+        );
+        if (baseMergeOutcome !== undefined) {
+          return baseMergeOutcome;
+        }
+        hasBaseMergedThisCycle = true;
+      }
+
       // 3. Execute the phase
       let result: PhaseResult;
       try {
         if (phase === 'validate') {
+          // 3a. Pre-phase base-merge for the validate cycle (#864, #914) —
+          // ephemeral. Runs ONCE before the first spawned command of the
+          // cycle (install, or validate itself if no preValidateCommand).
+          // The second between-install-and-validate call site (#864 original)
+          // was deleted in #914 — its `git reset --hard` + `git clean -fd`
+          // was destroying the freshly-installed toolchain (snappoll#4).
+          if (!hasBaseMergedThisCycle) {
+            const preValidateMergeOutcome = await this.runPreValidateBaseMerge(
+              context,
+              deps,
+              baseMergeRunner,
+              phase,
+              stage,
+              sequence,
+              startIndex,
+              i,
+              phaseTimestamps,
+            );
+            if (preValidateMergeOutcome !== undefined) {
+              return preValidateMergeOutcome;
+            }
+            hasBaseMergedThisCycle = true;
+          }
+
           // Pre-validate: install dependencies if configured
           if (config.preValidateCommand) {
             const installResult = await cliSpawner.runPreValidateInstall(
@@ -164,12 +311,20 @@ export class PhaseLoop {
               );
               results.push(installResult);
               await labelManager.onError(phase);
+              const evidence = this.buildErrorEvidence(
+                config.preValidateCommand,
+                installResult,
+                DEFAULT_INSTALL_TIMEOUT_MS,
+                undefined,
+              );
               await stageCommentManager.updateStageComment({
                 stage,
                 status: 'error',
                 phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
                 startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+                errorEvidence: evidence,
               });
+              await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
           }
@@ -213,12 +368,28 @@ export class PhaseLoop {
           'Unexpected error during phase execution',
         );
         await labelManager.onError(phase);
+        const syntheticResult: PhaseResult = {
+          phase,
+          success: false,
+          exitCode: 1,
+          durationMs: 0,
+          output: [],
+          error: { message: String(error), output: '', phase },
+        };
+        const evidence = this.buildErrorEvidence(
+          phase === 'validate' ? config.validateCommand : phase,
+          syntheticResult,
+          undefined,
+          'spawn-error',
+        );
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
           phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          errorEvidence: evidence,
         });
+        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
         throw error;
       }
 
@@ -254,6 +425,20 @@ export class PhaseLoop {
             { phase, tasksRemaining, lastTasksRemaining },
             'Implement increment made no progress — failing to prevent infinite loop',
           );
+          // FR-007: set result.error BEFORE evidence derivation so the alert
+          // and stage-comment evidence blocks have diagnostic content.
+          result.success = false;
+          result.error = {
+            message: 'Implement increment made no progress — aborting to prevent infinite loop',
+            output: `no progress: tasks_remaining stayed at ${tasksRemaining} across two increments`,
+            phase,
+          };
+          const evidence = this.buildErrorEvidence(
+            'implement (no-progress guard)',
+            result,
+            undefined,
+            'no-progress',
+          );
           await labelManager.onError(phase);
           await stageCommentManager.updateStageComment({
             stage,
@@ -261,13 +446,9 @@ export class PhaseLoop {
             phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
             startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
             prUrl: context.prUrl,
+            errorEvidence: evidence,
           });
-          result.success = false;
-          result.error = {
-            message: 'Implement increment made no progress — aborting to prevent infinite loop',
-            stderr: '',
-            phase,
-          };
+          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
         lastTasksRemaining = tasksRemaining;
@@ -331,13 +512,67 @@ export class PhaseLoop {
           }
         }
 
+        // #892: bounded validate-fix cycle. Fires ONLY on the resume-driven
+        // validate re-run (structurally gated on WorkerContext.resumeReason
+        // === 'base-advance'). First-time reds continue through onError.
+        if (
+          phase === 'validate'
+          && context.resumeReason === 'base-advance'
+          && deps.validateFixHandler
+          && prManager.getPrNumber() !== undefined
+        ) {
+          try {
+            // resolveBaseBranch returns `origin/<name>`; strip prefix to
+            // match the base-branch string used in listOpenPullRequests results.
+            const baseRefFull = await resolveBaseBranch(
+              context.github,
+              prManager,
+              context.checkoutPath,
+              context.item.owner,
+              context.item.repo,
+              this.logger,
+            );
+            const baseBranch = baseRefFull.startsWith('origin/')
+              ? baseRefFull.slice('origin/'.length)
+              : baseRefFull;
+            await deps.validateFixHandler.handle(
+              context.item,
+              context.checkoutPath,
+              { prNumber: prManager.getPrNumber()!, baseBranch },
+              {
+                stdout: result.capturedStdout ?? '',
+                // #890 renamed `error.stderr` → `error.output` (merged tail);
+                // fall back to it when the raw stderr buffer is empty.
+                stderr: result.capturedStderr ?? result.error?.output ?? '',
+                exitCode: result.exitCode,
+              },
+              context.github,
+            );
+          } catch (err) {
+            this.logger.warn(
+              { err: String(err), phase, issueNumber: context.item.issueNumber },
+              'validate-fix handler threw — falling through to standard onError path',
+            );
+          }
+        }
+
         await labelManager.onError(phase);
+        const evidence = this.buildErrorEvidence(
+          phase === 'validate' ? config.validateCommand : phase,
+          result,
+          phase === 'validate'
+            ? DEFAULT_VALIDATE_TIMEOUT_MS
+            : resolvePhaseTimeoutMs(config, phase as Exclude<WorkflowPhase, 'validate'>),
+          undefined,
+        );
         await stageCommentManager.updateStageComment({
           stage,
           status: 'error',
           phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+          errorEvidence: evidence,
         });
+        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
 
@@ -347,50 +582,81 @@ export class PhaseLoop {
         context.prUrl = prUrl;
       }
 
-      // 5b. Fail phases that require file changes but produced none
-      if (PHASES_REQUIRING_CHANGES.has(phase) && !hasChanges) {
-        // Check if a previous run already produced implementation changes on this
-        // branch (e.g., issue was requeued). If the branch has prior commits for
-        // this phase, treat it as a soft pass rather than an error.
-        let hasPriorImplementation = false;
+      // 5b. Fail phases that require product-code changes but produced none.
+      // Compares the branch's cumulative diff against its PR base ref (or the
+      // default branch when no PR yet) and rejects when every changed file lives
+      // under EXCLUDED_PATH_PREFIXES. See specs/820-*.
+      if (PHASES_REQUIRING_CHANGES.has(phase)) {
+        let productFiles: string[];
+        let changedFiles: string[];
+        let baseRef: string;
         try {
-          const defaultBranch = await context.github.getDefaultBranch();
-          const branch = await context.github.getCurrentBranch();
-          const commits = await context.github.getCommitsBetween(`origin/${defaultBranch}`, branch);
-          hasPriorImplementation = commits.some(
-            (c) =>
-              c.message.includes(`complete ${phase} phase`) ||
-              c.message.includes('feat: complete T') ||
-              c.message.includes('partial implement progress'),
+          baseRef = await resolveBaseRef(
+            context.github,
+            prManager,
+            context.item.owner,
+            context.item.repo,
           );
-        } catch {
-          // If we can't check, fall through to the error path
-        }
-
-        if (hasPriorImplementation) {
-          this.logger.warn(
-            { phase },
-            'Phase produced no new changes but branch has prior implementation commits — continuing',
-          );
-        } else {
+          ({ productFiles, changedFiles } = await computeProductDiff(context.github, baseRef));
+        } catch (err) {
           this.logger.error(
-            { phase },
-            'Phase completed with exit code 0 but produced no file changes',
+            { phase, err: String(err) },
+            'product-diff computation threw — treating as detection failure',
           );
           await labelManager.onError(phase);
+          result.success = false;
+          result.error = {
+            message: `Phase "${phase}" product-diff detection failed: ${String(err)}`,
+            output: '',
+            phase,
+          };
+          const evidence = this.buildErrorEvidence(
+            phase === 'validate' ? config.validateCommand : phase,
+            result,
+            undefined,
+            'product-diff-error',
+          );
           await stageCommentManager.updateStageComment({
             stage,
             status: 'error',
             phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
             startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
             prUrl: context.prUrl,
+            errorEvidence: evidence,
           });
+          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          return { results, completed: false, lastPhase: phase, gateHit: false };
+        }
+
+        if (productFiles.length === 0) {
+          this.logger.error(
+            { phase, baseRef, changedFiles, excluded: EXCLUDED_PATH_PREFIXES },
+            'implement phase produced no product-code changes — all diff lives under excluded paths',
+          );
+          await labelManager.onError(phase);
           result.success = false;
           result.error = {
-            message: `Phase "${phase}" succeeded but produced no file changes — expected code to be written`,
-            stderr: '',
+            message:
+              `Phase "${phase}" produced no product-code changes — all changed files are under excluded prefixes ` +
+              `[${EXCLUDED_PATH_PREFIXES.join(', ')}]. Implement must modify at least one non-excluded file.`,
+            output: '',
             phase,
           };
+          const evidence = this.buildErrorEvidence(
+            phase === 'validate' ? config.validateCommand : phase,
+            result,
+            undefined,
+            'no-product-code-changes',
+          );
+          await stageCommentManager.updateStageComment({
+            stage,
+            status: 'error',
+            phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps, 'error'),
+            startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+            prUrl: context.prUrl,
+            errorEvidence: evidence,
+          });
+          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
       }
@@ -546,6 +812,225 @@ export class PhaseLoop {
       completed: true,
       lastPhase: sequence[sequence.length - 1]!,
       gateHit: false,
+    };
+  }
+
+  /**
+   * Run the pre-implement base-merge (#864, committed). On conflict, pause the
+   * workflow via `waiting-for:merge-conflicts` and return the pause result;
+   * on clean merge, return `undefined` so the caller proceeds with phase execution.
+   */
+  private async runPreImplementBaseMerge(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    baseMergeRunner: BaseMergeRunner,
+    phase: WorkflowPhase,
+    stage: StageType,
+    sequence: WorkflowPhase[],
+    startIndex: number,
+    i: number,
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>,
+  ): Promise<PhaseLoopResult | undefined> {
+    return this.runPrePhaseBaseMerge(
+      context,
+      deps,
+      baseMergeRunner,
+      phase,
+      stage,
+      sequence,
+      startIndex,
+      i,
+      phaseTimestamps,
+      { commit: true },
+    );
+  }
+
+  /**
+   * Run the pre-validate/validate base-merge (#864, ephemeral). Symmetric with
+   * `runPreImplementBaseMerge` but `opts.commit === false` — the merge is left
+   * as an un-committed merge in the workspace and MUST be discarded by the next
+   * phase's reset-at-start (FR-006).
+   */
+  private async runPreValidateBaseMerge(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    baseMergeRunner: BaseMergeRunner,
+    phase: WorkflowPhase,
+    stage: StageType,
+    sequence: WorkflowPhase[],
+    startIndex: number,
+    i: number,
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>,
+  ): Promise<PhaseLoopResult | undefined> {
+    return this.runPrePhaseBaseMerge(
+      context,
+      deps,
+      baseMergeRunner,
+      phase,
+      stage,
+      sequence,
+      startIndex,
+      i,
+      phaseTimestamps,
+      { commit: false },
+    );
+  }
+
+  /**
+   * Shared pre-phase base-merge implementation. Resolves the base ref, invokes
+   * the runner, and (on conflict) pauses with `waiting-for:merge-conflicts` +
+   * `errorEvidence.mergeConflict`. Reuses the existing gate-return path so
+   * #849's paired resume-dedupe clear applies symmetrically.
+   */
+  private async runPrePhaseBaseMerge(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    baseMergeRunner: BaseMergeRunner,
+    phase: WorkflowPhase,
+    stage: StageType,
+    sequence: WorkflowPhase[],
+    startIndex: number,
+    i: number,
+    phaseTimestamps: Map<WorkflowPhase, { startedAt: string; completedAt?: string }>,
+    opts: { commit: boolean },
+  ): Promise<PhaseLoopResult | undefined> {
+    if (!context.branch) {
+      this.logger.warn(
+        { phase },
+        'Skipping pre-phase base-merge — WorkerContext.branch not set',
+      );
+      return undefined;
+    }
+
+    const baseRef = await resolveBaseBranch(
+      context.github,
+      deps.prManager,
+      context.checkoutPath,
+      context.item.owner,
+      context.item.repo,
+      this.logger,
+    );
+
+    const mergeResult = await baseMergeRunner(
+      context.checkoutPath,
+      context.branch,
+      baseRef,
+      opts,
+      this.logger,
+    );
+
+    if (mergeResult.ok) {
+      this.logger.info(
+        { phase, baseRef, commit: opts.commit, mergeSha: mergeResult.mergeSha },
+        'Pre-phase base-merge succeeded',
+      );
+      return undefined;
+    }
+
+    // Conflict: pause with merge-conflict gate.
+    const gateLabel = 'waiting-for:merge-conflicts';
+    this.logger.warn(
+      { phase, baseRef, conflictedPaths: mergeResult.conflictedPaths },
+      'Pre-phase base-merge conflict — pausing workflow',
+    );
+
+    deps.jobEventEmitter?.('job:paused', {
+      jobId: context.jobId,
+      workflowName: context.item.workflowName,
+      owner: context.item.owner,
+      repo: context.item.repo,
+      issueNumber: context.item.issueNumber,
+      status: 'paused',
+      currentStep: phase,
+      gateLabel,
+    });
+
+    // #898 FR-011/FR-012: substitute the manual-remedy template with the
+    // concrete branch / bare base / issue-ref for this pause. Keeps the
+    // renderer content-agnostic — it just prints the strings as given.
+    const bareBase = mergeResult.baseRef.replace(/^origin\//, '');
+    const branchName = context.branch ?? '<branch>';
+    const issueRef = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    const substitutedSteps = MERGE_CONFLICT_REMEDY.steps.map((step) =>
+      step
+        .replace(/<branch>/g, branchName)
+        .replace(/<base>/g, bareBase)
+        .replace(/<issue-ref>/g, issueRef),
+    );
+
+    await deps.stageCommentManager.updateStageComment({
+      stage,
+      status: 'in_progress',
+      phases: this.buildPhaseProgress(sequence, startIndex, i, phaseTimestamps),
+      startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
+      prUrl: context.prUrl,
+      errorEvidence: {
+        mergeConflict: {
+          baseRef: mergeResult.baseRef,
+          conflictedPaths: mergeResult.conflictedPaths,
+          manualRemedy: {
+            steps: substitutedSteps,
+            warning: MERGE_CONFLICT_REMEDY.warning,
+          },
+        },
+      },
+    });
+
+    // #902 FR-003: persist pause-context BEFORE applying the pause label.
+    // The worker's MergeConflictHandler dispatch reads this to populate
+    // `metadata.phase` — the single source of truth for the interrupted phase.
+    // If the write throws, we do NOT apply the pause label — the pause simply
+    // doesn't materialize, preventing the dead-park class.
+    const workflowId = `${context.item.owner}/${context.item.repo}#${context.item.issueNumber}`;
+    await writePauseContext(context.checkoutPath, workflowId, {
+      phase,
+      writtenAt: new Date().toISOString(),
+      issueRef: workflowId,
+    });
+
+    await deps.labelManager.onGateHit(phase, gateLabel);
+
+    return {
+      results: [],
+      completed: false,
+      lastPhase: phase,
+      gateHit: true,
+    };
+  }
+
+  /**
+   * Build the `errorEvidence` payload rendered inside the stage comment on
+   * `status: 'error'` transitions. See specs/847-found-during-cockpit-v1/
+   * contracts/failure-evidence-block.md for the derivation rules.
+   */
+  private buildErrorEvidence(
+    command: string,
+    result: PhaseResult,
+    resolvedTimeoutMs?: number,
+    classifier?: string,
+  ): CommandExitEvidence {
+    const message = result.error?.message ?? '';
+    const exitDescriptor = classifier
+      ? `failed post-exit: ${classifier} (process exit ${result.exitCode})`
+      : message.includes('timed out') && resolvedTimeoutMs !== undefined
+        ? `killed (SIGTERM) after ${resolvedTimeoutMs}ms`
+        : message.includes('was aborted')
+        ? 'aborted'
+        : `exit ${result.exitCode}`;
+
+    // Shell path: `error.output` is the ring-buffer tail (already merged).
+    // CLI path: `error.output` is empty; synthesize from parsed `type: 'text'` chunks.
+    // For synthetic PhaseResults (no-progress guard, product-diff failures, catch
+    // block): `error.output` is set directly by the caller (still merged-shape).
+    const rawOutput = result.error?.output ?? '';
+    const outputTail = rawOutput.length > 0
+      ? boundOutputTail(rawOutput)
+      : synthesizeOutputTail(result.output);
+    return {
+      command,
+      exitDescriptor,
+      outputTail,
+      ...(classifier ? { reason: message } : {}),
     };
   }
 

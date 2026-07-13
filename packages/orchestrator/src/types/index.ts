@@ -99,6 +99,7 @@ export {
   type WorkerInfo,
   type WorkerHandler,
   type PrFeedbackMetadata,
+  type ResolveMergeConflictsMetadata,
   type PrReviewEvent,
   type PrToIssueLink,
   type GitHubPrReviewWebhookPayload,

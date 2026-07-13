@@ -55,13 +55,28 @@ function makeConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
 vi.mock('@generacy-ai/workflow-engine', () => ({
   createGitHubClient: vi.fn(() => ({
     getPullRequest: vi.fn().mockResolvedValue({ head: { ref: 'test-branch' } }),
-    getPRComments: vi.fn().mockResolvedValue([
-      { id: 1, path: 'src/test.ts', line: 10, body: 'Fix this', author: 'reviewer', resolved: false },
+    getPRReviewThreads: vi.fn().mockResolvedValue([
+      {
+        id: 'PRRT_1',
+        rootCommentId: 1,
+        isResolved: false,
+        comments: [
+          { id: 1, path: 'src/test.ts', line: 10, body: 'Fix this', author: 'reviewer', created_at: '', updated_at: '' },
+        ],
+      },
     ]),
     getStatus: vi.fn().mockResolvedValue({ has_changes: false, staged: [], unstaged: [], untracked: [] }),
     removeLabels: vi.fn().mockResolvedValue(undefined),
     replyToPRComment: vi.fn().mockResolvedValue(undefined),
+    resolveReviewThread: vi.fn().mockResolvedValue(undefined),
+    addLabels: vi.fn().mockResolvedValue(undefined),
   })),
+  // Author-trust helpers (#842). Default stubs pass every comment through.
+  isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
+  tryLoadCommentTrustConfig: vi.fn(() => undefined),
+  wrapUntrustedData: vi.fn((content: string) => content),
+  // #883: short SHA lookup for reply body interpolation.
+  executeCommand: vi.fn(async () => ({ exitCode: 0, stdout: 'abc1234\n', stderr: '' })),
 }));
 
 describe('PrFeedbackHandler credentials', () => {
@@ -79,7 +94,12 @@ describe('PrFeedbackHandler credentials', () => {
 
   it('should include credentials in launch request when credentialRole is set', async () => {
     const config = makeConfig({ credentialRole: 'developer' });
-    const handler = new PrFeedbackHandler(config, logger, launcher);
+    const handler = new PrFeedbackHandler(config, logger, launcher, {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
 
     const item: QueueItem = {
       owner: 'test-org',
@@ -108,7 +128,12 @@ describe('PrFeedbackHandler credentials', () => {
 
   it('should omit credentials in launch request when credentialRole is not set', async () => {
     const config = makeConfig();
-    const handler = new PrFeedbackHandler(config, logger, launcher);
+    const handler = new PrFeedbackHandler(config, logger, launcher, {
+      isDuplicate: vi.fn().mockResolvedValue(false),
+      markProcessed: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      tryMarkProcessed: vi.fn().mockResolvedValue(true),
+    }, undefined);
 
     const item: QueueItem = {
       owner: 'test-org',

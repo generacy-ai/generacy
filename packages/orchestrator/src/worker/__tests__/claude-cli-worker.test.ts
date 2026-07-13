@@ -33,10 +33,16 @@ const mockGithub = {
   listBranches: vi.fn().mockResolvedValue([]),
   branchExists: vi.fn().mockResolvedValue(true),
   getCommitsBetween: vi.fn().mockResolvedValue([]),
+  // Default: implement product-diff check sees at least one product file
+  getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/foo/src/bar.ts']),
   // PR operations for PrFeedbackHandler
   getPullRequest: vi.fn().mockResolvedValue({ number: 100, head: { ref: 'feature-branch' }, base: { ref: 'main' }, state: 'open' }),
-  getPRComments: vi.fn().mockResolvedValue([]),
+  getPRReviewThreads: vi.fn().mockResolvedValue([]),
   replyToPRComment: vi.fn().mockResolvedValue(undefined),
+  // #889: LabelManager.ensureRepoLabelsExist boundary net. Default to the repo
+  // being fully provisioned so the ensure-pass is a no-op.
+  listLabels: vi.fn().mockResolvedValue([]),
+  createLabel: vi.fn().mockResolvedValue(undefined),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -51,6 +57,9 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   }),
   registerProcessLauncher: vi.fn(),
   clearProcessLauncher: vi.fn(),
+  // #889: LabelManager imports WORKFLOW_LABELS to drive the ensure-pass.
+  // Provide it here so the mock module surface matches the real one.
+  WORKFLOW_LABELS: [],
 }));
 
 vi.mock('../repo-checkout.js', () => ({
@@ -59,6 +68,13 @@ vi.mock('../repo-checkout.js', () => ({
     getDefaultBranch: vi.fn().mockResolvedValue('develop'),
     switchBranch: vi.fn().mockResolvedValue(undefined),
   })),
+}));
+
+// Mock base-merge so the pre-phase base-merge hook (#864) does not exercise
+// real git during integration tests. Returns a canned clean merge.
+vi.mock('../base-merge.js', () => ({
+  performBaseMerge: vi.fn().mockResolvedValue({ ok: true, baseRef: 'origin/develop' }),
+  resolveBaseBranch: vi.fn().mockResolvedValue('origin/develop'),
 }));
 
 // Mock PrFeedbackHandler for address-pr-feedback command routing tests
@@ -569,7 +585,7 @@ describe('ClaudeCliWorker (integration)', () => {
       // Should NOT throw even if markPRReady fails
       await expect(
         worker.handle(createQueueItem({ workflowName: 'no-gates' })),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ status: 'completed' });
 
       // Workflow should still complete successfully
       expect(mockGithub.removeLabels).toHaveBeenCalledWith(
@@ -689,7 +705,7 @@ describe('ClaudeCliWorker (integration)', () => {
       // Should NOT throw even if there's no PR to mark ready
       await expect(
         worker.handle(createQueueItem({ workflowName: 'no-gates' })),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ status: 'completed' });
 
       // markPRReady should not be called (no PR number available)
       expect(mockGithub.markPRReady).not.toHaveBeenCalled();
@@ -952,7 +968,7 @@ describe('ClaudeCliWorker (integration)', () => {
       // queue.complete() instead of queue.release().
       await expect(
         worker.handle(createQueueItem({ workflowName: 'no-gates' })),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ status: 'completed' });
     });
 
     it('re-throws when error occurs before phases complete', async () => {
@@ -1625,7 +1641,7 @@ describe('ClaudeCliWorker (integration)', () => {
       // Should NOT throw — phasesCompleted = true, so error is caught as post-completion
       await expect(
         worker.handle(createQueueItem({ workflowName: 'speckit-epic' })),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ status: 'completed' });
 
       // Should log at warn level (post-completion failure)
       expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -1949,7 +1965,7 @@ describe('ClaudeCliWorker (integration)', () => {
       // Should complete without throwing
       await expect(
         worker.handle(createQueueItem({ workflowName: 'no-gates' })),
-      ).resolves.toBeUndefined();
+      ).resolves.toEqual({ status: 'completed' });
 
       // Verify the worker actually processed phases (CLI was spawned)
       expect(spawnFn).toHaveBeenCalled();

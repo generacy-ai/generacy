@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/specs/788/clarify-context-output.schema.json",
+  "title": "ClarifyContextOutput",
+  "description": "JSON payload emitted by `generacy cockpit clarify-context <issue>` (FR-009). Stable schema: every field is always present; missing data is null/empty rather than omitted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["issue", "clarificationComment", "spec", "plan", "codeReferences"],
+  "properties": {
+    "issue": {
+      "type": "string",
+      "description": "Echo of input issue ref in \"owner/repo#n\" form.",
+      "pattern": "^[^/\\s]+/[^/\\s#]+#[1-9][0-9]*$"
+    },
+    "clarificationComment": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/ClarificationComment" }
+      ],
+      "description": "Selected via AD-3: first comment created at-or-after the most recent `waiting-for:clarification` label event. Null if none."
+    },
+    "spec": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/Artifact" }
+      ],
+      "description": "Contents of `specs/<branch>/spec.md`. Null if not found."
+    },
+    "plan": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/Artifact" }
+      ],
+      "description": "Contents of `specs/<branch>/plan.md`. Null if not yet present (e.g., `/plan` has not run)."
+    },
+    "codeReferences": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/CodeReferences" }
+      ],
+      "description": "Touched files and open-PR summary for the in-flight branch. Null if not on a feature branch."
+    }
+  },
+  "$defs": {
+    "ClarificationComment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["body", "author", "createdAt", "url"],
+      "properties": {
+        "body": { "type": "string", "description": "Comment markdown body as posted on GitHub." },
+        "author": { "type": "string", "description": "GitHub login of the comment author.", "pattern": "^[A-Za-z0-9-]+$" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "ISO-8601 timestamp." },
+        "url": { "type": "string", "format": "uri", "description": "GitHub URL of the comment." }
+      }
+    },
+    "Artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "body"],
+      "properties": {
+        "path": { "type": "string", "description": "Absolute filesystem path to the artifact." },
+        "body": { "type": "string", "description": "UTF-8 file contents." }
+      }
+    },
+    "CodeReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["touchedFiles", "prUrl", "prDiffSummary"],
+      "properties": {
+        "touchedFiles": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Files touched on the in-flight branch vs. the base branch."
+        },
+        "prUrl": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "format": "uri" }
+          ],
+          "description": "URL of the open PR for the branch, or null."
+        },
+        "prDiffSummary": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "string", "maxLength": 4108 }
+          ],
+          "description": "PR unified diff truncated to 4096 chars with optional `…[truncated]` suffix (12 chars). Max 4108 chars total. Null when no PR."
+        }
+      }
+    }
+  }
+}

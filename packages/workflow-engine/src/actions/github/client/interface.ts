@@ -9,6 +9,7 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  ReviewThread,
 } from '../../../types/github.js';
 
 /**
@@ -133,9 +134,35 @@ export interface GitHubClient {
   getIssueComments(owner: string, repo: string, number: number): Promise<Comment[]>;
 
   /**
+   * Fetch issue comments via GraphQL with `viewerDidAuthor` populated per
+   * comment. Sibling to `getIssueComments()` (REST) and mirror of
+   * `getPRReviewThreads()` (existing GraphQL precedent from #878).
+   *
+   * Callers that pass results through `isTrustedCommentAuthor(c, surface, ctx)`
+   * MUST use this method — REST does not surface `viewerDidAuthor`, so
+   * App-identity clusters cannot self-recognize their own posts and the
+   * trust helper rejects them at tier NONE. Consumed by
+   * `integrateClarificationAnswers` (answer-scanner surface) and
+   * `buildTrustedIssueCommentsBlock` (clarify-resume surface).
+   *
+   * Returns the first page (`first: 100`) only — matches
+   * `getPRReviewThreads()` pagination posture. See #910.
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on any other non-zero exit.
+   */
+  getIssueCommentsWithViewerAuth(owner: string, repo: string, number: number): Promise<Comment[]>;
+
+  /**
    * Update a comment
    */
   updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void>;
+
+  /**
+   * Get the label names on an issue. Cheaper than `getIssue` when only labels
+   * are needed (e.g., pre-enqueue `blocked:*` skip checks). See #883.
+   */
+  getIssueLabels(owner: string, repo: string, number: number): Promise<string[]>;
 
   /**
    * List open issues in a repository that have a specific label
@@ -167,9 +194,26 @@ export interface GitHubClient {
   markPRReady(owner: string, repo: string, number: number): Promise<void>;
 
   /**
-   * Get comments on a PR (review comments)
+   * Get comments on a PR (review comments).
+   *
+   * @deprecated The REST endpoint underneath this method does not expose
+   * thread resolution — every returned `Comment.resolved` is `undefined`.
+   * Use `getPRReviewThreads()` instead. Removed in a follow-up PR. See #861.
    */
   getPRComments(owner: string, repo: string, number: number): Promise<Comment[]>;
+
+  /**
+   * Fetch all review threads on a PR, with resolution state, via GraphQL.
+   *
+   * The REST endpoint at `/repos/{owner}/{repo}/pulls/{n}/comments` does NOT
+   * expose thread resolution — thread state is a GraphQL-only concept.
+   * Callers that need per-thread resolved state MUST use this method.
+   * `getPRComments()` is deprecated; do not use it for new code.
+   *
+   * @throws GhAuthError on HTTP 401 or 403.
+   * @throws Error on any other non-zero exit.
+   */
+  getPRReviewThreads(owner: string, repo: string, number: number): Promise<ReviewThread[]>;
 
   /**
    * Reply to a PR comment
@@ -177,9 +221,36 @@ export interface GitHubClient {
   replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment>;
 
   /**
+   * Resolve a PR review thread via the GraphQL `resolveReviewThread` mutation.
+   *
+   * Retries transient failures up to 3 times with 1s / 2s / 4s backoff. Auth
+   * failures (`GhAuthError`) are NOT retried — they are rethrown on the first
+   * attempt (aligns with #762 convention). GraphQL-level `errors[]` on a 200
+   * response are treated as terminal (deleted node, permission-denied) and are
+   * NOT retried. On persistent transient failure, throws `Error` with the
+   * last upstream stderr as the message. See #883.
+   *
+   * @param threadId - The GraphQL node ID of the thread (see ReviewThread.id).
+   */
+  resolveReviewThread(threadId: string): Promise<void>;
+
+  /**
    * List all open pull requests in a repository
    */
   listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]>;
+
+  /**
+   * List top-level (issue-comment) PR comment bodies for idempotency
+   * checks (#869 / FR-004). Does NOT return review-thread comment bodies
+   * (those come from `getPRReviewThreads`).
+   */
+  listPrCommentBodies(owner: string, repo: string, prNumber: number): Promise<string[]>;
+
+  /**
+   * Post a top-level PR comment (issue-comment API, not review-thread reply).
+   * Used by the PR-feedback monitor to post the untrusted-notice per FR-004.
+   */
+  postPrComment(owner: string, repo: string, prNumber: number, body: string): Promise<void>;
 
   /**
    * Find PR for the current branch
@@ -300,9 +371,42 @@ export interface GitHubClient {
   getCommitsBetween(base: string, head: string): Promise<{ sha: string; message: string }[]>;
 
   /**
+   * List files changed between two refs using merge-base (triple-dot) semantics.
+   * Equivalent to `git diff --name-only <base>...<head>`.
+   *
+   * @param base Base ref, typically `origin/<branch>`.
+   * @param head Head ref, typically `HEAD`.
+   * @returns Repo-relative file paths as emitted by git; empty array `[]` never null/undefined.
+   * @throws Error when the git command exits non-zero (missing ref, no fetch, ...).
+   */
+  getFilesChangedBetween(base: string, head: string): Promise<string[]>;
+
+  /**
    * List all branches in the repository
    */
   listBranches(owner: string, repo: string): Promise<string[]>;
+
+  /**
+   * Returns the current head commit SHA of a branch or ref.
+   * Used by BaseAdvanceMonitorService to detect base-branch advances (#892).
+   *
+   * @param ref - Branch/ref name, e.g. "develop", "main", "release/v2".
+   * @returns Full 40-character lower-case hex SHA.
+   * @throws GhAuthError on HTTP 401 (feeds #762 auth-health backstop).
+   * @throws Error on malformed response (non-40-hex).
+   */
+  getRefHeadSha(owner: string, repo: string, ref: string): Promise<string>;
+
+  /**
+   * List the file names touched by a pull request via `gh pr diff --name-only`.
+   * Used by ValidateFixHandler's sibling-duplication guard (#892).
+   *
+   * @param ownerRepo - `owner/repo` slug (matches gh CLI's `--repo` flag shape).
+   * @param prNumber - Pull request number.
+   * @returns Repo-relative file paths; empty array if no changes.
+   * @throws Error on non-zero exit.
+   */
+  prDiffNames(ownerRepo: string, prNumber: number): Promise<string[]>;
 
   /**
    * Create a PR (alias for createPullRequest)

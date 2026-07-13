@@ -86,7 +86,7 @@ describe('runActivation', () => {
     await runActivation({ cloudUrl: CLOUD_URL, logger: mockLogger });
 
     expect(mockOpenUrl).toHaveBeenCalledOnce();
-    expect(mockOpenUrl).toHaveBeenCalledWith('https://generacy.ai/activate');
+    expect(mockOpenUrl).toHaveBeenCalledWith('https://generacy.ai/activate?code=ABCD-1234');
   });
 
   it('retries up to maxCycles when device code expires', async () => {

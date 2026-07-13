@@ -18,8 +18,8 @@ export interface QueueItem {
   issueNumber: number;
   /** Workflow name parsed from label (e.g., "speckit-feature") */
   workflowName: string;
-  /** Command type: "process" for new, "continue" for resume, "address-pr-feedback" for PR review feedback */
-  command: 'process' | 'continue' | 'address-pr-feedback';
+  /** Command type: "process" for new, "continue" for resume, "address-pr-feedback" for PR review feedback, "resolve-merge-conflicts" for #898 bounded conflict resolution */
+  command: 'process' | 'continue' | 'address-pr-feedback' | 'resolve-merge-conflicts';
   /** Priority score (timestamp for FIFO, lower = higher priority) */
   priority: number;
   /** When this item was enqueued */
@@ -40,6 +40,34 @@ export interface PrFeedbackMetadata {
   prNumber: number;
   /** IDs of unresolved review threads at detection time */
   reviewThreadIds: number[];
+}
+
+/**
+ * Metadata for the `resolve-merge-conflicts` command (#898).
+ *
+ * `conflictedPathsAtPause` and `prNumber` are advisory. The handler re-derives
+ * them independently. `phase` (added in #902) is the interrupted phase carried
+ * in-band from the phase-loop pause site — required at handler entry for the
+ * re-arm path; absence triggers fail-loud per FR-004.
+ */
+export interface ResolveMergeConflictsMetadata {
+  /** Advisory snapshot of conflicted paths at pause time. */
+  conflictedPathsAtPause?: string[];
+  /** Advisory PR number if monitor resolved it. */
+  prNumber?: number;
+  /**
+   * NEW in #902 (FR-003).
+   * Interrupted phase carried in-band from the phase-loop pause site.
+   * Populated by the worker at handler dispatch (from the pause-context
+   * sidecar in the workflow state store).
+   *
+   * Absence at handler entry → fail-loud per FR-004 / #889 terminal path.
+   * MUST NOT be re-derived from labels.
+   *
+   * Optional at parse time because the monitor cannot construct it — only
+   * the worker (after reading the pause-context sidecar) populates it.
+   */
+  phase?: import('../worker/types.js').WorkflowPhase;
 }
 
 /**
@@ -212,6 +240,30 @@ export interface QueueManager extends QueueAdapter {
   getQueueItems(offset: number, limit: number): Promise<QueueItemWithScore[]>;
   /** Get the number of currently active (claimed) workers */
   getActiveWorkerCount(): Promise<number>;
+  /**
+   * Atomically enqueue an item iff its `itemKey` is not already in flight
+   * (pending or claimed by any worker).
+   *
+   * Semantics (per clarifications Q1 → B, Q2 → A, Q3 → A, Q4 → A):
+   *   - itemKey = `<owner>/<repo>#<issue>`
+   *   - "In flight" = membership in `orchestrator:queue:in-flight-items`, which
+   *     tracks the union of pending + claimed. Orphaned claims count as in-flight
+   *     until the dispatcher's reclaim path fires.
+   *   - Race-free: two concurrent calls with the same itemKey → one returns true,
+   *     the other returns false. No double-enqueue.
+   *   - Redis-error safe: returns false + logs warn on transport failure. Caller's
+   *     poll cycle re-fires the event.
+   *
+   * @returns true if the item was enqueued, false if it was already in flight or
+   *          a transport error occurred.
+   */
+  enqueueIfAbsent(item: QueueItem): Promise<boolean>;
+  /**
+   * Observability helper — SISMEMBER against the in-flight SET.
+   * NOT used on the dedupe path (Q1: enqueueIfAbsent is the atomic gate).
+   * Exposed for admin/queue routes and future cockpit views.
+   */
+  hasInFlight(itemKey: string): Promise<boolean>;
 }
 
 /**
@@ -231,9 +283,17 @@ export interface WorkerInfo {
 }
 
 /**
- * Callback signature for processing queue items
+ * Callback signature for processing queue items.
+ *
+ * Returns a `WorkerResult` discriminant that the dispatcher branches on:
+ * - `'completed'` — happy path; queue.complete()
+ * - `'failed-terminal'` — label-op exhaustion or similar caught terminal failure;
+ *   queue.complete() (NOT released) + best-effort recovery via terminalFailureHandler
+ *
+ * Non-`WorkerResult` throws still propagate; the dispatcher catches them and
+ * releases the item back to the queue (unchanged behavior for generic errors).
  */
-export type WorkerHandler = (item: QueueItem) => Promise<void>;
+export type WorkerHandler = (item: QueueItem) => Promise<import('../worker/worker-result.js').WorkerResult>;
 
 /**
  * Phase tracker interface for deduplication
@@ -248,4 +308,13 @@ export interface PhaseTracker {
    * Returns false if already processed (duplicate).
    */
   tryMarkProcessed(owner: string, repo: string, issue: number, phase: string): Promise<boolean>;
+  /**
+   * Raw-key variants for callers that own the full key namespace (#892).
+   * Semantically identical to isDuplicate/markProcessed but with the caller
+   * controlling the entire key string. Used by BaseAdvanceMonitorService
+   * which needs `base-advance-tracker:` keys sitting outside the `phase-tracker:`
+   * namespace.
+   */
+  isDuplicateRaw(key: string): Promise<boolean>;
+  markProcessedRaw(key: string): Promise<void>;
 }

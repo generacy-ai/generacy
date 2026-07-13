@@ -32,6 +32,14 @@ export class PrManager {
   }
 
   /**
+   * Returns the number of the PR this manager tracks, or undefined if none
+   * has been created (or resolved via findPRForBranch) yet.
+   */
+  getPrNumber(): number | undefined {
+    return this.prNumber;
+  }
+
+  /**
    * Commit any changes, push to remote, and ensure a draft PR exists.
    *
    * Safe to call after every phase — handles "nothing to commit" and

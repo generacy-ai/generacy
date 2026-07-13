@@ -20,16 +20,18 @@ import type {
   Label,
   RepoInfo,
   ConflictInfo,
+  ReviewThread,
 } from '../../../types/github.js';
 import { executeCommand, parseJSONSafe } from '../../cli-utils.js';
 
 /**
- * Thrown by `executeGh()` when the gh CLI's stderr signals HTTP 401.
+ * Thrown by `executeGh()` when the gh CLI's stderr signals HTTP 401 or 403.
  * Callers (label/PR-feedback monitors) catch this to drive auth-health state.
+ * See #861 for the 403 widening (GraphQL scope-denial paths).
  */
 export class GhAuthError extends Error {
   constructor(
-    public readonly statusCode: 401,
+    public readonly statusCode: 401 | 403,
     public readonly stderr: string,
     message?: string,
   ) {
@@ -87,8 +89,11 @@ export class GhCliGitHubClient implements GitHubClient {
   private async executeGh(args: string[]) {
     const env = await this.resolveTokenEnv();
     const result = await executeCommand('gh', args, { cwd: this.workdir, env });
-    if (result.exitCode !== 0 && parseGhStatusCode(result.stderr) === 401) {
-      throw new GhAuthError(401, result.stderr);
+    if (result.exitCode !== 0) {
+      const code = parseGhStatusCode(result.stderr);
+      if (code === 401 || code === 403) {
+        throw new GhAuthError(code, result.stderr);
+      }
     }
     return result;
   }
@@ -163,6 +168,26 @@ export class GhCliGitHubClient implements GitHubClient {
       created_at: data['createdAt'] as string,
       updated_at: data['updatedAt'] as string,
     };
+  }
+
+  async getIssueLabels(owner: string, repo: string, number: number): Promise<string[]> {
+    const result = await this.executeGh([
+      'issue', 'view', String(number),
+      '-R', `${owner}/${repo}`,
+      '--json', 'labels',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to get labels for issue #${number}: ${result.stderr}`);
+    }
+
+    const data = parseJSONSafe(result.stdout) as Record<string, unknown> | null;
+    if (!data) {
+      throw new Error('Failed to parse issue label data');
+    }
+
+    const labels = (data['labels'] as Array<{ name: string }> | undefined) ?? [];
+    return labels.map(l => l.name);
   }
 
   async listIssuesWithLabel(owner: string, repo: string, label: string): Promise<Issue[]> {
@@ -245,6 +270,8 @@ export class GhCliGitHubClient implements GitHubClient {
     }
 
     // gh doesn't return the comment details, so we need to fetch the latest comment
+    // #842 audit: whitelist — fetches the bot's own just-posted comment for
+    // metadata; content is not surfaced to any agent.
     const comments = await this.getIssueComments(owner, repo, number);
     const latest = comments[comments.length - 1];
     if (!latest) {
@@ -271,6 +298,7 @@ export class GhCliGitHubClient implements GitHubClient {
       user: { login: string };
       created_at: string;
       updated_at: string;
+      author_association?: string;
     }> | null;
 
     if (!data) {
@@ -283,7 +311,84 @@ export class GhCliGitHubClient implements GitHubClient {
       author: c.user.login,
       created_at: c.created_at,
       updated_at: c.updated_at,
+      authorAssociation: c.author_association,
     }));
+  }
+
+  async getIssueCommentsWithViewerAuth(
+    owner: string,
+    repo: string,
+    number: number,
+  ): Promise<Comment[]> {
+    const query = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issue(number: $number) {
+      comments(first: 100) {
+        nodes {
+          databaseId
+          body
+          createdAt
+          updatedAt
+          author { login }
+          authorAssociation
+          viewerDidAuthor
+        }
+      }
+    }
+  }
+}`;
+
+    const result = await this.executeGh([
+      'api', 'graphql',
+      '-f', `query=${query}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `number=${number}`,
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to get issue comments for issue #${number}: ${result.stderr}`);
+    }
+
+    const parsed = parseJSONSafe(result.stdout) as {
+      data?: {
+        repository?: {
+          issue?: {
+            comments?: {
+              nodes?: Array<{
+                databaseId: number;
+                body: string;
+                createdAt: string;
+                updatedAt: string;
+                author: { login: string } | null;
+                authorAssociation: string | null;
+                viewerDidAuthor: boolean | null;
+              }>;
+            };
+          };
+        };
+      };
+    } | null;
+
+    const nodes = parsed?.data?.repository?.issue?.comments?.nodes;
+    if (!nodes) return [];
+
+    return nodes.map((c) => {
+      const comment: Comment = {
+        id: c.databaseId,
+        body: c.body,
+        author: c.author?.login ?? '',
+        created_at: c.createdAt,
+        updated_at: c.updatedAt,
+      };
+      if (c.authorAssociation !== null && c.authorAssociation !== undefined) {
+        comment.authorAssociation = c.authorAssociation;
+      }
+      if (c.viewerDidAuthor !== null && c.viewerDidAuthor !== undefined) {
+        comment.viewerDidAuthor = c.viewerDidAuthor;
+      }
+      return comment;
+    });
   }
 
   async updateComment(owner: string, repo: string, commentId: number, body: string): Promise<void> {
@@ -439,7 +544,7 @@ export class GhCliGitHubClient implements GitHubClient {
     const result = await this.executeGh([
       'api',
       `/repos/${owner}/${repo}/pulls/${number}/comments`,
-      '--jq', '.[] | {id: .id, body: .body, author: .user.login, path: .path, line: .line, in_reply_to_id: .in_reply_to_id, created_at: .created_at, updated_at: .updated_at}',
+      '--jq', '.[] | {id: .id, body: .body, author: .user.login, author_association: .author_association, path: .path, line: .line, in_reply_to_id: .in_reply_to_id, created_at: .created_at, updated_at: .updated_at}',
     ]);
 
     if (result.exitCode !== 0) {
@@ -456,6 +561,7 @@ export class GhCliGitHubClient implements GitHubClient {
         id: data['id'] as number,
         body: data['body'] as string,
         author: data['author'] as string,
+        authorAssociation: data['author_association'] as string | undefined,
         path: data['path'] as string | undefined,
         line: data['line'] as number | undefined,
         in_reply_to_id: data['in_reply_to_id'] as number | undefined,
@@ -464,6 +570,113 @@ export class GhCliGitHubClient implements GitHubClient {
       });
     }
     return comments;
+  }
+
+  async getPRReviewThreads(owner: string, repo: string, number: number): Promise<ReviewThread[]> {
+    const query = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          comments(first: 100) {
+            nodes {
+              databaseId
+              body
+              path
+              line
+              createdAt
+              updatedAt
+              author { login }
+              authorAssociation
+              replyTo { databaseId }
+              viewerDidAuthor
+            }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+    const result = await this.executeGh([
+      'api', 'graphql',
+      '-f', `query=${query}`,
+      '-F', `owner=${owner}`,
+      '-F', `repo=${repo}`,
+      '-F', `number=${number}`,
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to fetch review threads for PR #${number}: ${result.stderr}`);
+    }
+
+    const parsed = parseJSONSafe(result.stdout) as {
+      data?: {
+        repository?: {
+          pullRequest?: {
+            reviewThreads?: {
+              nodes?: Array<{
+                id: string;
+                isResolved: boolean;
+                comments?: {
+                  nodes?: Array<{
+                    databaseId: number;
+                    body: string;
+                    path: string | null;
+                    line: number | null;
+                    createdAt: string;
+                    updatedAt: string;
+                    author: { login: string } | null;
+                    authorAssociation: string | null;
+                    replyTo: { databaseId: number } | null;
+                    viewerDidAuthor: boolean | null;
+                  }>;
+                };
+              }>;
+            };
+          };
+        };
+      };
+    } | null;
+
+    const nodes = parsed?.data?.repository?.pullRequest?.reviewThreads?.nodes;
+    if (!nodes) return [];
+
+    const threads: ReviewThread[] = [];
+    for (const node of nodes) {
+      const commentNodes = node.comments?.nodes;
+      if (!commentNodes || commentNodes.length === 0) continue;
+      const comments: Comment[] = commentNodes.map(c => {
+        const comment: Comment = {
+          id: c.databaseId,
+          body: c.body,
+          author: c.author?.login ?? '',
+          created_at: c.createdAt,
+          updated_at: c.updatedAt,
+        };
+        if (c.path !== null && c.path !== undefined) comment.path = c.path;
+        if (c.line !== null && c.line !== undefined) comment.line = c.line;
+        if (c.replyTo?.databaseId !== undefined && c.replyTo?.databaseId !== null) {
+          comment.in_reply_to_id = c.replyTo.databaseId;
+        }
+        if (c.authorAssociation !== null && c.authorAssociation !== undefined) {
+          comment.authorAssociation = c.authorAssociation;
+        }
+        if (c.viewerDidAuthor !== null && c.viewerDidAuthor !== undefined) {
+          comment.viewerDidAuthor = c.viewerDidAuthor;
+        }
+        return comment;
+      });
+      threads.push({
+        id: node.id,
+        rootCommentId: comments[0]!.id,
+        isResolved: node.isResolved,
+        comments,
+      });
+    }
+    return threads;
   }
 
   async replyToPRComment(owner: string, repo: string, number: number, commentId: number, body: string): Promise<Comment> {
@@ -490,6 +703,54 @@ export class GhCliGitHubClient implements GitHubClient {
       created_at: data['created_at'] as string,
       updated_at: data['updated_at'] as string,
     };
+  }
+
+  async resolveReviewThread(threadId: string): Promise<void> {
+    const mutation =
+      'mutation($id: ID!) { resolveReviewThread(input: { threadId: $id }) { thread { id isResolved } } }';
+    const backoffs = [1000, 2000, 4000];
+    let lastError: Error | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await this.executeGh([
+          'api', 'graphql',
+          '-f', `query=${mutation}`,
+          '-F', `id=${threadId}`,
+        ]);
+        if (result.exitCode !== 0) {
+          lastError = new Error(
+            `resolveReviewThread failed for ${threadId}: ${result.stderr}`,
+          );
+        } else {
+          const parsed = parseJSONSafe(result.stdout) as
+            | { errors?: Array<{ message?: string }> }
+            | null;
+          if (parsed?.errors && parsed.errors.length > 0) {
+            const messages = parsed.errors
+              .map(e => e.message ?? 'unknown')
+              .join('; ');
+            throw new Error(
+              `resolveReviewThread returned GraphQL errors for ${threadId}: ${messages}`,
+            );
+          }
+          return;
+        }
+      } catch (err) {
+        if (err instanceof GhAuthError) throw err;
+        if (
+          err instanceof Error &&
+          err.message.startsWith('resolveReviewThread returned GraphQL errors')
+        ) {
+          throw err;
+        }
+        lastError = err instanceof Error ? err : new Error(String(err));
+      }
+      const backoff = backoffs[attempt];
+      if (backoff !== undefined) {
+        await new Promise(resolve => setTimeout(resolve, backoff));
+      }
+    }
+    throw lastError ?? new Error(`resolveReviewThread failed for ${threadId}`);
   }
 
   async listOpenPullRequests(owner: string, repo: string): Promise<PullRequest[]> {
@@ -525,6 +786,30 @@ export class GhCliGitHubClient implements GitHubClient {
       created_at: pr['createdAt'] as string,
       updated_at: pr['updatedAt'] as string,
     }));
+  }
+
+  async listPrCommentBodies(owner: string, repo: string, prNumber: number): Promise<string[]> {
+    const result = await this.executeGh([
+      'pr', 'view', String(prNumber),
+      '--repo', `${owner}/${repo}`,
+      '--json', 'comments',
+      '--jq', '.comments[].body',
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to list PR comments for ${owner}/${repo}#${prNumber}: ${result.stderr}`);
+    }
+    return result.stdout.split('\n').filter(l => l.length > 0);
+  }
+
+  async postPrComment(owner: string, repo: string, prNumber: number, body: string): Promise<void> {
+    const result = await this.executeGh([
+      'pr', 'comment', String(prNumber),
+      '--repo', `${owner}/${repo}`,
+      '--body', body,
+    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(`Failed to post PR comment on ${owner}/${repo}#${prNumber}: ${result.stderr}`);
+    }
   }
 
   async findPRForBranch(owner: string, repo: string, branch: string): Promise<PullRequest | null> {
@@ -954,9 +1239,71 @@ export class GhCliGitHubClient implements GitHubClient {
     });
   }
 
+  async getFilesChangedBetween(base: string, head: string): Promise<string[]> {
+    const result = await executeCommand('git', [
+      'diff', '--name-only', `${base}...${head}`,
+    ], { cwd: this.workdir });
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `git diff --name-only ${base}...${head} failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    return result.stdout.split('\n').filter(Boolean);
+  }
+
   // ==========================================================================
   // Alias Methods (convenience wrappers)
   // ==========================================================================
+
+  /**
+   * Fetch the head commit SHA for a branch/ref (#892).
+   * Uses `gh api repos/{o}/{r}/commits/{ref} --jq .sha` and validates that the
+   * response is a 40-char lower-case hex SHA. Non-conforming output → throw.
+   * 401 → `GhAuthError` via `executeGh` (existing #762 path).
+   */
+  async getRefHeadSha(owner: string, repo: string, ref: string): Promise<string> {
+    const result = await this.executeGh([
+      'api',
+      `repos/${owner}/${repo}/commits/${ref}`,
+      '--jq', '.sha',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `getRefHeadSha ${owner}/${repo}@${ref} failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    const sha = result.stdout.trim();
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      throw new Error(
+        `Invalid SHA for ${owner}/${repo}@${ref}: ${sha.slice(0, 80)}`,
+      );
+    }
+    return sha;
+  }
+
+  /**
+   * List file names touched by a PR (`gh pr diff --name-only`, #892).
+   * Non-zero exit → throw with stderr for visibility.
+   */
+  async prDiffNames(ownerRepo: string, prNumber: number): Promise<string[]> {
+    const result = await this.executeGh([
+      'pr', 'diff', String(prNumber),
+      '--repo', ownerRepo,
+      '--name-only',
+    ]);
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `prDiffNames ${ownerRepo}#${prNumber} failed (exit ${result.exitCode}): ${result.stderr.trim()}`,
+      );
+    }
+
+    return result.stdout.split('\n').map((l) => l.trim()).filter(Boolean);
+  }
 
   async listBranches(owner: string, repo: string): Promise<string[]> {
     // List remote branches using gh api

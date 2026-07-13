@@ -1,5 +1,5 @@
 import type { GitHubClientFactory } from '@generacy-ai/workflow-engine';
-import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
+import { WORKFLOW_LABELS, classifyLabelProvisioningError } from '@generacy-ai/workflow-engine';
 
 /**
  * Result of syncing a single label
@@ -72,14 +72,23 @@ export class LabelSyncService {
     let created = 0;
     let updated = 0;
     let unchanged = 0;
+    let hadError = false;
+    let firstError: string | undefined;
 
+    // `listLabels` is fatal for the whole repo — without it we cannot diff.
+    let existingLabels: Awaited<ReturnType<typeof client.listLabels>>;
     try {
-      const existingLabels = await client.listLabels(owner, repo);
-      const existingMap = new Map(existingLabels.map(l => [l.name, l]));
+      existingLabels = await client.listLabels(owner, repo);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      return { owner, repo, success: false, created, updated, unchanged, error: errorMsg, results };
+    }
+    const existingMap = new Map(existingLabels.map((l) => [l.name, l]));
 
-      for (const label of WORKFLOW_LABELS) {
-        const existing = existingMap.get(label.name);
+    for (const label of WORKFLOW_LABELS) {
+      const existing = existingMap.get(label.name);
 
+      try {
         if (!existing) {
           await client.createLabel(owner, repo, label.name, label.color, label.description);
           results.push({ name: label.name, action: 'created' });
@@ -95,15 +104,43 @@ export class LabelSyncService {
           results.push({ name: label.name, action: 'unchanged' });
           unchanged++;
         }
+      } catch (error) {
+        const classification = classifyLabelProvisioningError(error);
+        if (classification.kind === 'already-exists') {
+          // A sibling worker beat us to it — count as `unchanged`, do not flip
+          // `success`. Logger interface has no `debug`; `info` is the least
+          // noisy level available (D5).
+          this.logger.info(
+            `${owner}/${repo}: label ${label.name} already exists (race), continuing`,
+          );
+          results.push({ name: label.name, action: 'unchanged' });
+          unchanged++;
+        } else {
+          this.logger.error(
+            `${owner}/${repo}: failed to sync label ${label.name} — ` +
+              `${classification.cause}` +
+              (classification.statusCode !== undefined ? ` (HTTP ${classification.statusCode})` : ''),
+          );
+          hadError = true;
+          firstError ??= classification.cause;
+        }
       }
-
-      this.syncedRepos.add(`${owner}/${repo}`);
-
-      return { owner, repo, success: true, created, updated, unchanged, results };
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      return { owner, repo, success: false, created, updated, unchanged, error: errorMsg, results };
     }
+
+    if (!hadError) {
+      this.syncedRepos.add(`${owner}/${repo}`);
+    }
+
+    return {
+      owner,
+      repo,
+      success: !hadError,
+      created,
+      updated,
+      unchanged,
+      error: firstError,
+      results,
+    };
   }
 
   /**

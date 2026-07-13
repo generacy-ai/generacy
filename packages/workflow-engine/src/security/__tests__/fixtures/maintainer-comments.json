@@ -1,0 +1,22 @@
+[
+  { "id": 1001, "author": "maintainer-a", "authorAssociation": "OWNER" },
+  { "id": 1002, "author": "maintainer-b", "authorAssociation": "MEMBER" },
+  { "id": 1003, "author": "maintainer-c", "authorAssociation": "MEMBER" },
+  { "id": 1004, "author": "external-collab-a", "authorAssociation": "COLLABORATOR" },
+  { "id": 1005, "author": "external-collab-b", "authorAssociation": "COLLABORATOR" },
+  { "id": 1006, "author": "maintainer-a", "authorAssociation": "OWNER" },
+  { "id": 1007, "author": "maintainer-b", "authorAssociation": "MEMBER" },
+  { "id": 1008, "author": "maintainer-c", "authorAssociation": "MEMBER" },
+  { "id": 1009, "author": "maintainer-a", "authorAssociation": "OWNER" },
+  { "id": 1010, "author": "maintainer-d", "authorAssociation": "MEMBER" },
+  { "id": 1011, "author": "external-collab-a", "authorAssociation": "COLLABORATOR" },
+  { "id": 1012, "author": "maintainer-b", "authorAssociation": "MEMBER" },
+  { "id": 1013, "author": "maintainer-e", "authorAssociation": "OWNER" },
+  { "id": 1014, "author": "maintainer-a", "authorAssociation": "OWNER" },
+  { "id": 1015, "author": "external-collab-b", "authorAssociation": "COLLABORATOR" },
+  { "id": 1016, "author": "maintainer-c", "authorAssociation": "MEMBER" },
+  { "id": 1017, "author": "maintainer-b", "authorAssociation": "MEMBER" },
+  { "id": 1018, "author": "maintainer-a", "authorAssociation": "OWNER" },
+  { "id": 1019, "author": "maintainer-d", "authorAssociation": "MEMBER" },
+  { "id": 1020, "author": "external-collab-a", "authorAssociation": "COLLABORATOR" }
+]

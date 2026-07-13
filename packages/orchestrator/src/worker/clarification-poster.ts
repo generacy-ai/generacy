@@ -8,7 +8,95 @@
  */
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import {
+  isTrustedCommentAuthor,
+  tryLoadCommentTrustConfig,
+  type CommentTrustContext,
+} from '@generacy-ai/workflow-engine';
+import type { Comment as TrustComment } from '@generacy-ai/workflow-engine';
+import {
+  commentCarriesQuestionMarker,
+  matchClarificationQuestionMarker,
+} from './clarification-markers.js';
 import type { WorkerContext, Logger } from './types.js';
+
+/**
+ * Resolve cluster bot login from env vars (identity.ts chain). The
+ * `gh api /user` fallback is intentionally skipped here — it fails on
+ * App-token clusters and env vars are the load-bearing tier in-cluster.
+ */
+function resolveBotLoginFromEnv(): string | undefined {
+  return process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'] ?? undefined;
+}
+
+/**
+ * Adapter: pino-style logger (WorkerContext.Logger) → workflow-engine Logger.
+ * The workflow-engine helper calls `logger.warn(message, obj)` (message first);
+ * pino-style loggers accept `warn(obj, message)`. Bridge the arg order.
+ */
+function toEngineLogger(logger: Logger): CommentTrustContext['logger'] {
+  return {
+    info: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.info(meta as Record<string, unknown>, msg);
+      else logger.info(msg);
+    },
+    warn: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.warn(meta as Record<string, unknown>, msg);
+      else logger.warn(msg);
+    },
+    error: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.error(meta as Record<string, unknown>, msg);
+      else logger.error(msg);
+    },
+    debug: (msg: string, meta?: unknown) => {
+      if (meta && typeof meta === 'object') logger.debug(meta as Record<string, unknown>, msg);
+      else logger.debug(msg);
+    },
+  };
+}
+
+/**
+ * Emit a structured skip-log for FR-010. Body is deliberately absent
+ * (SC-003).
+ */
+function logCommentSkipped(
+  logger: Logger,
+  surface: 'answer-scanner' | 'clarify-resume' | 'pr-feedback',
+  comment: TrustComment,
+  reason: string,
+): void {
+  logger.info(
+    {
+      event: 'comment-skipped',
+      surface,
+      commentId: comment.id,
+      author: comment.author,
+      authorAssociation: comment.authorAssociation,
+      reason,
+    },
+    'Skipped comment from untrusted author',
+  );
+}
+
+/**
+ * Marker for the bot's untrusted-answer explainer comment. Used to
+ * dedupe repeat postings for the same skipped comment (FR-013 idempotence).
+ */
+const UNTRUSTED_ANSWER_MARKER_PREFIX = '<!-- generacy-untrusted-answer:';
+
+function untrustedAnswerMarker(commentId: number): string {
+  return `${UNTRUSTED_ANSWER_MARKER_PREFIX}${commentId} -->`;
+}
+
+/**
+ * Detect whether a comment body matches the `Q<N>:` answer pattern that
+ * `parseAnswersFromComments` would attempt to consume. Used to decide
+ * whether an untrusted-comment skip warrants an explainer bot comment
+ * (matched) or log-only treatment (unmatched, generic drive-by).
+ */
+function commentMatchesAnswerPattern(body: string): boolean {
+  return /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:\s*.+/.test(body);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,6 +175,30 @@ export function clarificationMarker(issueNumber: number): string {
 // ---------------------------------------------------------------------------
 
 /**
+ * Split a comment body into sections keyed by `### Q<n>:` headings.
+ * Each section spans from a heading to the next `### ` heading (or EOF).
+ * Returns an empty array if no `### Q<n>:` heading is present.
+ */
+function splitByQuestionHeading(body: string): string[] {
+  const headingPattern = /^### Q\d+:.*$/gm;
+  const headings = [...body.matchAll(headingPattern)];
+  if (headings.length === 0) return [];
+
+  const sections: string[] = [];
+  for (let i = 0; i < headings.length; i++) {
+    const start = headings[i]!.index!;
+    const headingLen = headings[i]![0].length;
+    const nextTopLevelHeading = body.slice(start + headingLen).search(/^### /m);
+    const end =
+      nextTopLevelHeading === -1
+        ? body.length
+        : start + headingLen + nextTopLevelHeading;
+    sections.push(body.slice(start, end));
+  }
+  return sections;
+}
+
+/**
  * Detect whether a comment body is a clarification *questions* comment
  * (posted by the bot) rather than a human *answers* comment.
  *
@@ -100,16 +212,25 @@ export function clarificationMarker(issueNumber: number): string {
  * these markers.
  */
 export function isQuestionComment(body: string): boolean {
-  // Orchestrator-posted clarification comment
-  if (body.includes(MARKER_PREFIX)) return true;
-  // CLI-posted clarification comment
-  if (body.includes('<!-- generacy-clarification:')) return true;
-  // Stage tracking comment
-  if (body.includes('<!-- generacy-stage:')) return true;
+  // FR-101 / FR-108 / FR-109 — engine-authored questions markers.
+  // Delegated to the single-source predicate in clarification-markers.ts;
+  // adding a new dialect only touches that file.
+  if (commentCarriesQuestionMarker(body)) return true;
   // Clarify operation's direct posting (with or without emoji).
   // Negative lookahead excludes answer headings like
   // "## Answers to Clarification Questions".
   if (/##\s+(?!Answers\b).*Clarification Questions/.test(body)) return true;
+  // FR-001: variant question-comment shape — any `### Q<n>:` heading section
+  // containing question-side markup that never appears in human answers.
+  for (const section of splitByQuestionHeading(body)) {
+    if (
+      section.includes('**Question**:') ||
+      section.includes('**Context**:') ||
+      section.includes('**Options**:')
+    ) {
+      return true;
+    }
+  }
   return false;
 }
 
@@ -298,6 +419,15 @@ function extractEmbeddedAnswer(text: string): string | undefined {
   return undefined;
 }
 
+interface ParsedAnswer {
+  /** The extracted answer text, post-trim + post-extractEmbeddedAnswer. */
+  answer: string;
+  /** The GitHub numeric id of the comment this answer was captured from. */
+  sourceCommentId: number;
+  /** true if the source comment body contains at least one `### Q<n>:` heading. */
+  sourceHadQuestionHeadings: boolean;
+}
+
 /**
  * Parse answers from GitHub issue comments.
  *
@@ -313,18 +443,19 @@ function extractEmbeddedAnswer(text: string): string | undefined {
  * `**Answer**` line rather than the topic name after `Q1:`.
  */
 function parseAnswersFromComments(
-  comments: Array<{ body: string }>,
+  comments: Array<{ id: number; body: string; created_at?: string }>,
   questionNumbers: number[],
-): Map<number, string> {
-  const answers = new Map<number, string>();
+  logger: Logger,
+): Map<number, ParsedAnswer> {
+  const answers = new Map<number, ParsedAnswer>();
 
   for (const comment of comments) {
-    // Match Q patterns with optional heading markers (### Q1:) and bold (**Q1**:).
-    // The lookahead also handles heading-prefixed Q patterns so that sections
-    // like `### Q1: ...` and `### Q2: ...` are properly delimited instead of
-    // Q1 consuming everything up to $ when headings are used.
+    const sourceHadQuestionHeadings = /(?:^|\n)###\s+Q\d+:/.test(comment.body);
+
+    // FR-005: anchor the `Q<n>:` opener at line start (^ or newline) so that
+    // mid-prose references like "as per Q1: yes" do not capture as answers.
     const regex =
-      /(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
+      /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
 
     let match: RegExpExecArray | null;
     while ((match = regex.exec(comment.body)) !== null) {
@@ -343,9 +474,29 @@ function parseAnswersFromComments(
         }
       }
 
+      // FR-002: defense-in-depth — if the captured answer contains
+      // question-side markup, treat it as a leaked bot question body, not an
+      // answer. Skip and warn so operators can spot near-misses.
+      if (answer.includes('**Question**:') || answer.includes('**Context**:')) {
+        logger.warn(
+          {
+            code: 'SKIPPED_SUSPICIOUS_ANSWER',
+            commentId: comment.id,
+            questionNumber,
+            excerpt: answer.slice(0, 120),
+          },
+          'Skipped suspicious clarification answer (contains question-side markup)',
+        );
+        continue;
+      }
+
       // Skip placeholder text that is not a real answer
       if (answer && answer !== '*Pending*' && questionNumbers.includes(questionNumber)) {
-        answers.set(questionNumber, answer);
+        answers.set(questionNumber, {
+          answer,
+          sourceCommentId: comment.id,
+          sourceHadQuestionHeadings,
+        });
       }
     }
   }
@@ -358,6 +509,85 @@ export interface IntegrationResult {
   integrated: number;
   /** Reason if nothing was integrated */
   reason?: 'no-spec-dir' | 'no-file' | 'no-pending' | 'no-answers' | 'no-changes';
+}
+
+/**
+ * Post explainer bot comments for skipped untrusted `Q<N>:` answers
+ * (FR-013 / D7). Metadata only — never comment body (SC-007). Idempotent
+ * via `<!-- generacy-untrusted-answer:<commentId> -->` markers.
+ */
+async function postUntrustedAnswerExplainers(opts: {
+  github: WorkerContext['github'];
+  owner: string;
+  repo: string;
+  issueNumber: number;
+  existingComments: TrustComment[];
+  skipped: TrustComment[];
+  logger: Logger;
+}): Promise<void> {
+  const { github, owner, repo, issueNumber, existingComments, skipped, logger } = opts;
+  if (skipped.length === 0) return;
+
+  for (const c of skipped) {
+    const marker = untrustedAnswerMarker(c.id);
+    const alreadyPosted = existingComments.some((existing) => existing.body.includes(marker));
+    if (alreadyPosted) {
+      logger.debug(
+        { commentId: c.id, issueNumber },
+        'Untrusted-answer explainer already posted — skipping (idempotence)',
+      );
+      continue;
+    }
+
+    const tier = c.authorAssociation ?? 'unknown';
+    const body = `${marker}
+> Answers from @${c.author} were not applied (association tier: \`${tier}\`). A trusted member (OWNER/MEMBER/COLLABORATOR) must re-post the answers themselves in the \`Q1: <answer>\` format for the batch to integrate.`;
+
+    try {
+      await github.addIssueComment(owner, repo, issueNumber, body);
+      logger.info(
+        { commentId: c.id, author: c.author, tier, issueNumber },
+        'Posted untrusted-answer explainer comment',
+      );
+    } catch (error) {
+      logger.warn(
+        { commentId: c.id, error: error instanceof Error ? error.message : String(error) },
+        'Failed to post untrusted-answer explainer comment',
+      );
+    }
+  }
+}
+
+/**
+ * Fetch issue comments via GraphQL, retrying once on transient failure and
+ * failing closed on the second failure (FR-010, #910). No REST fallback —
+ * falling back would silently reproduce the pre-fix defect where
+ * App-identity clusters cannot self-recognize their own answers.
+ */
+async function getIssueCommentsWithRetry(
+  github: WorkerContext['github'],
+  owner: string,
+  repo: string,
+  issueNumber: number,
+  logger: Logger,
+): Promise<TrustComment[]> {
+  try {
+    return await github.getIssueCommentsWithViewerAuth(owner, repo, issueNumber);
+  } catch (firstErr) {
+    logger.warn(
+      { error: firstErr instanceof Error ? firstErr.message : String(firstErr) },
+      'getIssueCommentsWithViewerAuth failed; retrying once',
+    );
+    try {
+      return await github.getIssueCommentsWithViewerAuth(owner, repo, issueNumber);
+    } catch (secondErr) {
+      logger.warn(
+        { error: secondErr instanceof Error ? secondErr.message : String(secondErr) },
+        'getIssueCommentsWithViewerAuth failed twice; failing closed (no REST fallback)',
+      );
+      throw secondErr;
+    }
+  }
 }
 
 /**
@@ -401,10 +631,15 @@ export async function integrateClarificationAnswers(
 
   const pendingNumbers = pendingQuestions.map((q) => q.number);
 
-  // 3. Fetch GitHub issue comments and parse answers
-  let comments: Array<{ body: string }>;
+  // 3. Fetch GitHub issue comments and parse answers.
+  // #910: switched from REST getIssueComments() to GraphQL
+  // getIssueCommentsWithViewerAuth() so App-identity clusters can
+  // self-recognize their own answer posts via `viewerDidAuthor`. Retry
+  // once on transient failure; fail closed on second failure (no REST
+  // fallback — FR-010).
+  let comments: TrustComment[];
   try {
-    comments = await github.getIssueComments(owner, repo, issueNumber);
+    comments = await getIssueCommentsWithRetry(github, owner, repo, issueNumber, logger);
   } catch (error) {
     logger.warn(
       { error: error instanceof Error ? error.message : String(error) },
@@ -413,13 +648,74 @@ export async function integrateClarificationAnswers(
     return { integrated: 0, reason: 'no-answers' };
   }
 
-  // Filter out comments that contain the clarification questions themselves.
-  // Without this, parseAnswersFromComments matches Q patterns from the bot's
-  // own questions comment (e.g., "### Q1: Topic") and treats the topic text
-  // as an answer, causing the gate to incorrectly see all questions as answered.
-  const answerComments = comments.filter((c) => !isQuestionComment(c.body));
+  // FR-102 / FR-103: filter engine-authored questions BEFORE the trust check.
+  // The trust filter must never receive an engine questions comment as input —
+  // under #910 the cluster's own identity is trusted, and the trust check
+  // would wave those through to the parser.
+  const scanCandidates: TrustComment[] = [];
+  for (const c of comments) {
+    const markerPrefix = matchClarificationQuestionMarker(c.body);
+    if (markerPrefix !== undefined) {
+      logger.debug(
+        {
+          event: 'clarification-answer-scanner-marker-excluded',
+          commentId: c.id,
+          author: c.author,
+          markerPrefix,
+          issueNumber,
+        },
+        'Excluded from answer-scanner via question marker',
+      );
+      continue;
+    }
+    scanCandidates.push(c);
+  }
 
-  const answers = parseAnswersFromComments(answerComments, pendingNumbers);
+  // 3a. Author-trust gating (#842). Every marker-cleared comment goes through
+  // the shared helper before we treat it as an answer source. Answer-scanner
+  // surface ignores widen-config (FR-008).
+  const botLogin = resolveBotLoginFromEnv();
+  const trustConfig = tryLoadCommentTrustConfig(checkoutPath, toEngineLogger(logger));
+  const trustCtx: CommentTrustContext = {
+    logger: toEngineLogger(logger),
+    ...(botLogin ? { botLogin } : {}),
+    ...(trustConfig ? { config: trustConfig } : {}),
+  };
+
+  const trustedComments: TrustComment[] = [];
+  const skippedForExplainer: TrustComment[] = [];
+  for (const c of scanCandidates) {
+    const decision = isTrustedCommentAuthor(c, 'answer-scanner', trustCtx);
+    if (decision.trusted) {
+      trustedComments.push(c);
+    } else {
+      logCommentSkipped(logger, 'answer-scanner', c, decision.reason);
+      // Only comments that would have been consumed as answers get an
+      // explainer bot comment (FR-013 / D7). Generic drive-bys are log-only.
+      if (commentMatchesAnswerPattern(c.body)) {
+        skippedForExplainer.push(c);
+      }
+    }
+  }
+
+  // FR-102 pre-filter has already dropped engine-authored questions comments;
+  // parseAnswersFromComments's FR-002 content sniff still catches unmarked
+  // question-shaped text as a second line of defense (FR-106).
+  const answerComments = trustedComments;
+
+  // Post explainer comments for untrusted Q<N>: answers, before parsing.
+  // Fire-and-forget: failures are non-fatal.
+  await postUntrustedAnswerExplainers({
+    github,
+    owner,
+    repo,
+    issueNumber,
+    existingComments: comments,
+    skipped: skippedForExplainer,
+    logger,
+  });
+
+  const answers = parseAnswersFromComments(answerComments, pendingNumbers, logger);
   if (answers.size === 0) {
     return { integrated: 0, reason: 'no-answers' };
   }
@@ -427,14 +723,32 @@ export async function integrateClarificationAnswers(
   // 4. Update the file content — replace *Pending* with actual answers
   //    for each matched question
   let updatedContent = content;
-  for (const [questionNum, answer] of answers) {
+  for (const [questionNum, parsed] of answers) {
     // Match the answer line within the correct question section.
     // The pattern finds ### Q{N}: ... **Answer**: *Pending* and replaces
     // the *Pending* part with the actual answer text.
     const pattern = new RegExp(
       `(### Q${questionNum}:[\\s\\S]*?\\*\\*Answer\\*\\*:\\s*)\\*Pending\\*`,
     );
-    updatedContent = updatedContent.replace(pattern, `$1${answer}`);
+    const previousContent = updatedContent;
+    updatedContent = updatedContent.replace(pattern, `$1${parsed.answer}`);
+
+    // FR-004: residual-race detector — if the transition actually happened
+    // (updatedContent changed) AND the source comment had `### Q<n>:` headings,
+    // warn. Both FR-001 and FR-002 let this comment through, so a matching
+    // structure here is a signal of an uncovered failure vector.
+    if (updatedContent !== previousContent && parsed.sourceHadQuestionHeadings) {
+      logger.warn(
+        {
+          code: 'TRANSITION_WITH_QUESTION_HEADINGS',
+          commentId: parsed.sourceCommentId,
+          issueNumber,
+          questionNumber: questionNum,
+          answer: parsed.answer.slice(0, 120),
+        },
+        'Integrated answer from a comment containing question headings — possible bot self-answer',
+      );
+    }
   }
 
   if (updatedContent === content) {
@@ -497,6 +811,8 @@ export async function postClarifications(
 
   // 4. Check for existing clarification comment (dedup)
   // Check both our own marker and the Claude CLI clarify phase marker
+  // #842 audit: whitelist — reads only for own-marker dedup; body content is
+  // not surfaced to an agent.
   const marker = clarificationMarker(issueNumber);
   const cliMarkerPrefix = '<!-- generacy-clarification:';
   const comments = await github.getIssueComments(owner, repo, issueNumber);

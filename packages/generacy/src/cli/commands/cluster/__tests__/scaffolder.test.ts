@@ -730,6 +730,22 @@ describe('scaffoldEnvFile', () => {
     const content = readFileSync(join(dir, '.env'), 'utf-8');
     expect(content).not.toContain('GENERACY_PRE_APPROVED_DEVICE_CODE');
   });
+
+  // #878: CLUSTER_ACTING_LOGIN is dissolved. The generated .env must never
+  // reference the var — the mechanism it fed (`cluster-identity` trust rule)
+  // is replaced by GraphQL's `viewerDidAuthor` primitive.
+  it('never emits CLUSTER_ACTING_LOGIN in the generated .env (#878)', () => {
+    scaffoldEnvFile(dir, {
+      clusterId: 'c1',
+      projectId: 'p1',
+      orgId: 'o1',
+      cloudUrl: 'https://api.generacy.ai',
+      projectName: 'test',
+    });
+
+    const content = readFileSync(join(dir, '.env'), 'utf-8');
+    expect(content).not.toContain('CLUSTER_ACTING_LOGIN');
+  });
 });
 
 describe('deriveRelayUrl', () => {

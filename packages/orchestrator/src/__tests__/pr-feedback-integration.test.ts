@@ -33,7 +33,8 @@ import { PrFeedbackMonitorService } from '../services/pr-feedback-monitor-servic
 import type {
   GitHubPrReviewWebhookPayload,
   QueueItem,
-  QueueAdapter,
+  QueueItemWithScore,
+  QueueManager,
 } from '../types/index.js';
 import type { Logger } from '../worker/types.js';
 import { AgentLauncher } from '../launcher/agent-launcher.js';
@@ -44,16 +45,20 @@ import { ClaudeCodeLaunchPlugin } from '@generacy-ai/generacy-plugin-claude-code
 // ==========================================================================
 const mockGitHub = {
   getPullRequest: vi.fn(),
-  getPRComments: vi.fn(),
+  getPRReviewThreads: vi.fn(),
   addLabels: vi.fn(),
   removeLabels: vi.fn(),
   getIssue: vi.fn(),
+  // #883: default to empty label set so the monitor's blocked:* skip check
+  // passes through without needing per-test setup.
+  getIssueLabels: vi.fn().mockResolvedValue([]),
   listOpenPullRequests: vi.fn(),
   getStatus: vi.fn(),
   stageAll: vi.fn(),
   commit: vi.fn(),
   push: vi.fn(),
   replyToPRComment: vi.fn(),
+  resolveReviewThread: vi.fn(),
 };
 
 vi.mock('@generacy-ai/workflow-engine', () => ({
@@ -68,11 +73,33 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
       this.name = 'GhAuthError';
     }
   },
+  // Author-trust helpers (#842). Default stubs pass every comment through.
+  isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
+  tryLoadCommentTrustConfig: vi.fn(() => undefined),
+  wrapUntrustedData: vi.fn((content: string) => content),
+  // #883: short SHA lookup for reply-body interpolation.
+  executeCommand: vi.fn(async () => ({ exitCode: 0, stdout: 'abc1234\n', stderr: '' })),
+  // #889: LabelManager imports WORKFLOW_LABELS for its ensure-pass.
+  WORKFLOW_LABELS: [],
 }));
 
 // ==========================================================================
 // Test Helpers
 // ==========================================================================
+
+// #861: wrap a list of REST-like comment literals into a `ReviewThread[]`,
+// promoting `resolved` → `isResolved` on the wrapping thread.
+function asThreads(comments: Array<Record<string, unknown> & { id: number; resolved?: boolean }>) {
+  return comments.map(c => {
+    const { resolved, ...rest } = c;
+    return {
+      id: `PRRT_${c.id}`,
+      rootCommentId: c.id,
+      isResolved: resolved === true,
+      comments: [{ created_at: '', updated_at: '', ...rest }],
+    };
+  });
+}
 
 function createMockLogger(): Logger {
   return {
@@ -120,42 +147,45 @@ function computeSignature(secret: string, body: string): string {
 }
 
 // ==========================================================================
-// Mock Queue Adapter for Testing
+// Mock Queue Manager for Testing (#879: in-flight dedupe via enqueueIfAbsent)
 // ==========================================================================
-class MockQueueAdapter implements QueueAdapter {
+class MockQueueManager implements QueueManager {
   public enqueuedItems: QueueItem[] = [];
+  private inFlight = new Set<string>();
+
+  private itemKey(item: QueueItem): string {
+    return `${item.owner}/${item.repo}#${item.issueNumber}`;
+  }
 
   async enqueue(item: QueueItem): Promise<void> {
     this.enqueuedItems.push(item);
+    this.inFlight.add(this.itemKey(item));
   }
 
-  clear(): void {
-    this.enqueuedItems = [];
-  }
-}
-
-// ==========================================================================
-// Mock Phase Tracker (In-Memory)
-// ==========================================================================
-class MockPhaseTracker {
-  private processed = new Set<string>();
-
-  async tryMarkProcessed(
-    owner: string,
-    repo: string,
-    issueNumber: number,
-    phase: string,
-  ): Promise<boolean> {
-    const key = `${owner}/${repo}#${issueNumber}:${phase}`;
-    if (this.processed.has(key)) {
-      return false;
-    }
-    this.processed.add(key);
+  async enqueueIfAbsent(item: QueueItem): Promise<boolean> {
+    const key = this.itemKey(item);
+    if (this.inFlight.has(key)) return false;
+    this.inFlight.add(key);
+    this.enqueuedItems.push(item);
     return true;
   }
 
+  async hasInFlight(itemKey: string): Promise<boolean> {
+    return this.inFlight.has(itemKey);
+  }
+
+  async claim(): Promise<QueueItem | null> { return null; }
+  async release(): Promise<void> {}
+  async complete(_workerId: string, item: QueueItem): Promise<void> {
+    this.inFlight.delete(this.itemKey(item));
+  }
+  async getQueueDepth(): Promise<number> { return this.enqueuedItems.length; }
+  async getQueueItems(): Promise<QueueItemWithScore[]> { return []; }
+  async getActiveWorkerCount(): Promise<number> { return 0; }
+
   clear(): void {
-    this.processed.clear();
+    this.enqueuedItems = [];
+    this.inFlight.clear();
   }
 }
 
@@ -166,8 +196,7 @@ class MockPhaseTracker {
 describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
   let server: FastifyInstance;
   let logger: Logger;
-  let queueAdapter: MockQueueAdapter;
-  let phaseTracker: MockPhaseTracker;
+  let queueAdapter: MockQueueManager;
   let monitorService: PrFeedbackMonitorService;
 
   const WEBHOOK_SECRET = 'test-webhook-secret';
@@ -178,16 +207,14 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
     logger = createMockLogger();
 
     // Use in-memory queue adapter for faster tests
-    queueAdapter = new MockQueueAdapter();
+    queueAdapter = new MockQueueManager();
 
     // Use in-memory phase tracker
-    phaseTracker = new MockPhaseTracker();
 
     // Setup PR feedback monitor service
     monitorService = new PrFeedbackMonitorService(
       logger,
       () => mockGitHub as any,
-      phaseTracker as any,
       queueAdapter,
       {
         enabled: true,
@@ -234,6 +261,8 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       created_at: '',
       updated_at: '',
     });
+    // #883: monitor's pre-enqueue skip fetches issue labels; default → none blocked.
+    mockGitHub.getIssueLabels.mockResolvedValue([]);
 
     mockGitHub.getPullRequest.mockResolvedValue({
       number: 100,
@@ -244,7 +273,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -263,7 +292,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
@@ -274,7 +303,6 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
       await server.close();
     }
     queueAdapter.clear();
-    phaseTracker.clear();
   });
 
   // ==========================================================================
@@ -335,7 +363,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
 
     // Verify GitHub API calls
     expect(mockGitHub.getIssue).toHaveBeenCalled();
-    expect(mockGitHub.getPRComments).toHaveBeenCalledWith('test-org', 'test-repo', 100);
+    expect(mockGitHub.getPRReviewThreads).toHaveBeenCalledWith('test-org', 'test-repo', 100);
   });
 
   // ==========================================================================
@@ -381,8 +409,14 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
     // Only one item should be enqueued
     expect(queueAdapter.enqueuedItems).toHaveLength(1);
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -465,7 +499,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
 
   it('should skip PRs with no unresolved review threads', async () => {
     // All comments are resolved
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -475,7 +509,7 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
         resolved: true,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const payload = createWebhookPayload();
     const rawBody = JSON.stringify(payload);
@@ -720,21 +754,18 @@ describe('PR Feedback Integration Test: Webhook → Enqueue', () => {
 
 describe('PR Feedback Integration Test: Polling Fallback', () => {
   let logger: Logger;
-  let queueAdapter: MockQueueAdapter;
-  let phaseTracker: MockPhaseTracker;
+  let queueAdapter: MockQueueManager;
   let monitorService: PrFeedbackMonitorService;
 
   beforeEach(() => {
     vi.clearAllMocks();
     logger = createMockLogger();
-    queueAdapter = new MockQueueAdapter();
-    phaseTracker = new MockPhaseTracker();
+    queueAdapter = new MockQueueManager();
 
     // Setup monitor service with polling enabled (no webhooks)
     monitorService = new PrFeedbackMonitorService(
       logger,
       () => mockGitHub as any,
-      phaseTracker as any,
       queueAdapter,
       {
         enabled: true,
@@ -769,7 +800,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -788,7 +819,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
@@ -797,7 +828,6 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
   afterEach(() => {
     monitorService.stopPolling();
     queueAdapter.clear();
-    phaseTracker.clear();
   });
 
   // ==========================================================================
@@ -851,7 +881,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
 
     // Verify GitHub API calls
     expect(mockGitHub.listOpenPullRequests).toHaveBeenCalledWith('test-org', 'test-repo');
-    expect(mockGitHub.getPRComments).toHaveBeenCalledWith('test-org', 'test-repo', 100);
+    expect(mockGitHub.getPRReviewThreads).toHaveBeenCalledWith('test-org', 'test-repo', 100);
   });
 
   // ==========================================================================
@@ -906,7 +936,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
     ]);
 
     // All comments are resolved
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -916,7 +946,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
         resolved: true,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     await monitorService.poll();
 
@@ -1000,8 +1030,14 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
       prNumber: 101,
     });
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -1013,7 +1049,6 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
     const adaptiveMonitor = new PrFeedbackMonitorService(
       logger,
       () => mockGitHub as any,
-      phaseTracker as any,
       queueAdapter,
       {
         enabled: true,
@@ -1116,7 +1151,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
     expect(queueAdapter.enqueuedItems).toHaveLength(0);
 
     // No additional API calls should be made
-    expect(mockGitHub.getPRComments).not.toHaveBeenCalled();
+    expect(mockGitHub.getPRReviewThreads).not.toHaveBeenCalled();
     expect(mockGitHub.addLabels).not.toHaveBeenCalled();
   });
 
@@ -1129,7 +1164,6 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
     const multiRepoMonitor = new PrFeedbackMonitorService(
       logger,
       () => mockGitHub as any,
-      phaseTracker as any,
       queueAdapter,
       {
         enabled: true,
@@ -1166,8 +1200,7 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
 describe('PR Feedback Integration Test: Deduplication', () => {
   let server: FastifyInstance;
   let logger: Logger;
-  let queueAdapter: MockQueueAdapter;
-  let phaseTracker: MockPhaseTracker;
+  let queueAdapter: MockQueueManager;
   let monitorService: PrFeedbackMonitorService;
 
   const WEBHOOK_SECRET = 'test-webhook-secret';
@@ -1178,16 +1211,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
     logger = createMockLogger();
 
     // Use in-memory queue adapter for faster tests
-    queueAdapter = new MockQueueAdapter();
+    queueAdapter = new MockQueueManager();
 
     // Use in-memory phase tracker (atomic deduplication)
-    phaseTracker = new MockPhaseTracker();
 
     // Setup PR feedback monitor service
     monitorService = new PrFeedbackMonitorService(
       logger,
       () => mockGitHub as any,
-      phaseTracker as any,
       queueAdapter,
       {
         enabled: true,
@@ -1234,6 +1265,8 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       created_at: '',
       updated_at: '',
     });
+    // #883: monitor's pre-enqueue skip fetches issue labels; default → none blocked.
+    mockGitHub.getIssueLabels.mockResolvedValue([]);
 
     mockGitHub.getPullRequest.mockResolvedValue({
       number: 100,
@@ -1244,7 +1277,7 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -1263,7 +1296,7 @@ describe('PR Feedback Integration Test: Deduplication', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.listOpenPullRequests.mockResolvedValue([
       {
@@ -1288,7 +1321,6 @@ describe('PR Feedback Integration Test: Deduplication', () => {
     }
     monitorService.stopPolling();
     queueAdapter.clear();
-    phaseTracker.clear();
   });
 
   // ==========================================================================
@@ -1339,8 +1371,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       reviewThreadIds: [1, 2],
     });
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
     expect(mockGitHub.addLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
@@ -1412,8 +1450,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
     // CRITICAL: Exactly one queue item should exist
     expect(queueAdapter.enqueuedItems).toHaveLength(1);
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -1435,8 +1479,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       prNumber: 100,
     });
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -1467,8 +1517,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
     // CRITICAL: Exactly one queue item should exist
     expect(queueAdapter.enqueuedItems).toHaveLength(1);
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -1501,8 +1557,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
     // CRITICAL: Exactly one queue item should exist
     expect(queueAdapter.enqueuedItems).toHaveLength(1);
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -1552,8 +1614,14 @@ describe('PR Feedback Integration Test: Deduplication', () => {
       command: 'address-pr-feedback',
     });
 
-    // Label should only be added once
-    expect(mockGitHub.addLabels).toHaveBeenCalledTimes(1);
+    // #879 / FR-010: label is added idempotently on every Case A poll,
+    // decoupled from the enqueue outcome. Pre-#879 asserted "exactly 1"; the
+    // migration relaxes this to "at least 1 with the correct args" so the
+    // label-add fires even on `enqueueIfAbsent → false` collisions.
+    expect(mockGitHub.addLabels).toHaveBeenCalled();
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org', 'test-repo', 42, ['waiting-for:address-pr-feedback'],
+    );
   });
 
   // ==========================================================================
@@ -1668,8 +1736,7 @@ describe('PR Feedback Integration Test: Deduplication', () => {
 
 describe('PR Feedback Integration Test: Worker Processing', () => {
   let logger: Logger;
-  let queueAdapter: MockQueueAdapter;
-  let phaseTracker: MockPhaseTracker;
+  let queueAdapter: MockQueueManager;
   let monitorService: PrFeedbackMonitorService;
   let processFactory: any;
   let agentLauncher: AgentLauncher;
@@ -1678,14 +1745,12 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     logger = createMockLogger();
-    queueAdapter = new MockQueueAdapter();
-    phaseTracker = new MockPhaseTracker();
+    queueAdapter = new MockQueueManager();
 
     // Setup monitor service
     monitorService = new PrFeedbackMonitorService(
       logger,
       () => mockGitHub as any,
-      phaseTracker as any,
       queueAdapter,
       {
         enabled: true,
@@ -1720,7 +1785,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       state: 'open',
     });
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/index.ts',
@@ -1739,7 +1804,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     mockGitHub.addLabels.mockResolvedValue(undefined);
     mockGitHub.removeLabels.mockResolvedValue(undefined);
@@ -1777,7 +1842,6 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   afterEach(() => {
     monitorService.stopPolling();
     queueAdapter.clear();
-    phaseTracker.clear();
   });
 
   // ==========================================================================
@@ -1810,6 +1874,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     // Create queue item
@@ -1836,7 +1907,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockRepoCheckout.switchBranch).toHaveBeenCalledWith(checkoutPath, '42-add-tests');
 
     // Verify fresh unresolved threads were fetched
-    expect(mockGitHub.getPRComments).toHaveBeenCalledWith('test-org', 'test-repo', 100);
+    expect(mockGitHub.getPRReviewThreads).toHaveBeenCalledWith('test-org', 'test-repo', 100);
 
     // Verify Claude CLI was spawned with correct prompt
     expect(processFactory.spawn).toHaveBeenCalledWith(
@@ -1879,34 +1950,35 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     );
     expect(mockGitHub.push).toHaveBeenCalledWith('origin', '42-add-tests');
 
-    // Verify replies were posted to all unresolved threads (SC-005)
+    // #883: verify replies were posted with the new "Addressed in <sha>" body
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       100,
       1,
-      expect.stringContaining('addressed this feedback'),
+      expect.stringContaining('Addressed in abc1234'),
     );
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       100,
       2,
-      expect.stringContaining('addressed this feedback'),
+      expect.stringContaining('Addressed in abc1234'),
     );
 
-    // Verify label was removed
+    // #883: verify each thread was resolved via resolveReviewThread
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(2);
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_1');
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledWith('PRRT_2');
+
+    // #926 FR-006: happy-path coalesces both labels into one removeLabels call.
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       42,
-      ['waiting-for:address-pr-feedback'],
+      ['waiting-for:address-pr-feedback', 'agent:in-progress'],
     );
-
-    // Verify no resolve API was called (SC-006: Thread auto-resolve prevention)
-    expect((mockGitHub as any).resolveThread).toBeUndefined();
-    expect((mockGitHub as any).resolveReviewThread).toBeUndefined();
   });
 
   // ==========================================================================
@@ -1917,7 +1989,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
     // Mock many unresolved threads
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/file1.ts',
@@ -1963,7 +2035,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const handler = new PrFeedbackHandler(
       {
@@ -1975,6 +2047,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2012,13 +2091,8 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   // Test: Thread Auto-Resolve Prevention (SC-006)
   // ==========================================================================
 
-  it('should never auto-resolve threads, only reply (SC-006)', async () => {
+  it('#883: resolves each unresolved thread after successful reply', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
-
-    // Add potential resolve methods to mock to ensure they're not called
-    (mockGitHub as any).resolveThread = vi.fn();
-    (mockGitHub as any).resolveReviewThread = vi.fn();
-    (mockGitHub as any).markReviewThreadAsResolved = vi.fn();
 
     const handler = new PrFeedbackHandler(
       {
@@ -2030,6 +2104,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2048,13 +2129,9 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
 
     await handler.handle(queueItem, '/tmp/workspace/test-org/test-repo');
 
-    // SC-006: Verify only replyToPRComment was used
+    // #883: reply once per thread + resolve once per thread
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
-
-    // SC-006: Verify no resolve methods were called
-    expect((mockGitHub as any).resolveThread).not.toHaveBeenCalled();
-    expect((mockGitHub as any).resolveReviewThread).not.toHaveBeenCalled();
-    expect((mockGitHub as any).markReviewThreadAsResolved).not.toHaveBeenCalled();
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(2);
   });
 
   // ==========================================================================
@@ -2064,7 +2141,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   it('should build prompt with all required information', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 101,
         path: 'src/auth.ts',
@@ -2083,7 +2160,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const handler = new PrFeedbackHandler(
       {
@@ -2095,6 +2172,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2142,7 +2226,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
   // Test: No Changes Skip
   // ==========================================================================
 
-  it('should skip commit/push when CLI makes no changes', async () => {
+  it('#883: no-diff cycle → Disposition B (blocked label, no replies, no removal)', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
     // No changes after CLI runs
@@ -2163,6 +2247,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2186,26 +2277,47 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
     expect(mockGitHub.commit).not.toHaveBeenCalled();
     expect(mockGitHub.push).not.toHaveBeenCalled();
 
-    // Should still post replies and remove label
-    expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(2);
-    expect(mockGitHub.removeLabels).toHaveBeenCalled();
+    // #883: no-diff → Disposition B → no replies, no resolves, no waiting-for
+    // removal. #926 SC-004: `finally` still clears `agent:in-progress`.
+    expect(mockGitHub.replyToPRComment).not.toHaveBeenCalled();
+    expect(mockGitHub.resolveReviewThread).not.toHaveBeenCalled();
+    expect(mockGitHub.removeLabels).not.toHaveBeenCalledWith(
+      'test-org',
+      'test-repo',
+      42,
+      expect.arrayContaining(['waiting-for:address-pr-feedback']),
+    );
+    expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
+      'test-org',
+      'test-repo',
+      42,
+      ['agent:in-progress'],
+    );
+
+    // #883: blocked:stuck-feedback-loop is added
+    expect(mockGitHub.addLabels).toHaveBeenCalledWith(
+      'test-org',
+      'test-repo',
+      42,
+      ['blocked:stuck-feedback-loop'],
+    );
   });
 
   // ==========================================================================
   // Test: Partial Reply Failure (FR-007)
   // ==========================================================================
 
-  it('should remove label even when some replies fail (FR-007)', async () => {
+  it('#883: partial resolve failure — label still removed when ≥1 resolve succeeds', async () => {
     const { PrFeedbackHandler } = await import('../worker/pr-feedback-handler.js');
 
-    // Some replies succeed, some fail
-    mockGitHub.replyToPRComment = vi
+    // Middle resolve fails (transient); replies all succeed
+    mockGitHub.resolveReviewThread = vi
       .fn()
       .mockResolvedValueOnce(undefined) // Thread 1: success
       .mockRejectedValueOnce(new Error('GitHub API error')) // Thread 2: fail
       .mockResolvedValueOnce(undefined); // Thread 3: success
 
-    mockGitHub.getPRComments.mockResolvedValue([
+    mockGitHub.getPRReviewThreads.mockResolvedValue(asThreads([
       {
         id: 1,
         path: 'src/file1.ts',
@@ -2233,7 +2345,7 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
         resolved: false,
         in_reply_to_id: undefined,
       },
-    ]);
+    ]));
 
     const handler = new PrFeedbackHandler(
       {
@@ -2245,6 +2357,13 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
       },
       logger,
       agentLauncher,
+      {
+        isDuplicate: vi.fn().mockResolvedValue(false),
+        markProcessed: vi.fn().mockResolvedValue(undefined),
+        clear: vi.fn().mockResolvedValue(undefined),
+        tryMarkProcessed: vi.fn().mockResolvedValue(true),
+      },
+      undefined,
     );
 
     const queueItem = {
@@ -2263,18 +2382,119 @@ describe('PR Feedback Integration Test: Worker Processing', () => {
 
     await handler.handle(queueItem, '/tmp/workspace/test-org/test-repo');
 
-    // All three replies should be attempted
+    // All three replies + resolves should be attempted
     expect(mockGitHub.replyToPRComment).toHaveBeenCalledTimes(3);
+    expect(mockGitHub.resolveReviewThread).toHaveBeenCalledTimes(3);
 
-    // FR-007: Label should still be removed despite partial failure
+    // FR-006 strict-decrease met (2 of 3 resolves succeeded) → label removed.
+    // #926 FR-006: happy-path coalesces both labels into one removeLabels call.
     expect(mockGitHub.removeLabels).toHaveBeenCalledWith(
       'test-org',
       'test-repo',
       42,
-      ['waiting-for:address-pr-feedback'],
+      ['waiting-for:address-pr-feedback', 'agent:in-progress'],
     );
 
-    // Warnings should be logged for failed replies
+    // FR-010: warn emitted for the persistently-failed resolve
     expect(logger.warn).toHaveBeenCalled();
+  });
+
+  // ==========================================================================
+  // #878 SC-001: self-authored cluster comment (viewerDidAuthor:true) on an
+  // unresolved thread with author_association=NONE reaches the worker path.
+  // Direct replacement for the #869 login-comparison regression scenario —
+  // the mechanism is now GraphQL's viewerDidAuthor primitive.
+  // ==========================================================================
+  it('#878: self-authored (viewerDidAuthor:true) comment with NONE tier reaches the worker path', async () => {
+    // Trust-mock: simulate the real #878 decision — viewerDidAuthor:true
+    // trusts as 'self-authored', association-tier trust still applies.
+    const workflowEngine = await import('@generacy-ai/workflow-engine');
+    const originalMock = (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).getMockImplementation();
+    (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(
+      (comment: { author: string; authorAssociation?: string; viewerDidAuthor?: boolean }) => {
+        if (comment.viewerDidAuthor === true) {
+          return { trusted: true, reason: 'self-authored' };
+        }
+        if (comment.authorAssociation && ['OWNER', 'MEMBER', 'COLLABORATOR'].includes(comment.authorAssociation)) {
+          return { trusted: true, reason: comment.authorAssociation.toLowerCase() };
+        }
+        return { trusted: false, reason: 'none-untrusted' };
+      },
+    );
+
+    const logger = createMockLogger();
+    const queueAdapter = new MockQueueManager();
+    const enqueueIfAbsentSpy = vi.spyOn(queueAdapter, 'enqueueIfAbsent');
+    const clientFactory = vi.fn().mockReturnValue(mockGitHub);
+
+    mockGitHub.getIssue.mockResolvedValue({
+      number: 4,
+      title: 'sniplink test',
+      body: '',
+      state: 'open',
+      labels: [{ name: 'agent:in-progress', color: '' }],
+      assignees: ['cluster-app[bot]'],
+      created_at: '',
+      updated_at: '',
+    });
+    mockGitHub.getPRReviewThreads.mockResolvedValue([
+      {
+        id: 'PRRT_999',
+        rootCommentId: 999,
+        isResolved: false,
+        comments: [{
+          id: 999,
+          body: 'please tweak this',
+          author: 'cluster-app[bot]',
+          authorAssociation: 'NONE',
+          viewerDidAuthor: true,
+          created_at: '',
+          updated_at: '',
+          path: 'src/x.ts',
+          line: 1,
+        }],
+      },
+    ]);
+    mockGitHub.addLabels.mockResolvedValue(undefined);
+
+    const svc = new PrFeedbackMonitorService(
+      logger,
+      clientFactory,
+      queueAdapter,
+      { enabled: true, pollIntervalMs: 60000, adaptivePolling: false, maxConcurrentPolls: 1 },
+      [{ owner: 'christrudelpw', repo: 'sniplink' }],
+      'cluster-app[bot]',
+    );
+
+    const result = await svc.processPrReviewEvent({
+      owner: 'christrudelpw',
+      repo: 'sniplink',
+      prNumber: 14,
+      prBody: 'Closes #4',
+      branchName: '4-add-tests',
+      source: 'webhook',
+    });
+
+    expect(result).toBe(true);
+    expect(enqueueIfAbsentSpy).toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.stringContaining('PR feedback work enqueued'),
+    );
+
+    // Self-authored comment must NOT appear in comment-skipped log lines.
+    const infoCalls = (logger.info as ReturnType<typeof vi.fn>).mock.calls;
+    const skipped = infoCalls.find(([meta]) =>
+      typeof meta === 'object' && meta !== null && (meta as Record<string, unknown>).event === 'comment-skipped',
+    );
+    expect(skipped).toBeUndefined();
+
+    // Restore the blanket-trust mock for later tests.
+    if (originalMock) {
+      (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockImplementation(originalMock);
+    } else {
+      (workflowEngine.isTrustedCommentAuthor as ReturnType<typeof vi.fn>).mockReturnValue({ trusted: true, reason: 'owner' });
+    }
+    svc.stopPolling();
   });
 });

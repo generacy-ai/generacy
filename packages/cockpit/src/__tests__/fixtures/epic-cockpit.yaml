@@ -1,0 +1,22 @@
+epic:
+  repo: generacy-ai/generacy
+  issue: 786
+  slug: epic-cockpit
+  plan: docs/epic-cockpit-plan.md
+
+autonomy: {}
+
+phases:
+  - name: foundation
+    tier: P0
+    repos:
+      - generacy-ai/generacy
+    issues:
+      - generacy-ai/generacy#786
+      - generacy-ai/generacy#787
+  - name: ui
+    tier: P1
+    repos:
+      - generacy-ai/generacy-extension
+    issues:
+      - generacy-ai/generacy-extension#42

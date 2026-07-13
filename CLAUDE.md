@@ -2,6 +2,12 @@
 
 Frontend application for Generacy.
 
+## Per-feature technology notes
+
+Per-feature technology, dependency, and integration notes live in
+`specs/<feature>/stack.md` on each feature branch. This file is not
+updated by `/plan` — see [#899](https://github.com/generacy-ai/generacy/issues/899).
+
 ## Development
 
 ```bash
@@ -230,6 +236,28 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/src/services/credential-writer.ts` — NEW in #558: `writeCredential()` orchestrates secret write + YAML metadata write + relay event emission. Follows `default-role-writer.ts` pattern (atomic YAML writes, `yaml` package).
 - Cache coherence: credhelper-daemon restarted on bootstrap-complete (AD-2). Follow-up needed for post-bootstrap credential edit cache reload.
 
+## Orchestrator Boot-Time Service Resume (#824)
+
+- Bug: `generacy stop` explicitly stops the VS Code tunnel + code-server (`vscode-tunnel-stop` + `code-server-stop` lifecycle actions), but on `generacy start` neither service ever restarts. Sole auto-start site is the control-plane `bootstrap-complete` handler, which is only *replayed* by `PostActivationRetryService` when `needsRetry === true`. On a healthy already-activated cluster, `activated && postActivationComplete` → `needsRetry === false` → no replay → tunnel/code-server stay dead.
+- Fix: New sibling service `BootResumeService` in `packages/orchestrator/src/services/boot-resume-service.ts`. In `server.ts`'s "existing API key" branch, after `PostActivationRetryService.checkPostActivationState()`, a new `else if (activated && postActivationComplete)` branch instantiates `BootResumeService` and calls `triggerBootResume()`.
+- Design (per clarifications, spec `#824`): fires two independent, best-effort lifecycle POSTs concurrently via `Promise.allSettled`:
+  - `POST /lifecycle/vscode-tunnel-start`
+  - `POST /lifecycle/code-server-start`
+- Envelope mirrors `PostActivationRetryService.triggerPostActivationRetry()`: 15 s `probeControlPlaneSocket` wait + 1 POST attempt with 10 s request timeout. No retry loop; UI Restart is the manual backstop.
+- Failure surface: reuses `cluster.bootstrap` channel with new payload shape `{ status: 'failed', reason: 'resume-failed', service: 'vscode-tunnel' | 'code-server', error }`. Emitted per-service (each POST can fail independently). Does NOT push `cluster.state = degraded` (divergence from sibling — a failed tunnel restart is not cluster-degraded).
+- Runs after `initializeRelayBridge()` so `cluster.vscode-tunnel { status: 'starting' }` events from the tunnel manager reach the cloud on the very first emit.
+- Control-plane untouched. Both `VsCodeTunnelProcessManager.start()` and `CodeServerProcessManager.start()` are already idempotent.
+- Mutually exclusive with sibling: `needsRetry === true` branch fires `bootstrap-complete` (which starts both services); `needsRetry === false && activated && postActivationComplete` branch fires per-service resumes. No overlap.
+
+## Wire boot-resume into the wizard startup path (#834)
+
+- Bug: #824's `BootResumeService` wiring was added only to `createServer()`'s "existing API key" branch (`server.ts:447-503`). Wizard-provisioned clusters boot with `config.relay.apiKey === undefined` (the key persists to `/var/lib/generacy/cluster-api-key` and is reloaded during activation), so they take the `activateInBackground()` branch (`server.ts:433, :799`), which only handles the retry half of the decision matrix (`server.ts:879-896`). Net: on every wizard-cluster stop/start, `BootResumeService` never fires and #824's fix is unreachable.
+- Fix: `packages/orchestrator/src/services/post-activation-dispatch.ts` — NEW. Exports `runPostActivationBranch({ logger, sendRelayEvent })` that owns the entire retry/resume/noop decision (internally constructs `PostActivationRetryService`, calls `checkPostActivationState()`, dispatches to `triggerPostActivationRetry()` / `triggerBootResume()` / no-op). Returns `DispatchOutcome = 'retry' | 'resume' | 'noop'` for observability + test hooks. Both `server.ts` branches collapse to a single `await runPostActivationBranch(...)` call — regression is impossible by construction (no per-branch `if/else` to skew).
+- Prod call sites pass only `{ logger, sendRelayEvent }`; the two optional `retryServiceFactory` / `resumeServiceFactory` fields on `DispatchOptions` are test-only injection seams for the helper unit test.
+- Fire-and-forget preserved: helper does NOT await `triggerPostActivationRetry()` / `triggerBootResume()` — both remain `.catch(logger)`-guarded promises exactly as in `server.ts` today.
+- Regression coverage: `packages/orchestrator/src/__tests__/server-boot-resume-wizard-branch.test.ts` — NEW, load-bearing per clarifications Q3→A. Drives `createServer()` with empty `config.relay.apiKey` (forces wizard branch), stubs `activate()` + control-plane + `checkPostActivationState()` → `{ activated: true, postActivationComplete: true, needsRetry: false }`, asserts `BootResumeService.triggerBootResume` fires. Deleting the resume dispatch from either the helper or the wizard call site makes this test fail (SC-003). Optional Q3→C complement: `post-activation-dispatch.test.ts` unit tests the full retry / resume / noop matrix by direct import.
+- `PostActivationRetryService`, `BootResumeService`, control-plane, lifecycle handlers, and relay wiring all UNCHANGED — this is purely a call-site consolidation + regression test.
+
 ## Bootstrap-Complete Lifecycle Action (#562)
 
 - `packages/control-plane/src/schemas.ts` — MODIFIED in #562: `LifecycleActionSchema` enum extended from 5 to 6 entries, adding `'bootstrap-complete'`.
@@ -372,3 +400,36 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/control-plane/package.json` — MODIFIED in #768: `bin` field gains `"git-token-proxy": "./dist/bin/git-token-proxy.js"`.
 - Tests: pure-function vitest tests under `__tests__/bin/git-token-proxy/` (allow-list, header allow-list, body cap, upstream-error mapping) plus one POSIX-only Unix-socket smoke test for bind / `0660` mode / wire-level single-route enforcement / SIGTERM cleanup (clarification Q4 hybrid).
 - Companion cluster-base PR: updates `entrypoint-orchestrator.sh` to launch `/shared-packages/node_modules/@generacy-ai/control-plane/dist/bin/git-token-proxy.js` and removes the bundled script. Land #768 first so the bin exists.
+
+## Cockpit `advance` bare-number acceptance & error-copy refresh (#850)
+
+- `cockpit advance <ref>` violated the unified issue-ref grammar (#807 Q5, #822): it rejected bare numbers (`advance 2 --gate implementation-review`) and its rejection message pointed at the removed `cockpit.repos` config (deleted in #806). `cockpit context` had the same skew one directory over.
+- Root cause: both verbs called `parseIssueRef` directly instead of the shared `resolveIssueContext` wrapper that `status`/`watch`/`queue`/`merge` adopted in #822. The bare-number gate + FR-002 copy live inside `parseIssueRef`; the `try/catch` fall-through in `resolveIssueContext` at `resolver.ts:153` detected the case by regex-matching the thrown message (`/bare issue number/.test`).
+- Fix (per clarifications Q1 → C, Q2 → C, Q3 → A, Q4 → A):
+  - `packages/generacy/src/cli/commands/cockpit/resolver.ts` — MODIFIED: `parseIssueRef` narrowed to strict qualified-forms-only parser (owner/repo#N + URL). `BARE_NUMBER` gate moves *out* of `parseIssueRef` and *into* `resolveIssueContext` as the first branch. `/bare issue number/.test(message)` sentinel deleted. Redundant `Number.parseInt` + `Number.isInteger` re-check deleted (regex + `makeRef`'s `> 0` cover it). `parseIssueRef` marked `@internal` in JSDoc.
+  - `packages/generacy/src/cli/commands/cockpit/advance.ts` — MODIFIED: swap `parseIssueRef(issue)` → `resolveIssueContext({ issue, runner })`, source `gh` from the ctx bundle (FR-001).
+  - `packages/generacy/src/cli/commands/cockpit/context.ts` — MODIFIED: identical swap (FR-005 second offender).
+  - `.eslintrc.json` — MODIFIED: new `overrides` entry for `packages/generacy/src/cli/commands/cockpit/**/*.ts` (excluding `resolver.ts` and `__tests__/`) with `no-restricted-imports.paths[]` entry `{ name: "./resolver.js", importNames: ["parseIssueRef"], message: ... }` naming `resolveIssueContext` as the correct import (FR-006). Existing `child_process` / `node:child_process` entries carried forward — overrides replace, they don't merge.
+- FR-002 rejection copy (single inline sentence, `parse issue: ` prefix retained): `bare issue number "N" is not accepted here. Accepted: <owner>/<repo>#N, a full issue URL, or a bare number inside a checkout with a resolvable GitHub origin. (cwd-origin inference failed: <inner reason>)`. No `cockpit.repos` or `repos are not configured` substrings anywhere in `packages/generacy/src/` (SC-002 + SC-003 satisfied).
+- Fallback for FR-006: if `paths[].importNames` unsupported by CI ESLint version, swap to `patterns[]` with `group: ["**/resolver.js"]` (documented in `contracts/eslint-rule.md`).
+
+## Pause-Paired Resume-Dedupe Clear (#849)
+
+- Bug: `PhaseTrackerService` writes `phase-tracker:<owner>:<repo>:<issue>:resume:<gate>` with a 24h TTL when a resume event is enqueued (`label-monitor-service.ts:339`). Legitimate same-gate re-visits within 24h (PR-feedback re-review after request-changes; requeued issues) hit the residual key and strand silently. The `type === 'process'` path clears its stale dedupe before checking (`label-monitor-service.ts:278-280`); the `resume` path did not.
+- Fix: pair the DEL with the pause lifecycle, not the resume check. When `LabelManager.onGateHit(phase, gateLabel)` successfully applies `waiting-for:<gate>`, it clears the paired `resume:<gate>` dedupe key. TTL stays as a 24h backstop only.
+- `packages/orchestrator/src/worker/label-manager.ts` — MODIFIED in #849: `LabelManager` gains optional `clearResumeDedupe?: (gate: string) => Promise<void>` ctor arg + new `ClearResumeDedupeCallback` exported type. `onGateHit` invokes the callback with `gateSuffix` **after** `retryWithBackoff(removeLabels + addLabels)` returns success (FR-009 / Q1→A — asymmetric partial failure: never clear a dedupe for a pause that didn't manifest on the issue). One-shot, best-effort: try/catch wraps the callback, errors logged at `warn` and swallowed (FR-010 / Q2→A). Emits `logger.info(..., 'Cleared paired resume dedupe on pause')` on success and `logger.warn(...)` on swallowed failure with `{ phase, gateLabel, owner, repo, issueNumber }` fields (FR-011 / Q4→A).
+- `packages/orchestrator/src/worker/claude-cli-worker.ts` — MODIFIED in #849: `ClaudeCliWorkerDeps` gains optional `phaseTracker?: PhaseTracker`. At `new LabelManager(...)` site (~line 406), passes a closure that calls `phaseTracker.clear(item.owner, item.repo, item.issueNumber, ` `resume:${gate}` `)`. `LabelManager` stays Redis-free (Q3→A — narrow callback vs. injecting `PhaseTrackerService` directly).
+- `packages/orchestrator/src/server.ts` — MODIFIED in #849: worker-mode branch (~line 291) instantiates `PhaseTrackerService(server.log, redisClient)` when `redisClient` is available and threads it via `ClaudeCliWorkerDeps.phaseTracker`. Full-mode `PhaseTrackerService` instantiation at line 347 unchanged; both instances share the same Redis keyspace + key layout, so paired-clear invalidates the same keys `markProcessed` wrote.
+- Single-cycle protection preserved (FR-008): within one pause→resume cycle, `onGateHit` fires once → paired-clear runs once → subsequent resume triggers within the same cycle still hit `isDuplicate → true` because no further pause has fired. The fix runs at *pause start*, not at *resume check*.
+- Non-changes: `PhaseTrackerService` interface + impl unchanged; `label-monitor-service.ts:273-282` `process` clear pattern unchanged (FR-005); `label-monitor-service.ts:339` `markProcessed` after enqueue unchanged; TTL default 86400s unchanged (FR-006); Redis key layout unchanged.
+
+## Cockpit `resume` — re-arm a failed phase (#891, planning phase)
+
+- New cockpit verb `generacy cockpit resume <issue-ref>` planned. Engine-owned label surgery that clears `agent:error` / `failed:<phase>` / stray `phase:<phase>`, then applies the `waiting-for:<preceding-gate>` + `completed:<preceding-gate>` + `agent:paused` triple that matches a naturally-paused-then-completed gate. Label-monitor's next poll enqueues the issue and worker's `PhaseResolver.resolveFromContinue` picks `<phase>` as `startPhase` — makes the T-S2 by-hand recovery a one-liner and unblocks auto-mode Requeue (auto.md D.7/D.8).
+- Gate mapping derived by inverting `GATE_MAPPING` from `packages/orchestrator/src/worker/phase-resolver.ts` (overlaid with `WORKFLOW_GATE_MAPPING[workflowName]`) — NOT `WorkerConfigSchema.gates` from `worker/config.ts` (wrong semantic direction, would send resolver to the phase *after* the target). Truth-table: `validate → implementation-review`, `implement → tasks-review`, `tasks → plan-review`, `clarify → spec-review` (documented cross-phase tie-break), `specify` + `plan` → refuse (no preceding gate; evidence points at `process:*` re-queue).
+- `packages/generacy/src/cli/commands/cockpit/resume.ts` — NEW: `resumeCommand()` + `runResume()`, shape mirrors `advance.ts`. Deps-injection (`runner`, `gh`, `loadConfig`, `env`, `now`, `stdout`, `stderr`) for tests. Routes issue-ref through `resolveIssueContext` (per #822/#850). `CockpitExit` for controlled exits: 0 (happy path or no-op), 2 (arg parsing), 3 (refusal — evidence, zero mutations), 1 (transport). No `--force`, no comment posted (diverges from `advance` — log line + labels are the audit trail).
+- `packages/generacy/src/cli/commands/cockpit/gate-vocabulary.ts` — MODIFIED (planned): export `resolvePrecedingGate(phase, workflowName?)` returning `{ kind: 'found', gate: PrecedingGate } | { kind: 'no-preceding-gate' }`. Algorithm: invert effective gate mapping, filter by `resumeFrom === phase`, prefer cross-phase entries (nearest predecessor by `PHASE_SEQUENCE.indexOf`), fallback to self-loop, else `no-preceding-gate`. Cross-package import of `GATE_MAPPING`/`WORKFLOW_GATE_MAPPING` from orchestrator (add to public exports if not already exported).
+- Mutation ordering (per spec Assumptions §7): additions call first (`addLabels([waiting-for:<g>, completed:<g>, agent:paused])`), removals call second (`removeLabels([failed:<phase>, agent:error?, phase:<phase>?])`). Mid-sequence failure → over-labeled (recoverable) not under-labeled (stranded). Defensive removes report only actual mutations in the log line.
+- Refusal branches (all exit 3, zero mutations, evidence): multiple `failed:*`, unknown phase, no preceding gate (points at `process:*` re-queue), conflicting `waiting-for:<other-gate>`. Idempotency: no-op on non-failed issues (single-line stdout, exit 0).
+- Regression test (`resume.regression.test.ts`) proves the poll-path handoff end-to-end: post-resume label set → `parseLabelEvent` emits `type: 'resume'` → `PhaseResolver.resolveStartPhase(labels, 'continue', workflow)` returns the failed phase. Prior-phase `completed:<earlier-phase>` chain preserved untouched (per Q5).
+- No changes to `label-monitor-service.ts`, `phase-resolver.ts`, `label-manager.ts`, or the label protocol. The verb writes labels that satisfy the existing detector and resolver by construction. Auto-mode gate wording flip (auto.md D.7/D.8) lands in a sibling change; this spec ships the primitive only.

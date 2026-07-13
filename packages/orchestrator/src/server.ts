@@ -19,6 +19,8 @@ import { AgentRegistry } from './services/agent-registry.js';
 import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
+import { MergeConflictMonitorService } from './services/merge-conflict-monitor-service.js';
+import { BaseAdvanceMonitorService } from './services/base-advance-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
@@ -57,7 +59,7 @@ import { setupSessionDetailRoutes } from './routes/sessions.js';
 import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
-import { PostActivationRetryService } from './services/post-activation-retry.js';
+import { runPostActivationBranch } from './services/post-activation-dispatch.js';
 import { detectIdentitySplit } from './services/identity-split-detector.js';
 import {
   TunnelHandler,
@@ -323,13 +325,93 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     }
 
-    const cliWorker = new ClaudeCliWorker(config.worker, server.log, { jobEventEmitter, tokenProvider: githubTokenProvider });
+    // #892: PhaseTracker instance for the worker's ValidateFixHandler
+    // (dedupe on validate-fix:<evidenceHash>). Redis is optional; when
+    // absent the worker degrades gracefully to no fix cycle.
+    const workerPhaseTracker = new PhaseTrackerService(server.log, redisClient);
+
+    const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
+      jobEventEmitter,
+      tokenProvider: githubTokenProvider,
+      phaseTracker: workerPhaseTracker,
+    });
+
+    // #889: terminal-failure recovery handler. On WorkerResult.failed-terminal:
+    //   (a) best-effort agent:error label add via a fresh LabelManager;
+    //   (b) post the stage: 'label-op' failure alert via StageCommentManager.
+    // All steps swallowed independently so a downstream failure never releases.
+    const terminalFailureHandler = async (
+      item: import('./types/index.js').QueueItem,
+      failureMetadata: import('./worker/worker-result.js').FailureMetadata,
+    ): Promise<void> => {
+      const { LabelManager } = await import('./worker/label-manager.js');
+      const { StageCommentManager } = await import('./worker/stage-comment-manager.js');
+      const github = createGitHubClient();
+
+      try {
+        const labelManager = new LabelManager(
+          github,
+          item.owner,
+          item.repo,
+          item.issueNumber,
+          server.log,
+        );
+        // Best-effort: fire agent:error via onError('implement') as a stand-in
+        // — the site is already in failureMetadata; we're not repeating the
+        // phase, just applying agent:error.
+        await labelManager.onError('implement');
+      } catch (err) {
+        server.log.warn(
+          { err, owner: item.owner, repo: item.repo, issue: item.issueNumber },
+          'Best-effort agent:error label add failed on terminal failure (non-fatal)',
+        );
+      }
+
+      try {
+        const stageCommentManager = new StageCommentManager(
+          github,
+          item.owner,
+          item.repo,
+          item.issueNumber,
+          server.log,
+        );
+        const runId = crypto.randomUUID();
+        await stageCommentManager.postFailureAlert({
+          stage: 'label-op',
+          runId,
+          phase: failureMetadata.site,
+          labelOp: failureMetadata.labelOp,
+          evidence: {
+            command: `gh (${failureMetadata.labelOp})`,
+            exitDescriptor: 'exited 1',
+            // #890 renamed CommandExitEvidence.stderrTail → outputTail.
+            outputTail: failureMetadata.ghStderr,
+          },
+        });
+      } catch (err) {
+        server.log.error(
+          {
+            err,
+            site: failureMetadata.site,
+            labelOp: failureMetadata.labelOp,
+            ghStderr: failureMetadata.ghStderr,
+            owner: item.owner,
+            repo: item.repo,
+            issue: item.issueNumber,
+          },
+          'Failed to post label-op failure alert comment',
+        );
+      }
+    };
+
     workerDispatcher = new WorkerDispatcher(
       queueAdapter,
       redisClient,
       server.log,
       config.dispatch,
       cliWorker.handle.bind(cliWorker),
+      undefined,
+      terminalFailureHandler,
     );
 
     // Wire lease manager into dispatcher (if relay client is available)
@@ -342,6 +424,8 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // Initialize label monitor service (full mode only)
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
+  let mergeConflictMonitorService: MergeConflictMonitorService | null = null;
+  let baseAdvanceMonitorService: BaseAdvanceMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
     const phaseTracker = new PhaseTrackerService(server.log, redisClient);
@@ -378,12 +462,28 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
     }
 
-    // Initialize PR feedback monitor service (if enabled)
+    // Initialize PR feedback monitor service (if enabled). #879: in-flight
+    // dedupe via QueueManager.enqueueIfAbsent; no PhaseTracker dependency.
     if (config.prMonitor.enabled) {
       prFeedbackMonitorService = new PrFeedbackMonitorService(
         server.log,
         createGitHubClient,
-        phaseTracker,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
+      );
+
+      // #898: Merge-conflict monitor reuses the PR-monitor config for poll
+      // cadence (same order of magnitude). Enqueues `resolve-merge-conflicts`
+      // items when the pause label pair (`waiting-for:merge-conflicts` +
+      // `agent:paused`) is detected on an assigned open issue.
+      mergeConflictMonitorService = new MergeConflictMonitorService(
+        server.log,
+        createGitHubClient,
         queueAdapter,
         config.prMonitor,
         config.repositories,
@@ -393,6 +493,49 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAppCredentialId,
       );
     }
+
+    // #892: Initialize base-advance monitor. Enqueues a resume for any open PR
+    // sitting at `failed:validate` whose base branch head SHA has advanced.
+    // The resume path clears the failed:validate label and re-runs validate
+    // against a fresh merge-preview (stale-evidence recovery). Cadence
+    // matches LabelMonitorService.
+    baseAdvanceMonitorService = new BaseAdvanceMonitorService(
+      server.log,
+      createGitHubClient,
+      {
+        pollIntervalMs: monitorConfig.pollIntervalMs,
+        repositories: config.repositories,
+        concurrency: monitorConfig.maxConcurrentPolls,
+      },
+      phaseTracker,
+      async (item) => {
+        // Wire the resume enqueue. The cockpit-resume handler is a companion
+        // issue; for now we enqueue via the same QueueManager surface used
+        // by the label-monitor resume path. `command: 'continue'` +
+        // `queueReason: 'resume'` follows the existing resume shape, with
+        // metadata carrying the base-advance identity so PhaseLoop can gate
+        // ValidateFixHandler on it.
+        const queueItem = {
+          owner: item.owner,
+          repo: item.repo,
+          issueNumber: item.issueNumber,
+          workflowName: 'speckit-feature',
+          command: 'continue' as const,
+          priority: Date.now(),
+          enqueuedAt: new Date().toISOString(),
+          metadata: {
+            description: `Base advanced to ${item.newSha.slice(0, 12)}; re-validating`,
+            resumeReason: item.reason,
+            baseSha: item.newSha,
+          },
+          queueReason: 'resume' as const,
+        };
+        await queueAdapter.enqueueIfAbsent(queueItem);
+      },
+      githubTokenProvider,
+      githubAuthHealth ?? undefined,
+      githubAppCredentialId,
+    );
   }
 
   // Proactive credential expiry watcher (60s timer). Reads .agency/credentials.yaml
@@ -466,8 +609,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       server.log.error({ err }, 'Identity-split detection failed (non-fatal)');
     });
 
-    // Check if post-activation needs to be retried (activated but completion flag absent)
-    const retryService = new PostActivationRetryService({
+    await runPostActivationBranch({
       logger: server.log,
       sendRelayEvent: relayClientRef
         ? (channel, payload) => relayClientRef!.send({
@@ -478,13 +620,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           } as unknown as import('./types/relay.js').RelayMessage)
         : undefined,
     });
-    const postActivationState = retryService.checkPostActivationState();
-    if (postActivationState.needsRetry) {
-      server.log.info('Post-activation incomplete on restart — triggering retry');
-      retryService.triggerPostActivationRetry().catch((err) => {
-        server.log.error({ err }, 'Post-activation retry failed');
-      });
-    }
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
@@ -630,6 +765,18 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      if (mergeConflictMonitorService) {
+        mergeConflictMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Merge-conflict monitor polling failed');
+        });
+      }
+
+      if (baseAdvanceMonitorService) {
+        baseAdvanceMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Base-advance monitor polling failed');
+        });
+      }
+
       if (smeeReceiver) {
         smeeReceiver.start().catch((error) => {
           server.log.error({ err: error }, 'Smee webhook receiver failed');
@@ -690,6 +837,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (prFeedbackMonitorService) {
             prFeedbackMonitorService.stopPolling();
+          }
+          if (mergeConflictMonitorService) {
+            mergeConflictMonitorService.stopPolling();
+          }
+          if (baseAdvanceMonitorService) {
+            await baseAdvanceMonitorService.stopPolling();
           }
           if (credentialExpiryWatcher) {
             await credentialExpiryWatcher.stop();
@@ -836,9 +989,17 @@ async function activateInBackground(
 
   onInitialized(relayBridge, conversationManager);
 
-  // Server is already listening — start relay bridge directly
+  // Server is already listening — start relay bridge directly.
+  // Fire-and-forget: relayBridge.start() awaits client.connect(), which is a
+  // long-lived reconnect loop that only resolves on disconnect. Awaiting it
+  // here would strand everything below (identity-split detection, the
+  // post-activation dispatch) as unreachable dead code — the bug that made the
+  // #834 boot-resume never fire on wizard-provisioned clusters. Mirrors the
+  // synchronous existing-key path, which also starts the bridge fire-and-forget.
   if (relayBridge) {
-    await relayBridge.start();
+    relayBridge.start().catch((err) => {
+      server.log.error({ err }, 'Relay bridge start failed');
+    });
   }
 
   // Detect identity split after relay bridge has started (wizard-mode path, #750).
@@ -858,9 +1019,7 @@ async function activateInBackground(
     server.log.error({ err }, 'Identity-split detection failed (non-fatal)');
   });
 
-  // Check if post-activation needs to be retried (wizard-mode: activation just completed
-  // but post-activation may have failed on a prior container lifecycle)
-  const retryService = new PostActivationRetryService({
+  await runPostActivationBranch({
     logger: server.log,
     sendRelayEvent: localRelayClient
       ? (channel, payload) => localRelayClient!.send({
@@ -871,13 +1030,6 @@ async function activateInBackground(
         } as unknown as import('./types/relay.js').RelayMessage)
       : undefined,
   });
-  const postActivationState = retryService.checkPostActivationState();
-  if (postActivationState.needsRetry) {
-    server.log.info('Post-activation incomplete after wizard activation — triggering retry');
-    retryService.triggerPostActivationRetry().catch((err) => {
-      server.log.error({ err }, 'Post-activation retry failed');
-    });
-  }
 }
 
 /**

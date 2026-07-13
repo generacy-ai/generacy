@@ -81,6 +81,8 @@ export class UpdateStatusAction extends BaseAction {
       );
 
       // Find existing status comment
+      // #842 audit: whitelist — reads only for the `<!-- epic-status -->` marker
+      // to dedupe bot's own postings; body content is never surfaced to an agent.
       const comments = await client.getIssueComments(repoInfo.owner, repoInfo.repo, epicIssueNumber);
       const marker = '<!-- epic-status -->';
       const existingComment = comments.find(c => c.body.includes(marker));

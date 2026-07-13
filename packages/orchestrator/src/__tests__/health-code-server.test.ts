@@ -35,7 +35,7 @@ describe('GET /health — codeServerReady', () => {
       server: { port: 0, host: '127.0.0.1' },
       redis: { url: 'redis://127.0.0.1:1' },
     });
-    server = await createServer(config);
+    server = await createServer({ config });
   });
 
   afterAll(async () => {

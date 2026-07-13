@@ -139,7 +139,7 @@ describe('Lease + Relay integration', () => {
   beforeEach(() => {
     logger = createMockLogger();
     queue = createMockQueueManager();
-    handler = vi.fn<WorkerHandler>().mockResolvedValue(undefined);
+    handler = vi.fn<WorkerHandler>().mockResolvedValue({ status: 'completed' });
     relay = new MockRelayClient();
     leaseManager = new LeaseManager(relay, logger, leaseConfig);
     dispatcher = new WorkerDispatcher(queue, null, logger, dispatchConfig, handler);
@@ -290,7 +290,9 @@ describe('Lease + Relay integration', () => {
       // Handler that blocks
       let resolveHandler!: () => void;
       handler.mockImplementation(
-        () => new Promise<void>((resolve) => { resolveHandler = resolve; }),
+        () => new Promise<{ status: 'completed' }>((resolve) => {
+          resolveHandler = () => resolve({ status: 'completed' });
+        }),
       );
 
       (queue.claim as ReturnType<typeof vi.fn>)

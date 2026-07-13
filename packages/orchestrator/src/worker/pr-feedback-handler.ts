@@ -1,5 +1,11 @@
-import { createGitHubClient } from '@generacy-ai/workflow-engine';
-import type { GitHubClient } from '@generacy-ai/workflow-engine';
+import {
+  createGitHubClient,
+  executeCommand,
+  isTrustedCommentAuthor,
+  tryLoadCommentTrustConfig,
+  wrapUntrustedData,
+} from '@generacy-ai/workflow-engine';
+import type { Comment, GitHubClient, ReviewThread } from '@generacy-ai/workflow-engine';
 import type { QueueItem, PrFeedbackMetadata } from '../types/index.js';
 import type { Logger } from './types.js';
 import type { WorkerConfig } from './config.js';
@@ -10,6 +16,29 @@ import { OutputCapture } from './output-capture.js';
 import { RepoCheckout } from './repo-checkout.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
 
+/** Label added by the handler when the fix cycle cannot advance (#883). */
+const BLOCKED_STUCK_FEEDBACK_LOOP_LABEL = 'blocked:stuck-feedback-loop';
+
+/**
+ * `agent:in-progress` label — cleared structurally at the single shared exit
+ * path (#926 SC-004/SC-005). Extracted to a module constant so the literal
+ * appears at exactly one code site: the coalesced happy-path removal and the
+ * `clearInProgressLabel` fallback both reference this constant.
+ */
+const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
+
+/** Waiting gate cleared alongside `agent:in-progress` on the happy path. */
+const WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
+
+type OutcomeResult = { ok: true } | { ok: false; error: string };
+
+interface PerThreadOutcome {
+  threadId: string;
+  rootCommentId: number;
+  replyResult: OutcomeResult;
+  resolveResult: OutcomeResult;
+}
+
 /**
  * Handles the `address-pr-feedback` command.
  *
@@ -17,48 +46,22 @@ import { buildLaunchCredentials } from './credentials-helper.js';
  *  1. Extract PR number from queue item metadata
  *  2. Fetch the PR to get the branch name
  *  3. Switch to the PR branch (not default branch)
- *  4. Fetch fresh unresolved review threads
- *  5. Build a structured prompt with all unresolved comments
+ *  4. Fetch fresh unresolved review threads (trust-filtered per-thread)
+ *  5. Build a structured prompt with all trusted unresolved comments
  *  6. Spawn Claude CLI to address the feedback
- *  7. Stage, commit, and push changes to the PR branch
- *  8. Reply to each review thread (never resolve)
- *  9. Remove the `waiting-for:address-pr-feedback` label
+ *  7. Commit + push. If CLI failed OR no diff → Disposition B (blocked)
+ *  8. Otherwise: for each trusted unresolved thread — post one reply targeting
+ *     the root comment, then call `resolveReviewThread(thread.id)`
+ *  9. Strict-decrease success test — R = count of resolves that succeeded.
+ *     R === 0 → Disposition B (blocked); R ≥ 1 → Disposition A (success):
+ *     warn once per persistently-failed thread, then remove the
+ *     `waiting-for:address-pr-feedback` label
  *
- * Error handling strategy (T019):
- *
- * **FR-013: Timeout handling**
- * - If CLI times out: push any partial changes that were made
- * - Keep `waiting-for:address-pr-feedback` label (don't remove)
- * - Label retention ensures the task will be retried on next detection cycle
- * - Log timeout warning with structured context
- *
- * **FR-007: Reply failure handling**
- * - If posting replies fails for some threads: still remove label
- * - Log warnings for each failed reply
- * - Partial reply success is acceptable (code changes were pushed successfully)
- * - Handler does not throw on reply failures
- *
- * **SC-006: Thread resolution prevention**
- * - Only use `replyToPRComment()` API — never call any thread-resolve API
- * - Human reviewer will resolve threads after verifying changes
- * - Comments in code explicitly reference SC-006 for clarity
- *
- * **Structured logging**
- * - All operations logged with structured context (prNumber, issueNumber, owner, repo)
- * - Error logs include full error messages and relevant context
- * - Success/failure states clearly logged for observability
- * - All FR/SC references included in log messages for traceability
- *
- * **Critical operation failures**
- * - PR fetch failure: throw (cannot proceed without PR details)
- * - Branch switch failure: throw (wrong branch would cause issues)
- * - Comment fetch failure: throw (cannot address unknown feedback)
- * - Push failure: log error but don't throw (allows retry via label)
- *
- * **Non-critical operation failures**
- * - No unresolved threads: remove label, early return (success case)
- * - Reply posting: log warning, continue (FR-007)
- * - Label removal: log warning, continue (non-fatal)
+ * Disposition B (blocked, #883): add `blocked:stuck-feedback-loop` and leave
+ * `waiting-for:address-pr-feedback` in place. The monitor's pre-enqueue
+ * `blocked:*` check keeps the loop paused until an operator removes the
+ * label. This ends the runaway "reply-only" cycle (5→10→20→…) observed on
+ * christrudelpw/sniplink#4.
  */
 export class PrFeedbackHandler {
   private readonly repoCheckout: RepoCheckout;
@@ -94,9 +97,16 @@ export class PrFeedbackHandler {
       'Starting PR feedback addressing',
     );
 
-    // Create GitHub client scoped to checkout path
+    // Create GitHub client scoped to checkout path. Hoisted above the try so
+    // the `finally` clear can call it on every exit path (#926 SC-004).
     const github = createGitHubClient(checkoutPath);
 
+    // #926 SC-004: `agent:in-progress` is cleared structurally at a single
+    // shared exit path so no terminal return can leave the label pinned.
+    // Idempotency-safe: happy path already coalesces the clear into its own
+    // `removeLabels` call; this `finally` is a backstop for the four other
+    // exit paths (Cases A/B, both blocked-stuck dispositions, and thrown
+    // errors). Non-fatal on failure — mirrors `removeFeedbackLabel` shape.
     try {
       // 1. Fetch the PR to get branch name
       let pr;
@@ -124,32 +134,134 @@ export class PrFeedbackHandler {
         throw new Error(`Failed to switch to branch ${branchName}: ${String(error)}`);
       }
 
-      // 3. Fetch fresh unresolved review threads
-      let allComments;
-      let unresolvedComments;
+      // 3. Fetch fresh unresolved review threads via GraphQL (#861).
+      // REST never populated `.resolved`, so the old filter always emitted []
+      // and the handler no-op'd. GraphQL exposes thread-level resolution.
+      let allComments: Comment[];
+      let unresolvedThreadCount: number;
+      let unresolvedComments: Comment[];
+      let trustedUnresolvedThreads: ReviewThread[];
+      let untrustedSkips: Array<{
+        commentId: number;
+        author: string;
+        authorAssociation: string | undefined;
+        reason: string;
+        viewerDidAuthor?: boolean;
+      }>;
       try {
-        allComments = await github.getPRComments(owner, repo, prNumber);
-        unresolvedComments = allComments.filter((c) => c.resolved === false);
+        const threads = await github.getPRReviewThreads(owner, repo, prNumber);
+        const unresolvedThreads = threads.filter(t => !t.isResolved);
+        allComments = threads.flatMap(t => t.comments);
+        unresolvedThreadCount = unresolvedThreads.length;
+
+        // Author-trust gating (#842, #869, #878). Log each skip and drop
+        // untrusted comments before the CLI ever sees them. `pr-feedback`
+        // surface honors widen-config from .agency/comment-trust.yaml. #878:
+        // self-authorship comes from GraphQL's `viewerDidAuthor` field on
+        // each comment, not a login-comparison rule threaded via context.
+        //
+        // #883: also track trusted-unresolved threads (not just comments) so
+        // the post-CLI batch can iterate one-reply-per-thread and call
+        // `resolveReviewThread` per thread.
+        const trustConfig = tryLoadCommentTrustConfig(checkoutPath, this.logger);
+        const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+        const trustedUnresolved: Comment[] = [];
+        const trustedThreads: ReviewThread[] = [];
+        const skips: typeof untrustedSkips = [];
+        for (const thread of unresolvedThreads) {
+          let threadHasTrusted = false;
+          for (const c of thread.comments) {
+            const decision = isTrustedCommentAuthor(
+              c,
+              'pr-feedback',
+              {
+                logger: this.logger,
+                ...(botLogin ? { botLogin } : {}),
+                ...(trustConfig ? { config: trustConfig } : {}),
+              },
+            );
+            if (decision.trusted) {
+              trustedUnresolved.push(c);
+              threadHasTrusted = true;
+            } else {
+              skips.push({
+                commentId: c.id,
+                author: c.author,
+                authorAssociation: c.authorAssociation,
+                reason: decision.reason,
+                viewerDidAuthor: c.viewerDidAuthor,
+              });
+              this.logger.info(
+                {
+                  event: 'comment-skipped',
+                  surface: 'pr-feedback',
+                  commentId: c.id,
+                  author: c.author,
+                  authorAssociation: c.authorAssociation,
+                  reason: decision.reason,
+                  viewerDidAuthor: c.viewerDidAuthor ?? null,
+                },
+                'Skipped PR review comment from untrusted author',
+              );
+            }
+          }
+          if (threadHasTrusted) trustedThreads.push(thread);
+        }
+
+        unresolvedComments = trustedUnresolved;
+        trustedUnresolvedThreads = trustedThreads;
+        untrustedSkips = skips;
 
         this.logger.info(
-          { prNumber, totalComments: allComments.length, unresolved: unresolvedComments.length },
-          'Fetched PR review comments',
+          {
+            prNumber,
+            totalComments: allComments.length,
+            unresolvedThreads: unresolvedThreads.length,
+            trustedUnresolvedThreads: trustedThreads.length,
+            trustedUnresolvedComments: trustedUnresolved.length,
+          },
+          'Fetched PR review threads (author-trust filtered)',
         );
       } catch (error) {
         this.logger.error(
           { error: String(error), prNumber, owner, repo },
-          'Failed to fetch PR review comments',
+          'Failed to fetch PR review threads',
         );
-        throw new Error(`Failed to fetch review comments for PR #${prNumber}: ${String(error)}`);
+        throw new Error(`Failed to fetch review threads for PR #${prNumber}: ${String(error)}`);
       }
 
-      // 4. If no unresolved threads, remove label and return early
-      if (unresolvedComments.length === 0) {
+      // 4. Case A (#869): no unresolved threads at all — remove label and
+      // clear dedupe key.
+      if (unresolvedThreadCount === 0) {
         this.logger.info(
           { prNumber, issueNumber },
           'No unresolved threads found — removing label and exiting',
         );
         await this.removeFeedbackLabel(github, owner, repo, issueNumber);
+        return;
+      }
+
+      // 4b. Case B (#869 / FR-002): unresolved threads exist, but every
+      // comment is untrusted (race-window residue that the monitor didn't
+      // catch, or degraded-identity mode). Retain the waiting-for label
+      // (FR-002) and clear the dedupe key so the next monitor poll can
+      // re-enqueue if the situation changes. Do NOT emit the "No unresolved
+      // threads found" log line (SC-002).
+      if (unresolvedComments.length === 0) {
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            totalUnresolvedThreads: unresolvedThreadCount,
+            untrustedSkips: untrustedSkips.map((s) => ({
+              commentId: s.commentId,
+              author: s.author,
+              authorAssociation: s.authorAssociation,
+              reason: s.reason,
+              viewerDidAuthor: s.viewerDidAuthor ?? null,
+            })),
+          },
+          'Zero-trusted unresolved threads — retaining waiting-for:address-pr-feedback label (FR-002)',
+        );
         return;
       }
 
@@ -187,58 +299,118 @@ export class PrFeedbackHandler {
           { error: String(error), prNumber, issueNumber, branchName },
           'Failed to commit and push changes — partial work may be lost',
         );
-        // Don't throw here — we want to continue with reply attempt and label management
-        // The label will be kept for retry if success=false
+        // Don't throw here — we still need to run the blocked disposition.
       }
 
-      if (!hasChanges && !success) {
+      // 7a. Disposition B short-circuit (#883): CLI did not complete cleanly OR
+      // there is no diff. Both mean the loop cannot advance on this cycle —
+      // add `blocked:stuck-feedback-loop` and leave `waiting-for:*` intact so
+      // the operator sees the pause. Do NOT reply, do NOT resolve, do NOT log
+      // success.
+      if (!success || !hasChanges) {
         this.logger.warn(
-          { prNumber, issueNumber },
-          'No changes made and CLI did not complete successfully — will retry',
+          {
+            prNumber,
+            issueNumber,
+            trigger: 'unresolvedThreads>0',
+            reason: !success ? 'cli-did-not-complete' : 'no-diff',
+          },
+          'no-diff cycle — persisting trigger, entering blocked-stuck-feedback-loop disposition',
         );
+        await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
+        return;
       }
 
-      // 8. Reply to review threads (only if CLI completed successfully)
-      // FR-007: Partial reply failure is acceptable — we still remove the label
-      if (success) {
-        try {
-          await this.replyToThreads(github, owner, repo, prNumber, unresolvedComments);
-        } catch (error) {
-          // FR-007: Even if reply posting fails, we consider the task complete
-          // and remove the label. The code changes were pushed successfully.
-          this.logger.warn(
-            { error: String(error), prNumber, issueNumber },
-            'Failed to post some or all thread replies — partial success acceptable',
-          );
-          // Continue to label removal
-        }
-      } else {
+      // 7b. Happy path — CLI succeeded AND we have a real commit.
+      const shortSha = (await this.getHeadShortSha(checkoutPath)) ?? '<unknown>';
+
+      // 8. Interleaved reply→resolve per root thread (#883, Q4-C, FR-005,
+      // FR-007). Input-set closure: iterate `trustedUnresolvedThreads`
+      // captured at cycle start.
+      const outcomes: PerThreadOutcome[] = [];
+      for (const thread of trustedUnresolvedThreads) {
+        const replyBody = `Addressed in ${shortSha} — please review, and re-open this thread if it still falls short.`;
+        const replyResult = await this.tryPostReply(
+          github, owner, repo, prNumber, thread.rootCommentId, replyBody,
+        );
+        const resolveResult = await this.tryResolveReviewThread(github, thread.id);
+        outcomes.push({
+          threadId: thread.id,
+          rootCommentId: thread.rootCommentId,
+          replyResult,
+          resolveResult,
+        });
+      }
+
+      // 9. Strict-decrease success test (#883, FR-006, FR-010).
+      const resolveSuccesses = outcomes.filter(o => o.resolveResult.ok).length;
+      const resolveFailures = outcomes.filter(o => !o.resolveResult.ok);
+
+      if (resolveSuccesses === 0) {
+        // FR-006 tail — commit landed but no thread transitioned.
         this.logger.warn(
-          { prNumber, issueNumber },
-          'Skipping thread replies due to CLI timeout or failure — will retry on next cycle',
+          { prNumber, issueNumber, outcomes },
+          'commit pushed but resolve batch had zero successes — persisting trigger, entering blocked-stuck-feedback-loop disposition',
+        );
+        await this.addBlockedStuckFeedbackLoopLabel(github, owner, repo, issueNumber);
+        return;
+      }
+
+      // FR-010: one warn per persistently-failed thread, emitted BEFORE
+      // clearing the label so a silent partial failure is impossible.
+      for (const f of resolveFailures) {
+        this.logger.warn(
+          {
+            prNumber, issueNumber, owner, repo,
+            threadId: f.threadId,
+            rootCommentId: f.rootCommentId,
+            error: (f.resolveResult as { ok: false; error: string }).error,
+            remedy: 'Resolve the thread manually in the GitHub UI — the reply is already on the thread',
+          },
+          'resolveReviewThread persistently failed after retries; label will still be cleared',
         );
       }
 
-      // 9. Remove label (only if successful, otherwise keep for retry)
-      // FR-013: Keep label on timeout/failure to enable retry
-      if (success) {
-        await this.removeFeedbackLabel(github, owner, repo, issueNumber);
+      // 10. Label-clear LAST (Q4 tail). #926 FR-006: coalesce the happy-path
+      // clear into a single `removeLabels` call so `waiting-for:*` and
+      // `agent:in-progress` disappear in one request — no intermediate state
+      // where cockpit / auto observers see one label without the other.
+      // The `finally` clear becomes a no-op on this path (idempotent remove).
+      try {
+        await github.removeLabels(owner, repo, issueNumber, [
+          WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL,
+          AGENT_IN_PROGRESS_LABEL,
+        ]);
         this.logger.info(
-          { prNumber, issueNumber },
-          'PR feedback addressing completed successfully',
+          { issueNumber },
+          'Removed waiting-for:address-pr-feedback + agent:in-progress labels (coalesced)',
         );
-      } else {
-        this.logger.info(
-          { prNumber, issueNumber, hasChanges },
-          'Keeping waiting-for:address-pr-feedback label for retry (CLI did not complete successfully)',
+      } catch (error) {
+        this.logger.warn(
+          { error: String(error), issueNumber },
+          'Failed to remove happy-path labels — non-fatal, finally will re-attempt in-progress clear',
         );
       }
+      this.logger.info(
+        {
+          prNumber, issueNumber,
+          resolveSuccesses,
+          resolveFailures: resolveFailures.length,
+          shortSha,
+        },
+        'PR feedback cycle succeeded (strict decrease met)',
+      );
     } catch (error) {
       this.logger.error(
         { error: String(error), prNumber, issueNumber, owner, repo },
         'Error processing PR feedback — task failed',
       );
       throw error;
+    } finally {
+      // #926 SC-004: structural single-point clear. Every terminal exit
+      // (Case A, Case B, both blocked-stuck dispositions, happy path, and
+      // thrown errors) flows through here. Non-fatal on failure.
+      await this.clearInProgressLabel(github, owner, repo, issueNumber);
     }
   }
 
@@ -265,11 +437,14 @@ export class PrFeedbackHandler {
       })
       .join('\n\n');
 
+    // #842: fence ingested thread content (author-trust filtered upstream).
+    const fenced = wrapUntrustedData(commentList, `PR #${prNumber} review comments`);
+
     return `You are addressing PR review feedback for PR #${prNumber} (linked to issue #${issueNumber}).
 
 The following unresolved review comments need to be addressed:
 
-${commentList}
+${fenced}
 
 **Instructions:**
 1. Read and understand each review comment above
@@ -489,64 +664,87 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
   }
 
   /**
-   * Post a reply to each unresolved review thread.
-   *
-   * SC-006: Never resolves threads — that's left to the human reviewer.
-   * FR-007: Partial failure is acceptable: if some replies fail, log warnings but continue.
-   *         The handler will still remove the label even if some replies fail.
+   * Post a single reply targeting the root comment of a review thread.
+   * Returns a discriminated result — failures do not throw so the caller
+   * (#883 per-thread outcome loop) can aggregate results.
    */
-  private async replyToThreads(
+  private async tryPostReply(
     github: GitHubClient,
     owner: string,
     repo: string,
     prNumber: number,
-    comments: Array<{ id: number; path?: string; line?: number; body: string }>,
+    rootCommentId: number,
+    body: string,
+  ): Promise<OutcomeResult> {
+    try {
+      await github.replyToPRComment(owner, repo, prNumber, rootCommentId, body);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /**
+   * Delegate to `github.resolveReviewThread` (which owns the 3× retry). Wraps
+   * the result in a discriminated union so the caller can aggregate outcomes
+   * without a try/catch (#883).
+   */
+  private async tryResolveReviewThread(
+    github: GitHubClient,
+    threadId: string,
+  ): Promise<OutcomeResult> {
+    try {
+      await github.resolveReviewThread(threadId);
+      return { ok: true };
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  }
+
+  /**
+   * Read the short SHA of the just-pushed HEAD commit. Returns null when the
+   * git command fails; caller falls back to `<unknown>` in the reply body —
+   * the SHA is decoration, not termination logic (#883).
+   */
+  private async getHeadShortSha(checkoutPath: string): Promise<string | null> {
+    try {
+      const result = await executeCommand(
+        'git',
+        ['rev-parse', '--short', 'HEAD'],
+        { cwd: checkoutPath },
+      );
+      if (result.exitCode !== 0) return null;
+      const sha = result.stdout.trim();
+      return sha.length > 0 ? sha : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Add the `blocked:stuck-feedback-loop` label to signal that the fix cycle
+   * cannot advance and must not be re-enqueued until the operator removes the
+   * label. Non-fatal on failure — leaving `waiting-for:*` in place is the
+   * fallback safety net (#883).
+   */
+  private async addBlockedStuckFeedbackLoopLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
   ): Promise<void> {
-    this.logger.info(
-      { prNumber, threadCount: comments.length },
-      'Posting replies to review threads',
-    );
-
-    let successCount = 0;
-    let failureCount = 0;
-
-    for (const comment of comments) {
-      try {
-        // SC-006: Only reply, never resolve — human reviewer will resolve after verification
-        const replyBody = `I've addressed this feedback in the latest commit. Please review the changes.`;
-
-        await github.replyToPRComment(owner, repo, prNumber, comment.id, replyBody);
-
-        this.logger.debug(
-          { prNumber, commentId: comment.id, path: comment.path, line: comment.line },
-          'Posted reply to review thread',
-        );
-
-        successCount++;
-      } catch (error) {
-        // FR-007: Continue processing other threads even if this one fails
-        failureCount++;
-        this.logger.warn(
-          { error: String(error), prNumber, commentId: comment.id, path: comment.path, line: comment.line },
-          'Failed to post reply to review thread — continuing with remaining threads',
-        );
-      }
-    }
-
-    if (failureCount > 0) {
-      this.logger.warn(
-        { prNumber, successCount, failureCount, total: comments.length },
-        'Some thread replies failed — partial success (acceptable per FR-007)',
-      );
-    } else {
+    try {
+      await github.addLabels(owner, repo, issueNumber, [BLOCKED_STUCK_FEEDBACK_LOOP_LABEL]);
       this.logger.info(
-        { prNumber, successCount, total: comments.length },
-        'Successfully posted all thread replies',
+        { issueNumber, label: BLOCKED_STUCK_FEEDBACK_LOOP_LABEL },
+        'Added blocked:stuck-feedback-loop label',
+      );
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber, label: BLOCKED_STUCK_FEEDBACK_LOOP_LABEL },
+        'Failed to add blocked:stuck-feedback-loop label — non-fatal, waiting-for label persists',
       );
     }
-
-    // FR-007: Even if all replies fail, we don't throw — the caller will still remove the label
-    // because the code changes were pushed successfully
   }
 
   /**
@@ -559,12 +757,36 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
     issueNumber: number,
   ): Promise<void> {
     try {
-      await github.removeLabels(owner, repo, issueNumber, ['waiting-for:address-pr-feedback']);
+      await github.removeLabels(owner, repo, issueNumber, [WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL]);
       this.logger.info({ issueNumber }, 'Removed waiting-for:address-pr-feedback label');
     } catch (error) {
       this.logger.warn(
         { error: String(error), issueNumber },
         'Failed to remove waiting-for:address-pr-feedback label — non-fatal',
+      );
+    }
+  }
+
+  /**
+   * Structural clear of `agent:in-progress` on the linked issue (#926 SC-004).
+   * Called from the shared `finally` block in `handle()` — runs on every
+   * terminal exit path (Cases A/B, both blocked-stuck dispositions, happy
+   * path, and thrown errors). Idempotent: GitHub's `removeLabels` is a no-op
+   * when the label is already absent, so the happy-path coalesced removal +
+   * this `finally` clear together produce at most one truthful post-state.
+   */
+  private async clearInProgressLabel(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+  ): Promise<void> {
+    try {
+      await github.removeLabels(owner, repo, issueNumber, [AGENT_IN_PROGRESS_LABEL]);
+    } catch (error) {
+      this.logger.warn(
+        { error: String(error), issueNumber },
+        'Failed to remove agent:in-progress label — non-fatal',
       );
     }
   }

@@ -92,6 +92,12 @@ export type { GitHubClient, GitHubClientFactory } from './actions/github/client/
 // Label definitions (shared)
 export { WORKFLOW_LABELS, type LabelDefinition } from './actions/github/label-definitions.js';
 
+// Label-provisioning error classification (shared across LabelManager + LabelSyncService)
+export {
+  classifyLabelProvisioningError,
+  type ProvisioningErrorClassification,
+} from './actions/github/classify-label-provisioning-error.js';
+
 // Speckit operations (for direct invocation from orchestrator)
 export { executeTasksToIssues } from './actions/builtin/speckit/operations/tasks-to-issues.js';
 export { createFeature } from './actions/builtin/speckit/lib/feature.js';
@@ -210,3 +216,26 @@ export { FilesystemWorkflowStore } from './store/index.js';
 // Logger utilities
 export { ConsoleLogger, NoopLogger, createLogger } from './types/logger.js';
 export { parseActionType } from './types/action.js';
+
+// Comment-author trust helper (author_association gating for ingestion surfaces)
+export {
+  isTrustedCommentAuthor,
+  normalizeLogin,
+  DEFAULT_TRUSTED_TIERS,
+  KNOWN_UNTRUSTED_TIERS,
+  type TrustSurface,
+  type TrustReason,
+  type TrustDecision,
+  type CommentTrustContext,
+} from './security/comment-trust.js';
+export {
+  CommentTrustConfigSchema,
+  tryLoadCommentTrustConfig,
+  COMMENT_TRUST_CONFIG_RELATIVE_PATH,
+  type CommentTrustConfig,
+} from './security/comment-trust-config.js';
+export { wrapUntrustedData } from './security/untrusted-data-fence.js';
+
+// Comment types (re-exported so consumers filtering via isTrustedCommentAuthor
+// don't need to import from the deep types barrel)
+export type { Comment, ReviewThread, SkippedCommentInfo } from './types/github.js';

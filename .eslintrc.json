@@ -38,6 +38,8 @@
         "packages/workflow-engine/src/actions/cli-utils.ts",
         "packages/orchestrator/src/services/relay-bridge.ts",
         "packages/orchestrator/src/worker/repo-checkout.ts",
+        "packages/orchestrator/src/worker/base-merge.ts",
+        "packages/orchestrator/src/worker/merge-conflict-handler.ts",
         "packages/orchestrator/src/worker/sibling-review-checker.ts",
         "packages/orchestrator/src/services/identity.ts",
         "packages/cluster-relay/src/metadata.ts",
@@ -68,6 +70,32 @@
       ],
       "rules": {
         "no-restricted-imports": "off"
+      }
+    },
+    {
+      "files": ["packages/generacy/src/cli/commands/cockpit/**/*.ts"],
+      "excludedFiles": [
+        "packages/generacy/src/cli/commands/cockpit/resolver.ts",
+        "packages/generacy/src/cli/commands/cockpit/__tests__/**"
+      ],
+      "rules": {
+        "no-restricted-imports": ["error", {
+          "paths": [
+            {
+              "name": "child_process",
+              "message": "Direct child_process usage is forbidden. Use ProcessFactory or AgentLauncher instead. See #437."
+            },
+            {
+              "name": "node:child_process",
+              "message": "Direct child_process usage is forbidden. Use ProcessFactory or AgentLauncher instead. See #437."
+            },
+            {
+              "name": "./resolver.js",
+              "importNames": ["parseIssueRef"],
+              "message": "Import `resolveIssueContext` from './resolver.js' instead. `parseIssueRef` is a strict qualified-forms parser — cockpit verbs must go through `resolveIssueContext` so bare-number cwd-origin inference works uniformly. See #850."
+            }
+          ]
+        }]
       }
     }
   ],

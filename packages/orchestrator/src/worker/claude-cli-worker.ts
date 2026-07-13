@@ -3,13 +3,15 @@ import type { ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, findWorkspaceConfigPath } from '@generacy-ai/config';
+import { resolveSiblingWorkdirs, tryLoadWorkspaceConfig, tryLoadOrchestratorSettings, findWorkspaceConfigPath } from '@generacy-ai/config';
 import { createGitHubClient, createFeature, registerProcessLauncher, clearProcessLauncher, siblingFanoutHandler, FilesystemWorkflowStore } from '@generacy-ai/workflow-engine';
 import type { LaunchFunctionRequest, LaunchFunctionHandle, LinkedPR, SiblingFanoutContext } from '@generacy-ai/workflow-engine';
-import type { QueueItem } from '../types/index.js';
+import type { QueueItem, PhaseTracker } from '../types/index.js';
 import type { WorkerContext, ProcessFactory, ChildProcessHandle, Logger, JobEventEmitter } from './types.js';
+import { ValidateFixHandler } from './validate-fix-handler.js';
 import { getPhaseSequence } from './types.js';
 import type { WorkerConfig } from './config.js';
+import { applyRepoValidateOverrides } from './config.js';
 import { PhaseResolver } from './phase-resolver.js';
 import { LabelManager } from './label-manager.js';
 import { StageCommentManager } from './stage-comment-manager.js';
@@ -21,6 +23,9 @@ import { RepoCheckout } from './repo-checkout.js';
 import { PhaseLoop } from './phase-loop.js';
 import { PrManager } from './pr-manager.js';
 import { PrFeedbackHandler } from './pr-feedback-handler.js';
+import { MergeConflictHandler } from './merge-conflict-handler.js';
+import { readPauseContext, clearPauseContext } from './pause-context.js';
+import type { HandlerOutcome } from './handler-outcome.js';
 import { EpicPostTasks } from './epic-post-tasks.js';
 import { ConversationLogger } from './conversation-logger.js';
 import { createAgentLauncher } from '../launcher/launcher-setup.js';
@@ -29,6 +34,8 @@ import { CredhelperHttpClient } from '../launcher/credhelper-client.js';
 import { CredhelperUnavailableError } from '../launcher/credhelper-errors.js';
 import { JitTokenError } from '@generacy-ai/control-plane';
 import { conversationProcessFactory } from '../conversation/process-factory.js';
+import type { WorkerResult } from './worker-result.js';
+import { isTerminalLabelOpError } from './terminal-label-op-error.js';
 
 /**
  * Load linkedPRs from workflow state files in the checkout directory.
@@ -110,6 +117,13 @@ export interface ClaudeCliWorkerDeps {
   jobEventEmitter?: JobEventEmitter;
   /** Token provider for GitHub operations in the orchestrator process (e.g. sibling fan-out) */
   tokenProvider?: () => Promise<string | undefined>;
+  /**
+   * Optional PhaseTracker injected by the worker-mode wiring for #892's
+   * ValidateFixHandler dedupe. Also used by the #849 paired-clear callback.
+   * When absent, ValidateFixHandler is not constructed and the fix-cycle
+   * behavior degrades to "same as today" (base-advance re-runs still occur).
+   */
+  phaseTracker?: PhaseTracker;
 }
 
 /**
@@ -132,6 +146,7 @@ export class ClaudeCliWorker {
   private readonly sseEmitter?: SSEEventEmitter;
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly tokenProvider?: () => Promise<string | undefined>;
+  private readonly phaseTracker?: PhaseTracker;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -145,6 +160,7 @@ export class ClaudeCliWorker {
     this.sseEmitter = deps.sseEmitter;
     this.jobEventEmitter = deps.jobEventEmitter;
     this.tokenProvider = deps.tokenProvider;
+    this.phaseTracker = deps.phaseTracker;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -208,8 +224,18 @@ export class ClaudeCliWorker {
    * - Creates a WorkerContext
    * - Resolves the starting phase from issue labels
    * - Runs the phase loop to completion (or gate/error)
+   *
+   * Returns a `WorkerResult` discriminated union:
+   * - `{ status: 'completed' }` — happy path (incl. gate hits and phase failures
+   *   that self-terminated cleanly).
+   * - `{ status: 'failed-terminal', failureMetadata }` — a `TerminalLabelOpError`
+   *   was caught inside the phase loop or the outer catch. The dispatcher marks
+   *   the item completed (not released) and emits the `stage: 'label-op'` alert.
+   *
+   * All other unhandled throws propagate; the dispatcher catches them and
+   * releases the item (unchanged behavior for generic errors).
    */
-  async handle(item: QueueItem): Promise<void> {
+  async handle(item: QueueItem): Promise<WorkerResult> {
     const workerId = crypto.randomUUID();
     const jobId = crypto.randomUUID();
     const workflowId = `${item.owner}/${item.repo}#${item.issueNumber}`;
@@ -243,6 +269,7 @@ export class ClaudeCliWorker {
     let labelManager: LabelManager | undefined;
     let phasesCompleted = false;
     let gateHit = false;
+    let workerResult: WorkerResult = { status: 'completed' };
 
     try {
       // 1. Clone the default branch first (always works, even on first run)
@@ -282,7 +309,97 @@ export class ClaudeCliWorker {
           },
         });
 
-        return;
+        return { status: 'completed' };
+      }
+
+      // 2b. #898: route resolve-merge-conflicts to MergeConflictHandler.
+      if (item.command === 'resolve-merge-conflicts') {
+        workerLogger.info('Routing to MergeConflictHandler for merge-conflict resolution');
+
+        // #902 FR-003: read the pause-context sidecar written by the phase-loop
+        // pause site. Populates `metadata.phase` — the single source of truth
+        // for the interrupted phase. Absence triggers the handler's fail-loud
+        // path (FR-004) — never re-derived from labels.
+        const pauseContext = await readPauseContext(checkoutPath, workflowId);
+        if (pauseContext) {
+          item.metadata = {
+            ...(item.metadata ?? {}),
+            phase: pauseContext.phase,
+          };
+          workerLogger.info(
+            { pausePhase: pauseContext.phase, writtenAt: pauseContext.writtenAt },
+            '#902: loaded pause-context sidecar — populated metadata.phase',
+          );
+        } else {
+          workerLogger.warn(
+            { workflowId },
+            '#902: pause-context sidecar missing — MergeConflictHandler will enter fail-loud path',
+          );
+        }
+
+        const mergeConflictHandler = new MergeConflictHandler(
+          this.config,
+          workerLogger,
+          this.agentLauncher,
+          this.sseEmitter,
+        );
+
+        const outcome: HandlerOutcome = await mergeConflictHandler.handle(item, checkoutPath);
+
+        workerLogger.info(
+          { outcome: outcome.outcome },
+          'Merge-conflict resolution completed',
+        );
+
+        this.sseEmitter?.({
+          type: 'workflow:completed',
+          workflowId,
+          data: {
+            command: 'resolve-merge-conflicts',
+            lastPhase: 'resolve-merge-conflicts',
+            totalPhases: 1,
+          },
+        });
+
+        // #902 FR-002/FR-008: on re-armed, build the rearm item and hand it to
+        // the dispatcher via `postComplete`. Dispatcher fires `enqueueIfAbsent`
+        // AFTER `queue.complete()` — the current itemKey is freed first, so no
+        // self-collision on the shared itemKey `<owner>/<repo>#<issue>`.
+        if (outcome.outcome === 're-armed') {
+          const rearmItem: QueueItem = {
+            owner: item.owner,
+            repo: item.repo,
+            issueNumber: item.issueNumber,
+            workflowName: item.workflowName,
+            command: 'continue',
+            priority: Date.now(),
+            enqueuedAt: new Date().toISOString(),
+            queueReason: 'resume',
+            userId: item.userId,
+            metadata: {
+              startPhase: outcome.startPhase,
+              resumeReason: 'merge-conflict-resolved',
+            },
+          };
+
+          // Best-effort sidecar cleanup — a stale file left behind is
+          // overwritten by the next pause (writes are unconditional).
+          try {
+            await clearPauseContext(checkoutPath, workflowId);
+          } catch (err) {
+            workerLogger.warn(
+              { err: String(err), workflowId },
+              '#902: failed to clear pause-context sidecar — will be overwritten on next pause',
+            );
+          }
+
+          return {
+            status: 'completed',
+            postComplete: { kind: 'rearm', rearmItem },
+          };
+        }
+
+        return { status: 'completed' };
       }
 
       // 3. Get issue details and resolve description
@@ -353,7 +470,30 @@ export class ClaudeCliWorker {
         }
       }
 
+      // 5c. Apply per-repo validate-command overrides from the target repo's
+      // .generacy/config.yaml. The orchestrator's global validate defaults are
+      // monorepo-shaped (`pnpm test && pnpm build`); repos with a different
+      // shape (e.g. a single-package Astro site with no `test` script) override
+      // them so the validate phase doesn't fail on a missing script.
+      const orchSettings = configPath ? tryLoadOrchestratorSettings(configPath) : null;
+      const effectiveConfig = applyRepoValidateOverrides(this.config, orchSettings);
+      if (effectiveConfig !== this.config) {
+        workerLogger.info(
+          {
+            validateCommand: effectiveConfig.validateCommand,
+            preValidateCommand: effectiveConfig.preValidateCommand,
+          },
+          'Applied per-repo validate-command override from .generacy/config.yaml',
+        );
+      }
+
       // 6. Build WorkerContext
+      // #892: surface resume identity so PhaseLoop's validate `catch` can gate
+      // the ValidateFixHandler on the base-advance path.
+      const md = (item.metadata ?? {}) as Record<string, unknown>;
+      const resumeReason = md['resumeReason'] === 'base-advance' ? 'base-advance' as const : undefined;
+      const baseSha = typeof md['baseSha'] === 'string' ? (md['baseSha'] as string) : undefined;
+
       const context: WorkerContext = {
         workerId,
         jobId,
@@ -363,9 +503,12 @@ export class ClaudeCliWorker {
         logger: workerLogger,
         signal: abortController.signal,
         checkoutPath,
+        branch: featureResult.branch_name,
         issueUrl: `https://github.com/${item.owner}/${item.repo}/issues/${item.issueNumber}`,
         description,
         siblingWorkdirs,
+        ...(resumeReason ? { resumeReason } : {}),
+        ...(baseSha ? { baseSha } : {}),
       };
 
       // Helper to build job event base payload
@@ -469,14 +612,36 @@ export class ClaudeCliWorker {
             currentStep: 'tasks',
           });
 
-          return;
+          return { status: 'completed' };
         }
       }
 
       // 8. Execute the phase loop
       const phaseSequence = getPhaseSequence(item.workflowName);
       const phaseLoop = new PhaseLoop(workerLogger);
-      const loopResult = await phaseLoop.executeLoop(context, this.config, {
+
+      // #892: construct ValidateFixHandler only when PhaseTracker is available.
+      // The handler's dedupe surface requires it; without Redis the fix-cycle
+      // degrades to "same as today" (base-advance re-runs still occur).
+      const jobEmitter = this.jobEventEmitter;
+      const validateFixEmit = jobEmitter
+        ? (channel: string, payload: unknown): void => {
+            // Payload shape is always an object literal at the call site; cast
+            // it into the record shape the JobEventEmitter expects.
+            jobEmitter(channel, payload as Record<string, unknown>);
+          }
+        : undefined;
+      const validateFixHandler = this.phaseTracker
+        ? new ValidateFixHandler(
+            effectiveConfig,
+            this.agentLauncher,
+            this.phaseTracker,
+            workerLogger,
+            validateFixEmit,
+          )
+        : undefined;
+
+      const loopResult = await phaseLoop.executeLoop(context, effectiveConfig, {
         labelManager,
         stageCommentManager,
         gateChecker,
@@ -485,6 +650,7 @@ export class ClaudeCliWorker {
         prManager,
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
+        ...(validateFixHandler ? { validateFixHandler } : {}),
         phaseAfterHandlers: [
           // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
           async () => {
@@ -515,6 +681,21 @@ export class ClaudeCliWorker {
           },
         ],
       }, phaseSequence);
+
+      // 9. Handle terminal label-op failure (#889): translate into WorkerResult
+      //    so the dispatcher completes the item instead of releasing it. The
+      //    dispatcher's terminalFailureHandler emits the operator-facing alert.
+      if (loopResult.status === 'failed-terminal' && loopResult.failureMetadata) {
+        workerLogger.error(
+          { failureMetadata: loopResult.failureMetadata },
+          'Phase loop returned failed-terminal — surfacing as WorkerResult.failed-terminal',
+        );
+        workerResult = {
+          status: 'failed-terminal',
+          failureMetadata: loopResult.failureMetadata,
+        };
+        return workerResult;
+      }
 
       // 9. Handle completion
       if (loopResult.completed) {
@@ -620,6 +801,22 @@ export class ClaudeCliWorker {
             'Post-completion step failed (all phases completed successfully)',
           );
         }
+      } else if (isTerminalLabelOpError(error)) {
+        // #889: LabelManager retry exhaustion outside the phase loop (e.g. in
+        // onResumeStart or onWorkflowComplete). Translate into WorkerResult so
+        // the dispatcher completes the item instead of releasing it.
+        workerLogger.error(
+          { site: error.site, labelOp: error.labelOp, ghStderr: error.ghStderr },
+          'Worker caught TerminalLabelOpError — surfacing as WorkerResult.failed-terminal',
+        );
+        workerResult = {
+          status: 'failed-terminal',
+          failureMetadata: {
+            site: error.site,
+            labelOp: error.labelOp,
+            ghStderr: error.ghStderr,
+          },
+        };
       } else {
         workerLogger.error(
           { error: String(error) },
@@ -659,6 +856,8 @@ export class ClaudeCliWorker {
         await labelManager.ensureCleanup();
       }
     }
+
+    return workerResult;
   }
 
 }

@@ -418,4 +418,25 @@ describe('tryLoadOrchestratorSettings', () => {
     writeFileSync(configPath, 'orchestrator:\n  smeeChannelUrl: not-a-url\n');
     expect(() => tryLoadOrchestratorSettings(configPath)).toThrow();
   });
+
+  it('parses per-repo validate command overrides', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, [
+      'orchestrator:',
+      '  preValidateCommand: pnpm install',
+      '  validateCommand: pnpm build',
+    ].join('\n'));
+
+    const result = tryLoadOrchestratorSettings(configPath);
+    expect(result?.validateCommand).toBe('pnpm build');
+    expect(result?.preValidateCommand).toBe('pnpm install');
+  });
+
+  it('preserves an explicit empty preValidateCommand (skip install)', () => {
+    const configPath = join(tempDir, 'config.yaml');
+    writeFileSync(configPath, "orchestrator:\n  preValidateCommand: ''\n");
+
+    const result = tryLoadOrchestratorSettings(configPath);
+    expect(result?.preValidateCommand).toBe('');
+  });
 });

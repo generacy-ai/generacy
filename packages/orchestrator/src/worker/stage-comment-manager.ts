@@ -1,6 +1,56 @@
 import type { GitHubClient } from '@generacy-ai/workflow-engine';
-import type { StageType, StageCommentData, Logger } from './types.js';
-import { STAGE_MARKERS } from './types.js';
+import type { StageType, StageCommentData, Logger, FailureAlertData, CommandExitEvidence } from './types.js';
+import { STAGE_MARKERS, FAILURE_ALERT_MARKER_PREFIX } from './types.js';
+
+/** Narrow variant of `StageCommentData.errorEvidence` for the #864 merge-conflict block. */
+type MergeConflictEvidence = Extract<
+  NonNullable<StageCommentData['errorEvidence']>,
+  { mergeConflict: unknown }
+>['mergeConflict'];
+
+/**
+ * #915: Reason block byte cap (multi-line only). Defensive bound against
+ * `String(error)` producing multi-KB stack excerpts. Single-line reasons are
+ * not capped — production classifiers emit < 300 chars.
+ */
+const REASON_MULTILINE_BYTE_CAP = 1024;
+
+/**
+ * #915: Format the classifier-reason block for injection into both
+ * `appendEvidenceBlock` and `renderFailureAlert`. Returns an empty array when
+ * `reason` is absent or empty. Single-line reasons render inline as one line
+ * (`**Reason**: <safeReason>`); multi-line reasons render as `**Reason**:`,
+ * blank line, fenced ```text``` block. Backticks are ZWSP-escaped (matching
+ * the outputTail idiom). Multi-line body is capped at 1 KiB by
+ * `Buffer.byteLength`; on truncation, `…` is appended before the closing fence.
+ *
+ * The returned lines are inserted between the header lines (`**Exit**` for
+ * stage comment, summary line for failure alert) and the blank line preceding
+ * the `<details>` wrapper — both callers already emit that blank. See
+ * contracts/failure-reason-block.md §Rendering normalization.
+ */
+function formatReasonBlock(reason: string | undefined): string[] {
+  if (!reason) {
+    return [];
+  }
+  // ZWSP after every backtick — mirror the outputTail sanitization idiom
+  // already used at appendEvidenceBlock (~:200) and renderFailureAlert (~:334).
+  const safeReason = reason.replace(/`/g, '`​');
+  const isMultiLine = safeReason.includes('\n');
+
+  if (!isMultiLine) {
+    return [`**Reason**: ${safeReason}`];
+  }
+
+  // Multi-line: cap body at 1 KiB (bytes) with a `…` marker on truncate.
+  const bytes = Buffer.byteLength(safeReason, 'utf8');
+  if (bytes > REASON_MULTILINE_BYTE_CAP) {
+    const buf = Buffer.from(safeReason, 'utf8');
+    const sliced = buf.subarray(0, REASON_MULTILINE_BYTE_CAP).toString('utf8');
+    return ['**Reason**:', '', '```text', sliced, '…', '```'];
+  }
+  return ['**Reason**:', '', '```text', safeReason, '```'];
+}
 
 /**
  * Stage display titles with emoji prefixes
@@ -52,6 +102,8 @@ export class StageCommentManager {
    */
   async findOrCreateStageComment(stage: StageType): Promise<number> {
     const marker = STAGE_MARKERS[stage];
+    // #842 audit: whitelist — reads only for STAGE_MARKERS to dedupe bot's
+    // own stage-comment postings; body content is never surfaced to an agent.
     const comments = await this.github.getIssueComments(
       this.owner,
       this.repo,
@@ -151,6 +203,205 @@ export class StageCommentManager {
 
     lines.push('');
 
+    // Merge-conflict evidence can appear during a pause (status: 'in_progress').
+    // Command-exit evidence only appears on status: 'error' — preserving the #847 contract.
+    if (data.errorEvidence) {
+      if ('mergeConflict' in data.errorEvidence) {
+        this.appendMergeConflictBlock(lines, data.errorEvidence.mergeConflict);
+      } else if (data.status === 'error') {
+        this.appendEvidenceBlock(lines, data.errorEvidence);
+      } else {
+        this.logger.debug(
+          { stage: data.stage, status: data.status },
+          'Command-exit errorEvidence on non-error status — omitting evidence block',
+        );
+      }
+    } else if (data.status === 'error') {
+      this.logger.warn(
+        { stage: data.stage },
+        'Stage comment error status without errorEvidence — omitting evidence block',
+      );
+    }
+
     return lines.join('\n');
+  }
+
+  /**
+   * Append the failure-evidence block to the rendered comment lines.
+   *
+   * See specs/847-found-during-cockpit-v1/contracts/failure-evidence-block.md
+   * for the exact byte layout. The block is placed after the existing summary
+   * metadata (below a horizontal-rule separator), so bytes above the `---`
+   * remain identical to the pre-fix output (invariant 1).
+   */
+  private appendEvidenceBlock(
+    lines: string[],
+    evidence: CommandExitEvidence,
+  ): void {
+    // Neutralize any triple-backtick sequence inside outputTail so it cannot
+    // break out of our fenced block. Insert U+200B (ZWSP) between the first two
+    // backticks of every 3-backtick run.
+    const safeOutput = evidence.outputTail.replace(/```/g, '`​``');
+    const lineCount = evidence.outputTail.split('\n').length;
+
+    lines.push('---');
+    lines.push(`**Failed command**: \`${evidence.command}\``);
+    lines.push(`**Exit**: ${evidence.exitDescriptor}`);
+    // #915: reason block sits between **Exit** and the blank line preceding
+    // <details>. Empty for pre-#915 inputs (byte-identical to #890).
+    for (const line of formatReasonBlock(evidence.reason)) {
+      lines.push(line);
+    }
+    lines.push('');
+    lines.push(`<details><summary>output (last ${lineCount} lines)</summary>`);
+    lines.push('');
+    lines.push('```text');
+    lines.push(safeOutput);
+    lines.push('```');
+    lines.push('');
+    lines.push('</details>');
+  }
+
+  /**
+   * Append the merge-conflict evidence block (#864).
+   *
+   * See specs/864-found-during-cockpit-v1/contracts/merge-conflict-evidence-block.md
+   * §"Byte layout (variant B)" for the exact layout.
+   *
+   * #898 Ship 1: when `mergeConflict.manualRemedy` is present, also render the
+   * self-describing three-step remedy section per contracts/pause-comment-schema.md.
+   */
+  private appendMergeConflictBlock(
+    lines: string[],
+    mergeConflict: MergeConflictEvidence,
+  ): void {
+    // Neutralize any backticks inside paths using ZWSP (same treatment as #847/#890's outputTail).
+    const escapePath = (p: string): string => p.replace(/`/g, '`​');
+    const paths = mergeConflict.conflictedPaths;
+
+    lines.push('---');
+    lines.push('**Merge conflict during base-sync**');
+    lines.push(`**Base**: \`${mergeConflict.baseRef}\``);
+    lines.push('');
+    lines.push(`<details><summary>Conflicted paths (${paths.length})</summary>`);
+    lines.push('');
+    if (paths.length === 0) {
+      lines.push('- (no paths reported — merge failed for a non-conflict reason)');
+    } else {
+      for (const path of paths) {
+        lines.push(`- \`${escapePath(path)}\``);
+      }
+    }
+    lines.push('');
+    lines.push('</details>');
+
+    // #898 Ship 1 (FR-011/FR-012): self-describing remedy section. Optional at
+    // the type level so pre-Ship-1 evidence blobs still render (historical
+    // stage-comment reads via cockpit status). Post-Ship-1 the phase-loop
+    // pause site always sets manualRemedy.
+    const remedy = mergeConflict.manualRemedy;
+    if (remedy && remedy.steps.length > 0) {
+      lines.push('');
+      lines.push('## \u{26A0}\u{FE0F} Merge conflict on base-merge');
+      lines.push('');
+      lines.push('Conflicted paths:');
+      if (paths.length === 0) {
+        lines.push('- (no paths reported)');
+      } else {
+        for (const path of paths) {
+          lines.push(`- \`${escapePath(path)}\``);
+        }
+      }
+      lines.push('');
+      lines.push('### To resolve manually:');
+      lines.push('');
+      for (let i = 0; i < remedy.steps.length; i++) {
+        lines.push(`${i + 1}. ${remedy.steps[i]}`);
+      }
+      lines.push('');
+      lines.push(`> **${remedy.warning}**`);
+    }
+  }
+
+  /**
+   * Post a bottom-of-thread failure-alert comment on the issue.
+   *
+   * On a terminal-failure occurrence, `phase-loop.ts` calls this to surface a
+   * fresh comment (fires a GitHub notification) carrying a summary line + a
+   * collapsible <details> block with the verbatim buildErrorEvidence output.
+   *
+   * Deduplicated via marker scan: a matching `(stage, runId)` marker in an
+   * existing comment suppresses re-posting. See
+   * specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
+   */
+  async postFailureAlert(data: FailureAlertData): Promise<void> {
+    const marker = `${FAILURE_ALERT_MARKER_PREFIX}${data.stage}:${data.runId} -->`;
+
+    const comments = await this.github.getIssueComments(
+      this.owner,
+      this.repo,
+      this.issueNumber,
+    );
+
+    const existing = comments.find((c) => c.body.includes(marker));
+    if (existing) {
+      this.logger.info(
+        { stage: data.stage, runId: data.runId, existingCommentId: existing.id },
+        'Failure alert already exists — suppressing duplicate post',
+      );
+      return;
+    }
+
+    const body = this.renderFailureAlert(marker, data);
+    const created = await this.github.addIssueComment(
+      this.owner,
+      this.repo,
+      this.issueNumber,
+      body,
+    );
+
+    this.logger.info(
+      { stage: data.stage, runId: data.runId, commentId: created.id },
+      'Posted failure alert comment',
+    );
+  }
+
+  /**
+   * Render the failure-alert body per contract §"Alert body layout".
+   * Byte-exact: marker line, summary line, blank, <details> wrapper, fenced
+   * text block with backtick-neutralized output, closing </details>.
+   *
+   * For `stage === 'label-op'` (#889), the summary line references the failing
+   * label operation and site rather than a phase name.
+   * See specs/889-found-during-cockpit-v1/contracts/failure-alert-label-op.md.
+   */
+  private renderFailureAlert(marker: string, data: FailureAlertData): string {
+    const evidence = data.evidence;
+    const lineCount = evidence.outputTail.split('\n').length;
+    // Same ZWSP substitution used by appendEvidenceBlock — neutralize any
+    // ``` sequence inside outputTail so the outer fenced block stays closed.
+    const safeOutput = evidence.outputTail.replace(/```/g, '`​``');
+
+    const summaryLine =
+      data.stage === 'label-op'
+        ? `❌ **label operation failed** — \`${data.labelOp ?? evidence.command}\` at site \`${data.phase}\` (${evidence.exitDescriptor}).`
+        : `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`;
+
+    // #915: reason block sits between the summary line and the blank line
+    // preceding <details>. Empty array (spread expands to nothing) for pre-#915
+    // inputs (byte-identical to #865/#890).
+    return [
+      marker,
+      summaryLine,
+      ...formatReasonBlock(evidence.reason),
+      '',
+      `<details><summary>output (last ${lineCount} lines)</summary>`,
+      '',
+      '```text',
+      safeOutput,
+      '```',
+      '',
+      '</details>',
+    ].join('\n');
   }
 }

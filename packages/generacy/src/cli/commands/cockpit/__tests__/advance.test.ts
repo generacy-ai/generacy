@@ -1,0 +1,350 @@
+import { describe, it, expect, vi } from 'vitest';
+import { runAdvance } from '../advance.js';
+import { CockpitExit } from '../exit.js';
+import { getLogger, setLogger } from '../../../utils/logger.js';
+import type { CommandRunner, GhWrapper } from '@generacy-ai/cockpit';
+import type pino from 'pino';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const baseLoad = vi.fn(async () => ({
+  config: {},
+  source: 'defaults' as const,
+  warnings: [],
+}));
+
+function stubGh(overrides: Partial<GhWrapper> = {}): GhWrapper {
+  return {
+    fetchIssueLabels: vi.fn(async () => ({ labels: [] })),
+    fetchIssueState: vi.fn(),
+    postIssueComment: vi.fn(async () => ({ url: 'https://github.com/o/r/issues/1#issuecomment-1' })),
+    addLabel: vi.fn(async () => {}),
+    removeLabel: vi.fn(async () => {}),
+    fetchIssueTimeline: vi.fn(),
+    fetchIssueComments: vi.fn(),
+    getCurrentUser: vi.fn(async () => 'octocat'),
+    findOpenPrForBranch: vi.fn(),
+    prDiffNames: vi.fn(),
+    prDiffPatch: vi.fn(),
+    ...overrides,
+  } as GhWrapper;
+}
+
+const fixedNow = () => new Date('2026-06-26T12:00:00.000Z');
+
+describe('cockpit advance', () => {
+  it('happy path: comment → add completed (waiting-for:* left in place)', async () => {
+    const calls: string[] = [];
+    const removeLabel = vi.fn(async (_repo: string, _n: number, label: string) => {
+      calls.push(`remove:${label}`);
+    });
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification', 'phase:clarify'] })),
+      postIssueComment: vi.fn(async (_repo, _n, body) => {
+        calls.push('comment');
+        expect(body).toContain('<!-- generacy-cockpit:manual-advance gate=clarification');
+        return { url: 'https://github.com/o/r/issues/1#issuecomment-1' };
+      }),
+      addLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`add:${label}`);
+      }),
+      removeLabel,
+    });
+    const out: string[] = [];
+    await runAdvance(
+      'generacy-ai/generacy#1',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
+    );
+    expect(calls).toEqual(['comment', 'add:completed:clarification']);
+    expect(out[0]).toContain(
+      'advanced generacy-ai/generacy#1: completed:clarification added — waiting-for:clarification left in place for the worker to clear on resume',
+    );
+
+    // SC-003 regression: advance MUST NOT remove any waiting-for:* label.
+    // Deleting the fix in advance.ts (restoring the removeLabel(waitingLabel)
+    // call) makes this assertion fail deterministically.
+    for (const call of removeLabel.mock.calls) {
+      expect(call[2]).not.toMatch(/^waiting-for:/);
+    }
+  });
+
+  it('advance never removes waiting-for:* on the happy path', async () => {
+    const removeLabel = vi.fn(async () => {});
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+      removeLabel,
+    });
+    await runAdvance(
+      'generacy-ai/generacy#1',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: () => {} },
+    );
+    for (const call of removeLabel.mock.calls) {
+      expect(call[2]).not.toMatch(/^waiting-for:/);
+    }
+    // Direct assertion for extra clarity: no waiting-for:* removal ever.
+    expect(removeLabel).not.toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.stringMatching(/^waiting-for:/));
+  });
+
+  it('idempotent: already-advanced is a no-op with exit 0', async () => {
+    const calls: string[] = [];
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['completed:clarification'] })),
+      postIssueComment: vi.fn(async () => {
+        calls.push('comment');
+        return { url: '' };
+      }),
+      addLabel: vi.fn(async () => {
+        calls.push('add');
+      }),
+      removeLabel: vi.fn(async () => {
+        calls.push('remove');
+      }),
+    });
+    const out: string[] = [];
+    await runAdvance(
+      'generacy-ai/generacy#1',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
+    );
+    expect(calls).toEqual([]);
+    expect(out[0]).toContain('already advanced');
+  });
+
+  it('refusal: wrong active gate → exit 3, no side effects', async () => {
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:plan-review'] })),
+    });
+    const out: string[] = [];
+    await expect(
+      runAdvance(
+        'generacy-ai/generacy#1',
+        { gate: 'clarification' },
+        { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
+      ),
+    ).rejects.toMatchObject({ name: 'CockpitExit', code: 3 });
+    expect(out[0]).toContain('refusing to advance gate "clarification"');
+    expect(gh.postIssueComment).not.toHaveBeenCalled();
+    expect(gh.addLabel).not.toHaveBeenCalled();
+    expect(gh.removeLabel).not.toHaveBeenCalled();
+  });
+
+  it('refusal: no active waiting gate → exit 3', async () => {
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['phase:plan'] })),
+    });
+    await expect(
+      runAdvance('generacy-ai/generacy#1', { gate: 'clarification' }, { loadConfig: baseLoad, gh, now: fixedNow }),
+    ).rejects.toMatchObject({ name: 'CockpitExit', code: 3 });
+  });
+
+  it('unknown gate → exit 2 with valid gate list', async () => {
+    await expect(
+      runAdvance('generacy-ai/generacy#1', { gate: 'clarificaton' }, { loadConfig: baseLoad, gh: stubGh(), now: fixedNow }),
+    ).rejects.toThrow(/unknown gate "clarificaton"/);
+  });
+
+  it('missing --gate → exit 2', async () => {
+    await expect(
+      runAdvance('generacy-ai/generacy#1', {}, { loadConfig: baseLoad, gh: stubGh(), now: fixedNow }),
+    ).rejects.toMatchObject({ code: 2 });
+  });
+
+  it('--help-gates lists derived gates and returns 0', async () => {
+    const out: string[] = [];
+    await runAdvance(undefined, { helpGates: true }, {
+      loadConfig: baseLoad,
+      gh: stubGh(),
+      now: fixedNow,
+      stdout: (l) => out.push(l),
+    });
+    expect(out).toContain('clarification');
+    expect(out).toContain('plan-review');
+  });
+
+  it('SC-005: source file does not hard-code a "completed:" string list', () => {
+    const src = readFileSync(
+      resolve(__dirname, '../advance.ts'),
+      'utf-8',
+    );
+    // Allowed mentions: type imports, docstrings, error-message interpolation.
+    // What must NOT exist: an array/list literal of "completed:foo" strings.
+    const completedLiterals = src.match(/'completed:[a-z-]+'/g);
+    expect(completedLiterals, `unexpected hard-coded completed:* literals in advance.ts: ${completedLiterals?.join(',')}`).toBeNull();
+  });
+});
+
+describe('cockpit advance — bare-number ref resolution (#850)', () => {
+  it('bare-number happy path: infers repo from git origin and calls fetchIssueLabels(owner/repo, N)', async () => {
+    const fetchLabels = vi.fn(async () => ({ labels: ['waiting-for:clarification'] }));
+    const gh = stubGh({ fetchIssueLabels: fetchLabels });
+    const runner: CommandRunner = vi.fn(async (cmd, args) => {
+      expect(cmd).toBe('git');
+      expect(args).toEqual(['remote', 'get-url', 'origin']);
+      return { stdout: 'https://github.com/owner/repo.git\n', stderr: '', exitCode: 0 };
+    });
+    await runAdvance(
+      '2',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, runner, now: fixedNow, stdout: () => {} },
+    );
+    expect(fetchLabels).toHaveBeenCalledWith('owner/repo', 2);
+  });
+
+  it('bare-number failure: unresolvable origin → CockpitExit(2) with FR-002 copy', async () => {
+    const gh = stubGh();
+    const runner: CommandRunner = vi.fn(async () => ({
+      stdout: '',
+      stderr: 'fatal: no such remote',
+      exitCode: 128,
+    }));
+    let caught: unknown = null;
+    try {
+      await runAdvance(
+        '2',
+        { gate: 'clarification' },
+        { loadConfig: baseLoad, gh, runner, now: fixedNow, stdout: () => {} },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(CockpitExit);
+    const msg = (caught as CockpitExit).message;
+    expect((caught as CockpitExit).code).toBe(2);
+    expect(msg).toMatch(
+      /^Error: cockpit advance: parse issue: bare issue number "2" is not accepted here\./,
+    );
+    expect(msg).toMatch(
+      /Accepted: <owner>\/<repo>#2, a full issue URL, or a bare number inside a checkout/,
+    );
+  });
+
+  it('regression: owner/repo#N still routes without a runner call for origin', async () => {
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+    });
+    const runner: CommandRunner = vi.fn();
+    await runAdvance(
+      'owner/repo#2',
+      { gate: 'clarification' },
+      { loadConfig: baseLoad, gh, runner, now: fixedNow, stdout: () => {} },
+    );
+    for (const call of (runner as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[1]).not.toEqual(['remote', 'get-url', 'origin']);
+    }
+  });
+});
+
+describe('cockpit advance — CockpitExit subclass plumbing', () => {
+  it('CockpitExit thrown with code', async () => {
+    try {
+      await runAdvance('generacy-ai/generacy#1', { gate: 'no-such' }, { loadConfig: baseLoad, gh: stubGh() });
+      throw new Error('should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(CockpitExit);
+    }
+  });
+});
+
+describe('cockpit advance — App-credentialed identity resolution (#830)', () => {
+  it('resolves actor from CLUSTER_GITHUB_USERNAME env; comment carries that actor; label still applied', async () => {
+    const calls: string[] = [];
+    const throwingGetUser = vi.fn(async () => {
+      throw new Error('HTTP 403: Resource not accessible by integration');
+    });
+    let commentBody = '';
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+      postIssueComment: vi.fn(async (_repo, _n, body) => {
+        commentBody = body;
+        calls.push('comment');
+        return { url: 'https://github.com/o/r/issues/1#issuecomment-1' };
+      }),
+      addLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`add:${label}`);
+      }),
+      removeLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`remove:${label}`);
+      }),
+      getCurrentUser: throwingGetUser,
+    });
+    await runAdvance(
+      'generacy-ai/generacy#1',
+      { gate: 'clarification' },
+      {
+        loadConfig: baseLoad,
+        gh,
+        now: fixedNow,
+        env: { CLUSTER_GITHUB_USERNAME: 'cluster-bot' },
+      },
+    );
+    expect(calls).toEqual(['comment', 'add:completed:clarification']);
+    expect(commentBody).toContain('actor=cluster-bot');
+    expect(commentBody).toContain('by **@cluster-bot**');
+    expect(throwingGetUser).not.toHaveBeenCalled();
+  });
+
+  it('all identity sources miss → warns with 4-knob message, applies label, omits actor from comment (FR-003 / SC-002)', async () => {
+    const calls: string[] = [];
+    let commentBody = '';
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({ labels: ['waiting-for:clarification'] })),
+      postIssueComment: vi.fn(async (_repo, _n, body) => {
+        commentBody = body;
+        calls.push('comment');
+        return { url: 'https://github.com/o/r/issues/1#issuecomment-1' };
+      }),
+      addLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`add:${label}`);
+      }),
+      removeLabel: vi.fn(async (_repo, _n, label) => {
+        calls.push(`remove:${label}`);
+      }),
+      getCurrentUser: vi.fn(async () => {
+        throw new Error('gh api user: 403');
+      }),
+    });
+    const warnCalls: string[] = [];
+    const originalLogger = getLogger();
+    const stubLogger = {
+      info: vi.fn(),
+      warn: vi.fn((msg: unknown) => {
+        warnCalls.push(typeof msg === 'string' ? msg : String(msg));
+      }),
+      error: vi.fn(),
+      debug: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      child: vi.fn(() => stubLogger),
+    } as unknown as pino.Logger;
+    setLogger(stubLogger);
+    try {
+      await runAdvance(
+        'generacy-ai/generacy#1',
+        { gate: 'clarification' },
+        {
+          loadConfig: baseLoad,
+          gh,
+          now: fixedNow,
+          env: {},
+        },
+      );
+    } finally {
+      setLogger(originalLogger);
+    }
+    expect(calls).toEqual(['comment', 'add:completed:clarification']);
+    expect(commentBody).not.toContain('actor=');
+    expect(commentBody).not.toContain('by **@');
+    expect(commentBody).toContain('<!-- generacy-cockpit:manual-advance gate=clarification ts=');
+    expect(warnCalls.length).toBeGreaterThan(0);
+    const knobWarn = warnCalls.find(
+      (m) =>
+        m.includes('--assignee') &&
+        m.includes('cockpit.assignee') &&
+        m.includes('CLUSTER_GITHUB_USERNAME') &&
+        m.includes('GH_USERNAME'),
+    );
+    expect(knobWarn, `expected a warn call containing all four knobs; got: ${warnCalls.join(' | ')}`).toBeDefined();
+  });
+});

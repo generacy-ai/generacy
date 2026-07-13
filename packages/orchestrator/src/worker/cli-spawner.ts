@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type {
   CliSpawnOptions,
   ChildProcessHandle,
@@ -10,11 +11,18 @@ import type { AgentLauncher } from '../launcher/agent-launcher.js';
 import type { ShellIntent } from '../launcher/types.js';
 import { buildLaunchCredentials } from './credentials-helper.js';
 
+/**
+ * Pre-cap ring buffer capacity for shell-path merged stdout+stderr capture.
+ * Deliberately larger than the 4 KiB post-cap bound so `boundOutputTail`'s
+ * last-30-lines slicing has real data to work with when lines are long.
+ */
+const RING_BYTES = 8192;
+
 /** Default timeout for the validate phase (10 minutes). */
-const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
+export const DEFAULT_VALIDATE_TIMEOUT_MS = 600_000;
 
 /** Default timeout for pre-validate dependency installation (5 minutes). */
-const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
+export const DEFAULT_INSTALL_TIMEOUT_MS = 300_000;
 
 /**
  * Spawns Claude CLI processes (or shell commands for validation) and manages
@@ -154,6 +162,24 @@ export class CliSpawner {
   ): Promise<PhaseResult> {
     const startTime = Date.now();
     let stderrBuffer = '';
+    // #892: buffer raw stdout when no OutputCapture is attached — the
+    // validate + install paths need it as evidence for the fix cycle.
+    let stdoutBuffer = '';
+
+    // ---- Merged stdout+stderr ring buffer (shell paths only) ----
+    // #890: populated when capture is undefined. Chunks are appended in Node
+    // `data`-event arrival order (best-effort per FR-004, Q5→A) into one Buffer.
+    // The buffer holds at most RING_BYTES = 8192 bytes — older bytes are sliced off.
+    // Feeds `error.output`; the separate stdout/stderr buffers above feed #892's
+    // `capturedStdout`/`capturedStderr`.
+    let outputRing = Buffer.alloc(0);
+    const appendRing = (data: Buffer | string): void => {
+      const buf = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
+      outputRing = Buffer.concat([outputRing, buf]);
+      if (outputRing.length > RING_BYTES) {
+        outputRing = outputRing.subarray(outputRing.length - RING_BYTES);
+      }
+    };
 
     // ---- stdout ----
     if (child.stdout && capture) {
@@ -162,18 +188,34 @@ export class CliSpawner {
       });
     }
 
-    // For runValidatePhase we still want to capture stdout even without OutputCapture,
-    // so we attach a no-op listener to avoid back-pressure issues.
+    // Shell paths (runValidatePhase, no OutputCapture): capture raw stdout for
+    // two consumers — #890's merged evidence ring buffer (`error.output`) and
+    // #892's raw `stdoutBuffer` feeding the ValidateFixHandler evidence
+    // pipeline (bounded to a soft limit to avoid unbounded memory growth).
+    const STDOUT_CAP_BYTES = 5 * 1024 * 1024; // 5 MiB
     if (child.stdout && !capture) {
-      child.stdout.on('data', () => {
-        // intentionally empty
+      child.stdout.on('data', (data: Buffer | string) => {
+        appendRing(data);
+        if (stdoutBuffer.length < STDOUT_CAP_BYTES) {
+          const chunk = typeof data === 'string' ? data : data.toString('utf-8');
+          stdoutBuffer += chunk;
+        }
       });
     }
 
     // ---- stderr ----
     if (child.stderr) {
       child.stderr.on('data', (data: Buffer | string) => {
+        // #892: raw stderr for `capturedStderr` (validate + install paths).
         stderrBuffer += typeof data === 'string' ? data : data.toString('utf-8');
+        if (!capture) {
+          // Shell path: interleave into the merged ring buffer.
+          appendRing(data);
+        }
+        // CLI path: no ring buffer; stderr tail is not populated for CLI phases.
+        // Their diagnostic surface is `PhaseResult.output` (parsed JSON events),
+        // from which `buildErrorEvidence` synthesizes `outputTail` via
+        // `synthesizeOutputTail` at evidence-build time.
       });
     }
 
@@ -234,6 +276,10 @@ export class CliSpawner {
       output: capture ? capture.getOutput() : [],
       sessionId: capture?.sessionId,
       implementResult: capture?.implementResult,
+      // #892: expose the raw non-CLI stdout/stderr for the validate-fix
+      // evidence pipeline. Empty strings when OutputCapture was used.
+      capturedStdout: capture ? undefined : stdoutBuffer,
+      capturedStderr: stderrBuffer,
     };
 
     if (!success) {
@@ -246,7 +292,7 @@ export class CliSpawner {
 
       result.error = {
         message,
-        stderr: stderrBuffer,
+        output: capture ? '' : outputRing.toString('utf8'),
         phase,
       };
     }

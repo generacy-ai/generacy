@@ -3,6 +3,7 @@ import type { HealthResponse, HealthStatus, ServiceStatus } from '../types/index
 import type { GitHubAuthSnapshot } from '../types/github-auth.js';
 import { probeCodeServerSocket } from '../services/code-server-probe.js';
 import { probeControlPlaneSocket } from '../services/control-plane-probe.js';
+import { resolveOrchestratorVersion } from '../services/orchestrator-version.js';
 
 /**
  * Health check options
@@ -56,6 +57,7 @@ export async function setupHealthRoutes(
   const checks = { ...defaultChecks, ...options.checks };
   const cluster = options.cluster;
   const githubAuthGetter = options.githubAuth;
+  const resolvedVersion = resolveOrchestratorVersion();
 
   // GET /health - Health check endpoint
   server.get(
@@ -74,6 +76,7 @@ export async function setupHealthRoutes(
                 type: 'object',
                 additionalProperties: { type: 'string', enum: ['ok', 'error'] },
               },
+              version: { type: 'string' },
               codeServerReady: { type: 'boolean' },
               controlPlaneReady: { type: 'boolean' },
               displayName: { type: 'string' },
@@ -90,6 +93,7 @@ export async function setupHealthRoutes(
                 type: 'object',
                 additionalProperties: { type: 'string', enum: ['ok', 'error'] },
               },
+              version: { type: 'string' },
               codeServerReady: { type: 'boolean' },
               controlPlaneReady: { type: 'boolean' },
               displayName: { type: 'string' },
@@ -132,6 +136,7 @@ export async function setupHealthRoutes(
         status: overallStatus,
         timestamp: new Date().toISOString(),
         services,
+        version: resolvedVersion,
         codeServerReady,
         controlPlaneReady,
       };

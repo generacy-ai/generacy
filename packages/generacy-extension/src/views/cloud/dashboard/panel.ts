@@ -409,19 +409,19 @@ export class OrgDashboardPanel {
 
       case 'upgrade':
         void vscode.env.openExternal(
-          vscode.Uri.parse(`https://generacy.ai/upgrade?tier=${message.targetTier}`)
+          vscode.Uri.parse(`https://app.generacy.ai/upgrade?tier=${message.targetTier}`)
         );
         break;
 
       case 'manageBilling':
         void vscode.env.openExternal(
-          vscode.Uri.parse('https://generacy.ai/billing')
+          vscode.Uri.parse('https://app.generacy.ai/billing')
         );
         break;
 
       case 'inviteMember':
         void vscode.env.openExternal(
-          vscode.Uri.parse('https://generacy.ai/settings/members')
+          vscode.Uri.parse('https://app.generacy.ai/settings/members')
         );
         break;
 

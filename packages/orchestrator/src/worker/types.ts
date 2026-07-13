@@ -94,6 +94,18 @@ export const STAGE_MARKERS: Record<StageType, string> = {
 };
 
 /**
+ * HTML-marker prefix used on failure-alert comments. Full marker shape:
+ *   <!-- generacy:failure-alert:<stage>:<runId> -->
+ * where <stage> is a StageType and <runId> is a UUID minted at
+ * PhaseLoop.executeLoop entry.
+ *
+ * Future cockpit tooling MAY parse this prefix to discover alert history on
+ * an issue. Format changes require a contract-file edit
+ * (specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md).
+ */
+export const FAILURE_ALERT_MARKER_PREFIX = '<!-- generacy:failure-alert:';
+
+/**
  * Gate definition for pausing workflow at review checkpoints
  */
 export interface GateDefinition {
@@ -102,7 +114,7 @@ export interface GateDefinition {
   /** Label to add when gate is active */
   gateLabel: string;
   /** When to activate the gate */
-  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review';
+  condition: 'always' | 'on-request' | 'on-questions' | 'on-failure' | 'on-sibling-review' | 'on-merge-conflict';
 }
 
 /**
@@ -122,6 +134,14 @@ export interface ImplementPartialResult {
 export interface PhaseResult {
   /** Phase that was executed */
   phase: WorkflowPhase;
+  /**
+   * Raw stdout captured from the phase process, only populated by
+   * `runValidatePhase` (#892 evidence pipeline). Undefined for CLI phases,
+   * which surface output via `output: OutputChunk[]`.
+   */
+  capturedStdout?: string;
+  /** Raw stderr captured from the phase process (validate + install paths). */
+  capturedStderr?: string;
   /** Whether the phase completed successfully */
   success: boolean;
   /** CLI exit code (0 = success) */
@@ -140,7 +160,19 @@ export interface PhaseResult {
   /** Error details if failed */
   error?: {
     message: string;
-    stderr: string;
+    /**
+     * Merged stdout+stderr tail from the failed subprocess.
+     * - Shell paths (`runValidatePhase`, `runPreValidateInstall`): populated from
+     *   the ring buffer in `manageProcess` (bounded ~8 KiB, arrival-order
+     *   best-effort per Q5→A).
+     * - CLI paths (`spawnPhase`): empty string. Evidence is synthesized from
+     *   `PhaseResult.output` (parsed `type: 'text'` chunks) at evidence-build
+     *   time via `synthesizeOutputTail`.
+     * - Synthesized results (no-progress guard, product-diff detection failure,
+     *   empty-product-diff failure, unexpected-spawn catch): set by the caller
+     *   to a controlled diagnostic string.
+     */
+    output: string;
     phase: WorkflowPhase;
   };
   /** Partial implement result parsed from sentinel output (implement phase only) */
@@ -202,6 +234,129 @@ export interface StageCommentData {
   completedAt?: string;
   /** PR URL if available */
   prUrl?: string;
+  /**
+   * Rendered inside the comment when status === 'error' or during a merge-conflict pause.
+   *
+   * Discriminated union with two variants:
+   * - #847/#890 command-exit variant: `{ command, exitDescriptor, outputTail }` — populated by
+   *   phase-loop.ts at each `updateStageComment({ status: 'error' })` call site.
+   * - #864 merge-conflict variant: `{ mergeConflict: { baseRef, conflictedPaths } }` — populated
+   *   by the pre-phase base-merge hook when a merge conflict pauses the workflow.
+   *
+   * Consumed by StageCommentManager.renderStageComment which narrows on `.mergeConflict`
+   * presence. Exactly one variant is populated per call; both being present is a
+   * programmer bug and asserted (dev-mode).
+   */
+  errorEvidence?:
+    | {
+        /** The failing command string as it was passed to the spawner. */
+        command: string;
+        /** Resolved exit descriptor: `exit <N>`, `killed (SIGTERM) after <Nms>`, or `aborted` (FR-005, Q5→A). */
+        exitDescriptor: string;
+        /**
+         * Bounded merged tail — stdout and stderr chunks in Node `data`-event
+         * arrival order (best-effort per FR-004, Q5→A). Last 30 lines then 4 KiB
+         * cap, truncation marker prepended when applicable. Literal
+         * `(no output on either stream)` when both streams were empty. Never
+         * renders as `(empty)` when either stream produced any output (FR-003).
+         *
+         * Populated by phase-loop.ts via `buildErrorEvidence`, which:
+         * - For shell phases (validate, pre-validate): reads `result.error.output`
+         *   (the merged ring-buffer tail from manageProcess) and passes through
+         *   `boundOutputTail`.
+         * - For CLI phases: synthesizes from `result.output`'s `type: 'text'`
+         *   chunks via `synthesizeOutputTail` (also bounder-capped).
+         */
+        outputTail: string;
+        /**
+         * #915: Optional classifier reason — the human-readable message that
+         * explains why a synthetic post-exit failure was raised (product-diff
+         * guard, no-progress guard, spawn-error catch, product-diff-error
+         * catch). Sourced from `result.error.message` when the
+         * `buildErrorEvidence` caller passed an explicit `classifier` argument.
+         *
+         * Absent on process-failure paths (shell/CLI real non-zero exit) —
+         * the outputTail already carries the diagnostic surface.
+         *
+         * Rendering: single-line reasons appear inline as `**Reason**: <r>`;
+         * multi-line reasons appear as `**Reason**:` on its own line followed
+         * by a fenced ```text``` block, capped at 1 KiB with a trailing `…`
+         * marker. Backticks are ZWSP-escaped before render, matching outputTail.
+         */
+        reason?: string;
+      }
+    | {
+        /** Base-sync merge conflict variant (#864). */
+        mergeConflict: {
+          /** The `origin/<base>` ref that was being merged. */
+          baseRef: string;
+          /** Paths reported by `git diff --name-only --diff-filter=U`. */
+          conflictedPaths: string[];
+          /**
+           * #898 FR-011/FR-012 Ship 1: three-step manual remedy rendered into
+           * the pause comment. Optional to preserve backwards compatibility
+           * with pre-Ship-1 evidence blobs (queue admin views, cockpit status
+           * reads from historical comments). Post-Ship-1 the phase-loop pause
+           * site always populates this.
+           */
+          manualRemedy?: {
+            /** 3 strings, template-substituted at build time. */
+            steps: string[];
+            /** Callout warning under the numbered list. */
+            warning: string;
+          };
+        };
+      };
+}
+
+/**
+ * The #847/#890 command-exit variant of `StageCommentData.errorEvidence` —
+ * `{ command, exitDescriptor, outputTail }`. The failure-alert path (#865) only
+ * ever carries this variant; the #864 merge-conflict variant is rendered in
+ * place by `StageCommentManager.appendMergeConflictBlock`, never via an alert.
+ */
+export type CommandExitEvidence = Extract<
+  NonNullable<StageCommentData['errorEvidence']>,
+  { command: string }
+>;
+
+/**
+ * Input to StageCommentManager.postFailureAlert. Composed by phase-loop.ts at
+ * each of the terminal-error sites (pre-validate install failure, unexpected
+ * spawn error, post-phase failure, product-diff failures, no-progress guard)
+ * and passed as-is to the manager.
+ *
+ * `runId` is minted once per PhaseLoop.executeLoop invocation via
+ * crypto.randomUUID(). See specs/865-found-during-cockpit-v1/contracts/failure-alert-comment.md.
+ */
+export interface FailureAlertData {
+  /**
+   * The stage/kind the failure belongs to.
+   *
+   * - `StageType` (specification | planning | implementation) — phase-level
+   *   failures rendered inside the stage comment marker.
+   * - `'label-op'` (#889) — GitHub label-operation exhaustion terminal failure,
+   *   emitted by `WorkerDispatcher` on `WorkerResult.status === 'failed-terminal'`.
+   *   Uses its own marker suffix and a different summary line.
+   */
+  stage: StageType | 'label-op';
+  /** Stable per-runPhaseLoop-invocation UUID (dedup key inside the marker). */
+  runId: string;
+  /**
+   * The failing phase name (used in the summary line). For `stage === 'label-op'`
+   * this carries the `TerminalLabelOpSite` string ("gate-hit", "phase-start", …)
+   * rather than a `WorkflowPhase` — the site is what surfaces in the alert body.
+   */
+  phase: WorkflowPhase | string;
+  /**
+   * Verbatim reuse of buildErrorEvidence output. NO re-derivation.
+   */
+  evidence: CommandExitEvidence;
+  /**
+   * Only populated when `stage === 'label-op'` (#889). The `labelOp` field is
+   * copied verbatim from `WorkerResult.failureMetadata.labelOp`.
+   */
+  labelOp?: string;
 }
 
 /**
@@ -245,6 +400,8 @@ export interface WorkerContext {
   signal: AbortSignal;
   /** Repository checkout path */
   checkoutPath: string;
+  /** Feature branch name (e.g. `864-found-during-cockpit-v1`) — un-prefixed. */
+  branch?: string;
   /** Issue URL for prompts */
   issueUrl: string;
   /** Issue description (from metadata or GitHub fetch) */
@@ -255,6 +412,14 @@ export interface WorkerContext {
   siblingWorkdirs?: Record<string, string>;
   /** PRs opened in sibling repos during cross-repo fan-out (from WorkflowState) */
   linkedPRs?: LinkedPR[];
+  /**
+   * Why the worker was resumed (#892). Set by the resume path when the
+   * base-advance monitor enqueued the re-run. Gates ValidateFixHandler
+   * invocation in PhaseLoop's validate `catch` block (D7 ordering invariant).
+   */
+  resumeReason?: 'base-advance';
+  /** Base branch SHA that triggered the resume (#892). Surfaces in logs. */
+  baseSha?: string;
 }
 
 /**

@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { CliSpawner } from '../cli-spawner.js';
 import { WorkerConfigSchema } from '../config.js';
@@ -211,8 +212,8 @@ describe('CliSpawner', () => {
     });
   });
 
-  describe('stderr capture', () => {
-    it('includes stderr in error.stderr when process fails', async () => {
+  describe('CLI path output', () => {
+    it('leaves error.output empty for CLI phases — diagnostic surface is PhaseResult.output', async () => {
       const { handle, stderr } = createMockProcess(1, 50);
       spawnFn.mockReturnValue(handle);
       const capture = createMockCapture();
@@ -227,7 +228,9 @@ describe('CliSpawner', () => {
 
       expect(result.success).toBe(false);
       expect(result.error).toBeDefined();
-      expect(result.error!.stderr).toContain('something went wrong');
+      // CLI paths carry `output: ''` — the tail is synthesized from
+      // PhaseResult.output at evidence-build time via synthesizeOutputTail.
+      expect(result.error!.output).toBe('');
     });
   });
 
@@ -420,10 +423,83 @@ describe('CliSpawner', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Real-subprocess ring-buffer fixtures (#890) — shell path only.
+//
+// Uses node:child_process.spawn against real /bin/sh so we can prove the
+// ring buffer in manageProcess actually captures stdout (which the pre-#890
+// no-op listener silently dropped) and interleaves both streams.
+// ---------------------------------------------------------------------------
+describe('CliSpawner - runValidatePhase real subprocess (ring buffer)', () => {
+  function realFactory(): ProcessFactory {
+    return {
+      spawn(command, args, options): ChildProcessHandle {
+        const child: ChildProcess = nodeSpawn(command, args, {
+          cwd: options.cwd,
+          env: options.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const exitPromise = new Promise<number | null>((resolve) => {
+          child.on('exit', (code) => resolve(code));
+          child.on('error', () => resolve(1));
+        });
+        return {
+          stdin: null,
+          stdout: child.stdout,
+          stderr: child.stderr,
+          pid: child.pid,
+          kill: (signal?: NodeJS.Signals) => child.kill(signal),
+          exitPromise,
+        };
+      },
+    };
+  }
+
+  function makeRealSpawner(): CliSpawner {
+    const agentLauncher = new AgentLauncher(new Map([['default', realFactory()]]));
+    agentLauncher.registerPlugin(new ClaudeCodeLaunchPlugin());
+    agentLauncher.registerPlugin(new GenericSubprocessPlugin());
+    return new CliSpawner(agentLauncher, mockLogger, 50);
+  }
+
+  it('captures stdout-only failure output into result.error.output (SC-004 reproduction)', async () => {
+    const spawner = makeRealSpawner();
+    const controller = new AbortController();
+    const result = await spawner.runValidatePhase(
+      process.cwd(),
+      'echo "stdout error text"; exit 1',
+      controller.signal,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.error).toBeDefined();
+    expect(result.error!.output).toContain('stdout error text');
+  });
+
+  it('captures both stdout and stderr into a single merged tail', async () => {
+    const spawner = makeRealSpawner();
+    const controller = new AbortController();
+    const result = await spawner.runValidatePhase(
+      process.cwd(),
+      'echo "stdout"; echo "stderr" >&2; exit 1',
+      controller.signal,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.exitCode).toBe(1);
+    expect(result.error).toBeDefined();
+    expect(result.error!.output).toContain('stdout');
+    expect(result.error!.output).toContain('stderr');
+  });
+});
+
 describe('WorkerConfigSchema - preValidateCommand', () => {
-  it('defaults to pnpm install && pnpm -r --filter ./packages/* build', () => {
+  it('defaults to the degrade shell string (unconditional pnpm install + guarded workspace build)', () => {
     const config = WorkerConfigSchema.parse({});
-    expect(config.preValidateCommand).toBe("pnpm install && pnpm -r --filter './packages/*' build");
+    expect(config.preValidateCommand).toBe(
+      "pnpm install && if [ -f pnpm-workspace.yaml ] && ls packages/*/package.json >/dev/null 2>&1; then pnpm -r --filter './packages/*' build; fi",
+    );
   });
 
   it('accepts empty string', () => {

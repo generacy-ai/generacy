@@ -95,6 +95,8 @@ export { PTY_WRAPPER } from './launch/constants.js';
 export type {
   PhaseIntent,
   PrFeedbackIntent,
+  ValidateFixIntent,
+  MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,
   ClaudeCodeIntent,

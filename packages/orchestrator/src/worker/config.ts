@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { OrchestratorSettings } from '@generacy-ai/config';
 import type { WorkflowPhase } from './types.js';
 
 /**
@@ -10,7 +11,7 @@ export const GateDefinitionSchema = z.object({
   /** Label to add when gate is active */
   gateLabel: z.string(),
   /** When to activate the gate */
-  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review']),
+  condition: z.enum(['always', 'on-request', 'on-questions', 'on-failure', 'on-sibling-review', 'on-merge-conflict']),
 });
 
 /**
@@ -55,7 +56,11 @@ export const WorkerConfigSchema = z.object({
   /** Command to run during the validate phase */
   validateCommand: z.string().default('pnpm test && pnpm build'),
   /** Command to run before validation to install dependencies (empty string to skip) */
-  preValidateCommand: z.string().default("pnpm install && pnpm -r --filter './packages/*' build"),
+  preValidateCommand: z
+    .string()
+    .default(
+      "pnpm install && if [ -f pnpm-workspace.yaml ] && ls packages/*/package.json >/dev/null 2>&1; then pnpm -r --filter './packages/*' build; fi",
+    ),
   /** Maximum retries for implement phase when partial progress is detected */
   maxImplementRetries: z.number().int().min(0).max(5).default(2),
   /** Credential role from .generacy/config.yaml defaults.role — when set, credentials are populated on launch requests */
@@ -66,10 +71,14 @@ export const WorkerConfigSchema = z.object({
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
       { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'always' },
       { phase: 'implement', gateLabel: 'waiting-for:sibling-review', condition: 'on-sibling-review' },
+      { phase: 'implement', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
+      { phase: 'validate', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
     ],
     'speckit-bugfix': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
       { phase: 'implement', gateLabel: 'waiting-for:implementation-review', condition: 'on-request' },
+      { phase: 'implement', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
+      { phase: 'validate', gateLabel: 'waiting-for:merge-conflicts', condition: 'on-merge-conflict' },
     ],
     'speckit-epic': [
       { phase: 'clarify', gateLabel: 'waiting-for:clarification', condition: 'on-questions' },
@@ -79,6 +88,41 @@ export const WorkerConfigSchema = z.object({
 });
 
 export type WorkerConfig = z.infer<typeof WorkerConfigSchema>;
+
+/**
+ * Merge per-repo validate-command overrides onto the global worker config.
+ *
+ * The target repo's `.generacy/config.yaml` `orchestrator` block may set
+ * `validateCommand` / `preValidateCommand`. The global defaults are
+ * monorepo-shaped (`pnpm test && pnpm build`); single-package repos (e.g. an
+ * Astro site with only a `build` script) override them so the validate phase
+ * doesn't fail on a missing `test` script before it can reach the build.
+ *
+ * Only those two fields are overridable per-repo. An explicit empty
+ * `preValidateCommand` is preserved (it means "skip the install step"). Returns
+ * the original config object unchanged when there are no applicable overrides,
+ * so callers can cheaply detect "no override" via reference equality.
+ */
+export function applyRepoValidateOverrides(
+  config: WorkerConfig,
+  settings: OrchestratorSettings | null | undefined,
+): WorkerConfig {
+  if (
+    settings == null ||
+    (settings.validateCommand === undefined && settings.preValidateCommand === undefined)
+  ) {
+    return config;
+  }
+  return {
+    ...config,
+    ...(settings.validateCommand !== undefined
+      ? { validateCommand: settings.validateCommand }
+      : {}),
+    ...(settings.preValidateCommand !== undefined
+      ? { preValidateCommand: settings.preValidateCommand }
+      : {}),
+  };
+}
 
 /**
  * Resolve the wall-clock timeout (ms) for a CLI phase: the per-phase override

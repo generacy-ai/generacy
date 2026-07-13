@@ -35,7 +35,7 @@ function makeFailResult(phase: WorkflowPhase): PhaseResult {
     exitCode: 1,
     durationMs: 50,
     output: [],
-    error: { message: `${phase} failed`, stderr: '', phase },
+    error: { message: `${phase} failed`, output: '', phase },
   };
 }
 
@@ -49,6 +49,7 @@ function createMockDeps(): PhaseLoopDeps {
     } as any,
     stageCommentManager: {
       updateStageComment: vi.fn().mockResolvedValue(undefined),
+      postFailureAlert: vi.fn().mockResolvedValue(undefined),
     } as any,
     gateChecker: {
       checkGates: vi.fn().mockReturnValue([]),
@@ -66,6 +67,7 @@ function createMockDeps(): PhaseLoopDeps {
     } as any,
     prManager: {
       commitPushAndEnsurePr: vi.fn().mockResolvedValue({ prUrl: null, hasChanges: true }),
+      getPrNumber: vi.fn().mockReturnValue(undefined),
     } as any,
   };
 }
@@ -80,7 +82,12 @@ function createMockContext(startPhase: WorkflowPhase = 'validate'): WorkerContex
       workflowName: 'speckit-feature',
     } as any,
     startPhase,
-    github: {} as any,
+    // Default github mocks satisfy the implement product-diff check with a
+    // non-spec (product) file. Individual tests may override.
+    github: {
+      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getFilesChangedBetween: vi.fn().mockResolvedValue(['packages/orchestrator/src/foo.ts']),
+    } as any,
     logger: mockLogger,
     signal: new AbortController().signal,
     checkoutPath: '/tmp/repo',
@@ -159,79 +166,6 @@ describe('PhaseLoop - pre-validate install', () => {
     expect(result.completed).toBe(false);
     expect(deps.cliSpawner.runValidatePhase).not.toHaveBeenCalled();
     expect(deps.labelManager.onError).toHaveBeenCalledWith('validate');
-  });
-});
-
-describe('PhaseLoop - implement phase requires changes', () => {
-  let phaseLoop: PhaseLoop;
-  let deps: PhaseLoopDeps;
-
-  beforeEach(() => {
-    phaseLoop = new PhaseLoop(mockLogger);
-    deps = createMockDeps();
-  });
-
-  it('fails implement phase when no changes and no prior implementation', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
-      getCommitsBetween: vi.fn().mockResolvedValue([
-        { sha: 'abc', message: 'chore(speckit): complete specify phase for #8' },
-      ]),
-    } as any;
-    const config = createConfig();
-
-    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
-    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
-
-    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
-
-    expect(result.completed).toBe(false);
-    expect(result.lastPhase).toBe('implement');
-    expect(deps.labelManager.onError).toHaveBeenCalledWith('implement');
-  });
-
-  it('continues when no new changes but prior implementation commit exists on branch', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
-      getCommitsBetween: vi.fn().mockResolvedValue([
-        { sha: 'abc', message: 'chore(speckit): complete specify phase for #8' },
-        { sha: 'def', message: 'chore(speckit): complete implement phase for #8' },
-      ]),
-    } as any;
-    const config = createConfig();
-
-    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
-    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
-
-    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
-
-    expect(result.completed).toBe(true);
-    expect(deps.labelManager.onError).not.toHaveBeenCalled();
-    expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('implement');
-  });
-
-  it('soft-passes when no new changes but prior WIP retry commit exists on branch', async () => {
-    const context = createMockContext('implement');
-    context.github = {
-      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
-      getCurrentBranch: vi.fn().mockResolvedValue('008-feature'),
-      getCommitsBetween: vi.fn().mockResolvedValue([
-        { sha: 'abc', message: 'wip(speckit): partial implement progress for #8 (retry 1)' },
-      ]),
-    } as any;
-    const config = createConfig();
-
-    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
-    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
-
-    const result = await phaseLoop.executeLoop(context, config, deps, ['implement']);
-
-    expect(result.completed).toBe(true);
-    expect(deps.labelManager.onError).not.toHaveBeenCalled();
   });
 });
 
@@ -783,5 +717,673 @@ describe('PhaseLoop - phaseAfterHandlers', () => {
     expect(result.completed).toBe(true);
     expect(deps.labelManager.onPhaseComplete).toHaveBeenCalledWith('specify');
     expect(deps.gateChecker.checkGates).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure evidence threading (#847 Gap B / T008)
+// ---------------------------------------------------------------------------
+
+/** Locate the last stage-comment update call with status === 'error'. */
+function findLastErrorCall(spy: any): any | undefined {
+  const calls = spy.mock.calls;
+  for (let i = calls.length - 1; i >= 0; i--) {
+    if (calls[i][0].status === 'error') return calls[i][0];
+  }
+  return undefined;
+}
+
+describe('PhaseLoop - errorEvidence threading (#847)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('threads errorEvidence into pre-validate install failure', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+
+    const installResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 42,
+      durationMs: 100,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 42',
+        output: 'ELIFECYCLE Command failed with exit code 42',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(installResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'pnpm install',
+      exitDescriptor: 'exit 42',
+      outputTail: 'ELIFECYCLE Command failed with exit code 42',
+    });
+  });
+
+  it('threads errorEvidence for unexpected spawn error catch (synthetic PhaseResult, #915 classifier=spawn-error)', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockRejectedValue(new Error('spawn ENOENT'));
+
+    await expect(
+      phaseLoop.executeLoop(context, config, deps, ['specify']),
+    ).rejects.toThrow('spawn ENOENT');
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.command).toBe('specify');
+    // #915: synthetic classifier reworded exit descriptor.
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: spawn-error (process exit 1)');
+    // outputTail unchanged — synthetic PhaseResult carries no output.
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+    // #915: reason surfaces the caught error's message.
+    expect(errorCall.errorEvidence.reason).toBe('Error: spawn ENOENT');
+  });
+
+  it('threads errorEvidence for a post-phase CLI failure (implement)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    const failResult: PhaseResult = {
+      phase: 'implement',
+      success: false,
+      exitCode: 3,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "implement" failed with exit code 3',
+        output: 'compilation failed\n  at line 5',
+        phase: 'implement',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'implement',
+      exitDescriptor: 'exit 3',
+      outputTail: 'compilation failed\n  at line 5',
+    });
+  });
+
+  it('threads errorEvidence for a post-phase validate failure (uses validateCommand)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm test && npm run build',
+    });
+
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: 'Tests failed: 2 of 5',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'npm test && npm run build',
+      exitDescriptor: 'exit 1',
+      outputTail: 'Tests failed: 2 of 5',
+    });
+  });
+
+  it('renders killed (SIGTERM) descriptor when error message signals a timeout', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig({ phaseTimeoutMs: 900_000 });
+
+    const failResult: PhaseResult = {
+      phase: 'specify',
+      success: false,
+      exitCode: 1,
+      durationMs: 900_000,
+      output: [],
+      error: {
+        message: 'Phase "specify" timed out after 900000ms',
+        output: 'last log line before kill',
+        phase: 'specify',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('killed (SIGTERM) after 900000ms');
+  });
+
+  it('renders aborted descriptor when error message signals an abort', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    const failResult: PhaseResult = {
+      phase: 'specify',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "specify" was aborted',
+        output: '',
+        phase: 'specify',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['specify']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('aborted');
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+  });
+
+  it('synthesizes outputTail from type:text chunks for CLI phases (#890)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    const failResult: PhaseResult = {
+      phase: 'implement',
+      success: false,
+      exitCode: 3,
+      durationMs: 50,
+      output: [
+        { type: 'text', data: { text: 'line1' }, timestamp: '2026-07-09T00:00:00.000Z' },
+        { type: 'text', data: { text: 'line2' }, timestamp: '2026-07-09T00:00:01.000Z' },
+      ],
+      error: {
+        message: 'Phase "implement" failed with exit code 3',
+        output: '',
+        phase: 'implement',
+      },
+    };
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(failResult);
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.outputTail).toBe('line1\nline2');
+  });
+
+  it('surfaces stdout-only shell failure (SC-001: Next.js Type error synthetic)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm run build',
+    });
+
+    // Fixture models the christrudelpw/sniplink#6 scenario: Next.js writes the
+    // type-check failure to stdout only. The ring buffer in manageProcess
+    // captures it into error.output; buildErrorEvidence bounds it into outputTail.
+    const stdoutOnlyOutput = "Type error: Cannot find module '@/components/CopyButton'";
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: stdoutOnlyOutput,
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.outputTail).toContain("Type error: Cannot find module '@/components/CopyButton'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #915: classifier reason surfacing across buildErrorEvidence callsites
+// ---------------------------------------------------------------------------
+
+describe('PhaseLoop - #915 classifier reason surfacing', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  // -- Synthetic classifier sites: reason populated + descriptor reworded ----
+
+  it('no-progress guard (:429) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(0, 7))
+      .mockResolvedValueOnce(makePartialResult(0, 7)); // guard fires
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: no-progress (process exit 0)');
+    expect(errorCall.errorEvidence.reason).toBe(
+      'Implement increment made no progress — aborting to prevent infinite loop',
+    );
+    expect(errorCall.errorEvidence.outputTail).toBe('no progress: tasks_remaining stayed at 7 across two increments');
+    // Invariant 5: exit descriptor never reads the bare literal `exit 0` on a
+    // post-exit classifier failure with exitCode 0.
+    expect(errorCall.errorEvidence.exitDescriptor).not.toBe('exit 0');
+    // SC assertion: rendered surface can't collapse to just the both-empty literal.
+    expect(errorCall.errorEvidence.reason.length).toBeGreaterThan(0);
+  });
+
+  it('no-product-code-changes guard (:630) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('implement');
+    // Override github to return ONLY excluded (spec) files → guard fires.
+    context.github = {
+      getDefaultBranch: vi.fn().mockResolvedValue('develop'),
+      getFilesChangedBetween: vi.fn().mockResolvedValue([
+        'specs/915-found-during-cockpit-v1/tasks.md',
+        'specs/915-found-during-cockpit-v1/plan.md',
+      ]),
+    } as any;
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: 'https://github.com/pr/1', hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe(
+      'failed post-exit: no-product-code-changes (process exit 0)',
+    );
+    expect(errorCall.errorEvidence.reason).toContain('produced no product-code changes');
+    expect(errorCall.errorEvidence.reason).toContain('specs/');
+    // outputTail is the both-empty literal on this synthetic path.
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+    // Invariant 5: not the bare `exit 0` literal.
+    expect(errorCall.errorEvidence.exitDescriptor).not.toBe('exit 0');
+  });
+
+  it('spawn-error catch (:373) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('specify');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any).mockRejectedValue(new Error('spawn EACCES'));
+
+    await expect(
+      phaseLoop.executeLoop(context, config, deps, ['specify']),
+    ).rejects.toThrow('spawn EACCES');
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: spawn-error (process exit 1)');
+    expect(errorCall.errorEvidence.reason).toBe('Error: spawn EACCES');
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+  });
+
+  it('product-diff-error catch (:600) surfaces classifier reason and rewords descriptor', async () => {
+    const context = createMockContext('implement');
+    // resolveBaseRef → throws via getDefaultBranch rejection.
+    context.github = {
+      getDefaultBranch: vi.fn().mockRejectedValue(new Error('network unreachable')),
+      getFilesChangedBetween: vi.fn(),
+    } as any;
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeSuccessResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence.exitDescriptor).toBe(
+      'failed post-exit: product-diff-error (process exit 0)',
+    );
+    expect(errorCall.errorEvidence.reason).toContain('product-diff detection failed');
+    expect(errorCall.errorEvidence.reason).toContain('network unreachable');
+    // outputTail is the both-empty literal (result.error.output = '').
+    expect(errorCall.errorEvidence.outputTail).toBe('(no output on either stream)');
+  });
+
+  // -- Process-path regression sites: reason absent, descriptor unchanged ----
+
+  it('pre-validate install failure (:294) keeps pre-#915 shape — reason undefined', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+
+    const installResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 42,
+      durationMs: 100,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 42',
+        output: 'ELIFECYCLE Command failed with exit code 42',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(installResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    // Pre-#915 shape: exact three-field object, no reason field.
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'pnpm install',
+      exitDescriptor: 'exit 42',
+      outputTail: 'ELIFECYCLE Command failed with exit code 42',
+    });
+    expect(errorCall.errorEvidence.reason).toBeUndefined();
+    // Descriptor is not the reworded synthetic form.
+    expect(errorCall.errorEvidence.exitDescriptor).not.toMatch(/failed post-exit:/);
+  });
+
+  it('post-phase process failure (:548) keeps pre-#915 shape — reason undefined', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm test',
+    });
+
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: 'Tests failed: 2 of 5',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toEqual({
+      command: 'npm test',
+      exitDescriptor: 'exit 1',
+      outputTail: 'Tests failed: 2 of 5',
+    });
+    expect(errorCall.errorEvidence.reason).toBeUndefined();
+    expect(errorCall.errorEvidence.exitDescriptor).not.toMatch(/failed post-exit:/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failure-alert bottom-of-thread comment (#865)
+// ---------------------------------------------------------------------------
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+describe('PhaseLoop - failure-alert postFailureAlert (#865)', () => {
+  let phaseLoop: PhaseLoop;
+  let deps: PhaseLoopDeps;
+
+  beforeEach(() => {
+    phaseLoop = new PhaseLoop(mockLogger);
+    deps = createMockDeps();
+  });
+
+  it('mints a distinct runId per executeLoop invocation (T019)', async () => {
+    // First invocation: pre-validate fails, capture runId
+    const context1 = createMockContext('validate');
+    const config1 = createConfig({ preValidateCommand: 'pnpm install' });
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(makeFailResult('validate'));
+
+    await phaseLoop.executeLoop(context1, config1, deps, ['validate']);
+
+    const firstCall = (deps.stageCommentManager.postFailureAlert as any).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const runId1 = firstCall[0].runId;
+    expect(runId1).toMatch(UUID_REGEX);
+
+    // Second invocation: fresh deps + fresh phaseLoop → new runId
+    const phaseLoop2 = new PhaseLoop(mockLogger);
+    const deps2 = createMockDeps();
+    (deps2.cliSpawner.runPreValidateInstall as any).mockResolvedValue(makeFailResult('validate'));
+
+    await phaseLoop2.executeLoop(context1, config1, deps2, ['validate']);
+
+    const secondCall = (deps2.stageCommentManager.postFailureAlert as any).mock.calls[0];
+    expect(secondCall).toBeDefined();
+    const runId2 = secondCall[0].runId;
+    expect(runId2).toMatch(UUID_REGEX);
+    expect(runId2).not.toBe(runId1);
+  });
+
+  it('uses a stable runId within one executeLoop invocation (T020)', async () => {
+    // The Starting-phase-loop log line and the postFailureAlert call should
+    // carry the same runId. Capture logger.info calls to check the mint value.
+    const captured: { info: any[] } = { info: [] };
+    const capturingLogger = {
+      info: (obj: any, msg?: string) => {
+        if (typeof obj === 'object' && obj !== null && 'runId' in obj) {
+          captured.info.push({ obj, msg });
+        }
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      child: () => capturingLogger,
+    } as unknown as Logger;
+
+    const phaseLoopWithLog = new PhaseLoop(capturingLogger);
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(makeFailResult('validate'));
+
+    await phaseLoopWithLog.executeLoop(context, config, deps, ['validate']);
+
+    const startCall = captured.info.find((c) => c.msg === 'Starting phase loop');
+    expect(startCall).toBeDefined();
+    const runIdFromLog = startCall!.obj.runId;
+
+    const alertCall = (deps.stageCommentManager.postFailureAlert as any).mock.calls[0];
+    expect(alertCall).toBeDefined();
+    expect(alertCall[0].runId).toBe(runIdFromLog);
+  });
+
+  it('calls postFailureAlert once on pre-validate install failure with correct data (T021)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({ preValidateCommand: 'pnpm install' });
+
+    const installResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 100,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: 'missing package.json',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runPreValidateInstall as any).mockResolvedValue(installResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const spy = deps.stageCommentManager.postFailureAlert as any;
+    expect(spy).toHaveBeenCalledTimes(1);
+    const arg = spy.mock.calls[0][0];
+    expect(arg.stage).toBe('implementation');
+    expect(arg.phase).toBe('validate');
+    expect(arg.evidence.command).toBe('pnpm install');
+    expect(arg.evidence.exitDescriptor).toBe('exit 1');
+    expect(arg.runId).toMatch(UUID_REGEX);
+  });
+
+  it('calls postFailureAlert once on post-phase validate failure (T022)', async () => {
+    const context = createMockContext('validate');
+    const config = createConfig({
+      preValidateCommand: '',
+      validateCommand: 'npm test && npm run build',
+    });
+
+    const failResult: PhaseResult = {
+      phase: 'validate',
+      success: false,
+      exitCode: 1,
+      durationMs: 50,
+      output: [],
+      error: {
+        message: 'Phase "validate" failed with exit code 1',
+        output: 'Tests failed',
+        phase: 'validate',
+      },
+    };
+    (deps.cliSpawner.runValidatePhase as any).mockResolvedValue(failResult);
+
+    await phaseLoop.executeLoop(context, config, deps, ['validate']);
+
+    const spy = deps.stageCommentManager.postFailureAlert as any;
+    expect(spy).toHaveBeenCalledTimes(1);
+    const arg = spy.mock.calls[0][0];
+    expect(arg.phase).toBe('validate');
+    expect(arg.evidence.command).toBe('npm test && npm run build');
+  });
+
+  it('does NOT call postFailureAlert on intermediate implement retry that eventually succeeds (T023)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 2 });
+
+    // Fail once (retry), then succeed
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makeFailResult('implement'))
+      .mockResolvedValueOnce(makeSuccessResult('implement'));
+
+    (deps.prManager.commitPushAndEnsurePr as any)
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true })
+      .mockResolvedValueOnce({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    expect(deps.stageCommentManager.postFailureAlert).not.toHaveBeenCalled();
+  });
+
+  it('calls postFailureAlert exactly once when implement exhausts retries (T024)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 1 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    const spy = deps.stageCommentManager.postFailureAlert as any;
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0].phase).toBe('implement');
+  });
+
+  it('no-progress site emits evidence via updateStageComment AND postFailureAlert with same evidence (T025, #915 classifier=no-progress)', async () => {
+    const context = createMockContext('implement');
+    const config = createConfig();
+
+    (deps.cliSpawner.spawnPhase as any)
+      .mockResolvedValueOnce(makePartialResult(0, 10))  // 10 remaining
+      .mockResolvedValueOnce(makePartialResult(0, 10)); // still 10 — guard fires
+
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: true });
+
+    await phaseLoop.executeLoop(context, config, deps, ['implement']);
+
+    // updateStageComment gets error status with errorEvidence non-empty
+    const errorCall = findLastErrorCall(deps.stageCommentManager.updateStageComment);
+    expect(errorCall).toBeDefined();
+    expect(errorCall.errorEvidence).toBeDefined();
+    expect(errorCall.errorEvidence.outputTail).toContain('no progress: tasks_remaining stayed at');
+    // #915: synthetic classifier reworded exit descriptor + reason surfaces the guard message.
+    expect(errorCall.errorEvidence.exitDescriptor).toBe('failed post-exit: no-progress (process exit 0)');
+    expect(errorCall.errorEvidence.reason).toBe(
+      'Implement increment made no progress — aborting to prevent infinite loop',
+    );
+
+    // postFailureAlert gets the same evidence object
+    const alertSpy = deps.stageCommentManager.postFailureAlert as any;
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    const alertArg = alertSpy.mock.calls[0][0];
+    expect(alertArg.evidence).toEqual(errorCall.errorEvidence);
+    expect(alertArg.phase).toBe('implement');
+    expect(alertArg.evidence.command).toBe('implement (no-progress guard)');
+  });
+
+  it('preserves runId identity across log mint and error-site call (T026)', async () => {
+    // Regression fixture for the dedup semantic: within one invocation, the
+    // runId that appears in the "Starting phase loop" log MUST be the same
+    // string passed to postFailureAlert. If a second error site were
+    // hypothetically reached in the same executeLoop, dedup would match the
+    // marker written by the first site.
+    const captured: string[] = [];
+    const capturingLogger = {
+      info: (obj: any, msg?: string) => {
+        if (typeof obj === 'object' && obj !== null && obj.runId && msg === 'Starting phase loop') {
+          captured.push(obj.runId);
+        }
+      },
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+      child: () => capturingLogger,
+    } as unknown as Logger;
+
+    const phaseLoopWithLog = new PhaseLoop(capturingLogger);
+    const context = createMockContext('implement');
+    const config = createConfig({ maxImplementRetries: 0 });
+
+    (deps.cliSpawner.spawnPhase as any).mockResolvedValue(makeFailResult('implement'));
+    (deps.prManager.commitPushAndEnsurePr as any).mockResolvedValue({ prUrl: null, hasChanges: false });
+
+    await phaseLoopWithLog.executeLoop(context, config, deps, ['implement']);
+
+    expect(captured).toHaveLength(1);
+    const loggedRunId = captured[0];
+
+    const alertSpy = deps.stageCommentManager.postFailureAlert as any;
+    expect(alertSpy).toHaveBeenCalledTimes(1);
+    // The runId passed to postFailureAlert must match the runId logged at
+    // executeLoop entry — proving that all error sites in this invocation
+    // would use the same marker (and therefore dedup among themselves).
+    expect(alertSpy.mock.calls[0][0].runId).toBe(loggedRunId);
   });
 });

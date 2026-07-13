@@ -1,10 +1,25 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import type { QueueManager, WorkerHandler, WorkerInfo } from '../types/index.js';
+import type { QueueManager, WorkerHandler, WorkerInfo, QueueItem } from '../types/index.js';
 import type { DispatchConfig } from '../config/index.js';
 import type { LeaseManager } from './lease-manager.js';
+import type { FailureMetadata } from '../worker/worker-result.js';
 
 export type LabelCleanupFn = (owner: string, repo: string, issueNumber: number) => Promise<void>;
+
+/**
+ * Callback invoked when `WorkerHandler` returns `{ status: 'failed-terminal' }` (#889).
+ * Ordinary handler failures still release; only handler-returned terminal
+ * failures trigger this path. Implementations MUST NOT throw — dispatcher
+ * wraps the call in try/catch and always proceeds to `queue.complete()`.
+ *
+ * Typical wiring (server.ts): (a) best-effort `agent:error` label add,
+ * (b) `StageCommentManager.postFailureAlert({ stage: 'label-op', ... })`.
+ */
+export type TerminalFailureHandler = (
+  item: QueueItem,
+  failureMetadata: FailureMetadata,
+) => Promise<void>;
 
 interface Logger {
   info(msg: string): void;
@@ -38,6 +53,7 @@ export class WorkerDispatcher {
   private readonly handler: WorkerHandler;
   private readonly activeWorkers = new Map<string, WorkerInfo>();
   private readonly labelCleanup?: LabelCleanupFn;
+  private readonly terminalFailureHandler?: TerminalFailureHandler;
   /** In-memory heartbeat timestamps (used when Redis is null) */
   private readonly heartbeatTimestamps = new Map<string, number>();
   private abortController: AbortController | null = null;
@@ -55,6 +71,7 @@ export class WorkerDispatcher {
     config: DispatchConfig,
     handler: WorkerHandler,
     labelCleanup?: LabelCleanupFn,
+    terminalFailureHandler?: TerminalFailureHandler,
   ) {
     this.queue = queue;
     this.redis = redis;
@@ -62,6 +79,7 @@ export class WorkerDispatcher {
     this.config = config;
     this.handler = handler;
     this.labelCleanup = labelCleanup;
+    this.terminalFailureHandler = terminalFailureHandler;
   }
 
   /**
@@ -337,10 +355,76 @@ export class WorkerDispatcher {
     heartbeatInterval: NodeJS.Timeout,
   ): Promise<void> {
     try {
-      await this.handler(item);
+      const result = await this.handler(item);
+
+      if (result.status === 'failed-terminal') {
+        // #889: handler-caught terminal failure. Best-effort recovery
+        // (agent:error label + failure-alert comment) then COMPLETE the item.
+        // Never release — that would crash-loop the queue.
+        this.logger.error(
+          {
+            workerId,
+            owner: item.owner,
+            repo: item.repo,
+            issue: item.issueNumber,
+            failureMetadata: result.failureMetadata,
+          },
+          'Worker returned failed-terminal — triggering terminalFailureHandler',
+        );
+        if (this.terminalFailureHandler) {
+          try {
+            await this.terminalFailureHandler(item, result.failureMetadata);
+          } catch (handlerErr) {
+            this.logger.error(
+              { err: handlerErr, workerId, failureMetadata: result.failureMetadata },
+              'terminalFailureHandler threw — swallowing to avoid release',
+            );
+          }
+        }
+        await this.queue.complete(workerId, item);
+        return;
+      }
 
       // Success: complete the item
       await this.queue.complete(workerId, item);
+
+      // #902 FR-002/FR-008: fire post-complete side-effect AFTER queue.complete
+      // releases the itemKey — no self-collision with the source itemKey.
+      // Best-effort: transport errors + in-flight dedupe drops both recover
+      // via the next monitor poll cycle.
+      if (result.postComplete?.kind === 'rearm') {
+        try {
+          const enqueued = await this.queue.enqueueIfAbsent(result.postComplete.rearmItem);
+          if (!enqueued) {
+            this.logger.warn(
+              {
+                workerId,
+                owner: item.owner,
+                repo: item.repo,
+                issue: item.issueNumber,
+              },
+              'Rearm enqueue dropped (already in-flight) — deferred to next poll',
+            );
+          } else {
+            this.logger.info(
+              {
+                workerId,
+                owner: item.owner,
+                repo: item.repo,
+                issue: item.issueNumber,
+                rearmCommand: result.postComplete.rearmItem.command,
+              },
+              'Rearm item enqueued after queue.complete',
+            );
+          }
+        } catch (err) {
+          this.logger.error(
+            { err, workerId, owner: item.owner, repo: item.repo, issue: item.issueNumber },
+            'Rearm enqueue threw — pause labels intact for next poll',
+          );
+        }
+      }
+
       this.logger.info(
         { workerId, owner: item.owner, repo: item.repo, issue: item.issueNumber },
         'Worker completed successfully',

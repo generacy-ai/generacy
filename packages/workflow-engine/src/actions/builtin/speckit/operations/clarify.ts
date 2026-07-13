@@ -4,10 +4,15 @@
  */
 import { join } from 'node:path';
 import type { ActionContext } from '../../../../types/index.js';
+import type { Comment } from '../../../../types/github.js';
 import type { ClarifyInput, ClarifyOutput, ClarificationQuestion } from '../types.js';
 import { executeCommand, extractJSON } from '../../../cli-utils.js';
 import { exists, readFile, writeFile } from '../lib/fs.js';
 import { StreamBatcher } from '../lib/stream-batcher.js';
+import { createGitHubClient } from '../../../github/client/index.js';
+import { isTrustedCommentAuthor } from '../../../../security/comment-trust.js';
+import { tryLoadCommentTrustConfig } from '../../../../security/comment-trust-config.js';
+import { wrapUntrustedData } from '../../../../security/untrusted-data-fence.js';
 
 /**
  * Build the prompt for initial clarification question generation
@@ -55,14 +60,18 @@ Return the count of questions generated.`;
 
 /**
  * Build the prompt for resuming after developer answers.
- * Instructs the agent to fetch answers from the issue, consolidate,
- * and determine if follow-up questions are needed.
+ *
+ * `trustedCommentsBlock` is the pre-filtered, pre-fenced content of the
+ * issue's trusted comments (author-trust gated per #842). The agent no
+ * longer runs `gh issue view --comments` itself; that would ingest raw
+ * untrusted content into the prompt.
  */
 function buildResumePrompt(
   featureDir: string,
   specContent: string,
   existingClarifications: string,
   issueNumber: number,
+  trustedCommentsBlock: string,
 ): string {
   return `You are resuming a clarification round for a feature specification.
 Previously, clarification questions were posted to GitHub issue #${issueNumber}.
@@ -77,17 +86,19 @@ ${specContent}
 Previous clarification questions:
 ${existingClarifications}
 
+Developer answers (issue #${issueNumber} trusted comments):
+${trustedCommentsBlock}
+
 Instructions:
-1. Run \`gh issue view ${issueNumber} --comments\` to read the developer's answers from the issue comments
-2. Read the existing clarifications.md file
-3. For each question, find the developer's answer in the issue comments and fill in the **Answer** field
-4. Update the clarifications.md file with the consolidated answers
-5. Evaluate whether the answers are sufficient or if follow-up questions are needed
-6. If all questions are adequately answered:
+1. Read the existing clarifications.md file
+2. For each question, find the developer's answer in the trusted comments block above and fill in the **Answer** field
+3. Update the clarifications.md file with the consolidated answers
+4. Evaluate whether the answers are sufficient or if follow-up questions are needed
+5. If all questions are adequately answered:
    - Update ## Status to "Resolved"
    - Do NOT add any new questions
    - Return 0 for the count of NEW questions
-7. If follow-up questions are needed (answers are ambiguous, incomplete, or raise new concerns):
+6. If follow-up questions are needed (answers are ambiguous, incomplete, or raise new concerns):
    - Keep the answered questions with their answers
    - Add NEW follow-up questions at the end using the same format (### Q{N+1}: [Topic] etc.)
    - Update ## Status to "Follow-up Required"
@@ -99,6 +110,87 @@ can proceed.
 
 Write updates to the clarifications file directly.
 Return the count of NEW questions generated (0 if all resolved).`;
+}
+
+/**
+ * Fetch issue comments and partition through the author-trust helper.
+ * Returns a `<untrusted-data>`-fenced block of trusted comment content
+ * suitable for embedding in an agent prompt.
+ *
+ * Emits one structured info skip-log per skipped comment (FR-010). Never
+ * emits comment bodies to logs (SC-003).
+ *
+ * Exported for direct testability.
+ */
+export async function buildTrustedIssueCommentsBlock(
+  context: ActionContext,
+  issueNumber: number,
+): Promise<string> {
+  const workdir = context.workdir;
+  const trustConfig = tryLoadCommentTrustConfig(workdir, context.logger);
+  const botLogin = process.env['CLUSTER_GITHUB_USERNAME'] ?? process.env['GH_USERNAME'];
+
+  // #910: switched from REST getIssueComments() to GraphQL
+  // getIssueCommentsWithViewerAuth() so App-identity clusters' own posts
+  // carry the viewerDidAuthor primitive and pass through the trust helper
+  // as `self-authored`. Retry once on transient failure; fail closed on
+  // second failure (FR-010 — no REST fallback). The final failure lands
+  // on the same `(no comments available)` string as before.
+  let comments: Comment[];
+  try {
+    const client = createGitHubClient(workdir);
+    const repoInfo = await client.getRepoInfo();
+    try {
+      comments = await client.getIssueCommentsWithViewerAuth(
+        repoInfo.owner, repoInfo.repo, issueNumber,
+      );
+    } catch (firstErr) {
+      context.logger.warn(
+        `getIssueCommentsWithViewerAuth failed for issue #${issueNumber}; retrying once: ${firstErr instanceof Error ? firstErr.message : String(firstErr)}`,
+      );
+      comments = await client.getIssueCommentsWithViewerAuth(
+        repoInfo.owner, repoInfo.repo, issueNumber,
+      );
+    }
+  } catch (error) {
+    context.logger.warn(
+      `getIssueCommentsWithViewerAuth failed twice for issue #${issueNumber}; failing closed (no REST fallback): ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return wrapUntrustedData('(no comments available)', `issue #${issueNumber} comments`);
+  }
+
+  const trusted: Comment[] = [];
+  for (const c of comments) {
+    const decision = isTrustedCommentAuthor(
+      c,
+      'clarify-resume',
+      {
+        logger: context.logger,
+        ...(botLogin ? { botLogin } : {}),
+        ...(trustConfig ? { config: trustConfig } : {}),
+      },
+    );
+    if (decision.trusted) {
+      trusted.push(c);
+    } else {
+      context.logger.info(
+        `comment-skipped surface=clarify-resume commentId=${c.id} author=${c.author} authorAssociation=${c.authorAssociation ?? '<unset>'} reason=${decision.reason}`,
+      );
+    }
+  }
+
+  if (trusted.length === 0) {
+    return wrapUntrustedData('(no trusted comments)', `issue #${issueNumber} comments`);
+  }
+
+  const rendered = trusted
+    .map(
+      (c) =>
+        `<comment id="${c.id}" author="${c.author}" association="${c.authorAssociation ?? 'unknown'}">\n${c.body}\n</comment>`,
+    )
+    .join('\n\n');
+
+  return wrapUntrustedData(rendered, `issue #${issueNumber} comments`);
 }
 
 /**
@@ -194,7 +286,19 @@ export async function executeClarify(
     try {
       existingClarifications = await readFile(clarificationsFile);
     } catch { /* will proceed with empty */ }
-    prompt = buildResumePrompt(input.feature_dir, specContent, existingClarifications, input.issue_number);
+    // Fetch + trust-gate + fence issue comments (#842). The agent no
+    // longer runs `gh issue view --comments` itself.
+    const trustedCommentsBlock = await buildTrustedIssueCommentsBlock(
+      context,
+      input.issue_number,
+    );
+    prompt = buildResumePrompt(
+      input.feature_dir,
+      specContent,
+      existingClarifications,
+      input.issue_number,
+      trustedCommentsBlock,
+    );
   } else {
     prompt = buildClarifyPrompt(input.feature_dir, specContent);
   }
