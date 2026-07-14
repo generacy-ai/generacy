@@ -17,7 +17,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TOOLS_DIR = join(__dirname, '..', 'tools');
 const CLI_DIR = join(__dirname, '..', '..');
 
-type RefKind = 'issue' | 'epic';
+type RefKind = 'issue' | 'epic' | 'scope';
 
 /**
  * The audit table. Each entry names the wrapped CLI verb's REF kind — this
@@ -34,6 +34,11 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   cockpit_queue: 'epic',
   cockpit_merge: 'issue',
   cockpit_await_events: 'epic',
+  // #935 — scope-mutation verbs. `scope` semantics: input carries both a
+  // `scope` (target issue whose body is edited) and `issue` (the ref to
+  // add/remove). Both fields are asserted below.
+  cockpit_scope_add: 'scope',
+  cockpit_scope_remove: 'scope',
 };
 
 /**
@@ -44,6 +49,7 @@ const EXPECTED_KIND: Record<string, RefKind> = {
 const SCHEMA_FIELD_BY_KIND: Record<RefKind, string> = {
   issue: 'issue',
   epic: 'epic',
+  scope: 'scope',
 };
 
 /**
@@ -54,6 +60,7 @@ const SCHEMA_FIELD_BY_KIND: Record<RefKind, string> = {
 const CLI_TOKENS_BY_KIND: Record<RefKind, string[]> = {
   issue: ['<issue>', '<issue-ref>', '[issue]'],
   epic: ['<epic>', '<epic-ref>'],
+  scope: ['<scope-ref>'],
 };
 
 /**
@@ -69,6 +76,8 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   cockpit_queue: 'queue.ts',
   cockpit_merge: 'merge.ts',
   cockpit_await_events: null,
+  cockpit_scope_add: 'scope.ts',
+  cockpit_scope_remove: 'scope.ts',
 };
 
 const schemasSource = readFileSync(

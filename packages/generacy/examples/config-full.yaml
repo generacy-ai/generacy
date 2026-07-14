@@ -44,3 +44,32 @@ orchestrator:
 
   # Maximum number of concurrent workers (range: 1-20)
   workerCount: 3
+
+  # Per-workflow-phase `{ provider, model }` selection.
+  #
+  # Precedence (highest first):
+  #   workflows.<name>.phases.<phase>  >  workflows.<name>.default  >  agents.default
+  #   > defaults.agent (provider only) > cluster env  > built-in `claude-code`
+  #
+  # Provider and model resolve INDEPENDENTLY — a phase override can set only
+  # one of the two and let the other fall through from a lower tier. Everything
+  # is optional; when the whole `agents` block is absent, behavior is unchanged.
+  agents:
+    # Repo-wide default. Applies to any workflow/phase that doesn't override.
+    default:
+      provider: claude-code
+      model: sonnet-4-6
+
+    workflows:
+      speckit-feature:
+        # Applies to every phase of this workflow unless a phases.<phase>
+        # override is set below.
+        default:
+          model: sonnet-4-5
+
+        phases:
+          # Full override for the implement phase. pr-feedback binds to this
+          # same entry (pr-feedback resolves against the `implement` phase).
+          implement:
+            provider: claude-code
+            model: opus-4-7

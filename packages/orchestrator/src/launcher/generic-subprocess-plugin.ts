@@ -4,6 +4,7 @@ import type {
   LaunchSpec,
   OutputParser,
 } from './types.js';
+import { SYSTEM_PROVIDER } from './constants.js';
 
 /**
  * Pass-through plugin for generic-subprocess and shell intents.
@@ -13,6 +14,7 @@ import type {
  */
 export class GenericSubprocessPlugin implements AgentLaunchPlugin {
   readonly pluginId = 'generic-subprocess';
+  readonly provider = SYSTEM_PROVIDER;
   readonly supportedKinds = ['generic-subprocess', 'shell'] as const;
 
   buildLaunch(intent: LaunchIntent): LaunchSpec {

@@ -80,9 +80,27 @@ export const CockpitAdvanceInputSchema = z
   .object({ issue: IssueRefInputSchema, gate: GateNameInputSchema })
   .strict();
 export const CockpitResumeInputSchema = z.object({ issue: IssueRefInputSchema }).strict();
-export const CockpitQueueInputSchema = z
-  .object({ epic: EpicRefInputSchema, phase: z.string().min(1) })
+/**
+ * #935 — `cockpit_queue` accepts either the phase form (existing) or a new
+ * single-issue form. Discriminated union at Zod level so TypeScript consumers
+ * of the tool see both variants explicitly.
+ */
+export const CockpitQueueInputSchema = z.union([
+  z.object({ epic: EpicRefInputSchema, phase: z.string().min(1) }).strict(),
+  z.object({ issue: IssueRefInputSchema }).strict(),
+]);
+export type CockpitQueueInput = z.infer<typeof CockpitQueueInputSchema>;
+
+/** #935 — scope-mutation tool schemas. */
+export const CockpitScopeAddInputSchema = z
+  .object({ scope: EpicRefInputSchema, issue: IssueRefInputSchema })
   .strict();
+export type CockpitScopeAddInput = z.infer<typeof CockpitScopeAddInputSchema>;
+
+export const CockpitScopeRemoveInputSchema = z
+  .object({ scope: EpicRefInputSchema, issue: IssueRefInputSchema })
+  .strict();
+export type CockpitScopeRemoveInput = z.infer<typeof CockpitScopeRemoveInputSchema>;
 /**
  * #928 — `cockpit_merge` accepts an **issue ref** (matching the CLI verb),
  * with an optional `pr: <number>` escape hatch mirroring CLI `--pr <number>`.

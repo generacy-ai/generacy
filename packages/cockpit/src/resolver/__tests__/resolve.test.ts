@@ -48,6 +48,9 @@ class MockGhWrapper implements GhWrapper {
   async getRequiredCheckNames(): Promise<RequiredChecksResult> {
     throw new Error('not used');
   }
+  async updateIssueBody(): Promise<void> {
+    throw new Error('not used');
+  }
 }
 
 function makeIssue(overrides: Partial<Issue> & { number: number }): Issue {
@@ -107,15 +110,49 @@ describe('resolveEpic', () => {
     }
   });
 
-  it('throws NO_PHASE_HEADINGS when body has no ### headings', async () => {
-    const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body: 'no headings\n- [ ] owner/repo#1' }));
+  it('flat-list body (no ### headings, has task-list refs) resolves successfully (#935)', async () => {
+    const body = 'preamble prose\n- [ ] owner/repo#1\n- [ ] owner/repo#2';
+    const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body }));
+    const result = await resolveEpic({ epicRef: 'owner/repo#42', gh });
+    expect(result.parsed.phases).toEqual([]);
+    expect(result.parsed.adhocRefs).toEqual([
+      { repo: 'owner/repo', number: 1 },
+      { repo: 'owner/repo', number: 2 },
+    ]);
+    expect(result.parsed.allRefs).toEqual([
+      { repo: 'owner/repo', number: 1 },
+      { repo: 'owner/repo', number: 2 },
+    ]);
+  });
+
+  it('phased body with `## Ad-hoc` section coexists — phases and adhocRefs both populated (#935)', async () => {
+    const body = [
+      '### Phase 1',
+      '- [ ] owner/repo#1',
+      '## Ad-hoc',
+      '- [ ] owner/repo#9',
+    ].join('\n');
+    const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body }));
+    const result = await resolveEpic({ epicRef: 'owner/repo#42', gh });
+    expect(result.parsed.phases).toHaveLength(1);
+    expect(result.parsed.adhocRefs).toEqual([{ repo: 'owner/repo', number: 9 }]);
+  });
+
+  it('does not throw NO_PHASE_HEADINGS at runtime any more (#935)', async () => {
+    const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body: '- [ ] owner/repo#1' }));
+    const result = await resolveEpic({ epicRef: 'owner/repo#42', gh });
+    expect(result.parsed.phases).toEqual([]);
+    expect(result.parsed.allRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+  });
+
+  it('empty body still throws NO_REFS (#935 preserved)', async () => {
+    const gh = new MockGhWrapper(async () => makeIssue({ number: 1, body: '' }));
     try {
       await resolveEpic({ epicRef: 'owner/repo#42', gh });
       throw new Error('expected throw');
     } catch (err) {
       expect(err).toBeInstanceOf(LoudResolverError);
-      expect((err as LoudResolverError).code).toBe('NO_PHASE_HEADINGS');
-      expect((err as LoudResolverError).message).toContain('### <phase>');
+      expect((err as LoudResolverError).code).toBe('NO_REFS');
     }
   });
 

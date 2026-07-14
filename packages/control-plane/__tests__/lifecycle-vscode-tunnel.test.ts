@@ -14,6 +14,15 @@ vi.mock('node:fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
 }));
 
+// Default: pretend the wizard credentials contain a sealed GH_TOKEN so the
+// bootstrap-complete handler takes the "start tunnel + code-server" branch.
+// Tests targeting the deferred branch override this per-test.
+vi.mock('../src/services/wizard-env-writer.js', () => ({
+  writeWizardEnvFile: vi
+    .fn()
+    .mockResolvedValue({ written: ['github-app'], failed: [], hasGitHubToken: true }),
+}));
+
 function createMockReq(method: string, url: string) {
   return { method, url, headers: {} } as unknown as http.IncomingMessage;
 }

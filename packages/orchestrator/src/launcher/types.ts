@@ -1,5 +1,4 @@
 import type { ChildProcessHandle } from '../worker/types.js';
-import type { ClaudeCodeIntent } from '@generacy-ai/generacy-plugin-claude-code';
 import type { LaunchRequestCredentials } from '@generacy-ai/credhelper';
 
 /**
@@ -26,11 +25,99 @@ export interface ShellIntent {
 }
 
 /**
- * Discriminated union of all launch intent kinds.
- * Phase 1: generic-subprocess, shell
- * Phase 2: phase, pr-feedback, conversation-turn (ClaudeCodeIntent)
+ * Intent for executing a speckit workflow phase.
+ * Excludes 'validate' at compile time — validate runs via GenericSubprocessPlugin.
  */
-export type LaunchIntent = GenericSubprocessIntent | ShellIntent | ClaudeCodeIntent;
+export interface PhaseIntent {
+  kind: 'phase';
+  /** Speckit phase to execute */
+  phase: 'specify' | 'clarify' | 'plan' | 'tasks' | 'implement';
+  /** Full prompt text: slash command + issue URL (composed by caller) */
+  prompt: string;
+  /** Resume a previous session (for MCP server warmth + context carry) */
+  sessionId?: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
+}
+
+/**
+ * Intent for addressing PR review feedback.
+ */
+export interface PrFeedbackIntent {
+  kind: 'pr-feedback';
+  /** PR number for logging/tracing */
+  prNumber: number;
+  /** Full prompt text (pre-built by caller via buildFeedbackPrompt()) */
+  prompt: string;
+  /** Optional model override, provider-interpreted. */
+  model?: string;
+}
+
+/**
+ * Intent for a bounded validate-fix agent attempt (#892). Routes through the
+ * same launcher plumbing as `pr-feedback`. The `evidenceHash` surfaces in
+ * launcher observability + PhaseTracker dedupe key.
+ */
+export interface ValidateFixIntent {
+  kind: 'validate-fix';
+  /** PR number for logging/tracing */
+  prNumber: number;
+  /** Full prompt text (pre-built by ValidateFixHandler with stdout evidence) */
+  prompt: string;
+  /** 64-hex SHA-256 identity of the failing evidence — surfaces in logs. */
+  evidenceHash: string;
+}
+
+/**
+ * Intent for a bounded merge-conflict resolution agent attempt (#898).
+ * Routes through the same launcher plumbing as `pr-feedback`.
+ */
+export interface MergeConflictIntent {
+  kind: 'merge-conflict';
+  /** For logging/tracing */
+  issueNumber: number;
+  /** Full prompt (built by MergeConflictHandler via buildMergeConflictPrompt) */
+  prompt: string;
+}
+
+/**
+ * Intent for a single interactive conversation turn.
+ */
+export interface ConversationTurnIntent {
+  kind: 'conversation-turn';
+  /** User message to send */
+  message: string;
+  /** Resume session ID (omit for first turn) */
+  sessionId?: string;
+  /** Model override (omit for default) */
+  model?: string;
+  /** Whether to skip permission prompts */
+  skipPermissions: boolean;
+}
+
+/**
+ * Intent for invoking a raw command string.
+ */
+export interface InvokeIntent {
+  kind: 'invoke';
+  /** Raw command string (e.g., "/speckit:specify https://...") */
+  command: string;
+  /** Whether to stream output (reserved for future use) */
+  streaming?: boolean;
+}
+
+/**
+ * Discriminated union of all launch intent kinds.
+ */
+export type LaunchIntent =
+  | GenericSubprocessIntent
+  | ShellIntent
+  | PhaseIntent
+  | PrFeedbackIntent
+  | ValidateFixIntent
+  | MergeConflictIntent
+  | ConversationTurnIntent
+  | InvokeIntent;
 
 /**
  * Request to launch a process through the AgentLauncher.
@@ -48,6 +135,8 @@ export interface LaunchRequest {
   detached?: boolean;
   /** Optional credential scoping — when set, a credhelper session is managed around the subprocess */
   credentials?: LaunchRequestCredentials;
+  /** Optional provider selector. Default: 'claude-code'. Runtime-validated (UnknownProviderError). */
+  provider?: string;
 }
 
 /**
@@ -77,6 +166,8 @@ export interface LaunchSpec {
 export interface AgentLaunchPlugin {
   /** Unique identifier for this plugin */
   readonly pluginId: string;
+  /** Provider namespace this plugin claims. Registry key is (provider, kind). */
+  readonly provider: string;
   /** Intent kinds this plugin can handle */
   readonly supportedKinds: readonly string[];
   /**

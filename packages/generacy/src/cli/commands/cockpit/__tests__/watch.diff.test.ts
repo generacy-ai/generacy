@@ -387,4 +387,128 @@ describe('computeTransitions', () => {
     expect(events[0]?.event).toBe('issue-closed');
     expect(events[0]?.to).toBe('terminal');
   });
+
+  // #935 SC-001: mid-stream first-sight — a key in curr but absent from prev
+  // (i.e. `cockpit scope add` appended a ref to the epic body) emits one
+  // `initial: true` label-change event on the next poll cycle.
+  describe('mid-stream first-sight (#935)', () => {
+    it('emits initial:true label-change for a new actionable key on cycle N', () => {
+      const prev = map([
+        snapshotKey('o/r', 'issue', 1),
+        issueSnap({
+          number: 1,
+          labels: ['phase:plan', 'agent:in-progress'],
+          classifiedState: 'active',
+          sourceLabel: 'agent:in-progress',
+        }),
+      ]);
+      const curr = map(
+        [
+          snapshotKey('o/r', 'issue', 1),
+          issueSnap({
+            number: 1,
+            labels: ['phase:plan', 'agent:in-progress'],
+            classifiedState: 'active',
+            sourceLabel: 'agent:in-progress',
+          }),
+        ],
+        [
+          snapshotKey('o/r', 'issue', 2),
+          issueSnap({
+            number: 2,
+            labels: ['waiting-for:spec-review'],
+            classifiedState: 'waiting',
+            sourceLabel: 'waiting-for:spec-review',
+          }),
+        ],
+      );
+      const events = computeTransitions(prev, curr, ts);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.number).toBe(2);
+      expect(events[0]?.event).toBe('label-change');
+      expect(events[0]?.from).toBe(null);
+      expect(events[0]?.to).toBe('waiting');
+      expect(events[0]?.initial).toBe(true);
+    });
+
+    it('does not emit for a new non-actionable key on cycle N', () => {
+      const prev = map([
+        snapshotKey('o/r', 'issue', 1),
+        issueSnap({
+          number: 1,
+          classifiedState: 'active',
+          sourceLabel: 'agent:in-progress',
+        }),
+      ]);
+      const curr = map(
+        [
+          snapshotKey('o/r', 'issue', 1),
+          issueSnap({
+            number: 1,
+            classifiedState: 'active',
+            sourceLabel: 'agent:in-progress',
+          }),
+        ],
+        [
+          snapshotKey('o/r', 'issue', 2),
+          // Non-actionable: unlabeled, no waiting-for/completed/etc.
+          issueSnap({
+            number: 2,
+            labels: [],
+            classifiedState: 'unknown',
+            sourceLabel: '',
+          }),
+        ],
+      );
+      const events = computeTransitions(prev, curr, ts);
+      expect(events).toHaveLength(0);
+    });
+
+    it('does not emit for removed keys (removals stay silent)', () => {
+      const prev = map(
+        [
+          snapshotKey('o/r', 'issue', 1),
+          issueSnap({
+            number: 1,
+            classifiedState: 'waiting',
+            sourceLabel: 'waiting-for:spec-review',
+          }),
+        ],
+        [
+          snapshotKey('o/r', 'issue', 2),
+          issueSnap({
+            number: 2,
+            classifiedState: 'active',
+            sourceLabel: 'agent:in-progress',
+          }),
+        ],
+      );
+      const curr = map([
+        snapshotKey('o/r', 'issue', 1),
+        issueSnap({
+          number: 1,
+          classifiedState: 'waiting',
+          sourceLabel: 'waiting-for:spec-review',
+        }),
+      ]);
+      const events = computeTransitions(prev, curr, ts);
+      expect(events).toHaveLength(0);
+    });
+
+    it('cycle 1 (prev.size === 0) behavior unchanged — computeInitialSweep still fires', () => {
+      const prev: SnapshotMap = new Map();
+      const curr = map([
+        snapshotKey('o/r', 'issue', 1),
+        issueSnap({
+          number: 1,
+          classifiedState: 'waiting',
+          sourceLabel: 'waiting-for:spec-review',
+          labels: ['waiting-for:spec-review'],
+        }),
+      ]);
+      const events = computeTransitions(prev, curr, ts);
+      expect(events).toHaveLength(1);
+      expect(events[0]?.initial).toBe(true);
+    });
+  });
 });

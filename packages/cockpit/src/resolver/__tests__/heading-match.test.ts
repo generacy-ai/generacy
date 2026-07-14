@@ -8,7 +8,7 @@ function phase(heading: string, refs: ParsedPhase['refs'] = []): ParsedPhase {
 }
 
 function body(phases: ParsedPhase[]): ParsedEpicBody {
-  return { phases, allRefs: [], warnings: [] };
+  return { phases, adhocRefs: [], allRefs: [], warnings: [] };
 }
 
 describe('firstToken', () => {

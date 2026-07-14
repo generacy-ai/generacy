@@ -45,6 +45,17 @@ export interface QueueOptions {
   repo?: string;
   assignee?: string;
   yes?: boolean;
+  /** #935: single-issue form — mutually exclusive with positional <epic-ref> <phase>. */
+  issue?: string;
+}
+
+export interface QueueIssueResult {
+  ref: IssueRef;
+  workflowLabel: string;
+  assignee: string;
+  row: QueueRow;
+  confirmed: boolean;
+  exitCode: 0 | 1 | 2;
 }
 
 export type EligibilityStatus =
@@ -302,6 +313,38 @@ async function defaultPrompt(message: string): Promise<boolean> {
   return Boolean(answer);
 }
 
+/**
+ * Apply the queue mutation (assign + label) for one already-eligible row.
+ * Shared between phase-form and single-issue-form runners.
+ */
+async function applyQueueMutation(
+  row: QueueRow,
+  assignee: string,
+  cockpitGh: GhWrapper,
+): Promise<void> {
+  if (row.eligibility.kind !== 'eligible') return;
+  if (row.assignees.includes(assignee)) {
+    row.assignResult = { kind: 'already' };
+  } else {
+    try {
+      await cockpitGh.addAssignees(row.ref.repo, row.ref.number, [assignee]);
+      row.assignResult = { kind: 'ok' };
+    } catch (err) {
+      row.assignResult = { kind: 'error', reason: (err as Error).message };
+    }
+  }
+  if (row.labels.includes(row.eligibility.workflowLabel)) {
+    row.labelResult = { kind: 'already' };
+  } else {
+    try {
+      await cockpitGh.addLabel(row.ref.repo, row.ref.number, row.eligibility.workflowLabel);
+      row.labelResult = { kind: 'ok' };
+    } catch (err) {
+      row.labelResult = { kind: 'error', reason: (err as Error).message };
+    }
+  }
+}
+
 function pickTargetRepo(
   refs: IssueRef[],
   repoFlag: string | undefined,
@@ -504,27 +547,7 @@ export async function runQueue(
 
   const { eligible } = sortRows(rows);
   for (const row of eligible) {
-    if (row.eligibility.kind !== 'eligible') continue;
-    if (row.assignees.includes(assignee)) {
-      row.assignResult = { kind: 'already' };
-    } else {
-      try {
-        await cockpitGh.addAssignees(row.ref.repo, row.ref.number, [assignee]);
-        row.assignResult = { kind: 'ok' };
-      } catch (err) {
-        row.assignResult = { kind: 'error', reason: (err as Error).message };
-      }
-    }
-    if (row.labels.includes(row.eligibility.workflowLabel)) {
-      row.labelResult = { kind: 'already' };
-    } else {
-      try {
-        await cockpitGh.addLabel(row.ref.repo, row.ref.number, row.eligibility.workflowLabel);
-        row.labelResult = { kind: 'ok' };
-      } catch (err) {
-        row.labelResult = { kind: 'error', reason: (err as Error).message };
-      }
-    }
+    await applyQueueMutation(row, assignee, cockpitGh);
   }
 
   for (const line of renderSummary(rows)) print(line);
@@ -547,18 +570,147 @@ export async function runQueue(
   };
 }
 
+/**
+ * Single-issue queue form (#935). Bypasses `resolveEpic` — the caller supplies
+ * one specific issue ref; classify and mutate as a single row.
+ */
+export async function runQueueSingleIssue(
+  issueArg: string,
+  opts: QueueOptions,
+  deps: QueueCommandDeps,
+): Promise<QueueIssueResult> {
+  const print = deps.stdout ?? ((line: string) => process.stdout.write(`${line}\n`));
+  const workflowLabel = opts.label ?? DEFAULT_LABEL;
+  if (!LABEL_REGEX.test(workflowLabel)) {
+    throw new CockpitExit(2, `Error: cockpit queue: invalid --label "${workflowLabel}"`);
+  }
+  if (opts.assignee != null && !LOGIN_REGEX.test(opts.assignee)) {
+    throw new CockpitExit(
+      2,
+      `Error: cockpit queue: invalid --assignee "${opts.assignee}" (expected GitHub login)`,
+    );
+  }
+
+  const cockpitGh = deps.cockpitGh ?? new GhCliWrapper(deps.runner ?? nodeChildProcessRunner);
+  const gh = deps.gh ?? cockpitGh;
+  const loadedConfig = await (deps.loadConfig ?? loadCockpitConfig)({});
+  const log = getLogger();
+  for (const w of loadedConfig.warnings) log.warn(w);
+
+  let cliRef;
+  try {
+    const resolvedCtx = await resolveIssueContext({ issue: issueArg, runner: deps.runner });
+    cliRef = resolvedCtx.ref;
+  } catch (err) {
+    throw new CockpitExit(
+      2,
+      `Error: cockpit queue: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const ref: IssueRef = { repo: cliRef.nwo, number: cliRef.number };
+
+  let view: IssueStateResult | null;
+  try {
+    view = await cockpitGh.fetchIssueState(ref.repo, ref.number);
+  } catch {
+    view = null;
+  }
+
+  const eligibility = classifyRow(ref, ref.repo, workflowLabel, view);
+  const row: QueueRow = {
+    ref,
+    title: view?.title ?? '',
+    labels: view?.labels ?? [],
+    assignees: view?.assignees ?? [],
+    eligibility,
+  };
+
+  let assignee: string;
+  try {
+    const resolved = await resolveCockpitIdentity({
+      flag: opts.assignee,
+      configAssignee: loadedConfig.config.assignee,
+      gh,
+      logger: log,
+      verb: 'queue',
+      mode: 'required',
+      env: deps.env,
+    });
+    assignee = resolved.login;
+  } catch (err) {
+    if (err instanceof LoudIdentityError) {
+      throw new CockpitExit(1, `Error: ${err.message}`);
+    }
+    throw err;
+  }
+
+  // Preview: single-row line, matching the phased form's preview shape.
+  if (row.eligibility.kind === 'eligible') {
+    print(
+      `cockpit queue --issue: ${ref.repo}#${ref.number}  ${row.title} ` +
+        `(${row.eligibility.workflowLabel}, assignee: ${assignee})`,
+    );
+  } else {
+    const tag = `[SKIP: ${row.eligibility.reason}]`;
+    const title = row.title ? `  ${row.title}` : '';
+    print(`cockpit queue --issue: ${tag}  ${ref.repo}#${ref.number}${title}`);
+    return { ref, workflowLabel, assignee, row, confirmed: false, exitCode: 0 };
+  }
+
+  let confirmed = Boolean(opts.yes);
+  if (!confirmed) {
+    const prompt = deps.prompt ?? defaultPrompt;
+    confirmed = (await prompt('Proceed?')) === true;
+    if (!confirmed) {
+      print('Cancelled. No mutations made.');
+      return { ref, workflowLabel, assignee, row, confirmed: false, exitCode: 0 };
+    }
+  }
+
+  await applyQueueMutation(row, assignee, cockpitGh);
+  for (const line of renderSummary([row])) print(line);
+
+  const anyError =
+    row.assignResult?.kind === 'error' || row.labelResult?.kind === 'error';
+  return {
+    ref,
+    workflowLabel,
+    assignee,
+    row,
+    confirmed: true,
+    exitCode: anyError ? 1 : 0,
+  };
+}
+
 export function queueCommand(deps: QueueCommandDeps = {}): Command {
   const cmd = new Command('queue');
   cmd
-    .description('Queue every eligible ref under a phase heading to the cluster pipeline.')
-    .argument('<epic-ref>', 'Epic ref (owner/repo#N).')
-    .argument('<phase>', 'Phase token — matched case-insensitively against the first token of a ### heading.')
+    .description('Queue eligible refs under a phase heading — or a single issue via --issue.')
+    .argument('[epic-ref]', 'Epic ref (owner/repo#N). Omit when using --issue.')
+    .argument('[phase]', 'Phase token — matched against the first token of a ### heading.')
     .addOption(new Option('--label <name>', `Workflow label (default: ${DEFAULT_LABEL}).`))
     .addOption(new Option('--repo <owner/repo>', 'Restrict the invocation to a single repo.'))
     .addOption(new Option('--assignee <login>', 'Override the default cluster-account assignee.'))
     .addOption(new Option('--yes', 'Skip the interactive confirmation prompt.'))
-    .action(async (epicRef: string, phaseArg: string, opts: QueueOptions) => {
+    .addOption(new Option('--issue <ref>', 'Single-issue mode. Mutually exclusive with <epic-ref> <phase>.'))
+    .action(async (epicRef: string | undefined, phaseArg: string | undefined, opts: QueueOptions) => {
       try {
+        if (opts.issue != null) {
+          if (epicRef != null || phaseArg != null) {
+            throw new CockpitExit(
+              2,
+              'Error: cockpit queue: --issue is mutually exclusive with <epic-ref> <phase>',
+            );
+          }
+          const result = await runQueueSingleIssue(opts.issue, opts, deps);
+          process.exit(result.exitCode);
+        }
+        if (epicRef == null || phaseArg == null) {
+          throw new CockpitExit(
+            2,
+            'Error: cockpit queue: either <epic-ref> <phase> or --issue <ref> is required',
+          );
+        }
         const result = await runQueue(epicRef, phaseArg, opts, deps);
         process.exit(result.exitCode);
       } catch (err) {

@@ -33,7 +33,7 @@ function body(phases: ParsedPhase[], extraRefs: IssueRef[] = []): ParsedEpicBody
     const rc = a.repo.localeCompare(b.repo);
     return rc !== 0 ? rc : a.number - b.number;
   });
-  return { phases, allRefs, warnings: [] };
+  return { phases, adhocRefs: [], allRefs, warnings: [] };
 }
 
 function issueSnap(

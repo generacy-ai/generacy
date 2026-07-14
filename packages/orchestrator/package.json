@@ -13,6 +13,10 @@
     "./test-utils": {
       "import": "./dist/test-utils/index.js",
       "types": "./dist/test-utils/index.d.ts"
+    },
+    "./launcher/types": {
+      "import": "./dist/launcher/types.js",
+      "types": "./dist/launcher/types.d.ts"
     }
   },
   "scripts": {

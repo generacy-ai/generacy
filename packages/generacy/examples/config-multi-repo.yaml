@@ -51,3 +51,6 @@ orchestrator:
   # Maximum number of concurrent workers (range: 1-20)
   # Consider increasing for multi-repo projects with parallel work
   workerCount: 3
+
+  # For per-workflow-phase `{ provider, model }` overrides (the `agents` block),
+  # see examples/config-full.yaml.

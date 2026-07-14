@@ -21,6 +21,8 @@ export type ErrorClass =
   | 'transport'
   | 'invalid-cursor'
   | 'not-worker'
+  | 'contended'
+  | 'scope-not-found'
   | 'internal';
 
 export interface ToolOkResult<T> {

@@ -1,4 +1,12 @@
-import type { ClaudeCodeIntent, PhaseIntent, PrFeedbackIntent, ValidateFixIntent, MergeConflictIntent, ConversationTurnIntent, InvokeIntent } from './types.js';
+import type {
+  ClaudeCodeIntent,
+  PhaseIntent,
+  PrFeedbackIntent,
+  ValidateFixIntent,
+  MergeConflictIntent,
+  ConversationTurnIntent,
+  InvokeIntent,
+} from './types.js';
 import { PHASE_TO_COMMAND, PTY_WRAPPER } from './constants.js';
 
 /**
@@ -34,6 +42,7 @@ interface OutputParser {
  */
 export class ClaudeCodeLaunchPlugin {
   readonly pluginId = 'claude-code';
+  readonly provider = 'claude-code';
   readonly supportedKinds = ['phase', 'pr-feedback', 'validate-fix', 'merge-conflict', 'conversation-turn', 'invoke'] as const;
 
   buildLaunch(intent: ClaudeCodeIntent): LaunchSpec {
@@ -76,6 +85,10 @@ export class ClaudeCodeLaunchPlugin {
       '--verbose',
     ];
 
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
     if (intent.sessionId) {
       args.push('--resume', intent.sessionId);
     }
@@ -96,8 +109,13 @@ export class ClaudeCodeLaunchPlugin {
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
       '--verbose',
-      intent.prompt,
     ];
+
+    if (intent.model) {
+      args.push('--model', intent.model);
+    }
+
+    args.push(intent.prompt);
 
     return {
       command: 'claude',

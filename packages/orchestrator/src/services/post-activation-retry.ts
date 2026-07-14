@@ -1,4 +1,4 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import http from 'node:http';
 import type { FastifyBaseLogger } from 'fastify';
 import { probeControlPlaneSocket } from './control-plane-probe.js';
@@ -13,6 +13,7 @@ export interface PostActivationState {
 export interface PostActivationRetryOptions {
   completionFlagPath?: string;
   keyFilePath?: string;
+  wizardCredsPath?: string;
   controlPlaneSocket?: string;
   controlPlaneWaitTimeout?: number;
   logger: FastifyBaseLogger;
@@ -22,12 +23,14 @@ export interface PostActivationRetryOptions {
 
 const DEFAULT_COMPLETION_FLAG = '/var/lib/generacy/post-activation-complete';
 const DEFAULT_KEY_FILE = '/var/lib/generacy/cluster-api-key';
+const DEFAULT_WIZARD_CREDS = '/var/lib/generacy/wizard-credentials.env';
 const DEFAULT_SOCKET = '/run/generacy-control-plane/control.sock';
 const DEFAULT_WAIT_TIMEOUT = 15;
 
 export class PostActivationRetryService {
   private readonly completionFlagPath: string;
   private readonly keyFilePath: string;
+  private readonly wizardCredsPath: string;
   private readonly controlPlaneSocket: string;
   private readonly controlPlaneWaitTimeout: number;
   private readonly logger: FastifyBaseLogger;
@@ -37,6 +40,8 @@ export class PostActivationRetryService {
   constructor(options: PostActivationRetryOptions) {
     this.completionFlagPath = options.completionFlagPath ?? DEFAULT_COMPLETION_FLAG;
     this.keyFilePath = options.keyFilePath ?? DEFAULT_KEY_FILE;
+    this.wizardCredsPath =
+      options.wizardCredsPath ?? process.env['WIZARD_CREDS_PATH'] ?? DEFAULT_WIZARD_CREDS;
     this.controlPlaneSocket = options.controlPlaneSocket ?? DEFAULT_SOCKET;
     this.controlPlaneWaitTimeout = options.controlPlaneWaitTimeout ?? DEFAULT_WAIT_TIMEOUT;
     this.logger = options.logger;
@@ -44,13 +49,44 @@ export class PostActivationRetryService {
     this.statusReporter = new StatusReporter({ socketPath: this.controlPlaneSocket });
   }
 
+  private readGhToken(): { sealed: boolean; token?: string } {
+    try {
+      const raw = readFileSync(this.wizardCredsPath, 'utf8');
+      for (const line of raw.split(/\r?\n/)) {
+        const idx = line.indexOf('=');
+        if (idx < 0) continue;
+        const key = line.slice(0, idx);
+        if (key !== 'GH_TOKEN') continue;
+        const value = line.slice(idx + 1).trim();
+        return value.length > 0 ? { sealed: true, token: value } : { sealed: false };
+      }
+      return { sealed: false };
+    } catch {
+      return { sealed: false };
+    }
+  }
+
   checkPostActivationState(): PostActivationState {
     const activated = existsSync(this.keyFilePath);
     const postActivationComplete = existsSync(this.completionFlagPath);
+    const ghTokenSealed = this.readGhToken().sealed;
+    const needsRetry = activated && !postActivationComplete && ghTokenSealed;
+
+    if (activated && !postActivationComplete && !ghTokenSealed) {
+      this.logger.info(
+        { wizardCredsPath: this.wizardCredsPath },
+        'Post-activation retry deferred — GH_TOKEN not sealed in wizard-credentials.env',
+      );
+      this.sendRelayEvent?.('cluster.bootstrap', {
+        status: 'deferred',
+        reason: 'github-token-not-sealed',
+      });
+    }
+
     return {
       activated,
       postActivationComplete,
-      needsRetry: activated && !postActivationComplete,
+      needsRetry,
     };
   }
 

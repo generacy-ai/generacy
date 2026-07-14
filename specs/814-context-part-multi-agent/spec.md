@@ -1,0 +1,77 @@
+# Feature Specification: ## Context
+
+Part of the [multi-agent provider plan (Codex + OpenCode)](https://github
+
+**Branch**: `814-context-part-multi-agent` | **Date**: 2026-07-13 | **Status**: Draft
+
+## Summary
+
+## Context
+
+Part of the [multi-agent provider plan (Codex + OpenCode)](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/multi-agent-provider-plan.md) — Phase 1, issue 2 of 3. Depends on #813.
+
+No provider or model can be configured for workflow phases today; the only model field in the entire config tree is `conversations.defaultModel` (interactive conversations). This issue adds the `orchestrator.agents` config block and threads `{ provider, model }` from the target repo's `.generacy/config.yaml` all the way to the spawn. It ships immediate user value on its own: per-phase **model** selection for Claude Code, before any new provider exists.
+
+## Scope
+
+- Extend `OrchestratorSettingsSchema` in `packages/config/src/template-schema.ts` with an `agents` block: `default` / `workflows.<name>.default` / `workflows.<name>.phases.<phase>`, each `{ provider?, model? }`.
+- Mirror the field in the CLI-facing schema (`packages/generacy/src/config/schema.ts`) and `examples/config-*.yaml`; wire the existing (currently unconsumed) `defaults.agent` as the repo-level provider default.
+- Extend `WorkerConfigSchema` (`packages/orchestrator/src/worker/config.ts`) with the merged `agents` block, modeled on `PhaseTimeoutOverridesSchema`; extend the repo-override merge (today `applyRepoValidateOverrides`); add cluster-default env plumbing `WORKER_AGENT_PROVIDER` / `WORKER_AGENT_MODEL` in `config/loader.ts`.
+- Add `resolveAgentForPhase(config, workflowName, phase)` (sibling of `resolvePhaseTimeoutMs`) implementing precedence: `phases.<phase>` > `workflows.<name>.default` > `agents.default` > repo `defaults.agent` > cluster default (env) > built-in `claude-code`. Provider and model resolve independently (a phase override may set only `model`).
+- Thread `{ provider, model }` through `CliSpawnOptions` → intent → `LaunchRequest`.
+- `ClaudeCodeLaunchPlugin` pushes `--model` on `phase`/`pr-feedback` when set (mirroring the existing conversation-turn path).
+- Provider-aware resume: thread `{ provider, sessionId }` in the phase loop and drop the session when the next phase resolves to a different provider (cross-phase context lives in the spec artifacts by design).
+- Unknown provider at phase start fails the phase with a clear message through the existing stage-comment error path — no silent fallback to Claude.
+
+## Acceptance criteria
+
+- [ ] Unit tests cover the precedence chain.
+- [ ] Argv snapshots show `--model` per phase from a fixture config.
+- [ ] No-config parity snapshot unchanged.
+- [ ] Provider-switch unit test (using the fake plugin from Phase 1 issue 1) proves resume drops on switch.
+
+## Clarifications
+
+### Batch 1 — 2026-07-13
+
+- **pr-feedback resolution (Q1 → B)**: `pr-feedback` intents resolve `{ provider, model }` by binding to the `implement` phase — the pr-feedback call site invokes `resolveAgentForPhase(config, workflowName, 'implement')`. No new config key; no pseudo-phase in the schema. A dedicated `agents.prFeedback` slot may be layered later with `implement` as its absent-case fallback.
+- **Session drop on model change (Q2 → C)**: When only the **model** changes between phases (provider unchanged), preserve the stored `sessionId`. Only a provider change drops the session. The spawn log records the model transition (e.g., `agent.model.transition prev=<model> next=<model>`) for observability.
+- **Partial env-var configuration (Q3 → A)**: `WORKER_AGENT_PROVIDER` and `WORKER_AGENT_MODEL` resolve **independently** at the env tier, uniform with FR-008. Either may be set alone; the other falls through the precedence chain. No paired-config check.
+- **Model ID validation (Q4 → A)**: Model IDs are **opaque pass-through**. The Zod schema requires a non-empty string; no allowlist, no format check. Unknown/invalid model IDs surface at spawn time via the existing stage-comment error path — the same channel FR-012 uses for unknown providers.
+- **Custom workflow phase keys (Q5 → A)**: `agents.workflows.<name>.phases` keys are a **closed set** restricted to the `WorkflowPhase` enum (`specify` | `clarify` | `plan` | `tasks` | `implement` | `validate`), matching `PhaseTimeoutOverridesSchema`. Typoed keys fail Zod validation at config load. Custom-workflow phase names are out of scope for this issue.
+
+## User Stories
+
+### US1: [Primary User Story]
+
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
+
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
+
+## Assumptions
+
+- [Assumption 1]
+
+## Out of Scope
+
+- [Exclusion 1]
+
+---
+
+*Generated by speckit*

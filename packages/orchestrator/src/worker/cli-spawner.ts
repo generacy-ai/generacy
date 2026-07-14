@@ -72,10 +72,12 @@ export class CliSpawner {
         phase,
         prompt: options.prompt,
         sessionId: options.resumeSessionId,
+        ...(options.model !== undefined ? { model: options.model } : {}),
       },
       cwd: options.cwd,
       env: launchEnv,
       credentials: buildLaunchCredentials(this.credentialRole),
+      ...(options.provider !== undefined ? { provider: options.provider } : {}),
     });
     const child = handle.process;
 

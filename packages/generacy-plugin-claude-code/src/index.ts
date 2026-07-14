@@ -99,5 +99,4 @@ export type {
   MergeConflictIntent,
   ConversationTurnIntent,
   InvokeIntent,
-  ClaudeCodeIntent,
 } from './launch/types.js';

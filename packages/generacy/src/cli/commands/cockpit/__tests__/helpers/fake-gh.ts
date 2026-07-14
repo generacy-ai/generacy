@@ -224,6 +224,11 @@ export class FakeGh implements GhWrapper {
     this.calls.push({ method: 'prDiffPatch', args: [repo, prNumber] });
     throw new Error('prDiffPatch not stubbed in FakeGh');
   }
+
+  async updateIssueBody(repo: string, issue: number, body: string): Promise<void> {
+    this.calls.push({ method: 'updateIssueBody', args: [repo, issue, body] });
+    throw new Error('updateIssueBody not stubbed in FakeGh');
+  }
 }
 
 export function makeIssue(overrides: Partial<Issue> & { number: number }): Issue {

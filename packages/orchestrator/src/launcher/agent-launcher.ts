@@ -7,17 +7,22 @@ import type {
 import type { CredhelperClient } from './credhelper-client.js';
 import { applyCredentials } from './credentials-interceptor.js';
 import { CredhelperUnavailableError } from './credhelper-errors.js';
+import { DEFAULT_PROVIDER, SYSTEM_PROVIDER } from './constants.js';
+import {
+  DuplicatePluginRegistrationError,
+  UnknownProviderError,
+} from './errors.js';
 
 /**
- * Plugin-based process launcher with registry dispatch.
+ * Plugin-based process launcher with tuple-keyed registry dispatch.
  *
- * Resolves a LaunchRequest's intent to a registered plugin, delegates
- * command/args/env construction to the plugin, performs 3-layer env merge,
- * optionally applies credentials interceptor, selects a ProcessFactory
- * by stdio profile, and returns a LaunchHandle.
+ * Registry keys are composed as `${provider}:${kind}`. Callers may pass
+ * `LaunchRequest.provider` to select a plugin; if omitted, resolves to
+ * `DEFAULT_PROVIDER`. For kinds only the internal `SYSTEM_PROVIDER` claims,
+ * a default-provider request falls back to the system plugin (call-site parity).
  */
 export class AgentLauncher {
-  private readonly kindToPlugin = new Map<string, AgentLaunchPlugin>();
+  private readonly registry = new Map<string, AgentLaunchPlugin>();
   private readonly credhelperClient?: CredhelperClient;
 
   constructor(
@@ -28,42 +33,70 @@ export class AgentLauncher {
   }
 
   /**
-   * Register a plugin for the intent kinds it supports.
-   * Throws on duplicate kind registration.
+   * Register a plugin for each of its supported kinds under (provider, kind).
+   * Throws DuplicatePluginRegistrationError on duplicate key.
    */
   registerPlugin(plugin: AgentLaunchPlugin): void {
+    if (typeof plugin.provider !== 'string' || plugin.provider.length === 0) {
+      throw new Error(
+        `Plugin "${plugin.pluginId}" must declare a non-empty provider string`,
+      );
+    }
     for (const kind of plugin.supportedKinds) {
-      if (this.kindToPlugin.has(kind)) {
-        const existing = this.kindToPlugin.get(kind)!;
-        throw new Error(
-          `Intent kind "${kind}" already registered by plugin "${existing.pluginId}"`,
+      const key = `${plugin.provider}:${kind}`;
+      const existing = this.registry.get(key);
+      if (existing) {
+        throw new DuplicatePluginRegistrationError(
+          plugin.provider,
+          kind,
+          existing.pluginId,
         );
       }
-      this.kindToPlugin.set(kind, plugin);
+      this.registry.set(key, plugin);
     }
   }
 
   /**
-   * Launch a process based on the request's intent.
+   * Launch a process based on the request's intent + provider.
    *
-   * 1. Resolve plugin from registry by intent kind
-   * 2. Call plugin.buildLaunch() to get LaunchSpec
-   * 3. Merge env: process.env ← plugin env ← caller env
-   * 4. If credentials: apply credentials interceptor (begin session, merge env, wrap command)
-   * 5. Select ProcessFactory by LaunchSpec.stdioProfile
-   * 6. Spawn process and return LaunchHandle
-   * 7. If credentials: register exit cleanup (end session)
+   * 1. Resolve provider (request.provider ?? DEFAULT_PROVIDER)
+   * 2. Look up plugin by `${provider}:${kind}`; else fall back to
+   *    `${SYSTEM_PROVIDER}:${kind}` when provider was defaulted
+   * 3. Otherwise classify miss: known-provider-unknown-kind (Error)
+   *    vs. unknown-provider (UnknownProviderError)
+   * 4. Merge env, apply credentials, select factory, spawn.
    */
   async launch(request: LaunchRequest): Promise<LaunchHandle> {
     const { intent } = request;
+    const provider = request.provider ?? DEFAULT_PROVIDER;
+    const kind = intent.kind;
+    const key = `${provider}:${kind}`;
 
     // 1. Resolve plugin
-    const plugin = this.kindToPlugin.get(intent.kind);
+    let plugin = this.registry.get(key);
+    if (!plugin && request.provider === undefined) {
+      // Default-provider fallback: system-owned kinds (generic-subprocess, shell)
+      // resolve without callers needing to spell 'system'.
+      plugin = this.registry.get(`${SYSTEM_PROVIDER}:${kind}`);
+    }
     if (!plugin) {
-      const availableKinds = [...this.kindToPlugin.keys()].join(', ');
-      throw new Error(
-        `Unknown intent kind "${intent.kind}". Available kinds: ${availableKinds}`,
-      );
+      const registryKeys = [...this.registry.keys()];
+      const kindsForProvider: string[] = [];
+      const providers = new Set<string>();
+      for (const registryKey of registryKeys) {
+        const [keyProvider, keyKind] = splitKey(registryKey);
+        providers.add(keyProvider);
+        if (keyProvider === provider) {
+          kindsForProvider.push(keyKind);
+        }
+      }
+      if (kindsForProvider.length > 0) {
+        throw new Error(
+          `Unknown intent kind "${kind}" for provider "${provider}". Known kinds for this provider: ${kindsForProvider.join(', ')}`,
+        );
+      }
+      const availableProviders = [...providers].sort();
+      throw new UnknownProviderError(provider, kind, availableProviders);
     }
 
     // 2. Build launch spec
@@ -155,4 +188,10 @@ export class AgentLauncher {
       },
     };
   }
+}
+
+/** Split a `${provider}:${kind}` registry key. Provider is everything before the first colon. */
+function splitKey(key: string): [string, string] {
+  const colonIndex = key.indexOf(':');
+  return [key.slice(0, colonIndex), key.slice(colonIndex + 1)];
 }
