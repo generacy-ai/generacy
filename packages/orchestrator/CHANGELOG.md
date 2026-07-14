@@ -1,5 +1,91 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- 5488c4c: Provider-neutral launch intents and a `(provider, kind)` plugin registry (#813).
+
+  - `@generacy-ai/orchestrator`: the agent launch intent types (`phase`,
+    `pr-feedback`, `validate-fix`, `merge-conflict`, `conversation-turn`,
+    `invoke`) now live in and are owned by `src/launcher/types.ts` — the core
+    `LaunchIntent` union no longer imports `ClaudeCodeIntent` from the Claude
+    plugin, so the concrete provider no longer leaks into orchestrator core.
+    `PhaseIntent`/`PrFeedbackIntent` gain an optional `model` field and
+    `LaunchRequest` gains an optional `provider` selector (default
+    `'claude-code'`). The launcher registry is re-keyed on `(provider, kind)`,
+    keeping duplicate-registration protection per key, and an unknown provider
+    produces a typed error. These types are also exposed via the new
+    `@generacy-ai/orchestrator/launcher/types` subpath export.
+  - `@generacy-ai/orchestrator-types`: `LaunchRequest` and `AgentLaunchPlugin`
+    gain the `provider` field mirroring the orchestrator-owned contract.
+  - `@generacy-ai/generacy-plugin-claude-code`: `ClaudeCodeLaunchPlugin` declares
+    its `provider` namespace. The plugin structurally mirrors the
+    orchestrator-owned intent types locally (same pattern as its local
+    `LaunchSpec`/`OutputParser`) rather than importing them across the package
+    boundary, so the two packages do not form a build-time cycle. No call-site
+    behavior change — all sites resolve to the `claude-code` provider and argv
+    output is byte-identical.
+
+- 92ca0b4: Agent provider/model config surface threaded to phase spawns (#814).
+
+  Adds an `orchestrator.agents` config block so a repo's `.generacy/config.yaml`
+  can select the agent `{ provider, model }` per workflow phase. Ships immediate
+  value: per-phase **model** selection for Claude Code, ahead of any new provider.
+
+  - `@generacy-ai/config`: `OrchestratorSettingsSchema` gains an `agents` block
+    (`default` / `workflows.<name>.default` / `workflows.<name>.phases.<phase>`,
+    each `{ provider?, model? }`).
+  - `@generacy-ai/generacy`: mirrors the `agents` block in the CLI-facing config
+    schema and `examples/config-*.yaml`, and wires the previously-unconsumed
+    `defaults.agent` as the repo-level provider default.
+  - `@generacy-ai/orchestrator`: `WorkerConfigSchema` carries the merged `agents`
+    block; the repo-override merge and cluster-default env plumbing
+    (`WORKER_AGENT_PROVIDER` / `WORKER_AGENT_MODEL`) are extended. New
+    `resolveAgentForPhase(config, workflowName, phase)` implements precedence
+    (`phases.<phase>` > `workflows.<name>.default` > `agents.default` > repo
+    `defaults.agent` > cluster default > built-in `claude-code`), resolving
+    provider and model independently. `{ provider, model }` is threaded through
+    `CliSpawnOptions` → intent → `LaunchRequest`; provider-aware resume drops the
+    session when the next phase resolves to a different provider, and an unknown
+    provider fails the phase with a clear message (no silent Claude fallback).
+  - `@generacy-ai/generacy-plugin-claude-code`: `ClaudeCodeLaunchPlugin` pushes
+    `--model` on `phase`/`pr-feedback` intents when set, mirroring the existing
+    conversation-turn path. No-config argv output is unchanged.
+
+### Patch Changes
+
+- 23befe1: Fix fresh wizard clusters never cloning their repo: the post-activation retry replayed `bootstrap-complete` before `GH_TOKEN` was sealed, burning the one-shot clone watcher (#937).
+
+  On a brand-new wizard-provisioned cluster the state is `activated &&
+!postActivationComplete` the instant activation completes — so
+  `PostActivationRetryService` fired immediately, ~2 minutes before the user
+  finished entering credentials, replaying the `bootstrap-complete` lifecycle
+  action. The control-plane wrote the post-activation sentinel unconditionally,
+  the one-shot clone watcher fired with no token and (correctly) refused, then
+  exited — and nothing was left to consume the credentials when they landed.
+  This regressed once #838 made the dispatch block reachable on wizard clusters,
+  re-opening the race #739 had closed via the `bootstrap-complete` door it left
+  ungated.
+
+  - `@generacy-ai/orchestrator`: `checkPostActivationState()` now only sets
+    `needsRetry` when the wizard credentials file exists **and** carries a
+    non-empty `GH_TOKEN` (mirroring the guard `entrypoint-post-activation.sh`
+    applies). On a fresh pre-credentials cluster the retry defers; genuine
+    restart-recovery with creds already sealed still fires.
+  - `@generacy-ai/control-plane`: defense-in-depth — the `bootstrap-complete`
+    lifecycle handler now gates its sentinel write on `hasGitHubToken`, exactly
+    like the sibling `prepare-workspace` handler, so a token-less replay can never
+    fire the one-shot clone.
+
+- Updated dependencies [5488c4c]
+- Updated dependencies [92ca0b4]
+- Updated dependencies [23befe1]
+  - @generacy-ai/orchestrator-types@0.2.0
+  - @generacy-ai/generacy-plugin-claude-code@0.3.0
+  - @generacy-ai/config@0.4.0
+  - @generacy-ai/control-plane@0.7.2
+
 ## 0.7.0
 
 ### Minor Changes
