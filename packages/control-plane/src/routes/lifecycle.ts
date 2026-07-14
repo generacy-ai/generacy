@@ -169,8 +169,10 @@ export async function handlePostLifecycle(
     // Unseal wizard credentials and write transient env file before sentinel
     const agencyDir = process.env.AGENCY_DIR ?? '/workspaces/.agency';
     const envFilePath = process.env.WIZARD_CREDS_PATH ?? '/var/lib/generacy/wizard-credentials.env';
+    let hasGitHubToken = false;
     try {
       const envResult = await writeWizardEnvFile({ agencyDir, envFilePath });
+      hasGitHubToken = envResult.hasGitHubToken;
       if (envResult.failed.length > 0) {
         const pushEvent = getRelayPushEvent();
         pushEvent?.('cluster.bootstrap', {
@@ -184,24 +186,41 @@ export async function handlePostLifecycle(
     }
 
     const sentinel = process.env.POST_ACTIVATION_TRIGGER ?? '/tmp/generacy-bootstrap-complete';
-    await writeFile(sentinel, '', { flag: 'w' });
+    if (hasGitHubToken) {
+      await writeFile(sentinel, '', { flag: 'w' });
 
-    // Fire-and-forget: start code-server asynchronously (don't block the response)
-    const manager = getCodeServerManager();
-    manager.start().catch(() => {
-      // code-server start failure is non-fatal; metadata will report codeServerReady: false
-    });
+      // Fire-and-forget: start code-server asynchronously (don't block the response)
+      const manager = getCodeServerManager();
+      manager.start().catch(() => {
+        // code-server start failure is non-fatal; metadata will report codeServerReady: false
+      });
 
-    // Auto-start VS Code tunnel after bootstrap completes
-    try {
-      const tunnelManager = getVsCodeTunnelManager();
-      await tunnelManager.start();
-    } catch {
-      // Best-effort: don't fail bootstrap-complete if tunnel start fails
+      // Auto-start VS Code tunnel after bootstrap completes
+      try {
+        const tunnelManager = getVsCodeTunnelManager();
+        await tunnelManager.start();
+      } catch {
+        // Best-effort: don't fail bootstrap-complete if tunnel start fails
+      }
+    } else {
+      // GitHub token not sealed yet — defer the clone. The one-shot
+      // post-activation watcher must not fire without a usable GH_TOKEN; the
+      // wizard's subsequent bootstrap-complete (with credentials sealed) drives
+      // the sentinel + code-server + tunnel start.
+      getRelayPushEvent()?.('cluster.bootstrap', {
+        status: 'awaiting-credentials',
+        reason: 'github-token-not-sealed',
+      });
     }
 
     res.writeHead(200);
-    res.end(JSON.stringify({ accepted: true, action: parsed.data, sentinel }));
+    res.end(
+      JSON.stringify({
+        accepted: true,
+        action: parsed.data,
+        sentinel: hasGitHubToken ? sentinel : null,
+      }),
+    );
     return;
   }
 
