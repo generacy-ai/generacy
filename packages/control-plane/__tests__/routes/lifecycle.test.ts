@@ -231,6 +231,14 @@ describe('handlePostLifecycle', () => {
 
     beforeEach(() => {
       tempDir = mkdtempSync(join(tmpdir(), 'lifecycle-test-'));
+      // Default: pretend GH_TOKEN was sealed so bootstrap-complete takes the
+      // happy path (writes sentinel + starts code-server/tunnel). Individual
+      // tests targeting the FR-006 defer branch override with mockResolvedValueOnce.
+      vi.mocked(writeWizardEnvFile).mockResolvedValue({
+        written: ['github-app'],
+        failed: [],
+        hasGitHubToken: true,
+      });
     });
 
     afterEach(() => {
@@ -354,7 +362,7 @@ describe('handlePostLifecycle', () => {
       vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
         written: ['github-main-org'],
         failed: [],
-        hasGitHubToken: false,
+        hasGitHubToken: true,
       });
 
       const req = {} as IncomingMessage;
@@ -368,7 +376,7 @@ describe('handlePostLifecycle', () => {
       expect(body).toEqual({ accepted: true, action: 'bootstrap-complete', sentinel: sentinelPath });
     });
 
-    it('bootstrap-complete with no credentials.yaml still writes sentinel', async () => {
+    it('bootstrap-complete with no credentials.yaml defers the sentinel (FR-006)', async () => {
       const sentinelPath = join(tempDir, 'bootstrap-no-creds');
       process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
 
@@ -379,11 +387,14 @@ describe('handlePostLifecycle', () => {
 
       await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
 
-      expect(existsSync(sentinelPath)).toBe(true);
+      // No token → sentinel deferred until later bootstrap-complete with credentials.
+      expect(existsSync(sentinelPath)).toBe(false);
       expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({ accepted: true, action: 'bootstrap-complete', sentinel: null });
     });
 
-    it('bootstrap-complete with unseal failure still writes sentinel (non-fatal)', async () => {
+    it('bootstrap-complete with unseal failure defers the sentinel (non-fatal, FR-006)', async () => {
       const sentinelPath = join(tempDir, 'bootstrap-unseal-fail');
       process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
 
@@ -392,11 +403,94 @@ describe('handlePostLifecycle', () => {
       const req = {} as IncomingMessage;
       const res = createMockResponse();
 
-      // Should NOT throw — the catch swallows the error
+      // Should NOT throw — the catch swallows the error. Since hasGitHubToken
+      // stays false on unseal failure, the sentinel is deferred to a later call.
       await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
 
-      expect(existsSync(sentinelPath)).toBe(true);
+      expect(existsSync(sentinelPath)).toBe(false);
       expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({ accepted: true, action: 'bootstrap-complete', sentinel: null });
+    });
+
+    // RT-004: fresh-wizard defer path — GH_TOKEN not sealed. Mirrors the
+    // existing prepare-workspace gated-sentinel test: no sentinel written,
+    // sentinel: null in response, awaiting-credentials event emitted, and
+    // neither code-server nor tunnel started.
+    it('defers the sentinel when hasGitHubToken is false and emits awaiting-credentials event', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-deferred');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: [],
+        failed: [],
+        hasGitHubToken: false,
+      });
+
+      const codeServer = createFakeManager();
+      setCodeServerManager(codeServer);
+
+      const mockPushEvent = vi.fn();
+      vi.mocked(getRelayPushEvent).mockReturnValue(mockPushEvent);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({
+        accepted: true,
+        action: 'bootstrap-complete',
+        sentinel: null,
+      });
+      // Sentinel MUST NOT be written on the defer path.
+      expect(existsSync(sentinelPath)).toBe(false);
+      // Awaiting-credentials event emitted exactly once with the FR-006 shape.
+      const bootstrapCalls = mockPushEvent.mock.calls.filter(
+        (call) => call[0] === 'cluster.bootstrap',
+      );
+      expect(bootstrapCalls).toContainEqual([
+        'cluster.bootstrap',
+        { status: 'awaiting-credentials', reason: 'github-token-not-sealed' },
+      ]);
+      // Neither code-server nor tunnel start on the defer path (defer semantics).
+      expect(codeServer.start).not.toHaveBeenCalled();
+
+      vi.mocked(getRelayPushEvent).mockReturnValue(undefined);
+    });
+
+    // Positive-path assertion (T005): when hasGitHubToken is true the handler
+    // must behave exactly as before — writes sentinel, starts code-server, and
+    // returns sentinel path. Guards D8 defer-not-remove-behavior.
+    it('still writes sentinel and starts code-server when hasGitHubToken is true', async () => {
+      const sentinelPath = join(tempDir, 'bootstrap-sealed');
+      process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: ['github-app'],
+        failed: [],
+        hasGitHubToken: true,
+      });
+
+      const codeServer = createFakeManager();
+      setCodeServerManager(codeServer);
+
+      const req = {} as IncomingMessage;
+      const res = createMockResponse();
+
+      await handlePostLifecycle(req, res, { userId: 'u-test' }, { action: 'bootstrap-complete' });
+
+      expect(res.writeHead).toHaveBeenCalledWith(200);
+      const body = JSON.parse(res._body);
+      expect(body).toEqual({
+        accepted: true,
+        action: 'bootstrap-complete',
+        sentinel: sentinelPath,
+      });
+      expect(existsSync(sentinelPath)).toBe(true);
+      expect(codeServer.start).toHaveBeenCalledOnce();
     });
 
     it('relay warning emitted on partial credential unseal failure', async () => {
@@ -527,6 +621,13 @@ describe('handlePostLifecycle', () => {
     it('idempotent — bootstrap-complete after prepare-workspace still succeeds', async () => {
       const sentinelPath = join(tempDir, 'prepare-then-bootstrap');
       process.env.POST_ACTIVATION_TRIGGER = sentinelPath;
+
+      // Simulate the real wizard sequence: prepare-workspace fires first
+      // pre-credentials (defers), then bootstrap-complete fires post-wizard
+      // with credentials sealed (writes sentinel).
+      vi.mocked(writeWizardEnvFile)
+        .mockResolvedValueOnce({ written: [], failed: [], hasGitHubToken: false })
+        .mockResolvedValueOnce({ written: ['github-app'], failed: [], hasGitHubToken: true });
 
       const req = {} as IncomingMessage;
 

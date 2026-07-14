@@ -84,6 +84,31 @@ describe('runPostActivationBranch', () => {
     expect(retry.triggerPostActivationRetry).not.toHaveBeenCalled();
   });
 
+  // RT-003: fresh-wizard defer path. When PostActivationRetryService has already
+  // decided `needsRetry === false` because GH_TOKEN is not sealed (activated
+  // but !complete), the dispatch MUST fall through to 'noop' and MUST NOT call
+  // triggerPostActivationRetry. This is the complement of the retry-path test
+  // above and guards the fresh-cluster fix at the dispatch layer.
+  it('returns noop when activated && !complete && !needsRetry (fresh wizard defer)', async () => {
+    const logger = createMockLogger();
+    const retry = makeRetryFactory({
+      activated: true,
+      postActivationComplete: false,
+      needsRetry: false,
+    });
+    const resume = makeResumeFactory();
+
+    const outcome = await runPostActivationBranch({
+      logger,
+      retryServiceFactory: retry.factory,
+      resumeServiceFactory: resume.factory,
+    });
+
+    expect(outcome).toBe('noop');
+    expect(retry.triggerPostActivationRetry).not.toHaveBeenCalled();
+    expect(resume.triggerBootResume).not.toHaveBeenCalled();
+  });
+
   it('returns noop and dispatches nothing when !activated', async () => {
     const logger = createMockLogger();
     const retry = makeRetryFactory({

@@ -84,12 +84,15 @@ describe('PostActivationRetryService', () => {
 
     it('returns needsRetry: true when API key exists but completion flag is absent', () => {
       const keyPath = join(tempDir, 'cluster-api-key');
+      const wizardCredsPath = join(tempDir, 'wizard-credentials.env');
       writeFileSync(keyPath, 'test-key');
+      writeFileSync(wizardCredsPath, 'GH_TOKEN=ghp_valid\n');
 
       const service = new PostActivationRetryService({
         logger,
         keyFilePath: keyPath,
         completionFlagPath: join(tempDir, 'post-activation-complete'),
+        wizardCredsPath,
       });
 
       const state = service.checkPostActivationState();
@@ -98,6 +101,190 @@ describe('PostActivationRetryService', () => {
         activated: true,
         postActivationComplete: false,
         needsRetry: true,
+      });
+    });
+
+    // RT-001: fresh wizard cluster — activated && !complete, but no sealed
+    // GH_TOKEN yet. The retry MUST defer (needsRetry === false), emit the
+    // FR-002 log line, and emit the cluster.bootstrap `deferred` relay event.
+    describe('GH_TOKEN gate (RT-001)', () => {
+      it('defers when wizard-credentials.env is missing entirely', () => {
+        const keyPath = join(tempDir, 'cluster-api-key');
+        writeFileSync(keyPath, 'test-key');
+        const wizardCredsPath = join(tempDir, 'missing-wizard-credentials.env');
+        const sendRelayEvent = vi.fn();
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: keyPath,
+          completionFlagPath: join(tempDir, 'post-activation-complete'),
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        const state = service.checkPostActivationState();
+
+        expect(state).toEqual({
+          activated: true,
+          postActivationComplete: false,
+          needsRetry: false,
+        });
+        expect(logger.info).toHaveBeenCalledWith(
+          { wizardCredsPath },
+          expect.stringMatching(/GH_TOKEN not sealed/),
+        );
+        expect(sendRelayEvent).toHaveBeenCalledWith('cluster.bootstrap', {
+          status: 'deferred',
+          reason: 'github-token-not-sealed',
+        });
+      });
+
+      it('defers when GH_TOKEN key is absent from the file', () => {
+        const keyPath = join(tempDir, 'cluster-api-key');
+        const wizardCredsPath = join(tempDir, 'wizard-credentials.env');
+        writeFileSync(keyPath, 'test-key');
+        writeFileSync(
+          wizardCredsPath,
+          'ANTHROPIC_API_KEY=sk-ant-xxx\nGH_USERNAME=octocat\n',
+        );
+        const sendRelayEvent = vi.fn();
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: keyPath,
+          completionFlagPath: join(tempDir, 'post-activation-complete'),
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        const state = service.checkPostActivationState();
+
+        expect(state.needsRetry).toBe(false);
+        expect(sendRelayEvent).toHaveBeenCalledWith('cluster.bootstrap', {
+          status: 'deferred',
+          reason: 'github-token-not-sealed',
+        });
+      });
+
+      it('defers when GH_TOKEN is present but empty (trimmed)', () => {
+        const keyPath = join(tempDir, 'cluster-api-key');
+        const wizardCredsPath = join(tempDir, 'wizard-credentials.env');
+        writeFileSync(keyPath, 'test-key');
+        writeFileSync(wizardCredsPath, 'GH_TOKEN=   \n');
+        const sendRelayEvent = vi.fn();
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: keyPath,
+          completionFlagPath: join(tempDir, 'post-activation-complete'),
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        const state = service.checkPostActivationState();
+
+        expect(state.needsRetry).toBe(false);
+        expect(sendRelayEvent).toHaveBeenCalledWith('cluster.bootstrap', {
+          status: 'deferred',
+          reason: 'github-token-not-sealed',
+        });
+      });
+
+      it('does not throw on I/O errors — treats as not sealed', () => {
+        const keyPath = join(tempDir, 'cluster-api-key');
+        writeFileSync(keyPath, 'test-key');
+        // Point at the temp directory itself — readFileSync will EISDIR.
+        const wizardCredsPath = tempDir;
+        const sendRelayEvent = vi.fn();
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: keyPath,
+          completionFlagPath: join(tempDir, 'post-activation-complete'),
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        expect(() => service.checkPostActivationState()).not.toThrow();
+        const state = service.checkPostActivationState();
+        expect(state.needsRetry).toBe(false);
+      });
+
+      it('does not emit the defer event when !activated', () => {
+        const wizardCredsPath = join(tempDir, 'wizard-credentials.env');
+        // no api-key file → not activated
+        const sendRelayEvent = vi.fn();
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: join(tempDir, 'cluster-api-key'),
+          completionFlagPath: join(tempDir, 'post-activation-complete'),
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        service.checkPostActivationState();
+        expect(sendRelayEvent).not.toHaveBeenCalled();
+      });
+
+      it('does not emit the defer event when postActivationComplete is true', () => {
+        const keyPath = join(tempDir, 'cluster-api-key');
+        const flagPath = join(tempDir, 'post-activation-complete');
+        const wizardCredsPath = join(tempDir, 'wizard-credentials.env');
+        writeFileSync(keyPath, 'test-key');
+        writeFileSync(flagPath, '');
+        // no GH_TOKEN — but complete flag is set, so no defer signal
+        const sendRelayEvent = vi.fn();
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: keyPath,
+          completionFlagPath: flagPath,
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        service.checkPostActivationState();
+        expect(sendRelayEvent).not.toHaveBeenCalled();
+      });
+    });
+
+    // RT-002: restart-recovery preserved — sealed GH_TOKEN present, still
+    // needsRetry === true, no defer event emitted.
+    describe('GH_TOKEN present (RT-002)', () => {
+      it('returns needsRetry: true and emits no defer event when GH_TOKEN is sealed', () => {
+        const keyPath = join(tempDir, 'cluster-api-key');
+        const wizardCredsPath = join(tempDir, 'wizard-credentials.env');
+        writeFileSync(keyPath, 'test-key');
+        writeFileSync(
+          wizardCredsPath,
+          'GH_USERNAME=octocat\nGH_TOKEN=ghp_1234567890abcdef\nGH_EMAIL=octocat@example.com\n',
+        );
+        const sendRelayEvent = vi.fn();
+        const infoSpy = vi.mocked(logger.info);
+
+        const service = new PostActivationRetryService({
+          logger,
+          keyFilePath: keyPath,
+          completionFlagPath: join(tempDir, 'post-activation-complete'),
+          wizardCredsPath,
+          sendRelayEvent,
+        });
+
+        const state = service.checkPostActivationState();
+
+        expect(state).toEqual({
+          activated: true,
+          postActivationComplete: false,
+          needsRetry: true,
+        });
+        expect(sendRelayEvent).not.toHaveBeenCalled();
+        for (const call of infoSpy.mock.calls) {
+          const message = call[1];
+          if (typeof message === 'string') {
+            expect(message).not.toMatch(/GH_TOKEN not sealed/);
+          }
+        }
       });
     });
   });
