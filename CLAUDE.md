@@ -15,6 +15,45 @@ pnpm install
 pnpm dev
 ```
 
+## Changesets (required — CI gate)
+
+**If your diff touches a non-test file under `packages/<pkg>/src/`, the PR must add
+a new `.changeset/*.md` file.** Otherwise CI fails with:
+
+> ::error::This PR modifies packages/*/src/ but adds no changeset.
+
+Speckit phases do **not** generate changesets, so the implement phase must write one
+itself — this is the single most common reason a speckit PR lands red. Add it as part
+of the implementation, not as an afterthought:
+
+```bash
+pnpm changeset            # interactive
+# or hand-write .changeset/<issue-number>-<slug>.md
+```
+
+Rules:
+
+- It must be a **newly added** file in the PR diff (the gate greps `--diff-filter=A`
+  against the base). Editing an existing changeset does not satisfy it.
+- **Test-only** changes under `packages/*/src/` are exempt — the gate skips diffs whose
+  in-scope files are all `*.test.ts` / `*.spec.ts` / `__tests__/`.
+- List **every** package whose non-test `src/` changed. The gate only checks that *some*
+  changeset was added, so a changeset missing a package still passes CI but silently
+  ships that package unreleased — get this right by hand.
+- Bump level: new capability → `minor`; defect fix (`workflow:speckit-bugfix`) → `patch`;
+  new label vocabulary in `workflow-engine` → `minor`.
+- New exports that are **not** re-exported from the package's public `index.ts` are
+  internal surface, not API — still `patch`.
+- Genuinely needs no release (comment-only, or a refactor with no public surface)?
+  `pnpm changeset --empty`.
+- When unsure, copy the shape of a comparable existing changeset in `.changeset/`.
+
+Note: `pnpm changeset status --since=origin/develop` will not see your changeset until
+it is committed (it reads git, not the working tree). Plain `changeset status` reads the
+directory.
+
+Gate definition: `.github/workflows/changeset-bot.yml`.
+
 ## MCP Testing Tools
 
 For browser automation and UI testing, see:
