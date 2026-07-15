@@ -36,7 +36,8 @@
 - C: Label `escalation:repeat-failure`, N=2, SUPPLEMENTS `failed:<phase>`. Namespaces the escalation separately from `failed:*`.
 - D: Something else (please specify label, N, and coexistence rule)
 
-**Answer**: *Pending*
+**Answer**: A — Label `failed:<phase>-repeated`, N=2, SUPPLEMENTS `failed:<phase>` (both labels present).
+**Rationale** (@christrudelpw): Supplementing keeps every existing `failed:*` consumer working (including the cockpit classifier's error tier) while the `-repeated` suffix stays greppable in the same prefix family; replacing breaks exact-match watchers for no meaningful state-cleanliness gain. N=2 is right by the evidence: snappoll#8's three failures were byte-identical, so escalating on the second would have saved a full wasted retry with zero information lost.
 
 ### Q4: Cockpit verb scope for clearing escalation
 **Context**: FR-006 requires the escalation to be reversible by an operator, but leaves open whether a first-class cockpit verb (e.g. `generacy cockpit clear-escalation <issue-ref>` or a variant of `cockpit resume` from #891) ships as part of this issue or is deferred to a follow-up. Deferring means operators use `gh issue edit --remove-label` manually in v1, which is workable but less discoverable. Shipping the verb here doubles the surface area of this change.
@@ -47,7 +48,8 @@
 - C: Defer entirely — v1 relies on manual `gh issue edit --remove-label failed:<phase>-repeated`; a cockpit verb is a follow-up issue.
 - D: Something else (please specify)
 
-**Answer**: *Pending*
+**Answer**: B — Extend the existing `cockpit resume` (#891) to also clear the escalation label as part of its normal action; no new verb.
+**Rationale** (@christrudelpw): Resume is already the operator's "re-arm this failed phase" verb, and it is what the snappoll operator actually reached for on #8 and #13 — clearing the escalation there matches real usage with zero new surface area. A standalone verb would be a second thing to discover that is almost always run adjacent to resume anyway.
 
 ### Q5: Count-reset semantics when escalation is manually cleared
 **Context**: RT-007 explicitly flags ambiguity: after an operator clears the escalation label (per FR-006), the next same-fingerprint failure could either (a) restart the count at 1 (treats the clearance as "operator confirms the retry is worth trying again from scratch") or (b) resume the prior count and immediately re-escalate on the very next failure (treats the clearance as "operator has fixed the upstream artifact — one more failure means the fix didn't work"). The two semantics have opposite effects on operator UX and on how many retries a mis-diagnosed fix consumes.
@@ -58,4 +60,5 @@
 - C: Reset only if the operator also removes the `failed:<phase>` label (interpreted as "artifact repaired"); otherwise resume.
 - D: Something else (please specify)
 
-**Answer**: *Pending*
+**Answer**: B — Resume the prior count: clearance means "I believe I repaired the input; verify with one attempt," so the very next same-fingerprint failure re-escalates immediately.
+**Rationale** (@christrudelpw): The identical fingerprint is the whole signal: if the operator's repair worked, the fingerprint changes or the phase passes and the count is moot; if it recurs byte-identical, burning N-1 more retries re-creates precisely the waste this issue exists to stop. The conditional two-label protocol (option C) is subtle enough that operators would trip over it.
