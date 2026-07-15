@@ -160,6 +160,48 @@ describe('LabelManager', () => {
     });
   });
 
+  describe('onRepeatedError (#942)', () => {
+    it('adds failed:implement-repeated and does NOT remove any label', async () => {
+      const lm = createLabelManager();
+
+      await lm.onRepeatedError('implement');
+
+      expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'failed:implement-repeated',
+      ]);
+      // No removals — supplements failed:<phase>, does not replace it.
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+    });
+
+    it('adds failed:validate-repeated for validate phase', async () => {
+      const lm = createLabelManager();
+
+      await lm.onRepeatedError('validate');
+
+      expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'failed:validate-repeated',
+      ]);
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: calling twice results in two apply calls with same label (dedup at GH)', async () => {
+      const lm = createLabelManager();
+
+      await lm.onRepeatedError('implement');
+      await lm.onRepeatedError('implement');
+
+      expect(mockGithub.addLabels).toHaveBeenCalledTimes(2);
+      expect(mockGithub.addLabels).toHaveBeenNthCalledWith(1, 'owner', 'repo', 42, [
+        'failed:implement-repeated',
+      ]);
+      expect(mockGithub.addLabels).toHaveBeenNthCalledWith(2, 'owner', 'repo', 42, [
+        'failed:implement-repeated',
+      ]);
+      // Never removes anything on the escalation path.
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+    });
+  });
+
   describe('onWorkflowComplete', () => {
     it('removes agent:in-progress label', async () => {
       const lm = createLabelManager();

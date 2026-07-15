@@ -202,6 +202,29 @@ export class LabelManager {
   }
 
   /**
+   * #942: Called when a phase fails with the same fingerprint N or more times
+   * (N = REPEAT_FAILURE_THRESHOLD, currently 2). Applies `failed:<phase>-repeated`
+   * IN ADDITION to (not instead of) `failed:<phase>`. The regular `onError`
+   * still fires first so pre-#942 consumers of `failed:*` remain byte-compatible.
+   *
+   * Idempotent: `applyLabels` de-dupes when the label is already present.
+   * Never removes any label (Q3→A).
+   */
+  async onRepeatedError(phase: WorkflowPhase): Promise<void> {
+    const escalationLabel = `failed:${phase}-repeated`;
+    await this.retryWithBackoff(async () => {
+      await this.ensureRepoLabelsExist();
+
+      this.logger.info(
+        { phase, issue: this.issueNumber, escalationLabel },
+        `Repeat-identical failure escalation: adding ${escalationLabel}`,
+      );
+
+      await this.applyLabels([escalationLabel]);
+    }, { site: 'error-repeated', labelOp: `addLabels([${escalationLabel}])` });
+  }
+
+  /**
    * Called when the entire workflow completes (all phases finished).
    *
    * Removes the `agent:in-progress` label.

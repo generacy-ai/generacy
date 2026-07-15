@@ -374,6 +374,11 @@ export class StageCommentManager {
    * For `stage === 'label-op'` (#889), the summary line references the failing
    * label operation and site rather than a phase name.
    * See specs/889-found-during-cockpit-v1/contracts/failure-alert-label-op.md.
+   *
+   * #942: Line 1 is `<v1-marker> <v2-marker>` (single-space separated). The v1
+   * substring dedup at postFailureAlert (~:346) still matches because the v1
+   * marker prefix is byte-preserved. Body lines 2+ are byte-identical to #915.
+   * See specs/942-summary-when-phase-fails/contracts/failure-alert-marker-v2.md.
    */
   private renderFailureAlert(marker: string, data: FailureAlertData): string {
     const evidence = data.evidence;
@@ -387,11 +392,14 @@ export class StageCommentManager {
         ? `❌ **label operation failed** — \`${data.labelOp ?? evidence.command}\` at site \`${data.phase}\` (${evidence.exitDescriptor}).`
         : `❌ **${data.phase} failed** — \`${evidence.command}\` ${evidence.exitDescriptor}.`;
 
+    // #942: v2 sibling marker appended after a single space on line 1.
+    const firstLine = `${marker} <!-- fp:${data.fingerprint}:${data.occurrence} -->`;
+
     // #915: reason block sits between the summary line and the blank line
     // preceding <details>. Empty array (spread expands to nothing) for pre-#915
     // inputs (byte-identical to #865/#890).
     return [
-      marker,
+      firstLine,
       summaryLine,
       ...formatReasonBlock(evidence.reason),
       '',

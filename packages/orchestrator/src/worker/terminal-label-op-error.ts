@@ -11,6 +11,7 @@ export type TerminalLabelOpSite =
   | 'phase-start'
   | 'phase-complete'
   | 'error'
+  | 'error-repeated'
   | 'resume-start'
   | 'workflow-complete';
 

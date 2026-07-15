@@ -106,6 +106,26 @@ export const STAGE_MARKERS: Record<StageType, string> = {
 export const FAILURE_ALERT_MARKER_PREFIX = '<!-- generacy:failure-alert:';
 
 /**
+ * #942: Second HTML comment on failure-alert line 1 carrying the fingerprint
+ * hex + 1-based occurrence counter. Sibling to `FAILURE_ALERT_MARKER_PREFIX`.
+ *
+ * Wire shape:
+ *   <!-- generacy:failure-alert:<stage>:<runId> --> <!-- fp:<HEX16>:<N> -->
+ *
+ * The v1 substring dedup at stage-comment-manager.ts:346 remains byte-compatible
+ * (the v1 marker is unchanged; the v2 marker is appended after a single space).
+ */
+export const FAILURE_ALERT_MARKER_V2_REGEX = /<!-- fp:([0-9a-f]{16}):(\d+) -->/;
+
+/**
+ * #942: Stable derived string identifying a phase failure by its underlying
+ * defect. Two failures produce the same fingerprint iff they share phase +
+ * classifier + reason text (Q1→B default). Format: lowercase 16-char hex
+ * (sha256 prefix).
+ */
+export type FailureFingerprint = string;
+
+/**
  * Gate definition for pausing workflow at review checkpoints
  */
 export interface GateDefinition {
@@ -377,6 +397,19 @@ export interface FailureAlertData {
    * copied verbatim from `WorkerResult.failureMetadata.labelOp`.
    */
   labelOp?: string;
+  /**
+   * #942: Stable hex-16 fingerprint derived from
+   * `{ phase, classifier, reason_text }`. Populated by phase-loop.ts at every
+   * alert site. Rendered as `<!-- fp:HEX:N -->` on line 1 of the alert body.
+   */
+  fingerprint: FailureFingerprint;
+  /**
+   * #942: 1-based count of this occurrence, including the current in-flight
+   * failure (so 1 on the first failure, 2 on the second identical-fingerprint
+   * failure, etc.). Populated by phase-loop.ts. Rendered as the `:N` suffix in
+   * the v2 marker.
+   */
+  occurrence: number;
 }
 
 /**

@@ -4,12 +4,12 @@
  * Engine-owned label surgery: on an issue carrying `failed:<phase>` (with or
  * without `agent:error`), applies the additions `waiting-for:<preceding-gate>`
  * + `completed:<preceding-gate>` + `agent:paused` FIRST, then removes
- * `failed:<phase>` plus defensive `agent:error` / `phase:<phase>` when
- * present. The terminal on-issue state is byte-identical to a
- * naturally-paused-then-completed gate — the label monitor's next poll emits
- * a resume event, and the worker's `PhaseResolver.resolveFromContinue` walks
- * the preserved `completed:<earlier-phase>` chain to pick `<phase>` as the
- * start phase.
+ * `failed:<phase>` plus defensive `agent:error` / `phase:<phase>` /
+ * `failed:<phase>-repeated` (#942 escalation sibling) when present. The
+ * terminal on-issue state is byte-identical to a naturally-paused-then-completed
+ * gate — the label monitor's next poll emits a resume event, and the worker's
+ * `PhaseResolver.resolveFromContinue` walks the preserved
+ * `completed:<earlier-phase>` chain to pick `<phase>` as the start phase.
  *
  * Side effects (in order):
  *   1. gh addLabels [waiting-for:<G>, completed:<G>, agent:paused]
@@ -18,6 +18,12 @@
  * Idempotent (FR-003): no `failed:*` → no-op with single-line stdout, exit 0.
  * Refuses (FR-004) with evidence and zero mutations when the state is
  * ambiguous or non-re-armable. No `--force` in v1 (parity with `advance`).
+ *
+ * #942: `failed:<phase>-repeated` (repeat-identical failure escalation) is
+ * treated as a sibling of `failed:<phase>` — it is NOT counted as a separate
+ * primary failure for the multiple-failed refusal, and it is cleared alongside
+ * its primary. Count semantics on clear are "resume, do not reset": the next
+ * same-fingerprint failure re-escalates immediately.
  */
 import { Command } from 'commander';
 import {
@@ -86,17 +92,22 @@ function resolveWorkflowFromLabels(labels: string[]): string {
 }
 
 function classify(labels: string[], workflowOverride?: string): ResumeClassification {
-  const failedLabels = labels.filter((l) => l.startsWith('failed:')).sort();
+  // #942: `failed:<phase>-repeated` is the repeat-identical-failure escalation
+  // sibling of `failed:<phase>`. It does NOT count as a separate primary failure
+  // for the "multiple-failed" refusal — it's always paired with its primary.
+  const primaryFailedLabels = labels
+    .filter((l) => l.startsWith('failed:') && !l.endsWith('-repeated'))
+    .sort();
 
-  if (failedLabels.length === 0) {
+  if (primaryFailedLabels.length === 0) {
     return { kind: 'no-op' };
   }
 
-  if (failedLabels.length > 1) {
-    return { kind: 'refuse-multiple-failed', failedLabels };
+  if (primaryFailedLabels.length > 1) {
+    return { kind: 'refuse-multiple-failed', failedLabels: primaryFailedLabels };
   }
 
-  const failedLabel = failedLabels[0]!;
+  const failedLabel = primaryFailedLabels[0]!;
   const phaseSuffix = failedLabel.slice('failed:'.length);
   if (!isKnownPhase(phaseSuffix)) {
     return { kind: 'refuse-unknown-phase', failedLabel, phaseSuffix };
@@ -127,6 +138,10 @@ function classify(labels: string[], workflowOverride?: string): ResumeClassifica
   if (labels.includes('agent:error')) labelsToRemove.push('agent:error');
   const phaseLabel = `phase:${failedPhase}`;
   if (labels.includes(phaseLabel)) labelsToRemove.push(phaseLabel);
+  // #942: clear the repeat-failure escalation label alongside failed:<phase>.
+  // Best-effort — `gh label remove` no-ops when the label is absent.
+  const repeatedLabel = `failed:${failedPhase}-repeated`;
+  if (labels.includes(repeatedLabel)) labelsToRemove.push(repeatedLabel);
 
   return { kind: 'happy-path', failedPhase, gate, labelsToAdd, labelsToRemove };
 }
