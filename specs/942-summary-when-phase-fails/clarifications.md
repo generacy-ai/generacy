@@ -14,7 +14,7 @@
 - C: `{ phase, classifier, sha256(reason_text + last_N_lines_of_output) }` — finest. Adds output tail so a classifier bucket that spans multiple root causes still discriminates.
 - D: Something else (please specify)
 
-**Answer**: *Pending*
+**Answer**: <your answer>
 
 ### Q2: Fingerprint history persistence mechanism
 **Context**: FR-002 forbids in-memory-only state (every external requeue starts a fresh worker invocation with counters reset). Two natural persistent surfaces exist: (a) the GitHub issue's `failure-alert` comment thread, which is already tamper-visible and survives cluster rebuilds, or (b) a new Redis/state-store keyspace scoped to `<owner>:<repo>:<issue>`. The choice affects failure modes (GitHub API rate limits vs. Redis availability), the shape of the detection code path, and whether history survives issue re-creation.
@@ -25,7 +25,13 @@
 - C: Both — write to Redis for fast detection, embed fingerprint hex in the comment marker as an audit backstop.
 - D: Something else (please specify)
 
-**Answer**: *Pending*
+**Answer**: <your answer>
+...
+```
+
+Then add the `completed:clarification` label to signal you're done.
+
+---
 
 ### Q3: Escalation label spelling, threshold N, and coexistence with `failed:<phase>`
 **Context**: FR-003 leaves three coupled decisions unspecified: (1) the exact escalation label string (which downstream automation, cockpit verbs, and label allowlists in `LabelManager` will hard-code), (2) the threshold N at which escalation fires (issue text proposes 2; a higher N might reduce false escalations on genuinely-flaky-once phases), and (3) whether the escalation label REPLACES `failed:<phase>` (cleaner state, but breaks any tooling that watches for `failed:*`) or SUPPLEMENTS it (backwards-compatible, but two labels to reason about). RT-004 explicitly flags this as a clarification-driven decision.
