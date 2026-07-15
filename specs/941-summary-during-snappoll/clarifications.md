@@ -15,7 +15,7 @@
 - B: **Invariant-first** — install a runtime guard in `LabelManager` that rejects any `completed:<human-gate>` write not tagged as coming from `cockpit advance` (audit-comment path) or an approve-review handler. Root-cause diagnosis is a byproduct of adding the guard (any current writer will trip it).
 - C: **Both** — locate and remove the specific writer AND install the invariant guard as defense-in-depth. FR-003 lands in the same PR.
 
-**Answer**: *Pending*
+**Answer**: C — Both: locate and remove the specific writer AND install the LabelManager invariant guard as defense-in-depth, in the same PR. *Rationale*: The snappoll evidence shows two anonymous advances via what may be different sub-flows (31 and 14 minutes after their respective reviews), and recon has already eliminated the leading suspect — a culprit-only fix risks whack-a-mole, while a guard-only fix would start rejecting an unknown live writer in production without understanding what breaks downstream. The guard also doubles as the diagnostic that finds the writer.
 
 ---
 
@@ -27,7 +27,7 @@
 - B: **Does not exist — leave `cockpit advance` as the only writer.** FR-006 is a null constraint; FR-003 collapses to "the audit-comment path is the only writer." Approve-review auto-advance is out of scope (separate future feature).
 - C: **Does not exist — create it as part of this fix.** Net-new capability: an approve-review handler writes `completed:implementation-review` + the `<!-- generacy-cockpit:manual-advance -->`-shaped audit comment (or an equivalent approve-review audit marker).
 
-**Answer**: *Pending*
+**Answer**: B — No approve-review auto-advance path exists; leave `cockpit advance` as the only legitimate writer. FR-006 is a null constraint and approve-review auto-advance is out of scope (separate future feature). *Rationale*: Every legitimate approval in the snappoll run flowed through `cockpit_advance` (all review verdicts are visible as advance calls in the operator transcript) — there is no happy path to protect. Creating a second writer inside the very change whose purpose is locking writers down works against the invariant; it can ship later as its own feature with its own audit marker.
 
 ---
 
@@ -39,7 +39,7 @@
 - B: **Never re-add.** The handler only guarantees non-removal of `waiting-for:implementation-review` and non-write of `completed:implementation-review`. If the gate label is missing when the session ends, that's a bug in another code path (e.g., an unwanted `onResumeStart` invocation) and out of scope here.
 - C: **Assert then re-add on mismatch, log-loud.** If `waiting-for:implementation-review` is missing at session exit, log a structured `error` line (`{ event: 'gate-label-missing-at-fix-exit', ... }`) and re-add — surfaces the underlying bug while still satisfying FR-002.
 
-**Answer**: *Pending*
+**Answer**: C — Assert then re-add on mismatch, log-loud: if `waiting-for:implementation-review` is missing at fix-session exit, emit a structured `gate-label-missing-at-fix-exit` error line and re-add it. *Rationale*: A silent defensive re-add satisfies FR-002 but buries the evidence of whichever path stripped the label — hidden masking between redundant mechanisms is exactly the defect class rev 3 exists to eliminate. C gives the same operator-visible guarantee while making the underlying bug loud enough to earn its own issue.
 
 ---
 
@@ -51,7 +51,7 @@
 - B: **Per-caller assertion at each writer site** — every place that writes `completed:<gate>` throws unless a source predicate matches. No shared guard type; each callsite documents its own justification.
 - C: **Test-only invariant** — the FR-003 protection is a test that greps the codebase (or uses static analysis) to enforce "only `cockpit_advance.ts` and `<approve-review handler>` reference `completed:<human-gate>` writes." No runtime cost; regressed by refactor.
 
-**Answer**: *Pending*
+**Answer**: A — Runtime guard in `LabelManager.applyLabels`: reject any `completed:<human-gate>` add unless the caller passes an authorization token (e.g. `AllowGateComplete.CockpitAdvance`). *Rationale*: The writer being defended against is unknown — per-caller assertions only cover callers already found, and a test-only invariant is regressed by the first refactor. The seam guard is the only placement that catches writers we haven't met yet, and it is what makes Q1's diagnosis work.
 
 ---
 
@@ -63,4 +63,4 @@
 - B: **Integration test on the phase-loop / worker route** — drives a simulated `address-pr-feedback` queue item end-to-end through the worker and asserts the final label set on the mock GitHub client matches `{ 'waiting-for:implementation-review', 'agent:paused' }`. Locks the whole write chain in that flow.
 - C: **Full end-to-end** — spawns `LabelMonitorService` + `PrFeedbackMonitorService` + `ClaudeCliWorker` against a mock GitHub, injects a request-changes review, asserts terminal issue state. Highest fidelity, slowest, most brittle.
 
-**Answer**: *Pending*
+**Answer**: B — Integration test on the phase-loop / worker route: drive a simulated address-pr-feedback queue item end-to-end and assert the terminal label set is `{waiting-for:implementation-review, agent:paused}` on the mock GitHub client. *Rationale*: Recon already suggests the handler itself is innocent, so a unit test on it locks the wrong door; the failure lived in the interaction chain, which the integration layer covers at a fraction of end-to-end's cost and flakiness. The Q4 seam guard brings its own unit tests, so the cheap layer is covered anyway.
