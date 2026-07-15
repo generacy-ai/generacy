@@ -10,6 +10,14 @@ const TERMINAL_COMPLETED_LABELS = new Set<string>([
   'completed:children-complete',
 ]);
 
+// #943: enumerated blocked:* → error tier. Any blocked:* name not in this set
+// (including blocked:stuck-feedback-loop from #883 and any future addition)
+// still falls through to the waiting prefix branch below — safe default.
+const ERROR_BLOCKED_LABELS: ReadonlySet<string> = new Set([
+  'blocked:stuck-merge-conflicts',
+  'blocked:stuck-validate-fix',
+]);
+
 /**
  * Build-time-static lookup table mapping label name → curated CockpitState.
  *
@@ -32,6 +40,7 @@ function classifyByPattern(label: string): CockpitState {
     return TERMINAL_COMPLETED_LABELS.has(label) ? 'terminal' : 'stage-complete';
   }
   if (label.startsWith('failed:') || label === 'agent:error') return 'error';
+  if (ERROR_BLOCKED_LABELS.has(label)) return 'error';
   if (
     label.startsWith('waiting-for:') ||
     label.startsWith('needs:') ||

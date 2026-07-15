@@ -3,8 +3,87 @@ import { WORKFLOW_LABELS, classifyLabelProvisioningError } from '@generacy-ai/wo
 import type { WorkflowPhase, Logger } from './types.js';
 import { TerminalLabelOpError, type TerminalLabelOpSite } from './terminal-label-op-error.js';
 import type { ProvisioningError } from './provisioning-failure.js';
+import { GATE_MAPPING, WORKFLOW_GATE_MAPPING } from './phase-resolver.js';
 
 const WORKFLOW_LABEL_NAMES = new Set(WORKFLOW_LABELS.map((l) => l.name));
+
+/**
+ * Closed union of legitimate writers of `completed:<human-gate>` labels.
+ *
+ * Currently a single member — `cockpit advance` (the CLI command that also
+ * posts the `<!-- generacy-cockpit:manual-advance -->` audit comment). The CLI
+ * writes labels over the wire via `gh addLabel` and does NOT invoke
+ * `LabelManager`, so this token has zero in-process call sites today; it exists
+ * as a public export for future in-process writers that will need to
+ * explicitly opt in through the seam guard.
+ *
+ * DO NOT extend without a corresponding audit-comment marker design — see
+ * #941 spec §Out-of-scope for the `ApproveReview` case (Q2 → B).
+ */
+export const AllowGateComplete = Object.freeze({
+  CockpitAdvance: 'cockpit-advance',
+} as const);
+
+export type AllowGateComplete = (typeof AllowGateComplete)[keyof typeof AllowGateComplete];
+
+/**
+ * Thrown by `LabelManager.applyLabels` when a `completed:<human-gate>` label
+ * is written without an `AllowGateComplete` token. See #941.
+ */
+export class HumanGateCompletionUnauthorizedError extends Error {
+  readonly label: string;
+  readonly allowedTokens: readonly string[];
+
+  constructor(label: string) {
+    super(
+      `refused to add "${label}": ` +
+        `writing completed:<human-gate> requires an AllowGateComplete token ` +
+        `(none passed). Only the cockpit-advance path may complete a human ` +
+        `gate. See #941.`,
+    );
+    this.name = 'HumanGateCompletionUnauthorizedError';
+    this.label = label;
+    this.allowedTokens = Object.values(AllowGateComplete);
+  }
+}
+
+/**
+ * Human gates that live in `WorkerConfigSchema.gates` defaults but do not
+ * appear in the `phase-resolver.ts` `GATE_MAPPING` / `WORKFLOW_GATE_MAPPING`
+ * (they have no `resumeFrom` phase — they resume back to their own phase).
+ * Kept as a small static supplement so the guard reads a single deterministic
+ * source (not `WorkerConfigSchema.gates`, which is mutable per repo).
+ */
+const SUPPLEMENTAL_HUMAN_GATE_SUFFIXES: readonly string[] = [
+  'sibling-review',
+  'merge-conflicts',
+];
+
+/**
+ * Set of gate suffixes — the "X" in `completed:X` / `waiting-for:X` — that
+ * denote a human review gate (not a workflow phase). Derived from
+ * `GATE_MAPPING` and every `WORKFLOW_GATE_MAPPING[*]` plus the supplemental
+ * static list so a repo-level workflow override cannot silently expand or
+ * shrink the guarded set.
+ */
+const HUMAN_GATE_SUFFIXES: ReadonlySet<string> = (() => {
+  const s = new Set<string>(Object.keys(GATE_MAPPING));
+  for (const map of Object.values(WORKFLOW_GATE_MAPPING)) {
+    for (const gateName of Object.keys(map)) s.add(gateName);
+  }
+  for (const suffix of SUPPLEMENTAL_HUMAN_GATE_SUFFIXES) s.add(suffix);
+  return s;
+})();
+
+/**
+ * Returns true when `label` is `completed:<X>` and X is a known human-gate
+ * suffix. Phase completions (`completed:implement`, `completed:validate`, …)
+ * return false because phase names are disjoint from gate suffixes.
+ */
+export function isHumanGateCompletion(label: string): boolean {
+  if (!label.startsWith('completed:')) return false;
+  return HUMAN_GATE_SUFFIXES.has(label.slice('completed:'.length));
+}
 
 /**
  * Callback invoked from `onGateHit` after a pause label pair
@@ -451,7 +530,21 @@ export class LabelManager {
    *
    * All other error shapes rethrow unchanged.
    */
-  private async applyLabels(labels: string[]): Promise<void> {
+  private async applyLabels(
+    labels: string[],
+    allow?: AllowGateComplete,
+  ): Promise<void> {
+    // #941 FR-003: reject unauthorized human-gate completion adds before any
+    // network call. Rejection is per-label and atomic — if any label in the
+    // batch is a `completed:<human-gate>` without an `AllowGateComplete`
+    // token, the whole call throws with no partial write.
+    if (allow == null) {
+      for (const label of labels) {
+        if (isHumanGateCompletion(label)) {
+          throw new HumanGateCompletionUnauthorizedError(label);
+        }
+      }
+    }
     try {
       await this.github.addLabels(this.owner, this.repo, this.issueNumber, labels);
     } catch (err) {

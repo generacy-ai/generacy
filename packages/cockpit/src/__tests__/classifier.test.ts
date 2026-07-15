@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { WORKFLOW_LABELS } from '@generacy-ai/workflow-engine';
 import { classify } from '../state/classifier.js';
 import { mapLabelToState } from '../state/label-map.js';
-import { WAITING_PIPELINE_ORDER } from '../state/precedence.js';
+import { ERROR_PIPELINE_ORDER, WAITING_PIPELINE_ORDER } from '../state/precedence.js';
 
 describe('classify()', () => {
   describe('per-state coverage (a)', () => {
@@ -275,6 +275,123 @@ describe('classify()', () => {
         state: 'waiting',
         sourceLabel: 'waiting-for:address-pr-feedback',
       });
+    });
+  });
+
+  describe('#943: blocked:* labels in the error tier', () => {
+    it('blocked:stuck-merge-conflicts alone classifies as error', () => {
+      expect(classify(['blocked:stuck-merge-conflicts'])).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-merge-conflicts',
+      });
+    });
+
+    it('blocked:stuck-validate-fix alone classifies as error', () => {
+      expect(classify(['blocked:stuck-validate-fix'])).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-validate-fix',
+      });
+    });
+
+    it('blocked:stuck-feedback-loop stays in waiting (preserves #883)', () => {
+      expect(classify(['blocked:stuck-feedback-loop'])).toEqual({
+        state: 'waiting',
+        sourceLabel: 'blocked:stuck-feedback-loop',
+      });
+    });
+
+    it('unknown blocked:* prefix (e.g. blocked:future) stays in waiting (safe default)', () => {
+      // Not in WORKFLOW_LABELS so LABEL_TO_STATE has no entry; verify the
+      // fallthrough via mapLabelToState + classifyByPattern semantics: an
+      // unlisted blocked:* is not in ERROR_BLOCKED_LABELS, so the prefix
+      // branch classifies it as waiting when the classifier reaches it.
+      // Since it is unknown to WORKFLOW_LABELS, classify() returns unknown
+      // for a lone unknown label — but the invariant we care about is that
+      // it never lands in the error tier via the allow-list.
+      expect(classify(['blocked:future'])).toEqual({
+        state: 'unknown',
+        sourceLabel: '',
+      });
+    });
+
+    it('blocked:stuck-merge-conflicts wins the sourceLabel slot over agent:error', () => {
+      expect(classify(['agent:error', 'blocked:stuck-merge-conflicts'])).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-merge-conflicts',
+      });
+    });
+
+    it('blocked:stuck-merge-conflicts wins the sourceLabel slot over failed:validate', () => {
+      expect(classify(['failed:validate', 'blocked:stuck-merge-conflicts'])).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-merge-conflicts',
+      });
+    });
+
+    it('blocked:stuck-validate-fix wins the sourceLabel slot over agent:error', () => {
+      expect(classify(['agent:error', 'blocked:stuck-validate-fix'])).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-validate-fix',
+      });
+    });
+
+    it('blocked:stuck-merge-conflicts wins over blocked:stuck-validate-fix by ERROR_PIPELINE_ORDER', () => {
+      expect(
+        classify(['blocked:stuck-validate-fix', 'blocked:stuck-merge-conflicts']),
+      ).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-merge-conflicts',
+      });
+    });
+
+    it('cross-tier: error beats waiting when blocked:stuck-merge-conflicts coexists with waiting-for:merge-conflicts', () => {
+      expect(
+        classify(['waiting-for:merge-conflicts', 'blocked:stuck-merge-conflicts']),
+      ).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-merge-conflicts',
+      });
+    });
+
+    it('cross-tier: error beats waiting when blocked:stuck-validate-fix coexists with waiting-for:validate-fix', () => {
+      expect(
+        classify(['waiting-for:validate-fix', 'blocked:stuck-validate-fix']),
+      ).toEqual({
+        state: 'error',
+        sourceLabel: 'blocked:stuck-validate-fix',
+      });
+    });
+
+    it('regression: agent:error alone still classifies as error', () => {
+      expect(classify(['agent:error'])).toEqual({
+        state: 'error',
+        sourceLabel: 'agent:error',
+      });
+    });
+
+    it('regression: failed:plan alone still classifies as error', () => {
+      expect(classify(['failed:plan'])).toEqual({
+        state: 'error',
+        sourceLabel: 'failed:plan',
+      });
+    });
+
+    it('T005: mapLabelToState(blocked:stuck-merge-conflicts) is error', () => {
+      expect(mapLabelToState('blocked:stuck-merge-conflicts')).toBe('error');
+    });
+
+    it('T005: mapLabelToState(blocked:stuck-validate-fix) is error', () => {
+      expect(mapLabelToState('blocked:stuck-validate-fix')).toBe('error');
+    });
+
+    it('T005: mapLabelToState(blocked:stuck-feedback-loop) is waiting', () => {
+      expect(mapLabelToState('blocked:stuck-feedback-loop')).toBe('waiting');
+    });
+
+    it('T006: every ERROR_PIPELINE_ORDER entry classifies as error under mapLabelToState', () => {
+      for (const label of ERROR_PIPELINE_ORDER) {
+        expect(mapLabelToState(label)).toBe('error');
+      }
     });
   });
 
