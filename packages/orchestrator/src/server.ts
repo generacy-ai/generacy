@@ -330,10 +330,36 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     // absent the worker degrades gracefully to no fix cycle.
     const workerPhaseTracker = new PhaseTrackerService(server.log, redisClient);
 
+    // #942: FailureFingerprintTracker — scans issue failure-alert comments to
+    // count prior same-fingerprint failures. Construction is best-effort:
+    // if it throws (should never happen for the GitHub-scan impl since it's a
+    // pure ctor), we log and pass undefined so escalation degrades to a no-op.
+    let workerFailureFingerprintTracker:
+      | import('./services/failure-fingerprint-tracker.js').FailureFingerprintTracker
+      | undefined;
+    try {
+      const { GitHubCommentFailureFingerprintTracker } = await import(
+        './services/failure-fingerprint-tracker.js'
+      );
+      const trackerGithub = createGitHubClient();
+      workerFailureFingerprintTracker = new GitHubCommentFailureFingerprintTracker(
+        trackerGithub,
+        server.log,
+      );
+    } catch (err) {
+      server.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Failed to construct FailureFingerprintTracker — repeat-failure escalation disabled',
+      );
+    }
+
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
       phaseTracker: workerPhaseTracker,
+      ...(workerFailureFingerprintTracker
+        ? { failureFingerprintTracker: workerFailureFingerprintTracker }
+        : {}),
     });
 
     // #889: terminal-failure recovery handler. On WorkerResult.failed-terminal:
@@ -375,18 +401,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           item.issueNumber,
           server.log,
         );
+        const { computeFailureFingerprint } = await import('./worker/failure-fingerprint.js');
         const runId = crypto.randomUUID();
+        const evidence = {
+          command: `gh (${failureMetadata.labelOp})`,
+          exitDescriptor: 'exited 1',
+          // #890 renamed CommandExitEvidence.stderrTail → outputTail.
+          outputTail: failureMetadata.ghStderr,
+        };
+        // #942: label-op alerts still get a fingerprint marker so the comment
+        // renders consistently. No history lookup — we're outside the phase
+        // loop, occurrence is always 1.
+        const fingerprint = computeFailureFingerprint({ phase: failureMetadata.site, evidence });
         await stageCommentManager.postFailureAlert({
           stage: 'label-op',
           runId,
           phase: failureMetadata.site,
           labelOp: failureMetadata.labelOp,
-          evidence: {
-            command: `gh (${failureMetadata.labelOp})`,
-            exitDescriptor: 'exited 1',
-            // #890 renamed CommandExitEvidence.stderrTail → outputTail.
-            outputTail: failureMetadata.ghStderr,
-          },
+          evidence,
+          fingerprint,
+          occurrence: 1,
         });
       } catch (err) {
         server.log.error(

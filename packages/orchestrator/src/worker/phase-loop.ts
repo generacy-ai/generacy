@@ -21,10 +21,17 @@ import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
 import { writePauseContext } from './pause-context.js';
+import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
+import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
+
+/** Narrow a `WorkflowPhase | string` union to WorkflowPhase. */
+function isWorkflowPhase(value: WorkflowPhase | string): value is WorkflowPhase {
+  return (PHASE_SEQUENCE as readonly string[]).includes(value);
+}
 
 /**
  * Dependencies injected into the PhaseLoop.
@@ -53,6 +60,12 @@ export interface PhaseLoopDeps {
    * continue to route through `LabelManager.onError('validate')` (D7).
    */
   validateFixHandler?: ValidateFixHandler;
+  /**
+   * #942: Optional repeat-failure history tracker. When absent, escalation
+   * degrades to a no-op (occurrence is always 1, `-repeated` never fires).
+   * Injected by the worker-mode wiring in server.ts.
+   */
+  failureFingerprintTracker?: FailureFingerprintTracker;
 }
 
 /**
@@ -315,7 +328,6 @@ export class PhaseLoop {
                 'Pre-validate install failed',
               );
               results.push(installResult);
-              await labelManager.onError(phase);
               const evidence = this.buildErrorEvidence(
                 config.preValidateCommand,
                 installResult,
@@ -329,7 +341,7 @@ export class PhaseLoop {
                 startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
                 errorEvidence: evidence,
               });
-              await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+              await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
           }
@@ -418,7 +430,6 @@ export class PhaseLoop {
           { phase, error: String(error) },
           'Unexpected error during phase execution',
         );
-        await labelManager.onError(phase);
         const syntheticResult: PhaseResult = {
           phase,
           success: false,
@@ -440,7 +451,7 @@ export class PhaseLoop {
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
           errorEvidence: evidence,
         });
-        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+        await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
         throw error;
       }
 
@@ -490,7 +501,6 @@ export class PhaseLoop {
             undefined,
             'no-progress',
           );
-          await labelManager.onError(phase);
           await stageCommentManager.updateStageComment({
             stage,
             status: 'error',
@@ -499,7 +509,7 @@ export class PhaseLoop {
             prUrl: context.prUrl,
             errorEvidence: evidence,
           });
-          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
         lastTasksRemaining = tasksRemaining;
@@ -607,7 +617,6 @@ export class PhaseLoop {
           }
         }
 
-        await labelManager.onError(phase);
         const evidence = this.buildErrorEvidence(
           phase === 'validate' ? config.validateCommand : phase,
           result,
@@ -623,7 +632,7 @@ export class PhaseLoop {
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
           errorEvidence: evidence,
         });
-        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+        await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
 
@@ -654,7 +663,6 @@ export class PhaseLoop {
             { phase, err: String(err) },
             'product-diff computation threw — treating as detection failure',
           );
-          await labelManager.onError(phase);
           result.success = false;
           result.error = {
             message: `Phase "${phase}" product-diff detection failed: ${String(err)}`,
@@ -675,7 +683,7 @@ export class PhaseLoop {
             prUrl: context.prUrl,
             errorEvidence: evidence,
           });
-          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
 
@@ -684,7 +692,6 @@ export class PhaseLoop {
             { phase, baseRef, changedFiles, excluded: EXCLUDED_PATH_PREFIXES },
             'implement phase produced no product-code changes — all diff lives under excluded paths',
           );
-          await labelManager.onError(phase);
           result.success = false;
           result.error = {
             message:
@@ -707,7 +714,7 @@ export class PhaseLoop {
             prUrl: context.prUrl,
             errorEvidence: evidence,
           });
-          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
       }
@@ -1047,6 +1054,69 @@ export class PhaseLoop {
       lastPhase: phase,
       gateHit: true,
     };
+  }
+
+  /**
+   * #942: Fingerprint the failure, look up prior identical failures on this
+   * issue, escalate labels + post the alert.
+   *
+   * Order (per contract):
+   *   1. Compute fingerprint (pure, non-throwing).
+   *   2. Fetch prior-occurrence count (fail-open — errors already suppressed
+   *      inside the tracker, so this is always a number).
+   *   3. `labelManager.onError(phase)` — unchanged pre-#942 path.
+   *   4. If `occurrence >= REPEAT_FAILURE_THRESHOLD` (N=2), also apply the
+   *      `-repeated` escalation label BEFORE the alert-post.
+   *   5. `stageCommentManager.postFailureAlert({ ..., fingerprint, occurrence })`
+   *      — line-1 v2 marker carries the fingerprint hex + occurrence counter.
+   */
+  private async escalateAndAlert(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    phase: WorkflowPhase | string,
+    evidence: CommandExitEvidence,
+    stage: StageType | 'label-op',
+    runId: string,
+  ): Promise<void> {
+    const fingerprint = computeFailureFingerprint({ phase, evidence });
+    const priorCount = deps.failureFingerprintTracker
+      ? await deps.failureFingerprintTracker.countPriorOccurrences(
+          context.item.owner,
+          context.item.repo,
+          context.item.issueNumber,
+          fingerprint,
+        )
+      : 0;
+    const occurrence = priorCount + 1;
+
+    // Regular error label first (byte-compatible w/ pre-#942 consumers).
+    // `phase` is a WorkflowPhase here for the 6 real phase-loop sites; the
+    // `phase: string` union member exists only for `label-op` failures which
+    // don't route through this helper today.
+    if (isWorkflowPhase(phase)) {
+      await deps.labelManager.onError(phase);
+      if (occurrence >= REPEAT_FAILURE_THRESHOLD) {
+        this.logger.warn(
+          {
+            phase,
+            fingerprint,
+            occurrence,
+            issue: context.item.issueNumber,
+          },
+          'Repeat-identical failure detected — escalating with failed:<phase>-repeated',
+        );
+        await deps.labelManager.onRepeatedError(phase);
+      }
+    }
+
+    await deps.stageCommentManager.postFailureAlert({
+      stage,
+      runId,
+      phase,
+      evidence,
+      fingerprint,
+      occurrence,
+    });
   }
 
   /**

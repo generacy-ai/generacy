@@ -69,6 +69,15 @@ export const WORKFLOW_LABELS: LabelDefinition[] = [
   { name: 'failed:implement', color: 'D73A4A', description: 'Phase implement failed' },
   { name: 'failed:validate', color: 'D73A4A', description: 'Phase validate failed' },
 
+  // #942: Repeat-identical failure escalation labels — applied by
+  // LabelManager.onRepeatedError when the same fingerprint fires ≥2×.
+  { name: 'failed:specify-repeated', color: 'B60205', description: 'Phase specify failed with the same defect ≥2×' },
+  { name: 'failed:clarify-repeated', color: 'B60205', description: 'Phase clarify failed with the same defect ≥2×' },
+  { name: 'failed:plan-repeated', color: 'B60205', description: 'Phase plan failed with the same defect ≥2×' },
+  { name: 'failed:tasks-repeated', color: 'B60205', description: 'Phase tasks failed with the same defect ≥2×' },
+  { name: 'failed:implement-repeated', color: 'B60205', description: 'Phase implement failed with the same defect ≥2×' },
+  { name: 'failed:validate-repeated', color: 'B60205', description: 'Phase validate failed with the same defect ≥2×' },
+
   // Issue type labels
   { name: 'type:feature', color: '1D76DB', description: 'Feature request' },
   { name: 'type:bug', color: 'D73A4A', description: 'Bug report' },

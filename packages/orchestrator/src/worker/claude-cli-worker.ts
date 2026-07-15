@@ -124,6 +124,12 @@ export interface ClaudeCliWorkerDeps {
    * behavior degrades to "same as today" (base-advance re-runs still occur).
    */
   phaseTracker?: PhaseTracker;
+  /**
+   * #942: Optional repeat-failure history tracker. Threaded into PhaseLoopDeps
+   * so `escalateAndAlert` can count prior same-fingerprint failures. When
+   * absent, `-repeated` escalation degrades to a no-op (occurrence stays at 1).
+   */
+  failureFingerprintTracker?: import('../services/failure-fingerprint-tracker.js').FailureFingerprintTracker;
 }
 
 /**
@@ -147,6 +153,7 @@ export class ClaudeCliWorker {
   private readonly jobEventEmitter?: JobEventEmitter;
   private readonly tokenProvider?: () => Promise<string | undefined>;
   private readonly phaseTracker?: PhaseTracker;
+  private readonly failureFingerprintTracker?: import('../services/failure-fingerprint-tracker.js').FailureFingerprintTracker;
   private readonly repoCheckout: RepoCheckout;
   private readonly phaseResolver: PhaseResolver;
   private readonly agentLauncher: AgentLauncher;
@@ -161,6 +168,7 @@ export class ClaudeCliWorker {
     this.jobEventEmitter = deps.jobEventEmitter;
     this.tokenProvider = deps.tokenProvider;
     this.phaseTracker = deps.phaseTracker;
+    this.failureFingerprintTracker = deps.failureFingerprintTracker;
     this.repoCheckout = new RepoCheckout(config.workspaceDir, logger);
     this.phaseResolver = new PhaseResolver();
 
@@ -655,6 +663,7 @@ export class ClaudeCliWorker {
         conversationLogger,
         jobEventEmitter: this.jobEventEmitter,
         ...(validateFixHandler ? { validateFixHandler } : {}),
+        ...(this.failureFingerprintTracker ? { failureFingerprintTracker: this.failureFingerprintTracker } : {}),
         phaseAfterHandlers: [
           // Fan-out: commit sibling changes, push, open draft PRs, persist linkedPRs to state.
           async () => {
