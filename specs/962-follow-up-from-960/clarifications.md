@@ -1,0 +1,25 @@
+# Clarifications
+
+## Batch 1 — 2026-07-16
+
+### Q1: Interaction between stage-status guard and clarification markers
+**Context**: FR-002 defines a positive REJECT list of 6 stage-status prefixes (`<!-- generacy-stage:{planning,specification,implementation}` and their `<!-- speckit-stage:*` legacy twins). FR-003 says the guard MUST NOT reject comments carrying `<!-- generacy-stage:clarification` or `<!-- generacy-stage:clarification-batch-N`. But `packages/orchestrator/src/worker/clarification-markers.ts` exports a `CLARIFICATION_QUESTION_MARKERS` list of **four** prefixes today (`<!-- generacy-stage:clarification`, `<!-- generacy-clarifications:`, `<!-- generacy-clarification:`, `<!-- generacy-cockpit:clarifications-batch:`), and the Assumptions section explicitly defers the reuse-vs-hardcode choice to `/plan`. There is also no rule for the mixed case: a single comment body carrying BOTH a stage-status marker AND a clarification marker at column 0 (contrived, but a hand-composed comment or a future dual-stamped engine post could produce it). The reject-vs-accept decision here is implementation-blocking because FR-006/FR-007/FR-008 need concrete truth-tables to encode.
+
+**Question**: When a candidate comment body has one of the 6 FR-002 stage-status markers at column 0 AND (also at column 0) a marker from what "clarification" family, does the finder accept or reject it?
+**Options**:
+- A: **Reject-wins.** If any FR-002 stage-status marker is at column 0, the finder always skips it — no clarification-marker override. FR-003 is read narrowly as "the two named clarification markers, in isolation, are not on the reject list" — not as an override on a mixed body.
+- B: **Accept overrides for the two FR-003-named markers only.** The guard rejects a candidate if a stage-status marker is at column 0 AND neither `<!-- generacy-stage:clarification` nor `<!-- generacy-stage:clarification-batch-N` is at column 0 in the same body. The other two `CLARIFICATION_QUESTION_MARKERS` entries (`<!-- generacy-clarifications:`, `<!-- generacy-cockpit:clarifications-batch:`) do NOT override — they are simply not in the reject list, so a body carrying *only* them was never a rejection candidate to begin with.
+- C: **Accept overrides for the full `CLARIFICATION_QUESTION_MARKERS` set.** The guard rejects a candidate if a stage-status marker is at column 0 AND none of the four `CLARIFICATION_QUESTION_MARKERS` prefixes are at column 0 in the same body. Requires the finder to import from `packages/orchestrator/src/worker/clarification-markers.ts`, which bends SC-003 ("0 changed files outside the finder and its test file") — the import site is `clarification-comment-finder.ts` (in scope), but any change to the exported constants (e.g., renaming or splitting the list) would then touch a second file.
+
+**Answer**: *Pending*
+
+### Q2: Author-scope of the content guard
+**Context**: FR-002's match rule is defined purely on comment `body` — no mention of author. In practice, `<!-- generacy-stage:planning` tables are stamped only by the engine (bot identity). A guard that fires regardless of author would also reject the (very unlikely) case of a human handwriting a comment whose first line happens to be `<!-- generacy-stage:planning -->` — probably desired (they're using the marker vocabulary) — but it would also skip any human-composed comment that quotes such a table without the `> ` prefix (e.g., pasted from a raw diff). Conversely, a bot-only guard would require the finder to know the engine's login (either hard-coded or read from `getCurrentUser()`), which the finder does not do today.
+
+**Question**: Does the FR-002 content guard apply to comments from all authors, or only to comments authored by the engine identity?
+**Options**:
+- A: **All authors.** The guard is purely body-driven; author is not consulted. Mirrors the existing `commentCarriesQuestionMarker` semantics in `clarification-markers.ts`, which are also author-agnostic. Simplest, no new dependency on `getCurrentUser()`.
+- B: **Engine-authored only.** The finder additionally consults comment `author` and applies the guard only when the comment was authored by the engine's bot login. Requires a source of truth for that login (probably `gh.getCurrentUser()`) and adds a network call on each finder invocation. Prevents the (rare) false-positive of skipping a human comment that starts with a stage-marker prefix.
+- C: **All authors, with warn log on human-authored hits.** Same rejection semantics as A, but emit a debug/warn line when a rejected comment is not engine-authored so the operator can spot false positives. No new network call.
+
+**Answer**: *Pending*
