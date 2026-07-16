@@ -156,6 +156,12 @@ describe('PrFeedbackMonitorService', () => {
       queueManager,
       defaultConfig,
       defaultRepos,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true, // #953: webhooksConfigured=true — pre-existing "record webhook
+            // → recover to base" tests assume a configured feeder path.
     );
   });
 
@@ -807,6 +813,8 @@ describe('PrFeedbackMonitorService', () => {
       };
       const shortService = new PrFeedbackMonitorService(
         logger, clientFactory, queueManager, shortConfig, defaultRepos,
+        undefined, undefined, undefined, undefined,
+        true, // #953: matches outer service — configured-feeder semantics
       );
 
       // Start recording then simulate unhealthy

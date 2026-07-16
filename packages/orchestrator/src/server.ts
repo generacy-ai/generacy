@@ -482,6 +482,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       githubTokenProvider,
       githubAuthHealth ?? undefined,
       githubAppCredentialId,
+      config.smee.channelUrl != null, // #953: webhooksConfigured
     );
 
     // Wire the smee pipeline (receiver + optional webhook setup) for a resolved URL.
@@ -553,6 +554,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
+        false, // #953: no reliable feeder signal available at construction
       );
 
       // #898: Merge-conflict monitor reuses the PR-monitor config for poll
@@ -569,6 +571,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
+        false, // #953: recordWebhookEvent() has no callers anywhere
       );
     }
 
