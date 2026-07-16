@@ -260,13 +260,17 @@ describe('ClaudeCliWorker (integration)', () => {
         'test-owner', 'test-repo', 42, ['completed:specify'],
       );
 
-      // Verify clarify phase labels
+      // Verify clarify phase labels — `phase:clarify` applied at start
       expect(mockGithub.addLabels).toHaveBeenCalledWith(
         'test-owner', 'test-repo', 42, ['phase:clarify'],
       );
-      expect(mockGithub.addLabels).toHaveBeenCalledWith(
-        'test-owner', 'test-repo', 42, ['completed:clarify'],
-      );
+      // #958 FR-008 — `completed:clarify` is NOT applied when the gate
+      // fires. `onPhaseComplete(phase)` moved to after the gate check;
+      // gate-pause returns before it runs. The advance-authorizing label
+      // stays off the issue while the phase is paused.
+      const completedClarifyCalls = (mockGithub.addLabels as ReturnType<typeof vi.fn>).mock.calls
+        .filter((c: unknown[]) => Array.isArray(c[3]) && (c[3] as string[]).includes('completed:clarify'));
+      expect(completedClarifyCalls).toEqual([]);
 
       // Verify gate hit labels
       expect(mockGithub.addLabels).toHaveBeenCalledWith(

@@ -20,6 +20,7 @@ import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
 import { MergeConflictMonitorService } from './services/merge-conflict-monitor-service.js';
+import { ClarificationAnswerMonitorService } from './services/clarification-answer-monitor-service.js';
 import { BaseAdvanceMonitorService } from './services/base-advance-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
@@ -460,6 +461,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
   let mergeConflictMonitorService: MergeConflictMonitorService | null = null;
+  let clarificationAnswerMonitorService: ClarificationAnswerMonitorService | null = null;
   let baseAdvanceMonitorService: BaseAdvanceMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
@@ -596,6 +598,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
         false, // #953: recordWebhookEvent() has no callers anywhere
+      );
+
+      // #958 T015: Clarification-answer monitor — sibling of merge-conflict
+      // monitor. Enqueues `continue` resumes when a plain human comment
+      // arrives on a `waiting-for:clarification` + `agent:paused` issue.
+      // Never applies `completed:clarification` (FR-011).
+      clarificationAnswerMonitorService = new ClarificationAnswerMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
       );
     }
 
@@ -878,6 +896,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      if (clarificationAnswerMonitorService) {
+        clarificationAnswerMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Clarification-answer monitor polling failed');
+        });
+      }
+
       if (baseAdvanceMonitorService) {
         baseAdvanceMonitorService.startPolling().catch((error) => {
           server.log.error({ err: error }, 'Base-advance monitor polling failed');
@@ -938,6 +962,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (mergeConflictMonitorService) {
             mergeConflictMonitorService.stopPolling();
+          }
+          if (clarificationAnswerMonitorService) {
+            clarificationAnswerMonitorService.stopPolling();
           }
           if (baseAdvanceMonitorService) {
             await baseAdvanceMonitorService.stopPolling();

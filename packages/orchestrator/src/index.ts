@@ -263,6 +263,17 @@ export {
   type WorkflowPhase,
 } from './worker/types.js';
 
+// #958 — clarification marker families (question + answer) so cockpit and
+// other consumers can validate round-trips without deep imports.
+export {
+  CLARIFICATION_QUESTION_MARKERS,
+  commentCarriesQuestionMarker,
+  matchClarificationQuestionMarker,
+  CLARIFICATION_ANSWER_MARKERS,
+  commentCarriesAnswerMarker,
+  matchClarificationAnswerMarker,
+} from './worker/clarification-markers.js';
+
 // Utils
 export {
   setupGracefulShutdown,

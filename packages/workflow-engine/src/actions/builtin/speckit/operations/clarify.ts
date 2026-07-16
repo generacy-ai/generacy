@@ -13,6 +13,7 @@ import { createGitHubClient } from '../../../github/client/index.js';
 import { isTrustedCommentAuthor } from '../../../../security/comment-trust.js';
 import { tryLoadCommentTrustConfig } from '../../../../security/comment-trust-config.js';
 import { wrapUntrustedData } from '../../../../security/untrusted-data-fence.js';
+import { PENDING_ANSWER_LITERAL } from '../pending-literal.js';
 
 /**
  * Build the prompt for initial clarification question generation
@@ -52,7 +53,7 @@ Format the clarifications file as markdown with this structure:
 **Options**:
 - A) [Option label]: [Description]
 - B) [Option label]: [Description]
-**Answer**: [Leave empty for now]
+**Answer**: ${PENDING_ANSWER_LITERAL}
 
 Write the clarifications to the file directly.
 Return the count of questions generated.`;
