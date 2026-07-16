@@ -134,6 +134,11 @@ function loadFromEnv(): Record<string, unknown> {
     if (orchSettings.smeeChannelUrl && !smeeEnvUrl) {
       config.smee = { channelUrl: orchSettings.smeeChannelUrl };
     }
+    const smeeChannelFilePath = process.env[`${ENV_PREFIX}SMEE_CHANNEL_FILE_PATH`];
+    if (smeeChannelFilePath) {
+      if (!config.smee) config.smee = {};
+      (config.smee as Record<string, unknown>).channelFilePath = smeeChannelFilePath;
+    }
     if (orchSettings.webhookSetup !== undefined &&
         !process.env['WEBHOOK_SETUP_ENABLED'] && !process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`]) {
       config.webhookSetup = { enabled: orchSettings.webhookSetup };
