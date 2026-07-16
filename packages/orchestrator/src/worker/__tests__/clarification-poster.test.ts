@@ -184,6 +184,83 @@ describe('parseClarifications', () => {
     const q2 = questions[1]!;
     expect(q2.options).toBeUndefined();
   });
+
+  // Regression: hard-wrapped option descriptions ended the options block at the
+  // first continuation line, truncating that option mid-sentence and dropping
+  // every option after it. Shape taken from specs/787-epic-generacy-ai-tetrad.
+  it('keeps hard-wrapped option descriptions whole and parses later options', () => {
+    const questions = parseClarifications(`### Q1: Epic scoping flag
+**Context**: Neither verb has a documented way to discover which epic to
+scope to.
+**Question**: How should \`watch\` and \`status\` determine which issues to
+include?
+**Options**:
+- A: Require an \`--epic\` flag on both verbs. Single-epic only;
+  multiple invocations for multiple epics.
+- B: Auto-discover every epic from manifests, scope to the union of all
+  manifest-listed issues. No flag needed.
+- C: Take no epic argument; emit every open issue.
+
+**Answer**: *Pending*
+`);
+
+    const options = questions[0]!.options!;
+    expect(options.map((o) => o.label)).toEqual(['A', 'B', 'C']);
+    expect(options[0]!.description).toContain('multiple invocations for multiple epics.');
+    expect(options[1]!.description).toContain('No flag needed.');
+  });
+
+  // Regression: an option carrying indented sub-bullets truncated identically.
+  // Shape taken from specs/916-found-during-cockpit-v1.
+  it('keeps indented sub-bullets attached to their option', () => {
+    const questions = parseClarifications(`### Q4: Shortened description content
+**Question**: What content shape should the shortened descriptions take?
+**Options**:
+- A: **Terse cause only, keep issue ref**. Examples:
+  - \`blocked:stuck-feedback-loop\`: \`PR-feedback loop paused.\`
+  - \`blocked:stuck-validate-fix\`: \`Validate-fix paused (#892).\`
+- B: **Cause only, no directive**. Slightly terser.
+- C: **Cause + issue ref only**. Very short.
+
+**Answer**: *Pending*
+`);
+
+    const options = questions[0]!.options!;
+    expect(options.map((o) => o.label)).toEqual(['A', 'B', 'C']);
+    expect(options[0]!.description).toContain('blocked:stuck-validate-fix');
+    expect(options[2]!.description).toBe('**Cause + issue ref only**. Very short.');
+  });
+
+  it('parses options separated by blank lines', () => {
+    const questions = parseClarifications(`### Q1: Topic
+**Question**: Which?
+**Options**:
+- A) First option
+
+- B) Second option
+
+**Answer**: *Pending*
+`);
+
+    const options = questions[0]!.options!;
+    expect(options).toEqual([
+      { label: 'A', description: 'First option' },
+      { label: 'B', description: 'Second option' },
+    ]);
+  });
+
+  it('does not absorb the Answer line into the last option', () => {
+    const questions = parseClarifications(`### Q1: Topic
+**Question**: Which?
+**Options**:
+- A) Only option
+**Answer**: Use A
+`);
+
+    expect(questions[0]!.options).toEqual([{ label: 'A', description: 'Only option' }]);
+    expect(questions[0]!.answered).toBe(true);
+    expect(questions[0]!.answer).toBe('Use A');
+  });
 });
 
 // ---------------------------------------------------------------------------

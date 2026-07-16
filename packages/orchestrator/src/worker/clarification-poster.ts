@@ -274,18 +274,26 @@ export function parseClarifications(content: string): ClarificationQuestion[] {
     const questionMatch = section.match(/\*\*Question\*\*:\s*(.+?)(?=\n\*\*|\n###|$)/s);
     const question = questionMatch ? questionMatch[1]!.trim() : '';
 
-    // Extract options
-    const optionsMatch = section.match(/\*\*Options\*\*:\s*\n((?:- .+\n?)+)/);
+    // Extract options. The block runs to the next `**Field**:` line, `###`
+    // heading, or EOF — the same delimiters Context and Question use above.
+    // An option's description may hard-wrap or carry indented sub-bullets;
+    // such continuation lines belong to the option above them. Matching only
+    // consecutive `- ` lines would end the block at the first continuation,
+    // truncating that option mid-sentence and dropping every option after it.
+    const optionsMatch = section.match(/\*\*Options\*\*:\s*\n([\s\S]+?)(?=\n\*\*|\n###|$)/);
     let options: ClarificationOption[] | undefined;
     if (optionsMatch) {
       options = [];
-      const optionLines = optionsMatch[1]!.trim().split('\n');
-      for (const line of optionLines) {
-        const optMatch = line.match(/^- ([A-Z])[):]\s*(.+)$/);
+      for (const line of optionsMatch[1]!.trim().split('\n')) {
+        const optMatch = line.match(/^- ([A-Z])[):]\s*(.*)$/);
         if (optMatch) {
-          options.push({ label: optMatch[1]!, description: optMatch[2]!.trim() });
+          options.push({ label: optMatch[1]!, description: optMatch[2]! });
+        } else if (options.length > 0) {
+          options[options.length - 1]!.description += `\n${line}`;
         }
       }
+      for (const opt of options) opt.description = opt.description.trim();
+      options = options.filter((opt) => opt.description !== '');
       if (options.length === 0) options = undefined;
     }
 
