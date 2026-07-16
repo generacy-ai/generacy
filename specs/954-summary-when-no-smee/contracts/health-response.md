@@ -73,10 +73,12 @@ Worker mode: `smee.channelUrl: undefined`, `mode: 'worker'`  →  `smeeConfigure
 
 Contract-of-record for the second observability line (`data-model.md` §4). Kept here for locality with the other observability contracts.
 
-**Emit site**: `packages/orchestrator/src/server.ts:824` — the `if (config.webhookSetup.enabled && config.smee.channelUrl)` block. Add:
+**Emit site** (adapted for #952): inside `startSmeePipeline` in `packages/orchestrator/src/server.ts`, as the `else` of the `if (config.webhookSetup.enabled)` webhook-setup block:
 
 ```ts
-else if (config.smee.channelUrl && !config.webhookSetup.enabled) {
+if (config.webhookSetup.enabled) {
+  // … WebhookSetupService.ensureWebhooks(…) …
+} else {
   server.log.info(
     { remediation: ['GENERACY_WEBHOOK_SETUP_ENABLED', 'orchestrator.webhookSetup.enabled'] },
     'Webhook auto-setup disabled; no GitHub webhooks will be created for monitored repos',
@@ -84,6 +86,8 @@ else if (config.smee.channelUrl && !config.webhookSetup.enabled) {
 }
 ```
 
-- **Fires only when smee is set and setup is disabled** — the smee-unset case is already covered by the §1 warning ("polling fallback active" implies no webhook).
+`startSmeePipeline` runs once a channel is active — static (`config.smee.channelUrl`), persisted, or provisioned — so the opt-out surfaces on every webhook-capable boot where auto-setup is off, not only the static-URL path.
+
+- **Fires only when a smee channel is active and setup is disabled** — the fully webhook-less case (resolver returns `null`) is covered by the §1 warning ("polling fallback active" implies no webhook).
 - **`info`, not `warn`** — deliberate operator opt-out is not degradation.
 - **Not covered by the `/health` `smeeConfigured` field** — that boolean does not encode the `webhookSetup.enabled` axis. A future widening (`smee: {...}`) could add it; not this feature.

@@ -26,6 +26,7 @@ import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { SmeeWebhookReceiver } from './services/smee-receiver.js';
+import { SmeeChannelResolver } from './services/smee-channel-resolver.js';
 import { RelayBridge } from './services/relay-bridge.js';
 import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
@@ -481,30 +482,87 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       githubTokenProvider,
       githubAuthHealth ?? undefined,
       githubAppCredentialId,
+      config.smee.channelUrl != null, // #953: webhooksConfigured
     );
 
-    // Create SmeeWebhookReceiver if Smee channel URL is configured
-    if (config.smee.channelUrl) {
+    // Wire the smee pipeline (receiver + optional webhook setup) for a resolved URL.
+    // Captures labelMonitorService, config, githubTokenProvider, clusterGithubUsername
+    // from the enclosing scope. See specs/952-summary-no-automated-cluster/contracts/server-pipeline.md.
+    const startSmeePipeline = (channelUrl: string): void => {
       const watchedRepos = new Set(
         config.repositories.map(r => `${r.owner}/${r.repo}`)
       );
-      smeeReceiver = new SmeeWebhookReceiver(
+      const receiver = new SmeeWebhookReceiver(
         server.log,
-        labelMonitorService,
-        { channelUrl: config.smee.channelUrl, watchedRepos, clusterGithubUsername },
+        labelMonitorService!,
+        { channelUrl, watchedRepos, clusterGithubUsername },
       );
-      server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
+      smeeReceiver = receiver;
+      server.log.info({ channelUrl }, 'Smee webhook receiver configured');
+      receiver.start().catch((error) => {
+        server.log.error({ err: error }, 'Smee webhook receiver failed');
+      });
+      if (config.webhookSetup.enabled) {
+        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider);
+        webhookSetupService.ensureWebhooks(channelUrl, config.repositories).catch((error) => {
+          server.log.error({ err: error }, 'Webhook setup failed');
+        });
+      } else {
+        // #954: surface the deliberate webhook-setup opt-out rather than
+        // staying silent. Fires whenever a smee pipeline starts (static,
+        // persisted, or provisioned channel) while auto-setup is disabled —
+        // no GitHub webhooks will be created for the monitored repos.
+        server.log.info(
+          { remediation: ['GENERACY_WEBHOOK_SETUP_ENABLED', 'orchestrator.webhookSetup.enabled'] },
+          'Webhook auto-setup disabled; no GitHub webhooks will be created for monitored repos',
+        );
+      }
+    };
+
+    if (config.smee.channelUrl) {
+      // Env/yaml URL path: preserve today's synchronous ordering so `smeeReceiver`
+      // is non-null before onReady runs (existing tests rely on this).
+      startSmeePipeline(config.smee.channelUrl);
     } else {
-      server.log.warn(
-        {
-          pollIntervalMs: monitorConfig.pollIntervalMs,
-          completedCheckInterval: LabelMonitorService.COMPLETED_CHECK_INTERVAL,
-          processLatencyMs: monitorConfig.pollIntervalMs,
-          completedLatencyMs: monitorConfig.pollIntervalMs * LabelMonitorService.COMPLETED_CHECK_INTERVAL,
-          remediation: ['SMEE_CHANNEL_URL', 'orchestrator.smeeChannelUrl'],
-        },
-        'No smee channel configured; polling fallback active',
-      );
+      // No URL configured: kick off async resolver after server.listen() via onReady.
+      // Fire-and-forget; never blocks listen. Belt-and-braces predicate matches the
+      // outer gate so future refactors can't accidentally invoke on worker-mode boot.
+      server.addHook('onReady', async () => {
+        if (isWorkerMode || !config.labelMonitor || config.repositories.length === 0) return;
+        const resolver = new SmeeChannelResolver(server.log, {
+          channelFilePath: config.smee.channelFilePath,
+        });
+        resolver.resolve()
+          .then((result) => {
+            if (result) {
+              server.log.info(
+                { channelUrl: result.channelUrl, source: result.source },
+                'Resolved smee channel URL — starting pipeline',
+              );
+              startSmeePipeline(result.channelUrl);
+            } else {
+              // #954: the cluster is genuinely webhook-less — no static URL,
+              // no persisted channel, and provisioning failed — so polling is
+              // the only feeder. Emit the polling-fallback summary with the
+              // resulting latency characteristics + remediation pointers. This
+              // is the true "no smee" moment under the #952 resolver model
+              // (not construction time, where a channel may still be resolved).
+              server.log.warn(
+                {
+                  pollIntervalMs: monitorConfig.pollIntervalMs,
+                  completedCheckInterval: LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+                  processLatencyMs: monitorConfig.pollIntervalMs,
+                  completedLatencyMs: monitorConfig.pollIntervalMs * LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+                  remediation: ['SMEE_CHANNEL_URL', 'orchestrator.smeeChannelUrl'],
+                },
+                'No smee channel configured; polling fallback active',
+              );
+            }
+          })
+          .catch((error) => {
+            server.log.error({ err: error }, 'Unexpected error resolving smee channel URL');
+          });
+      });
     }
 
     // Initialize PR feedback monitor service (if enabled). #879: in-flight
@@ -520,6 +578,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
+        false, // #953: no reliable feeder signal available at construction
       );
 
       // #898: Merge-conflict monitor reuses the PR-monitor config for poll
@@ -536,6 +595,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
+        false, // #953: recordWebhookEvent() has no callers anywhere
       );
     }
 
@@ -824,26 +884,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
-      if (smeeReceiver) {
-        smeeReceiver.start().catch((error) => {
-          server.log.error({ err: error }, 'Smee webhook receiver failed');
-        });
-      }
+      // smeeReceiver.start() and WebhookSetupService.ensureWebhooks() are invoked
+      // from startSmeePipeline() at construction time (sync path) or from the
+      // resolver's .then() callback (async path); no separate onReady wiring needed.
 
       if (credentialExpiryWatcher) {
         credentialExpiryWatcher.start();
-      }
-
-      if (config.webhookSetup.enabled && config.smee.channelUrl) {
-        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider);
-        webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
-          server.log.error({ err: error }, 'Webhook setup failed');
-        });
-      } else if (config.smee.channelUrl && !config.webhookSetup.enabled) {
-        server.log.info(
-          { remediation: ['GENERACY_WEBHOOK_SETUP_ENABLED', 'orchestrator.webhookSetup.enabled'] },
-          'Webhook auto-setup disabled; no GitHub webhooks will be created for monitored repos',
-        );
       }
 
       // Only start relay bridge here if it was initialized synchronously.

@@ -140,7 +140,8 @@ export const PrMonitorConfigSchema = z.object({
   /** GitHub webhook secret for signature verification */
   webhookSecret: z.string().optional(),
   /** Enable adaptive polling frequency */
-  adaptivePolling: z.boolean().default(true),
+  // #953: silently doubled GH API load; opt-in via PR_MONITOR_ADAPTIVE_POLLING=true
+  adaptivePolling: z.boolean().default(false),
   /** Maximum concurrent GitHub API calls during polling */
   maxConcurrentPolls: z.number().int().min(1).max(20).default(3),
 });
@@ -240,6 +241,8 @@ export const SmeeConfigSchema = z.object({
   channelUrl: z.string().url().optional(),
   /** Fallback poll interval when Smee is active (milliseconds) */
   fallbackPollIntervalMs: z.number().int().min(30000).default(300000),
+  /** Path to the persisted smee channel file (used by SmeeChannelResolver auto-provisioning) */
+  channelFilePath: z.string().default('/var/lib/generacy/smee-channel'),
 });
 export type SmeeConfig = z.infer<typeof SmeeConfigSchema>;
 

@@ -1,9 +1,18 @@
 /**
  * Startup wiring test — smee-fallback warning log.
  *
- * Covers #954: When no smee.channelUrl is configured and the label monitor
- * is active in full mode, the orchestrator must emit a single `warn` log
- * describing the polling-fallback state with remediation pointers.
+ * Covers #954 as adapted to the #952 smee-resolver model: when no smee
+ * channel can be obtained (no `smee.channelUrl`, no persisted channel, and
+ * provisioning fails) while the label monitor is active in full mode, the
+ * orchestrator must emit a single `warn` describing the polling-fallback
+ * state with remediation pointers.
+ *
+ * Under #952 the "no smee" decision is only known after the async
+ * `SmeeChannelResolver` runs on `onReady` — so the warn fires from the
+ * resolver's null (webhook-less) branch, not synchronously at construction.
+ * These tests mock the resolver to return null to exercise that branch
+ * deterministically (the real resolver would attempt to provision a channel
+ * over the network).
  *
  * The warn payload contract lives in specs/954-summary-when-no-smee/contracts/log-warning.md.
  */
@@ -38,6 +47,24 @@ vi.mock('../services/code-server-probe.js', () => ({
 
 vi.mock('../services/control-plane-probe.js', () => ({
   probeControlPlaneSocket: vi.fn(async () => false),
+}));
+
+// Force the webhook-less path: the resolver never yields a channel URL, so
+// the onReady branch takes the polling-fallback warn. Without this the real
+// resolver would try to `POST https://smee.io/new` over the network.
+vi.mock('../services/smee-channel-resolver.js', () => ({
+  SmeeChannelResolver: vi.fn().mockImplementation(() => ({
+    resolve: vi.fn().mockResolvedValue(null),
+  })),
+}));
+
+// SmeeWebhookReceiver.start() would open a real EventSource against smee.io
+// on the `channelUrl` set path — stub it so those boots stay offline.
+vi.mock('../services/smee-receiver.js', () => ({
+  SmeeWebhookReceiver: vi.fn().mockImplementation(() => ({
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+  })),
 }));
 
 vi.mock('@generacy-ai/control-plane', async (importOriginal) => {
@@ -99,6 +126,11 @@ function findWarns(records: LogRecord[]): LogRecord[] {
   return records.filter((r) => r.level === WARN_LEVEL && r.msg === WARN_MSG);
 }
 
+/** Let the fire-and-forget onReady resolver `.then()` callback run. */
+async function flushResolver(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 0));
+}
+
 function buildConfig(overrides: Partial<Parameters<typeof createTestConfig>[0]> = {}) {
   return createTestConfig({
     server: { port: 0, host: '127.0.0.1' },
@@ -123,7 +155,7 @@ describe('server startup: smee-fallback warning', () => {
     }
   });
 
-  it('emits exactly one warn with the contract payload when smee.channelUrl is unset (full+labelMonitor+repositories)', async () => {
+  it('emits exactly one warn with the contract payload when no channel resolves (full+labelMonitor+repositories)', async () => {
     const { logger, records } = createCapturingLogger();
 
     const config = buildConfig({
@@ -135,15 +167,17 @@ describe('server startup: smee-fallback warning', () => {
         maxConcurrentPolls: 1,
         adaptivePolling: false,
       },
-      smee: {}, // channelUrl undefined
+      smee: {}, // channelUrl undefined → resolver runs, mocked to null
       prMonitor: { enabled: false },
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await vi.waitFor(() => {
+      expect(findWarns(records)).toHaveLength(1);
+    });
 
-    const warns = findWarns(records);
-    expect(warns).toHaveLength(1);
-    const warn = warns[0]!;
+    const warn = findWarns(records)[0]!;
 
     expect(warn['pollIntervalMs']).toBe(300000);
     expect(warn['completedCheckInterval']).toBe(3);
@@ -182,10 +216,12 @@ describe('server startup: smee-fallback warning', () => {
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await vi.waitFor(() => {
+      expect(findWarns(records)).toHaveLength(1);
+    });
 
-    const warns = findWarns(records);
-    expect(warns).toHaveLength(1);
-    const warn = warns[0]!;
+    const warn = findWarns(records)[0]!;
 
     expect(warn['completedCheckInterval']).toBe(3);
     expect(warn['completedLatencyMs']).toBe(
@@ -210,17 +246,19 @@ describe('server startup: smee-fallback warning', () => {
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await vi.waitFor(() => {
+      expect(findWarns(records)).toHaveLength(1);
+    });
 
-    const warns = findWarns(records);
-    expect(warns).toHaveLength(1);
-    const warn = warns[0]!;
+    const warn = findWarns(records)[0]!;
 
     expect(warn['pollIntervalMs']).toBe(60000);
     expect(warn['processLatencyMs']).toBe(60000);
     expect(warn['completedLatencyMs']).toBe(180000);
   });
 
-  it('negative: does NOT warn when smee.channelUrl is set', async () => {
+  it('negative: does NOT warn when smee.channelUrl is set (static pipeline, no resolver)', async () => {
     const { logger, records } = createCapturingLogger();
 
     const config = buildConfig({
@@ -238,6 +276,8 @@ describe('server startup: smee-fallback warning', () => {
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await flushResolver();
 
     expect(findWarns(records)).toHaveLength(0);
   });
@@ -254,6 +294,8 @@ describe('server startup: smee-fallback warning', () => {
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await flushResolver();
 
     expect(findWarns(records)).toHaveLength(0);
   });
@@ -270,6 +312,8 @@ describe('server startup: smee-fallback warning', () => {
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await flushResolver();
 
     expect(findWarns(records)).toHaveLength(0);
   });
@@ -286,6 +330,8 @@ describe('server startup: smee-fallback warning', () => {
     });
 
     server = await createServer({ config, fastifyOptions: { logger } });
+    await server.ready();
+    await flushResolver();
 
     expect(findWarns(records)).toHaveLength(0);
   });

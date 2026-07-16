@@ -187,14 +187,27 @@ export interface GitHubWebhookPayload {
 export interface MonitorState {
   /** Whether the polling loop is running */
   isPolling: boolean;
-  /** Whether webhook endpoint has received events recently */
+  /**
+   * Whether the configured webhook path is currently delivering events.
+   * Only meaningful when `webhooksConfigured === true`.
+   */
   webhookHealthy: boolean;
-  /** Timestamp of last webhook event received */
+  /**
+   * Timestamp of the last webhook event received.
+   * Stays `null` on smee-less clusters (no receiver ever calls `recordWebhookEvent`).
+   */
   lastWebhookEvent: number | null;
   /** Current effective poll interval (adaptive) */
   currentPollIntervalMs: number;
   /** Configured base poll interval */
   basePollIntervalMs: number;
+  /**
+   * #953: Whether a webhook feeder is configured for this service.
+   * Set once at construction from a per-service derivation rule; never mutated.
+   * Distinguishes "webhooks configured but quiet" (grace applies) from
+   * "no webhook path exists at all" (engage fast interval when adaptive).
+   */
+  webhooksConfigured: boolean;
 }
 
 /**
