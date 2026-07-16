@@ -494,6 +494,17 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         { channelUrl: config.smee.channelUrl, watchedRepos, clusterGithubUsername },
       );
       server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
+    } else {
+      server.log.warn(
+        {
+          pollIntervalMs: monitorConfig.pollIntervalMs,
+          completedCheckInterval: LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+          processLatencyMs: monitorConfig.pollIntervalMs,
+          completedLatencyMs: monitorConfig.pollIntervalMs * LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+          remediation: ['SMEE_CHANNEL_URL', 'orchestrator.smeeChannelUrl'],
+        },
+        'No smee channel configured; polling fallback active',
+      );
     }
 
     // Initialize PR feedback monitor service (if enabled). #879: in-flight
@@ -677,6 +688,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           displayName: config.cluster?.displayName,
         },
         githubAuth: () => githubAuthHealth?.snapshot(),
+        smeeConfigured: !!config.smee.channelUrl,
       });
       await setupDispatchRoutes(server, queueAdapter);
     } else {
@@ -705,6 +717,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             displayName: config.cluster?.displayName,
           },
           githubAuth: () => githubAuthHealth?.snapshot(),
+          smeeConfigured: !!config.smee.channelUrl,
         },
       });
 
@@ -826,6 +839,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });
+      } else if (config.smee.channelUrl && !config.webhookSetup.enabled) {
+        server.log.info(
+          { remediation: ['GENERACY_WEBHOOK_SETUP_ENABLED', 'orchestrator.webhookSetup.enabled'] },
+          'Webhook auto-setup disabled; no GitHub webhooks will be created for monitored repos',
+        );
       }
 
       // Only start relay bridge here if it was initialized synchronously.

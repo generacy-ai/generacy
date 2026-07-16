@@ -80,7 +80,7 @@ export class LabelMonitorService {
    * Process:* labels are checked every cycle. Completed:* labels
    * are for resume detection and can be checked less frequently.
    */
-  private static readonly COMPLETED_CHECK_INTERVAL = 3;
+  public static readonly COMPLETED_CHECK_INTERVAL = 3;
 
   private state: MonitorState;
 

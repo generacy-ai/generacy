@@ -217,6 +217,7 @@ export const HealthResponseSchema = z.object({
   displayName: z.string().optional(),
   clusterId: z.string().optional(),
   githubAuth: GitHubAuthSnapshotSchema.optional(),
+  smeeConfigured: z.boolean().optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
