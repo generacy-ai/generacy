@@ -774,6 +774,13 @@ describe('PR Feedback Integration Test: Polling Fallback', () => {
         maxConcurrentPolls: 1,
       },
       [{ owner: 'test-org', repo: 'test-repo' }],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true, // #953: webhooksConfigured=true — this suite asserts
+            // "webhook received → reset to base" semantics, which is only
+            // reachable when the service believes a webhook feeder exists.
     );
 
     // Setup default mock responses

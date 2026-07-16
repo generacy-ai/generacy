@@ -78,6 +78,12 @@ describe('LabelMonitorService', () => {
       queueAdapter,
       defaultConfig,
       defaultRepos,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true, // #953: webhooksConfigured=true — pre-existing "record webhook
+            // → recover to base" tests assume a configured feeder path.
     );
   });
 

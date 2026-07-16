@@ -41,6 +41,7 @@ function createMockMonitorService(
       lastWebhookEvent: null,
       currentPollIntervalMs: 60000,
       basePollIntervalMs: 60000,
+      webhooksConfigured: false,
     }),
     ...overrides,
   } as unknown as PrFeedbackMonitorService;
