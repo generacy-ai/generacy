@@ -129,6 +129,10 @@ export class ClarificationAnswerMonitorService {
       lastWebhookEvent: null,
       currentPollIntervalMs: config.pollIntervalMs,
       basePollIntervalMs: config.pollIntervalMs,
+      // #953: this monitor is poll-driven and has no webhook feeder signal,
+      // so it runs at base cadence (no adaptive backoff). Matches the
+      // `false` default the other poll-fed monitors pass.
+      webhooksConfigured: false,
     };
   }
 
