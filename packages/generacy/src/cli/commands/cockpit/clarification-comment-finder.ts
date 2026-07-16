@@ -12,6 +12,35 @@ import type { GhWrapper, IssueComment } from '@generacy-ai/cockpit';
 
 const WAITING_CLARIFICATION = 'waiting-for:clarification';
 
+const STAGE_STATUS_REJECT_PREFIXES: readonly string[] = [
+  '<!-- generacy-stage:planning',
+  '<!-- generacy-stage:specification',
+  '<!-- generacy-stage:implementation',
+  '<!-- speckit-stage:planning',
+  '<!-- speckit-stage:specification',
+  '<!-- speckit-stage:implementation',
+] as const;
+
+const CLARIFICATION_STAGE_OVERRIDE_PREFIXES: readonly string[] = [
+  '<!-- generacy-stage:clarification',
+  '<!-- generacy-stage:clarification-batch-',
+] as const;
+
+function isStageStatusComment(body: string): boolean {
+  const lines = body.split('\n');
+  for (const line of lines) {
+    for (const prefix of CLARIFICATION_STAGE_OVERRIDE_PREFIXES) {
+      if (line.startsWith(prefix)) return false;
+    }
+  }
+  for (const line of lines) {
+    for (const prefix of STAGE_STATUS_REJECT_PREFIXES) {
+      if (line.startsWith(prefix)) return true;
+    }
+  }
+  return false;
+}
+
 interface TimelineLabelEvent {
   event?: string;
   created_at?: string;
@@ -43,9 +72,9 @@ export async function findClarificationComment(
   const sorted = [...comments].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   for (const c of sorted) {
     const ct = Date.parse(c.createdAt);
-    if (!Number.isNaN(ct) && ct >= labelTime) {
-      return c;
-    }
+    if (Number.isNaN(ct) || ct < labelTime) continue;
+    if (isStageStatusComment(c.body)) continue;
+    return c;
   }
   return null;
 }
