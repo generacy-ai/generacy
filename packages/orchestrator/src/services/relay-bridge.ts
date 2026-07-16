@@ -37,6 +37,10 @@ import type { StatusReporter } from './status-reporter.js';
 import { readFile } from 'node:fs/promises';
 import { probeCodeServerSocket } from './code-server-probe.js';
 import { probeControlPlaneSocket } from './control-plane-probe.js';
+import {
+  clearRetainedTunnelEvent,
+  getRetainedTunnelEvent,
+} from '../routes/retained-tunnel-event.js';
 
 export interface TunnelHandlerLike {
   handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
@@ -200,6 +204,8 @@ export class RelayBridge {
     // Set up event forwarding
     this.setupEventForwarding();
 
+    this.replayRetainedTunnelEvent();
+
     // Send metadata immediately on connect
     this.sendMetadata().catch((err) => {
       this.logger.warn(
@@ -214,6 +220,26 @@ export class RelayBridge {
     // Push ready status to control-plane
     if (this.statusReporter) {
       this.statusReporter.pushStatus('ready').catch(() => {});
+    }
+  }
+
+  private replayRetainedTunnelEvent(): void {
+    const retained = getRetainedTunnelEvent();
+    if (!retained) return;
+    if (!this.client.isConnected) return;
+    try {
+      this.client.send({
+        type: 'event',
+        event: retained.event,
+        data: retained.data,
+        timestamp: retained.timestamp,
+      });
+      clearRetainedTunnelEvent();
+    } catch (err) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Failed to replay retained cluster.vscode-tunnel event (non-fatal)',
+      );
     }
   }
 

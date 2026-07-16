@@ -799,7 +799,7 @@ describe("VsCodeTunnelProcessManager", () => {
       });
     });
 
-    it("does NOT re-emit in starting state (no device code stored yet)", async () => {
+    it("re-emits a fresh starting event on second start() while starting (#966 FR-003)", async () => {
       const child = createMockChild();
       spawnMock.mockReturnValue(child);
 
@@ -810,8 +810,14 @@ describe("VsCodeTunnelProcessManager", () => {
       const eventCountBefore = relayEvents.length;
       await mgr.start();
 
-      // No new events emitted
-      expect(relayEvents.length).toBe(eventCountBefore);
+      const reEmitted = relayEvents.slice(eventCountBefore);
+      expect(reEmitted).toHaveLength(1);
+      expect(reEmitted[0]).toEqual({
+        channel: "cluster.vscode-tunnel",
+        payload: { status: "starting", tunnelName: "test-cluster" },
+      });
+      // Second start() must NOT respawn while the child is alive.
+      expect(spawnMock).toHaveBeenCalledTimes(1);
     });
 
     it("clears stored deviceCode/verificationUri on process exit", async () => {
@@ -1054,6 +1060,169 @@ describe("VsCodeTunnelProcessManager", () => {
       await shutdownPromise;
 
       expect(mgr.getStatus()).toBe("stopped");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #966: fresh-emit while starting, auth-phase timeout, and timer invariants
+// ---------------------------------------------------------------------------
+describe("VsCodeTunnelProcessManager #966", () => {
+  let pushEventFn: ReturnType<typeof vi.fn>;
+  let relayEvents: Array<{ channel: string; payload: VsCodeTunnelEvent }>;
+
+  beforeEach(() => {
+    relayEvents = [];
+    pushEventFn = vi.fn((channel: string, payload: VsCodeTunnelEvent) => {
+      relayEvents.push({ channel, payload });
+    });
+    getRelayPushEventMock.mockReturnValue(pushEventFn);
+    spawnMock.mockReset();
+    spawnMock.mockImplementation(() => createMockChild());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  describe("FR-003: fresh-emit during starting on second start()", () => {
+    it("emits a fresh starting event and does NOT respawn (SC-004)", async () => {
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(defaultOpts());
+      await mgr.start();
+      // First start() emits the initial "starting" event.
+      const startingBefore = relayEvents.filter(
+        (e) => e.payload.status === "starting"
+      ).length;
+      expect(startingBefore).toBe(1);
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+      expect(mgr.getStatus()).toBe("starting");
+
+      // Second start() with child alive + status === "starting" +
+      // deviceCode == null.
+      await mgr.start();
+
+      const startingAfter = relayEvents.filter(
+        (e) => e.payload.status === "starting"
+      ).length;
+      expect(startingAfter).toBe(2);
+      expect(relayEvents[relayEvents.length - 1]).toEqual({
+        channel: "cluster.vscode-tunnel",
+        payload: { status: "starting", tunnelName: "test-cluster" },
+      });
+      expect(spawnMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("FR-004: auth-phase timeout (SC-003)", () => {
+    it("times out authorization_pending after authTimeoutMs (positive)", async () => {
+      vi.useFakeTimers();
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ authTimeoutMs: 50, deviceCodeTimeoutMs: 30_000 })
+      );
+      await mgr.start();
+
+      pushLine(child, "Enter code ABCD-1234 at https://github.com/login/device");
+      expect(mgr.getStatus()).toBe("authorization_pending");
+
+      vi.advanceTimersByTime(51);
+
+      expect(mgr.getStatus()).toBe("error");
+      const errorEvents = relayEvents.filter(
+        (e) => e.payload.status === "error"
+      );
+      expect(errorEvents).toHaveLength(1);
+      expect(errorEvents[0].payload.error).toBe(
+        "Timed out waiting for device-code authorization"
+      );
+      expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+
+      // Exit handler must not double-emit an "error" event.
+      const errorCountBeforeExit = errorEvents.length;
+      child.emit("exit", 0);
+      const errorCountAfterExit = relayEvents.filter(
+        (e) => e.payload.status === "error"
+      ).length;
+      expect(errorCountAfterExit).toBe(errorCountBeforeExit);
+      expect(mgr.getStatus()).toBe("error");
+    });
+
+    it("does not fire authTimer when auth completes in time (negative)", async () => {
+      vi.useFakeTimers();
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ authTimeoutMs: 50, deviceCodeTimeoutMs: 30_000 })
+      );
+      await mgr.start();
+
+      pushLine(child, "Enter code AAAA-BBBB at https://github.com/login/device");
+      expect(mgr.getStatus()).toBe("authorization_pending");
+
+      // Connect BEFORE the auth timer fires.
+      pushLine(child, "Tunnel is ready and is connected");
+      expect(mgr.getStatus()).toBe("connected");
+
+      vi.advanceTimersByTime(200);
+
+      const errorEvents = relayEvents.filter(
+        (e) =>
+          e.payload.status === "error" &&
+          e.payload.error === "Timed out waiting for device-code authorization"
+      );
+      expect(errorEvents).toHaveLength(0);
+      expect(child.kill).not.toHaveBeenCalledWith("SIGTERM");
+      expect((mgr as unknown as { authTimer: unknown }).authTimer).toBeNull();
+    });
+  });
+
+  describe("T1/T2 timer invariants", () => {
+    it("after connected, both timers are null", async () => {
+      vi.useFakeTimers();
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ authTimeoutMs: 5_000, deviceCodeTimeoutMs: 30_000 })
+      );
+      await mgr.start();
+      pushLine(child, "Code CDEF-1234");
+      pushLine(child, "Tunnel is ready and is connected");
+
+      const internals = mgr as unknown as {
+        deviceCodeTimer: NodeJS.Timeout | null;
+        authTimer: NodeJS.Timeout | null;
+      };
+      expect(internals.deviceCodeTimer).toBeNull();
+      expect(internals.authTimer).toBeNull();
+    });
+
+    it("after exit, both timers are null", async () => {
+      vi.useFakeTimers();
+      const child = createMockChild();
+      spawnMock.mockReturnValue(child);
+
+      const mgr = new VsCodeTunnelProcessManager(
+        defaultOpts({ authTimeoutMs: 5_000, deviceCodeTimeoutMs: 30_000 })
+      );
+      await mgr.start();
+      pushLine(child, "Code ZZZZ-1234");
+      expect(mgr.getStatus()).toBe("authorization_pending");
+      child.emit("exit", 1);
+
+      const internals = mgr as unknown as {
+        deviceCodeTimer: NodeJS.Timeout | null;
+        authTimer: NodeJS.Timeout | null;
+      };
+      expect(internals.deviceCodeTimer).toBeNull();
+      expect(internals.authTimer).toBeNull();
     });
   });
 });
