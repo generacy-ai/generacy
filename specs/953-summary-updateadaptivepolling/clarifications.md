@@ -15,7 +15,11 @@
 - B: **Treat webhooks as unhealthy immediately.** At construction, seed `webhookHealthy = false` (or equivalent) so the existing "webhooks appear unhealthy" branch of `updateAdaptivePolling()` fires on the first poll cycle. Reuses the current transition path and log line semantics; may need a distinguishing field per FR-004.
 - C: **Seed `lastWebhookEvent` at poll-loop start.** Set `lastWebhookEvent = poll-loop-start-time` in the smee-less branch so the existing elapsed-time comparison naturally trips after `basePollIntervalMs * 2`. Adaptive polling engages after a bounded grace, not immediately.
 
-**Answer**: *Pending*
+**Answer**: **A — skip adaptive polling; fixed-fast interval from the start.**
+
+"Unhealthy" implies a condition that could recover. A cluster with no smee channel and no webhook ingress has no real-time path to recover *to* — the absence is structural, and it is known at construction time rather than observed at runtime. **B** would emit `Webhooks appear unhealthy, increasing poll frequency` on every boot of every smee-less cluster, which describes a transient degradation where the truth is a permanent configuration fact. **C** spends `basePollIntervalMs * 2` rediscovering something already available at construction. A is the honest model: compute `basePollIntervalMs / ADAPTIVE_DIVISOR` clamped to `MIN_POLL_INTERVAL_MS` once and use it as the steady state.
+
+Note for the implementer: at the default 30s base, LabelMonitor's `ADAPTIVE_DIVISOR = 3` (`label-monitor-service.ts:59`) gives exactly 10s, which is exactly `MIN_POLL_INTERVAL_MS` (`:58`). **The clamp binds at the default configuration** — a test asserting the fast interval at defaults is really asserting the clamp, not the divide. Pick test values that separate the two.
 
 ---
 
@@ -27,7 +31,9 @@
 - B: **Bounded grace equal to `basePollIntervalMs`** (one base cycle). Polls at base for one cycle, then flips to adaptive on cycle 2. Rationale: minimal accommodation for services that haven't finished initialization; still bounded and predictable.
 - C: **N/A — Q1 answer is C** (existing `basePollIntervalMs * 2` threshold defines the grace by construction).
 
-**Answer**: *Pending*
+**Answer**: **A — no grace, engage on cycle 1.**
+
+Follows from Q1=A. The signal is a constructor-time constant, so there is no initialization race to accommodate — poll cycle 1 already runs after construction completes. A grace period would delay the correct interval by one cycle in exchange for no information.
 
 ---
 
@@ -39,7 +45,18 @@
 - B: **Use `fallbackPollIntervalMs` (the smee-configured fallback).** Treat opt-out as "poll at the pre-configured fallback cadence, whatever that is." Consistent with the smee-configured branch.
 - C: **Reject the config combination at load time.** `adaptivePolling: false` + no smee is a configuration error (the flag has no meaning without a real-time path). Fail loud in `config/loader.ts` with a clear message pointing at the two ways to fix.
 
-**Answer**: *Pending*
+**Answer**: **A — stay at `basePollIntervalMs` indefinitely.**
+
+Natural reading of the flag, and it protects a legitimate use case: an operator on a tight GitHub rate-limit budget may deliberately want the slower cadence on a smee-less cluster. Tripling the request rate against their wishes because they *also* lack a webhook is not a favour. **B** conflates two unrelated settings — `fallbackPollIntervalMs` (default 300000, `config/schema.ts:242`) is the *smee-configured* safety-net cadence; it has no meaning on a cluster with no smee. **C** rejects a configuration that is both valid and useful.
+
+A also satisfies FR-005 cleanly:
+
+| `adaptivePolling` | smee | interval |
+|---|---|---|
+| `true` (default) | absent | fast (`base / DIVISOR`, clamped) |
+| `false` | absent | `basePollIntervalMs` |
+
+Two distinct, reachable behaviours — so the flag stops being dead code, which is the point of FR-005.
 
 ---
 
@@ -51,7 +68,34 @@
 - B: **Out of scope — LabelMonitor only, follow-up issue for PrFeedback.** Keep the surface small; land LabelMonitor first, file a companion issue for PrFeedback that reuses the same clarification answers. Rationale: preserves the "one issue = one bug" hygiene the spec set up.
 - C: **Extract shared helper, both callers migrate.** Pull `updateAdaptivePolling()` + supporting state into a shared module (e.g. `adaptive-poll-controller.ts`) that both services delegate to. Both callers get the fix by construction; regression test lives against the helper.
 
-**Answer**: *Pending*
+**Answer**: **C — extract shared helper; all THREE services migrate. (Premise correction: there are three affected services, not two.)**
+
+`services/merge-conflict-monitor-service.ts:346` carries the identical early return, with the same `webhookHealthy` / `lastWebhookEvent` state:
+
+```ts
+private updateAdaptivePolling(): void {
+  if (this.state.lastWebhookEvent === null) return;
+  ...
+}
+```
+
+And it is **worse than the other two**: `MergeConflictMonitorService.recordWebhookEvent()` (`:332`) has **no callers anywhere in the codebase** — only its own definition. Nothing can ever set its `lastWebhookEvent`, so its adaptive polling is dead on *every* cluster in *every* configuration. Not "dead on smee-less clusters" — dead unconditionally.
+
+`PrFeedbackMonitorService` is nearly as bad: `SmeeWebhookReceiver` is typed to `LabelMonitorService` (`smee-receiver.ts:57`) and filters to `x-github-event: issues` (`:210`), so **smee never feeds PrFeedback at all**. Its only event source is the direct HTTP route at `pr-webhooks.ts:119` — which a smee-based cluster does not use, because the entire reason to run smee is the absence of public ingress. So on exactly the clusters #952 exists to create, PrFeedback's adaptive polling is dead too.
+
+That reframes the choice. Option B doesn't leave *one* known-bad path live, it leaves two — one of which is broken on every cluster we operate. Option A fixes two of three and leaves the universally-dead one.
+
+**C, extended to all three.** The bug exists *because* this block was copy-pasted three times; fixing the copies in place preserves the mechanism that produced it. Note the constants have already drifted, so the helper must take the divisor as a parameter:
+
+| Service | `ADAPTIVE_DIVISOR` | `MIN_POLL_INTERVAL_MS` |
+|---|---|---|
+| `label-monitor-service.ts` | 3 (`:59`) | 10000 (`:58`) |
+| `pr-feedback-monitor-service.ts` | 2 (`:42`) | 10000 (`:36`) |
+| `merge-conflict-monitor-service.ts` | 2 (`:34`) | 10_000 (`:29`) |
+
+The divergence is documented in-code at `pr-feedback-monitor-service.ts:40` ("This differs from LabelMonitorService which uses ADAPTIVE_DIVISOR = 3"), so it is intentional and must be preserved, not normalised away. FR-007's regression test should live against the helper, with a thin per-service test that each passes its own divisor through.
+
+**Scope note:** larger diff than a bugfix workflow usually carries, deliberately. Fallback if reviewer wants it split: land the helper + LabelMonitor here, migrate PrFeedback and MergeConflict in an immediate follow-up. Do not land a LabelMonitor-only point fix that leaves the other two copies untouched.
 
 ---
 
@@ -62,5 +106,31 @@
 - A: **New `webhooksConfigured: boolean` on `MonitorState`,** set once at construction from the constructor arg and read wherever needed. `webhookHealthy` stays semantically "is the configured webhook path currently delivering." Log line uses `{ webhooksConfigured: false }` per the spec's example.
 - B: **Reuse `webhookHealthy: false`** at construction on smee-less clusters. No new state field; distinguish log lines with a distinct `reason: 'webhooks-not-configured'` string. Compact but overloads `webhookHealthy` semantically ("healthy" and "configured" now mean the same thing on this branch).
 - C: **No state field — hold on `options` only.** `webhooksConfigured` is a constructor-time constant read directly from `this.options` at every use site; no `state` mutation, no serialization surface. Least state, most reads.
+
+**Answer**: **A — new `webhooksConfigured: boolean` on `MonitorState`.**
+
+Keeps `webhookHealthy` meaning "the configured webhook path is currently delivering" and adds a separate field for "a webhook path exists at all". Two genuinely different facts. **B**'s overload is exactly the mistake that produced this bug — `lastWebhookEvent === null` was made to carry both "no data yet" and "never configured", and the code chose the wrong reading. The `reason: 'webhooks-not-configured'` string B proposes is an admission that the two states need distinguishing anyway. A over **C** because FR-004's log line and FR-007's tests both want to read the value, and `getState()` already exposes state for assertions. Holding it only on `options` splits the test surface and the log-field surface away from where every other monitor fact lives.
+
+---
+
+## Batch 2 — 2026-07-16
+
+### Q6: `webhooksConfigured` derivation per service
+**Context**: Q4=C expanded scope to three services (`LabelMonitorService`, `PrFeedbackMonitorService`, `MergeConflictMonitorService`), and Q1=A + Q5=A pin the mechanism to a construction-time `webhooksConfigured: boolean`. But each service has a different webhook feeder, so the derivation rule differs by service:
+
+- **`LabelMonitorService`** is fed by `SmeeWebhookReceiver`. Derivation is well-defined: `config.smee.channelUrl != null`.
+- **`PrFeedbackMonitorService`** is *not* fed by smee (`smee-receiver.ts:57` is typed to LabelMonitor, and its stream filters to `x-github-event: issues`). Its only feeder is the direct HTTP webhook route at `pr-webhooks.ts:119`, which is always registered but only accepts payloads when `PR_MONITOR_WEBHOOK_SECRET` is set (`config/loader.ts:187–192`). Note that as Q4's answer states, a smee-based cluster does not use direct HTTP ingress at all — so treating "smee configured" as "webhooks configured" for PrFeedback is wrong on that population.
+- **`MergeConflictMonitorService`** has no feeder anywhere — `recordWebhookEvent()` has no callers. Under the current codebase `webhooksConfigured` for this service is always `false`. Adding a feeder is explicitly out of scope.
+
+The implementer needs a rule for each. FR-002 acceptance ("service polls at the fixed-fast interval when `webhooksConfigured === false`") is only testable once the derivation is fixed.
+
+**Question**: How is `webhooksConfigured` derived for each of the three services?
+**Options**:
+- A: **Per-service, purpose-built derivation** (recommended, aligned with Q4 rationale).
+  - `LabelMonitor`: `config.smee.channelUrl != null` (unchanged from spec).
+  - `PrFeedback`: `PR_MONITOR_WEBHOOK_SECRET` env-var is set — proxy for "the direct HTTP route is intended to receive traffic." Surfaced through config (e.g. `config.prMonitor.webhookSecret != null` after loader).
+  - `MergeConflict`: hardcoded `false` at the construction callsite in `server.ts` (no feeder exists; TODO comment cross-references the "no callers of `recordWebhookEvent()`" fact).
+- B: **Single derived config field `config.webhooks.configured`,** computed once in `config/loader.ts` as `smee.channelUrl != null || PR_MONITOR_WEBHOOK_SECRET != null || false`. All three services take the same value. Simpler shape, but glosses over per-service feeder differences: `PrFeedback` reads `true` on a smee-only cluster (smee doesn't feed it), and `MergeConflict` reads `true` when it has no feeder at all.
+- C: **Anchor on smee alone.** `webhooksConfigured` for every service ⇔ `config.smee.channelUrl != null`. Rejected by Q4's rationale (smee doesn't feed PrFeedback) — listed for completeness, and to make the trade-off explicit if the reviewer wants LabelMonitor-symmetric behaviour for reasons like log-line consistency.
 
 **Answer**: *Pending*
