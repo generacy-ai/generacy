@@ -14,7 +14,7 @@
 - C: The entire Q block content between openers (verbatim). Parser stores raw; any downstream stripping is that consumer's problem.
 - D: Something else (please specify)
 
-**Answer**: *Pending*
+**Answer**: ** A — Use the sealed file backend\nRationale:** It avoids a cloud round-trip.\n`. The outer regex captures the whole Q block (until the next opener or EOF), then `extractEmbeddedAnswer` picks the answer text out. What ends up in `clarifications.md` for Q1 depends on whether the rationale line rides along or gets stripped. This is user-visible: it controls whether operators reading persisted answers later see the *why* or just the *what*, and it also controls whether the deterministic backstop faithfully reproduces what the LLM path already writes.
 
 ### Q2: Opener strictness when the colon is absent
 **Context**: FR-001 says the outer regex must accept `### Q<n>` (no colon) in addition to `### Q<n>: <topic>`. FR-004 says FR-005 line-anchoring stays intact — mid-prose `as per Q1: yes` must not capture. That leaves one shape genuinely unresolved: a **bare `Q<n>` at line start with no heading marker and no colon** (e.g., `Q1\n**Answer:** X`). The existing regex `(?:#{1,6}\s+)?` makes the heading optional; if we also make the colon optional, `Q1\n…` becomes an opener, which widens beyond the byte-locked cockpit shape and risks false positives in prose that happens to start a line with `Q1`. Cockpit itself always emits `### Q<n>` (heading present), so restricting the colon-less form to heading-prefixed lines does not lose any real coverage.
