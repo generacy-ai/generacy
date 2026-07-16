@@ -10,7 +10,7 @@
 - B: Broad 3xx range: `response.status >= 300 && response.status < 400` — accepts any redirect-family status, hedges against another silent upstream flip.
 - C: Explicit set widened to include `303`: `[301, 302, 303, 307, 308]` — matches practical HTTP redirect vocabulary while excluding `304`/`305`/`306`.
 
-**Answer**: *Pending*
+**Answer**: B — Broad 3xx range (`response.status >= 300 && response.status < 400`). Per FR-002 and the spec's Assumptions, do not hard-code 307: smee.io already silently flipped once (302→307, and POST→GET), so accepting the whole redirect family hedges against another flip. The returned `Location` is re-validated against `SMEE_URL_PATTERN` regardless, so the broad range degrades safely — 304/305/306 carry no valid smee `Location` and fail the pattern check anyway. Option A's strict set gains nothing given that Location validation; option C's extra 303 is redundant under B and absent from the spec's set.
 
 ### Q2: HTTP method — GET or HEAD
 **Context**: FR-001 permits `GET` **or** `HEAD` against `https://smee.io/new`. Both are verified to return `307` with a valid `Location` today. `HEAD` avoids transferring a response body (marginally cheaper, more principled since we only need the `Location` header). `GET` matches typical curl-in-terminal debugging and is less likely to be broken by an intermediary that drops `HEAD` support. Only one is implemented.
@@ -19,7 +19,7 @@
 - A: `GET` — matches manual debugging invocations, universally supported.
 - B: `HEAD` — no body transferred, semantically closer to "just tell me the redirect target".
 
-**Answer**: *Pending*
+**Answer**: A — GET. FR-001 lists `GET` (or `HEAD`) with GET primary, and GET is the empirically verified path: `GET https://smee.io/new` → `307` with a valid `Location`. HEAD's only advantage (no response body) saves ~66 bytes, which is negligible against GET's universal support and lower exposure to intermediary/proxy HEAD-handling quirks.
 
 ### Q3: FR-007 error message improvement — in scope or deferred
 **Context**: FR-007 is marked P2 ("Nice-to-have, not blocking") and would change the error string from `"unexpected status 200"` to something like `"expected 3xx with Location, got 200"`. Including it means editing the same lines this bugfix already touches (essentially free); deferring keeps this PR minimal and lets the wording be revisited separately. The current wording will remain diagnostic ("unexpected status 200") if deferred.
@@ -28,4 +28,4 @@
 - A: Ship in this PR — the lines are already being edited; incremental cost is near zero.
 - B: Defer to a follow-up — keep this PR tightly scoped to method + status-acceptance only.
 
-**Answer**: *Pending*
+**Answer**: A — Ship the FR-007 error-message reword in this PR. The error-emitting line (`lastError = "unexpected status ${response.status}"`) is already being rewritten for the FR-002 status-acceptance change, so the incremental cost is effectively zero. Deferring would leave a listed FR of this issue unimplemented (spec/impl drift) and drop exactly the diagnostic ("expected 3xx with Location, got 200") that would surface the next upstream drift from logs alone.
