@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { setupInternalRelayEventsRoute } from '../internal-relay-events.js';
+import {
+  clearRetainedTunnelEvent,
+  getRetainedTunnelEvent,
+} from '../retained-tunnel-event.js';
 import { createAuthMiddleware, InMemoryApiKeyStore } from '../../auth/index.js';
 import type { ClusterRelayClient } from '../../types/relay.js';
 
@@ -23,6 +27,7 @@ describe('POST /internal/relay-events', () => {
   const testApiKey = 'test-internal-key-uuid';
 
   beforeEach(async () => {
+    clearRetainedTunnelEvent();
     server = Fastify();
     relayClient = createMockRelayClient();
     apiKeyStore = new InMemoryApiKeyStore();
@@ -161,5 +166,123 @@ describe('POST /internal/relay-events', () => {
 
     expect(response.statusCode).toBe(204);
     expect(relayClient.send).not.toHaveBeenCalled();
+  });
+
+  describe('retained tunnel event on !isConnected', () => {
+    async function bootDisconnected(): Promise<FastifyInstance> {
+      relayClient = createMockRelayClient({ isConnected: false });
+      const disconnectedServer = Fastify();
+      const authMiddleware = createAuthMiddleware({
+        apiKeyStore,
+        enabled: true,
+        skipRoutes: ['/health'],
+      });
+      disconnectedServer.addHook('preHandler', authMiddleware);
+      setupInternalRelayEventsRoute(disconnectedServer, () => relayClient);
+      await disconnectedServer.ready();
+      return disconnectedServer;
+    }
+
+    it('retains cluster.vscode-tunnel authorization_pending events', async () => {
+      const disconnected = await bootDisconnected();
+      const timestamp = new Date().toISOString();
+      const payload = {
+        status: 'authorization_pending',
+        deviceCode: 'ABCD-1234',
+        verificationUri: 'https://github.com/login/device',
+        tunnelName: 'g-abc',
+      };
+
+      const response = await disconnected.inject({
+        method: 'POST',
+        url: '/internal/relay-events',
+        headers: { authorization: `Bearer ${testApiKey}` },
+        payload: {
+          event: 'cluster.vscode-tunnel',
+          data: payload,
+          timestamp,
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(relayClient.send).not.toHaveBeenCalled();
+      const retained = getRetainedTunnelEvent();
+      expect(retained).not.toBeNull();
+      expect(retained?.event).toBe('cluster.vscode-tunnel');
+      expect(retained?.timestamp).toBe(timestamp);
+      expect(retained?.status).toBe('authorization_pending');
+      expect(retained?.data).toEqual(payload);
+    });
+
+    it('does NOT populate the slot when relay client is connected', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/internal/relay-events',
+        headers: { authorization: `Bearer ${testApiKey}` },
+        payload: {
+          event: 'cluster.vscode-tunnel',
+          data: {
+            status: 'authorization_pending',
+            deviceCode: 'AAAA-BBBB',
+          },
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(relayClient.send).toHaveBeenCalledTimes(1);
+      expect(getRetainedTunnelEvent()).toBeNull();
+    });
+
+    it('does NOT retain cluster.audit events when disconnected', async () => {
+      const disconnected = await bootDisconnected();
+      const response = await disconnected.inject({
+        method: 'POST',
+        url: '/internal/relay-events',
+        headers: { authorization: `Bearer ${testApiKey}` },
+        payload: {
+          event: 'cluster.audit',
+          data: { entries: [] },
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(getRetainedTunnelEvent()).toBeNull();
+    });
+
+    it('does NOT retain payloads that fail eligibility (starting status)', async () => {
+      const disconnected = await bootDisconnected();
+      const response = await disconnected.inject({
+        method: 'POST',
+        url: '/internal/relay-events',
+        headers: { authorization: `Bearer ${testApiKey}` },
+        payload: {
+          event: 'cluster.vscode-tunnel',
+          data: { status: 'starting' },
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(getRetainedTunnelEvent()).toBeNull();
+    });
+
+    it('does NOT retain malformed data (Zod extraction fails)', async () => {
+      const disconnected = await bootDisconnected();
+      const response = await disconnected.inject({
+        method: 'POST',
+        url: '/internal/relay-events',
+        headers: { authorization: `Bearer ${testApiKey}` },
+        payload: {
+          event: 'cluster.vscode-tunnel',
+          data: 'not-an-object',
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      expect(response.statusCode).toBe(204);
+      expect(getRetainedTunnelEvent()).toBeNull();
+    });
   });
 });
