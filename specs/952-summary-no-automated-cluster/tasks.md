@@ -11,13 +11,13 @@
 
 ## Phase 1: Config schema + env-var wiring
 
-- [ ] T001 [US1] Add `channelFilePath: z.string().default('/var/lib/generacy/smee-channel')` field to `SmeeConfigSchema` in `packages/orchestrator/src/config/schema.ts` (~line 238–244) per data-model.md §5. No changes to existing `channelUrl` / `fallbackPollIntervalMs` fields; the Zod default keeps existing configs parsing unchanged (no migration).
+- [X] T001 [US1] Add `channelFilePath: z.string().default('/var/lib/generacy/smee-channel')` field to `SmeeConfigSchema` in `packages/orchestrator/src/config/schema.ts` (~line 238–244) per data-model.md §5. No changes to existing `channelUrl` / `fallbackPollIntervalMs` fields; the Zod default keeps existing configs parsing unchanged (no migration).
 
-- [ ] T002 [P] [US1] Wire `ORCHESTRATOR_SMEE_CHANNEL_FILE_PATH` env-var override in `packages/orchestrator/src/config/loader.ts`, mirroring the existing `smeeEnvUrl` pattern near line 133 (populate `config.smee.channelFilePath` if the env var is set). Test-only knob; not documented in the CLI scaffolder.
+- [X] T002 [P] [US1] Wire `ORCHESTRATOR_SMEE_CHANNEL_FILE_PATH` env-var override in `packages/orchestrator/src/config/loader.ts`, mirroring the existing `smeeEnvUrl` pattern near line 133 (populate `config.smee.channelFilePath` if the env var is set). Test-only knob; not documented in the CLI scaffolder.
 
 ## Phase 2: Resolver service
 
-- [ ] T003 [US1] Create `packages/orchestrator/src/services/smee-channel-resolver.ts` (~120 LOC) implementing the full contract in `contracts/smee-channel-resolver.md` and `data-model.md` §§1–4:
+- [X] T003 [US1] Create `packages/orchestrator/src/services/smee-channel-resolver.ts` (~120 LOC) implementing the full contract in `contracts/smee-channel-resolver.md` and `data-model.md` §§1–4:
   - Export: `SMEE_URL_PATTERN = /^https:\/\/smee\.io\/[A-Za-z0-9_-]+$/`, `ChannelSource` union (`'env-or-yaml' | 'persisted' | 'provisioned'`), `SmeeChannelResolverOptions`, `SmeeChannelResolverResult`, `SmeeChannelResolver` class.
   - `resolve()` implements the 4-tier precedence exactly as specified:
     - **Tier 1** (env-or-yaml): if `options.presetUrl` set → return `{ channelUrl: presetUrl, source: 'env-or-yaml' }`. No re-validation (trust Zod).
@@ -30,7 +30,7 @@
 
 ## Phase 3: Resolver unit tests
 
-- [ ] T004 [P] [US1] Create `packages/orchestrator/src/services/__tests__/smee-channel-resolver.test.ts` (~180 LOC) covering the T1–T14 test cases enumerated in `contracts/smee-channel-resolver.md` §"Testing contract":
+- [X] T004 [P] [US1] Create `packages/orchestrator/src/services/__tests__/smee-channel-resolver.test.ts` (~180 LOC) covering the T1–T14 test cases enumerated in `contracts/smee-channel-resolver.md` §"Testing contract":
   - T1 presetUrl short-circuits (no file read, no fetch).
   - T2 valid persisted file returns `source: 'persisted'` (no fetch, no write).
   - T3 malformed persisted file → L3 log with truncated contentPreview → fetch → overwrite → `source: 'provisioned'`.
@@ -49,7 +49,7 @@
 
 ## Phase 4: Server-side pipeline wiring
 
-- [ ] T005 [US1] Refactor `packages/orchestrator/src/server.ts` per `contracts/server-pipeline.md`:
+- [X] T005 [US1] Refactor `packages/orchestrator/src/server.ts` per `contracts/server-pipeline.md`:
   - Inside `createServer()`, define a closure `startSmeePipeline(channelUrl: string): void` capturing `labelMonitorService`, `config`, `server.log`, `githubTokenProvider`, `clusterGithubUsername`. Body: build `watchedRepos`, construct `SmeeWebhookReceiver`, assign to enclosing `smeeReceiver`, log info `Smee webhook receiver configured { channelUrl }`, fire-and-forget `receiver.start().catch(logError)`, and if `config.webhookSetup.enabled` construct `WebhookSetupService` and fire-and-forget `ensureWebhooks(channelUrl, config.repositories).catch(logError)`.
   - Inside the existing gate `if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0)` at ~`server.ts:464`:
     - When `config.smee.channelUrl` is set → call `startSmeePipeline(config.smee.channelUrl)` synchronously (preserves today's construction ordering; existing tests continue to pass).
@@ -58,7 +58,7 @@
 
 ## Phase 5: Server integration test
 
-- [ ] T006 [P] [US1] Create `packages/orchestrator/src/__tests__/server-smee-provisioning.test.ts` (~70 LOC) covering I1–I6 from `contracts/server-pipeline.md` §"Test contract":
+- [X] T006 [P] [US1] Create `packages/orchestrator/src/__tests__/server-smee-provisioning.test.ts` (~70 LOC) covering I1–I6 from `contracts/server-pipeline.md` §"Test contract":
   - I1 sync path: `config.smee.channelUrl` set → `smeeReceiver` is non-null after `createServer()` (before `onReady` runs); resolver is NOT constructed.
   - I2 async path succeeds: `config.smee.channelUrl` unset, stub `fetch` (via `vi.stubGlobal('fetch', …)`) returns a 302 with valid `Location` → after `server.listen()` + resolver `.then()` fires, `smeeReceiver` is non-null, `ensureWebhooks` was called with the provisioned URL, file at `channelFilePath` (pointed at tmpdir) contains the URL with mode `0600`.
   - I3 worker-mode skip: `createServer({ config: workerModeConfig })` → resolver never invoked.
@@ -69,7 +69,7 @@
 
 ## Phase 6: Changeset (required by CLAUDE.md CI gate)
 
-- [ ] T007 [US1] Add `.changeset/952-orchestrator-smee-auto-provision.md` with a `minor` bump for `@generacy-ai/orchestrator` (new capability — auto-provisioning resolver). No other packages touched, so this is the only entry. One-sentence summary along the lines of *"orchestrator: auto-provision a smee.io channel on startup when none is configured, persist it to `/var/lib/generacy/smee-channel`, and let the existing webhook-setup flow wire the GitHub webhook."*
+- [X] T007 [US1] Add `.changeset/952-orchestrator-smee-auto-provision.md` with a `minor` bump for `@generacy-ai/orchestrator` (new capability — auto-provisioning resolver). No other packages touched, so this is the only entry. One-sentence summary along the lines of *"orchestrator: auto-provision a smee.io channel on startup when none is configured, persist it to `/var/lib/generacy/smee-channel`, and let the existing webhook-setup flow wire the GitHub webhook."*
 
 ## Dependencies & Execution Order
 
