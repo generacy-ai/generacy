@@ -89,13 +89,77 @@ function untrustedAnswerMarker(commentId: number): string {
 }
 
 /**
+ * Shared opener fragment for a `Q<n>` clarification-answer block (#949).
+ *
+ * Composes into three sites, all in this file:
+ *   1. The outer regex opener in `parseAnswersFromComments`.
+ *   2. The outer regex terminator lookahead in `parseAnswersFromComments`
+ *      (via `QN_TERMINATOR_LOOKAHEAD`) — MUST stay in lockstep with (1)
+ *      or multi-question cockpit bodies open exactly one block (Q1's lazy
+ *      `(.*?)` swallows Q2..Qn to EOF).
+ *   3. `commentMatchesAnswerPattern` (via `QN_OPENER_PATTERN_NONCAPTURING`)
+ *      — used by the FR-013 untrusted-author explainer gate.
+ *
+ * DELIBERATELY NOT USED by `sourceHadQuestionHeadings` — that discriminator
+ * requires a colon after `Q<n>` because it separates engine-authored
+ * question comments from cockpit answer delimiters (see comment at that
+ * site).
+ *
+ * Grammar accepted (line-anchored via `(?:^|\n)`):
+ *   [heading] [**]Q<n>[**]              (colon-less — heading REQUIRED)
+ *   [heading] [**]Q<n>[**]:              (colon — heading optional; bare Q<n>: OK)
+ *
+ * Trailing captures use `[^\n]*` (not `.*`) so the opener does not devour
+ * body content across newlines under the outer regex's `s` flag.
+ *
+ * Two arms of the disjunction produce four capture groups:
+ *   [1] Q number (colon-less arm)
+ *   [2] topic/trailing (colon-less arm)
+ *   [3] Q number (colon-bearing arm)
+ *   [4] answer/trailing (colon-bearing arm)
+ * Consumers use `pickQnMatch()` to resolve to a single `{ qn, trailing }`.
+ */
+const QN_OPENER_PATTERN =
+  '(?:^|\\n)(?:(?:#{1,6}\\s+(?:\\*\\*)?Q(\\d+)(?:\\*\\*)?(?::\\s*([^\\n]*))?)|(?:(?:\\*\\*)?Q(\\d+)(?:\\*\\*)?:\\s*([^\\n]*)))';
+
+/**
+ * Non-capturing variant of `QN_OPENER_PATTERN` for boolean predicates.
+ * Every `(\d+)` numeric-capture replaced with `(?:\d+)` and every
+ * `([^\n]*)` trailing capture replaced with `(?:[^\n]*)`.
+ */
+const QN_OPENER_PATTERN_NONCAPTURING =
+  '(?:^|\\n)(?:(?:#{1,6}\\s+(?:\\*\\*)?Q(?:\\d+)(?:\\*\\*)?(?::\\s*(?:[^\\n]*))?)|(?:(?:\\*\\*)?Q(?:\\d+)(?:\\*\\*)?:\\s*(?:[^\\n]*)))';
+
+/**
+ * Block terminator lookahead used by the outer regex in
+ * `parseAnswersFromComments`. Requires a leading `\n` (no `^` alternation)
+ * so it cannot re-anchor mid-line inside a captured body.
+ *
+ * Coupling invariant: MUST accept the same set of next-opener shapes that
+ * `QN_OPENER_PATTERN` accepts as openers. Widen this in exact lockstep
+ * with the opener or multi-question bodies silently open one block.
+ */
+const QN_TERMINATOR_LOOKAHEAD =
+  '(?=(?:\\n(?:(?:#{1,6}\\s+(?:\\*\\*)?Q\\d+(?:\\*\\*)?(?::[^\\n]*)?)|(?:(?:\\*\\*)?Q\\d+(?:\\*\\*)?:[^\\n]*)))|$)';
+
+/**
+ * Resolve `{ qn, trailing }` from the two disjunction arms of
+ * `QN_OPENER_PATTERN`. Exactly one arm matches per opener occurrence.
+ */
+function pickQnMatch(m: RegExpExecArray): { qn: number; trailing: string } {
+  const num = m[1] ?? m[3];
+  const trail = m[2] ?? m[4] ?? '';
+  return { qn: parseInt(num!, 10), trailing: trail };
+}
+
+/**
  * Detect whether a comment body matches the `Q<N>:` answer pattern that
  * `parseAnswersFromComments` would attempt to consume. Used to decide
  * whether an untrusted-comment skip warrants an explainer bot comment
  * (matched) or log-only treatment (unmatched, generic drive-by).
  */
-function commentMatchesAnswerPattern(body: string): boolean {
-  return /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:\s*.+/.test(body);
+export function commentMatchesAnswerPattern(body: string): boolean {
+  return new RegExp(QN_OPENER_PATTERN_NONCAPTURING).test(body);
 }
 
 // ---------------------------------------------------------------------------
@@ -411,14 +475,27 @@ export function hasPendingClarifications(
  * `**Answer: value**` or `**Answer**: value` line and returns the answer
  * portion. Returns `undefined` if no embedded answer is found.
  */
-function extractEmbeddedAnswer(text: string): string | undefined {
-  // Format: **Answer: value** with optional trailing text
+export function extractEmbeddedAnswer(text: string): string | undefined {
+  // Format: **Answer:** value (#949 — cockpit dialect; colon INSIDE bold).
+  // Placed BEFORE m1/m2 because `**Answer:**` is strictly more specific
+  // than `**Answer: ...**` — the `\*\*` right after the colon disambiguates.
+  const m0 = text.match(/\*\*Answer:\*\*\s*(.+?)$/m);
+  if (m0) {
+    let answer = m0[1]!.trim();
+    // Q1→B: if a `**Rationale:** …` line follows inside the same captured
+    // block, join it onto the answer so clarifications.md preserves the *why*.
+    const r = text.match(/\n\*\*Rationale:\*\*\s*(.+?)$/m);
+    if (r) answer = `${answer}\nRationale: ${r[1]!.trim()}`;
+    return answer;
+  }
+
+  // Format: **Answer: value** with optional trailing text (engine dialect)
   const m1 = text.match(/\*\*Answer:\s*(.+?)\*\*(.*)$/m);
   if (m1) {
     return (m1[1]! + m1[2]!).trim();
   }
 
-  // Format: **Answer**: value
+  // Format: **Answer**: value (engine dialect — colon OUTSIDE bold)
   const m2 = text.match(/\*\*Answer\*\*:\s*(.+)$/m);
   if (m2) {
     return m2[1]!.trim();
@@ -450,7 +527,7 @@ interface ParsedAnswer {
  * For heading format, the actual answer is extracted from the embedded
  * `**Answer**` line rather than the topic name after `Q1:`.
  */
-function parseAnswersFromComments(
+export function parseAnswersFromComments(
   comments: Array<{ id: number; body: string; created_at?: string }>,
   questionNumbers: number[],
   logger: Logger,
@@ -458,49 +535,71 @@ function parseAnswersFromComments(
   const answers = new Map<number, ParsedAnswer>();
 
   for (const comment of comments) {
+    // FR-004 discriminator (#949 Q5→C): the colon here is DELIBERATE and
+    // load-bearing. It separates engine-authored question comments (which
+    // use `### Q1: Topic` shape, per `formatComment` above) from cockpit
+    // answer-block delimiters (which use `### Q1` — NO colon). Removing the
+    // colon or folding this pattern into `QN_OPENER_PATTERN` would cause the
+    // `TRANSITION_WITH_QUESTION_HEADINGS` warn below to fire on every
+    // legitimate cockpit integration — a 100%-rate false positive. Keep
+    // colon-required. This exclusion is per #949 clarification Q5→C.
     const sourceHadQuestionHeadings = /(?:^|\n)###\s+Q\d+:/.test(comment.body);
 
-    // FR-005: anchor the `Q<n>:` opener at line start (^ or newline) so that
-    // mid-prose references like "as per Q1: yes" do not capture as answers.
-    const regex =
-      /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
+    // FR-005: opener is line-anchored via `(?:^|\n)` inside QN_OPENER_PATTERN
+    // so mid-prose references like "as per Q1: yes" do not capture as
+    // answers. Colon-less opener additionally requires a markdown heading
+    // (per #949 Q2→A), so a bare `Q1\n…` cannot open a block.
+    //
+    // Capture-group layout (from QN_OPENER_PATTERN's two disjunction arms
+    // plus the outer body `(.*?)`):
+    //   [1] Q number (colon-less arm)
+    //   [2] topic/trailing (colon-less arm)
+    //   [3] Q number (colon-bearing arm)
+    //   [4] answer/trailing (colon-bearing arm)
+    //   [5] block body between opener and terminator
+    const regex = new RegExp(
+      `${QN_OPENER_PATTERN}(.*?)${QN_TERMINATOR_LOOKAHEAD}`,
+      'gs',
+    );
 
     let match: RegExpExecArray | null;
     while ((match = regex.exec(comment.body)) !== null) {
-      const numStr = match[1];
-      const answerStr = match[2];
-      if (!numStr || answerStr === undefined) continue;
-      const questionNumber = parseInt(numStr, 10);
-      let answer = answerStr.trim();
+      const { qn, trailing } = pickQnMatch(match);
+      if (Number.isNaN(qn)) continue;
+      const bodyText = match[5] ?? '';
 
-      // When Q is in a heading (### Q1: Topic), the captured text starts with
-      // the topic name, not the answer. Look for an embedded **Answer** line.
-      if (answer.includes('\n')) {
-        const embedded = extractEmbeddedAnswer(answer);
-        if (embedded) {
-          answer = embedded;
-        }
-      }
+      // Combine the opener's trailing (topic/answer on the opener line) with
+      // the body (subsequent lines up to the terminator). This mirrors the
+      // old single `.*?` capture semantics for downstream extraction.
+      const combined = trailing + bodyText;
 
-      // FR-002: defense-in-depth — if the captured answer contains
-      // question-side markup, treat it as a leaked bot question body, not an
-      // answer. Skip and warn so operators can spot near-misses.
-      if (answer.includes('**Question**:') || answer.includes('**Context**:')) {
+      // FR-002: defense-in-depth on the raw combined block content. If the
+      // block carries question-side markup, treat it as a leaked bot question
+      // body, not an answer. Sniffing before extraction catches cockpit-shaped
+      // bodies that would otherwise have a clean `**Answer:**` value strip
+      // the leaked `**Question**:` away.
+      if (combined.includes('**Question**:') || combined.includes('**Context**:')) {
         logger.warn(
           {
             code: 'SKIPPED_SUSPICIOUS_ANSWER',
             commentId: comment.id,
-            questionNumber,
-            excerpt: answer.slice(0, 120),
+            questionNumber: qn,
+            excerpt: combined.trim().slice(0, 120),
           },
           'Skipped suspicious clarification answer (contains question-side markup)',
         );
         continue;
       }
 
+      // Prefer an embedded `**Answer**` extraction (cockpit or engine
+      // dialect) over the raw trimmed block. For a bare `Q1: X` shape,
+      // extraction returns undefined and we fall through to `combined.trim()`.
+      const embedded = extractEmbeddedAnswer(combined);
+      const answer = embedded ?? combined.trim();
+
       // Skip placeholder text that is not a real answer
-      if (answer && answer !== '*Pending*' && questionNumbers.includes(questionNumber)) {
-        answers.set(questionNumber, {
+      if (answer && answer !== '*Pending*' && questionNumbers.includes(qn)) {
+        answers.set(qn, {
           answer,
           sourceCommentId: comment.id,
           sourceHadQuestionHeadings,
