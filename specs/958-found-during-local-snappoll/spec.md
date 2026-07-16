@@ -106,8 +106,8 @@ Accepting `1. A` / prose answer forms would be a further permissiveness win, but
 **So that** planning never proceeds on fabricated answers derived from restating the questions.
 
 **Acceptance Criteria**:
-- [ ] A comment authored by the cluster (`viewerDidAuthor === true`) is only treated as an answer source when it carries an engine-written answer marker.
-- [ ] When the FR-004 `TRANSITION_WITH_QUESTION_HEADINGS` detector fires, integration is blocked and the gate remains armed; behaviour is fail-closed, not `logger.warn`.
+- [ ] A comment authored by the cluster (`viewerDidAuthor === true`) is only treated as an answer source when it carries the engine-written answer marker (`<!-- generacy-clarification-answers:<batch> -->`, see FR-003).
+- [ ] When the FR-004 `TRANSITION_WITH_QUESTION_HEADINGS` detector fires on a human-authored comment, only that comment is skipped; when it fires on a cluster-self-authored comment (`viewerDidAuthor === true`), the entire poll's integration is aborted and the gate stays armed.
 - [ ] Replaying the snappoll#7 scenario (bot posts questions, no human reply) results in zero integrated answers, `waiting-for:clarification` retained, `phase:plan` never applied.
 - [ ] `hasPendingClarifications` returns `true` on missing spec dir / unreadable / unparseable file (unknown → pause).
 
@@ -130,8 +130,9 @@ Accepting `1. A` / prose answer forms would be a further permissiveness win, but
 **So that** I do not have to know to also toggle the `completed:clarification` label.
 
 **Acceptance Criteria**:
-- [ ] A `ClarificationAnswerMonitorService` (mirroring `MergeConflictMonitorService`) polls issues in `waiting-for:clarification` + `agent:paused`.
-- [ ] On finding a new human-authored comment that yields at least one integrated answer, the monitor applies `completed:clarification` (or the equivalent resume trigger).
+- [ ] A `ClarificationAnswerMonitorService` (mirroring `MergeConflictMonitorService`'s `enqueueIfAbsent` pattern) polls issues in `waiting-for:clarification` + `agent:paused`.
+- [ ] On finding a new human-authored comment, the monitor enqueues a resume queue item. The monitor never applies `completed:clarification`. The phase loop (which has a checkout) performs integration; the gate deactivates naturally when `hasPendingClarifications === false`, or re-arms and pauses again if questions remain unparsed.
+- [ ] `completed:clarification` remains reserved for the human's explicit "proceed anyway, I know parsing failed" force-advance override.
 - [ ] No `issue_comment` webhook subscription is required — the monitor is authoritative.
 
 ### US4: Partial-parse failure is observable, not silent (P2)
@@ -150,17 +151,18 @@ Accepting `1. A` / prose answer forms would be a further permissiveness win, but
 |----|-------------|----------|-------|
 | FR-001 | Authorship — not content — determines whether a comment is an answer source. Use GraphQL `viewerDidAuthor` (already fetched by #910's plumbing) to classify. | P1 | Replaces L488 `.includes('**Question**:')` sniff. |
 | FR-002 | Human-authored comments are parsed permissively and never require a marker. | P1 | Primary supported flow. |
-| FR-003 | Cluster-self-authored comments are answer sources only when they carry an engine-written answer marker (cockpit-stamped when relaying a human's answers). | P1 | Narrow correction to #910's "bot == authoritative" conflation. |
-| FR-004 | `TRANSITION_WITH_QUESTION_HEADINGS` blocks integration and leaves the gate armed. | P1 | Convert `logger.warn` to fail-closed control flow. |
+| FR-003 | Cluster-self-authored comments are answer sources only when they carry the engine-written answer marker `<!-- generacy-clarification-answers:<batch> -->` (HTML comment, mirrors the existing `clarification:batch-N` shape). The marker MUST be written by deterministic code, never by an agent following prompt instructions — cockpit's current answer-relay path posts comments freehand via `gh issue comment` and MUST be refactored to post through a tool (extend `cockpit_advance` or add a sibling verb) that formats and stamps the marker deterministically. Both sides land together in this PR. | P1 | Narrow correction to #910's "bot == authoritative" conflation. Agent-authored markers reproduce this issue's root cause on the answer side. |
+| FR-004 | `TRANSITION_WITH_QUESTION_HEADINGS` fails closed with mixed blast radius: human-authored → skip only the offending comment (surviving human comments in the same poll integrate normally, gate stays armed only if pending questions remain); cluster-self-authored (`viewerDidAuthor === true`) → abort the entire poll's integration and leave the gate armed. Emit a warning identifying the offender in both branches. | P1 | Convert `logger.warn` to fail-closed control flow. Rationale: once FR-003 excludes bot self-authored comments on marker absence, any self-authored comment that both carries the marker and trips the detector signals a malfunction of unknown extent. |
 | FR-005 | Strip `> `-quoted lines before parsing; bound answer captures at quoted blocks (column-0 rule applied consistently). | P1 | Fixes quote-reply. |
 | FR-006 | A valid leading answer is preserved when trailing noise (including quoted question blocks) would otherwise fail the capture. | P1 | Split answer at first quoted line rather than discard. |
 | FR-007 | `hasPendingClarifications` fails closed: missing spec dir, unreadable file, and unparseable content all return `true` (= pause). | P1 | Currently returns `false` = advance. |
 | FR-008 | `completed:clarify` is granted only after gate evaluation, not before. | P2 | `onPhaseComplete(phase)` at phase-loop.ts:723 moves below the gate check at :731; retract-on-hit code path (`label-manager.ts` L215-231) can then be simplified. |
 | FR-009 | The safety net (`postClarifications()`) runs unconditionally on the clarify phase, not only in the gate-active branch. | P2 | Move above `if (!gateActive) continue` at phase-loop.ts:771. |
 | FR-010 | Parse failures during answer integration are reported to the issue (comment + relay event), including question indices that remained `*Pending*`. | P2 | Silent partial-advance is the anti-goal. |
-| FR-011 | Introduce `ClarificationAnswerMonitorService` polling `waiting-for:clarification` + `agent:paused` issues, integrating new human comments, and resuming on success. | P2 | Mirror `MergeConflictMonitorService` (#898). |
-| FR-012 | The engine's `*Pending*` placeholder is unified: prompt (`clarify.ts` L55 `[Leave empty for now]`), parser (`clarification-poster.ts` L303), and write-back regex (L738-740) all agree on one literal. | P2 | Latent — an agent that follows its own prompt marks every question answered and skips every gate. |
-| FR-013 | Cleanup: reset `christrudelpw/snappoll#7`'s plan and tasks (currently `phase:tasks` + `completed:plan`) since they derive from five fabricated answers. #5/#6/#8 (correctly paused) and #2/#3/#4 (genuine human answers) untouched. | P3 | One-shot repair, not a code change. |
+| FR-011 | Introduce `ClarificationAnswerMonitorService` polling `waiting-for:clarification` + `agent:paused` issues. On a new human-authored comment, enqueue a resume queue item via `enqueueIfAbsent` (mirrors `MergeConflictMonitorService.enqueueIfAbsent` at `merge-conflict-monitor-service.ts` L113-169). The monitor MUST NOT apply `completed:clarification` — that label remains the human's explicit force-advance override. Integration is performed by the phase loop (which has a checkout); if all pending questions resolve the gate deactivates naturally, otherwise it re-arms and pauses again. | P2 | Mirror `MergeConflictMonitorService` (#898). Rejected alternative: applying `completed:clarification` from the monitor would rebuild this issue's own bug (single answer out of five force-advances into plan). |
+| FR-012 | The engine's pending placeholder is unified via a single shared constant `PENDING_ANSWER_LITERAL` (value `*Pending*`) imported by prompt template (`clarify.ts` L55), parser (`clarification-poster.ts` L303), and write-back regex (L738-740). The parser additionally treats empty, whitespace-only, and any square-bracketed placeholder (`[Leave empty for now]`, `[TBD]`, etc.) as pending — anything that is not a recognisable answer is pending; the failure direction is "ask again", never "advance". Bracketed tolerance subsumes the legacy `[Leave empty for now]` value, so no separate legacy handling is required. | P2 | Latent — an agent that follows its own prompt marks every question answered and skips every gate. Shared constant makes prompt/parser divergence structurally impossible rather than re-synchronising two copies that will drift again. |
+
+*(FR-013 removed per clarification Q5: snappoll#7 reset delivered out-of-band, not by this PR.)*
 
 ## Success Criteria
 
@@ -172,14 +174,14 @@ Accepting `1. A` / prose answer forms would be a further permissiveness win, but
 | SC-004 | Reply-only resume latency | Median <2× monitor poll interval from human reply to phase resumption | Instrument `ClarificationAnswerMonitorService`; measure over local snappoll rerun. |
 | SC-005 | Silent partial advance | 0 occurrences of `completed:clarification` applied while any `*Pending*` remains in `clarifications.md` without an accompanying parse-failure comment | Assert in integration test; count occurrences in production logs post-deploy. |
 | SC-006 | `hasPendingClarifications` fail-closed behaviour | 100% of unknown states (missing dir / unreadable / unparseable) return `true` | Unit test the three failure branches. |
-| SC-007 | Placeholder mismatch elimination | 0 divergent placeholder literals across prompt / parser / write-back | Grep; assert single constant re-used. |
+| SC-007 | Placeholder mismatch elimination | 0 divergent placeholder literals across prompt / parser / write-back | Grep; assert `PENDING_ANSWER_LITERAL` is the single re-used constant. Additionally: parser recognises empty / whitespace-only / `[…]`-bracketed values as pending (unit test). |
 
 ## Assumptions
 
 - The GraphQL `viewerDidAuthor` field is already fetched on the answer-scanner surface (per #910's plumbing). If not, this spec depends on that fetch being added.
-- The engine-written answer marker used by cockpit-relayed human answers exists or can be added as part of this work (design decision to be nailed down in `/clarify` or `/plan`).
-- `MergeConflictMonitorService`'s polling cadence and pause-label conventions are the reference model for `ClarificationAnswerMonitorService`.
-- Cleanup of `christrudelpw/snappoll#7` is manual and does not require an engineering change beyond label / branch reset.
+- The engine-written answer marker `<!-- generacy-clarification-answers:<batch> -->` is defined and introduced by this PR (Q1 resolution). Cockpit's answer-relay path is refactored in the same PR so that answers are posted through a deterministic tool that stamps the marker — not by an agent free-writing the comment (which would reproduce this issue's exact lottery on the answer side, as the four-different-invented-markers table on #5/#6/#7/#8 documents).
+- `MergeConflictMonitorService`'s polling cadence, pause-label conventions, and `enqueueIfAbsent` resume pattern are the reference model for `ClarificationAnswerMonitorService`.
+- `christrudelpw/snappoll#7` reset is delivered out-of-band, not by this PR (Q5 resolution). If a general "detect fabricated-answer fingerprints across repos" recovery tool is wanted, it is a separate issue with a different shape.
 - Prose and numbered-list answer forms (`"go with A for the first"`, `1. A`) remain out of scope for this pass — permissiveness on those raises false-positive risk and should land only after authorship is the gate.
 
 ## Out of Scope
@@ -187,8 +189,9 @@ Accepting `1. A` / prose answer forms would be a further permissiveness win, but
 - Accepting prose or numbered-list answer forms.
 - Subscribing to the `issue_comment` webhook (the monitor is the chosen mechanism, not a webhook expansion).
 - Rewriting the marker-allowlist to enumerate agent-invented dialects (`speckit-clarify:batch-1`, `speckit-stage:clarification`, etc.). #909's approach is retired, not extended.
-- Cockpit-side changes to how human answers are relayed, beyond ensuring the engine-written answer marker is present on cockpit-authored comments.
 - Multi-repo / cross-cluster clarification flows.
+- Cleanup of `christrudelpw/snappoll#7` (label reset + branch discard). Tracked as a separate out-of-band ops task; original FR-013 removed per Q5.
+- Any general "detect fabricated-answer fingerprints across all repos" recovery tooling. If wanted, filed as its own issue.
 
 ---
 
