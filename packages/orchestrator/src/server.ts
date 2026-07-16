@@ -507,6 +507,15 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         webhookSetupService.ensureWebhooks(channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });
+      } else {
+        // #954: surface the deliberate webhook-setup opt-out rather than
+        // staying silent. Fires whenever a smee pipeline starts (static,
+        // persisted, or provisioned channel) while auto-setup is disabled —
+        // no GitHub webhooks will be created for the monitored repos.
+        server.log.info(
+          { remediation: ['GENERACY_WEBHOOK_SETUP_ENABLED', 'orchestrator.webhookSetup.enabled'] },
+          'Webhook auto-setup disabled; no GitHub webhooks will be created for monitored repos',
+        );
       }
     };
 
@@ -532,7 +541,22 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
               );
               startSmeePipeline(result.channelUrl);
             } else {
-              server.log.warn('No smee channel URL available — cluster is webhook-less, falling back to polling');
+              // #954: the cluster is genuinely webhook-less — no static URL,
+              // no persisted channel, and provisioning failed — so polling is
+              // the only feeder. Emit the polling-fallback summary with the
+              // resulting latency characteristics + remediation pointers. This
+              // is the true "no smee" moment under the #952 resolver model
+              // (not construction time, where a channel may still be resolved).
+              server.log.warn(
+                {
+                  pollIntervalMs: monitorConfig.pollIntervalMs,
+                  completedCheckInterval: LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+                  processLatencyMs: monitorConfig.pollIntervalMs,
+                  completedLatencyMs: monitorConfig.pollIntervalMs * LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+                  remediation: ['SMEE_CHANNEL_URL', 'orchestrator.smeeChannelUrl'],
+                },
+                'No smee channel configured; polling fallback active',
+              );
             }
           })
           .catch((error) => {
@@ -724,6 +748,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           displayName: config.cluster?.displayName,
         },
         githubAuth: () => githubAuthHealth?.snapshot(),
+        smeeConfigured: !!config.smee.channelUrl,
       });
       await setupDispatchRoutes(server, queueAdapter);
     } else {
@@ -752,6 +777,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             displayName: config.cluster?.displayName,
           },
           githubAuth: () => githubAuthHealth?.snapshot(),
+          smeeConfigured: !!config.smee.channelUrl,
         },
       });
 

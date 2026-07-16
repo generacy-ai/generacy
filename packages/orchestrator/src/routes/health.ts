@@ -26,6 +26,13 @@ export interface HealthCheckOptions {
    * (worker mode, or wizard activation has not completed).
    */
   githubAuth?: () => GitHubAuthSnapshot | undefined;
+  /**
+   * Snapshot of `config.smee.channelUrl` at server construction time
+   * (coerced to boolean via `!!`). Not a getter — the value cannot change
+   * at runtime. When omitted, the `smeeConfigured` field is absent from
+   * the response entirely.
+   */
+  smeeConfigured?: boolean;
 }
 
 const GITHUB_AUTH_SCHEMA = {
@@ -79,6 +86,7 @@ export async function setupHealthRoutes(
               version: { type: 'string' },
               codeServerReady: { type: 'boolean' },
               controlPlaneReady: { type: 'boolean' },
+              smeeConfigured: { type: 'boolean' },
               displayName: { type: 'string' },
               clusterId: { type: 'string' },
               githubAuth: GITHUB_AUTH_SCHEMA,
@@ -96,6 +104,7 @@ export async function setupHealthRoutes(
               version: { type: 'string' },
               codeServerReady: { type: 'boolean' },
               controlPlaneReady: { type: 'boolean' },
+              smeeConfigured: { type: 'boolean' },
               displayName: { type: 'string' },
               clusterId: { type: 'string' },
               githubAuth: GITHUB_AUTH_SCHEMA,
@@ -141,6 +150,9 @@ export async function setupHealthRoutes(
         controlPlaneReady,
       };
 
+      if (options.smeeConfigured !== undefined) {
+        response.smeeConfigured = options.smeeConfigured;
+      }
       if (cluster?.displayName) {
         response.displayName = cluster.displayName;
       }
