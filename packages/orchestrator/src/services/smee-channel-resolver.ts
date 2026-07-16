@@ -3,7 +3,7 @@
  *
  * Resolves the smee channel URL for the orchestrator through a 4-tier
  * precedence: env-or-yaml (via presetUrl) → persisted file → provision
- * `POST https://smee.io/new` → persist. Never throws; every failure mode
+ * `GET https://smee.io/new` → persist. Never throws; every failure mode
  * folds into `return null` (spec FR-006: fail open, degrade to polling).
  *
  * Feature: #952
@@ -134,12 +134,12 @@ export class SmeeChannelResolver {
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
         const response = await this.fetchImpl(PROVISION_URL, {
-          method: 'POST',
+          method: 'GET',
           redirect: 'manual',
           signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
         });
-        if (response.status !== 302) {
-          lastError = `unexpected status ${response.status}`;
+        if (response.status < 300 || response.status >= 400) {
+          lastError = `expected 3xx with Location, got ${response.status}`;
         } else {
           const location = response.headers.get('location');
           if (!location) {

@@ -174,7 +174,7 @@ describe('#952: server smee provisioning', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith('https://smee.io/new', expect.objectContaining({
-      method: 'POST',
+      method: 'GET',
       redirect: 'manual',
     }));
 

@@ -5,14 +5,22 @@ import { join } from 'node:path';
 import { SmeeChannelResolver, SMEE_URL_PATTERN } from '../smee-channel-resolver.js';
 
 /**
- * Helper: 302 Response with Location header.
+ * Helper: redirect Response with optional Location header.
  */
-function make302(location: string | null): Response {
+function makeRedirect(status: number, location: string | null): Response {
   const headers = new Headers();
   if (location !== null) {
     headers.set('location', location);
   }
-  return new Response(null, { status: 302, headers });
+  return new Response(null, { status, headers });
+}
+
+/**
+ * Helper: 302 Response with Location header (thin wrapper preserved for
+ * existing call-sites).
+ */
+function make302(location: string | null): Response {
+  return makeRedirect(302, location);
 }
 
 describe('SmeeChannelResolver', () => {
@@ -397,5 +405,72 @@ describe('SmeeChannelResolver', () => {
 
     expect(result).toEqual({ channelUrl: persistedUrl, source: 'persisted' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('T15: 307 with valid Location → success, no retries (FR-005 case 1)', async () => {
+    const provisionedUrl = 'https://smee.io/3dCinhK6djyd2yK';
+    const fetchMock = vi.fn().mockResolvedValue(makeRedirect(307, provisionedUrl));
+    const sleepMock = vi.fn().mockResolvedValue(undefined);
+
+    const resolver = new SmeeChannelResolver(mockLogger, {
+      channelFilePath,
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
+      sleep: sleepMock,
+    });
+
+    const result = await resolver.resolve();
+
+    expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(sleepMock).not.toHaveBeenCalled();
+  });
+
+  it('T16: 200 with empty body / no Location → failure, retries exhausted, lastError matches FR-007 wording (FR-005 case 2, SC-003)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    const sleepMock = vi.fn().mockResolvedValue(undefined);
+
+    const resolver = new SmeeChannelResolver(mockLogger, {
+      channelFilePath,
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
+      sleep: sleepMock,
+    });
+
+    const result = await resolver.resolve();
+
+    expect(result).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sleepMock).toHaveBeenCalledWith(1000);
+    const l4 = mockLogger.warn.mock.calls.find(
+      (c) =>
+        c[1] ===
+        'Failed to provision smee channel after 2 attempts — cluster is webhook-less, falling back to polling',
+    );
+    expect(l4).toBeDefined();
+    const [ctx] = l4 as [Record<string, unknown>, string];
+    expect(ctx.lastError).toBe('expected 3xx with Location, got 200');
+  });
+
+  it('T17: 307 with Location not matching SMEE_URL_PATTERN → failure via pattern check (FR-005 case 3)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(makeRedirect(307, 'https://evil.com/x'));
+    const sleepMock = vi.fn().mockResolvedValue(undefined);
+
+    const resolver = new SmeeChannelResolver(mockLogger, {
+      channelFilePath,
+      fetch: fetchMock as unknown as typeof globalThis.fetch,
+      sleep: sleepMock,
+    });
+
+    const result = await resolver.resolve();
+
+    expect(result).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const l4 = mockLogger.warn.mock.calls.find(
+      (c) =>
+        c[1] ===
+        'Failed to provision smee channel after 2 attempts — cluster is webhook-less, falling back to polling',
+    );
+    expect(l4).toBeDefined();
+    const [ctx] = l4 as [Record<string, unknown>, string];
+    expect(ctx.lastError).toBe('Location does not match SMEE_URL_PATTERN');
   });
 });
