@@ -3,6 +3,9 @@ import {
   CLARIFICATION_QUESTION_MARKERS,
   commentCarriesQuestionMarker,
   matchClarificationQuestionMarker,
+  CLARIFICATION_ANSWER_MARKERS,
+  commentCarriesAnswerMarker,
+  matchClarificationAnswerMarker,
 } from '../clarification-markers.js';
 
 describe('CLARIFICATION_QUESTION_MARKERS', () => {
@@ -90,5 +93,80 @@ describe('matchClarificationQuestionMarker', () => {
     const body =
       '<!-- generacy-clarifications:42 -->\n<!-- generacy-stage:clarification -->\n### Q1: Topic';
     expect(matchClarificationQuestionMarker(body)).toBe('<!-- generacy-clarifications:');
+  });
+});
+
+describe('#958 CLARIFICATION_ANSWER_MARKERS', () => {
+  it('exposes exactly one initial dialect in declared order', () => {
+    expect([...CLARIFICATION_ANSWER_MARKERS]).toEqual([
+      '<!-- generacy-clarification-answers:',
+    ]);
+  });
+});
+
+describe('#958 commentCarriesAnswerMarker', () => {
+  it('returns true when the marker appears at column 0', () => {
+    const body = '<!-- generacy-clarification-answers:1 actor=chris ts=2026-07-16T00:00:00Z -->\n\nQ1: A';
+    expect(commentCarriesAnswerMarker(body)).toBe(true);
+  });
+
+  it('returns false when the marker is > block-quoted (column-0 rule)', () => {
+    const body = '> <!-- generacy-clarification-answers:1 -->\n\nQ1: A';
+    expect(commentCarriesAnswerMarker(body)).toBe(false);
+  });
+
+  it('returns false for a question-family marker (non-overlap)', () => {
+    expect(commentCarriesAnswerMarker('<!-- generacy-clarifications:42 -->')).toBe(false);
+    expect(commentCarriesAnswerMarker('<!-- generacy-clarification:1 -->')).toBe(false);
+    expect(commentCarriesAnswerMarker('<!-- generacy-stage:clarification -->')).toBe(false);
+    expect(commentCarriesAnswerMarker('<!-- generacy-cockpit:clarifications-batch:1 -->')).toBe(false);
+  });
+
+  it('returns false when the marker has leading whitespace', () => {
+    expect(commentCarriesAnswerMarker('  <!-- generacy-clarification-answers:1 -->')).toBe(false);
+    expect(commentCarriesAnswerMarker('\t<!-- generacy-clarification-answers:1 -->')).toBe(false);
+  });
+
+  it('returns false for empty body', () => {
+    expect(commentCarriesAnswerMarker('')).toBe(false);
+  });
+
+  it('returns false for body without any marker', () => {
+    expect(commentCarriesAnswerMarker('Q1: A\nQ2: B')).toBe(false);
+  });
+
+  it('returns true when the marker appears on a non-first line', () => {
+    const body = 'preamble\n<!-- generacy-clarification-answers:2 -->\nQ1: A';
+    expect(commentCarriesAnswerMarker(body)).toBe(true);
+  });
+});
+
+describe('#958 matchClarificationAnswerMarker', () => {
+  it('returns the exact prefix on match', () => {
+    const returned = matchClarificationAnswerMarker(
+      '<!-- generacy-clarification-answers:1 -->\nQ1: A',
+    );
+    expect(returned).toBe('<!-- generacy-clarification-answers:');
+  });
+
+  it('returns undefined for empty body', () => {
+    expect(matchClarificationAnswerMarker('')).toBeUndefined();
+  });
+
+  it('returns undefined for question-family markers', () => {
+    expect(
+      matchClarificationAnswerMarker('<!-- generacy-clarifications:42 -->'),
+    ).toBeUndefined();
+  });
+
+  it('answer-marker family and question-marker family are disjoint', () => {
+    // No member of one is a prefix of a member of the other (spec
+    // contracts/answer-marker.md §Non-overlap).
+    for (const answer of CLARIFICATION_ANSWER_MARKERS) {
+      for (const question of CLARIFICATION_QUESTION_MARKERS) {
+        expect(answer.startsWith(question)).toBe(false);
+        expect(question.startsWith(answer)).toBe(false);
+      }
+    }
   });
 });

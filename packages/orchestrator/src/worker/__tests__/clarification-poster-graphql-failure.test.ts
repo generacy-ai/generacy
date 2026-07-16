@@ -84,10 +84,14 @@ beforeEach(() => {
 
 describe('SC-008 retry-once success path', () => {
   it('throws once then resolves — answers still ingested on retry, one retry warn, NO REST call', async () => {
+    // #958 FR-003 — a viewerDidAuthor=true comment must carry the engine
+    // answer marker to be an answer source. Add the marker to keep this
+    // #910 retry regression test passing under the new authorship gate.
+    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const successPayload = [
       {
         id: 1,
-        body: 'Q1: OAuth 2.0',
+        body: `${answerMarker}\n\nQ1: OAuth 2.0`,
         author: 'cluster',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,

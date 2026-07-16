@@ -13,6 +13,7 @@ import type { PrManager } from './pr-manager.js';
 import type { ValidateFixHandler } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
+import { PENDING_ANSWER_LITERAL } from '@generacy-ai/workflow-engine';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
@@ -719,8 +720,39 @@ export class PhaseLoop {
         }
       }
 
-      // 5c. Mark phase as completed in labels
-      await labelManager.onPhaseComplete(phase);
+      // 5c. #958 FR-009 safety-net + FR-010 parse-failure reporting.
+      // Runs unconditionally on the clarify phase (used to sit inside the
+      // gate-active branch — went quiet exactly when needed). Integration
+      // happens here so the local clarifications.md reflects any freshly
+      // relayed answers before the gate check.
+      let clarifyIntegration:
+        | Awaited<ReturnType<typeof integrateClarificationAnswers>>
+        | undefined;
+      if (phase === 'clarify') {
+        try {
+          clarifyIntegration = await integrateClarificationAnswers(context, this.logger);
+        } catch (err) {
+          this.logger.warn(
+            { err: String(err) },
+            'integrateClarificationAnswers threw — continuing (gate check will pause on unknown state per FR-007)',
+          );
+        }
+        try {
+          await postClarifications(context, this.logger);
+        } catch (err) {
+          this.logger.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            'Failed to post clarification questions safety net — continuing',
+          );
+        }
+        // FR-010: surface parse failures on the issue + relay event.
+        if (
+          clarifyIntegration?.parseFailures !== undefined
+          && clarifyIntegration.parseFailures.length > 0
+        ) {
+          await this.reportClarificationParseFailures(context, clarifyIntegration);
+        }
+      }
 
       // 5d. Invoke phase:after handlers (post-commit, pre-gate)
       for (const handler of deps.phaseAfterHandlers ?? []) {
@@ -740,9 +772,9 @@ export class PhaseLoop {
         if (gate.condition === 'always') {
           gateActive = true;
         } else if (gate.condition === 'on-questions') {
-          // Defensive: integrate any GitHub answers into local clarifications.md
-          // before checking for pending questions.
-          await integrateClarificationAnswers(context, this.logger);
+          // #958 FR-008/FR-009 — integration + safety-net posting already ran
+          // in step 5c above. This branch is now a pure boolean check against
+          // the freshly-integrated file (fail-closed per FR-007).
           gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber);
           if (!gateActive) {
             this.logger.info(
@@ -809,17 +841,8 @@ export class PhaseLoop {
 
         await labelManager.onGateHit(phase, gate.gateLabel);
 
-        // Post clarification questions to the issue when clarify gate is hit
-        if (gate.gateLabel === 'waiting-for:clarification') {
-          try {
-            await postClarifications(context, this.logger);
-          } catch (error) {
-            this.logger.warn(
-              { error: error instanceof Error ? error.message : String(error) },
-              'Failed to post clarification questions — continuing gate flow',
-            );
-          }
-        }
+        // #958 FR-009 — safety-net posting moved to step 5c so it runs on any
+        // clarify-phase completion, not only when the gate activates.
 
         // Update the result with gate info
         result.gateHit = {
@@ -842,6 +865,14 @@ export class PhaseLoop {
 
         return { results, completed: false, lastPhase: phase, gateHit: true };
       }
+
+      // 6b. #958 FR-008 — grant `completed:<phase>` only after every gate
+      // evaluation returned "skip" (either not active, or already satisfied).
+      // The pre-#958 placement (before gate check) meant any code path that
+      // skipped the gate left the advance-authorizing label in place. This
+      // ordering also lets `LabelManager.onGateHit` drop its dead-code
+      // retract-the-completed-label branch (T012).
+      await labelManager.onPhaseComplete(phase);
 
       // 7. Record phase completion time
       const phaseTs = phaseTimestamps.get(phase);
@@ -1117,6 +1148,46 @@ export class PhaseLoop {
       fingerprint,
       occurrence,
     });
+  }
+
+  /**
+   * #958 FR-010 — Surface parse failures on the issue + relay event so that
+   * "failed to pick up the answers" and "planned anyway" are no longer one
+   * event. Best-effort: failures posting the comment are logged and
+   * swallowed — the pause itself (via the on-questions gate check that
+   * follows) is the load-bearing behavior; this is diagnostic.
+   */
+  private async reportClarificationParseFailures(
+    context: WorkerContext,
+    integration: import('./clarification-poster.js').IntegrationResult,
+  ): Promise<void> {
+    const failures = integration.parseFailures ?? [];
+    if (failures.length === 0) return;
+
+    const { owner, repo, issueNumber } = context.item;
+    const marker = `<!-- generacy-clarification-parse-failures:${issueNumber} -->`;
+    const perQuestion = failures
+      .map((f) => `  - Q${f.questionNumber}: ${f.reason}`)
+      .join('\n');
+    const body = `${marker}\n\n**Clarification answer integration reported parse failures.** The following questions remain \`${PENDING_ANSWER_LITERAL}\` and the phase will re-pause:\n\n${perQuestion}\n\nReply with \`Q<n>: <answer>\` for each failing question; the resume monitor will pick up your reply on the next poll cycle.`;
+
+    try {
+      await context.github.addIssueComment(owner, repo, issueNumber, body);
+    } catch (err) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err), issueNumber },
+        'Failed to post clarification parse-failure comment (non-fatal)',
+      );
+    }
+    this.logger.warn(
+      {
+        event: 'clarification.parse_failures',
+        issueNumber,
+        pendingAfter: integration.pendingAfter,
+        failures,
+      },
+      'Clarification integration surfaced parse failures',
+    );
   }
 
   /**

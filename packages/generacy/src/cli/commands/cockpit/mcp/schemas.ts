@@ -114,3 +114,35 @@ export const CockpitMergeInputSchema = z
     pr: z.number().int().positive().optional(),
   })
   .strict();
+
+/**
+ * #958 — `cockpit_relay_clarify_answers` input schema.
+ *
+ * Structured answer payload: keys are positive integers (question numbers),
+ * values are non-empty strings. The tool refuses to render an empty `Q<n>:`
+ * line; callers omit a key rather than pass an empty string.
+ *
+ * The `z.record(z.coerce.number()...)` shape accepts JSON object keys as
+ * strings (as they arrive over MCP) and coerces to numeric keys for the
+ * downstream formatter's `Record<number, string>` API.
+ */
+export const CockpitRelayClarifyAnswersInputSchema = z
+  .object({
+    issue: IssueRefInputSchema,
+    batch: z.number().int().min(0),
+    answers: z
+      .record(z.coerce.number().int().positive(), z.string().min(1))
+      .refine((r) => Object.keys(r).length > 0, {
+        message: 'answers map must contain at least one entry',
+      }),
+    actor: z
+      .string()
+      .regex(/^[A-Za-z0-9-]+$/, {
+        message: 'actor must match /^[A-Za-z0-9-]+$/',
+      })
+      .optional(),
+  })
+  .strict();
+export type CockpitRelayClarifyAnswersInput = z.infer<
+  typeof CockpitRelayClarifyAnswersInputSchema
+>;

@@ -12,13 +12,55 @@ import {
   isTrustedCommentAuthor,
   tryLoadCommentTrustConfig,
   type CommentTrustContext,
+  PENDING_ANSWER_LITERAL,
+  isPendingAnswerValue,
 } from '@generacy-ai/workflow-engine';
 import type { Comment as TrustComment } from '@generacy-ai/workflow-engine';
 import {
   commentCarriesQuestionMarker,
   matchClarificationQuestionMarker,
+  commentCarriesAnswerMarker,
 } from './clarification-markers.js';
 import type { WorkerContext, Logger } from './types.js';
+
+/**
+ * #958 FR-005 / FR-006 — pre-parse pass over a comment body that drops every
+ * line whose first non-EOL character is `>` (the column-0 quote rule already
+ * codified for markers in `clarification-markers.ts`).
+ *
+ * Returns `stripped` — the body with all quoted lines filtered out — plus a
+ * `headBeforeFirstQuote` slice preserved for FR-006 diagnostics. The parser
+ * runs against `stripped` so:
+ *   - a quoted `> ### Q2: …` cannot bleed into Q1's capture (FR-005), AND
+ *   - a valid trailing `Q2: …` sitting after a quoted block still integrates
+ *     (a naive "cut at first quote" would discard it — spec §Observed B row 2).
+ *
+ * The `> `-prefix predicate is the same one `clarification-markers.ts` uses
+ * for column-0 marker matching — a leading tab / space disqualifies. Blank
+ * lines (`>` followed by nothing) also drop.
+ */
+export function stripQuotedLines(body: string): {
+  stripped: string;
+  headBeforeFirstQuote: string;
+} {
+  const lines = body.split('\n');
+  const nonQuoted = lines.filter((line) => !line.startsWith('>'));
+  const firstQuotedIdx = lines.findIndex((line) => line.startsWith('>'));
+  const headBeforeFirstQuote =
+    firstQuotedIdx === -1 ? body : lines.slice(0, firstQuotedIdx).join('\n');
+  return {
+    stripped: nonQuoted.join('\n'),
+    headBeforeFirstQuote,
+  };
+}
+
+/**
+ * Regex escape helper for building the write-back pattern with a shared
+ * literal — `PENDING_ANSWER_LITERAL` contains `*` metacharacters.
+ */
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Resolve cluster bot login from env vars (identity.ts chain). The
@@ -248,7 +290,7 @@ export function isQuestionComment(body: string): boolean {
  * **Question**: ...
  * **Options**: (optional)
  * - A) ...
- * **Answer**: *Pending*
+ * **Answer**: PENDING_ANSWER_LITERAL
  * ```
  */
 export function parseClarifications(content: string): ClarificationQuestion[] {
@@ -297,10 +339,12 @@ export function parseClarifications(content: string): ClarificationQuestion[] {
       if (options.length === 0) options = undefined;
     }
 
-    // Check answer status
+    // Check answer status. Empty / whitespace-only / any `[…]`-bracketed
+    // placeholder / literal PENDING_ANSWER_LITERAL all read as "not
+    // answered" (FR-012).
     const answerMatch = section.match(/\*\*Answer\*\*:\s*(.+)/);
     const answerText = answerMatch ? answerMatch[1]!.trim() : '';
-    const answered = !!answerText && answerText !== '*Pending*';
+    const answered = !!answerText && !isPendingAnswerValue(answerText);
 
     const q: ClarificationQuestion = {
       number,
@@ -372,11 +416,19 @@ export function formatComment(questions: ClarificationQuestion[], issueNumber: n
 // ---------------------------------------------------------------------------
 
 /**
- * Check whether the clarify phase produced pending questions.
+ * #958 FR-007 — Check whether the clarify phase produced pending questions.
  *
- * Returns `true` if `clarifications.md` exists in the spec directory and
- * contains at least one unanswered question. Used by the phase loop to
- * evaluate the `on-questions` gate condition.
+ * Fail-closed contract: unknown states pause on a human gate. The three
+ * unknown branches all return `true`:
+ *  - missing spec directory
+ *  - `readFileSync` throws (unreadable / permission / I/O)
+ *  - non-empty file content with zero parsed questions (parse failure)
+ *
+ * Legit empty file (`content.trim() === ''`) is the ONE branch that returns
+ * `false`: a `clarifications.md` file with no questions at all is a valid
+ * post-clarify state.
+ *
+ * Returns `true` when at least one parsed question is unanswered.
  */
 export function hasPendingClarifications(
   checkoutPath: string,
@@ -384,7 +436,7 @@ export function hasPendingClarifications(
 ): boolean {
   const specsDir = join(checkoutPath, 'specs');
   const specDir = findSpecDir(specsDir, issueNumber);
-  if (!specDir) return false;
+  if (!specDir) return true;
 
   const clarificationsPath = join(specsDir, specDir, 'clarifications.md');
 
@@ -392,10 +444,15 @@ export function hasPendingClarifications(
   try {
     content = readFileSync(clarificationsPath, 'utf-8');
   } catch {
-    return false;
+    return true;
   }
 
+  // Legit empty file — no questions is a valid resolved state.
+  if (content.trim() === '') return false;
+
   const questions = parseClarifications(content);
+  // Non-empty content that parsed to zero questions ⇒ parse failure; pause.
+  if (questions.length === 0) return true;
   return questions.some((q) => !q.answered);
 }
 
@@ -434,39 +491,63 @@ interface ParsedAnswer {
   sourceCommentId: number;
   /** true if the source comment body contains at least one `### Q<n>:` heading. */
   sourceHadQuestionHeadings: boolean;
+  /**
+   * #958 — carries the source comment's `viewerDidAuthor` state into the
+   * caller so FR-004 can pick the asymmetric blast-radius branch (skip vs
+   * abort) at integration time.
+   */
+  sourceViewerDidAuthor: boolean | undefined;
 }
 
 /**
- * Parse answers from GitHub issue comments.
+ * #958 — Parse answers from GitHub issue comments.
  *
- * Scans comment bodies for patterns like `Q1: answer text` and extracts
- * answers keyed by question number. Later answers for the same question
- * override earlier ones (last wins).
+ * Two properties this function guarantees over the pre-#958 version:
+ *  1. **FR-005 quote-stripping**: each comment body is split at the first
+ *     `>`-prefixed line via `stripQuotedLines()`. Only the head (before the
+ *     first quoted line) is parsed for `Q<n>:` answers. A quoted
+ *     `> ### Q2: …` cannot bleed into Q1's capture, and a trailing quoted
+ *     `> **Question**: …` cannot discard a valid leading answer (FR-006).
+ *  2. **Bounding on quoted headers**: the regex terminator also matches a
+ *     `> `-quoted `Q<n>:` line so any residual quoted question in the head
+ *     acts as a boundary (belt-and-suspenders after quote-stripping).
+ *
+ * Note: the L488 `.includes('**Question**:')` sniff is deleted. Authorship
+ * is decided by `viewerDidAuthor` in the caller (FR-001).
  *
  * Supports two answer formats:
- * - Simple:  `Q1: answer text`
- * - Heading: `### Q1: Topic\n**Answer: B** — explanation`
- *
- * For heading format, the actual answer is extracted from the embedded
- * `**Answer**` line rather than the topic name after `Q1:`.
+ *  - Simple:  `Q1: answer text`
+ *  - Heading: `### Q1: Topic\n**Answer: B** — explanation`
  */
 function parseAnswersFromComments(
-  comments: Array<{ id: number; body: string; created_at?: string }>,
+  comments: Array<{
+    id: number;
+    body: string;
+    created_at?: string;
+    viewerDidAuthor?: boolean;
+  }>,
   questionNumbers: number[],
-  logger: Logger,
+  _logger: Logger,
 ): Map<number, ParsedAnswer> {
   const answers = new Map<number, ParsedAnswer>();
 
   for (const comment of comments) {
-    const sourceHadQuestionHeadings = /(?:^|\n)###\s+Q\d+:/.test(comment.body);
+    // FR-005/FR-006: drop every `> `-quoted line, then parse the surviving
+    // body. Quoted `> ### Q<n>:` cannot bleed into a prior capture; a valid
+    // `Q<n>:` sitting after a quoted block still integrates.
+    const { stripped } = stripQuotedLines(comment.body);
+    const body = stripped;
+    const sourceHadQuestionHeadings = /(?:^|\n)###\s+Q\d+:/.test(body);
 
-    // FR-005: anchor the `Q<n>:` opener at line start (^ or newline) so that
-    // mid-prose references like "as per Q1: yes" do not capture as answers.
+    // Anchor the `Q<n>:` opener at line start (^ or newline) so that mid-prose
+    // references like "as per Q1: yes" do not capture as answers. The
+    // terminator also matches a `> `-quoted opener as a defense-in-depth
+    // bound (quote-stripping should already have removed it).
     const regex =
-      /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
+      /(?:^|\n)(?:#{1,6}\s+)?(?:\*\*)?Q(\d+)(?:\*\*)?:\s*(.*?)(?=(?:\n(?:>\s*)?(?:#{1,6}\s+)?(?:\*\*)?Q\d+(?:\*\*)?:)|$)/gs;
 
     let match: RegExpExecArray | null;
-    while ((match = regex.exec(comment.body)) !== null) {
+    while ((match = regex.exec(body)) !== null) {
       const numStr = match[1];
       const answerStr = match[2];
       if (!numStr || answerStr === undefined) continue;
@@ -482,28 +563,15 @@ function parseAnswersFromComments(
         }
       }
 
-      // FR-002: defense-in-depth — if the captured answer contains
-      // question-side markup, treat it as a leaked bot question body, not an
-      // answer. Skip and warn so operators can spot near-misses.
-      if (answer.includes('**Question**:') || answer.includes('**Context**:')) {
-        logger.warn(
-          {
-            code: 'SKIPPED_SUSPICIOUS_ANSWER',
-            commentId: comment.id,
-            questionNumber,
-            excerpt: answer.slice(0, 120),
-          },
-          'Skipped suspicious clarification answer (contains question-side markup)',
-        );
-        continue;
-      }
-
-      // Skip placeholder text that is not a real answer
-      if (answer && answer !== '*Pending*' && questionNumbers.includes(questionNumber)) {
+      // FR-012: broadened pending tolerance — empty, whitespace-only,
+      // PENDING_ANSWER_LITERAL, and any `[…]`-bracketed placeholder are
+      // treated as not-an-answer.
+      if (!isPendingAnswerValue(answer) && questionNumbers.includes(questionNumber)) {
         answers.set(questionNumber, {
           answer,
           sourceCommentId: comment.id,
           sourceHadQuestionHeadings,
+          sourceViewerDidAuthor: comment.viewerDidAuthor,
         });
       }
     }
@@ -516,7 +584,27 @@ export interface IntegrationResult {
   /** Number of answers integrated into the file */
   integrated: number;
   /** Reason if nothing was integrated */
-  reason?: 'no-spec-dir' | 'no-file' | 'no-pending' | 'no-answers' | 'no-changes';
+  reason?:
+    | 'no-spec-dir'
+    | 'no-file'
+    | 'no-pending'
+    | 'no-answers'
+    | 'no-changes'
+    | 'aborted-cluster-self-detector';
+  /**
+   * #958 FR-010 — questions still pending (or reason-flagged) after this
+   * integration pass. Callers (phase-loop) render an issue comment + relay
+   * event when non-empty.
+   */
+  parseFailures?: Array<{
+    questionNumber: number;
+    reason:
+      | 'no-source-comment'
+      | 'transition-with-question-headings'
+      | 'pending-value';
+  }>;
+  /** #958 FR-010 — number of questions still pending after this pass. */
+  pendingAfter?: number;
 }
 
 /**
@@ -706,11 +794,6 @@ export async function integrateClarificationAnswers(
     }
   }
 
-  // FR-102 pre-filter has already dropped engine-authored questions comments;
-  // parseAnswersFromComments's FR-002 content sniff still catches unmarked
-  // question-shaped text as a second line of defense (FR-106).
-  const answerComments = trustedComments;
-
   // Post explainer comments for untrusted Q<N>: answers, before parsing.
   // Fire-and-forget: failures are non-fatal.
   await postUntrustedAnswerExplainers({
@@ -723,53 +806,136 @@ export async function integrateClarificationAnswers(
     logger,
   });
 
+  // #958 FR-001 / FR-003 — Authorship gate. `viewerDidAuthor === true`
+  // (cluster-self) requires the engine-written answer marker; anything else
+  // is parsed permissively. The L488 `.includes('**Question**:')` content
+  // sniff has been retired as an authorship signal — content is not
+  // authorship.
+  const answerComments: TrustComment[] = [];
+  for (const c of trustedComments) {
+    if (c.viewerDidAuthor === true) {
+      if (commentCarriesAnswerMarker(c.body)) {
+        answerComments.push(c);
+      } else {
+        logger.debug(
+          {
+            event: 'clarification-answer-scanner-self-unmarked',
+            commentId: c.id,
+            author: c.author,
+            issueNumber,
+          },
+          'Skipped cluster-self comment lacking engine-written answer marker (FR-003)',
+        );
+      }
+    } else {
+      // Human / undefined viewerDidAuthor — parse permissively (FR-002).
+      answerComments.push(c);
+    }
+  }
+
   const answers = parseAnswersFromComments(answerComments, pendingNumbers, logger);
   if (answers.size === 0) {
     return { integrated: 0, reason: 'no-answers' };
   }
 
-  // 4. Update the file content — replace *Pending* with actual answers
-  //    for each matched question
+  // 4. Update the file content — replace `PENDING_ANSWER_LITERAL` with actual
+  //    answers for each matched question. FR-004 asymmetric fail-close: if a
+  //    cluster-self answer trips `TRANSITION_WITH_QUESTION_HEADINGS`, abort
+  //    the entire poll's integration; if a human comment trips it, skip only
+  //    the offending question.
   let updatedContent = content;
+  const integratedNumbers = new Set<number>();
+  const parseFailures: NonNullable<IntegrationResult['parseFailures']> = [];
   for (const [questionNum, parsed] of answers) {
-    // Match the answer line within the correct question section.
-    // The pattern finds ### Q{N}: ... **Answer**: *Pending* and replaces
-    // the *Pending* part with the actual answer text.
-    const pattern = new RegExp(
-      `(### Q${questionNum}:[\\s\\S]*?\\*\\*Answer\\*\\*:\\s*)\\*Pending\\*`,
-    );
-    const previousContent = updatedContent;
-    updatedContent = updatedContent.replace(pattern, `$1${parsed.answer}`);
-
-    // FR-004: residual-race detector — if the transition actually happened
-    // (updatedContent changed) AND the source comment had `### Q<n>:` headings,
-    // warn. Both FR-001 and FR-002 let this comment through, so a matching
-    // structure here is a signal of an uncovered failure vector.
-    if (updatedContent !== previousContent && parsed.sourceHadQuestionHeadings) {
+    // Detect FR-004 case: source comment carried `### Q<n>:` headings.
+    if (parsed.sourceHadQuestionHeadings) {
+      if (parsed.sourceViewerDidAuthor === true) {
+        // Cluster-self AND question-headings — unknown-extent malfunction.
+        // Abort the entire poll's integration; leave the gate armed.
+        logger.warn(
+          {
+            code: 'TRANSITION_WITH_QUESTION_HEADINGS',
+            commentId: parsed.sourceCommentId,
+            issueNumber,
+            questionNumber: questionNum,
+            excerpt: parsed.answer.slice(0, 120),
+          },
+          'Cluster-self answer contains question headings — aborting integration (FR-004 fail-closed)',
+        );
+        return {
+          integrated: 0,
+          reason: 'aborted-cluster-self-detector',
+          pendingAfter: pendingQuestions.length,
+        };
+      }
+      // Human comment tripped it — skip only this question, keep others.
       logger.warn(
         {
           code: 'TRANSITION_WITH_QUESTION_HEADINGS',
           commentId: parsed.sourceCommentId,
           issueNumber,
           questionNumber: questionNum,
-          answer: parsed.answer.slice(0, 120),
+          excerpt: parsed.answer.slice(0, 120),
         },
-        'Integrated answer from a comment containing question headings — possible bot self-answer',
+        'Human answer contains question headings — skipping only this question (FR-004)',
       );
+      parseFailures.push({
+        questionNumber: questionNum,
+        reason: 'transition-with-question-headings',
+      });
+      continue;
+    }
+
+    // Match the answer line within the correct question section. The pattern
+    // finds `### Q{N}: ... **Answer**: <PENDING_ANSWER_LITERAL>` and replaces
+    // the literal with the actual answer text. Escaped because
+    // `PENDING_ANSWER_LITERAL` contains regex metacharacters.
+    const pattern = new RegExp(
+      `(### Q${questionNum}:[\\s\\S]*?\\*\\*Answer\\*\\*:\\s*)${escapeRegExp(PENDING_ANSWER_LITERAL)}`,
+    );
+    const previousContent = updatedContent;
+    updatedContent = updatedContent.replace(pattern, `$1${parsed.answer}`);
+    if (updatedContent !== previousContent) {
+      integratedNumbers.add(questionNum);
+    } else {
+      parseFailures.push({
+        questionNumber: questionNum,
+        reason: 'no-source-comment',
+      });
+    }
+  }
+
+  // Any pending question with no attempted answer at all → parse-failure entry
+  // so FR-010 reporting can surface it.
+  for (const p of pendingQuestions) {
+    if (!answers.has(p.number)) {
+      parseFailures.push({ questionNumber: p.number, reason: 'no-source-comment' });
     }
   }
 
   if (updatedContent === content) {
-    return { integrated: 0, reason: 'no-changes' };
+    const result: IntegrationResult = {
+      integrated: 0,
+      reason: 'no-changes',
+      pendingAfter: pendingQuestions.length,
+    };
+    if (parseFailures.length > 0) result.parseFailures = parseFailures;
+    return result;
   }
 
   writeFileSync(clarificationsPath, updatedContent);
   logger.info(
-    { count: answers.size, issueNumber },
+    { count: integratedNumbers.size, issueNumber },
     'Integrated GitHub answers into clarifications.md',
   );
 
-  return { integrated: answers.size };
+  const pendingAfter = pendingQuestions.length - integratedNumbers.size;
+  const result: IntegrationResult = {
+    integrated: integratedNumbers.size,
+    pendingAfter,
+  };
+  if (parseFailures.length > 0) result.parseFailures = parseFailures;
+  return result;
 }
 
 // ---------------------------------------------------------------------------

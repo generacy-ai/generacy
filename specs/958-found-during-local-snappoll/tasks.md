@@ -2,7 +2,7 @@
 
 **Input**: Design documents from `/specs/958-found-during-local-snappoll/`
 **Prerequisites**: plan.md (required), spec.md (required), research.md, data-model.md, quickstart.md, contracts/*.md
-**Status**: Complete
+**Status**: Complete — all tasks implemented (T008 deferred to agency companion PR — noted below).
 
 ## Format: `[ID] [P?] [Story] Description`
 - **[P]**: Can run in parallel (different files, no dependencies)
@@ -11,29 +11,29 @@
 
 ## Phase 1: Shared foundations (no story — prerequisites for every US)
 
-- [ ] T001 [P] Add `packages/orchestrator/src/worker/pending-literal.ts` exporting `PENDING_ANSWER_LITERAL = '*Pending*'` and `isPendingAnswerValue(v)`. Recognise empty / whitespace-only / any single `[…]`-bracketed placeholder / literal `*Pending*` as pending; anything else returns `false`. Per data-model.md §"New constants" invariants. Add companion unit test at `packages/orchestrator/src/worker/__tests__/pending-literal.test.ts` covering the eight invariant rows in data-model.md.
+- [X] T001 [P] Add `packages/workflow-engine/src/actions/builtin/speckit/pending-literal.ts` exporting `PENDING_ANSWER_LITERAL = '*Pending*'` and `isPendingAnswerValue(v)`. Recognise empty / whitespace-only / any single `[…]`-bracketed placeholder / literal `*Pending*` as pending; anything else returns `false`. Per data-model.md §"New constants" invariants. Per data-model.md D1: home is workflow-engine (orchestrator already depends on workflow-engine — reverse would form a cycle). Companion unit test at `packages/workflow-engine/src/actions/builtin/speckit/__tests__/pending-literal.test.ts`.
 
-- [ ] T002 [P] Extend `packages/orchestrator/src/worker/clarification-markers.ts` with `CLARIFICATION_ANSWER_MARKERS = ['<!-- generacy-clarification-answers:'] as const`, `matchClarificationAnswerMarker(body)`, and `commentCarriesAnswerMarker(body)`. Reuse the existing column-0 rule verbatim (mirror `commentCarriesQuestionMarker`). Add companion unit test at `packages/orchestrator/src/worker/__tests__/clarification-markers.test.ts` (or extend existing) proving: column-0 match, quoted-marker miss, non-overlap with `CLARIFICATION_QUESTION_MARKERS`.
+- [X] T002 [P] Extend `packages/orchestrator/src/worker/clarification-markers.ts` with `CLARIFICATION_ANSWER_MARKERS = ['<!-- generacy-clarification-answers:'] as const`, `matchClarificationAnswerMarker(body)`, and `commentCarriesAnswerMarker(body)`. Reuse the existing column-0 rule verbatim (mirror `commentCarriesQuestionMarker`). Companion unit test extended in `packages/orchestrator/src/worker/__tests__/clarification-markers.test.ts` proving: column-0 match, quoted-marker miss, non-overlap with `CLARIFICATION_QUESTION_MARKERS`.
 
-- [ ] T003 [P] Re-export `PENDING_ANSWER_LITERAL` from `packages/orchestrator/src/index.ts` (or wherever the package public entry lives) so `@generacy-ai/workflow-engine` can import it without an internal-path reach-through. If the resulting workflow-engine → orchestrator dependency creates a cycle, move `pending-literal.ts` into `packages/workflow-engine/src/` per data-model.md §"Cross-package import strategy" fallback and update T001's path.
+- [X] T003 [P] Re-exported `PENDING_ANSWER_LITERAL` + `isPendingAnswerValue` from `packages/workflow-engine/src/index.ts` (the package public entry). Home moved from orchestrator to workflow-engine per data-model.md D1 fallback to avoid the workflow-engine → orchestrator dependency cycle.
 
 ## Phase 2: Cockpit-side deterministic answer stamping (US1 — FR-003 prerequisite)
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 (needs PENDING_ANSWER_LITERAL + CLARIFICATION_ANSWER_MARKERS) -->
 
-- [ ] T004 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/clarification-answer-marker.ts` exporting `formatClarificationAnswerComment(marker)` per data-model.md §"formatClarificationAnswerComment" output shape. Mirror `packages/generacy/src/cli/commands/cockpit/manual-advance-marker.ts` for the regex-gated validation of `batch` / `actor` / `ts` / `answers` keys. Import `PENDING_ANSWER_LITERAL` for sparse-map rendering. Companion unit test asserts: header line matches `commentCarriesAnswerMarker` (round-trip), invalid `actor` / non-int `batch` / non-ISO `ts` throw, empty-string answer value throws.
+- [X] T004 [P] [US1] Added `packages/generacy/src/cli/commands/cockpit/clarification-answer-marker.ts` exporting `formatClarificationAnswerComment(marker)`. Mirrors `manual-advance-marker.ts` for regex-gated validation. Companion unit test at `packages/generacy/src/cli/commands/cockpit/__tests__/clarification-answer-marker.test.ts` covers round-trip with `commentCarriesAnswerMarker`, all invalid inputs, and ascending-key emission.
 
-- [ ] T005 [US1] Add `packages/generacy/src/cli/commands/cockpit/clarify-relay.ts` exporting `runClarifyRelay(input, deps)` per data-model.md §"runClarifyRelay". Reuse `resolveIssueContext`, `CockpitExit`, `resolveCockpitIdentity` from the cockpit dir. Posts the stamped comment via `gh.postIssueComment`, then applies `completed:clarification` label. Returns `{ commentUrl, completedLabel: 'completed:clarification' }`. Structured `answers: Record<number, string>` input — no free-form body accepted. Depends on T004 for the formatter.
+- [X] T005 [US1] Added `packages/generacy/src/cli/commands/cockpit/clarify-relay.ts` exporting `runClarifyRelay(input, deps)`. Reuses `resolveIssueContext`, `CockpitExit`, `resolveCockpitIdentity`. Posts marker-stamped comment, then applies `completed:clarification`. Idempotent: prior-batch marker detection returns `action: 'already-relayed'` without re-posting.
 
-- [ ] T006 [US1] Add `packages/generacy/src/cli/commands/cockpit/mcp/tools/cockpit_relay_clarify_answers.ts` — new MCP tool. Zod input schema `{ issue: IssueRefInput, batch: number, answers: Record<number, string>, actor?: string }`. Delegates to `runClarifyRelay`. Returns `ToolResult<ClarifyRelayResult>`. Match the envelope of `packages/generacy/src/cli/commands/cockpit/mcp/tools/cockpit_advance.ts`. Depends on T005.
+- [X] T006 [US1] Added `packages/generacy/src/cli/commands/cockpit/mcp/tools/cockpit_relay_clarify_answers.ts` — new MCP tool. Zod input schema `CockpitRelayClarifyAnswersInputSchema` in `mcp/schemas.ts`. Delegates to `runClarifyRelay`. Returns `ToolResult<CockpitRelayClarifyAnswersData>`. Envelope matches `cockpit_advance`.
 
-- [ ] T007 [US1] Register the new tool in `packages/generacy/src/cli/commands/cockpit/mcp/server.ts` via `server.registerTool('cockpit_relay_clarify_answers', ...)`. Depends on T006.
+- [X] T007 [US1] Registered `cockpit_relay_clarify_answers` in `packages/generacy/src/cli/commands/cockpit/mcp/server.ts`.
 
-- [ ] T008 [US1] Rewrite the cockpit-clarify skill file(s) under `.claude/skills/cockpit-clarify/` to invoke `cockpit_relay_clarify_answers` with a structured `{ [questionNumber]: string }` payload in place of the freehand `gh issue comment` step. This is the FR-003 load-bearing companion change — without it, the agent continues to free-write the answer marker and reproduces the bug on the answer side. Depends on T007.
+- [ ] T008 [US1] **Companion — deferred to agency repo.** The cockpit-clarify skill lives in `/workspaces/agency/packages/claude-plugin-cockpit/commands/clarify.md` (a separate repo). Update deferred to a follow-up PR in agency: the skill's step 6 currently writes the answer body via `gh issue comment --body-file`; that step must be replaced with an invocation of `cockpit_relay_clarify_answers({ issue, batch, answers: { [n]: text } })`. Tracked outside this PR since generacy and agency ship independently — the tool is available on the MCP server the moment this PR ships; the skill can adopt it in a subsequent agency release without a co-deploy handshake.
 
 ## Phase 3: Core parser + hasPendingClarifications rewrite (US1 + US2)
 <!-- Phase boundary: Complete Phase 1 before starting Phase 3 -->
 
-- [ ] T009 [US1] [US2] Rewrite `packages/orchestrator/src/worker/clarification-poster.ts`:
+- [X] T009 [US1] [US2] Rewrote `packages/orchestrator/src/worker/clarification-poster.ts`:
   1. Import `PENDING_ANSWER_LITERAL` + `isPendingAnswerValue` from `./pending-literal.js`; replace L303 `answerText !== '*Pending*'` and L502 `answer !== '*Pending*'` with `!isPendingAnswerValue(...)`; use `PENDING_ANSWER_LITERAL` in the L738 write-back regex builder.
   2. Import `matchClarificationAnswerMarker` + `commentCarriesAnswerMarker` from `./clarification-markers.js`.
   3. Add `stripQuotedLines(body)` helper (drop lines whose first non-EOL char is `>`) and integrate as a pre-parse pass in `parseAnswersFromComments`. Per research.md D4: return `{ headBeforeFirstQuote, remainder }` so FR-006 keeps the leading answer when trailing quoted noise would otherwise fail the capture.
@@ -44,22 +44,22 @@
   8. Rewrite `hasPendingClarifications` per FR-007 + research.md D6: `try/catch` around `readFileSync` → catch returns `true`; missing spec dir → `true`; non-empty content + zero parsed questions → `true`; content whose `.trim() === ''` → `false` (legit empty).
   9. Extend `IntegrationResult` type per data-model.md §"IntegrationResult extension" — add `pendingAfter?: number` and `parseFailures?: Array<{ questionNumber, reason }>` for FR-010; add the new `aborted-cluster-self-detector` reason to the union.
 
-- [ ] T010 [P] [US2] Update `packages/workflow-engine/src/actions/builtin/speckit/operations/clarify.ts` L55 prompt template: replace the literal `**Answer**: [Leave empty for now]` with `` `**Answer**: ${PENDING_ANSWER_LITERAL}` `` (template string). Import from wherever T003 landed the re-export. This is the FR-012 prompt/parser convergence.
+- [X] T010 [P] [US2] Updated `packages/workflow-engine/src/actions/builtin/speckit/operations/clarify.ts` L55 prompt template — replaced literal `[Leave empty for now]` with `${PENDING_ANSWER_LITERAL}` template interpolation, imported from `../pending-literal.js`. FR-012 prompt/parser convergence complete.
 
 ## Phase 4: Phase-loop wiring (US1 gate ordering, US4 observability)
 <!-- Phase boundary: Complete Phase 3 before starting Phase 4 (needs the extended IntegrationResult) -->
 
-- [ ] T011 [US1] [US4] Edit `packages/orchestrator/src/worker/phase-loop.ts`:
+- [X] T011 [US1] [US4] Edited `packages/orchestrator/src/worker/phase-loop.ts`:
   1. **FR-008**: Move `labelManager.onPhaseComplete(phase)` from L723 to AFTER the gate-check block (below L810). `completed:clarify` is granted only if no gate activated.
   2. **FR-009**: Hoist the `postClarifications()` safety-net call above the `if (!gateActive) continue` guard at L771. It runs on any clarify-phase completion, not only when the gate is active.
   3. **FR-010**: After `integrateClarificationAnswers`, if `IntegrationResult.parseFailures.length > 0`, post a parse-failure comment on the issue enumerating question indices AND emit a relay event on the same channel the existing progress relay uses.
 
-- [ ] T012 [P] [US1] Edit `packages/orchestrator/src/worker/label-manager.ts`: after T011 lands FR-008, the `onGateHit` retract-the-completed-label branch (L215-231, specifically the `completedLabel` in `removeLabels` list at L226-229) becomes dead code — `completed:<phase>` is never applied before the gate check. Drop `completedLabel` from that `removeLabels` list; keep the fn signature unchanged. Leave an in-code single-line comment noting FR-008 is the reason (per data-model.md §"LabelManager.onGateHit"). Can run in parallel with T011 because the two edits are in different files and the dead-code removal is independent of the ordering change.
+- [X] T012 [P] [US1] Edited `packages/orchestrator/src/worker/label-manager.ts` — dropped `completedLabel` from the `removeLabels` list in `onGateHit`. In-code comment explains the FR-008 dependency so a future reader doesn't re-add the dead retract branch.
 
 ## Phase 5: Reply-only resume monitor (US3)
 <!-- Phase boundary: Complete Phase 3 before starting Phase 5 (needs clarification-poster changes for identity/auth signalling) -->
 
-- [ ] T013 [US3] Add `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`. Mirror `packages/orchestrator/src/services/merge-conflict-monitor-service.ts` verbatim except:
+- [X] T013 [US3] Added `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`. Mirrors `merge-conflict-monitor-service.ts` verbatim with the documented divergences:
   - Precondition label constant: `WAITING_FOR_CLARIFICATION_LABEL = 'waiting-for:clarification'`.
   - Requires `agent:paused` co-present (per plan §"Existing constraints observed").
   - Event detection: after label match, fetch comments via `getIssueCommentsWithViewerAuth`; require ≥1 comment with `viewerDidAuthor === false`. Author-trust gating via `isTrustedCommentAuthor('answer-scanner', ...)` — same helper the phase-loop scanner uses.
@@ -67,31 +67,27 @@
   - Same `AuthHealthSink` + `JitTokenError` + `GhAuthError` branches as merge-conflict monitor (verbatim).
   - Export the class + `ClarificationAnswerEvent` + `ClarificationAnswerMonitorOptions` interfaces per data-model.md.
 
-- [ ] T014 [US3] Add the new export to `packages/orchestrator/src/services/index.ts`. Depends on T013.
+- [X] T014 [US3] Added export to `packages/orchestrator/src/services/index.ts`.
 
-- [ ] T015 [US3] Edit `packages/orchestrator/src/server.ts` to instantiate `ClarificationAnswerMonitorService` alongside `MergeConflictMonitorService`. Pass the same `tokenProvider`, `authHealth`, `githubAppCredentialId`, `clusterGithubUsername`. Register `.startPolling()` / `.stopPolling()` in the same lifecycle hooks as the sibling monitor. Depends on T013 + T014.
+- [X] T015 [US3] Wired `ClarificationAnswerMonitorService` in `packages/orchestrator/src/server.ts`: instantiated alongside `MergeConflictMonitorService` with identical DI, `startPolling()` fire-and-forget after listen, `stopPolling()` in cleanup.
 
 ## Phase 6: Integration + regression tests
 <!-- Phase boundary: Complete Phase 3–5 before starting Phase 6 -->
 
-- [ ] T016 [P] [US1] Add `packages/orchestrator/src/worker/__tests__/clarification-self-answer.test.ts` — snappoll#7 replay integration test (SC-001). Setup: mock issue where the bot posts 5 questions comment (`viewerDidAuthor === true`, no answer marker) and no human replies. Assert: zero integrated answers; `waiting-for:clarification` retained; `phase:plan` never applied; no `**Answer**:` fields populated with question restatement.
+- [X] T016 [P] [US1] Added `packages/orchestrator/src/worker/__tests__/clarification-self-answer.test.ts` — snappoll#7 replay + FR-003 reject/accept pairs (SC-001).
 
-- [ ] T017 [P] [US2] Add `packages/orchestrator/src/worker/__tests__/clarification-quote-reply.test.ts` — table-driven test against `integrateClarificationAnswers` covering all four required rows from spec §"Observed B" (SC-002): plain `Q1:` / `Q2:`, GitHub "Quote reply", answer restating question inline, `**Q1**:` / `**Q2**:`. Prose and numbered-list forms remain best-effort; do not assert on them.
+- [X] T017 [P] [US2] Added `packages/orchestrator/src/worker/__tests__/clarification-quote-reply.test.ts` — table-driven test covering the four required rows from spec §"Observed B" (SC-002).
 
-- [ ] T018 [P] [US1] Add unit test at `packages/orchestrator/src/worker/__tests__/has-pending-clarifications.test.ts` covering the three FR-007 branches (SC-006): missing spec dir → `true`; unreadable file (I/O throw) → `true`; non-empty content with parse failure → `true`; legit empty file (`content.trim() === ''`) → `false`.
+- [X] T018 [P] [US1] Added `packages/orchestrator/src/worker/__tests__/has-pending-clarifications.test.ts` — covers all FR-007 branches + FR-012 bracketed placeholder (SC-006).
 
-- [ ] T019 [P] [US3] Add `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts` — unit test covering: label precondition (only `waiting-for:clarification` + `agent:paused`), `viewerDidAuthor === false` gate, `enqueueIfAbsent` dedupe, no `completed:clarification` write, JIT / GhAuth error branches.
+- [X] T019 [P] [US3] Added `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts` — precondition filtering, viewerDidAuthor gate, cluster-self-with-marker exclusion, in-flight dedupe, MUST-NOT completed:clarification assertion.
 
-- [ ] T020 [P] [US1] Grep-based structural assertion (SC-003): add `packages/orchestrator/src/worker/__tests__/authorship-not-marker.test.ts` — a static-analysis-style test that greps the built source for `.includes('**Question**:')` (must be zero occurrences in `clarification-poster.ts` after T009) and asserts `STAGE_MARKERS` / marker-allowlist is not the sole authorship signal on the answer surface.
+- [X] T020 [P] [US1] Added `packages/orchestrator/src/worker/__tests__/authorship-not-marker.test.ts` — grep-based structural assertion (SC-003 + SC-007): the L488 sniff is gone; `*Pending*` / `[Leave empty for now]` appear only in `pending-literal.ts`.
 
 ## Phase 7: Release plumbing
 <!-- Phase boundary: Complete every earlier phase before starting Phase 7 -->
 
-- [ ] T021 Add `.changeset/958-authorship-gated-clarification-scanner.md`:
-  - `minor` on `@generacy-ai/orchestrator` (new capability: authorship-gated integration + new monitor service).
-  - `minor` on `@generacy-ai/generacy` (new capability: `cockpit_relay_clarify_answers` MCP tool + `runClarifyRelay`).
-  - `patch` on `@generacy-ai/workflow-engine` (prompt-template imports a re-exported constant, no public API change).
-  - Body: one paragraph pointing at spec.md §Summary + linking #958. This must be a **newly added** file in the PR diff — the CI gate requires it (see `CLAUDE.md` §"Changesets").
+- [X] T021 Added `.changeset/958-authorship-gated-clarification-scanner.md`: minor on orchestrator + generacy (new capabilities), patch on workflow-engine (prompt-template imports shared constant, no public API change). Body summarizes spec §Summary and links #958.
 
 ## Dependencies & Execution Order
 

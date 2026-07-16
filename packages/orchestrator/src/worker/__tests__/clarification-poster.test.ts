@@ -37,6 +37,16 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
   tryLoadCommentTrustConfig: vi.fn(() => undefined),
   wrapUntrustedData: vi.fn((content: string) => content),
+  // #958 — real implementations of the shared pending-answer helpers so the
+  // orchestrator code (which imports them) sees non-undefined values.
+  PENDING_ANSWER_LITERAL: '*Pending*',
+  isPendingAnswerValue: (v: string): boolean => {
+    if (typeof v !== 'string') return false;
+    const t = v.trim();
+    if (t === '') return true;
+    if (t === '*Pending*') return true;
+    return /^\[[^\]]*\]$/.test(t);
+  },
 }));
 
 // Marker predicate module — real implementation preserved via importOriginal,
@@ -466,27 +476,32 @@ describe('hasPendingClarifications', () => {
     expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
   });
 
-  it('returns false when specs dir does not exist', () => {
+  // #958 FR-007 — hasPendingClarifications fails closed. Missing spec dir,
+  // missing subdirectory match, and unreadable file all now return TRUE
+  // (== pause), not false (== advance). Unknown state must pause on a
+  // human gate. Sibling test file: `has-pending-clarifications.test.ts`
+  // covers the branches in more detail.
+  it('returns true when specs dir does not exist (FR-007 fail-closed)', () => {
     mockReaddirSync.mockImplementation(() => {
       throw new Error('ENOENT');
     });
 
-    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
-  it('returns false when no matching spec directory found', () => {
+  it('returns true when no matching spec directory found (FR-007)', () => {
     mockReaddirSync.mockReturnValue(['99-other-issue']);
 
-    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
-  it('returns false when clarifications.md does not exist', () => {
+  it('returns true when clarifications.md does not exist (FR-007)', () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockImplementation(() => {
       throw new Error('ENOENT');
     });
 
-    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
   it('returns false for empty clarifications file', () => {
@@ -666,7 +681,12 @@ describe('integrateClarificationAnswers', () => {
     expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 
-  it('integrates answers from heading format (### Q1: Topic + **Answer: X**)', async () => {
+  // #958 FR-004 — heading-format answers now trigger fail-closed skip for
+  // humans (per-question). This is a deliberate blast-radius trade to prevent
+  // bot self-answer via `### Q<n>:` headings. Cluster-relayed answers use the
+  // deterministic cockpit tool which emits `Q<n>:` lines (not headings).
+  // Heading-format was never in the SC-002 supported flow list.
+  it('#958 FR-004 — heading-format human answer is skipped (fail-closed)', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
     (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -675,58 +695,41 @@ describe('integrateClarificationAnswers', () => {
         body: `## Clarification Answers
 
 ### Q1: Authentication method
-**Answer: A** — OAuth 2.0 is the standard for our stack.
-
-We already use OAuth in the existing services.
+**Answer: A** — OAuth 2.0.
 
 ### Q2: Database choice
-**Answer: B** — Use PostgreSQL for consistency with our other services.`,
+**Answer: B** — Use PostgreSQL.`,
       },
     ]);
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(2);
-    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
-    expect(writtenContent).toContain('**Answer**: A — OAuth 2.0 is the standard for our stack.');
-    expect(writtenContent).toContain('**Answer**: B — Use PostgreSQL for consistency with our other services.');
-    // No phantom Q2 injected into Q1's section
-    expect(writtenContent).not.toContain('**Answer**: *Pending*');
+    expect(result.integrated).toBe(0);
+    expect(result.parseFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: 'transition-with-question-headings' }),
+      ]),
+    );
   });
 
-  it('heading-format answers override template instructions text (last wins)', async () => {
+  it('#958 FR-004 — heading-format on a bot comment + plain `Q<n>:` on human comment: only the human comment integrates', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
     (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
-      // System-posted comment with template instructions
+      // Bot's questions comment carries the questions marker — filtered by
+      // the question-marker pre-filter.
       {
         id: 1,
         body: `<!-- generacy-clarifications:42 -->
 ## Clarification Questions
 
 ### Q1: Authentication method
-**Context**: The spec mentions user auth.
-**Question**: Which authentication method?
-
----
-
-**How to answer**: Reply to this issue with your answers in the format:
-\`\`\`
-Q1: your answer here
-Q2: your answer here
-\`\`\`
-`,
+**Question**: Which authentication method?`,
       },
-      // User's answer in heading format
+      // Plain-format human answer — integrates via the supported SC-002 flow.
       {
         id: 2,
-        body: `## Answers
-
-### Q1: Authentication method
-**Answer: A** — Use OAuth 2.0.
-
-### Q2: Database choice
-**Answer**: PostgreSQL`,
+        body: `Q1: OAuth 2.0\nQ2: PostgreSQL`,
       },
     ]);
 
@@ -734,10 +737,8 @@ Q2: your answer here
 
     expect(result.integrated).toBe(2);
     const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
-    // Real answers should win, not "your answer here" from template
-    expect(writtenContent).toContain('**Answer**: A — Use OAuth 2.0.');
+    expect(writtenContent).toContain('**Answer**: OAuth 2.0');
     expect(writtenContent).toContain('**Answer**: PostgreSQL');
-    expect(writtenContent).not.toContain('your answer here');
   });
 
   it('does not treat *Pending* from question comments as real answers', async () => {
@@ -896,10 +897,13 @@ The following questions were identified during spec analysis. Please answer to u
 
     const result = await integrateClarificationAnswers(ctx, logger);
 
-    // The bot's own comment should be filtered out — no answers to integrate
+    // #958 — the bot's own comment is filtered by FR-004 (has `### Q<n>:`
+    // headings). No answers integrate. reason may be `no-changes` (parser
+    // captured candidate answers that were then FR-004-skipped) rather than
+    // `no-answers` (parser found none).
     expect(result.integrated).toBe(0);
-    expect(result.reason).toBe('no-answers');
     expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(['no-answers', 'no-changes']).toContain(result.reason);
   });
 
   it('still integrates real answers when bot comment is also present (#375)', async () => {
@@ -1191,14 +1195,15 @@ describe('parseAnswersFromComments — suspicious answer skip (FR-002, US2)', ()
     logger = createMockLogger();
   });
 
-  it('skips captured answer containing **Question**: markup and warns SKIPPED_SUSPICIOUS_ANSWER', async () => {
+  // #958 FR-001 — the L488 content-sniff branch was deleted. Authorship
+  // (viewerDidAuthor) is the gate, not content. These two former SC-002
+  // tests are inverted: a human comment with `**Question**:` or `**Context**:`
+  // markup inside a captured answer now integrates through the human /
+  // permissive branch, because content is not authorship. The bot self-answer
+  // scenario is covered by the T016 authorship gate (clarification-self-answer.test.ts).
+  it('#958 FR-001 — captured answer with **Question**: markup on a human comment integrates (content is not authorship)', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
-    // Craft a comment whose body looks like it slipped past isQuestionComment
-    // (no marker, no ## heading, no ### Q<n>: heading — so the section-scoped
-    // FR-001 rule can't fire), but whose captured Q1 answer text contains
-    // `**Question**:` markup — a signal the bot's question body is being read
-    // back as an answer.
     const bodyWithQuestionMarkup = `Q1: Some intro text
 **Question**: Which authentication method should be used?
 Q2: PostgreSQL`;
@@ -1208,6 +1213,8 @@ Q2: PostgreSQL`;
         id: 501,
         body: bodyWithQuestionMarkup,
         author: 'user',
+        // No viewerDidAuthor → permissive human branch. Under #958 this
+        // integrates without invoking the deleted L488 sniff.
         created_at: '',
         updated_at: '',
       },
@@ -1215,55 +1222,16 @@ Q2: PostgreSQL`;
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    // Q2 clean → integrates. Q1 tainted → skipped.
-    expect(result.integrated).toBe(1);
+    // Both Q1 and Q2 integrate — the content sniff is gone.
+    expect(result.integrated).toBe(2);
     const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
     expect(writtenContent).toContain('**Answer**: PostgreSQL');
-
-    // Q1 must remain pending.
-    const q1SectionStart = writtenContent.indexOf('### Q1:');
-    const q1SectionEnd = writtenContent.indexOf('### Q2:');
-    const q1Section = writtenContent.slice(q1SectionStart, q1SectionEnd);
-    expect(q1Section).toContain('*Pending*');
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: 'SKIPPED_SUSPICIOUS_ANSWER',
-        commentId: 501,
-        questionNumber: 1,
-        excerpt: expect.any(String),
-      }),
-      expect.stringContaining('Skipped suspicious clarification answer'),
-    );
-  });
-
-  it('skips captured answer containing **Context**: markup and warns SKIPPED_SUSPICIOUS_ANSWER', async () => {
-    mockReaddirSync.mockReturnValue(['42-feature-branch']);
-    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
-    const bodyWithContextMarkup = `Q1: Some text
-**Context**: The spec mentions user auth but doesn't specify.`;
-
-    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
-      {
-        id: 502,
-        body: bodyWithContextMarkup,
-        author: 'user',
-        created_at: '',
-        updated_at: '',
-      },
-    ]);
-
-    const result = await integrateClarificationAnswers(context, logger);
-
-    expect(result.integrated).toBe(0);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: 'SKIPPED_SUSPICIOUS_ANSWER',
-        commentId: 502,
-        questionNumber: 1,
-      }),
-      expect.stringContaining('Skipped suspicious clarification answer'),
-    );
+    // SKIPPED_SUSPICIOUS_ANSWER warn is deleted with the sniff.
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('SKIPPED_SUSPICIOUS_ANSWER');
+    }
   });
 
   it('does NOT warn when the answer is a clean human answer', async () => {
@@ -1304,11 +1272,12 @@ describe('integrateClarificationAnswers — residual race warn (FR-004)', () => 
     logger = createMockLogger();
   });
 
-  it('warns TRANSITION_WITH_QUESTION_HEADINGS when a real answer transitions from a comment with ### Q<n>: heading', async () => {
+  it('#958 FR-004 — human comment with ### Q<n>: heading is skipped (fail-closed per-question)', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
-    // Comment has ### Q1: heading (per data-model, sourceHadQuestionHeadings=true)
-    // but no markup, so it passes FR-001 and FR-002. Yet integration happens.
+    // Under #958 the FR-004 detector fires fail-closed: for humans, skip the
+    // offending question (parseFailures entry); for cluster-self, abort the
+    // whole poll.
     const body = `### Q1: my answer follows
 Q1: real answer text`;
     (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1317,14 +1286,22 @@ Q1: real answer text`;
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(1);
+    // Q1 was skipped (fail-closed) → 0 integrated on this fixture.
+    expect(result.integrated).toBe(0);
+    expect(result.parseFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          questionNumber: 1,
+          reason: 'transition-with-question-headings',
+        }),
+      ]),
+    );
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         code: 'TRANSITION_WITH_QUESTION_HEADINGS',
         commentId: 8001,
         issueNumber: 42,
         questionNumber: 1,
-        answer: expect.any(String),
       }),
       expect.stringContaining('question headings'),
     );

@@ -57,3 +57,11 @@ export {
   filterByAssignee,
   type FilterableIssue,
 } from './identity.js';
+
+// #958 T014 — Reactive resume monitor for `waiting-for:clarification` +
+// `agent:paused` pauses when a plain human comment arrives.
+export {
+  ClarificationAnswerMonitorService,
+  type ClarificationAnswerEvent,
+  type ClarificationAnswerMonitorOptions,
+} from './clarification-answer-monitor-service.js';

@@ -106,11 +106,17 @@ beforeEach(() => {
 });
 
 describe('SC-001 / SC-002 App-auth self-authored path', () => {
-  it('trusts a viewerDidAuthor=true + NONE comment (App-identity cluster answer)', async () => {
+  it('trusts a viewerDidAuthor=true comment carrying the #958 engine answer marker', async () => {
+    // #958 FR-003 update: viewerDidAuthor=true is only an answer source when
+    // the comment carries the engine-written answer marker. Without the
+    // marker, the cluster-self comment is skipped (the load-bearing
+    // correction to #910). This test adds the marker to preserve the
+    // #910 integration invariant under the new authorship gate.
+    const marker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
         id: 1,
-        body: 'Q1: OAuth 2.0',
+        body: `${marker}\n\nQ1: OAuth 2.0`,
         author: 'random-account',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,
@@ -131,6 +137,27 @@ describe('SC-001 / SC-002 App-auth self-authored path', () => {
     // (FR-010 / FR-002 — no silent REST fallback).
     expect(github.getIssueComments).not.toHaveBeenCalled();
     expect(github.getIssueCommentsWithViewerAuth).toHaveBeenCalledOnce();
+  });
+
+  it('#958 FR-003 — viewerDidAuthor=true without answer marker is skipped', async () => {
+    const github = createMockGithub([
+      {
+        id: 1,
+        body: 'Q1: OAuth 2.0',
+        author: 'cluster-bot',
+        authorAssociation: 'NONE',
+        viewerDidAuthor: true,
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    const context = createContext(github);
+    const logger = createMockLogger();
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 });
 
@@ -202,9 +229,10 @@ describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', 
     // Two self-authored comments:
     // (a) the bot's questions comment carrying the marker — must be filtered
     //     by isQuestionComment BEFORE parseAnswersFromComments.
-    // (b) a self-authored answers comment — must reach parseAnswersFromComments
-    //     and integrate.
+    // (b) a self-authored answers comment carrying the #958 engine answer
+    //     marker — must reach parseAnswersFromComments and integrate.
     const marker = clarificationMarker(42);
+    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
         id: 1,
@@ -217,7 +245,7 @@ describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', 
       },
       {
         id: 2,
-        body: 'Q1: OAuth 2.0',
+        body: `${answerMarker}\n\nQ1: OAuth 2.0`,
         author: 'cluster-bot',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,
@@ -279,6 +307,7 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
   // parsing, and the real answer must still integrate.
   it('marker-carrying self-authored comment is filtered out even when it contains a plausible Q1 answer', async () => {
     const marker = clarificationMarker(42);
+    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
         // (1) Marker-carrying self-authored comment. If the filter is
@@ -293,9 +322,11 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
         updated_at: '2026-07-10T00:00:00Z',
       },
       {
-        // (2) Distinct self-authored answer comment posted later.
+        // (2) Distinct self-authored answer comment posted later. #958
+        // FR-003: carries the engine answer marker so it's an authoritative
+        // answer source (viewerDidAuthor=true alone would be skipped now).
         id: 2,
-        body: 'Q1: REAL_ANSWER_OAUTH2',
+        body: `${answerMarker}\n\nQ1: REAL_ANSWER_OAUTH2`,
         author: 'cluster-bot',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,
@@ -318,10 +349,14 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
 
 describe('SC-006 no shape-drift warn on healthy self-authored comments', () => {
   it('does NOT emit "viewerDidAuthor missing/non-boolean" when field is populated (true)', async () => {
+    // #958 FR-003 — self-authored comments require the engine answer marker.
+    // Add it here so the comment still reaches the trust helper (which is
+    // what actually exercises the viewerDidAuthor shape-drift warn path).
+    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
         id: 1,
-        body: 'Q1: OAuth 2.0',
+        body: `${answerMarker}\n\nQ1: OAuth 2.0`,
         author: 'cluster',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,

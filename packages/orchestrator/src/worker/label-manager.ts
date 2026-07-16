@@ -214,18 +214,22 @@ export class LabelManager {
    */
   async onGateHit(phase: WorkflowPhase, gateLabel: string): Promise<void> {
     const phaseLabel = `phase:${phase}`;
-    const completedLabel = `completed:${phase}`;
+    // #958 FR-008 — `completed:<phase>` is applied AFTER the gate check in
+    // phase-loop.ts, so it is never present when this handler runs. Do NOT
+    // add it back to `removeLabels` — the paired T011 reorder ensures the
+    // label was never granted; a retract call here would be dead code, and
+    // future readers seeing "why isn't it removing completed?" should read
+    // this comment before re-adding it.
     await this.retryWithBackoff(async () => {
       await this.ensureRepoLabelsExist();
 
       this.logger.info(
         { phase, gateLabel, issue: this.issueNumber },
-        `Gate hit: removing ${phaseLabel} and ${completedLabel}, adding ${gateLabel} and agent:paused`,
+        `Gate hit: removing ${phaseLabel}, adding ${gateLabel} and agent:paused`,
       );
 
       await this.github.removeLabels(this.owner, this.repo, this.issueNumber, [
         phaseLabel,
-        completedLabel,
       ]);
       await this.applyLabels([gateLabel, 'agent:paused']);
     }, { site: 'gate-hit', labelOp: `addLabels([${gateLabel}, agent:paused])` });

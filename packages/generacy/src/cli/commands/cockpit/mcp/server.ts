@@ -21,6 +21,7 @@ import { cockpitMerge } from './tools/cockpit_merge.js';
 import { cockpitAwaitEvents } from './tools/cockpit_await_events.js';
 import { cockpitScopeAdd } from './tools/cockpit_scope_add.js';
 import { cockpitScopeRemove } from './tools/cockpit_scope_remove.js';
+import { cockpitRelayClarifyAnswers } from './tools/cockpit_relay_clarify_answers.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -30,6 +31,7 @@ import {
   CockpitMergeInputSchema,
   CockpitScopeAddInputSchema,
   CockpitScopeRemoveInputSchema,
+  CockpitRelayClarifyAnswersInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
@@ -128,6 +130,17 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
       inputSchema: CockpitScopeRemoveInputSchema,
     },
     async (args) => toCallToolResult(await cockpitScopeRemove(args as never, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_relay_clarify_answers',
+    {
+      description:
+        'Post a deterministic marker-stamped answer comment for a clarification batch and apply completed:clarification. Idempotent per batch.',
+      inputSchema: CockpitRelayClarifyAnswersInputSchema,
+    },
+    async (args) =>
+      toCallToolResult(await cockpitRelayClarifyAnswers(args as never, deps)),
   );
 
   server.registerTool(
