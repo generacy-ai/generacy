@@ -1,6 +1,10 @@
-# Feature Specification: VS Code Desktop tunnel hangs on "Starting tunnel…" — device-code auth event dropped/never surfaced
+# Feature Specification: ## Summary
+
+On a freshly deployed cluster (preview channel), clicking **"Connect with VS Code Desktop"** in the cloud dashboard hangs forever on "Starting tunnel…"
 
 **Branch**: `966-summary-freshly-deployed` | **Date**: 2026-07-16 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -57,94 +61,81 @@ The reliable-delivery gap is the core bug. Options, roughly in order of preferen
 
 Add a client-side timeout / Firestore `vscodeTunnelStatus` fallback in `use-vscode-tunnel.ts` so a lost SSE event degrades to an actionable error instead of an infinite "Starting tunnel…" spinner. Track separately per one-issue-per-repo convention.
 
+## Acceptance criteria
+
+- On a fresh cluster, clicking "Connect with VS Code Desktop" surfaces the GitHub device-code prompt (code + `github.com/login/device` URL) in the UI, and completing it connects the tunnel.
+- A tunnel status event emitted while the orchestrator relay is momentarily disconnected is delivered to the cloud once the relay reconnects (buffered/replayed, not dropped).
+- A user-triggered `vscode-tunnel-start` always yields a deliverable status event even when a child process already exists.
+- A tunnel that stays in `authorization_pending` past the device-code timeout emits a terminal `error` event (and is torn down), rather than hanging indefinitely.
+
 ## Environment
 
 - Release channel: **preview** (`ghcr.io/generacy-ai/cluster-base:preview`, orchestrator `0.0.0-preview-20260716184512-4c1ff4d`, code-server 4.96.4)
 - Local cluster deployed from staging (`app-staging.generacy.ai`), project `snappoll`.
 
----
 
 ## User Stories
 
-### US1: Device-code prompt reliably reaches the UI (P1)
+### US1: See the device code after clicking "Connect with VS Code Desktop"
 
-**As a** developer on a freshly deployed cluster,
-**I want** clicking "Connect with VS Code Desktop" to show me the GitHub device code and verification URL,
-**So that** I can authorize the tunnel and finish connecting VS Code Desktop instead of watching an indefinite spinner.
-
-**Acceptance Criteria**:
-- [ ] On a fresh cluster where the orchestrator relay was disconnected at `bootstrap-complete` (the current preview default), clicking "Connect with VS Code Desktop" surfaces the device code + `github.com/login/device` URL in the cloud UI within one relay reconnect cycle.
-- [ ] Completing the device-code flow transitions the tunnel to `connected` and registers with the VS Code tunnel relay (an outbound TCP connection to `global.rel.tunnels.api.visualstudio.com` becomes visible).
-- [ ] The flow works without the user restarting the cluster or manually re-triggering `vscode-tunnel-start`.
-
-### US2: Tunnel status survives a relay disconnect (P1)
-
-**As a** cluster operator,
-**I want** tunnel status events emitted while the orchestrator relay is momentarily disconnected to reach the cloud after reconnect,
-**So that** a single dropped event does not permanently strand the tunnel in `starting`.
+**As a** developer using a freshly deployed cluster,
+**I want** the GitHub device code and `github.com/login/device` URL to appear in the cloud dashboard after I click "Connect with VS Code Desktop",
+**So that** I can complete the GitHub authorization and use the VS Code Desktop tunnel.
 
 **Acceptance Criteria**:
-- [ ] The latest tunnel-status event of a "user-actionable" class (at minimum `authorization_pending`, and terminal `connected` / `disconnected` / `error`) is retained in the orchestrator when the relay is not `connected` and replayed on reconnect.
-- [ ] `starting` transitions (transient) do not need to be replayed; only the latest actionable status per tunnel matters.
-- [ ] The reconnect replay rides the same code path that already re-sends metadata on reconnect (no separate reconnect handler).
+- [ ] On a fresh cluster, the click surfaces the GitHub device-code prompt (code + URL) in the UI.
+- [ ] Completing the device-code flow transitions the UI to a connected tunnel state.
+- [ ] The flow works even when tunnel auto-start at `bootstrap-complete` races the orchestrator relay's initial `connected` transition.
 
-### US3: User-triggered start always yields a deliverable event (P1)
+### US2: Never miss a tunnel state transition across a relay reconnect
 
-**As a** developer clicking "Connect with VS Code Desktop",
-**I want** the click to always produce a fresh, deliverable status event,
-**So that** a lost prior event during boot can never cause the UI to hang on a click that "did nothing".
-
-**Acceptance Criteria**:
-- [ ] `POST /lifecycle/vscode-tunnel-start` invoked while a child process is already running re-emits the current tunnel status (or a fresh `starting`) as a new event, rather than returning silently.
-- [ ] The re-emitted event reaches the cloud UI (via replay per US2 if the relay is momentarily disconnected).
-
-### US4: Stuck device-code auth surfaces a terminal error (P2)
-
-**As a** developer,
-**I want** a tunnel that stays in `authorization_pending` past the device-code timeout to fail with a visible error,
-**So that** I see an actionable failure instead of an infinite spinner and can retry.
+**As a** cloud UI consumer of `cluster.vscode-tunnel` events,
+**I want** the latest actionable status per tunnel to be delivered once the orchestrator relay reconnects,
+**So that** a momentary relay disconnect does not leave me stuck on a stale `starting` spinner or showing a stale device code for an already-authorized tunnel.
 
 **Acceptance Criteria**:
-- [ ] A tunnel that remains in `authorization_pending` past `DEFAULT_DEVICE_CODE_TIMEOUT_MS` emits a terminal `error` status event and tears down the child process.
-- [ ] The error event is delivered to the cloud UI (subject to US2 replay if relay is disconnected).
-- [ ] Subsequent user clicks on "Connect with VS Code Desktop" spawn a fresh `code tunnel` child and restart the flow cleanly.
+- [ ] Only the latest actionable status per tunnel matters — a stale intermediate state is not required for correctness.
+- [ ] A terminal state (`connected` / `disconnected` / `error`) that fires during a `!isConnected` window overwrites any earlier retained `authorization_pending` and is what the UI sees on reconnect.
+- [ ] Among retained terminals, the latest wins.
 
 ## Functional Requirements
 
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | The orchestrator MUST retain the latest actionable tunnel-status event (at minimum `authorization_pending`, `connected`, `disconnected`, `error`) per tunnel when the relay is not `connected`, and replay it once the relay transitions to `connected`. | P1 | Fixes the silent drop at `internal-relay-events.ts:43`. Transient `starting` need not be replayed. |
-| FR-002 | The reconnect replay MUST ride the same reconnect code path that already re-sends metadata (relay bridge), not a bespoke reconnect handler. | P1 | Consistency and single source of truth for reconnect behaviour. |
-| FR-003 | `POST /lifecycle/vscode-tunnel-start` invoked while a `code tunnel` child process already exists MUST re-emit a fresh, deliverable status event (either the currently-cached actionable status or a fresh `starting` prompting the manager to re-emit its cached device-code state), rather than early-returning without emitting. | P1 | The #831 early-return branch is currently unforgiving of any prior dropped event. |
-| FR-004 | `VsCodeTunnelProcessManager` MUST enforce `DEFAULT_DEVICE_CODE_TIMEOUT_MS` — if the child stays in `authorization_pending` past the timeout, emit a terminal `error` status event AND kill the child (SIGTERM → SIGKILL fallback). | P2 | The #831 timeout path currently does not fire in practice. |
-| FR-005 | Buffer scope MUST be limited to at most one retained event per tunnel per event-class (latest wins). No unbounded queue, no replay of stale transient status. | P1 | Avoids accidental buffer growth on long disconnects. |
-| FR-006 | The retained-event mechanism MUST NOT apply to `cluster.audit` or `cluster.credentials` channels — those channels have their own delivery semantics (batching, receipt) and MUST retain the current fire-and-forget behaviour when the relay is disconnected. | P1 | Scope containment: this issue is about `cluster.vscode-tunnel` reliability, not a general reliable-delivery layer. |
+| ID     | Requirement | Priority | Notes |
+|--------|-------------|----------|-------|
+| FR-001 | The orchestrator MUST retain the latest actionable `cluster.vscode-tunnel` event per tunnel when the relay is not `connected`, and MUST replay the retained event to the cloud on relay (re)connect instead of dropping it silently at the `/internal/relay-events` handler. Retained statuses: `authorization_pending`, `connected`, `disconnected`, `error`. | P0 | Fixes the primary bug: fire-and-forget drop at `packages/orchestrator/src/routes/internal-relay-events.ts:43` when `!client.isConnected`. |
+| FR-002 | The retained-event replay MUST ride the existing relay reconnect code path (`RelayBridge.handleConnected` at `packages/orchestrator/src/services/relay-bridge.ts:197`, which already re-sends metadata). No new inter-process reconnect signal (e.g., a `POST /lifecycle/relay-reconnect` back into control-plane) is introduced. | P0 | Q1 → A: retained event lives as a module-level singleton in the orchestrator (`retained-events.ts` / `internal-relay-events.ts`) with `get`/`set` accessors imported by both writer and reader, mirroring the existing `getRelayPushEvent`/`setRelayPushEvent` idiom. |
+| FR-003 | A user-triggered `POST /lifecycle/vscode-tunnel-start` MUST always produce a fresh, deliverable status event. Specifically, when the child process is alive and `status === "starting"` with no device code parsed yet, `start()` MUST emit a fresh `starting` event and return (keep the child), instead of early-returning silently. | P0 | Q5 → A: emit fresh `starting`, do not kill+respawn. The `starting`-with-live-child branch is today's click-into-silence gap in `packages/control-plane/src/services/vscode-tunnel-manager.ts:143-163`. |
+| FR-004 | A tunnel that stays in `authorization_pending` past a bounded timeout MUST emit a terminal `error` event and tear down the child, rather than hanging indefinitely. The system MUST enforce this as a separate `DEFAULT_DEVICE_CODE_AUTH_TIMEOUT_MS` (~300 s / 5 min) armed on transition to `authorization_pending`. The existing 30 s starting-phase timer is retained for the "spawned but never printed a code" broken-CLI case. | P0 | Q4 → C: two distinct constants. Rationale — 30 s is too short for a human to open a browser and type an 8-char device code; 5 min is well under GitHub's ~15 min device-code validity. Live hang was 10+ min in `authorization_pending` after the starting-phase timer had already been cleared at `vscode-tunnel-manager.ts:392`. |
+| FR-005 | The retained-event buffer MUST hold at most one event per tunnel (single slot) with terminal preference: a `connected` / `disconnected` / `error` event MUST overwrite an earlier `authorization_pending`, and among terminal states the latest wins. A late/re-emitted `authorization_pending` MUST NOT clobber a retained terminal. | P0 | Q3 → C: single-slot with explicit terminal-beats-pending precedence. Rules out multi-slot audit-trail semantics (option B) so the UI never sees a device code for an already-authorized tunnel. |
+| FR-006 | Retention MUST distinguish child-lifecycle `error` events from administrative `error` events. Only child-lifecycle `error` events (spawn failure, exit-before-connected, device-code timeout) are retained; `error` emitted from `unregister()` cleanup (`vscode-tunnel-manager.ts:326-378`) and the `actualTunnelName !== opts.tunnelName` name-collision observational emit at `vscode-tunnel-manager.ts:434` MUST NOT be retained. | P1 | Q2 → B. Rationale — replaying an `unregister()` cleanup error or a name-collision observational error after reconnect could spuriously error a tunnel that is actually `connected`. |
 
 ## Success Criteria
 
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Time from user click on "Connect with VS Code Desktop" to device-code prompt visible in UI on a fresh cluster (relay disconnected at `bootstrap-complete`) | < 30 seconds median across 10 fresh-cluster runs | Manual repro on preview channel; instrument the relay reconnect + replay path. |
-| SC-002 | Fraction of `authorization_pending` events surfaced to the UI when emitted during a `!isConnected` window | 100% (currently 0%) | Integration test: force relay `disconnected`, emit `authorization_pending`, transition relay to `connected`, assert event received. |
-| SC-003 | Fraction of user-triggered `vscode-tunnel-start` requests that yield a deliverable event when a child process is already running | 100% (currently 0% for lost prior events) | Integration test: spawn tunnel, drop the first `authorization_pending`, POST `/lifecycle/vscode-tunnel-start`, assert a deliverable event is emitted. |
-| SC-004 | Fraction of tunnels stuck in `authorization_pending` past `DEFAULT_DEVICE_CODE_TIMEOUT_MS` that emit a terminal `error` and tear down the child | 100% (currently 0% observed) | Integration test with mocked device-code auth that never completes; assert `error` event within timeout + kill-grace window. |
-| SC-005 | Regression: no additional relay-message traffic on healthy clusters (relay stays `connected` throughout boot) | Retained-event mechanism sends 0 extra messages on the happy path | Compare relay message count on a healthy-boot cluster before/after the change. |
+| ID     | Metric | Target | Measurement |
+|--------|--------|--------|-------------|
+| SC-001 | Fresh-cluster success rate for "Connect with VS Code Desktop" reaching the device-code prompt in the UI | 100 % across 10 consecutive fresh-cluster boots (preview channel) | Manual repro on 10 freshly deployed preview clusters after fix ships. |
+| SC-002 | `cluster.vscode-tunnel` retained-event delivery across relay reconnect | 100 % of retained actionable statuses delivered to the cloud within one reconnect cycle | Integration test: emit `authorization_pending` while relay is `!isConnected`, force reconnect, assert cloud receives it exactly once. |
+| SC-003 | Bounded `authorization_pending` phase duration | An `authorization_pending` state MUST terminate (either transition to `connected` / `disconnected` or emit `error` and tear down) within `DEFAULT_DEVICE_CODE_AUTH_TIMEOUT_MS` (300 s) | Integration test: spawn a stub `code tunnel` that stays in `authorization_pending` beyond the timeout; assert `error` event and child SIGTERM within the window. |
+| SC-004 | Fresh-emit on user re-trigger with live `starting` child | 100 % of `POST /lifecycle/vscode-tunnel-start` calls emit at least one deliverable status event | Unit test on `VsCodeTunnelProcessManager.start()`: with `status === 'starting'` and `deviceCode == null`, calling `start()` fires exactly one `starting` event and does not spawn a new child. |
+| SC-005 | No spurious `error` from `unregister()` after reconnect | 0 replayed `error` events sourced from `unregister()` or name-collision observational emit paths | Unit test on the retention layer: emit an `unregister()` `error`, then reconnect; assert no replay. |
 
 ## Assumptions
 
-- The relay bridge's existing metadata re-send-on-reconnect path is a suitable hook for tunnel-status replay (per Proposed fix #1). If it is not, FR-002 permits a sibling handler on the same reconnect trigger, but no new reconnect signal is introduced.
-- The manager already caches device-code state internally (per #831 rework at commit `aef8f58a`); FR-003 relies on that cache being present. If it is not, FR-003 additionally requires introducing that cache.
-- `DEFAULT_DEVICE_CODE_TIMEOUT_MS` is defined in `vscode-tunnel-manager.ts` today (per #831). If it is not, FR-004 additionally requires introducing it.
-- The cloud-side infinite-spinner behaviour (`use-vscode-tunnel.ts` no timeout) is tracked as a separate generacy-cloud issue per the "one-issue-per-repo" convention. This spec is cluster-side only.
-- No changes to the `code tunnel` invocation itself (still no non-interactive access token; still device-code auth) — introducing a non-interactive token is a separate design decision, out of scope.
+- The orchestrator and control-plane remain in separate processes; the retained-event buffer lives in the orchestrator, which is where the drop (writer) and reconnect (reader) code paths both run.
+- `RelayBridge.handleConnected` remains the sole code path invoked on relay reconnect, i.e., the metadata re-send already happens there and the retained tunnel event can ride the same trigger.
+- The `code tunnel` CLI prints the device code on stdout in the format matched today by the parser at `packages/control-plane/src/services/vscode-tunnel-manager.ts` (regex `/[A-Z0-9]{4}-[A-Z0-9]{4}/`). No CLI-format regression is in scope.
+- Only one `code tunnel` child process is expected per cluster at any moment. Multi-tenant retention (per-clusterId keying) is not required.
+- Cloud-side consumers (`use-vscode-tunnel.ts`) will accept a replayed `cluster.vscode-tunnel` event without additional cluster-side signaling — no new SSE frame type or discriminator field is added.
+- GitHub device codes remain valid ~15 min, well above the ~5 min `DEFAULT_DEVICE_CODE_AUTH_TIMEOUT_MS`.
 
 ## Out of Scope
 
-- Cloud-side (`use-vscode-tunnel.ts`) client-side timeout / Firestore `vscodeTunnelStatus` fallback. Tracked separately in generacy-cloud.
-- Introducing a non-interactive access token for `code tunnel` (would eliminate device-code auth entirely, but is a different design).
-- Extending the retained-event / replay mechanism to any channel other than `cluster.vscode-tunnel` (audit and credentials keep their existing semantics; see FR-006).
-- Rewriting the tunnel manager's `start()` beyond what FR-003 requires; the #831 architecture stays.
-- Any UX changes to the "Connect with VS Code Desktop" button or the "Starting tunnel…" copy.
+- Cloud-side (`generacy-cloud`) UI/timeout work in `use-vscode-tunnel.ts` — the client-side timeout / Firestore `vscodeTunnelStatus` fallback is tracked as a separate issue per one-issue-per-repo convention.
+- A general-purpose retained/replay layer for other `cluster.*` event channels beyond `cluster.vscode-tunnel`.
+- Persisting the retained event across orchestrator process restarts (in-memory only; a restart resets the buffer, which is acceptable because the child process is also gone after restart).
+- Multi-tenant per-clusterId keying of the retained-event buffer (single-tunnel assumption above).
+- Changes to the `code tunnel` device-code CLI parser or CLI flags.
+- Making `bootstrap-complete` gate the tunnel auto-start on relay-connected (option 2 in the issue body) — the reliable-delivery approach (FR-001/FR-002) subsumes it.
 
 ---
 
