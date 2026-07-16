@@ -60,71 +60,47 @@ Consider surfacing it on the health/status endpoint too, so it's visible without
 - #952 — Orchestrator should auto-provision a smee channel when none is configured. Even once that lands, this warning stays relevant: provisioning can fail (offline, smee.io down) and fall back to polling, and that fallback must be loud rather than silent — otherwise the same debugging session repeats.
 - #953 — Adaptive polling never engages for clusters that never had a webhook.
 
+## Clarifications
+
+Resolved in [`clarifications.md`](./clarifications.md) — Batch 1 (2026-07-16). Decisions that constrain the plan:
+
+- **Q1 → A**: Ship the log-warning half **and** a `smeeConfigured: boolean` on `HealthResponse` (200 + 503 Fastify schemas in `packages/orchestrator/src/routes/health.ts`), plumbed from `config.smee.channelUrl` at `createServer()` construction. Do **not** ship a nested `smee: {...}` object — a boolean is the minimum consumer commitment; widening later is additive.
+- **Q2 → B**: The warning states **both** label classes' worst-case latency, **computed from the effective `pollIntervalMs`** — not hardcoded to defaults. Format: `process:* up to ~<pollIntervalMs/1000>s`, `completed:* up to ~<pollIntervalMs*COMPLETED_CHECK_INTERVAL/1000>s`. Wrong numbers under non-default intervals is worse than silence.
+- **Q3 → C**: The **warning fires full-mode only**, guarded **inside** the `!isWorkerMode && config.labelMonitor && config.repositories.length > 0` block at `server.ts:464` on `!config.smee.channelUrl` (not as an `else` on the block — an `else` would falsely warn in worker mode, in pre-activation clusters with `repositories.length === 0`, and on deliberate `labelMonitor === false` opt-outs). The `/health` `smeeConfigured` field reports the config value on **all** processes (workers included) — that's a configuration statement, not a degradation claim.
+- **Q4 → B**: Cover **both** webhook-setup skip reasons, at different levels. Case (a) `smee.channelUrl` empty is already covered by the Q3 warning. Case (b) `webhookSetup.enabled === false` gets its own **`info`** line (deliberate opt-out, not degradation). Warning on the opt-out would erode the "warn = degraded" signal; silence on it reproduces this issue's failure mode.
+- **Q5 → B**: Warning is a **short message + structured Pino fields**, not prose. Shape: `server.log.warn({ pollIntervalMs, completedCheckInterval, processLatencyMs, completedLatencyMs, remediation: ['SMEE_CHANNEL_URL', 'orchestrator.smeeChannelUrl'] }, 'No smee channel configured; polling fallback active')`. Matches surrounding convention (`server.ts:496` etc.). SC-004 substring assertions still hold against the serialised JSON line.
 
 ## User Stories
 
-### US1: Operator diagnosing a slow cluster finds the fallback in one grep
+### US1: [Primary User Story]
 
-**As a** cluster operator watching a fresh cluster react slowly to issue-label events,
-**I want** the orchestrator to log a loud, one-shot warning at startup when no smee channel is configured,
-**So that** `docker logs <orch> 2>&1 | grep -i smee` immediately explains the latency — instead of forcing me to read `server.ts`, trace the `config.smee.channelUrl` guard, inspect container env, and diff provisioning paths across repos.
-
-**Acceptance Criteria**:
-- [ ] On startup with `config.smee.channelUrl` empty/unset, the orchestrator emits exactly one `warn`-level log line naming smee.
-- [ ] The warning states the *consequence* (fallback to polling; label events detected in up to ~90s given `pollIntervalMs=30000` × `COMPLETED_CHECK_INTERVAL=3`), not just the condition.
-- [ ] The warning states that **no GitHub webhook will be created** for monitored repos (mirrors the silently-skipped `webhookSetupService.ensureWebhooks()` at `server.ts:824`).
-- [ ] The warning includes remediation: set `SMEE_CHANNEL_URL` env or `orchestrator.smeeChannelUrl` in `.generacy/config.yaml`.
-- [ ] The configured-happy-path log (`server.ts:487` — `Smee webhook receiver configured`) is unchanged.
-
-### US2: Health/status endpoint reflects webhook-less mode
-
-**As a** cluster operator (or a cockpit UI querying the cluster),
-**I want** the `/health` (or equivalent status) response to indicate that the cluster is in polling-only mode,
-**So that** operational tooling can surface the degraded mode without log archaeology.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] `/health` (or the same surface that reports `controlPlaneReady` / `codeServerReady`) reports a boolean or string field indicating whether smee is configured.
-- [ ] Field is stable enough for the cockpit / cloud dashboard to consume.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | When `config.smee.channelUrl` is empty at startup, emit exactly one `warn`-level log line stating the orchestrator is falling back to polling. | P1 | Add an `else` to the `if (config.smee.channelUrl)` block at `packages/orchestrator/src/server.ts:487`. |
-| FR-002 | The warning MUST include the observed detection latency for `completed:*` labels expressed from the effective `pollIntervalMs` and `COMPLETED_CHECK_INTERVAL=3` (`label-monitor-service.ts:83`). | P1 | Latency string should reference concrete numbers so operators recognise "why is my cluster stuck for ~90s" instantly. |
-| FR-003 | The warning MUST state that no GitHub webhook will be created for monitored repos. | P1 | Mirrors `webhookSetupService.ensureWebhooks()` being skipped at `server.ts:824`. |
-| FR-004 | The warning MUST include remediation pointing at both `SMEE_CHANNEL_URL` env and `orchestrator.smeeChannelUrl` in `.generacy/config.yaml`. | P1 | Both names should appear verbatim so `grep` finds them. |
-| FR-005 | Log level MUST be `warn`, not `info`. | P1 | Per issue "Note on log level": this is a degraded operating mode, must stand out from startup chatter. |
-| FR-006 | The warning MUST fire exactly once per orchestrator process lifetime — not per repo, not per poll cycle. | P2 | One-shot startup line only. |
-| FR-007 | When `config.smee.channelUrl` is set, orchestrator behaviour and log output MUST be unchanged (no new warning, existing `info` log preserved). | P1 | Non-regression guardrail. |
-| FR-008 | `/health` (or equivalent status surface) SHOULD expose a `smeeConfigured: boolean` (or equivalent) field so cockpit/dashboard can render the degraded mode without scraping logs. | P2 | "Consider surfacing it on the health/status endpoint too" — treat as SHOULD unless clarified otherwise. |
-| FR-009 | The `WebhookSetupService` skip-path at `server.ts:824` MUST also be observable — either covered by the same one-shot warning (preferred) or by its own warn line. | P2 | Silent skip of webhook creation is the second half of the same bug. |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Time-to-diagnose a webhook-less cluster from operator perspective. | ≤ 1 shell command (`docker logs <orch> 2>&1 \| grep -i smee`) returns a self-explanatory line. | Reproduce issue scenario on a fresh cluster with no `SMEE_CHANNEL_URL` — grep must return ≥ 1 line with `warn` level and the word `polling`. |
-| SC-002 | Grep-ability of the warning. | `grep -ci smee` returns ≥ 1 on a webhook-less startup. | Same repro as SC-001. |
-| SC-003 | Non-regression on configured path. | 0 new warn/error lines at startup when `SMEE_CHANNEL_URL` is set. | Diff orchestrator startup logs before/after the change with URL configured. |
-| SC-004 | Warning content completeness. | The warn line mentions `polling`, an explicit latency number (or the formula), `webhook`, and both remediation names (`SMEE_CHANNEL_URL`, `orchestrator.smeeChannelUrl`). | Assert substring presence in unit/integration test on the emitted log. |
-| SC-005 | Health endpoint observability (if FR-008 implemented). | `/health` returns a `smeeConfigured` field matching the runtime configuration. | Curl `/health` in both configured and webhook-less startups. |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The fix targets `packages/orchestrator/src/server.ts` — the two guarded blocks at lines 487 (receiver construction + `info` log) and 824 (webhook setup service).
-- `config.smee.channelUrl` is the single source of truth for whether smee is configured; empty string and undefined are both treated as "not configured".
-- Related work in #952 (auto-provision smee channel) does **not** obviate this warning — provisioning can fail (offline, smee.io down) and fall back to polling; that fallback still needs to be loud per the issue.
-- Related work in #953 (adaptive polling never engages without prior webhook) is out of scope here — this feature only makes the fallback visible.
-- The effective poll cadence used in the warning message should reflect any `fallbackPollIntervalMs` override (`server.ts:470`) if that path is taken, but at minimum should reference the currently effective `pollIntervalMs`.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Auto-provisioning a smee channel when none is configured (tracked as #952).
-- Adaptive polling engagement for never-webhook clusters (tracked as #953).
-- Changing the polling cadence or `COMPLETED_CHECK_INTERVAL` itself.
-- Changing behaviour when the smee channel *is* configured but unreachable at runtime — this issue is about the never-configured case.
-- Reworking cockpit/dashboard UI to render the new health field — surfacing the field is in scope; consuming it downstream is not.
+- [Exclusion 1]
 
 ---
 
