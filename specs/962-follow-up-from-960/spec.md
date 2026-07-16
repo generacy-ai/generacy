@@ -53,8 +53,8 @@ comment.
 | ID     | Requirement                                                                                                                                                                                                                        | Priority | Notes |
 |--------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------|
 | FR-001 | The finder MUST apply a content guard to each at-or-after candidate before returning it. A candidate whose body is a "stage-status comment" (see FR-002) MUST be skipped, not returned.                                            | P1       | This is the residual hardening called out in #962's "Ask". |
-| FR-002 | A comment counts as a **stage-status comment** iff its body contains, at column 0 of some line, any of: `<!-- generacy-stage:planning`, `<!-- generacy-stage:specification`, `<!-- generacy-stage:implementation`, `<!-- speckit-stage:planning`, `<!-- speckit-stage:specification`, `<!-- speckit-stage:implementation`. Match rule is prefix substring, case-sensitive ASCII, line-anchored (mirrors `commentCarriesQuestionMarker` in `packages/orchestrator/src/worker/clarification-markers.ts`). | P1       | Explicit allow-list, not a wildcard on `generacy-stage:` — see FR-003. |
-| FR-003 | The content guard MUST NOT reject comments carrying the `<!-- generacy-stage:clarification` or `<!-- generacy-stage:clarification-batch-N` markers. Those are legitimate clarification comments stamped by the engine's clarification poster. | P1       | Regression risk: a naïve `startsWith('<!-- generacy-stage:')` guard would break the primary happy path. |
+| FR-002 | A comment counts as a **stage-status comment** iff its body contains, at column 0 of some line, any of: `<!-- generacy-stage:planning`, `<!-- generacy-stage:specification`, `<!-- generacy-stage:implementation`, `<!-- speckit-stage:planning`, `<!-- speckit-stage:specification`, `<!-- speckit-stage:implementation`. Match rule is prefix substring, case-sensitive ASCII, line-anchored (mirrors `commentCarriesQuestionMarker` in `packages/orchestrator/src/worker/clarification-markers.ts`). The rule is body-driven only — comment author is never consulted (see Assumptions). | P1       | Explicit allow-list, not a wildcard on `generacy-stage:` — see FR-003. |
+| FR-003 | The content guard MUST NOT reject comments carrying the `<!-- generacy-stage:clarification` or `<!-- generacy-stage:clarification-batch-N` markers at column 0 of some line. Mixed-body precedence: a candidate is skipped **iff** an FR-002 stage-status marker is at column 0 AND neither of these two clarification-stage prefixes is at column 0 in the same body — i.e., presence of a clarification-stage marker overrides the reject. Only these two prefixes override; the other `CLARIFICATION_QUESTION_MARKERS` entries (`<!-- generacy-clarifications:`, `<!-- generacy-cockpit:clarifications-batch:`) do not start with `<!-- generacy-stage:` and were never rejection candidates, so they need no override. | P1       | Regression risk: a naïve `startsWith('<!-- generacy-stage:')` guard would break the primary happy path; the mixed-body override closes the last edge case. |
 | FR-004 | When every at-or-after candidate is skipped by the guard, the finder MUST return `null` — the same "distinguishable absent" it returns when no timeline label event exists or no at-or-after comment exists.                        | P1       | AC-2 from the parent issue #960. |
 | FR-005 | When multiple candidates exist at-or-after the label timestamp, the finder MUST continue to prefer the earliest by `createdAt` **among the candidates that survive the guard**, not the earliest overall. If the earliest is a stage-status comment but a later one is a legitimate clarification, return the later one. | P2       | Preserves the "first qualifying comment" contract while making it precise about what qualifies. |
 | FR-006 | A regression test in `packages/generacy/src/cli/commands/cockpit/__tests__/clarification-comment-finder.test.ts` MUST cover: only comment at-or-after the `waiting-for:clarification` event is a `<!-- generacy-stage:planning -->` table → finder returns `null`.                                                                | P1       | Direct AC-3 from #962. |
@@ -80,9 +80,21 @@ comment.
 - `<!-- generacy-stage:clarification` and `<!-- generacy-stage:clarification-batch-N`
   are the only `generacy-stage:*` prefixes that must be treated as
   clarification content, and they are already the ones enumerated in
-  `CLARIFICATION_QUESTION_MARKERS`. The finder MAY reuse the marker constants
-  from that module rather than hard-coding strings, but this is an
-  implementation choice deferred to `/plan`.
+  `CLARIFICATION_QUESTION_MARKERS`. **Resolved by Q1/B (2026-07-16)**: the
+  finder MUST hardcode the 6-entry stage-status reject list and the 2-entry
+  clarification-stage override list directly in `clarification-comment-finder.ts`
+  — it does **not** import from `packages/orchestrator/src/worker/clarification-markers.ts`.
+  This keeps SC-003 ("0 changed files outside the finder and its test") intact
+  and avoids coupling the finder to a marker vocabulary that includes two
+  unrelated `CLARIFICATION_QUESTION_MARKERS` entries (`generacy-clarifications:`
+  and `generacy-cockpit:clarifications-batch:`) that never intersected the
+  reject rule to begin with.
+- **Resolved by Q2/A (2026-07-16)**: the content guard is purely body-driven —
+  comment `author` is never consulted. The finder does no `getCurrentUser()`
+  lookup today by design, and this spec preserves that. The (vanishingly rare)
+  case of a human deliberately opening a comment with a `generacy-stage:planning`
+  marker line is treated as a rejected candidate — they are speaking the
+  engine's marker vocabulary and skipping is arguably correct.
 - `speckit-stage:*` markers are legacy but must still be rejected because
   archived issues can carry them; the issue body explicitly lists both
   namespaces.
