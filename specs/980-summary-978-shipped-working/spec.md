@@ -75,18 +75,20 @@ Export `COCKPIT_DOORBELL_SMEE_URL=<current smee channel URL>` in the operator se
 
 **Acceptance Criteria**:
 - [ ] From an operator session that does **not** mount the cluster's `generacy-data` volume, `generacy cockpit doorbell <epic-ref>` selects `source=smee` and stays running.
-- [ ] The smee channel URL is discoverable at a workspace-relative path already shared with the operator (same surface as the auto ledger under `/workspaces/<repo>/.generacy/cockpit/`).
-- [ ] Existing `COCKPIT_DOORBELL_SMEE_URL` env override and `/var/lib/generacy/smee-channel` path continue to work as fallback lookups.
+- [ ] The smee channel URL is discoverable at a **single cluster-scoped path on the shared workspace volume** (`/workspaces/.generacy/cockpit/smee-channel` — sibling of the per-repo dirs). The reader walks up from `cwd` to the nearest `.generacy/cockpit/smee-channel` and falls back to the absolute path.
+- [ ] Existing `COCKPIT_DOORBELL_SMEE_URL` env override and `/var/lib/generacy/smee-channel` cluster-internal path continue to work as fallback lookups.
 
 ### US2: Doorbell survives a transient `gh` blip at startup
 
 **As an** operator whose PAT is occasionally rate-limited by GitHub,
-**I want** the doorbell to retry with backoff when startup `gh` calls fail transiently,
-**So that** a single hiccup does not silently downgrade the entire auto run to heartbeat-only latency (~5 min).
+**I want** the doorbell to retry with backoff when startup `gh` calls fail transiently, and self-heal if the transient outlasts the initial window,
+**So that** a single hiccup does not silently downgrade the entire auto run to heartbeat-only latency (~5 min), and the run recovers automatically when the transient clears.
 
 **Acceptance Criteria**:
-- [ ] A transient `gh`/rate-limit error during `acquireEpicBus` (poll-fallback path) or `resolveEpic` (smee ref-filter path) triggers backoff-retry, not `exit(2)`.
-- [ ] After transient failures resolve, the doorbell reaches its normal steady state (smee-selected on smee-live clusters, poll on others).
+- [ ] A **transient** `gh` error (429 / network-level ECONNRESET/ETIMEDOUT/ENOTFOUND/ECONNREFUSED/socket hang up / 5xx 500/502/503/504) during `acquireEpicBus` (poll-fallback path) or `resolveEpic` (smee ref-filter path) triggers backoff-retry, not `exit(2)`.
+- [ ] Retry policy: bounded initial window (~2 min, exponential backoff via the already-wired `rateLimitScheduler`); on exhaustion, transition to a periodic late-startup retry (~every 5 min) while the process **stays alive**. Never `exit(2)` from a transient failure.
+- [ ] **Permanent** errors (401 "Bad credentials", 403 SSO/scope, 404 epic-not-found, malformed `gh` output) are surfaced immediately on stderr with a distinct diagnostic and exit code `3` (distinguishable from today's silent `exit(2)`).
+- [ ] After transient failures resolve within the late-startup retry window, the doorbell reaches its normal steady state (smee-selected on smee-live clusters, poll on others).
 - [ ] The passive skill (#431) does not need to re-spawn the doorbell after a transient blip — the doorbell surface owns transport resilience.
 
 ### US3: No regression on clusters without smee
@@ -103,41 +105,49 @@ Export `COCKPIT_DOORBELL_SMEE_URL=<current smee channel URL>` in the operator se
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | At smee channel provision time (`SmeeChannelResolver` / orchestrator boot), write the resolved channel URL to a workspace-relative path (e.g. `/workspaces/<repo>/.generacy/cockpit/smee-channel`) in addition to `/var/lib/generacy/smee-channel`. | P1 | Same shared `*_workspace` volume already used by the auto ledger. No new volume mounts. |
-| FR-002 | Extend `channel-discovery.js`'s lookup order to include the workspace-relative path: `COCKPIT_DOORBELL_SMEE_URL` env → workspace-relative shared path → `/var/lib/generacy/smee-channel` cluster-internal path. | P1 | Preserves existing overrides and fallbacks. |
-| FR-003 | On a transient `gh`/rate-limit error during `SmeeDoorbellSource.start()`'s `resolveEpic` call, retry with backoff via the already-wired `rateLimitScheduler` instead of failing the source. | P1 | Failure of `SmeeDoorbellSource.start()` today cascades to poll-fallback then `exit(2)`. |
-| FR-004 | On a transient `gh` error during poll-fallback `acquireEpicBus`, retry with backoff instead of taking the all-sources-failed branch to `exit(2)`. | P1 | Aligns doorbell surface with #431 Q3=A "resilience behind the doorbell, not in the skill". |
-| FR-005 | Preserve poll-fallback behavior when neither smee nor env override yields a channel URL; do not remove the poll loop. | P1 | smee.io is best-effort, poll stays as safety net (matches #978 design). |
-| FR-006 | Preserve `#970` poll-cost reductions on the fallback path — no regression to poll cadence or API-call count. | P1 | |
+| FR-001 | At smee channel provision time (`SmeeChannelResolver` / orchestrator boot), write the resolved channel URL to a **single cluster-scoped path on the shared workspace volume**: `/workspaces/.generacy/cockpit/smee-channel` (sibling of the per-repo dirs), in addition to `/var/lib/generacy/smee-channel`. | P1 | One write per re-provision (not N). Verify the volume root is writable by the orchestrator uid. See Q1=C. |
+| FR-002 | Extend `channel-discovery.js`'s lookup order to include the workspace-relative path: `COCKPIT_DOORBELL_SMEE_URL` env → nearest `.generacy/cockpit/smee-channel` (walk up from `cwd`) → `/workspaces/.generacy/cockpit/smee-channel` absolute default → `/var/lib/generacy/smee-channel` cluster-internal fallback. | P1 | Preserves existing overrides and cluster-internal fallback. |
+| FR-003 | On a **transient** `gh` error during `SmeeDoorbellSource.start()`'s `resolveEpic` call, retry with backoff via the already-wired `rateLimitScheduler` for a bounded ~2 min initial window; on exhaustion, transition to a periodic late-startup retry (~every 5 min) while keeping the process alive. Never `exit(2)` on transient failures. | P1 | Symmetric with #978 Q3=D demotion-with-retry. See Q2=D. |
+| FR-004 | On a **transient** `gh` error during poll-fallback `acquireEpicBus`, apply the same bounded-initial + periodic-late-startup retry policy as FR-003. Never take the all-sources-failed → `exit(2)` branch on a transient failure. | P1 | Aligns doorbell surface with #431 Q3=A "resilience behind the doorbell, not in the skill". |
+| FR-005 | Classify errors: **retriable** = HTTP 429, network-level (ECONNRESET/ETIMEDOUT/ENOTFOUND/ECONNREFUSED/socket hang up), 5xx (500/502/503/504). **Permanent** = 401 "Bad credentials", 403 SSO/scope, 404 not-found, malformed `gh` output. Permanent errors surface a distinct diagnostic on stderr and exit with code `3` (not today's silent `exit(2)`). | P1 | See Q3=B. Prevents masking real misconfiguration behind an eternally-retrying silent doorbell. |
+| FR-006 | Preserve poll-fallback behavior when neither smee nor env override yields a channel URL; do not remove the poll loop. | P1 | smee.io is best-effort; poll stays as safety net (matches #978 design). |
+| FR-007 | Preserve `#970` poll-cost reductions on the fallback path — no regression to poll cadence or API-call count. | P1 | |
+| FR-008 | Workspace-relative channel file is written with mode `0644`, bare-URL content (no metadata). | P1 | `0644` because writer/reader may run under different uids across the container/tunnel boundary. Bare URL keeps the reader symmetric with the cluster-internal fallback. See Q5=B. |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
 | SC-001 | End-to-end doorbell wake latency on a smee-live cluster, from operator session | ≤ ~3s p95 (smee mode) | Time from `waiting-for:*` label applied to doorbell stdout line, measured on `snappoll` preview cluster from the operator devcontainer |
-| SC-002 | Doorbell process survival across a transient startup failure | 0 unexpected `exit(2)` under a simulated single `gh` rate-limit response | Inject a 429 for the first `gh` call at doorbell startup; assert the process reaches steady state instead of exiting |
-| SC-003 | No poll-cost regression on smee-less clusters | Poll cadence and API-call count unchanged vs. #970 baseline | Compare `runOnePoll` invocation count over a fixed window on a smee-less cluster before/after |
-| SC-004 | Auto ledger no longer shows heartbeat-only phase surfacing on smee-live clusters | Zero `heartbeat · schedule-wakeup · fired · drain complete` lines for phase-transition wakes | Grep the auto-runs ledger over a full multi-phase run on the `snappoll` cluster |
+| SC-002 | Doorbell process survival across a transient startup failure | 0 unexpected `exit(2)` under a simulated single `gh` rate-limit (429) response | Inject a 429 for the first `gh` call at doorbell startup; assert the process reaches steady state instead of exiting |
+| SC-003 | Doorbell process survival across an extended transient outage | Process stays alive for ≥ 10 min while `gh` returns 429/5xx/network errors; recovers to normal steady state within one late-startup retry cycle (~5 min) once transient clears | Inject sustained 429 for 6 min, then clear; assert doorbell reaches steady state within 11 min end-to-end |
+| SC-004 | Permanent errors are diagnosable, not silent | Under 401/403/404/malformed `gh` output, doorbell exits with code `3` and a distinct stderr diagnostic within the first ~2 min | Inject each permanent-error class; assert exit code `3` and matching stderr line |
+| SC-005 | No poll-cost regression on smee-less clusters | Poll cadence and API-call count unchanged vs. #970 baseline | Compare `runOnePoll` invocation count over a fixed window on a smee-less cluster before/after |
+| SC-006 | Auto ledger no longer shows heartbeat-only phase surfacing on smee-live clusters | Zero `heartbeat · schedule-wakeup · fired · drain complete` lines for phase-transition wakes | Grep the auto-runs ledger over a full multi-phase run on the `snappoll` cluster |
 
 ## Assumptions
 
 - The `*_workspace` volume is mounted into both the orchestrator container (for the writer) and the operator devcontainer/tunnel (for the reader). Evidenced by the shared auto ledger under `/workspaces/<repo>/.generacy/cockpit/auto-runs/`.
-- The doorbell's `GhCliWrapper` already has `rateLimitScheduler` wired, so FR-003/FR-004 are a matter of *using* it at the two startup call sites rather than adding new infrastructure.
-- `SmeeChannelResolver` and orchestrator-boot are the correct write points; if the channel is re-provisioned mid-run, the workspace-relative path is refreshed alongside the cluster-internal path.
+- The workspace-volume **root** (`/workspaces/.generacy/`) is writable by the orchestrator uid — same volume the orchestrator already writes ledgers into under `/workspaces/<repo>/.generacy/`. This must be verified at implementation time; if the root is not writable, fall back to writing under each per-repo `.generacy/cockpit/` (option A) as a mitigation, though this is not the chosen design.
+- The doorbell's `GhCliWrapper` already has `rateLimitScheduler` wired, so FR-003/FR-004 are a matter of *using* it at the two startup call sites plus adding the late-startup periodic retry, not adding new infrastructure.
+- `SmeeChannelResolver` and orchestrator-boot are the correct write points; the writer overwrites the file at every boot, so a stale wrong-cluster file at the shared path cannot outlast a cluster restart.
+- The smee channel URL is persisted and stable across restarts (verified `source=persisted` in orchestrator logs), so a **mid-run** channel URL change is rare and normally restart-coupled. See Out of Scope: mid-run re-read.
 - No agency skill (#431) change is required. The passive-recovery contract is satisfied by FR-B making the doorbell resilient; discovery works because the shared workspace path is reachable from the operator session.
 
 ## Out of Scope
 
+- **Mid-run channel re-provision without operator restart.** The doorbell reads the channel file once at startup; if the orchestrator provisions a new smee URL mid-run, the running doorbell continues attached to the old (dead) URL until the operator restarts `/cockpit:auto`. Rare in practice (channel is persisted/stable) and benign (heartbeat still advances the run). If this becomes painful later, add a cheap ~5-min periodic file re-read — explicitly **not** `fs.watch` (semantics are unreliable across Docker / bind-mount volumes). See Q4=A.
 - **Webhook-based channel discovery** (`gh api repos/<owner>/<repo>/hooks` → `smee.io` `config.url`). Rejected as primary because the operator PAT typically lacks `Webhooks: read` (404 observed).
 - **Skill-side changes** to `agency#431` `auto.md` — no re-spawn logic, no capability-probe changes, no environment injection from the skill.
 - **Lossless smee delivery.** smee.io is a best-effort free relay; gaps remain covered by the auto skill's `ScheduleWakeup` heartbeat. This spec does not add gap-detection or replay.
 - **Removing the poll fallback.** The 30s poll loop stays as the safety net; this spec only reorders discovery so smee wins when reachable.
 - **Cluster identity / bot-vs-human distinction** (that's #976's surface). This spec is purely about channel URL delivery + transport resilience.
+- **JSON channel-file content with metadata** (`{url, writtenAt, clusterId}`). Rejected for this fix (Q5=B — bare URL is symmetric with the cluster-internal fallback and the writer overwrites at every boot). Reconsider if wrong-cluster detection becomes a real problem.
 
 ## Related
 
 - **#978** — the engine implementation of smee-mode doorbell (merged, works when the channel URL is reachable). This spec wires it end-to-end.
-- **#970** — parent (poll-cost reductions + original poll-loop doorbell). The fallback path preserved by FR-005/FR-006.
+- **#970** — parent (poll-cost reductions + original poll-loop doorbell). The fallback path preserved by FR-006/FR-007.
 - **#972** — webhook registration (fixed; smee now delivers to the orchestrator). This spec is about delivering the *channel URL* to the doorbell process.
 - **agency#431** — the skill that spawns the doorbell and stays passive on its death (Q3=A). No skill-side change required.
 
