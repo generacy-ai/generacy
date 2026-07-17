@@ -11,12 +11,18 @@ but that verb was never implemented in generacy. Auto runs on preview clusters
 fail to spawn the sensor with `error: unknown command 'doorbell'` and silently
 degrade to heartbeat-only (5-min) polling.
 
-This spec adds the missing verb. The verb attaches to the same event-bus poll
-loop that `cockpit_await_events` already drains (via `acquireEpicBus` in
-`packages/generacy/src/cli/commands/cockpit/mcp/event-bus-registry.ts`), so it
-does **not** start a second poll loop — that is the whole point of #970's
-"collapse the dual poll" item. Callers (the skill) treat any non-empty stdout
-line as a wake signal; the content is not parsed.
+This spec adds the missing verb. The verb runs as a self-contained CLI process
+that constructs its own in-process refcounted `EpicEventBus` (via
+`acquireEpicBus` in
+`packages/generacy/src/cli/commands/cockpit/mcp/event-bus-registry.ts`) and
+subscribes to it. The cockpit MCP server is stdio-only and cannot be attached
+to across processes, so cross-process bus sharing (agency#431's aspirational
+"one poll loop per epic") is out of scope for this verb — see
+Clarifications Q1. The doorbell replaces the `cockpit watch` subprocess as the
+sensor, so net poll-loop count under auto-drive stays at today's baseline
+(watch + MCP `cockpit_await_events`) rather than increasing. Callers (the
+skill) treat any non-empty stdout line as a wake signal; the content is not
+parsed.
 
 ## Background — cross-repo drift
 
@@ -64,31 +70,40 @@ restoring near-instant reaction latency instead of the ~5-min fallback
 
 **Acceptance Criteria**:
 - [ ] `generacy cockpit doorbell <epic-ref>` exits 0 on `--help` (pre-flight
-      probe passes) and runs until SIGTERM otherwise.
-- [ ] Every transition emitted by the shared event-bus produces exactly one
-      newline-terminated stdout line.
-- [ ] The verb accepts an epic ref positionally, plus `--tracking <ref>` for
-      tracking-ref mode and `--new` for epic-less mode, matching how
-      `auto.md:53` arms it.
-- [ ] The doorbell shares the same event-bus subscription as
-      `cockpit_await_events` for the same epic — no second poll loop is
-      created; verified via `acquireEpicBus` refcount (>= 2 with both attached).
+      probe passes) and runs until SIGTERM otherwise (default; see FR-011 for
+      opt-in `--exit-on-epic-complete`).
+- [ ] Every event emitted by the in-process event-bus produces exactly one
+      newline-terminated stdout line. The line content is the event `type`
+      word (`issue-transition`, `phase-complete`, `epic-complete`); the initial
+      FR-010 armed line is the constant `armed`. (Clarifications Q3=B, Q4=A.)
+- [ ] The verb accepts an epic ref positionally under Form 1
+      (`doorbell <epic-ref>`) and Form 2 (`doorbell <tracking-ref> --tracking`),
+      and takes no positional under Form 3 (`doorbell --new "<title>"`),
+      matching how `auto.md:53` arms it. (Clarifications Q2=A.)
+- [ ] The doorbell's poll loop is refcounted in-process via `acquireEpicBus()`:
+      two doorbell subscribers **inside the same process** share one poll
+      loop. Cross-process sharing with the MCP server's `cockpit_await_events`
+      is explicitly not attempted (Clarifications Q1=C).
 
 ### US2: Skill can drop the redundant `cockpit watch` subprocess
 
 **As** the maintainer of agency#431,
 **I want** the engine-side doorbell to be present,
-**So that** the skill can replace the current dual poller (a
-`generacy cockpit watch` subprocess PLUS the MCP `cockpit_await_events`
-subscriber) with a single subscriber — cutting steady-state GraphQL call rate
-against GitHub in half on epics under auto-drive.
+**So that** the skill can replace the current `generacy cockpit watch`
+subprocess with the doorbell as its stdout wake sensor. Net poll-loop count
+under auto-drive is unchanged (doorbell process + MCP `cockpit_await_events`
+process — the doorbell simply takes `watch`'s slot). True cross-process
+poll-collapse (agency#431's "one poll loop per epic") is a follow-up requiring
+a new IPC surface (Clarifications Q1 option B) and is not delivered by this
+spec.
 
 **Acceptance Criteria**:
-- [ ] With two doorbells attached to the same epic-ref, the underlying poll
-      cadence is identical to one — no per-caller multiplier.
-- [ ] Releasing the doorbell (SIGTERM) does not tear down the bus if
-      `cockpit_await_events` still holds a ref (existing idle-TTL semantics
-      preserved).
+- [ ] With two `acquireEpicBus()` subscribers **inside the doorbell process**
+      (e.g., a test that acquires the bus twice), the underlying poll cadence
+      is identical to one — no per-caller multiplier.
+- [ ] Releasing one subscriber's `release()` inside the doorbell process does
+      not tear down the bus if another in-process ref is still held (existing
+      idle-TTL / refcount semantics preserved).
 
 ## Functional Requirements
 
@@ -96,21 +111,22 @@ against GitHub in half on epics under auto-drive.
 |--------|-------------|----------|-------|
 | FR-001 | Register `doorbell` subcommand under `cockpit` group in `packages/generacy/src/cli/commands/cockpit/index.ts`. | P1 | So `--help` lists it and Commander routes to the handler. |
 | FR-002 | Accept `<epic-ref>` positional argument. Reject empty/missing argument with the same error shape used by `cockpit watch` (`cockpit doorbell: parse issue: issue argument is required`, exit 2). | P1 | Ref grammar identical to `resolveIssueContext` (see #822/#850). |
-| FR-003 | Accept `--tracking <ref>` and `--new` flags matching the skill's arming shape (`auto.md:53`). | P1 | `--tracking` and `--new` are mutually exclusive with each other; `<epic-ref>` positional stays required unless `--new` is passed. |
-| FR-004 | Attach to the shared `EpicEventBus` for the resolved ref via `acquireEpicBus()` — do NOT construct a second poll loop. | P1 | This is the poll-collapse contract. |
-| FR-005 | Subscribe to the bus and emit **one newline-terminated stdout line per event received**. | P1 | Content is not a documented contract with the caller; a single-word marker (e.g. the event `type`) is sufficient. |
+| FR-003 | Accept `--tracking` (flag, no value) and `--new "<title>"` flags matching the skill's arming shape (`auto.md:53`). Under Form 1 the positional is the epic ref and subscribes the epic bus. Under Form 2 (`<ref> --tracking`) the positional is the tracking-issue ref and subscribes the tracking-ref bus (same `acquireEpicBus`, different key — `EpicEventBus` keys on any ref `resolveIssueContext` can expand). Under Form 3 (`--new "<title>"`) no positional is accepted and the doorbell emits only the FR-010 `armed` line then blocks on SIGTERM without a subscription. `--tracking` and `--new` are mutually exclusive. (Clarifications Q2=A.) | P1 | Ref grammar identical to `resolveIssueContext` (see #822/#850). |
+| FR-004 | Construct and subscribe to an in-process `EpicEventBus` for the resolved ref via `acquireEpicBus()`. The doorbell's "shared" contract is single-process: multiple `acquireEpicBus` calls **inside the doorbell process** share one poll loop; the doorbell does **not** attach to the MCP-server process's bus. (Clarifications Q1=C.) | P1 | The MCP server is stdio-only and cannot accept a second client; cross-process poll-collapse is a follow-up (Q1 option B). |
+| FR-005 | Subscribe to the bus and emit **one newline-terminated stdout line per event received**, 1:1 with `bus.emit()`, with no filter (Clarifications Q4=A). Each line contains the event `type` word only (`issue-transition`, `phase-complete`, `epic-complete`) — no JSON, no ref (Clarifications Q3=B). | P1 | The `CockpitStreamEvent` union today is exactly those three types; `epic-refresh` mentioned in the clarification context is not a real emitted type. |
 | FR-006 | Flush stdout after each write (do NOT rely on Node's block-buffered default when stdout is not a TTY). | P1 | Skill reads line-by-line; buffered writes defeat the wake signal. |
-| FR-007 | On SIGTERM / SIGINT, unsubscribe from the bus, call the `release()` returned by `acquireEpicBus`, and exit 0. | P1 | Preserves refcount semantics; other bus users unaffected. |
+| FR-007 | On SIGTERM / SIGINT, unsubscribe from the bus, call the `release()` returned by `acquireEpicBus`, and exit 0. | P1 | Preserves in-process refcount semantics; other in-process bus users unaffected. |
 | FR-008 | On `--help` the verb prints usage and exits 0 (satisfies the skill's `--help` pre-flight probe). | P1 | Commander default behavior — nothing extra required. |
 | FR-009 | Log warnings (poll errors, resolve failures) to stderr, not stdout. | P1 | stdout is reserved for wake signals only. |
-| FR-010 | Emit an **initial** doorbell line once the initial poll completes, so the skill can observe that the sensor is armed and steady. | P2 | Distinguishes "sensor up, epic quiet" from "sensor never started". |
+| FR-010 | Emit an **initial** out-of-band `armed\n` line once the initial poll completes (or, under Form 3 `--new`, immediately at startup with no subscription), so the skill can observe that the sensor is armed and steady. The `armed` line is emitted directly to stdout, not routed through `bus.emit()` (Clarifications Q4=A rationale). | P2 | Distinguishes "sensor up, epic quiet" from "sensor never started". |
+| FR-011 | Accept an optional `--exit-on-epic-complete` flag mirroring `cockpit watch` (`watch.ts:217-225, 253`). Off by default; when on, after emitting the `epic-complete\n` line the doorbell flushes stdout and `process.exit(0)`. When off (the default), the doorbell keeps polling after `epic-complete` and exits only on SIGTERM/SIGINT. Only meaningful under Form 1 (epic-ref); no-op under Form 2/3 where `epic-complete` never fires. (Clarifications Q5=B.) | P2 | Parity with `watch` — skill can opt in to auto-teardown, otherwise harness `Monitor` kills the sensor on epic terminal. |
 
 ## Success Criteria
 
 | ID     | Metric | Target | Measurement |
 |--------|--------|--------|-------------|
 | SC-001 | `generacy cockpit doorbell --help` exits 0 on a fresh preview cluster. | Exit code 0. | Manual: run against the next preview build. |
-| SC-002 | On an epic with concurrent `cockpit_await_events` subscriber and `doorbell` process, the underlying `EpicEventBus` refcount is >= 2, and only ONE poll loop is running. | Refcount == 2; poll cadence == default (30s). | Integration test using `acquireEpicBus` from `event-bus-registry.ts` directly. |
+| SC-002 | Inside the doorbell process, two concurrent `acquireEpicBus()` subscribers on the same ref share ONE poll loop (refcounted). Cross-process sharing with the MCP server is out of scope for this spec (Clarifications Q1=C). | In-process refcount == 2; poll cadence == default (30s); one active poll timer. | Vitest against the doorbell handler and `event-bus-registry.ts`, in-process. |
 | SC-003 | Every event emitted by the bus produces exactly one stdout line on the doorbell process. | 1:1 (event to line). | Vitest against the doorbell handler with a stubbed bus. |
 | SC-004 | Auto-drive latency from a real epic transition to skill wake drops from the 5-min `ScheduleWakeup` fallback to `<= 60s` (poll cadence + emit). | p95 <= 60s. | Preview-cluster verification during `/cockpit:auto` run on a synthetic epic. |
 | SC-005 | Zero regressions in `cockpit watch` / `cockpit_await_events` behavior. | All existing tests pass. | Existing `packages/generacy/src/cli/commands/cockpit/__tests__/` + `mcp/__tests__/` green. |
@@ -124,9 +140,16 @@ against GitHub in half on epics under auto-drive.
 - The skill (`auto.md`) treats **any** non-empty stdout line as a wake. No
   NDJSON payload contract is required. The verb is free to emit terse markers.
 - `acquireEpicBus` is safe to call from a CLI process (not only from the MCP
-  server context). If it is not — e.g., it relies on a running MCP server for
-  bus lifecycle — the implementation may extract the shared poll driver into a
-  reusable module. This is a planning-phase decision.
+  server context). This is now a hard requirement, not a planning question,
+  under Clarifications Q1=C: the doorbell verb owns its own bus in-process.
+  If refactor is needed to make `acquireEpicBus` process-agnostic (e.g.
+  extracting the poll driver into a reusable module used by both CLI and MCP
+  paths), that lands as part of this feature.
+- The `CockpitStreamEvent` union today is exactly `issue-transition` +
+  `phase-complete` + `epic-complete` (see `watch/stream-event.ts`). No
+  cycle-boundary noise events exist, so FR-005's "all events, no filter"
+  contract does not need a noise-list carve-out. If the union grows, the
+  filter policy must be re-visited (out of scope for this spec).
 - Existing `--tracking` / `--new` handling in the skill matches the parse
   shape used by other epic-taking cockpit verbs (`watch`, `status`).
 
@@ -140,8 +163,14 @@ against GitHub in half on epics under auto-drive.
   present" from "verb absent" (currently `--help` exits 0 in both cases when
   Commander sees an unknown subcommand under a parent group). That is a
   companion agency-side issue mentioned in #974's Related section.
-- Documented stdout payload format for the doorbell. Only "non-empty line per
-  event" is contracted.
+- Documented stdout payload format for the doorbell as a *caller contract*.
+  Content is deterministic for testability (FR-005, Clarifications Q3=B), but
+  callers (the skill) continue to treat any non-empty line as a wake and MUST
+  NOT parse the content.
+- Cross-process poll-loop collapse between the doorbell process and the MCP
+  server's `cockpit_await_events`. Achieving agency#431's "one poll loop per
+  epic" aspiration requires a new IPC surface (Clarifications Q1 option B) and
+  is deferred as a follow-up if the 2× cost proves material.
 
 ---
 
