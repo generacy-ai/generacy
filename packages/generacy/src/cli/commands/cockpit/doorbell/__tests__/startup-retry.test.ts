@@ -63,6 +63,24 @@ describe('classifyGhError', () => {
     }
   });
 
+  it('maps GitHub rate-limit errors → retriable rate-limit (incl. HTTP-403 secondary, before the permanent 403 rule)', () => {
+    for (const message of [
+      // GraphQL primary limit — plain text, no HTTP status (as seen in the wild).
+      'GraphQL: API rate limit already exceeded for installation ID 113597939',
+      // REST primary limit.
+      'API rate limit exceeded for user ID 42',
+      // Secondary limit — arrives as HTTP 403; must NOT be classified permanent.
+      'HTTP 403: You have exceeded a secondary rate limit. Please wait a few minutes',
+      // Legacy abuse-detection wording.
+      'You have triggered an abuse detection mechanism',
+    ]) {
+      expect(classifyGhError(makeError(message))).toEqual({
+        kind: 'retriable',
+        hint: 'rate-limit',
+      });
+    }
+  });
+
   it('maps HTTP 401 → permanent bad-credentials', () => {
     expect(classifyGhError(makeError('HTTP 401 Unauthorized'))).toEqual({
       kind: 'permanent',

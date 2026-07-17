@@ -81,6 +81,21 @@ export function classifyGhError(err: unknown): GhErrorClass {
   if (retriableHttp) {
     return { kind: 'retriable', hint: `http-${retriableHttp[1]}` };
   }
+  // Retriable: GitHub primary/secondary rate limits. These do NOT reliably
+  // surface as "HTTP 429" — the GraphQL primary limit arrives as plain text
+  // ("API rate limit exceeded" / "...rate limit already exceeded...") with no
+  // HTTP status, and the secondary/abuse limit arrives as HTTP 403. They MUST
+  // be matched here, before the permanent 401/403 rules below, or a
+  // rate-limited `gh` call is misclassified as permanent and the doorbell
+  // exit(3)s instead of retrying — the exact failure this envelope exists to
+  // prevent, since rate-limiting is the dominant transient `gh` failure.
+  if (
+    /rate limit (?:already )?exceeded/i.test(message) ||
+    /secondary rate limit/i.test(message) ||
+    /abuse detection/i.test(message)
+  ) {
+    return { kind: 'retriable', hint: 'rate-limit' };
+  }
 
   // Permanent: 401 / Bad credentials.
   if (/\bHTTP\s+401\b/.test(message) || /Bad credentials/i.test(message)) {
