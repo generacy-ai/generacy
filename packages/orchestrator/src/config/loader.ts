@@ -297,6 +297,17 @@ function loadFromEnv(): Record<string, unknown> {
     (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
   }
 
+  // Workspace mirror path override. Explicit empty string disables the mirror.
+  const smeeWorkspaceMirrorPath =
+    process.env['SMEE_WORKSPACE_MIRROR_PATH'] ??
+    process.env[`${ENV_PREFIX}SMEE_WORKSPACE_MIRROR_PATH`];
+  if (smeeWorkspaceMirrorPath !== undefined) {
+    if (!config.smee) {
+      config.smee = {};
+    }
+    (config.smee as Record<string, unknown>).workspaceMirrorPath = smeeWorkspaceMirrorPath;
+  }
+
   // Label monitor config (LABEL_MONITOR_ENABLED takes precedence, falls back to ORCHESTRATOR_LABEL_MONITOR_ENABLED)
   const labelMonitorEnabled = process.env['LABEL_MONITOR_ENABLED'] ?? process.env[`${ENV_PREFIX}LABEL_MONITOR_ENABLED`];
   if (labelMonitorEnabled !== undefined) {

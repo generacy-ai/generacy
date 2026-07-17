@@ -34,6 +34,7 @@ import {
 } from './doorbell/channel-discovery.js';
 import { SourceSelector, type SourceMode } from './doorbell/source-selector.js';
 import { SmeeDoorbellSource } from './doorbell/smee-source.js';
+import { runStartupRetry } from './doorbell/startup-retry.js';
 
 export interface DoorbellOptions {
   tracking?: boolean;
@@ -126,6 +127,7 @@ interface RunPollModeInput {
   stderr: { write(chunk: string): boolean | void };
   stopPromise: Promise<void>;
   stop: () => void;
+  retryAbortSignal: AbortSignal;
 }
 
 interface RunPollModeHandle {
@@ -133,26 +135,51 @@ interface RunPollModeHandle {
   waitForStop: () => Promise<void>;
 }
 
-async function runPollMode(input: RunPollModeInput): Promise<RunPollModeHandle | null> {
+/**
+ * Fallback scheduler for tests / callers that do not wire a real
+ * rate-limit-aware scheduler. Retry envelope treats absence as "sleep for
+ * 1s between attempts and do nothing else".
+ */
+function noopScheduler(): RateLimitScheduler {
+  return {
+    getCurrentIntervalMs: () => 1_000,
+    probeNow: async () => null,
+    noteRetryAfter: () => undefined,
+    noteResponseHeaders: () => undefined,
+    start: () => undefined,
+    stop: () => undefined,
+  };
+}
+
+async function runPollMode(
+  input: RunPollModeInput,
+): Promise<RunPollModeHandle | { kind: 'permanent-exit' } | null> {
   const acquire = input.deps.acquireBus ?? acquireEpicBus;
-  let acquired: Acquired;
-  try {
-    const acquireOptions: AcquireOptions = {
-      epicRef: input.ref,
-      logger: input.logger,
-    };
-    if (input.deps.runner != null) acquireOptions.runner = input.deps.runner;
-    if (input.deps.gh != null) acquireOptions.gh = input.deps.gh;
-    if (input.deps.rateLimitScheduler != null) {
-      acquireOptions.rateLimitScheduler = input.deps.rateLimitScheduler;
-    }
-    acquired = await acquire(acquireOptions);
-  } catch (err) {
-    input.stderr.write(
-      `cockpit doorbell: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
+  const acquireOptions: AcquireOptions = {
+    epicRef: input.ref,
+    logger: input.logger,
+  };
+  if (input.deps.runner != null) acquireOptions.runner = input.deps.runner;
+  if (input.deps.gh != null) acquireOptions.gh = input.deps.gh;
+  if (input.deps.rateLimitScheduler != null) {
+    acquireOptions.rateLimitScheduler = input.deps.rateLimitScheduler;
+  }
+
+  const outcome = await runStartupRetry<Acquired>({
+    task: () => acquire(acquireOptions),
+    label: 'acquireEpicBus',
+    rateLimitScheduler: input.deps.rateLimitScheduler ?? noopScheduler(),
+    abortSignal: input.retryAbortSignal,
+    stderr: input.stderr,
+    logger: input.logger,
+  });
+  if (outcome.kind === 'permanent') {
+    return { kind: 'permanent-exit' };
+  }
+  if (outcome.kind === 'aborted') {
     return null;
   }
+  const acquired = outcome.value;
 
   const onEmit = (event: CockpitStreamEvent): void => {
     if (
@@ -190,13 +217,16 @@ interface RunSmeeModeInput {
   stdout: { write(chunk: string, cb?: () => void): boolean | void };
   selector: SourceSelector;
   stop: () => void;
+  retryAbortSignal: AbortSignal;
 }
 
 interface RunSmeeModeHandle {
   source: SmeeDoorbellSource;
 }
 
-async function runSmeeMode(input: RunSmeeModeInput): Promise<RunSmeeModeHandle | null> {
+async function runSmeeMode(
+  input: RunSmeeModeInput,
+): Promise<RunSmeeModeHandle | { kind: 'permanent-exit' } | null> {
   if (input.deps.gh == null) {
     input.logger.warn('cockpit doorbell: smee-mode requires a gh wrapper; falling through');
     return null;
@@ -232,12 +262,21 @@ async function runSmeeMode(input: RunSmeeModeInput): Promise<RunSmeeModeHandle |
       ? input.deps.smeeSourceFactory(sourceOptions)
       : new SmeeDoorbellSource(sourceOptions);
 
-  try {
-    await source.start();
-  } catch (err) {
-    input.logger.warn(
-      `cockpit doorbell: smee source start failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  const outcome = await runStartupRetry<null>({
+    task: async () => {
+      await source.start();
+      return null;
+    },
+    label: 'resolveEpic',
+    rateLimitScheduler: input.deps.rateLimitScheduler ?? noopScheduler(),
+    abortSignal: input.retryAbortSignal,
+    stderr: process.stderr,
+    logger: input.logger,
+  });
+  if (outcome.kind === 'permanent') {
+    return { kind: 'permanent-exit' };
+  }
+  if (outcome.kind === 'aborted') {
     return null;
   }
 
@@ -289,9 +328,12 @@ export async function runDoorbell(
     stopResolve = resolve;
   });
   let stopped = false;
+  // Signal used to abort startup-retry sleeps promptly on shutdown.
+  const retryAbortController = new AbortController();
   const stop = (): void => {
     if (stopped) return;
     stopped = true;
+    retryAbortController.abort();
     stopResolve();
   };
 
@@ -376,8 +418,10 @@ export async function runDoorbell(
     }
   };
 
-  const startPollMode = async (): Promise<boolean> => {
-    if (pollHandle != null) return true;
+  type StartOutcome = 'ok' | 'transient-fail' | 'permanent-exit';
+
+  const startPollMode = async (): Promise<StartOutcome> => {
+    if (pollHandle != null) return 'ok';
     const handle = await runPollMode({
       ref: form.ref,
       form,
@@ -388,14 +432,16 @@ export async function runDoorbell(
       stderr,
       stopPromise,
       stop,
+      retryAbortSignal: retryAbortController.signal,
     });
-    if (handle == null) return false;
-    pollHandle = handle;
-    return true;
+    if (handle == null) return 'transient-fail';
+    if ('kind' in handle && handle.kind === 'permanent-exit') return 'permanent-exit';
+    pollHandle = handle as RunPollModeHandle;
+    return 'ok';
   };
 
-  const startSmeeMode = async (url: string): Promise<boolean> => {
-    if (smeeHandle != null) return true;
+  const startSmeeMode = async (url: string): Promise<StartOutcome> => {
+    if (smeeHandle != null) return 'ok';
     const handle = await runSmeeMode({
       ref: form.ref,
       form,
@@ -406,11 +452,17 @@ export async function runDoorbell(
       stdout,
       selector,
       stop,
+      retryAbortSignal: retryAbortController.signal,
     });
-    if (handle == null) return false;
-    smeeHandle = handle;
-    return true;
+    if (handle == null) return 'transient-fail';
+    if ('kind' in handle && handle.kind === 'permanent-exit') return 'permanent-exit';
+    smeeHandle = handle as RunSmeeModeHandle;
+    return 'ok';
   };
+
+  // Signals a permanent-error exit from a mode-change branch that runs
+  // fire-and-forget. Consumed once at the outer boundary.
+  let permanentExit = false;
 
   selector.onModeChange((next: SourceMode) => {
     if (next === 'poll-fallback') {
@@ -420,8 +472,11 @@ export async function runDoorbell(
           smeeHandle = null;
           await s.source.stop();
         }
-        const ok = await startPollMode();
-        if (!ok) stop();
+        const outcome = await startPollMode();
+        if (outcome === 'permanent-exit') {
+          permanentExit = true;
+          stop();
+        } else if (outcome === 'transient-fail') stop();
       })();
     } else if (next === 'smee-attempt' && discovery != null) {
       void (async (): Promise<void> => {
@@ -430,22 +485,48 @@ export async function runDoorbell(
           pollHandle = null;
           p.release();
         }
-        const ok = await startSmeeMode(discovery.url);
-        if (!ok) {
+        const outcome = await startSmeeMode(discovery.url);
+        if (outcome === 'permanent-exit') {
+          permanentExit = true;
+          stop();
+        } else if (outcome === 'transient-fail') {
           // smee-attempt failed → fall back to poll-mode immediately, without
           // waiting for the demotion counter.
-          const okPoll = await startPollMode();
-          if (!okPoll) stop();
+          const pollOutcome = await startPollMode();
+          if (pollOutcome === 'permanent-exit') {
+            permanentExit = true;
+            stop();
+          } else if (pollOutcome === 'transient-fail') stop();
         }
       })();
     }
   });
 
   if (discovery != null) {
-    const ok = await startSmeeMode(discovery.url);
-    if (!ok) {
-      const okPoll = await startPollMode();
-      if (!okPoll) {
+    const outcome = await startSmeeMode(discovery.url);
+    if (outcome === 'permanent-exit') {
+      selector.stop();
+      cleanupSignals();
+      try {
+        exit(3);
+      } catch {
+        /* test seam may throw */
+      }
+      return 3;
+    }
+    if (outcome === 'transient-fail') {
+      const pollOutcome = await startPollMode();
+      if (pollOutcome === 'permanent-exit') {
+        selector.stop();
+        cleanupSignals();
+        try {
+          exit(3);
+        } catch {
+          /* test seam may throw */
+        }
+        return 3;
+      }
+      if (pollOutcome === 'transient-fail' && !stopped) {
         selector.stop();
         cleanupSignals();
         try {
@@ -457,8 +538,18 @@ export async function runDoorbell(
       }
     }
   } else {
-    const ok = await startPollMode();
-    if (!ok) {
+    const outcome = await startPollMode();
+    if (outcome === 'permanent-exit') {
+      selector.stop();
+      cleanupSignals();
+      try {
+        exit(3);
+      } catch {
+        /* test seam may throw */
+      }
+      return 3;
+    }
+    if (outcome === 'transient-fail' && !stopped) {
       selector.stop();
       cleanupSignals();
       try {
@@ -476,12 +567,13 @@ export async function runDoorbell(
   selector.stop();
   await drainStdout(stdout);
   cleanupSignals();
+  const finalCode = permanentExit ? 3 : 0;
   try {
-    exit(0);
+    exit(finalCode);
   } catch {
     /* test seam may throw */
   }
-  return 0;
+  return finalCode;
 }
 
 export function doorbellCommand(): Command {

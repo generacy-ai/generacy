@@ -15,9 +15,21 @@ class MockStdout {
   }
 }
 
-function makeFs(behavior: 'enoent' | 'valid' | 'malformed', value?: string) {
+function makeFs(
+  behavior: 'enoent' | 'valid' | 'malformed',
+  matchPath?: string,
+  value?: string,
+) {
   return {
-    readFile: async (): Promise<string> => {
+    readFile: async (path: string | Buffer | URL): Promise<string> => {
+      // When matchPath is set, only that path exercises the behavior; every
+      // other path (walk-up ancestors, absolute workspace mirror) returns
+      // ENOENT — the walk-up chain terminates cleanly.
+      if (matchPath != null && String(path) !== matchPath) {
+        const err = new Error('not found') as Error & { code?: string };
+        err.code = 'ENOENT';
+        throw err;
+      }
       if (behavior === 'enoent') {
         const err = new Error('not found') as Error & { code?: string };
         err.code = 'ENOENT';
@@ -57,7 +69,7 @@ describe('runDoorbell branch selection', () => {
         acquireBus,
         smeeSourceFactory: smeeFactory,
         env: {},
-        fs: makeFs('enoent'),
+        fs: makeFs('enoent', '/tmp/nonexistent'),
         channelFilePath: '/tmp/nonexistent',
         exit: () => {
           /* do not throw */
@@ -97,7 +109,7 @@ describe('runDoorbell branch selection', () => {
         smeeSourceFactory: smeeFactory,
         gh: {} as unknown as any,
         env: { COCKPIT_DOORBELL_SMEE_URL: 'https://smee.io/xyz' },
-        fs: makeFs('enoent'),
+        fs: makeFs('enoent', '/tmp/nonexistent'),
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
@@ -129,7 +141,7 @@ describe('runDoorbell branch selection', () => {
         smeeSourceFactory: smeeFactory,
         gh: {} as unknown as any,
         env: {},
-        fs: makeFs('malformed'),
+        fs: makeFs('malformed', '/tmp/bogus'),
         channelFilePath: '/tmp/bogus',
         exit: () => undefined,
         abortSignal: abort.signal,
