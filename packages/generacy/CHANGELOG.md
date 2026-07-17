@@ -1,5 +1,135 @@
 # @generacy-ai/generacy
 
+## 0.6.0
+
+### Minor Changes
+
+- 679d2e7: Authorship-gated clarification answer scanner, quote-safe parser, and
+  reply-only resume monitor. Replaces the content-sniffing L488 branch in
+  `clarification-poster.ts` (which fails both directions — bot self-answers
+  its own gate; developer quote-replies get silently discarded) with
+  `viewerDidAuthor`-based authorship + a new engine-written answer marker
+  family. Cluster-self-authored comments are answer sources only when they
+  carry `<!-- generacy-clarification-answers:<batch> -->`, stamped
+  exclusively by the new `cockpit_relay_clarify_answers` MCP tool. Adds
+  `ClarificationAnswerMonitorService` (mirror of `MergeConflictMonitorService`)
+  so a plain reply resumes the paused gate. `hasPendingClarifications` fails
+  closed on missing dir / unreadable file / parse failure. Prompt template,
+  parser, write-back regex, and cockpit tool now share `PENDING_ANSWER_LITERAL`
+  via `@generacy-ai/workflow-engine`, making prompt/parser drift structurally
+  impossible. See #958.
+- bd43b04: Add `generacy cockpit doorbell <epic-ref>` — a wake-sensor CLI verb for
+  `/cockpit:auto` (agency#431). The verb spawns as a background sensor,
+  constructs its own in-process refcounted `EpicEventBus` via `acquireEpicBus`,
+  and emits one newline-terminated stdout line per bus event (the event `type`
+  word: `issue-transition`, `phase-complete`, `epic-complete`) plus an initial
+  out-of-band `armed` line. Three arming forms: `doorbell <epic-ref>`,
+  `doorbell <tracking-ref> --tracking`, `doorbell --new "<title>"`. Optional
+  `--exit-on-epic-complete` mirrors `cockpit watch`. Unblocks auto-drive wake
+  latency, which was silently degrading to the 5-min `ScheduleWakeup` heartbeat
+  because the skill's arm-command was returning `error: unknown command
+'doorbell'`.
+- 6770cbc: Wire the smee doorbell end-to-end for operator sessions on smee-live clusters.
+
+  The orchestrator's `SmeeChannelResolver` now mirrors the resolved channel URL
+  to a shared workspace path so operator devcontainer/tunnel sessions — which
+  do not mount the cluster-internal `generacy-data` volume — can discover it,
+  and the doorbell's startup `gh` calls survive transient failures via a two-
+  tier retry envelope instead of `exit(2)`-ing on the first hiccup.
+
+### Patch Changes
+
+- c7807a3: Detect repeat-identical phase failures and escalate to artifact repair instead of retrying verbatim (#942).
+
+  A phase failure caused by a defective generated artifact used to fail forever:
+  the retry path re-ran the same phase against the same artifacts. On snappoll#8,
+  `implement` failed three times with a byte-identical reason (a self-contradictory
+  `tasks.md` kept tripping the `no-product-code-changes` post-exit check) and only
+  cleared after a 3-hour hand-implementation. Three verbatim-identical failures are
+  an unambiguous signal that retrying will not help — the inputs are wrong.
+
+  - `@generacy-ai/workflow-engine`: adds six `failed:<phase>-repeated` label
+    definitions (`specify`, `clarify`, `plan`, `tasks`, `implement`, `validate`),
+    applied when the same failure fingerprint fires ≥2×.
+  - `@generacy-ai/orchestrator`: fingerprints each phase failure (phase + reason)
+    and tracks recurrence, so the phase loop stops retrying on the second
+    identical failure and surfaces the distinct `failed:<phase>-repeated` state
+    rather than looping. Non-identical failures retry as before.
+  - `@generacy-ai/generacy`: `cockpit resume` understands the repeated-failure
+    state, so the operator is offered the artifact-repair path (repair/regenerate
+    the upstream artifact with the failure reason as context) instead of a plain
+    requeue that would reproduce the same failure.
+
+- 4c1ff4d: Add defensive content guard to `findClarificationComment` so stage-status
+  tables never surface as the clarification batch (#962).
+
+  The finder previously selected the first at-or-after `waiting-for:clarification`
+  comment purely by timing, with no body check. #960's symptom (a
+  `<!-- generacy-stage:planning -->` status table returned as the clarification
+  batch) was only latent because #958 stopped the engine from self-answering
+  inside the at-or-after window. The guard rejects candidates whose body carries
+  one of six stage-status prefixes (`<!-- generacy-stage:{planning,specification,
+implementation}` and the legacy `<!-- speckit-stage:*` twins) at column 0,
+  unless the same body also carries a `<!-- generacy-stage:clarification*` override
+  marker. Rejected candidates are skipped and scanning continues; the finder
+  returns `null` only when every at-or-after candidate is rejected.
+
+- 55844a0: Reduce cockpit's GraphQL point spend during `/cockpit:auto` runs so a single
+  shared-token operator doesn't exhaust GitHub's 5k/hr GraphQL bucket. Five
+  coordinated fixes at the cockpit CLI + `GhCliWrapper` layer:
+
+  - New `GhResponseCache` — 20s TTL read-through cache with in-flight coalescing
+    wired into the four hot-path GraphQL methods (`getPullRequestCheckRuns`,
+    `getIssue`, `resolveIssueToPR`, `getPullRequest`). Opt-in via
+    `new GhCliWrapper(runner, logger, { cache })`.
+  - New `RateLimitScheduler` — probes `gh api rate_limit` and widens the poll
+    interval on a hysteresis ladder (`< 20% → 2× base`, `< 5% → 4× base`,
+    ceiling `5 min`). Honours `retry-after` when present.
+  - New `derivePrChecksNeeded()` gate on `runOnePoll` — skips
+    `getPullRequestCheckRuns` for terminal-green PRs until head-SHA changes,
+    labels change, or a 20-cycle safety re-fetch fires.
+  - `resolveEpic` is now refreshed only every 10th cycle in both the CLI watch
+    loop and the MCP event-bus loop (was every cycle).
+  - `PauseState.skipNextCycle` prevents the immediate-post-catch-up double poll
+    after a paused event bus resumes.
+
+  New public exports on `@generacy-ai/cockpit`: `createGhResponseCache`,
+  `GhCacheOptions`, `GhResponseCache`, `createRateLimitScheduler`,
+  `RateLimitSchedulerOptions`, `RateLimitScheduler`, `RateLimitProbeResult`,
+  `GhCliWrapperOptions`, plus a new optional `headRefOid?: string` field on
+  `PullRequestSummary`. Bare `new GhCliWrapper(runner)` retains pre-#970
+  behavior exactly.
+
+- ffe6d31: `cockpit doorbell` swaps its wake source to a smee.io SSE consumer when a
+  cluster smee channel is configured, keeping the existing 30s event-bus poll
+  loop as a safety-net fallback (#978). No CLI surface changes and no public
+  schemas move (Q1=A preserved): `CockpitEventSchema` enum is unchanged and
+  `armed\n` still writes immediately after argument validation. Real-time-first
+  on smee-live clusters drops label-to-wake latency from ~25s to ≤ ~3s p95;
+  poll-only clusters see no behavior change.
+- 80cbd26: fix(cockpit): treat GitHub rate-limit errors as retriable in the doorbell startup-retry classifier
+
+  `classifyGhError` did not recognize GitHub rate-limit errors — the GraphQL primary limit surfaces as plain text (`API rate limit already exceeded …`) with no `HTTP 429` marker, and the secondary/abuse limit arrives as `HTTP 403` — so both fell through to `permanent`, causing `generacy cockpit doorbell` to `exit(3)` instead of retrying. Because rate-limiting is the dominant transient `gh` failure on a shared token, a rate-limited `acquireEpicBus`/`resolveEpic` would kill the wake sensor mid-run and drop `/cockpit:auto` to the 5-minute heartbeat. Primary, secondary, and abuse-detection rate-limit messages are now classified retriable, matched before the permanent 401/403 rules so a 403 secondary limit is no longer mistaken for a scope error.
+
+- Updated dependencies [cbaa48f]
+- Updated dependencies [c7807a3]
+- Updated dependencies [f26480e]
+- Updated dependencies [9341fd1]
+- Updated dependencies [bb60299]
+- Updated dependencies [d0bafbc]
+- Updated dependencies [d4ca687]
+- Updated dependencies [1b6d362]
+- Updated dependencies [679d2e7]
+- Updated dependencies [520b1f1]
+- Updated dependencies [405ed96]
+- Updated dependencies [55844a0]
+- Updated dependencies [01bbb03]
+- Updated dependencies [73fe178]
+- Updated dependencies [6770cbc]
+  - @generacy-ai/orchestrator@0.9.0
+  - @generacy-ai/workflow-engine@0.4.0
+  - @generacy-ai/cockpit@0.5.0
+
 ## 0.5.0
 
 ### Minor Changes

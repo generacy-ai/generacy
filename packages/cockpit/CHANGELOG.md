@@ -1,5 +1,63 @@
 # @generacy-ai/cockpit
 
+## 0.5.0
+
+### Minor Changes
+
+- 55844a0: Reduce cockpit's GraphQL point spend during `/cockpit:auto` runs so a single
+  shared-token operator doesn't exhaust GitHub's 5k/hr GraphQL bucket. Five
+  coordinated fixes at the cockpit CLI + `GhCliWrapper` layer:
+
+  - New `GhResponseCache` — 20s TTL read-through cache with in-flight coalescing
+    wired into the four hot-path GraphQL methods (`getPullRequestCheckRuns`,
+    `getIssue`, `resolveIssueToPR`, `getPullRequest`). Opt-in via
+    `new GhCliWrapper(runner, logger, { cache })`.
+  - New `RateLimitScheduler` — probes `gh api rate_limit` and widens the poll
+    interval on a hysteresis ladder (`< 20% → 2× base`, `< 5% → 4× base`,
+    ceiling `5 min`). Honours `retry-after` when present.
+  - New `derivePrChecksNeeded()` gate on `runOnePoll` — skips
+    `getPullRequestCheckRuns` for terminal-green PRs until head-SHA changes,
+    labels change, or a 20-cycle safety re-fetch fires.
+  - `resolveEpic` is now refreshed only every 10th cycle in both the CLI watch
+    loop and the MCP event-bus loop (was every cycle).
+  - `PauseState.skipNextCycle` prevents the immediate-post-catch-up double poll
+    after a paused event bus resumes.
+
+  New public exports on `@generacy-ai/cockpit`: `createGhResponseCache`,
+  `GhCacheOptions`, `GhResponseCache`, `createRateLimitScheduler`,
+  `RateLimitSchedulerOptions`, `RateLimitScheduler`, `RateLimitProbeResult`,
+  `GhCliWrapperOptions`, plus a new optional `headRefOid?: string` field on
+  `PullRequestSummary`. Bare `new GhCliWrapper(runner)` retains pre-#970
+  behavior exactly.
+
+### Patch Changes
+
+- f26480e: Classify `blocked:stuck-merge-conflicts` / `blocked:stuck-validate-fix` as error-tier instead of surfacing them as unrecognized state (#943).
+
+  `blocked:stuck-merge-conflicts` — applied by the orchestrator's merge-conflict
+  handler when its auto-remedy gives up — had no tier in the cockpit classifier,
+  so it reached consumers as an _unrecognized state_. During the snappoll auto run
+  that produced 3 unrecognized-state escalations, each interrupting the operator
+  with a generic "never guess" gate instead of the specific merge-conflict
+  escalation that already exists for `waiting-for:merge-conflicts`.
+
+  - `classify()` now maps an enumerated set of `blocked:*` labels
+    (`blocked:stuck-merge-conflicts`, `blocked:stuck-validate-fix`) to the `error`
+    tier, with the blocked label as `sourceLabel`. The set is enumerated rather
+    than prefix-matched on purpose: any other `blocked:*` name — including
+    `blocked:stuck-feedback-loop` (#883) and future additions — still falls
+    through to the waiting prefix branch, preserving today's behavior as the safe
+    default.
+  - Adds an intra-error tie-break (`ERROR_PIPELINE_ORDER`) so those blocked labels
+    outrank `agent:error` / `failed:*` and co-occurring `waiting-for:merge-conflicts`,
+    letting consumers dispatch to the specific escalation gate. The full label set
+    remains available on the classified state for consumers wanting the generic
+    signal.
+
+- Updated dependencies [c7807a3]
+- Updated dependencies [679d2e7]
+  - @generacy-ai/workflow-engine@0.4.0
+
 ## 0.4.0
 
 ### Minor Changes

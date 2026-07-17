@@ -1,5 +1,183 @@
 # Changelog
 
+## 0.9.0
+
+### Minor Changes
+
+- d0bafbc: Auto-provision a smee.io channel on orchestrator startup when none is
+  configured, persist it to `/var/lib/generacy/smee-channel` (mode 0600), and
+  let the existing webhook-setup flow wire the GitHub webhook. Every automated
+  provisioning path (local CLI, cloud onboarding, cloud deploy) previously
+  shipped an empty `SMEE_CHANNEL_URL`, so every new cluster silently ran
+  webhook-less and degraded to polling. The orchestrator's new
+  `SmeeChannelResolver` runs asynchronously off the listen path (fire-and-forget)
+  with a 4-tier precedence — env/yaml → persisted file → `POST https://smee.io/new`
+  (5 s timeout, 2 attempts, 1 s delay) → persist — and fails open on any tier.
+  Clusters with a hand-set env URL are unchanged.
+- 679d2e7: Authorship-gated clarification answer scanner, quote-safe parser, and
+  reply-only resume monitor. Replaces the content-sniffing L488 branch in
+  `clarification-poster.ts` (which fails both directions — bot self-answers
+  its own gate; developer quote-replies get silently discarded) with
+  `viewerDidAuthor`-based authorship + a new engine-written answer marker
+  family. Cluster-self-authored comments are answer sources only when they
+  carry `<!-- generacy-clarification-answers:<batch> -->`, stamped
+  exclusively by the new `cockpit_relay_clarify_answers` MCP tool. Adds
+  `ClarificationAnswerMonitorService` (mirror of `MergeConflictMonitorService`)
+  so a plain reply resumes the paused gate. `hasPendingClarifications` fails
+  closed on missing dir / unreadable file / parse failure. Prompt template,
+  parser, write-back regex, and cockpit tool now share `PENDING_ANSWER_LITERAL`
+  via `@generacy-ai/workflow-engine`, making prompt/parser drift structurally
+  impossible. See #958.
+- 6770cbc: Wire the smee doorbell end-to-end for operator sessions on smee-live clusters.
+
+  The orchestrator's `SmeeChannelResolver` now mirrors the resolved channel URL
+  to a shared workspace path so operator devcontainer/tunnel sessions — which
+  do not mount the cluster-internal `generacy-data` volume — can discover it,
+  and the doorbell's startup `gh` calls survive transient failures via a two-
+  tier retry envelope instead of `exit(2)`-ing on the first hiccup.
+
+### Patch Changes
+
+- cbaa48f: Stop the address-pr-feedback flow from completing the `implementation-review` human gate without approval (#941).
+
+  When a fix session exited, the gate was marked `completed:implementation-review`
+  server-side regardless of whether the review's findings were actually resolved —
+  so request-changes verdicts were effectively advisory. During the snappoll run
+  this advanced the gate twice with no operator call and no
+  `<!-- generacy-cockpit:manual-advance -->` audit comment, letting a PR with three
+  known-blocking findings sail through validate.
+
+  - `PrFeedbackHandler` now re-asserts `waiting-for:implementation-review` on every
+    terminal exit (happy path, both blocked-stuck dispositions, and thrown errors)
+    via the shared `finally`, idempotently re-adding the label and logging a
+    structured error if some other path stripped it. It runs _before_ the
+    `agent:in-progress` clear, so the terminal transient state is never
+    `{ agent:in-progress present, waiting-for:implementation-review absent }`.
+    A fix attempt that does not resolve the findings therefore lands back in
+    review rather than past it.
+  - `LabelManager` gains a seam guard: writing `completed:<human-gate>` now
+    requires an explicit `AllowGateComplete` token and otherwise throws
+    `HumanGateCompletionUnauthorizedError`. The union has a single member
+    (`cockpit-advance` — the path that also posts the manual-advance audit
+    comment), so human gates stay attributable and no server-side path can
+    silently complete one.
+
+- c7807a3: Detect repeat-identical phase failures and escalate to artifact repair instead of retrying verbatim (#942).
+
+  A phase failure caused by a defective generated artifact used to fail forever:
+  the retry path re-ran the same phase against the same artifacts. On snappoll#8,
+  `implement` failed three times with a byte-identical reason (a self-contradictory
+  `tasks.md` kept tripping the `no-product-code-changes` post-exit check) and only
+  cleared after a 3-hour hand-implementation. Three verbatim-identical failures are
+  an unambiguous signal that retrying will not help — the inputs are wrong.
+
+  - `@generacy-ai/workflow-engine`: adds six `failed:<phase>-repeated` label
+    definitions (`specify`, `clarify`, `plan`, `tasks`, `implement`, `validate`),
+    applied when the same failure fingerprint fires ≥2×.
+  - `@generacy-ai/orchestrator`: fingerprints each phase failure (phase + reason)
+    and tracks recurrence, so the phase loop stops retrying on the second
+    identical failure and surfaces the distinct `failed:<phase>-repeated` state
+    rather than looping. Non-identical failures retry as before.
+  - `@generacy-ai/generacy`: `cockpit resume` understands the repeated-failure
+    state, so the operator is offered the artifact-repair path (repair/regenerate
+    the upstream artifact with the failure reason as context) instead of a plain
+    requeue that would reproduce the same failure.
+
+- 9341fd1: Fix clarification options being truncated when an option description wraps (#948).
+
+  `parseClarifications()` extracted the `**Options**:` block by matching a run of
+  consecutive `- ` lines, so the first continuation line ended the block. A
+  hard-wrapped option description — or one carrying indented sub-bullets — was
+  therefore cut off mid-sentence, and every option after it was silently dropped
+  before `postClarifications()` rendered and posted the comment. The human
+  answering the gate never saw the missing options.
+
+  The block is now delimited the same way `**Context**` and `**Question**` already
+  are (to the next `**Field**:` line, `###` heading, or EOF), with continuation
+  lines attached to the option above them. Across the 1,440 questions carrying
+  options in the repo's shipped `clarifications.md` files, this recovers 17
+  dropped options and 6 truncated descriptions.
+
+  Comments already posted are unaffected — the poster dedups on its marker and
+  will not repost.
+
+- bb60299: Widen `parseAnswersFromComments` to accept the cockpit `### Q<n>` + `**Answer:** value` dialect, so the deterministic backstop parser stops silently returning `no-answers` on every cockpit-posted clarification comment.
+- d4ca687: Fix `updateAdaptivePolling()` dead branch across `LabelMonitorService`, `PrFeedbackMonitorService`, and `MergeConflictMonitorService` — the safety net is now reachable on clusters with no configured webhook feeder (#953).
+
+  The three copy-pasted `updateAdaptivePolling()` implementations all opened with `if (this.state.lastWebhookEvent === null) return`, so the fast-poll compensation only ever engaged for clusters that once had a working webhook and lost it — never for smee-less clusters (currently every new cluster). All three copies now delegate to a shared pure helper (`adaptive-poll-controller.ts`), and each service accepts a construction-time `webhooksConfigured` flag that distinguishes "webhooks configured but quiet" (grace applies) from "no webhook path exists" (engage fast interval when `adaptivePolling: true`).
+
+  Two operator-visible facts ship with this:
+
+  - **`PrMonitorConfigSchema.adaptivePolling` default flips `true → false`.** The old default was inert (dead branch); flipping it now that the branch actually fires prevents silently doubling GitHub API load on every existing cluster. Operators opt in with `PR_MONITOR_ADAPTIVE_POLLING=true`. `MonitorConfigSchema.adaptivePolling` default stays `true` — LabelMonitor's 30s base was tuned assuming a real-time path, so restoring fast polling on smee-less clusters preserves the original design intent.
+  - **Smee-less LabelMonitor clusters emit a `to-fast` transition log line on cycle 1** where they previously emitted nothing. The log body carries `reason: 'webhooks-not-configured'`.
+
+- 1b6d362: Surface smee-less startup and webhook-setup opt-out (#954).
+
+  When no smee channel is configured, the orchestrator silently degrades to polling:
+  the smee receiver is constructed inside `if (config.smee.channelUrl)` with no
+  `else`, so `docker logs … | grep -i smee` returns nothing on a polling-only
+  cluster. This adds three observability primitives:
+
+  - A `warn` at label-monitor construction when `config.smee.channelUrl` is unset
+    in full mode with an active label monitor and repositories configured. Payload
+    states the effective `pollIntervalMs`, `completedCheckInterval = 3` (from
+    `LabelMonitorService`), both computed `process:*`/`completed:*` worst-case
+    latencies, and remediation pointers (`SMEE_CHANNEL_URL`,
+    `orchestrator.smeeChannelUrl`). The block guards on `!isWorkerMode &&
+config.labelMonitor && config.repositories.length > 0` — no false-warning in
+    worker mode, pre-activation, or deliberate opt-out.
+  - An `info` at the webhook-setup guard when `config.smee.channelUrl` IS set but
+    `config.webhookSetup.enabled` is false, so an operator inheriting an opt-out
+    config gets one observable line rather than silence. `info`, not `warn`:
+    deliberate opt-out is not degradation.
+  - An additive optional `smeeConfigured: boolean` field on `HealthResponse`
+    (200 + 503 schemas), populated from `!!config.smee.channelUrl` at
+    `createServer()` construction. Present on all processes — it's a
+    configuration statement, not a degradation claim.
+
+- 520b1f1: Fix SmeeChannelResolver.provision() to match smee.io's current GET/307 behavior; provisioning previously failed on POST/302 assumptions and every fresh cluster fell back to polling.
+- 405ed96: Fix "Connect with VS Code Desktop" hanging on freshly deployed clusters (#966).
+
+  The `authorization_pending` event from `code tunnel` was silently dropped when the
+  orchestrator relay wasn't yet `connected`, so the cloud UI never saw the device code.
+  The orchestrator now retains the latest actionable `cluster.vscode-tunnel` event and
+  replays it on relay reconnect, `VsCodeTunnelProcessManager.start()` emits a fresh
+  `starting` event on user re-trigger while the child is alive, and a distinct 5-minute
+  timeout bounds the `authorization_pending` phase.
+
+- 01bbb03: Fail loud on webhook-registration 403 in `WebhookSetupService` (#972).
+
+  When `ensureWebhooks()` gets HTTP 403 (`Resource not accessible by integration`) on
+  list/create/update — the systemic missing `admin:repo_hook` scope on the Generacy
+  GitHub App — the orchestrator now emits a triple: a structured `warn` log line,
+  a `cluster.bootstrap` relay event `{ status: 'failed', reason:
+'webhook-registration-forbidden', repo, installationId, missingScope:
+'admin:repo_hook' }`, and a cluster status transition to `degraded` (via
+  `POST /internal/status`). Also locks the create-time event set to `issues`,
+  `pull_request`, `check_run`, `check_suite` (FR-001) and adds an exact
+  persisted-URL heal path (FR-004) that PATCHes a hook whose `config.url` matches
+  a previously-provisioned smee channel to the current channel URL, and refuses
+  to modify foreign smee hooks that match neither current nor persisted URL.
+
+- 73fe178: Same-account plain `Q<n>:` replies on paused clarify issues now auto-resume
+  and integrate.
+
+  Both clarification answer surfaces (the monitor's enqueue check and the phase
+  loop's integration scanner) previously short-circuited any comment authored
+  by the cluster's own GitHub account, silently dropping human-operator answers
+  posted through that identity. The identity gate is removed at both sites in
+  favor of a broader machine-marker filter (`MACHINE_MARKERS`), delegating
+  same-account trust to the existing self-authored branch of the shared
+  trust helper. Machine-authored comments (question posts, stage/status
+  tracking, audit, marker-relay, bot explainers) are still excluded via the
+  marker set.
+
+- Updated dependencies [c7807a3]
+- Updated dependencies [679d2e7]
+- Updated dependencies [405ed96]
+  - @generacy-ai/workflow-engine@0.4.0
+  - @generacy-ai/control-plane@0.7.3
+
 ## 0.8.0
 
 ### Minor Changes
