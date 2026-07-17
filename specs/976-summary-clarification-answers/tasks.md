@@ -10,7 +10,7 @@
 
 ## Phase 1: Marker Vocabulary (shared foundation)
 
-- [ ] T001 [SC-001][SC-002] Add `MACHINE_MARKERS`, `commentCarriesMachineMarker`, `matchMachineMarker` to
+- [X] T001 [SC-001][SC-002] Add `MACHINE_MARKERS`, `commentCarriesMachineMarker`, `matchMachineMarker` to
       `packages/orchestrator/src/worker/clarification-markers.ts`.
       - Define `MACHINE_MARKERS` as the exact inventory in `contracts/machine-markers.md` §Inventory,
         using `...CLARIFICATION_QUESTION_MARKERS` spread at the top to enforce the superset invariant.
@@ -26,7 +26,7 @@
 
 ## Phase 2: Structural Marker Tests
 
-- [ ] T010 [P][SC-001][SC-002] New file
+- [X] T010 [P][SC-001][SC-002] New file
       `packages/orchestrator/src/worker/__tests__/clarification-machine-markers.test.ts`
       asserting the six coverage points in `contracts/machine-markers.md` §Structural test coverage:
       1. Every entry in `MACHINE_MARKERS` positively matches (parameterized loop).
@@ -38,14 +38,14 @@
       Include an explicit positive assertion that `'<!-- generacy-clarification-answers:'` is IN
       `MACHINE_MARKERS` (locks in the marker-relay deprecation, research §Decision 3).
 
-- [ ] T011 [P] MOD `packages/orchestrator/src/worker/__tests__/clarification-markers.test.ts` — no
+- [X] T011 [P] MOD `packages/orchestrator/src/worker/__tests__/clarification-markers.test.ts` — no
       new assertions required. Verify the existing "unrelated marker family" negative case at ~L36
       (using `generacy-untrusted-answer:` as a negative for `commentCarriesQuestionMarker`) still
       passes as-is; add a code comment noting the question-marker predicate stays narrow post-#976.
 
 ## Phase 3: Monitor Call-Site
 
-- [ ] T020 [SC-001] Modify
+- [X] T020 [SC-001] Modify
       `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`:
       - Import at L42: swap `commentCarriesAnswerMarker` → `commentCarriesMachineMarker`.
       - Loop body at L198-209: delete `if (c.viewerDidAuthor === true) continue;`; replace
@@ -54,7 +54,7 @@
       - Do NOT touch anything else in this file (contract I-Mon3 — no other side effects).
       Depends on T001.
 
-- [ ] T021 [SC-001][SC-002] MOD
+- [X] T021 [SC-001][SC-002] MOD
       `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts`:
       - Delete/rewrite the existing case at L199-232 ("cluster-self comment only → no enqueue").
       - Add case (a): parameterized over every prefix in `MACHINE_MARKERS` — cluster-self comment
@@ -68,7 +68,7 @@
 
 ## Phase 4: Phase-Loop Scanner Call-Site
 
-- [ ] T030 [SC-001][SC-002] Modify `packages/orchestrator/src/worker/clarification-poster.ts`:
+- [X] T030 [SC-001][SC-002] Modify `packages/orchestrator/src/worker/clarification-poster.ts`:
       - Imports (L11-23 group): drop `matchClarificationQuestionMarker` and
         `commentCarriesAnswerMarker`; add `matchMachineMarker`. Keep `commentCarriesQuestionMarker`
         (still used by `isQuestionComment`). Grep-verify no other references to the dropped
@@ -87,14 +87,14 @@
         `parsed.sourceViewerDidAuthor`, not on candidacy).
       Depends on T001.
 
-- [ ] T031 [SC-001] MOD `packages/orchestrator/src/worker/__tests__/clarification-poster.test.ts`:
+- [X] T031 [SC-001] MOD `packages/orchestrator/src/worker/__tests__/clarification-poster.test.ts`:
       Add one positive case under the existing "answer integration" describe block mirroring the
       existing different-account case, but with `viewerDidAuthor: true`:
       cluster-self plain `"Q1: OAuth 2.0"` reply → `integrated: 1`, `mockWriteFileSync` invoked
       with a body containing `**Answer**: OAuth 2.0`.
       Depends on T030.
 
-- [ ] T032 [SC-001][SC-002] MOD
+- [X] T032 [SC-001][SC-002] MOD
       `packages/orchestrator/src/worker/__tests__/clarification-self-answer.test.ts`:
       - Case at ~L120-160 ("questions comment + no human reply → zero integrated") — UNCHANGED
         (questions-marker filter still fires via the broader `MACHINE_MARKERS`).
@@ -110,7 +110,7 @@
 
 ## Phase 5: Regression Guard
 
-- [ ] T040 Verify the following test files require NO changes (grep + spot-read):
+- [X] T040 Verify the following test files require NO changes (grep + spot-read):
       - `clarification-poster-trust.test.ts` — trust-tier gating for untrusted authors +
         `postUntrustedAnswerExplainers`. Both call sites' trust behavior unchanged.
       - `clarification-quote-reply.test.ts` — `> `-prefix column-0 rule unchanged.
@@ -120,13 +120,13 @@
       If any of these break during the run (T060), fix the test to reflect the new contract —
       do NOT weaken assertions.
 
-- [ ] T041 Grep the whole tree for references to the deleted log event
+- [X] T041 Grep the whole tree for references to the deleted log event
       `clarification-answer-scanner-self-unmarked`. Expected: zero hits (contract I-Post4).
       If any hit exists outside the deleted lines, resolve it in this PR.
 
 ## Phase 6: Ship prerequisites
 
-- [ ] T050 Add changeset `.changeset/976-same-account-clarification-answers.md`:
+- [X] T050 Add changeset `.changeset/976-same-account-clarification-answers.md`:
       - `bump`: `patch` for `@generacy-ai/orchestrator` (behavior change; no public API surface
         change; internal only).
       - Summary line: "Same-account plain `Q<n>:` replies on paused clarify issues now
@@ -138,16 +138,16 @@
 
 ## Phase 7: Verification
 
-- [ ] T060 Run the full orchestrator test suite:
+- [X] T060 Run the full orchestrator test suite:
       `pnpm --filter @generacy-ai/orchestrator test`.
       Verify (a) all new/modified tests from T010, T011, T021, T031, T032 pass and (b) the
       regression files listed in T040 continue to pass unchanged.
 
-- [ ] T061 Run repo-wide lint / typecheck to catch any straggler references from the dropped
+- [X] T061 Run repo-wide lint / typecheck to catch any straggler references from the dropped
       imports in T020 and T030:
       `pnpm -w typecheck && pnpm -w lint` (or the project's equivalent gate).
 
-- [ ] T062 [FR-007] Manual trace-through of the three failure surfacing paths documented in
+- [X] T062 [FR-007] Manual trace-through of the three failure surfacing paths documented in
       `contracts/machine-markers.md` §FR-007 surfacing contract:
       1. Trusted same-account, malformed body, no `Q<n>:` shape → `IntegrationResult
          { integrated: 0, reason: 'no-answers' }`.

@@ -83,3 +83,71 @@ export function matchClarificationAnswerMarker(body: string): string | undefined
   }
   return undefined;
 }
+
+/**
+ * #976 — canonical machine-marker inventory. Superset of
+ * `CLARIFICATION_QUESTION_MARKERS`; also covers every stage/status, audit /
+ * lifecycle, answer-relay, and bot-authored explainer comment family the
+ * clarification answer scanner must never treat as an answer source.
+ *
+ * The monitor (`clarification-answer-monitor-service.ts`) and the phase-loop
+ * scanner (`clarification-poster.ts::integrateClarificationAnswers`) both
+ * pre-filter comments through this set. Same-account trust is delegated
+ * entirely to `isTrustedCommentAuthor`; the identity gate at both call sites
+ * is deleted in favor of this marker filter (#976 fix for agency#433).
+ *
+ * Why: the `<!-- generacy-clarification-answers:` entry duplicates the
+ * exported `CLARIFICATION_ANSWER_MARKERS` prefix — the two must move
+ * in lockstep. See `specs/976-summary-clarification-answers/data-model.md`.
+ *
+ * Match rule (identical to the question-marker family):
+ *  - Prefix substring, case-sensitive ASCII.
+ *  - Line-anchored: only fires when the marker starts at column 0 of some line.
+ *  - `> `-quoted markers therefore do NOT match — humans quoting a machine
+ *    comment while answering still have their `Q<n>: <answer>` lines
+ *    integrated.
+ */
+export const MACHINE_MARKERS: readonly string[] = [
+  // Question-family (superset invariant — spread from CLARIFICATION_QUESTION_MARKERS)
+  ...CLARIFICATION_QUESTION_MARKERS,
+
+  // Stage/status comments
+  '<!-- generacy-stage:specification',
+  '<!-- generacy-stage:planning',
+  '<!-- generacy-stage:implementation',
+  '<!-- speckit-stage:specification',
+  '<!-- speckit-stage:planning',
+  '<!-- speckit-stage:implementation',
+
+  // Audit / lifecycle bot comments
+  '<!-- generacy-cockpit:manual-advance',
+
+  // Answer-relay marker (deprecates cockpit_relay_clarify_answers integration path)
+  '<!-- generacy-clarification-answers:',
+
+  // Bot-authored explainer / diagnostic comments
+  '<!-- generacy-untrusted-answer:',
+  '<!-- generacy-clarification-parse-failures:',
+] as const;
+
+/**
+ * True iff `body` contains one of the `MACHINE_MARKERS` prefixes at column 0
+ * of some line.
+ */
+export function commentCarriesMachineMarker(body: string): boolean {
+  return matchMachineMarker(body) !== undefined;
+}
+
+/**
+ * Same semantics as `commentCarriesMachineMarker`; returns the specific prefix
+ * string that matched (identity from `MACHINE_MARKERS`) or `undefined` if no
+ * match.
+ */
+export function matchMachineMarker(body: string): string | undefined {
+  for (const line of body.split('\n')) {
+    for (const prefix of MACHINE_MARKERS) {
+      if (line.startsWith(prefix)) return prefix;
+    }
+  }
+  return undefined;
+}

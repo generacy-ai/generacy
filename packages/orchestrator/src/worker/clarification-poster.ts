@@ -18,8 +18,7 @@ import {
 import type { Comment as TrustComment } from '@generacy-ai/workflow-engine';
 import {
   commentCarriesQuestionMarker,
-  matchClarificationQuestionMarker,
-  commentCarriesAnswerMarker,
+  matchMachineMarker,
 } from './clarification-markers.js';
 import type { WorkerContext, Logger } from './types.js';
 
@@ -852,7 +851,7 @@ export async function integrateClarificationAnswers(
   // would wave those through to the parser.
   const scanCandidates: TrustComment[] = [];
   for (const c of comments) {
-    const markerPrefix = matchClarificationQuestionMarker(c.body);
+    const markerPrefix = matchMachineMarker(c.body);
     if (markerPrefix !== undefined) {
       logger.debug(
         {
@@ -862,7 +861,7 @@ export async function integrateClarificationAnswers(
           markerPrefix,
           issueNumber,
         },
-        'Excluded from answer-scanner via question marker',
+        'Excluded from answer-scanner via machine marker',
       );
       continue;
     }
@@ -908,32 +907,12 @@ export async function integrateClarificationAnswers(
     logger,
   });
 
-  // #958 FR-001 / FR-003 — Authorship gate. `viewerDidAuthor === true`
-  // (cluster-self) requires the engine-written answer marker; anything else
-  // is parsed permissively. The L488 `.includes('**Question**:')` content
-  // sniff has been retired as an authorship signal — content is not
-  // authorship.
-  const answerComments: TrustComment[] = [];
-  for (const c of trustedComments) {
-    if (c.viewerDidAuthor === true) {
-      if (commentCarriesAnswerMarker(c.body)) {
-        answerComments.push(c);
-      } else {
-        logger.debug(
-          {
-            event: 'clarification-answer-scanner-self-unmarked',
-            commentId: c.id,
-            author: c.author,
-            issueNumber,
-          },
-          'Skipped cluster-self comment lacking engine-written answer marker (FR-003)',
-        );
-      }
-    } else {
-      // Human / undefined viewerDidAuthor — parse permissively (FR-002).
-      answerComments.push(c);
-    }
-  }
+  // #976 — every trusted, marker-free comment is a candidate answer,
+  // regardless of viewerDidAuthor. Same-account trust is delegated to
+  // `isTrustedCommentAuthor` (self-authored → trusted per comment-trust.ts).
+  // FR-004 asymmetric fail-close on `sourceHadQuestionHeadings` still keys
+  // off per-answer `sourceViewerDidAuthor` (a shape-check, not identity).
+  const answerComments: TrustComment[] = trustedComments;
 
   const answers = parseAnswersFromComments(answerComments, pendingNumbers, logger);
   if (answers.size === 0) {

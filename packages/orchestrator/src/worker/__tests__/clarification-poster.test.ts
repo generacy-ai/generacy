@@ -562,6 +562,34 @@ describe('integrateClarificationAnswers', () => {
     expect(writtenContent).toContain('**Answer**: Use the existing brand colors');
   });
 
+  // #976 SC-001 — cluster-self plain `Q<n>:` reply integrates. Mirrors the
+  // different-account case above; the only difference is `viewerDidAuthor: true`.
+  // Same-account trust is delegated to `isTrustedCommentAuthor` (self-authored
+  // → trusted); no machine marker means no pre-filter exclusion; the answer
+  // flows through the same path as a different-account reply.
+  it('#976 SC-001 — cluster-self plain `Q<n>:` reply (viewerDidAuthor=true, no marker) integrates', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 1,
+        body: 'Q1: OAuth 2.0',
+        author: 'cluster-bot',
+        authorAssociation: 'NONE',
+        viewerDidAuthor: true,
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(1);
+    expect(mockWriteFileSync).toHaveBeenCalledOnce();
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: OAuth 2.0');
+  });
+
   it('returns no-spec-dir when spec directory not found', async () => {
     mockReaddirSync.mockReturnValue(['99-other-issue']);
 
@@ -1526,7 +1554,7 @@ describe('parseAnswersFromComments — marker exclusion (#909)', () => {
     expect(m.body).toBeUndefined();
     expect(m.content).toBeUndefined();
     expect(m.text).toBeUndefined();
-    expect(msg).toBe('Excluded from answer-scanner via question marker');
+    expect(msg).toBe('Excluded from answer-scanner via machine marker');
     const serialized = JSON.stringify(meta);
     expect(serialized).not.toContain('Authentication method');
     expect(serialized).not.toContain('Database choice');

@@ -53,12 +53,18 @@ describe('#958 SC-003 — authorship-by-content sniff removed', () => {
     expect(source).not.toMatch(/answer\.includes\(['"]\*\*Context\*\*:['"]\)/);
   });
 
-  it('viewerDidAuthor gate is the answer-scanner authorship signal', () => {
+  it('#976 — machine-marker filter replaces the viewerDidAuthor answer-scanner gate', () => {
     const source = readPoster();
-    // The FR-001 branch must be present — authorship gates integration.
-    expect(source).toMatch(/viewerDidAuthor\s*===\s*true/);
-    // And the marker requirement for cluster-self:
-    expect(source).toMatch(/commentCarriesAnswerMarker\(/);
+    // #976 SC-001: the `viewerDidAuthor === true` disjunction in the
+    // answer-comment assembly is deleted; same-account trust is delegated
+    // to `isTrustedCommentAuthor`. The `sourceViewerDidAuthor === true`
+    // check in the FR-004 fail-close path is retained (per-answer shape
+    // check, not a candidate gate) — the regex tolerates that substring.
+    expect(source).toMatch(/matchMachineMarker\(/);
+    // The pre-#976 `commentCarriesAnswerMarker(` call must be gone from
+    // the scanner path — the marker-relay integration is now deprecated
+    // and the answer-relay prefix lives inside MACHINE_MARKERS.
+    expect(source).not.toMatch(/commentCarriesAnswerMarker\(/);
   });
 });
 
