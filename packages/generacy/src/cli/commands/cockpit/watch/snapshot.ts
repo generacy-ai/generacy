@@ -28,6 +28,8 @@ export interface PrSnapshot {
   labels: string[];
   classified: ClassifiedIssue;
   checksRollup: ChecksRollup;
+  headRefOid?: string;
+  cyclesSinceLastCheckFetch: number;
 }
 
 export type Snapshot = IssueSnapshot | PrSnapshot;
@@ -60,6 +62,7 @@ export function buildPrSnapshot(
   classified: ClassifiedIssue,
   lifecycle: PrLifecycle,
   rollup: ChecksRollup,
+  extras: { headRefOid?: string; cyclesSinceLastCheckFetch?: number } = {},
 ): PrSnapshot {
   return {
     kind: 'pr',
@@ -72,5 +75,7 @@ export function buildPrSnapshot(
     labels: [...issue.labels],
     classified,
     checksRollup: rollup,
+    ...(extras.headRefOid != null ? { headRefOid: extras.headRefOid } : {}),
+    cyclesSinceLastCheckFetch: extras.cyclesSinceLastCheckFetch ?? 0,
   };
 }

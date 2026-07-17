@@ -19,13 +19,13 @@
 <!-- The cache and scheduler are pure primitives with no dependency on the wrapper.
      They can be built + tested in parallel before the wrapper is touched. -->
 
-- [ ] T001 [P] [F2] Create `packages/cockpit/src/gh/cache.ts` implementing `GhResponseCache`
+- [X] T001 [P] [F2] Create `packages/cockpit/src/gh/cache.ts` implementing `GhResponseCache`
       per `contracts/gh-response-cache.md`. Public API: `createGhResponseCache(opts?)`
       returning `{ getOrFetch, invalidate, invalidatePrefix, size }`. In-flight coalescing
       (Promise dedup) per I-2. Rejections NOT cached (I-3). Default `ttlMs=20_000`. Test
       seams: `now`, `logger.debug`. No LRU (I-5).
 
-- [ ] T002 [P] [F4] Create `packages/cockpit/src/gh/rate-limit-scheduler.ts` implementing
+- [X] T002 [P] [F4] Create `packages/cockpit/src/gh/rate-limit-scheduler.ts` implementing
       `RateLimitScheduler` per `contracts/rate-limit-scheduler.md`. Public API:
       `createRateLimitScheduler(opts?)` returning `{ getCurrentIntervalMs, probeNow,
       noteRetryAfter, noteResponseHeaders, start, stop }`. Ladder + hysteresis exactly
@@ -37,13 +37,13 @@
       `resetWatermarkRatio > lowWatermarkRatio > criticalWatermarkRatio > 0` and
       `ceilingMs >= baseIntervalMs` (throw with specific message on violation).
 
-- [ ] T003 [P] [F2] Add unit tests `packages/cockpit/src/__tests__/gh-cache.test.ts`
+- [X] T003 [P] [F2] Add unit tests `packages/cockpit/src/__tests__/gh-cache.test.ts`
       covering: TTL hit at 19s / miss at 21s (I-1), in-flight coalescing (10 concurrent
       `getOrFetch` → 1 fetcher invocation, I-2), rejection not cached (I-3), `invalidate(k)`
       immediate re-fetch (I-4), `invalidatePrefix(p)` removes matching entries only,
       `size()` reflects live count.
 
-- [ ] T004 [P] [F4] Add unit tests
+- [X] T004 [P] [F4] Add unit tests
       `packages/cockpit/src/__tests__/rate-limit-scheduler.test.ts` covering every row
       of the ladder table in `contracts/rate-limit-scheduler.md` (including the
       hysteresis band `0.20 <= r < 0.30` → previous interval retained), retry-after
@@ -57,13 +57,13 @@
 <!-- Phase boundary: T001+T002 must complete (types + implementations must exist)
      before the wrapper can accept them via constructor. -->
 
-- [ ] T005 [F2] Extend `PullRequestSummary` in `packages/cockpit/src/gh/wrapper.ts`
+- [X] T005 [F2] Extend `PullRequestSummary` in `packages/cockpit/src/gh/wrapper.ts`
       with optional `headRefOid?: string` (per data-model.md). Update the JSON field
       selection in `getPullRequest`'s `gh pr view --json ...` call to include
       `headRefOid` and populate the returned `PullRequestSummary`. Field is optional
       so older test doubles that don't set it still compile.
 
-- [ ] T006 [F2] [F4] Extend `GhCliWrapper` constructor in
+- [X] T006 [F2] [F4] Extend `GhCliWrapper` constructor in
       `packages/cockpit/src/gh/wrapper.ts` with third `options?: { cache?:
       GhResponseCache; rateLimitScheduler?: RateLimitScheduler }` parameter. When
       `options.cache` present, delegate the four hot-path GraphQL methods
@@ -77,7 +77,7 @@
       `getRequiredCheckNames`, `addAssignees`, `resolveIssueToPRRef` (per plan §Not
       cached).
 
-- [ ] T007 [F2] Wire cache invalidation from write paths in
+- [X] T007 [F2] Wire cache invalidation from write paths in
       `packages/cockpit/src/gh/wrapper.ts` (invalidation MUST happen BEFORE the wrapper
       method returns, per contract §Caller responsibilities). Sites:
       - `addLabel` / `addLabels` / `removeLabel` / `removeLabels` (repo, n) →
@@ -89,7 +89,7 @@
         When linked issue unknown, TTL handles it (Q3=A explicitly accepts).
       Guard every site with `if (this.cache) …` so bare-wrapper callers are unaffected.
 
-- [ ] T008 [F2] Add integration test
+- [X] T008 [F2] Add integration test
       `packages/cockpit/src/__tests__/gh-wrapper-cache-integration.test.ts`. Cases:
       - Two `getPullRequestCheckRuns(repo, n)` calls within TTL → runner invoked once.
       - `addLabels(repo, n, [...])` invalidates the paired `getIssue:${repo}#${n}` key
@@ -104,21 +104,21 @@
 <!-- Phase boundary: T005 (headRefOid on PullRequestSummary) must land before the
      gate can read it. -->
 
-- [ ] T009 [F1] Extend `PrSnapshot` in
+- [X] T009 [F1] Extend `PrSnapshot` in
       `packages/generacy/src/cli/commands/cockpit/watch/snapshot.ts` with
       `headRefOid?: string` and `cyclesSinceLastCheckFetch: number` (per data-model.md).
       Update `buildPrSnapshot` (and any siblings that construct `PrSnapshot`) to
       populate both — `cyclesSinceLastCheckFetch` starts at `0`; `headRefOid` comes
       from the `PullRequestSummary` returned by `gh.getPullRequest`.
 
-- [ ] T010 [F1] Add pure function `derivePrChecksNeeded` in
+- [X] T010 [F1] Add pure function `derivePrChecksNeeded` in
       `packages/generacy/src/cli/commands/cockpit/watch/pr-state.ts` per
       `contracts/pr-checks-gate.md`. Signature per contract; decision tree per
       contract §Decision tree (branches 1-8 in exactly the specified order); returns
       `{ fetch, reason }`. Export the `PrChecksNeededReason` union + `PrChecksNeededDecision`
       interface. PURE — no I/O, no logging.
 
-- [ ] T011 [F1] Wire `derivePrChecksNeeded` into `runOnePoll` in
+- [X] T011 [F1] Wire `derivePrChecksNeeded` into `runOnePoll` in
       `packages/generacy/src/cli/commands/cockpit/watch/poll-loop.ts`. Extend
       `PollDeps` with optional `cycleNumber?: number` (per data-model.md). For each
       PR ref: compute the decision using `prevSnapshot`, current lifecycle, current
@@ -130,7 +130,7 @@
       call `getPullRequest` once to populate `headRefOid` (plan §Head-ref-OID
       acquisition — bundle-once path). Log the `reason` at debug for observability.
 
-- [ ] T012 [P] [F1] Add unit tests
+- [X] T012 [P] [F1] Add unit tests
       `packages/generacy/src/cli/commands/cockpit/watch/__tests__/pr-state-checks-gate.test.ts`
       covering every row of the test matrix in `contracts/pr-checks-gate.md` (rows
       1-13). Assert both `fetch` and `reason` for each row. Row 13 (prev success but
@@ -142,7 +142,7 @@
 <!-- Phase boundary: T002 (scheduler) must exist before loops can consume
      `getCurrentIntervalMs()`. Independent of Phase 3. -->
 
-- [ ] T013 [F3] [F4] Apply `cyclesSinceEpicRefresh` gate + scheduler interval in
+- [X] T013 [F3] [F4] Apply `cyclesSinceEpicRefresh` gate + scheduler interval in
       `packages/generacy/src/cli/commands/cockpit/watch.ts`. Initialise
       `cyclesSinceEpicRefresh = 0` outside the loop. On each tick after `firstTick`:
       increment, refresh `currentResolved` only when `>= 10`, reset on refresh. On
@@ -152,7 +152,7 @@
       `WatchDeps` (or construct in the CLI entrypoint alongside the wrapper). Call
       `scheduler.start()` before the loop, `scheduler.stop()` on shutdown.
 
-- [ ] T014 [F3] [F4] [F5] Apply three changes in
+- [X] T014 [F3] [F4] [F5] Apply three changes in
       `packages/generacy/src/cli/commands/cockpit/mcp/event-bus-registry.ts`:
       1. **Epic-refresh cadence** — inside `runRealCycle` (~line 407): increment
          `state.cyclesSinceEpicRefresh` and refresh `state.currentResolved` only when
@@ -171,14 +171,14 @@
          scheduler alongside the shared `GhCliWrapper` for the event bus and call
          `start()` / `stop()` in the same lifecycle as the bus.
 
-- [ ] T015 [P] [F5] Add unit test
+- [X] T015 [P] [F5] Add unit test
       `packages/generacy/src/cli/commands/cockpit/mcp/__tests__/event-bus-catchup-skip.test.ts`.
       Spy on `runCycle`. Drive `acquireEpicBus` → release (refcount 0) → acquire
       (refcount 1 — triggers catch-up + resume). Assert `runCycle` called exactly once
       (the catch-up), NOT twice. Assert events emitted by the catch-up survive the
       skipped cycle (per plan Risk 6).
 
-- [ ] T016 [P] [F3] Add unit test
+- [X] T016 [P] [F3] Add unit test
       `packages/generacy/src/cli/commands/cockpit/mcp/__tests__/event-bus-epic-refresh-cadence.test.ts`.
       Inject a `runCycle` that increments a counter; count invocations of `resolveEpic`
       (spy or stub). Assert `resolveEpic` invoked on cycles 1, 11, 21, 31 — and NOT
@@ -190,7 +190,7 @@
 <!-- Phase boundary: All implementation phases (2, 3, 4) must land before the
      integration test can exercise them together. -->
 
-- [ ] T017 [F1] [F2] [F3] [F4] [F5] Add integration test
+- [X] T017 [F1] [F2] [F3] [F4] [F5] Add integration test
       `packages/generacy/src/cli/commands/cockpit/__tests__/cockpit-graphql-budget.integration.test.ts`.
       Spin up a fake `gh` runner that counts calls per subcommand. Drive one hour of
       simulated `cockpit watch` at 30 s cadence against a fake 30-ref, 4-open-PR epic.
@@ -204,7 +204,7 @@
         `remaining=500/5000` (10%), `scheduler.getCurrentIntervalMs()` returns
         `60_000` (2× base).
 
-- [ ] T018 [F1] [F2] [F3] [F4] [F5] Add changeset
+- [X] T018 [F1] [F2] [F3] [F4] [F5] Add changeset
       `.changeset/970-cockpit-graphql-rate-limit.md`. Per plan §Constitution Check:
       `@generacy-ai/cockpit` bumps `minor` (new public exports: `GhResponseCache`,
       `createGhResponseCache`, `GhCacheOptions`, `RateLimitScheduler`,
@@ -213,7 +213,7 @@
       `GhCliWrapper`). `@generacy-ai/generacy` bumps `patch` (internal behavior
       change, no CLI surface change). Write both entries in the same changeset file.
 
-- [ ] T019 [F1] [F2] [F3] [F4] [F5] Run `pnpm --filter @generacy-ai/cockpit test`,
+- [X] T019 [F1] [F2] [F3] [F4] [F5] Run `pnpm --filter @generacy-ai/cockpit test`,
       `pnpm --filter @generacy-ai/generacy test`, and `pnpm typecheck` from the
       repo root. All must pass. Regression check: existing tests that construct
       `new GhCliWrapper(runner)` without the cache/scheduler options continue to

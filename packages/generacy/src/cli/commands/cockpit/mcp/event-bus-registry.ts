@@ -23,6 +23,7 @@ import {
   resolveEpic,
   type CommandRunner,
   type GhWrapper,
+  type RateLimitScheduler,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
 import { resolveIssueContext } from '../resolver.js';
@@ -42,6 +43,8 @@ const DEFAULT_INTERVAL_MS = 30_000;
 const DEFAULT_IDLE_TTL_MS = 600_000;
 /** Env knob `COCKPIT_MCP_BUS_MAX` — soft cap on live buses. */
 const DEFAULT_MAX_BUSES = 100;
+
+const EPIC_REFRESH_CYCLES = 10;
 
 function parsePositiveIntEnv(
   raw: string | undefined,
@@ -63,6 +66,7 @@ interface PollState {
   aggState: AggregateState;
   firstPoll: boolean;
   currentResolved: ResolvedEpic | null;
+  cyclesSinceEpicRefresh: number;
 }
 
 interface Subscription {
@@ -72,6 +76,7 @@ interface Subscription {
   pausePoller: () => void;
   resumePoller: () => void;
   catchUpPoll: () => Promise<void>;
+  markSkipNextCycle: () => void;
   idleTimer: NodeJS.Timeout | null;
   lastActiveAt: number;
   /** TTL captured at first acquire; used by `releaseKey` to arm the timer. */
@@ -87,6 +92,7 @@ export interface AcquireOptions {
   runner?: CommandRunner;
   gh?: GhWrapper;
   intervalMs?: number;
+  rateLimitScheduler?: RateLimitScheduler;
   logger?: { warn: (msg: string) => void; info?: (msg: string) => void };
   /**
    * Injection seam for tests: build an event bus without starting a poll
@@ -146,6 +152,7 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
     // concurrent-caller acquires (refcount was already > 0) skip it.
     if (wasPaused) {
       await existing.catchUpPoll();
+      existing.markSkipNextCycle();
       existing.resumePoller();
     }
     return { bus: existing.bus, release: () => releaseKey(expandedRef) };
@@ -175,6 +182,7 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
       pausePoller: () => undefined,
       resumePoller: () => undefined,
       catchUpPoll: async () => undefined,
+      markSkipNextCycle: () => undefined,
       idleTimer: null,
       lastActiveAt: now(),
       idleTtlMs,
@@ -186,18 +194,22 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
 
   const gh = options.gh ?? new GhCliWrapper(options.runner);
   const interval = options.intervalMs ?? DEFAULT_INTERVAL_MS;
+  const scheduler = options.rateLimitScheduler;
+  scheduler?.start();
 
   const state: PollState = {
     prev: new Map(),
     aggState: initialAggregateState(),
     firstPoll: true,
     currentResolved: null,
+    cyclesSinceEpicRefresh: 0,
   };
 
   const controller = new AbortController();
   const pauseState: PauseState = {
     paused: false,
     resumeResolver: null,
+    skipNextCycle: false,
   };
 
   const runCycle = options.runCycle
@@ -217,6 +229,7 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
 
   const stop = (): void => {
     controller.abort();
+    scheduler?.stop();
     // Also wake any pending resume waiter so the loop exits promptly.
     if (pauseState.resumeResolver != null) {
       const r = pauseState.resumeResolver;
@@ -237,6 +250,9 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
       r();
     }
   };
+  const markSkipNextCycle = (): void => {
+    pauseState.skipNextCycle = true;
+  };
 
   const sub: Subscription = {
     bus,
@@ -245,6 +261,7 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
     pausePoller,
     resumePoller,
     catchUpPoll,
+    markSkipNextCycle,
     idleTimer: null,
     lastActiveAt: now(),
     idleTtlMs,
@@ -255,7 +272,7 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
   // Kick off the poll loop unless the caller opted out (`noPoll` with a
   // custom `runCycle` is a valid test config — the loop is still needed).
   if (options.noPoll !== true) {
-    void runPollLoop(runCycle, interval, controller.signal, pauseState, logger);
+    void runPollLoop(runCycle, interval, controller.signal, pauseState, logger, scheduler);
   }
 
   return { bus, release: () => releaseKey(expandedRef) };
@@ -264,6 +281,7 @@ export async function acquireEpicBus(options: AcquireOptions): Promise<Acquired>
 interface PauseState {
   paused: boolean;
   resumeResolver: (() => void) | null;
+  skipNextCycle: boolean;
 }
 
 function releaseKey(key: string): void {
@@ -338,11 +356,18 @@ async function runPollLoop(
   signal: AbortSignal,
   pauseState: PauseState,
   logger: { warn: (msg: string) => void },
+  scheduler: RateLimitScheduler | undefined,
 ): Promise<void> {
   while (!signal.aborted) {
     if (pauseState.paused) {
       await waitForResume(pauseState, signal);
       if (signal.aborted) break;
+      continue;
+    }
+    if (pauseState.skipNextCycle) {
+      pauseState.skipNextCycle = false;
+      const activeInterval = scheduler?.getCurrentIntervalMs() ?? interval;
+      await sleep(activeInterval, signal);
       continue;
     }
     try {
@@ -354,7 +379,8 @@ async function runPollLoop(
     }
     if (signal.aborted) break;
     if (pauseState.paused) continue;
-    await sleep(interval, signal);
+    const activeInterval = scheduler?.getCurrentIntervalMs() ?? interval;
+    await sleep(activeInterval, signal);
   }
 }
 
@@ -365,9 +391,11 @@ async function runRealCycle(
   state: PollState,
   logger: { warn: (msg: string) => void },
 ): Promise<void> {
+  let justFetched = false;
   if (state.currentResolved == null) {
     try {
       state.currentResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
+      justFetched = true;
     } catch (err) {
       if (err instanceof LoudResolverError) {
         logger.warn(`event-bus: resolveEpic failed: ${err.message}`);
@@ -404,13 +432,21 @@ async function runRealCycle(
   state.prev = result.curr;
   state.firstPoll = false;
 
-  // Refresh the resolved epic for the next cycle (best effort).
-  try {
-    state.currentResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
-  } catch (err) {
-    logger.warn(
-      `event-bus: resolveEpic refresh failed: ${err instanceof Error ? err.message : String(err)}`,
-    );
+  // Refresh the resolved epic only every Nth cycle (best effort). Skip the
+  // cycle that already fetched a fresh epic — otherwise we would refresh on
+  // cycles 10, 20, 30 instead of the intended 11, 21, 31 cadence.
+  if (!justFetched) {
+    state.cyclesSinceEpicRefresh += 1;
+    if (state.cyclesSinceEpicRefresh >= EPIC_REFRESH_CYCLES) {
+      state.cyclesSinceEpicRefresh = 0;
+      try {
+        state.currentResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
+      } catch (err) {
+        logger.warn(
+          `event-bus: resolveEpic refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
   }
 }
 

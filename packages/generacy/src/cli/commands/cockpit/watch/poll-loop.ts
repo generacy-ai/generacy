@@ -7,12 +7,13 @@ import { classifyIssue } from '../shared/classify-issue.js';
 import { listAllIssues } from '../shared/pagination.js';
 import { rollup } from './check-rollup.js';
 import { computeTransitions, type CockpitEvent } from './diff.js';
-import { derivePrLifecycle } from './pr-state.js';
+import { derivePrChecksNeeded, derivePrLifecycle } from './pr-state.js';
 import {
   buildIssueSnapshot,
   buildPrSnapshot,
   snapshotKey,
   type ChecksRollup,
+  type PrSnapshot,
   type Snapshot,
   type SnapshotMap,
 } from './snapshot.js';
@@ -25,8 +26,9 @@ export interface PollDeps {
   epicOwnerRepo: string;
   safetyCap?: number;
   pageSize?: number;
-  logger?: { warn: (msg: string) => void };
+  logger?: { warn: (msg: string) => void; debug?: (msg: string) => void };
   now?: () => string;
+  cycleNumber?: number;
 }
 
 export interface PollResult {
@@ -90,16 +92,54 @@ export async function runOnePoll(
       if (isPullRequest(issue)) {
         const key = snapshotKey(repo, 'pr', issue.number);
         const prevSnap = prev.get(key);
+        const prevPr: PrSnapshot | undefined =
+          prevSnap != null && prevSnap.kind === 'pr' ? prevSnap : undefined;
         const lifecycle = await derivePrLifecycle(repo, prevSnap, issue, {
           getPullRequest: deps.gh.getPullRequest.bind(deps.gh),
         });
-        let checksResult: ChecksRollup;
-        try {
-          checksResult = rollup(await deps.gh.getPullRequestCheckRuns(repo, issue.number));
-        } catch {
-          checksResult = 'error';
+
+        let currentHeadRefOid: string | undefined = prevPr?.headRefOid;
+        if (prevPr == null && lifecycle === 'open') {
+          try {
+            const pr = await deps.gh.getPullRequest(repo, issue.number);
+            if (pr.headRefOid != null) currentHeadRefOid = pr.headRefOid;
+          } catch {
+            // Best-effort — leave undefined, gate will not spuriously fetch.
+          }
         }
-        snapshot = buildPrSnapshot(repo, issue, classified, lifecycle, checksResult);
+
+        const prevCycles = prevPr?.cyclesSinceLastCheckFetch ?? 0;
+        const decision = derivePrChecksNeeded({
+          prevSnapshot: prevPr,
+          currentLifecycle: lifecycle,
+          currentLabels: issue.labels,
+          currentHeadRefOid,
+          cyclesSinceLastCheckFetch: prevCycles,
+        });
+        deps.logger?.debug?.(
+          `pr-checks-gate ${repo}#${issue.number}: fetch=${decision.fetch} reason=${decision.reason}`,
+        );
+
+        let checksResult: ChecksRollup;
+        let nextCycles: number;
+        if (decision.fetch) {
+          try {
+            checksResult = rollup(
+              await deps.gh.getPullRequestCheckRuns(repo, issue.number),
+            );
+          } catch {
+            checksResult = 'error';
+          }
+          nextCycles = 0;
+        } else {
+          checksResult = prevPr?.checksRollup ?? 'none';
+          nextCycles = prevCycles + 1;
+        }
+
+        snapshot = buildPrSnapshot(repo, issue, classified, lifecycle, checksResult, {
+          ...(currentHeadRefOid != null ? { headRefOid: currentHeadRefOid } : {}),
+          cyclesSinceLastCheckFetch: nextCycles,
+        });
         curr.set(key, snapshot);
       } else {
         const key = snapshotKey(repo, 'issue', issue.number);
