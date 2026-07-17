@@ -3,6 +3,7 @@
  *
  * Observability verbs (read-only) for Generacy epics and repos:
  *   - watch    — poll an epic's issues/PRs and emit cockpit events on state changes
+ *   - doorbell — wake sensor for /cockpit:auto; one stdout line per epic bus event
  *   - status   — render a grouped, colorized table of the epic's current state
  *
  * Single-issue verbs that inspect and drive workflow state for one issue:
@@ -17,6 +18,7 @@
  */
 import { Command } from 'commander';
 import { watchCommand } from './watch.js';
+import { doorbellCommand } from './doorbell.js';
 import { statusCommand } from './status.js';
 import { advanceCommand } from './advance.js';
 import { contextCommand } from './context.js';
@@ -31,6 +33,7 @@ export function cockpitCommand(): Command {
   command.description('Cockpit — inspect and drive workflow state for Generacy epics and issues.');
 
   command.addCommand(watchCommand());
+  command.addCommand(doorbellCommand());
   command.addCommand(statusCommand());
   command.addCommand(advanceCommand());
   command.addCommand(contextCommand());
