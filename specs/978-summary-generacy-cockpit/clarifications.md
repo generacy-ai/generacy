@@ -11,7 +11,7 @@
 - C: Same as A, plus `pull_request_review.submitted` AND `issue_comment.created` (covers gate-satisfying developer comments). Two new enum values.
 - D: Doorbell emits a generic `webhook` line for every ref-set-matching payload; typed decoding remains the sole responsibility of `cockpit_await_events`. Breaks the shipped stdout contract; requires agency#431 update.
 
-**Answer**: *Pending*
+**Answer**: A — Preserve the existing event set exactly; this is a wake-source swap, not a protocol change. Map webhook events to today's enum: issues.labeled/unlabeled → label-change; issues.closed → issue-closed; pull_request.closed (merged=true) → pr-merged, (merged=false) → pr-closed; check_run.completed OR check_suite.completed → pr-checks. pull_request_review / pull_request_review_comment / issue_comment are OUT OF SCOPE — adding them is new capability requiring a CockpitEventSchema rev + agency#431 forward-compat; file separately if wanted (e.g. #692 on-sibling-review). from/to best-effort from the payload's labels[] is fine: the doorbell stdout line is a bare wake signal (event type only, per doorbell/subscribe.js lineForEvent), and the authoritative from/to diff stays in cockpit_await_events.
 
 ### Q2: Ref-set refresh cadence in smee mode
 **Context**: FR-003 requires filtering SSE payloads by the epic's ref set (epic + children + tracking issue), derived from `resolveEpic(...)`. In poll mode, `event-bus-registry.ts` re-runs `resolveEpic` every `EPIC_REFRESH_CYCLES = 10` cycles (~5 min at 30 s cadence). In smee mode there is no poll cadence — the spec is silent on when the ref set is refreshed. If a child issue is added to the epic body mid-run, its webhooks will be silently dropped by the filter until refresh.
@@ -22,7 +22,7 @@
 - C: Refresh only when an SSE payload arrives for the epic issue itself (`issue.number === epicNumber && action ∈ { edited, labeled, unlabeled }`). Zero background calls; but misses edits made via `gh api` PATCH that don't fire an `issues.edited` webhook.
 - D: Hybrid — startup + on-epic-issue-payload (Option C) + safety-net timer (~10 min) so silent gaps are bounded.
 
-**Answer**: *Pending*
+**Answer**: D — Hybrid refresh: run resolveEpic at startup + on any SSE payload for the epic issue itself (issue.number === epicNumber, action ∈ {edited, labeled, unlabeled}) + a ~10 min safety-net timer. Rationale: mid-run scope changes are real (cockpit_scope_add edits the epic body, which fires issues.edited), so a child added mid-run must refresh the ref-set or its events are silently dropped by the filter. The on-epic-payload path gives near-instant currency for the common case at zero background cost; the safety-net timer bounds the worst case (anything that doesn't fire issues.edited). Mirrors the feature's real-time-first + bounded-safety-net philosophy. (Option B — a fixed ~5 min background refresh — is the simpler parity option if minimizing moving parts is preferred, at the cost of a standing background poll and up-to-5min scope-add latency.)
 
 ### Q3: Runtime SSE loss — reconnect forever, or eventually demote to poll?
 **Context**: FR-002 enumerates fallback triggers as pre-first-event ("SSE connect fails, or SSE errors before first event"). FR-005 mandates exponential-backoff reconnect (5 s → 300 s cap). But the spec is silent on what happens if SSE connected, delivered events, then reconnects fail persistently (e.g., smee.io outage lasting hours). The orchestrator's `SmeeWebhookReceiver` reconnects forever. The doorbell process is short-lived-ish (one epic run) — an infinite reconnect loop with no wake signal could silently strand `/cockpit:auto`.
@@ -33,7 +33,7 @@
 - C: After X minutes without a successful reconnect (e.g., 15), demote to poll-fallback with same stderr log. Never re-attempt smee.
 - D: Demote to poll-fallback AND periodically retry smee-mode promotion (e.g., every 5 min); log each transition.
 
-**Answer**: *Pending*
+**Answer**: D — Reconnect with capped backoff for a bounded window, then demote to poll-fallback on sustained smee loss (~5 consecutive failed reconnects / ~2.5 min), AND periodically retry smee-mode promotion (~every 5 min); log each source transition on stderr (the FR-006 source= line). Rationale: this feature exists for responsiveness, so during a smee.io outage the pre-existing poll path gives strictly better latency than heartbeat-only, and auto re-promotion means a transient blip doesn't permanently downgrade the run. The ScheduleWakeup heartbeat (FR-011) remains the ultimate backstop under both modes, so the run is never stranded. (Option A — reconnect forever, never demote, matching the orchestrator's SmeeWebhookReceiver — is the simpler, orchestrator-consistent alternative and is also safe via the heartbeat; the tradeoff is heartbeat-only latency during a prolonged outage.)
 
 ### Q4: Aggregate events (phase-complete, epic-complete) in smee mode
 **Context**: The current poll cycle drives `computeAggregateEvents(...)` from a `SnapshotMap` diff to emit `phase-complete` and `epic-complete` events (`packages/generacy/src/cli/commands/cockpit/watch/aggregate.ts`). SSE payloads carry per-item state, not aggregate roll-up state. The `--exit-on-epic-complete` flag depends on `epic-complete` being emitted. FR-007 forbids the doorbell from acquiring `acquireEpicBus` in smee mode. If aggregate events aren't computed, `--exit-on-epic-complete` silently never fires in smee mode — a functional regression on smee-live clusters.
@@ -44,7 +44,7 @@
 - C: Do not emit aggregate events in smee mode. `--exit-on-epic-complete` is broken for smee-live clusters (skill must poll a separate signal). Simplest; regressive.
 - D: In smee mode still acquire the shared `EpicEventBus` at a much longer poll interval (e.g., 5 min) — SSE drives `issue-transition` events, poll drives aggregates. Violates FR-007 as written; would require FR-007 revision.
 
-**Answer**: *Pending*
+**Answer**: A — Compute aggregates on-demand, event-driven: when an SSE payload carries a completed:* label OR an issues.closed / pull_request.closed action (the only signals that can complete a phase or an epic), run a single resolveEpic + snapshot refresh, diff against the in-process AggregateState, and emit phase-complete / epic-complete via the existing computeAggregateEvents. Cost is ~1 gh call per completion signal, only when a completion is actually possible — no background poll, no FR-007 violation (never calls acquireEpicBus), and epic-complete (hence --exit-on-epic-complete) still fires in real-time rather than up to 5 min late (option B) or never (option C, a regression).
 
 ### Q5: `armed\n` line timing in smee mode
 **Context**: Today's doorbell writes `armed\n` to stdout immediately after `acquireEpicBus` returns, before any wake signal is possible. The agency#431 skill uses `armed\n` as its "doorbell process is ready" signal. In smee mode there is no `acquireEpicBus`; the spec does not say whether `armed\n` still fires before smee-source selection, after smee is confirmed connected, or after fallback selection has settled. The timing determines what the skill can rely on when it sees `armed\n`.
@@ -54,4 +54,4 @@
 - B: After the source is selected (smee-connected OR poll-fallback bus acquired), i.e., only once the doorbell has a working wake path. Skill can treat `armed\n` as "wake path is live" — stronger guarantee, but delays the ready signal by the SSE-connect / poll-acquire latency.
 - C: Unconditionally at startup (matches A), AND additionally emit the FR-006 `source=…` stderr line as the "source settled" signal. Skill relies on `armed\n` for liveness only.
 
-**Answer**: *Pending*
+**Answer**: A — Write `armed\n` unconditionally, immediately after startup argument validation, exactly as today. Keep it a pure LIVENESS signal ('the doorbell process is up and will attempt to wake'), making no claim about whether smee or poll is the eventual source — agency#431 relies on it only for readiness and re-checks live state in its startup sweep anyway. The FR-006 `source=...` stderr line (already required) is the separate 'which source settled' signal. This preserves the existing armed contract and timing (no skill change) and avoids delaying the ready signal by SSE-connect latency (which option B would introduce). Equivalent to option C, which just makes the source= line's role explicit.
