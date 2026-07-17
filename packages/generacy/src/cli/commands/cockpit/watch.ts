@@ -2,9 +2,13 @@ import { Command } from 'commander';
 import {
   GhCliWrapper,
   LoudResolverError,
+  createGhResponseCache,
+  createRateLimitScheduler,
+  nodeChildProcessRunner,
   resolveEpic,
   type CommandRunner,
   type GhWrapper,
+  type RateLimitScheduler,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
 import { resolveIssueContext } from './resolver.js';
@@ -76,7 +80,10 @@ export interface WatchDeps {
   onTick?: () => void;
   /** Optional external abort — used by tests to stop the loop deterministically. */
   abortSignal?: AbortSignal;
+  rateLimitScheduler?: RateLimitScheduler;
 }
+
+const EPIC_REFRESH_CYCLES = 10;
 
 export async function runWatch(
   epicRef: string | undefined,
@@ -155,19 +162,27 @@ export async function runWatch(
   let firstPoll = true;
   let aggState: AggregateState = initialAggregateState();
   let currentResolved: ResolvedEpic = initialResolved;
+  let cyclesSinceEpicRefresh = 0;
+
+  const scheduler = deps.rateLimitScheduler;
+  scheduler?.start();
+
+  const cleanupScheduler = (): void => {
+    scheduler?.stop();
+  };
 
   while (!stopped) {
     if (!firstTick) {
-      try {
-        currentResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
-      } catch (err) {
-        process.stderr.write(
-          `cockpit watch: poll error: ${err instanceof Error ? err.message : String(err)}\n`,
-        );
-        deps.onTick?.();
-        if (stopped) break;
-        await sleep(interval, controller.signal);
-        continue;
+      cyclesSinceEpicRefresh += 1;
+      if (cyclesSinceEpicRefresh >= EPIC_REFRESH_CYCLES) {
+        cyclesSinceEpicRefresh = 0;
+        try {
+          currentResolved = await resolveEpic({ epicRef: expandedRef, gh, logger });
+        } catch (err) {
+          logger.warn(
+            `cockpit watch: resolveEpic failed, keeping prior resolution: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
     }
     firstTick = false;
@@ -218,9 +233,11 @@ export async function runWatch(
 
     deps.onTick?.();
     if (stopped) break;
-    await sleep(interval, controller.signal);
+    const activeInterval = scheduler?.getCurrentIntervalMs() ?? interval;
+    await sleep(activeInterval, controller.signal);
   }
 
+  cleanupScheduler();
   return 0;
 }
 
@@ -235,7 +252,11 @@ export function watchCommand(): Command {
     .option('--safety-cap <n>', `Warn when per-poll item count exceeds this (default ${DEFAULT_SAFETY_CAP}).`)
     .option('--exit-on-epic-complete', 'Exit 0 after flushing the epic-complete NDJSON line.', false)
     .action(async (epicRef: string, options: WatchOptions) => {
-      const code = await runWatch(epicRef, options);
+      const runner: CommandRunner = nodeChildProcessRunner;
+      const cache = createGhResponseCache();
+      const rateLimitScheduler = createRateLimitScheduler({ runner });
+      const gh = new GhCliWrapper(runner, undefined, { cache, rateLimitScheduler });
+      const code = await runWatch(epicRef, options, { gh, runner, rateLimitScheduler });
       process.exit(code);
     });
 }

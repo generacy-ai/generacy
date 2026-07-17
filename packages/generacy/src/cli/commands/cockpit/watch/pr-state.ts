@@ -1,6 +1,78 @@
 import type { GhWrapper, Issue, PullRequestSummary } from '@generacy-ai/cockpit';
 import type { PrLifecycle, PrSnapshot, Snapshot } from './snapshot.js';
 
+export type PrChecksNeededReason =
+  | 'no-prev'
+  | 'lifecycle-flip'
+  | 'head-changed'
+  | 'label-changed'
+  | 'safety-cycle'
+  | 'not-terminal'
+  | 'skip-terminal';
+
+export interface PrChecksNeededDecision {
+  fetch: boolean;
+  reason: PrChecksNeededReason;
+}
+
+export interface DerivePrChecksNeededInput {
+  prevSnapshot: PrSnapshot | undefined;
+  currentLifecycle: PrLifecycle;
+  currentLabels: string[];
+  currentHeadRefOid: string | undefined;
+  cyclesSinceLastCheckFetch: number;
+  safetyCycles?: number;
+}
+
+const DEFAULT_SAFETY_CYCLES = 20;
+
+function labelSetsEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  const set = new Set(a);
+  for (const x of b) if (!set.has(x)) return false;
+  return true;
+}
+
+export function derivePrChecksNeeded(
+  input: DerivePrChecksNeededInput,
+): PrChecksNeededDecision {
+  const {
+    prevSnapshot,
+    currentLifecycle,
+    currentLabels,
+    currentHeadRefOid,
+    cyclesSinceLastCheckFetch,
+  } = input;
+  const safetyCycles = input.safetyCycles ?? DEFAULT_SAFETY_CYCLES;
+
+  if (prevSnapshot == null) {
+    return { fetch: true, reason: 'no-prev' };
+  }
+  if (currentLifecycle === 'merged' || currentLifecycle === 'closed') {
+    return { fetch: false, reason: 'skip-terminal' };
+  }
+  if (prevSnapshot.lifecycle !== 'open' && currentLifecycle === 'open') {
+    return { fetch: true, reason: 'lifecycle-flip' };
+  }
+  if (prevSnapshot.checksRollup !== 'success') {
+    return { fetch: true, reason: 'not-terminal' };
+  }
+  if (
+    currentHeadRefOid != null &&
+    prevSnapshot.headRefOid != null &&
+    currentHeadRefOid !== prevSnapshot.headRefOid
+  ) {
+    return { fetch: true, reason: 'head-changed' };
+  }
+  if (!labelSetsEqual(prevSnapshot.labels, currentLabels)) {
+    return { fetch: true, reason: 'label-changed' };
+  }
+  if (cyclesSinceLastCheckFetch >= safetyCycles) {
+    return { fetch: true, reason: 'safety-cycle' };
+  }
+  return { fetch: false, reason: 'skip-terminal' };
+}
+
 export interface DerivePrLifecycleDeps {
   getPullRequest: GhWrapper['getPullRequest'];
 }
