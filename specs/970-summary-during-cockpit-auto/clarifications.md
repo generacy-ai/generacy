@@ -11,7 +11,7 @@
 - C: Green = all conclusions == `success` strictly (skipped/neutral count as non-terminal and stay polled). Re-fetch on `headRefOid` OR label change.
 - D: Same as B, plus a periodic safety re-fetch every N cycles (e.g. every 20th cycle ≈ 10 min) even without change signal, to catch late-registered required checks.
 
-**Answer**: *Pending*
+**Answer**: D — Terminal-green = every check-run conclusion ∈ {success, skipped, neutral} AND zero pending/queued/in-progress. Re-fetch a previously terminal-green PR when headRefOid changes OR the observed label set changes, PLUS a safety re-fetch every 20 poll cycles (~10 min) even absent a change signal, to catch late-registered required checks. (The merge-time re-verify in the auto skill bounds risk, but the safety re-fetch keeps event emission timely for a negligible cost.)
 
 ### Q2: Rate-limit signal source
 **Context**: FR-007/FR-008 require inspecting `x-ratelimit-remaining` / `retry-after` on `gh` responses. Assumption #4 flags that `gh` may swallow response headers and offers `gh api /rate_limit` on a slower cadence as a fallback. The spec does not pick a primary — this is load-bearing for whether we can react per-call or only every few minutes, and it changes the shape of the widening logic in FR-007.
@@ -22,7 +22,7 @@
 - C: Both: prefer response headers when `gh` exposes them; fall back to `/rate_limit` probe when headers are absent or stale. Probe cadence bounded (≥ every 5 min while healthy, faster on low-budget).
 - D: Neither — instead react only to 403 rate-limit errors after they occur (FR-008 only), skipping FR-007 proactive widening.
 
-**Answer**: *Pending*
+**Answer**: B — Primary signal is a `gh api /rate_limit` probe on a slow cadence (e.g. every ~5 min while healthy, faster when low). Rationale: the hot-path calls are `gh pr checks` / `gh issue view`, which do NOT surface response headers in our shell-out model, and the /rate_limit endpoint does not itself consume the GraphQL budget. Response headers are read opportunistically only when a call already goes through `gh api -i` (supplemental, not required).
 
 ### Q3: Cache invalidation scope
 **Context**: FR-004 says "Cache invalidation on write paths (label add/remove, merge, close/reopen)". Ambiguous whether this covers only mutations initiated by *this* cockpit process (in which case invalidation is a same-process hook call) or also externally-driven changes (webhook-style detection, poll-cycle diff, etc.). It also does not say what happens when a same-process mutation and a concurrent read race.
@@ -33,7 +33,7 @@
 - C: Local + write-through. Same as A, plus on cockpit-initiated mutations the cache is *repopulated* with the post-mutation value returned by the write API (skipping the next fetch entirely) rather than just invalidated.
 - D: Bypass instead of invalidate. Write paths bypass the cache entirely (read-your-own-writes always hits `gh`), and TTL is the sole invalidation mechanism.
 
-**Answer**: *Pending*
+**Answer**: A — Local-only invalidation: the cache is invalidated on cockpit-initiated mutations (label add/remove, cockpit_merge, close/reopen) via a same-process hook; externally-driven changes are picked up on TTL expiry (15–30s). No locking beyond the cache mutex. The cache exists to coalesce near-simultaneous duplicate reads across the poll loops + cockpit_status, not to be an authoritative store, so TTL-only for external writes is sufficient at 30s poll cadence.
 
 ### Q4: Poll widening thresholds & max interval
 **Context**: FR-007 says "widen the poll interval as the budget drains" but does not specify the trigger threshold(s) or the ceiling. SC-006 hints at "≤ 5 min" as an example upper bound. This shapes both the widening algorithm and the operator-visible behavior when the account is under pressure.
@@ -44,7 +44,7 @@
 - C: Threshold + retry-after. On response, if `retry-after` present, honor it exactly. Otherwise use the single-step ladder from A. Ceiling 5 min.
 - D: On 403 only (FR-008): stay at base 30s until a rate-limit 403 occurs, then exponential backoff (60s, 120s, 240s, cap 5 min) with reset on first success. Skip proactive widening.
 
-**Answer**: *Pending*
+**Answer**: C — On each response honor `retry-after` exactly when present (authoritative for GitHub secondary-limit / 403 responses); otherwise apply the single-step ladder (remaining <20% → 2×/60s, <5% → 4×/2min), hard ceiling 5 min, reset to base once remaining ≥ 30%. This unifies proactive widening (FR-007) with reactive backoff (FR-008) in one mechanism.
 
 ### Q5: `resolveEpic` refresh trigger
 **Context**: FR-005 requires making the per-cycle `resolveEpic` fetch conditional — "only when epic body/label hash changes or every N cycles". The spec does not define the hash inputs, how the change signal is obtained without a fetch (chicken-and-egg), or the value of N. Without pinning this down the fix could either be a no-op (still fetching every cycle to compute the hash) or oscillate.
@@ -55,4 +55,4 @@
 - C: Cheap poll (`gh issue view <epic> --json updatedAt,labels`) every cycle, full `resolveEpic` only when `updatedAt` or labels changed OR every N=20 cycles as safety. Two-tier: light per-cycle, heavy conditional.
 - D: Skill-side (`generacy-ai/agency`) exposes an edit doorbell; cockpit refreshes only on doorbell OR every N=20 cycles. Requires cross-repo coordination — out of scope per Assumption #1?
 
-**Answer**: *Pending*
+**Answer**: A — Refresh resolveEpic every Nth cycle only, N=10 (~5 min at 30s cadence); no mid-window fetch. IMPORTANT: option C does NOT meet FR-005's goal — `gh issue view` is served by GraphQL regardless of the --json field set, so a 'cheap' updatedAt/labels poll every cycle still costs one GraphQL call per cycle and saves nothing on the GraphQL budget. Only the every-Nth-cycle approach actually reduces epic-view GraphQL (~120/hr → ~12/hr per loop). Accepted tradeoff: operator scope edits to the epic body surface up to ~5 min late.
