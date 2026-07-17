@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, statSync, mkdirSync, chmodSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname as dirnameFn } from 'node:path';
 import { SmeeChannelResolver, SMEE_URL_PATTERN } from '../smee-channel-resolver.js';
 
 /**
@@ -472,5 +472,134 @@ describe('SmeeChannelResolver', () => {
     expect(l4).toBeDefined();
     const [ctx] = l4 as [Record<string, unknown>, string];
     expect(ctx.lastError).toBe('Location does not match SMEE_URL_PATTERN');
+  });
+
+  describe('workspaceMirrorPath (#980)', () => {
+    let mirrorPath: string;
+
+    beforeEach(() => {
+      mirrorPath = join(baseDir, 'workspace', '.generacy', 'cockpit', 'smee-channel');
+    });
+
+    it('M1: tier-3 provisioning + mirror success → mirror file exists, mode 0644, bare-URL bytes', async () => {
+      const provisionedUrl = 'https://smee.io/newMIRROR1';
+      const fetchMock = vi.fn().mockResolvedValue(make302(provisionedUrl));
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        workspaceMirrorPath: mirrorPath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+      expect(readFileSync(mirrorPath, 'utf-8')).toBe(provisionedUrl);
+      expect(statSync(mirrorPath).mode & 0o777).toBe(0o644);
+    });
+
+    it('M2: tier-3 provisioning + cluster-internal write success + mirror EACCES → resolver returns provisioned; one warn; mirror file absent', async () => {
+      // Skip if root (chmod 0500 is ignored for root)
+      if (process.getuid && process.getuid() === 0) return;
+
+      const provisionedUrl = 'https://smee.io/newMIRROR2';
+      const fetchMock = vi.fn().mockResolvedValue(make302(provisionedUrl));
+
+      // Read-only parent dir for the mirror to force EACCES on mkdir/rename.
+      const roDir = join(baseDir, 'ro-workspace');
+      mkdirSync(roDir, { mode: 0o500 });
+      const roMirror = join(roDir, '.generacy', 'cockpit', 'smee-channel');
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        workspaceMirrorPath: roMirror,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+      });
+
+      const result = await resolver.resolve();
+
+      // Restore for cleanup
+      chmodSync(roDir, 0o700);
+
+      expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+      const mirrorWarn = mockLogger.warn.mock.calls.find(
+        (c) => c[1] === 'Workspace mirror write failed — operator sessions may fall back to polling',
+      );
+      expect(mirrorWarn).toBeDefined();
+    });
+
+    it('M3: tier-2 persisted-read + mirror missing → mirror written', async () => {
+      const persistedUrl = 'https://smee.io/persMIRROR3';
+      writeFileSync(channelFilePath, persistedUrl);
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        workspaceMirrorPath: mirrorPath,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: persistedUrl, source: 'persisted' });
+      expect(readFileSync(mirrorPath, 'utf-8')).toBe(persistedUrl);
+      expect(statSync(mirrorPath).mode & 0o777).toBe(0o644);
+    });
+
+    it('M4: tier-2 persisted-read + mirror bytes equal persisted URL → no writeFile called for mirror', async () => {
+      const persistedUrl = 'https://smee.io/persMIRROR4';
+      writeFileSync(channelFilePath, persistedUrl);
+      mkdirSync(dirnameFn(mirrorPath), { recursive: true });
+      writeFileSync(mirrorPath, persistedUrl, { mode: 0o644 });
+      const originalMtime = statSync(mirrorPath).mtimeMs;
+
+      // Give a slight delay so any re-write would be detectable
+      await new Promise((r) => setTimeout(r, 10));
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        workspaceMirrorPath: mirrorPath,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: persistedUrl, source: 'persisted' });
+      // mtime unchanged proves writeFile was not called for the mirror.
+      expect(statSync(mirrorPath).mtimeMs).toBe(originalMtime);
+    });
+
+    it('M5: tier-2 persisted-read + mirror bytes differ → mirror re-written', async () => {
+      const persistedUrl = 'https://smee.io/persMIRROR5NEW';
+      writeFileSync(channelFilePath, persistedUrl);
+      mkdirSync(dirnameFn(mirrorPath), { recursive: true });
+      writeFileSync(mirrorPath, 'https://smee.io/persMIRROR5OLD', { mode: 0o644 });
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        workspaceMirrorPath: mirrorPath,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: persistedUrl, source: 'persisted' });
+      expect(readFileSync(mirrorPath, 'utf-8')).toBe(persistedUrl);
+    });
+
+    it('M6: workspaceMirrorPath undefined → no mirror write attempted; behavior identical to today', async () => {
+      const provisionedUrl = 'https://smee.io/newNOMIRROR';
+      const fetchMock = vi.fn().mockResolvedValue(make302(provisionedUrl));
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+      // No mirror-related warn
+      const mirrorWarn = mockLogger.warn.mock.calls.find(
+        (c) => c[1] === 'Workspace mirror write failed — operator sessions may fall back to polling',
+      );
+      expect(mirrorWarn).toBeUndefined();
+    });
   });
 });

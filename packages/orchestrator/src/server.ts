@@ -572,6 +572,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         if (isWorkerMode || !config.labelMonitor || config.repositories.length === 0) return;
         const resolver = new SmeeChannelResolver(server.log, {
           channelFilePath: config.smee.channelFilePath,
+          workspaceMirrorPath: config.smee.workspaceMirrorPath === ''
+            ? undefined
+            : config.smee.workspaceMirrorPath,
         });
         resolver.resolve()
           .then((result) => {

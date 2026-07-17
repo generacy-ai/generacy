@@ -243,6 +243,15 @@ export const SmeeConfigSchema = z.object({
   fallbackPollIntervalMs: z.number().int().min(30000).default(300000),
   /** Path to the persisted smee channel file (used by SmeeChannelResolver auto-provisioning) */
   channelFilePath: z.string().default('/var/lib/generacy/smee-channel'),
+  /**
+   * Cluster-scoped mirror path on the shared *_workspace volume. When set,
+   * SmeeChannelResolver writes the resolved URL here (mode 0644) after the
+   * cluster-internal atomic write succeeds. Mirror-write failures are logged
+   * and non-fatal. Empty string disables the mirror.
+   */
+  workspaceMirrorPath: z
+    .string()
+    .default('/workspaces/.generacy/cockpit/smee-channel'),
 });
 export type SmeeConfig = z.infer<typeof SmeeConfigSchema>;
 

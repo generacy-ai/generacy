@@ -43,6 +43,12 @@ export interface SmeeChannelResolverOptions {
   fetch?: typeof globalThis.fetch;
   /** Injected for tests. Defaults to a `setTimeout`-backed sleep. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * When set, resolver mirror-writes the resolved URL to this path (mode
+   * 0644) alongside the cluster-internal write. Mirror-write failures are
+   * logged and non-fatal. Undefined or empty string disables the mirror.
+   */
+  workspaceMirrorPath?: string;
 }
 
 export interface SmeeChannelResolverResult {
@@ -71,6 +77,7 @@ export class SmeeChannelResolver {
   async resolve(): Promise<SmeeChannelResolverResult | null> {
     // Tier 1: env/yaml preset — trust Zod validation
     if (this.options.presetUrl) {
+      await this.mirrorToWorkspaceIfNeeded(this.options.presetUrl);
       return { channelUrl: this.options.presetUrl, source: 'env-or-yaml' };
     }
 
@@ -81,6 +88,7 @@ export class SmeeChannelResolver {
         { channelUrl: persisted, source: 'persisted' },
         'Reusing persisted smee channel URL',
       );
+      await this.mirrorToWorkspaceIfNeeded(persisted);
       return { channelUrl: persisted, source: 'persisted' };
     }
 
@@ -95,6 +103,9 @@ export class SmeeChannelResolver {
     if (!persistOk) {
       return null;
     }
+
+    // Tier 3 mirror is unguarded — always attempt after provision.
+    await this.mirrorToWorkspace(provisioned);
 
     this.logger.info(
       { channelUrl: provisioned, source: 'provisioned' },
@@ -182,6 +193,48 @@ export class SmeeChannelResolver {
         'Provisioned smee channel URL but failed to persist — dropping URL to avoid orphaned GitHub webhook accumulation',
       );
       return false;
+    }
+  }
+
+  /**
+   * Guarded mirror write for tier-1 (preset) and tier-2 (persisted) hits.
+   * Skips the write when the mirror already contains the exact same URL
+   * (avoids inode churn on every restart). On any other read outcome
+   * (ENOENT, other errors), attempts the write.
+   */
+  private async mirrorToWorkspaceIfNeeded(url: string): Promise<void> {
+    const path = this.options.workspaceMirrorPath;
+    if (!path) return;
+    try {
+      const existing = (await readFile(path, 'utf-8')).trim();
+      if (existing === url) {
+        return;
+      }
+    } catch {
+      // ENOENT or any other read error — fall through and attempt the write.
+    }
+    await this.mirrorToWorkspace(url);
+  }
+
+  /**
+   * Best-effort mirror write to the shared *_workspace volume. Failures
+   * emit one warn line and are swallowed — the cluster-internal write is
+   * the source of truth.
+   */
+  private async mirrorToWorkspace(url: string): Promise<void> {
+    const path = this.options.workspaceMirrorPath;
+    if (!path) return;
+    const tmp = `${path}.tmp`;
+    try {
+      await mkdir(dirname(path), { recursive: true });
+      await writeFile(tmp, url, { mode: 0o644 });
+      await rename(tmp, path);
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      this.logger.warn(
+        { path, code: err.code, message: err.message ?? String(err) },
+        'Workspace mirror write failed — operator sessions may fall back to polling',
+      );
     }
   }
 }
