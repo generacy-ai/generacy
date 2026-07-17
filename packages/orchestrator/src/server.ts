@@ -180,6 +180,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // service does not emit until monitors call recordResult/maybeRequestRefresh,
   // which happens after server.listen() and (in wizard mode) after activation.
   let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  // #972: StatusReporter ref populated by `initializeRelayBridge()` on both
+  // wizard and existing-key paths. Read through by the WebhookSetupService
+  // fail-loud triple's `pushStatus('degraded', ...)` call; safe because the
+  // 403 fires from a network round-trip, so the ref is populated by the time
+  // it dereferences.
+  let statusReporterRef: StatusReporter | null = null;
   const githubAuthHealth = !isWorkerMode
     ? new GitHubAuthHealthService({
         emitEvent: (payload) => {
@@ -505,7 +511,40 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         server.log.error({ err: error }, 'Smee webhook receiver failed');
       });
       if (config.webhookSetup.enabled) {
-        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider);
+        // #972: DI hooks for fail-loud triple on webhook-registration 403.
+        // - sendRelayEvent: mirrors the closure used by PostActivationRetryService
+        //   / BootResumeService at the initializeRelayBridge sites; dereferences
+        //   relayClientRef at emit time so late relay-client init is tolerated.
+        // - statusReporter: exposes the same StatusReporter instance the relay
+        //   bridge init returns; wrapped as a thin object so the ref is read
+        //   at pushStatus() call time (the 403 fires from a network round-trip,
+        //   so the ref is populated by then even on the wizard-mode path).
+        // - channelFilePath: same path SmeeChannelResolver writes to.
+        // - installationIdProvider: null in v1 — installation id is not stored
+        //   in .agency/credentials.yaml (it lives inside the sealed credential
+        //   value in credentials.dat). Diagnostic-only per spec, so falling
+        //   back to null is safe (data-model.md §"WebhookRegistrationForbiddenEvent").
+        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider, {
+          sendRelayEvent: (channel, payload) => {
+            const client = relayClientRef;
+            if (!client || !client.isConnected) return;
+            client.send({
+              type: 'event',
+              event: channel,
+              data: payload,
+              timestamp: new Date().toISOString(),
+            } as unknown as import('./types/relay.js').RelayMessage);
+          },
+          statusReporter: {
+            pushStatus: async (status, reason) => {
+              const reporter = statusReporterRef;
+              if (!reporter) return;
+              await reporter.pushStatus(status, reason);
+            },
+          },
+          channelFilePath: config.smee.channelFilePath,
+          installationIdProvider: async () => null,
+        });
         webhookSetupService.ensureWebhooks(channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });
@@ -703,7 +742,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       relayBridgeRef = bridge;
       conversationManager = convMgr;
       activationPending = false;
-    }, (client) => { relayClientRef = client; }).catch((error) => {
+    }, (client) => { relayClientRef = client; }, (reporter) => { statusReporterRef = reporter; }).catch((error) => {
       activationPending = false;
       server.log.warn(
         `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -714,6 +753,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
     relayBridge = result.relayBridge;
     relayBridgeRef = result.relayBridge;
+    statusReporterRef = result.statusReporter;
 
     // Detect identity split (env GENERACY_CLUSTER_ID vs persisted cluster.json.cluster_id).
     // Best-effort: drops event if relay client unavailable. Once per process lifetime (#750).
@@ -1064,6 +1104,7 @@ async function activateInBackground(
   apiKeyStore: InMemoryApiKeyStore,
   onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
+  setStatusReporter?: (reporter: StatusReporter) => void,
 ): Promise<void> {
   const initialWorkersRaw = process.env['GENERACY_INITIAL_WORKERS'];
   let initialWorkers: number | undefined;
@@ -1106,10 +1147,11 @@ async function activateInBackground(
   server.log.info('Cluster activation complete');
 
   let localRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
-  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
+  const { relayBridge, statusReporter } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
     localRelayClient = client;
     setRelayClient?.(client);
   });
+  setStatusReporter?.(statusReporter);
   const conversationManager = await initializeConversationManager(config, server, relayBridge);
 
   onInitialized(relayBridge, conversationManager);
