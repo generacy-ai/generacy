@@ -16,7 +16,7 @@ All P1 requirements land in `packages/orchestrator/`. No cross-package edits, no
 
 Order within this phase is sequential — every task edits `packages/orchestrator/src/services/webhook-setup-service.ts` (same file). Do NOT mark `[P]` between them.
 
-- [ ] T001 [US1] Extend `WebhookSetupService` constructor with optional dependency-injection hooks in
+- [X] T001 [US1] Extend `WebhookSetupService` constructor with optional dependency-injection hooks in
       `packages/orchestrator/src/services/webhook-setup-service.ts`:
       - `sendRelayEvent?: (channel: string, payload: unknown) => void`
       - `statusReporter?: { pushStatus(status: ClusterStatus, reason: string): Promise<void> }`
@@ -26,13 +26,13 @@ Order within this phase is sequential — every task edits `packages/orchestrato
       side-effect is a no-op (matches current behavior). Add matching TypeScript types alongside
       existing `RepositoryConfig` / `GitHubWebhook` / `WebhookSetupResult`.
 
-- [ ] T002 [US1] FR-001 — Lock the four spec-locked events in `_createRepoWebhook` in
+- [X] T002 [US1] FR-001 — Lock the four spec-locked events in `_createRepoWebhook` in
       `packages/orchestrator/src/services/webhook-setup-service.ts`. The `gh api` call MUST emit
       `-F events[]=issues -F events[]=pull_request -F events[]=check_run -F events[]=check_suite`,
       plus `-F config[url]=<smeeChannelUrl> -F config[content_type]=json -F active=true`
       (see `contracts/ensure-webhooks-behavior.md` §"Locked create-time payload").
 
-- [ ] T003 [US1] FR-004 — Add persisted-URL exact-match decision matrix in
+- [X] T003 [US1] FR-004 — Add persisted-URL exact-match decision matrix in
       `packages/orchestrator/src/services/webhook-setup-service.ts`. Extract `_selectExistingHookForUpdate`
       (or equivalent) implementing rows 4–8 of `contracts/ensure-webhooks-behavior.md`:
       - Row 4: exact match on current channel URL AND `active === true` → skip (idempotent no-op).
@@ -46,7 +46,7 @@ Order within this phase is sequential — every task edits `packages/orchestrato
       Read persisted URL from `channelFilePath` (from T001 DI); return `null` on ENOENT or invalid content.
       Case-insensitive string equality per `data-model.md` §"Field-Level Validation Rules Summary".
 
-- [ ] T004 [US1] FR-002 + FR-003 + FR-006 — Wire the 403 fail-loud triple in the
+- [X] T004 [US1] FR-002 + FR-003 + FR-006 — Wire the 403 fail-loud triple in the
       `_ensureWebhookForRepo` catch branch in
       `packages/orchestrator/src/services/webhook-setup-service.ts`. When `gh api` stderr matches
       (case-insensitive substring) `HTTP 403` OR `Resource not accessible by integration` on any of
@@ -72,7 +72,7 @@ Order within this phase is sequential — every task edits `packages/orchestrato
 ## Phase 2: Wiring
 <!-- Phase boundary: Complete Phase 1 before starting Phase 2 -->
 
-- [ ] T005 [US1] Wire the DI hooks in `packages/orchestrator/src/server.ts` at the
+- [X] T005 [US1] Wire the DI hooks in `packages/orchestrator/src/server.ts` at the
       `WebhookSetupService` construction site (currently `~:508`):
       - Pass `sendRelayEvent` — reuse the same closure already built for `PostActivationRetryService`
         at `~:723-727` / `BootResumeService` at `~:1135-1138`; it wraps `ClusterRelayClient.send`.
@@ -89,7 +89,7 @@ Order within this phase is sequential — every task edits `packages/orchestrato
 ## Phase 3: Tests
 <!-- Phase boundary: Complete Phase 2 before starting Phase 3 -->
 
-- [ ] T006 [US1] Extend
+- [X] T006 [US1] Extend
       `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts` with the seven
       cases spec'd in plan.md §"Project Structure" line-of-effect table:
       1. 403 on list → emits log + relay event + `pushStatus('degraded', ...)`.
@@ -105,7 +105,7 @@ Order within this phase is sequential — every task edits `packages/orchestrato
       Use stubbed `sendRelayEvent`, `statusReporter.pushStatus`, and `channelFilePath` reader —
       the existing `_executeGh` / `gh` mocking pattern in this file already covers the transport.
 
-- [ ] T007 [P] [US1] Create
+- [X] T007 [P] [US1] Create
       `packages/orchestrator/src/__tests__/server-webhook-setup-loud-failure.test.ts` — server-level
       regression per plan.md line-of-effect table. Boot orchestrator (in-process, existing test
       pattern from sibling server tests), inject a fake `gh` runner that returns 403 for repo-hook
@@ -122,12 +122,12 @@ Order within this phase is sequential — every task edits `packages/orchestrato
 
 ## Phase 4: Release + Verification
 
-- [ ] T008 [US1] Add `.changeset/972-webhook-registration-fail-loud.md` with a `patch` bump for
+- [X] T008 [US1] Add `.changeset/972-webhook-registration-fail-loud.md` with a `patch` bump for
       `@generacy-ai/orchestrator`. Required by the CI changeset gate (`CLAUDE.md` §"Changesets");
       no new public API means `patch` per the gate's "internal surface" rule. One-sentence summary
       naming the fail-loud triple.
 
-- [ ] T009 [US1] Verification (do NOT skip — the plan's Diagnosis binds this fix to observable
+- [X] T009 [US1] Verification (do NOT skip — the plan's Diagnosis binds this fix to observable
       behavior, not to type checks):
       - `pnpm --filter @generacy-ai/orchestrator test` — the two test files from Phase 3 pass.
       - `pnpm --filter @generacy-ai/orchestrator typecheck` — DI additions compile cleanly.

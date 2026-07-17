@@ -18,8 +18,13 @@ describe('WebhookSetupService', () => {
   let executeCommandMock: Mock;
 
   beforeEach(() => {
-    // Reset mocks before each test
+    // Reset mocks and any queued mockResolvedValueOnce implementations before
+    // each test. `clearAllMocks` clears call history but leaves the
+    // implementation queue intact — under #972 several tests consume only 1
+    // gh call where they previously consumed 2 (list failure now returns
+    // early), so the leftover queued response would pollute the next test.
     vi.clearAllMocks();
+    (workflowEngine.executeCommand as Mock).mockReset();
 
     // Create mock logger
     mockLogger = {
@@ -291,33 +296,31 @@ describe('WebhookSetupService', () => {
     });
 
     it('should handle 403 permission errors gracefully', async () => {
-      // Arrange - list fails, then create also fails
-      executeCommandMock
-        .mockResolvedValueOnce({
-          exitCode: 1,
-          stdout: '',
-          stderr: 'gh: Forbidden (HTTP 403)',
-        })
-        .mockResolvedValueOnce({
-          exitCode: 1,
-          stdout: '',
-          stderr: 'gh: Forbidden (HTTP 403)',
-        });
+      // Arrange — #972: list-403 immediately fails (row 1 of the decision
+      // matrix); no create attempt. Only one gh mock consumed.
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'gh: Forbidden (HTTP 403)',
+      });
 
       // Act
       const result = await service.ensureWebhooks('https://smee.io/abc123', [
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert
+      // Assert — #972 fail-loud message, not the pre-fix
+      // "Insufficient permissions" line.
       expect(result.total).toBe(1);
       expect(result.failed).toBe(1);
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'testorg',
           repo: 'testrepo',
+          missingScope: 'admin:repo_hook',
+          reason: 'webhook-registration-forbidden',
         }),
-        expect.stringContaining('Insufficient permissions')
+        'Webhook registration forbidden: missing admin:repo_hook scope',
       );
     });
 
@@ -531,14 +534,11 @@ describe('WebhookSetupService', () => {
     });
 
     it('should continue processing other repos if one fails', async () => {
-      // Arrange
+      // Arrange — #972: list failure returns early (rows 1-3), so repo1
+      // consumes exactly one mock (list) then fails; repo2 consumes list
+      // (empty) + create.
       executeCommandMock
-        // Repo 1: list fails, then create fails
-        .mockResolvedValueOnce({
-          exitCode: 1,
-          stdout: '',
-          stderr: 'API error',
-        })
+        // Repo 1: list fails
         .mockResolvedValueOnce({
           exitCode: 1,
           stdout: '',
@@ -604,7 +604,8 @@ describe('WebhookSetupService', () => {
 
   describe('webhook matching', () => {
     it('should not match webhooks with trailing slashes in URLs', async () => {
-      // Arrange
+      // Arrange — pre-existing smee.io hook whose URL differs from ours only
+      // by a trailing slash.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
@@ -614,27 +615,31 @@ describe('WebhookSetupService', () => {
         },
       ];
 
-      executeCommandMock
-        .mockResolvedValueOnce({
-          exitCode: 0,
-          stdout: JSON.stringify(mockWebhooks),
-          stderr: '',
-        })
-        .mockResolvedValueOnce({
-          exitCode: 0,
-          stdout: JSON.stringify({ id: 456 }),
-          stderr: '',
-        });
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(mockWebhooks),
+        stderr: '',
+      });
 
       // Act - URL without trailing slash
       const result = await service.ensureWebhooks('https://smee.io/abc123', [
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert - Should NOT match (no URL normalization beyond case)
+      // Assert — #972 row 8 (clobber-prevention): a smee.io hook that
+      // doesn't match current or persisted URL is treated as foreign and
+      // left alone; we do NOT create a duplicate hook.
       expect(result.total).toBe(1);
-      expect(result.created).toBe(1); // Creates new because URLs don't exactly match
-      expect(result.skipped).toBe(0);
+      expect(result.created).toBe(0);
+      expect(result.skipped).toBe(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'testorg',
+          repo: 'testrepo',
+          webhookId: 123,
+        }),
+        'Foreign webhook present; not modifying',
+      );
     });
 
     it('should not match webhooks with different protocols', async () => {
@@ -749,7 +754,8 @@ describe('WebhookSetupService', () => {
     });
 
     it('should match exact URL including query parameters', async () => {
-      // Arrange
+      // Arrange — pre-existing smee.io hook whose URL differs from ours by
+      // a query string.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
@@ -759,27 +765,22 @@ describe('WebhookSetupService', () => {
         },
       ];
 
-      executeCommandMock
-        .mockResolvedValueOnce({
-          exitCode: 0,
-          stdout: JSON.stringify(mockWebhooks),
-          stderr: '',
-        })
-        .mockResolvedValueOnce({
-          exitCode: 0,
-          stdout: JSON.stringify({ id: 456 }),
-          stderr: '',
-        });
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(mockWebhooks),
+        stderr: '',
+      });
 
       // Act - URL without query param
       const result = await service.ensureWebhooks('https://smee.io/abc123', [
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert - Should NOT match (query params differ)
+      // Assert — #972 row 8 (clobber-prevention): differing smee.io hooks
+      // are foreign; log-and-skip, do NOT create a duplicate.
       expect(result.total).toBe(1);
-      expect(result.created).toBe(1);
-      expect(result.skipped).toBe(0);
+      expect(result.created).toBe(0);
+      expect(result.skipped).toBe(1);
     });
 
     it('should match first webhook when multiple webhooks point to same URL', async () => {
@@ -1378,6 +1379,411 @@ describe('WebhookSetupService', () => {
           expect.objectContaining({ owner: 'org4', action: 'failed' }),
         ]),
       });
+    });
+  });
+
+  // #972: fail-loud triple on webhook-registration 403 + FR-004 persisted-URL
+  // stale-channel healing + FR-001 locked events on create. Contracts:
+  // specs/972-summary-snappoll-preview/contracts/ensure-webhooks-behavior.md
+  // specs/972-summary-snappoll-preview/contracts/webhook-registration-forbidden-event.md
+  // specs/972-summary-snappoll-preview/contracts/degraded-status-transition.md
+  describe('#972 fail-loud + persisted-URL healing', () => {
+    let sendRelayEvent: Mock;
+    let pushStatus: Mock;
+    let readChannelFile: Mock;
+    let readFileMock: Mock;
+
+    beforeEach(() => {
+      sendRelayEvent = vi.fn();
+      pushStatus = vi.fn().mockResolvedValue(undefined);
+      readChannelFile = vi.fn();
+      readFileMock = readChannelFile;
+    });
+
+    /**
+     * Build a service instance wired with the #972 DI hooks and a fake
+     * `readFile` that returns the given persisted-URL string (or `null` /
+     * throws for ENOENT). Kept local to this block so pre-existing tests
+     * keep the pre-#972 constructor signature.
+     */
+    const buildService = (persistedUrl: string | null): WebhookSetupService => {
+      // Route the persisted-URL file read through a temp path that our mock
+      // resolves — the service uses `fs.readFile(channelFilePath)`, so we
+      // point `channelFilePath` at a sentinel we intercept via the fake path.
+      const channelFilePath = '/tmp/972-test-smee-channel-nonexistent';
+      readChannelFile.mockImplementation(async () => {
+        if (persistedUrl === null) {
+          const err = new Error('ENOENT') as NodeJS.ErrnoException;
+          err.code = 'ENOENT';
+          throw err;
+        }
+        return persistedUrl;
+      });
+      // Patch `fs.readFile` for this instance by wrapping construction —
+      // simplest path: stub node:fs/promises via vi.doMock. The service's
+      // fallback is safe (returns null on any read error), so we can just
+      // rely on ENOENT for the "no persisted URL" case and use a real temp
+      // file for the persisted-URL case. To keep tests hermetic and avoid
+      // filesystem side-effects, we spy on fs/promises below.
+      return new WebhookSetupService(mockLogger, undefined, {
+        sendRelayEvent,
+        statusReporter: { pushStatus },
+        channelFilePath,
+        installationIdProvider: async () => 113597939,
+      });
+    };
+
+    // Silence the unused-var warning by referencing the mock (each case that
+    // needs to control persisted-URL will re-mock `fs.readFile` directly).
+    void readFileMock;
+
+    /** Wait for the fail-loud triple's async chain to flush. */
+    const flushMicrotasks = async (): Promise<void> => {
+      // Two ticks: the installationId provider promise + the pushStatus/send
+      // fire-and-forget promises.
+      await Promise.resolve();
+      await Promise.resolve();
+    };
+
+    it('#972 case 1: 403 on list emits log + relay event + degraded status', async () => {
+      // Arrange
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'gh: Resource not accessible by integration (HTTP 403)',
+      });
+      const svc = buildService(null);
+
+      // Act
+      const result = await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'christrudelpw', repo: 'snappoll' },
+      ]);
+      await flushMicrotasks();
+
+      // Assert — return shape
+      expect(result.failed).toBe(1);
+      expect(result.results[0]).toEqual({
+        owner: 'christrudelpw',
+        repo: 'snappoll',
+        action: 'failed',
+        error: 'webhook-registration-forbidden',
+      });
+
+      // Assert — log line (audit floor)
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'christrudelpw',
+          repo: 'snappoll',
+          installationId: 113597939,
+          missingScope: 'admin:repo_hook',
+          reason: 'webhook-registration-forbidden',
+        }),
+        'Webhook registration forbidden: missing admin:repo_hook scope',
+      );
+
+      // Assert — relay event on cluster.bootstrap
+      expect(sendRelayEvent).toHaveBeenCalledTimes(1);
+      expect(sendRelayEvent).toHaveBeenCalledWith('cluster.bootstrap', {
+        status: 'failed',
+        reason: 'webhook-registration-forbidden',
+        repo: 'christrudelpw/snappoll',
+        installationId: 113597939,
+        missingScope: 'admin:repo_hook',
+      });
+
+      // Assert — degraded status transition
+      expect(pushStatus).toHaveBeenCalledTimes(1);
+      expect(pushStatus).toHaveBeenCalledWith(
+        'degraded',
+        'webhook-registration-forbidden',
+      );
+    });
+
+    it('#972 case 2: 403 on create emits the same triple', async () => {
+      // Arrange — list succeeds (empty), create fails 403.
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([]),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'HTTP 403: Resource not accessible by integration',
+        });
+      const svc = buildService(null);
+
+      // Act
+      const result = await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+      await flushMicrotasks();
+
+      // Assert
+      expect(result.failed).toBe(1);
+      expect(sendRelayEvent).toHaveBeenCalledWith(
+        'cluster.bootstrap',
+        expect.objectContaining({
+          reason: 'webhook-registration-forbidden',
+          repo: 'testorg/testrepo',
+        }),
+      );
+      expect(pushStatus).toHaveBeenCalledWith(
+        'degraded',
+        'webhook-registration-forbidden',
+      );
+    });
+
+    it('#972 case 3: 200 on create emits no relay event and no status change (regression)', async () => {
+      // Arrange — list empty, create succeeds.
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([]),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 42 }),
+          stderr: '',
+        });
+      const svc = buildService(null);
+
+      // Act
+      const result = await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+      await flushMicrotasks();
+
+      // Assert — happy path emits neither observable.
+      expect(result.created).toBe(1);
+      expect(sendRelayEvent).not.toHaveBeenCalled();
+      expect(pushStatus).not.toHaveBeenCalled();
+    });
+
+    it('#972 case 4: existing hook with current-URL match is skipped (row 4)', async () => {
+      // Arrange
+      const mockWebhooks: GitHubWebhook[] = [
+        {
+          id: 999,
+          active: true,
+          config: { url: 'https://smee.io/abc123' },
+          events: ['issues', 'pull_request', 'check_run', 'check_suite'],
+        },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(mockWebhooks),
+        stderr: '',
+      });
+      const svc = buildService(null);
+
+      // Act
+      const result = await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Assert
+      expect(result.skipped).toBe(1);
+      expect(result.created).toBe(0);
+      expect(result.reactivated).toBe(0);
+      // Only one gh call (list); no PATCH, no POST.
+      expect(executeCommandMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('#972 case 5: persisted-URL match PATCHes to current URL + locked events (row 6)', async () => {
+      // Arrange — write the stale prior channel URL to a real temp file so
+      // the service's `fs.readFile(channelFilePath)` can resolve it. ESM
+      // module exports can't be spied on, so we use a real file — hermetic
+      // via os.tmpdir + unique filename + finally-cleanup.
+      const persistedUrl = 'https://smee.io/stale-channel-xyz';
+      const currentUrl = 'https://smee.io/new-channel-abc';
+      const fs = await import('node:fs/promises');
+      const os = await import('node:os');
+      const path = await import('node:path');
+      const channelFilePath = path.join(
+        os.tmpdir(),
+        `972-test-channel-${process.pid}-${Date.now()}`,
+      );
+      await fs.writeFile(channelFilePath, persistedUrl + '\n');
+
+      try {
+        const mockWebhooks: GitHubWebhook[] = [
+          {
+            id: 777,
+            active: true,
+            config: { url: persistedUrl },
+            events: ['issues'],
+          },
+        ];
+        executeCommandMock
+          .mockResolvedValueOnce({
+            exitCode: 0,
+            stdout: JSON.stringify(mockWebhooks),
+            stderr: '',
+          })
+          .mockResolvedValueOnce({
+            exitCode: 0,
+            stdout: JSON.stringify({ id: 777 }),
+            stderr: '',
+          });
+
+        const svc = new WebhookSetupService(mockLogger, undefined, {
+          sendRelayEvent,
+          statusReporter: { pushStatus },
+          channelFilePath,
+          installationIdProvider: async () => 113597939,
+        });
+
+        // Act
+        const result = await svc.ensureWebhooks(currentUrl, [
+          { owner: 'testorg', repo: 'testrepo' },
+        ]);
+
+        // Assert — reactivated (URL healed).
+        expect(result.reactivated).toBe(1);
+        expect(result.results[0]?.webhookId).toBe(777);
+        expect(mockLogger.info).toHaveBeenCalledWith(
+          expect.objectContaining({
+            oldUrl: persistedUrl,
+            newUrl: currentUrl,
+            events: ['issues', 'pull_request', 'check_run', 'check_suite'],
+          }),
+          'Updated Generacy webhook to current channel URL',
+        );
+
+        // Assert — PATCH call carries new URL + all four locked events.
+        const patchCall = executeCommandMock.mock.calls.find((call) => {
+          const args = call[1] as string[];
+          return args.includes('PATCH');
+        });
+        expect(patchCall).toBeDefined();
+        const patchArgs = patchCall![1] as string[];
+        expect(patchArgs).toContain(`config[url]=${currentUrl}`);
+        expect(patchArgs).toContain('events[]=issues');
+        expect(patchArgs).toContain('events[]=pull_request');
+        expect(patchArgs).toContain('events[]=check_run');
+        expect(patchArgs).toContain('events[]=check_suite');
+      } finally {
+        await fs.rm(channelFilePath, { force: true });
+      }
+    });
+
+    it('#972 case 6: foreign smee hook (no match on current or persisted) is log-and-skipped (row 8)', async () => {
+      // Arrange — hook URL matches neither current nor persisted (null).
+      const mockWebhooks: GitHubWebhook[] = [
+        {
+          id: 555,
+          active: true,
+          config: { url: 'https://smee.io/some-other-project' },
+          events: ['issues'],
+        },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(mockWebhooks),
+        stderr: '',
+      });
+      const svc = buildService(null);
+
+      // Act
+      const result = await svc.ensureWebhooks('https://smee.io/current-channel', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Assert — skipped without PATCH.
+      expect(result.skipped).toBe(1);
+      expect(result.created).toBe(0);
+      // Only one gh call (list). No PATCH, no POST.
+      expect(executeCommandMock).toHaveBeenCalledTimes(1);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'testorg',
+          repo: 'testrepo',
+          webhookId: 555,
+        }),
+        'Foreign webhook present; not modifying',
+      );
+    });
+
+    it('#972 case 7: create-time payload includes all four locked events', async () => {
+      // Arrange — list empty triggers create.
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([]),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 100 }),
+          stderr: '',
+        });
+      const svc = buildService(null);
+
+      // Act
+      await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Assert — the POST call's argv includes all four spec-locked events.
+      const createCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('POST');
+      });
+      expect(createCall).toBeDefined();
+      const createArgs = createCall![1] as string[];
+      expect(createArgs).toContain('events[]=issues');
+      expect(createArgs).toContain('events[]=pull_request');
+      expect(createArgs).toContain('events[]=check_run');
+      expect(createArgs).toContain('events[]=check_suite');
+      expect(createArgs).toContain('config[url]=https://smee.io/abc123');
+      expect(createArgs).toContain('config[content_type]=json');
+      expect(createArgs).toContain('active=true');
+    });
+
+    it('#972: 403 fires the triple at most once per (repo, boot)', async () => {
+      // Arrange — two repos both hit 403 on list; only ONE relay event
+      // per repo (bounded emission). Then re-run against the same repo —
+      // no additional event.
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'HTTP 403',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'HTTP 403',
+        });
+      const svc = buildService(null);
+
+      // Act — one call, two repos
+      await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'org1', repo: 'repo1' },
+        { owner: 'org2', repo: 'repo2' },
+      ]);
+      await flushMicrotasks();
+
+      // Assert — 2 events, one per repo.
+      expect(sendRelayEvent).toHaveBeenCalledTimes(2);
+
+      // Act — re-run against repo1 alone; no NEW event.
+      sendRelayEvent.mockClear();
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'HTTP 403',
+      });
+      await svc.ensureWebhooks('https://smee.io/abc123', [
+        { owner: 'org1', repo: 'repo1' },
+      ]);
+      await flushMicrotasks();
+
+      // Assert — same-boot dedup: no new event for repo1.
+      expect(sendRelayEvent).not.toHaveBeenCalled();
     });
   });
 });
