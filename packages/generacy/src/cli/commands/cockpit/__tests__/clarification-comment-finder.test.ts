@@ -88,4 +88,140 @@ describe('findClarificationComment', () => {
     const c = await findClarificationComment(gh, 'o/r', 1);
     expect(c?.url).toBe('new');
   });
+
+  it('FR-006: returns null when the only at-or-after candidate is a generacy-stage:planning status table', async () => {
+    const gh = stub({
+      fetchIssueTimeline: vi.fn(async () => [
+        {
+          event: 'labeled',
+          label: { name: 'waiting-for:clarification' },
+          created_at: '2026-06-25T10:00:00Z',
+        },
+      ]),
+      fetchIssueComments: vi.fn(async () => [
+        {
+          body: '<!-- generacy-stage:planning -->\n\n<status table>',
+          author: 'bot',
+          createdAt: '2026-06-25T10:01:00Z',
+          url: 'planning-status',
+        },
+      ]),
+    });
+    expect(await findClarificationComment(gh, 'o/r', 1)).toBeNull();
+  });
+
+  it('FR-007: returns a generacy-stage:clarification-batch-1 comment (guards against naive startsWith)', async () => {
+    const gh = stub({
+      fetchIssueTimeline: vi.fn(async () => [
+        {
+          event: 'labeled',
+          label: { name: 'waiting-for:clarification' },
+          created_at: '2026-06-25T10:00:00Z',
+        },
+      ]),
+      fetchIssueComments: vi.fn(async () => [
+        {
+          body: '<!-- generacy-stage:clarification-batch-1 -->\n\n## Clarifications\n\n### Q1: …',
+          author: 'bot',
+          createdAt: '2026-06-25T10:01:00Z',
+          url: 'batch-1',
+        },
+      ]),
+    });
+    const c = await findClarificationComment(gh, 'o/r', 1);
+    expect(c?.url).toBe('batch-1');
+  });
+
+  it('FR-008: skips a stage-status table and returns the later clarification-batch comment', async () => {
+    const gh = stub({
+      fetchIssueTimeline: vi.fn(async () => [
+        {
+          event: 'labeled',
+          label: { name: 'waiting-for:clarification' },
+          created_at: '2026-06-25T10:00:00Z',
+        },
+      ]),
+      fetchIssueComments: vi.fn(async () => [
+        {
+          body: '<!-- generacy-stage:planning -->\n\n<status table>',
+          author: 'bot',
+          createdAt: '2026-06-25T10:01:00Z',
+          url: 'planning-status',
+        },
+        {
+          body: '<!-- generacy-stage:clarification-batch-1 -->\n\n## Clarifications',
+          author: 'bot',
+          createdAt: '2026-06-25T10:02:00Z',
+          url: 'batch-1',
+        },
+      ]),
+    });
+    const c = await findClarificationComment(gh, 'o/r', 1);
+    expect(c?.url).toBe('batch-1');
+  });
+
+  it('FR-003: mixed-body candidate with both a reject and an override marker is returned (override wins)', async () => {
+    const gh = stub({
+      fetchIssueTimeline: vi.fn(async () => [
+        {
+          event: 'labeled',
+          label: { name: 'waiting-for:clarification' },
+          created_at: '2026-06-25T10:00:00Z',
+        },
+      ]),
+      fetchIssueComments: vi.fn(async () => [
+        {
+          body: '<!-- generacy-stage:planning -->\n\n<!-- generacy-stage:clarification-batch-2 -->\n\n## Clarifications',
+          author: 'bot',
+          createdAt: '2026-06-25T10:01:00Z',
+          url: 'mixed-body',
+        },
+      ]),
+    });
+    const c = await findClarificationComment(gh, 'o/r', 1);
+    expect(c?.url).toBe('mixed-body');
+  });
+
+  it('FR-002: legacy speckit-stage:implementation status table is skipped', async () => {
+    const gh = stub({
+      fetchIssueTimeline: vi.fn(async () => [
+        {
+          event: 'labeled',
+          label: { name: 'waiting-for:clarification' },
+          created_at: '2026-06-25T10:00:00Z',
+        },
+      ]),
+      fetchIssueComments: vi.fn(async () => [
+        {
+          body: '<!-- speckit-stage:implementation -->\n\n<status table>',
+          author: 'bot',
+          createdAt: '2026-06-25T10:01:00Z',
+          url: 'speckit-impl',
+        },
+      ]),
+    });
+    expect(await findClarificationComment(gh, 'o/r', 1)).toBeNull();
+  });
+
+  it('D7: a quoted (> -prefixed) stage-status marker does not trigger the guard (column-0 rule)', async () => {
+    const gh = stub({
+      fetchIssueTimeline: vi.fn(async () => [
+        {
+          event: 'labeled',
+          label: { name: 'waiting-for:clarification' },
+          created_at: '2026-06-25T10:00:00Z',
+        },
+      ]),
+      fetchIssueComments: vi.fn(async () => [
+        {
+          body: '> <!-- generacy-stage:planning -->\n\nQ1: my answer',
+          author: 'human',
+          createdAt: '2026-06-25T10:01:00Z',
+          url: 'quoted-marker',
+        },
+      ]),
+    });
+    const c = await findClarificationComment(gh, 'o/r', 1);
+    expect(c?.url).toBe('quoted-marker');
+  });
 });

@@ -236,6 +236,15 @@ export {
 } from './security/comment-trust-config.js';
 export { wrapUntrustedData } from './security/untrusted-data-fence.js';
 
+// #958 — shared placeholder literal for clarification answers. Single source
+// of truth imported by prompt template, orchestrator parser, and cockpit
+// answer-relay so the prompt-vs-parser drift bug (spec FR-012) is
+// structurally impossible.
+export {
+  PENDING_ANSWER_LITERAL,
+  isPendingAnswerValue,
+} from './actions/builtin/speckit/pending-literal.js';
+
 // Comment types (re-exported so consumers filtering via isTrustedCommentAuthor
 // don't need to import from the deep types barrel)
 export type { Comment, ReviewThread, SkippedCommentInfo } from './types/github.js';

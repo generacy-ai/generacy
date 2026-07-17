@@ -9,6 +9,9 @@ import {
   clarificationMarker,
   integrateClarificationAnswers,
   isQuestionComment,
+  parseAnswersFromComments,
+  extractEmbeddedAnswer,
+  commentMatchesAnswerPattern,
 } from '../clarification-poster.js';
 import {
   CLARIFICATION_QUESTION_MARKERS,
@@ -37,6 +40,16 @@ vi.mock('@generacy-ai/workflow-engine', () => ({
   isTrustedCommentAuthor: vi.fn(() => ({ trusted: true, reason: 'owner' })),
   tryLoadCommentTrustConfig: vi.fn(() => undefined),
   wrapUntrustedData: vi.fn((content: string) => content),
+  // #958 — real implementations of the shared pending-answer helpers so the
+  // orchestrator code (which imports them) sees non-undefined values.
+  PENDING_ANSWER_LITERAL: '*Pending*',
+  isPendingAnswerValue: (v: string): boolean => {
+    if (typeof v !== 'string') return false;
+    const t = v.trim();
+    if (t === '') return true;
+    if (t === '*Pending*') return true;
+    return /^\[[^\]]*\]$/.test(t);
+  },
 }));
 
 // Marker predicate module — real implementation preserved via importOriginal,
@@ -183,6 +196,83 @@ describe('parseClarifications', () => {
     const questions = parseClarifications(SAMPLE_CLARIFICATIONS);
     const q2 = questions[1]!;
     expect(q2.options).toBeUndefined();
+  });
+
+  // Regression: hard-wrapped option descriptions ended the options block at the
+  // first continuation line, truncating that option mid-sentence and dropping
+  // every option after it. Shape taken from specs/787-epic-generacy-ai-tetrad.
+  it('keeps hard-wrapped option descriptions whole and parses later options', () => {
+    const questions = parseClarifications(`### Q1: Epic scoping flag
+**Context**: Neither verb has a documented way to discover which epic to
+scope to.
+**Question**: How should \`watch\` and \`status\` determine which issues to
+include?
+**Options**:
+- A: Require an \`--epic\` flag on both verbs. Single-epic only;
+  multiple invocations for multiple epics.
+- B: Auto-discover every epic from manifests, scope to the union of all
+  manifest-listed issues. No flag needed.
+- C: Take no epic argument; emit every open issue.
+
+**Answer**: *Pending*
+`);
+
+    const options = questions[0]!.options!;
+    expect(options.map((o) => o.label)).toEqual(['A', 'B', 'C']);
+    expect(options[0]!.description).toContain('multiple invocations for multiple epics.');
+    expect(options[1]!.description).toContain('No flag needed.');
+  });
+
+  // Regression: an option carrying indented sub-bullets truncated identically.
+  // Shape taken from specs/916-found-during-cockpit-v1.
+  it('keeps indented sub-bullets attached to their option', () => {
+    const questions = parseClarifications(`### Q4: Shortened description content
+**Question**: What content shape should the shortened descriptions take?
+**Options**:
+- A: **Terse cause only, keep issue ref**. Examples:
+  - \`blocked:stuck-feedback-loop\`: \`PR-feedback loop paused.\`
+  - \`blocked:stuck-validate-fix\`: \`Validate-fix paused (#892).\`
+- B: **Cause only, no directive**. Slightly terser.
+- C: **Cause + issue ref only**. Very short.
+
+**Answer**: *Pending*
+`);
+
+    const options = questions[0]!.options!;
+    expect(options.map((o) => o.label)).toEqual(['A', 'B', 'C']);
+    expect(options[0]!.description).toContain('blocked:stuck-validate-fix');
+    expect(options[2]!.description).toBe('**Cause + issue ref only**. Very short.');
+  });
+
+  it('parses options separated by blank lines', () => {
+    const questions = parseClarifications(`### Q1: Topic
+**Question**: Which?
+**Options**:
+- A) First option
+
+- B) Second option
+
+**Answer**: *Pending*
+`);
+
+    const options = questions[0]!.options!;
+    expect(options).toEqual([
+      { label: 'A', description: 'First option' },
+      { label: 'B', description: 'Second option' },
+    ]);
+  });
+
+  it('does not absorb the Answer line into the last option', () => {
+    const questions = parseClarifications(`### Q1: Topic
+**Question**: Which?
+**Options**:
+- A) Only option
+**Answer**: Use A
+`);
+
+    expect(questions[0]!.options).toEqual([{ label: 'A', description: 'Only option' }]);
+    expect(questions[0]!.answered).toBe(true);
+    expect(questions[0]!.answer).toBe('Use A');
   });
 });
 
@@ -389,27 +479,32 @@ describe('hasPendingClarifications', () => {
     expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
   });
 
-  it('returns false when specs dir does not exist', () => {
+  // #958 FR-007 — hasPendingClarifications fails closed. Missing spec dir,
+  // missing subdirectory match, and unreadable file all now return TRUE
+  // (== pause), not false (== advance). Unknown state must pause on a
+  // human gate. Sibling test file: `has-pending-clarifications.test.ts`
+  // covers the branches in more detail.
+  it('returns true when specs dir does not exist (FR-007 fail-closed)', () => {
     mockReaddirSync.mockImplementation(() => {
       throw new Error('ENOENT');
     });
 
-    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
-  it('returns false when no matching spec directory found', () => {
+  it('returns true when no matching spec directory found (FR-007)', () => {
     mockReaddirSync.mockReturnValue(['99-other-issue']);
 
-    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
-  it('returns false when clarifications.md does not exist', () => {
+  it('returns true when clarifications.md does not exist (FR-007)', () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockImplementation(() => {
       throw new Error('ENOENT');
     });
 
-    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(false);
+    expect(hasPendingClarifications('/tmp/checkout', 42)).toBe(true);
   });
 
   it('returns false for empty clarifications file', () => {
@@ -465,6 +560,34 @@ describe('integrateClarificationAnswers', () => {
     expect(writtenContent).toContain('**Answer**: Use PostgreSQL');
     // Already-answered Q3 should remain unchanged
     expect(writtenContent).toContain('**Answer**: Use the existing brand colors');
+  });
+
+  // #976 SC-001 — cluster-self plain `Q<n>:` reply integrates. Mirrors the
+  // different-account case above; the only difference is `viewerDidAuthor: true`.
+  // Same-account trust is delegated to `isTrustedCommentAuthor` (self-authored
+  // → trusted); no machine marker means no pre-filter exclusion; the answer
+  // flows through the same path as a different-account reply.
+  it('#976 SC-001 — cluster-self plain `Q<n>:` reply (viewerDidAuthor=true, no marker) integrates', async () => {
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 1,
+        body: 'Q1: OAuth 2.0',
+        author: 'cluster-bot',
+        authorAssociation: 'NONE',
+        viewerDidAuthor: true,
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(1);
+    expect(mockWriteFileSync).toHaveBeenCalledOnce();
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain('**Answer**: OAuth 2.0');
   });
 
   it('returns no-spec-dir when spec directory not found', async () => {
@@ -589,7 +712,12 @@ describe('integrateClarificationAnswers', () => {
     expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 
-  it('integrates answers from heading format (### Q1: Topic + **Answer: X**)', async () => {
+  // #958 FR-004 — heading-format answers now trigger fail-closed skip for
+  // humans (per-question). This is a deliberate blast-radius trade to prevent
+  // bot self-answer via `### Q<n>:` headings. Cluster-relayed answers use the
+  // deterministic cockpit tool which emits `Q<n>:` lines (not headings).
+  // Heading-format was never in the SC-002 supported flow list.
+  it('#958 FR-004 — heading-format human answer is skipped (fail-closed)', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
     (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -598,58 +726,41 @@ describe('integrateClarificationAnswers', () => {
         body: `## Clarification Answers
 
 ### Q1: Authentication method
-**Answer: A** — OAuth 2.0 is the standard for our stack.
-
-We already use OAuth in the existing services.
+**Answer: A** — OAuth 2.0.
 
 ### Q2: Database choice
-**Answer: B** — Use PostgreSQL for consistency with our other services.`,
+**Answer: B** — Use PostgreSQL.`,
       },
     ]);
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(2);
-    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
-    expect(writtenContent).toContain('**Answer**: A — OAuth 2.0 is the standard for our stack.');
-    expect(writtenContent).toContain('**Answer**: B — Use PostgreSQL for consistency with our other services.');
-    // No phantom Q2 injected into Q1's section
-    expect(writtenContent).not.toContain('**Answer**: *Pending*');
+    expect(result.integrated).toBe(0);
+    expect(result.parseFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ reason: 'transition-with-question-headings' }),
+      ]),
+    );
   });
 
-  it('heading-format answers override template instructions text (last wins)', async () => {
+  it('#958 FR-004 — heading-format on a bot comment + plain `Q<n>:` on human comment: only the human comment integrates', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
     (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
-      // System-posted comment with template instructions
+      // Bot's questions comment carries the questions marker — filtered by
+      // the question-marker pre-filter.
       {
         id: 1,
         body: `<!-- generacy-clarifications:42 -->
 ## Clarification Questions
 
 ### Q1: Authentication method
-**Context**: The spec mentions user auth.
-**Question**: Which authentication method?
-
----
-
-**How to answer**: Reply to this issue with your answers in the format:
-\`\`\`
-Q1: your answer here
-Q2: your answer here
-\`\`\`
-`,
+**Question**: Which authentication method?`,
       },
-      // User's answer in heading format
+      // Plain-format human answer — integrates via the supported SC-002 flow.
       {
         id: 2,
-        body: `## Answers
-
-### Q1: Authentication method
-**Answer: A** — Use OAuth 2.0.
-
-### Q2: Database choice
-**Answer**: PostgreSQL`,
+        body: `Q1: OAuth 2.0\nQ2: PostgreSQL`,
       },
     ]);
 
@@ -657,10 +768,8 @@ Q2: your answer here
 
     expect(result.integrated).toBe(2);
     const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
-    // Real answers should win, not "your answer here" from template
-    expect(writtenContent).toContain('**Answer**: A — Use OAuth 2.0.');
+    expect(writtenContent).toContain('**Answer**: OAuth 2.0');
     expect(writtenContent).toContain('**Answer**: PostgreSQL');
-    expect(writtenContent).not.toContain('your answer here');
   });
 
   it('does not treat *Pending* from question comments as real answers', async () => {
@@ -819,10 +928,13 @@ The following questions were identified during spec analysis. Please answer to u
 
     const result = await integrateClarificationAnswers(ctx, logger);
 
-    // The bot's own comment should be filtered out — no answers to integrate
+    // #958 — the bot's own comment is filtered by FR-004 (has `### Q<n>:`
+    // headings). No answers integrate. reason may be `no-changes` (parser
+    // captured candidate answers that were then FR-004-skipped) rather than
+    // `no-answers` (parser found none).
     expect(result.integrated).toBe(0);
-    expect(result.reason).toBe('no-answers');
     expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(['no-answers', 'no-changes']).toContain(result.reason);
   });
 
   it('still integrates real answers when bot comment is also present (#375)', async () => {
@@ -1114,14 +1226,15 @@ describe('parseAnswersFromComments — suspicious answer skip (FR-002, US2)', ()
     logger = createMockLogger();
   });
 
-  it('skips captured answer containing **Question**: markup and warns SKIPPED_SUSPICIOUS_ANSWER', async () => {
+  // #958 FR-001 — the L488 content-sniff branch was deleted. Authorship
+  // (viewerDidAuthor) is the gate, not content. These two former SC-002
+  // tests are inverted: a human comment with `**Question**:` or `**Context**:`
+  // markup inside a captured answer now integrates through the human /
+  // permissive branch, because content is not authorship. The bot self-answer
+  // scenario is covered by the T016 authorship gate (clarification-self-answer.test.ts).
+  it('#958 FR-001 — captured answer with **Question**: markup on a human comment integrates (content is not authorship)', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
-    // Craft a comment whose body looks like it slipped past isQuestionComment
-    // (no marker, no ## heading, no ### Q<n>: heading — so the section-scoped
-    // FR-001 rule can't fire), but whose captured Q1 answer text contains
-    // `**Question**:` markup — a signal the bot's question body is being read
-    // back as an answer.
     const bodyWithQuestionMarkup = `Q1: Some intro text
 **Question**: Which authentication method should be used?
 Q2: PostgreSQL`;
@@ -1131,6 +1244,8 @@ Q2: PostgreSQL`;
         id: 501,
         body: bodyWithQuestionMarkup,
         author: 'user',
+        // No viewerDidAuthor → permissive human branch. Under #958 this
+        // integrates without invoking the deleted L488 sniff.
         created_at: '',
         updated_at: '',
       },
@@ -1138,55 +1253,16 @@ Q2: PostgreSQL`;
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    // Q2 clean → integrates. Q1 tainted → skipped.
-    expect(result.integrated).toBe(1);
+    // Both Q1 and Q2 integrate — the content sniff is gone.
+    expect(result.integrated).toBe(2);
     const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
     expect(writtenContent).toContain('**Answer**: PostgreSQL');
-
-    // Q1 must remain pending.
-    const q1SectionStart = writtenContent.indexOf('### Q1:');
-    const q1SectionEnd = writtenContent.indexOf('### Q2:');
-    const q1Section = writtenContent.slice(q1SectionStart, q1SectionEnd);
-    expect(q1Section).toContain('*Pending*');
-
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: 'SKIPPED_SUSPICIOUS_ANSWER',
-        commentId: 501,
-        questionNumber: 1,
-        excerpt: expect.any(String),
-      }),
-      expect.stringContaining('Skipped suspicious clarification answer'),
-    );
-  });
-
-  it('skips captured answer containing **Context**: markup and warns SKIPPED_SUSPICIOUS_ANSWER', async () => {
-    mockReaddirSync.mockReturnValue(['42-feature-branch']);
-    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
-    const bodyWithContextMarkup = `Q1: Some text
-**Context**: The spec mentions user auth but doesn't specify.`;
-
-    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
-      {
-        id: 502,
-        body: bodyWithContextMarkup,
-        author: 'user',
-        created_at: '',
-        updated_at: '',
-      },
-    ]);
-
-    const result = await integrateClarificationAnswers(context, logger);
-
-    expect(result.integrated).toBe(0);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        code: 'SKIPPED_SUSPICIOUS_ANSWER',
-        commentId: 502,
-        questionNumber: 1,
-      }),
-      expect.stringContaining('Skipped suspicious clarification answer'),
-    );
+    // SKIPPED_SUSPICIOUS_ANSWER warn is deleted with the sniff.
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('SKIPPED_SUSPICIOUS_ANSWER');
+    }
   });
 
   it('does NOT warn when the answer is a clean human answer', async () => {
@@ -1227,11 +1303,12 @@ describe('integrateClarificationAnswers — residual race warn (FR-004)', () => 
     logger = createMockLogger();
   });
 
-  it('warns TRANSITION_WITH_QUESTION_HEADINGS when a real answer transitions from a comment with ### Q<n>: heading', async () => {
+  it('#958 FR-004 — human comment with ### Q<n>: heading is skipped (fail-closed per-question)', async () => {
     mockReaddirSync.mockReturnValue(['42-feature-branch']);
     mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
-    // Comment has ### Q1: heading (per data-model, sourceHadQuestionHeadings=true)
-    // but no markup, so it passes FR-001 and FR-002. Yet integration happens.
+    // Under #958 the FR-004 detector fires fail-closed: for humans, skip the
+    // offending question (parseFailures entry); for cluster-self, abort the
+    // whole poll.
     const body = `### Q1: my answer follows
 Q1: real answer text`;
     (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -1240,14 +1317,22 @@ Q1: real answer text`;
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(1);
+    // Q1 was skipped (fail-closed) → 0 integrated on this fixture.
+    expect(result.integrated).toBe(0);
+    expect(result.parseFailures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          questionNumber: 1,
+          reason: 'transition-with-question-headings',
+        }),
+      ]),
+    );
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         code: 'TRANSITION_WITH_QUESTION_HEADINGS',
         commentId: 8001,
         issueNumber: 42,
         questionNumber: 1,
-        answer: expect.any(String),
       }),
       expect.stringContaining('question headings'),
     );
@@ -1469,7 +1554,7 @@ describe('parseAnswersFromComments — marker exclusion (#909)', () => {
     expect(m.body).toBeUndefined();
     expect(m.content).toBeUndefined();
     expect(m.text).toBeUndefined();
-    expect(msg).toBe('Excluded from answer-scanner via question marker');
+    expect(msg).toBe('Excluded from answer-scanner via machine marker');
     const serialized = JSON.stringify(meta);
     expect(serialized).not.toContain('Authentication method');
     expect(serialized).not.toContain('Database choice');
@@ -1720,5 +1805,583 @@ describe('isQuestionComment — FR-109 delegation to commentCarriesQuestionMarke
     // Marker branch runs first (returns false), then content-shape branches
     // run. The delegation must have been consulted.
     expect(spy).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #949 — Cockpit dialect fixtures + tests
+// ---------------------------------------------------------------------------
+//
+// Fixture inventory per specs/949-summary-cockpit-plugin-posts/data-model.md
+// §"Fixture inventory". FIXTURE_COCKPIT_MULTI is captured VERBATIM from the
+// cockpit-format clarification-answer comment on this repo's issue #949, per
+// clarification Q4→A ("MUST — at least one test fixture must be captured
+// verbatim from a real cockpit-posted issue comment").
+
+/**
+ * FIXTURE_COCKPIT_MULTI — captured verbatim from issue #949's cockpit-format
+ * answer comment (`gh issue view 949 --json comments`). Four `### Q<n>` blocks
+ * (Q2-Q5), each with an `**Answer:**` line and a `**Rationale:**` line.
+ * Multi-question requirement per Q4→A (≥ 2 blocks).
+ */
+const FIXTURE_COCKPIT_MULTI = `<!-- generacy-cockpit:clarification-answers -->
+
+### Q2
+**Answer:** A — The colon-less opener REQUIRES a markdown heading (\`### Q<n>\`, \`## Q<n>\`, \`#### Q<n>\`, etc.). Colon-required forms (\`Q1:\`, \`**Q1**:\`, bare \`Q1:\`) continue to open exactly as they do today.
+**Rationale:** Option B would promote a bare line-start \`Q1\` into an opener, which weakens the very FR-005 line-anchoring guard this spec insists on preserving.
+
+### Q3
+**Answer:** A — MUST. The implementation must extract a single shared opener pattern; two duplicate copies fail acceptance.
+**Rationale:** The defect class under repair *is* pattern drift, and here extraction is mechanically cheap rather than awkward.
+
+### Q4
+**Answer:** A — MUST, with two refinements. The fixture MUST be multi-question (≥ 2 \`### Q<n>\` blocks).
+**Rationale:** A hand-written fixture pins the implementer's *reading* of the byte-locked contract rather than the contract itself.
+
+### Q5
+**Answer:** C — Neither A nor B. FR-004 should not fire for well-formed cockpit answers, so the correct acceptance surface is to pin the negative, not the positive.
+**Rationale:** A cockpit answer comment uses \`### Q<n>\` as answer-block delimiters, not question headings.
+`;
+
+/**
+ * FIXTURE_COCKPIT_SINGLE — single-block cockpit body with rationale.
+ * SC-002-adjacent regression (single-Q positive path).
+ */
+const FIXTURE_COCKPIT_SINGLE = `<!-- generacy-cockpit:clarification-answers -->
+
+### Q1
+**Answer:** A — Use the sealed file backend
+**Rationale:** It avoids a cloud round-trip.
+`;
+
+/** Engine dialect: `### Q1: Topic\\n**Answer: A** — text`. */
+const FIXTURE_ENGINE_HEADING = `### Q1: Authentication method
+**Answer: A** — OAuth 2.0 is the standard for our stack.`;
+
+/** Engine dialect: `### Q1: Topic\\n**Answer**: A` (colon outside bold). */
+const FIXTURE_ENGINE_ANSWER_COLON_OUTSIDE = `### Q1: Authentication method
+**Answer**: OAuth 2.0`;
+
+/** Bare human dialect. */
+const FIXTURE_BARE_HUMAN = `Q1: answer text`;
+
+/** FR-005 negative — mid-prose reference must NOT capture. */
+const FIXTURE_MID_PROSE = `Great — I agree with your framing.
+Also — as per Q1: yes I like OAuth.
+More prose after.`;
+
+/** Q2→A negative — colon-less form requires heading, bare `Q1\\n...` must not open. */
+const FIXTURE_BARE_LINE_START_NO_HEADING = `Q1
+**Answer:** X`;
+
+/** FR-002 negative — leaked `**Question**:` inside cockpit-shaped body. */
+const FIXTURE_LEAKED_QUESTION = `<!-- generacy-cockpit:clarification-answers -->
+
+### Q1
+**Answer:** X
+**Question**: leaked bot text that should not be here`;
+
+/** FR-013 — cockpit-shaped body posted by an untrusted author. */
+const FIXTURE_COCKPIT_UNTRUSTED_AUTHOR = `<!-- generacy-cockpit:clarification-answers -->
+
+### Q1
+**Answer:** A — my drive-by answer
+**Rationale:** because I said so`;
+
+/**
+ * FIXTURE_COCKPIT_FR004_NEGATIVE — well-formed cockpit body. Data-model
+ * permits reusing FIXTURE_COCKPIT_MULTI; we keep a distinct constant for
+ * test-intent clarity.
+ */
+const FIXTURE_COCKPIT_FR004_NEGATIVE = FIXTURE_COCKPIT_MULTI;
+
+/**
+ * Clarifications file skeleton with pending Q2..Q5 slots so integration tests
+ * against the multi-block cockpit fixture can persist answers to real
+ * pending slots.
+ */
+const SAMPLE_CLARIFICATIONS_949 = `# Clarification Questions
+
+## Status: Pending
+
+## Questions
+
+### Q2: Opener strictness when the colon is absent
+**Context**: The colon is optional in cockpit dialect.
+**Question**: Which line shapes qualify as openers?
+
+**Answer**: *Pending*
+
+### Q3: Shared regex constant
+**Context**: FR-003 stay-in-lockstep language.
+**Question**: MUST or SHOULD?
+
+**Answer**: *Pending*
+
+### Q4: Real cockpit-posted comment fixture
+**Context**: SC-001 language.
+**Question**: MUST or SHOULD?
+
+**Answer**: *Pending*
+
+### Q5: FR-004 residual-race detector
+**Context**: Whether FR-004 should fire on cockpit bodies.
+**Question**: Dedicated test coverage?
+
+**Answer**: *Pending*
+`;
+
+// ---------------------------------------------------------------------------
+// T008: multi-question terminator lockstep (LOAD-BEARING per plan Q4→A)
+// ---------------------------------------------------------------------------
+describe('cockpit dialect: multi-question integration (#949, T008 load-bearing)', () => {
+  it('integrates each block independently from the real captured cockpit body', () => {
+    const logger = createMockLogger();
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_COCKPIT_MULTI }],
+      [2, 3, 4, 5],
+      logger,
+    );
+
+    // Load-bearing invariant: with a widened opener but stale terminator,
+    // Q2's lazy `(.*?)` would swallow Q3/Q4/Q5 into its own body — only
+    // ONE block would be captured. Assert all four are present and distinct.
+    expect(answers.size).toBe(4);
+
+    expect(answers.get(2)?.answer).toContain('A — The colon-less opener REQUIRES');
+    expect(answers.get(2)?.answer).toContain('Rationale: Option B would promote');
+
+    expect(answers.get(3)?.answer).toContain('A — MUST');
+    expect(answers.get(3)?.answer).toContain('Rationale: The defect class');
+
+    expect(answers.get(4)?.answer).toContain('A — MUST, with two refinements');
+    expect(answers.get(4)?.answer).toContain('Rationale: A hand-written fixture');
+
+    expect(answers.get(5)?.answer).toContain('C — Neither A nor B');
+    expect(answers.get(5)?.answer).toContain('Rationale: A cockpit answer comment');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T009: single-question with rationale (Q1→B join)
+// ---------------------------------------------------------------------------
+describe('cockpit dialect: single question with rationale (#949, T009)', () => {
+  it('joins the **Rationale:** line onto the answer per Q1→B', () => {
+    const logger = createMockLogger();
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_COCKPIT_SINGLE }],
+      [1],
+      logger,
+    );
+
+    expect(answers.get(1)?.answer).toBe(
+      'A — Use the sealed file backend\nRationale: It avoids a cloud round-trip.',
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T010: single question without rationale
+// ---------------------------------------------------------------------------
+describe('cockpit dialect: single question without rationale (#949, T010)', () => {
+  it('returns just the answer value with no Rationale: suffix', () => {
+    const logger = createMockLogger();
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: '### Q1\n**Answer:** X' }],
+      [1],
+      logger,
+    );
+
+    expect(answers.get(1)?.answer).toBe('X');
+    expect(answers.get(1)?.answer).not.toContain('Rationale:');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T011-T014: Regression tests for existing dialects (all parallel)
+// ---------------------------------------------------------------------------
+describe('regression: existing dialects still parse (#949, T011-T014)', () => {
+  const logger = createMockLogger();
+
+  it('T011: engine dialect `### Q1: Topic\\n**Answer: X**` still parses (m1 arm)', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_ENGINE_HEADING }],
+      [1],
+      logger,
+    );
+    expect(answers.get(1)?.answer).toBe(
+      'A — OAuth 2.0 is the standard for our stack.',
+    );
+  });
+
+  it('T012: engine dialect `### Q1: Topic\\n**Answer**: X` still parses (m2 arm)', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_ENGINE_ANSWER_COLON_OUTSIDE }],
+      [1],
+      logger,
+    );
+    expect(answers.get(1)?.answer).toBe('OAuth 2.0');
+  });
+
+  it('T013: bare human dialect `Q1: answer text` still parses', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_BARE_HUMAN }],
+      [1],
+      logger,
+    );
+    expect(answers.get(1)?.answer).toBe('answer text');
+  });
+
+  it('T014: bold-wrapped colon-bearing `**Q1**: A` still parses (contract row 10)', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: '**Q1**: A' }],
+      [1],
+      logger,
+    );
+    expect(answers.get(1)?.answer).toBe('A');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T015-T017: Negative regression tests (all parallel)
+// ---------------------------------------------------------------------------
+describe('negative regressions (#949, T015-T017)', () => {
+  let logger: Logger;
+
+  beforeEach(() => {
+    logger = createMockLogger();
+  });
+
+  it('T015 (FR-005): mid-prose `as per Q1: yes` does NOT capture', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_MID_PROSE }],
+      [1],
+      logger,
+    );
+    expect(answers.get(1)).toBeUndefined();
+    expect(answers.size).toBe(0);
+  });
+
+  it('T016 (Q2→A): bare line-start `Q1\\n**Answer:** X` (no heading, no colon) does NOT open', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body: FIXTURE_BARE_LINE_START_NO_HEADING }],
+      [1],
+      logger,
+    );
+    expect(answers.get(1)).toBeUndefined();
+    expect(answers.size).toBe(0);
+  });
+
+  it('T017 (#958 FR-001): cockpit opener with a leaked `**Question**:` line still extracts the clean `**Answer:**` — content is not authorship, no SKIPPED_SUSPICIOUS_ANSWER', () => {
+    const answers = parseAnswersFromComments(
+      [{ id: 501, body: FIXTURE_LEAKED_QUESTION }],
+      [1],
+      logger,
+    );
+    // The `**Question**:` content-sniff was deleted with #958. The block's
+    // clean `**Answer:** X` is extracted; the leaked line is simply ignored.
+    // Whether such a comment is trusted is decided by authorship in the
+    // caller (viewerDidAuthor), not by content markers here.
+    expect(answers.get(1)?.answer).toBe('X');
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('SKIPPED_SUSPICIOUS_ANSWER');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T018: FR-013 — cockpit-format answer from untrusted author produces explainer
+// ---------------------------------------------------------------------------
+describe('FR-013: cockpit-format answer from untrusted author produces explainer (#949, T018)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('commentMatchesAnswerPattern returns true for cockpit-shaped body', () => {
+    expect(commentMatchesAnswerPattern(FIXTURE_COCKPIT_UNTRUSTED_AUTHOR)).toBe(true);
+  });
+
+  it('untrusted-author explainer fires for a cockpit-format body', async () => {
+    // Force NONE-authored to be untrusted so the explainer path fires.
+    const trustSpy = isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>;
+    trustSpy.mockImplementation((comment: { authorAssociation?: string }) => {
+      if (comment.authorAssociation === 'NONE') {
+        return { trusted: false, reason: 'none-untrusted' };
+      }
+      return { trusted: true, reason: 'owner' };
+    });
+
+    mockReaddirSync.mockReturnValue(['42-feature-branch']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS);
+    const context = createWorkerContext();
+    const logger = createMockLogger();
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 909,
+        body: FIXTURE_COCKPIT_UNTRUSTED_AUTHOR,
+        author: 'eve',
+        authorAssociation: 'NONE',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    await integrateClarificationAnswers(context, logger);
+
+    const addIssueComment = context.github.addIssueComment as ReturnType<typeof vi.fn>;
+    expect(addIssueComment).toHaveBeenCalled();
+    const explainerBody = addIssueComment.mock.calls[0]![3] as string;
+    expect(explainerBody).toContain('not applied');
+    expect(explainerBody).toContain('association tier');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T019: FR-004 negative pin — cockpit body must NOT emit
+//       TRANSITION_WITH_QUESTION_HEADINGS (LOAD-BEARING for Q5→C)
+// ---------------------------------------------------------------------------
+describe('FR-004 negative pin (#949 Q5→C, T019 load-bearing)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('well-formed cockpit multi-block body integrates WITHOUT TRANSITION_WITH_QUESTION_HEADINGS', async () => {
+    // Ensure trust does not gate this test.
+    const trustSpy = isTrustedCommentAuthor as unknown as ReturnType<typeof vi.fn>;
+    trustSpy.mockImplementation(() => ({ trusted: true, reason: 'owner' }));
+
+    mockReaddirSync.mockReturnValue(['949-cockpit']);
+    mockReadFileSync.mockReturnValue(SAMPLE_CLARIFICATIONS_949);
+    const context = createWorkerContext({
+      item: {
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 949,
+        workflowName: 'speckit-bugfix',
+        command: 'process',
+        priority: Date.now(),
+        enqueuedAt: new Date().toISOString(),
+      },
+    });
+    const logger = createMockLogger();
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 949001,
+        body: FIXTURE_COCKPIT_FR004_NEGATIVE,
+        author: 'operator',
+        authorAssociation: 'OWNER',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(4);
+
+    // Load-bearing assertion: if the shared constant is swept over :453
+    // (Q5→C violation), this warn would fire on every legitimate cockpit
+    // integration — a 100%-rate false positive.
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('TRANSITION_WITH_QUESTION_HEADINGS');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T020: extractEmbeddedAnswer unit tests (contract rows 1-6)
+// ---------------------------------------------------------------------------
+describe('extractEmbeddedAnswer — unit tests per regex-contract.md (#949, T020)', () => {
+  it('row 1: m0 + rationale join (Q1→B)', () => {
+    const text =
+      '\n**Answer:** A — Use the sealed file backend\n**Rationale:** It avoids a cloud round-trip.';
+    expect(extractEmbeddedAnswer(text)).toBe(
+      'A — Use the sealed file backend\nRationale: It avoids a cloud round-trip.',
+    );
+  });
+
+  it('row 2: m0 alone — no rationale ⇒ no join', () => {
+    expect(extractEmbeddedAnswer('\n**Answer:** X')).toBe('X');
+  });
+
+  it('row 3: m1 — engine dialect regression `**Answer: A** — description`', () => {
+    expect(extractEmbeddedAnswer('\n**Answer: A** — description')).toBe(
+      'A — description',
+    );
+  });
+
+  it('row 4: m2 — engine dialect regression `**Answer**: A`', () => {
+    expect(extractEmbeddedAnswer('\n**Answer**: A')).toBe('A');
+  });
+
+  it('row 5: no **Answer markup ⇒ undefined', () => {
+    expect(extractEmbeddedAnswer('some other text')).toBeUndefined();
+  });
+
+  it('row 6: multi-`**Answer:**` in one block — first match wins per /m mode', () => {
+    const text =
+      '\n**Answer:** X\n**Rationale:** Y\n**Answer:** Z';
+    expect(extractEmbeddedAnswer(text)).toBe('X\nRationale: Y');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T021: commentMatchesAnswerPattern unit tests (contract rows 1-6)
+// ---------------------------------------------------------------------------
+describe('commentMatchesAnswerPattern — unit tests per regex-contract.md (#949, T021)', () => {
+  it('row 1: cockpit dialect colon-less with heading ⇒ true', () => {
+    expect(commentMatchesAnswerPattern('### Q1\n**Answer:** X')).toBe(true);
+  });
+
+  it('row 2: engine dialect ⇒ true', () => {
+    expect(commentMatchesAnswerPattern('### Q1: Topic\n**Answer**: X')).toBe(true);
+  });
+
+  it('row 3: bare human dialect ⇒ true', () => {
+    expect(commentMatchesAnswerPattern('Q1: answer')).toBe(true);
+  });
+
+  it('row 4: FR-005 mid-prose ⇒ false', () => {
+    expect(commentMatchesAnswerPattern('as per Q1: yes')).toBe(false);
+  });
+
+  it('row 5: Q2→A bare line-start `Q1\\n...` (no heading, no colon) ⇒ false', () => {
+    expect(commentMatchesAnswerPattern('Q1\n**Answer:** X')).toBe(false);
+  });
+
+  it('row 6: unrelated comment (baseline) ⇒ false', () => {
+    expect(commentMatchesAnswerPattern('Random comment, no question ref.')).toBe(
+      false,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T022: Invariant — mid-block bare Q<n> is NOT re-opened by terminator
+// ---------------------------------------------------------------------------
+describe('invariant: terminator lockstep prevents mid-block re-opening (#949, T022)', () => {
+  it('mid-block bare `Q1\\n**Answer:** Y` inside a captured block stays inside the body', () => {
+    const logger = createMockLogger();
+    const body =
+      '### Q1\n**Answer:** X\nsome text\nQ1\n**Answer:** Y\n### Q2\n**Answer:** Z';
+
+    const answers = parseAnswersFromComments(
+      [{ id: 1, body }],
+      [1, 2],
+      logger,
+    );
+
+    // Two blocks captured (Q1 and Q2). If the terminator's colon-less arm
+    // did not also require a heading, the mid-block bare `Q1\n**Answer:** Y`
+    // would re-open a new block and overwrite Q1's answer to 'Y'.
+    expect(answers.size).toBe(2);
+    expect(answers.get(1)?.answer).toBe('X');
+    expect(answers.get(1)?.answer).not.toBe('Y');
+    expect(answers.get(2)?.answer).toBe('Z');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T023: Shared-constant invariant — no duplicate inline copies (Q3→A)
+// ---------------------------------------------------------------------------
+describe('invariant: shared opener constant not duplicated inline (#949, T023)', () => {
+  it('distinctive raw-pattern prefix appears exactly twice in clarification-poster.ts', async () => {
+    const fs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const testDir = pathDirname(fileURLToPath(import.meta.url));
+    const srcPath = pathJoin(testDir, '..', 'clarification-poster.ts');
+    const src = fs.readFileSync(srcPath, 'utf8');
+
+    // Distinctive substring shared by both QN_OPENER_PATTERN and
+    // QN_OPENER_PATTERN_NONCAPTURING. Present nowhere else — the terminator
+    // starts with `(?=(?:\\n(?:(?:#{1,6}` (no `^` alternation).
+    // String.raw preserves backslashes so the search string exactly matches
+    // the file's `\\n` (two literal characters: backslash + n).
+    const needle = String.raw`(?:^|\\n)(?:(?:#{1,6}`;
+    const occurrences = src.split(needle).length - 1;
+    expect(occurrences).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// T024: End-to-end integration test per contract §integrateClarificationAnswers
+// ---------------------------------------------------------------------------
+describe('integrateClarificationAnswers — cockpit end-to-end (#949, T024)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('integrates 2 cockpit answers with rationale-line joins and no FR-004 warn', async () => {
+    // Two-pending-question clarifications file matching the contract example.
+    const clarifications = `# Clarifications
+
+### Q1: Rationale-line inclusion
+**Answer**: *Pending*
+
+### Q2: Opener strictness
+**Answer**: *Pending*
+`;
+    mockReaddirSync.mockReturnValue(['949-cockpit']);
+    mockReadFileSync.mockReturnValue(clarifications);
+
+    const cockpitBody = `<!-- generacy-cockpit:clarification-answers -->
+
+### Q1
+**Answer:** A — Use the sealed file backend
+**Rationale:** It avoids a cloud round-trip.
+
+### Q2
+**Answer:** A
+**Rationale:** Heading requirement is safest.`;
+
+    const context = createWorkerContext({
+      item: {
+        owner: 'test-owner',
+        repo: 'test-repo',
+        issueNumber: 949,
+        workflowName: 'speckit-bugfix',
+        command: 'process',
+        priority: Date.now(),
+        enqueuedAt: new Date().toISOString(),
+      },
+    });
+    const logger = createMockLogger();
+
+    (context.github.getIssueComments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        id: 949100,
+        body: cockpitBody,
+        author: 'operator',
+        authorAssociation: 'OWNER',
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    // (a) integrated: 2
+    expect(result.integrated).toBe(2);
+
+    // (b) persisted file content has both answers with Rationale: joined.
+    const writtenContent = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(writtenContent).toContain(
+      '**Answer**: A — Use the sealed file backend\nRationale: It avoids a cloud round-trip.',
+    );
+    expect(writtenContent).toContain(
+      '**Answer**: A\nRationale: Heading requirement is safest.',
+    );
+
+    // (c) FR-004 warn MUST NOT fire (Q5→C negative pin).
+    const warnCalls = (logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    for (const call of warnCalls) {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      expect(payload?.code).not.toBe('TRANSITION_WITH_QUESTION_HEADINGS');
+    }
   });
 });

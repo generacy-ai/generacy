@@ -501,3 +501,124 @@ describe('cockpit resume — FR-002 ordering + Q3/Q5 invariants', () => {
     }
   });
 });
+
+// -------------------------------------------------------------------------
+// #942 — repeat-identical failure escalation label clearance
+// -------------------------------------------------------------------------
+describe('cockpit resume — #942 clears failed:<phase>-repeated alongside failed:<phase>', () => {
+  it('happy-path: both failed:implement AND failed:implement-repeated are removed', async () => {
+    const calls: string[] = [];
+    const addLabels = vi.fn(async (_nwo: string, _n: number, labels: string[]) => {
+      calls.push(`add:${labels.join(',')}`);
+    });
+    const removeLabels = vi.fn(async (_nwo: string, _n: number, labels: string[]) => {
+      calls.push(`remove:${labels.join(',')}`);
+    });
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({
+        labels: [
+          'workflow:speckit-feature',
+          'failed:implement',
+          'failed:implement-repeated',
+          'agent:error',
+          'phase:implement',
+        ],
+      })),
+      addLabels,
+      removeLabels,
+    });
+    await runResume(
+      'generacy-ai/generacy#42',
+      {},
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: () => {} },
+    );
+
+    // Both labels are cleared in the same removeLabels() call.
+    expect(removeLabels).toHaveBeenCalledTimes(1);
+    const removed = removeLabels.mock.calls[0]![2] as string[];
+    expect(removed).toContain('failed:implement');
+    expect(removed).toContain('failed:implement-repeated');
+    expect(removed).toContain('agent:error');
+    expect(removed).toContain('phase:implement');
+
+    // Additions still fire first.
+    expect(calls[0]).toBe('add:waiting-for:tasks-review,completed:tasks-review,agent:paused');
+  });
+
+  it('idempotency: failed:implement WITHOUT -repeated still succeeds (no throw)', async () => {
+    const removeLabels = vi.fn(async () => {});
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({
+        labels: [
+          'workflow:speckit-feature',
+          'failed:implement',
+          'agent:error',
+          'phase:implement',
+        ],
+      })),
+      addLabels: vi.fn(async () => {}),
+      removeLabels,
+    });
+    await runResume(
+      'generacy-ai/generacy#42',
+      {},
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: () => {} },
+    );
+
+    // The failed:implement-repeated label is NOT included when it's absent from
+    // the issue — the removal list is intersected against the current labels.
+    const removed = removeLabels.mock.calls[0]![2] as string[];
+    expect(removed).not.toContain('failed:implement-repeated');
+    expect(removed).toContain('failed:implement');
+  });
+
+  it('failed:<phase>-repeated alone (no primary) is treated as no-op — not counted as primary', async () => {
+    // Defensive: if `failed:<phase>` was removed manually but `failed:<phase>-repeated`
+    // lingers, resume should not re-arm off the `-repeated` label alone.
+    const addLabels = vi.fn(async () => {});
+    const removeLabels = vi.fn(async () => {});
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({
+        labels: ['workflow:speckit-feature', 'failed:implement-repeated'],
+      })),
+      addLabels,
+      removeLabels,
+    });
+    const out: string[] = [];
+    await runResume(
+      'generacy-ai/generacy#42',
+      {},
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: (l) => out.push(l) },
+    );
+    // No primary failed:<phase> → no-op path.
+    expect(addLabels).not.toHaveBeenCalled();
+    expect(removeLabels).not.toHaveBeenCalled();
+    expect(out[0]).toContain('not in a failed state');
+  });
+
+  it('does NOT count failed:*-repeated as a separate failure for multiple-failed refusal', async () => {
+    // Two labels present: failed:implement + failed:implement-repeated.
+    // Should be treated as ONE primary failure (implement), not two.
+    const removeLabels = vi.fn(async () => {});
+    const addLabels = vi.fn(async () => {});
+    const gh = stubGh({
+      fetchIssueLabels: vi.fn(async () => ({
+        labels: [
+          'workflow:speckit-feature',
+          'failed:implement',
+          'failed:implement-repeated',
+        ],
+      })),
+      addLabels,
+      removeLabels,
+    });
+    // Must NOT throw CockpitExit(3) refuse-multiple-failed.
+    await runResume(
+      'generacy-ai/generacy#42',
+      {},
+      { loadConfig: baseLoad, gh, now: fixedNow, stdout: () => {} },
+    );
+    expect(addLabels).toHaveBeenCalled();
+    expect(removeLabels).toHaveBeenCalled();
+  });
+});

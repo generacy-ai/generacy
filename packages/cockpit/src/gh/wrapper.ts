@@ -3,6 +3,8 @@ import {
   nodeChildProcessRunner,
   type CommandRunner,
 } from './command-runner.js';
+import type { GhResponseCache } from './cache.js';
+import type { RateLimitScheduler } from './rate-limit-scheduler.js';
 
 export interface Issue {
   number: number;
@@ -149,6 +151,7 @@ export interface PullRequestSummary {
   url: string;
   isDraft: boolean;
   labels: string[];
+  headRefOid?: string;
 }
 
 export interface IssueLabelsResult {
@@ -636,6 +639,7 @@ const PullRequestRawSchema = z
         z.union([z.string(), z.object({ name: z.string() }).passthrough()]),
       )
       .default([]),
+    headRefOid: z.string().nullable().optional(),
   })
   .passthrough();
 
@@ -664,6 +668,7 @@ function parsePullRequest(stdout: string, prNumber: number): PullRequestSummary 
   const raw = result.data;
   const mergedAt = raw.mergedAt ?? undefined;
   const closedAt = raw.closedAt ?? undefined;
+  const headRefOid = raw.headRefOid ?? undefined;
   return {
     number: raw.number ?? prNumber,
     state: normalizePrState(raw.state, mergedAt),
@@ -672,6 +677,7 @@ function parsePullRequest(stdout: string, prNumber: number): PullRequestSummary 
     url: raw.url,
     isDraft: raw.isDraft ?? false,
     labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+    ...(headRefOid != null ? { headRefOid } : {}),
   };
 }
 
@@ -764,16 +770,26 @@ function failIfNonZero(result: { stdout: string; stderr: string; exitCode: numbe
   }
 }
 
+export interface GhCliWrapperOptions {
+  cache?: GhResponseCache;
+  rateLimitScheduler?: RateLimitScheduler;
+}
+
 export class GhCliWrapper implements GhWrapper {
   private readonly runner: CommandRunner;
   private readonly logger: GhWrapperLogger;
+  private readonly cache: GhResponseCache | undefined;
+  private readonly rateLimitScheduler: RateLimitScheduler | undefined;
 
   constructor(
     runner: CommandRunner = nodeChildProcessRunner,
     logger: GhWrapperLogger = defaultGhWrapperLogger,
+    options?: GhCliWrapperOptions,
   ) {
     this.runner = runner;
     this.logger = logger;
+    this.cache = options?.cache;
+    this.rateLimitScheduler = options?.rateLimitScheduler;
   }
 
   async listIssues(query: string, options: ListIssuesOptions = {}): Promise<Issue[]> {
@@ -815,32 +831,38 @@ export class GhCliWrapper implements GhWrapper {
       '--json',
       'number,title,state,stateReason,labels,url,body,author,createdAt',
     ];
-    const result = await this.runner('gh', args);
-    failIfNonZero(result, 'issue view');
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(result.stdout);
-    } catch {
-      throw new Error(
-        `gh returned malformed JSON for getIssue: ${result.stdout.slice(0, 200)}`,
-      );
-    }
-    const shape = IssueRawSchema.safeParse(parsed);
-    if (!shape.success) {
-      throw new Error(`gh getIssue JSON shape mismatch: ${shape.error.message}`);
-    }
-    const raw = shape.data;
-    return {
-      number: raw.number,
-      title: raw.title,
-      state: normalizeIssueState(raw.state),
-      stateReason: normalizeStateReason(raw.stateReason),
-      labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
-      url: raw.url,
-      body: raw.body ?? '',
-      author: raw.author?.login != null ? { login: raw.author.login } : undefined,
-      createdAt: raw.createdAt ?? '',
+    const doFetch = async (): Promise<Issue> => {
+      const result = await this.runner('gh', args);
+      failIfNonZero(result, 'issue view');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(result.stdout);
+      } catch {
+        throw new Error(
+          `gh returned malformed JSON for getIssue: ${result.stdout.slice(0, 200)}`,
+        );
+      }
+      const shape = IssueRawSchema.safeParse(parsed);
+      if (!shape.success) {
+        throw new Error(`gh getIssue JSON shape mismatch: ${shape.error.message}`);
+      }
+      const raw = shape.data;
+      return {
+        number: raw.number,
+        title: raw.title,
+        state: normalizeIssueState(raw.state),
+        stateReason: normalizeStateReason(raw.stateReason),
+        labels: raw.labels.map((l) => (typeof l === 'string' ? l : l.name)),
+        url: raw.url,
+        body: raw.body ?? '',
+        author: raw.author?.login != null ? { login: raw.author.login } : undefined,
+        createdAt: raw.createdAt ?? '',
+      };
     };
+    if (this.cache != null) {
+      return this.cache.getOrFetch(`getIssue:${repo}#${number}`, doFetch);
+    }
+    return doFetch();
   }
 
   async addLabels(repo: string, issue: number, labels: string[]): Promise<void> {
@@ -848,6 +870,9 @@ export class GhCliWrapper implements GhWrapper {
     const args = ['issue', 'edit', String(issue), '--repo', repo];
     for (const label of labels) {
       args.push('--add-label', label);
+    }
+    if (this.cache != null) {
+      this.cache.invalidate(`getIssue:${repo}#${issue}`);
     }
     const result = await this.runner('gh', args);
     failIfNonZero(result, 'issue edit (add-label)');
@@ -858,6 +883,9 @@ export class GhCliWrapper implements GhWrapper {
     const args = ['issue', 'edit', String(issue), '--repo', repo];
     for (const label of labels) {
       args.push('--remove-label', label);
+    }
+    if (this.cache != null) {
+      this.cache.invalidate(`getIssue:${repo}#${issue}`);
     }
     const result = await this.runner('gh', args);
     failIfNonZero(result, 'issue edit (remove-label)');
@@ -881,19 +909,28 @@ export class GhCliWrapper implements GhWrapper {
       '--json',
       'name,state,bucket,link',
     ];
-    const result = await this.runner('gh', args);
-    if (result.exitCode !== 0) {
-      const stderr = result.stderr.trim();
-      if (stderr.toLowerCase().includes('no checks reported')) {
-        return [];
+    const doFetch = async (): Promise<CheckRunSummary[]> => {
+      const result = await this.runner('gh', args);
+      if (result.exitCode !== 0) {
+        const stderr = result.stderr.trim();
+        if (stderr.toLowerCase().includes('no checks reported')) {
+          return [];
+        }
+        this.logger.warn(
+          { repo, prNumber, ghStderr: stderr },
+          'gh pr checks failed',
+        );
+        throw new Error(`gh pr checks failed (exit ${result.exitCode}): ${stderr}`);
       }
-      this.logger.warn(
-        { repo, prNumber, ghStderr: stderr },
-        'gh pr checks failed',
+      return parseCheckRuns(result.stdout);
+    };
+    if (this.cache != null) {
+      return this.cache.getOrFetch(
+        `getPullRequestCheckRuns:${repo}#${prNumber}`,
+        doFetch,
       );
-      throw new Error(`gh pr checks failed (exit ${result.exitCode}): ${stderr}`);
     }
-    return parseCheckRuns(result.stdout);
+    return doFetch();
   }
 
   async resolveIssueToPR(repo: string, issueNumber: number): Promise<number | null> {
@@ -906,9 +943,15 @@ export class GhCliWrapper implements GhWrapper {
       '--json',
       'closedByPullRequestsReferences',
     ];
-    const result = await this.runner('gh', args);
-    failIfNonZero(result, 'issue view');
-    return parseResolveIssueToPr(result.stdout);
+    const doFetch = async (): Promise<number | null> => {
+      const result = await this.runner('gh', args);
+      failIfNonZero(result, 'issue view');
+      return parseResolveIssueToPr(result.stdout);
+    };
+    if (this.cache != null) {
+      return this.cache.getOrFetch(`resolveIssueToPR:${repo}#${issueNumber}`, doFetch);
+    }
+    return doFetch();
   }
 
   async getPullRequest(repo: string, prNumber: number): Promise<PullRequestSummary> {
@@ -919,11 +962,17 @@ export class GhCliWrapper implements GhWrapper {
       '--repo',
       repo,
       '--json',
-      'number,state,mergedAt,closedAt,url,isDraft,labels',
+      'number,state,mergedAt,closedAt,url,isDraft,labels,headRefOid',
     ];
-    const result = await this.runner('gh', args);
-    failIfNonZero(result, 'pr view');
-    return parsePullRequest(result.stdout, prNumber);
+    const doFetch = async (): Promise<PullRequestSummary> => {
+      const result = await this.runner('gh', args);
+      failIfNonZero(result, 'pr view');
+      return parsePullRequest(result.stdout, prNumber);
+    };
+    if (this.cache != null) {
+      return this.cache.getOrFetch(`getPullRequest:${repo}#${prNumber}`, doFetch);
+    }
+    return doFetch();
   }
 
   async resolveIssueToPRRef(
@@ -1359,6 +1408,10 @@ export class GhCliWrapper implements GhWrapper {
     prNumber: number,
     _opts: { squash: true },
   ): Promise<MergeResult> {
+    if (this.cache != null) {
+      this.cache.invalidate(`getPullRequest:${repo}#${prNumber}`);
+      this.cache.invalidate(`getPullRequestCheckRuns:${repo}#${prNumber}`);
+    }
     const mergeResult = await this.runner('gh', [
       'pr',
       'merge',
@@ -1723,6 +1776,9 @@ export class GhCliWrapper implements GhWrapper {
     issue: number,
     body: string,
   ): Promise<void> {
+    if (this.cache != null) {
+      this.cache.invalidate(`getIssue:${repo}#${issue}`);
+    }
     // `--body-file -` reads from stdin: avoids argv-length limits and
     // shell-metachar hazards for large or mixed-content bodies.
     const result = await this.runner(

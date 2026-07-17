@@ -45,6 +45,7 @@ export {
   DIFF_BYTE_CAP,
   DIFF_TRUNCATION_MARKER,
   type GhWrapper,
+  type GhCliWrapperOptions,
   type Issue,
   type CheckRunSummary,
   type ListIssuesOptions,
@@ -69,3 +70,14 @@ export {
   type CommandRunnerOptions,
   type CommandResult,
 } from './gh/command-runner.js';
+export {
+  createGhResponseCache,
+  type GhCacheOptions,
+  type GhResponseCache,
+} from './gh/cache.js';
+export {
+  createRateLimitScheduler,
+  type RateLimitSchedulerOptions,
+  type RateLimitScheduler,
+  type RateLimitProbeResult,
+} from './gh/rate-limit-scheduler.js';

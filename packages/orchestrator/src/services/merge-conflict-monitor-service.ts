@@ -23,6 +23,7 @@ import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import type { Logger } from '../worker/types.js';
 import { filterByAssignee } from './identity.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
+import { decideAdaptivePoll } from './adaptive-poll-controller.js';
 
 const WAITING_FOR_MERGE_CONFLICTS_LABEL = 'waiting-for:merge-conflicts';
 const AGENT_PAUSED_LABEL = 'agent:paused';
@@ -81,6 +82,7 @@ export class MergeConflictMonitorService {
     tokenProvider?: () => Promise<string | undefined>,
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
+    webhooksConfigured: boolean = false,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -101,6 +103,7 @@ export class MergeConflictMonitorService {
       lastWebhookEvent: null,
       currentPollIntervalMs: config.pollIntervalMs,
       basePollIntervalMs: config.pollIntervalMs,
+      webhooksConfigured,
     };
   }
 
@@ -331,29 +334,45 @@ export class MergeConflictMonitorService {
 
   recordWebhookEvent(): void {
     this.state.lastWebhookEvent = Date.now();
-    const wasUnhealthy = !this.state.webhookHealthy;
     this.state.webhookHealthy = true;
-    if (wasUnhealthy) {
-      this.state.currentPollIntervalMs = this.state.basePollIntervalMs;
+    const decision = decideAdaptivePoll({
+      webhooksConfigured: this.state.webhooksConfigured,
+      adaptivePolling: this.options.adaptivePolling,
+      basePollIntervalMs: this.state.basePollIntervalMs,
+      currentPollIntervalMs: this.state.currentPollIntervalMs,
+      lastWebhookEvent: this.state.lastWebhookEvent,
+      webhookHealthy: this.state.webhookHealthy,
+      adaptiveDivisor: ADAPTIVE_DIVISOR,
+      minPollIntervalMs: MIN_POLL_INTERVAL_MS,
+      nowMs: Date.now(),
+    });
+    this.state.currentPollIntervalMs = decision.currentPollIntervalMs;
+    this.state.webhookHealthy = decision.webhookHealthy;
+    if (decision.transition !== 'none') {
       this.logger.info(
-        { intervalMs: this.state.currentPollIntervalMs },
+        { intervalMs: this.state.currentPollIntervalMs, reason: decision.reason },
         'Webhook reconnected, restoring merge-conflict monitor poll interval',
       );
     }
   }
 
   private updateAdaptivePolling(): void {
-    if (this.state.lastWebhookEvent === null) return;
-    const timeSinceLastWebhook = Date.now() - this.state.lastWebhookEvent;
-    const unhealthyThreshold = this.state.basePollIntervalMs * 2;
-    if (timeSinceLastWebhook > unhealthyThreshold && this.state.webhookHealthy) {
-      this.state.webhookHealthy = false;
-      this.state.currentPollIntervalMs = Math.max(
-        MIN_POLL_INTERVAL_MS,
-        Math.floor(this.state.basePollIntervalMs / ADAPTIVE_DIVISOR),
-      );
+    const decision = decideAdaptivePoll({
+      webhooksConfigured: this.state.webhooksConfigured,
+      adaptivePolling: this.options.adaptivePolling,
+      basePollIntervalMs: this.state.basePollIntervalMs,
+      currentPollIntervalMs: this.state.currentPollIntervalMs,
+      lastWebhookEvent: this.state.lastWebhookEvent,
+      webhookHealthy: this.state.webhookHealthy,
+      adaptiveDivisor: ADAPTIVE_DIVISOR,
+      minPollIntervalMs: MIN_POLL_INTERVAL_MS,
+      nowMs: Date.now(),
+    });
+    this.state.currentPollIntervalMs = decision.currentPollIntervalMs;
+    this.state.webhookHealthy = decision.webhookHealthy;
+    if (decision.transition !== 'none') {
       this.logger.info(
-        { intervalMs: this.state.currentPollIntervalMs, timeSinceLastWebhook },
+        { intervalMs: this.state.currentPollIntervalMs, reason: decision.reason },
         'Webhooks appear unhealthy, increasing merge-conflict poll frequency',
       );
     }

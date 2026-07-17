@@ -37,10 +37,12 @@ export interface VsCodeTunnelManagerOptions {
   tunnelName: string;
   forceKillTimeoutMs?: number;
   deviceCodeTimeoutMs?: number;
+  authTimeoutMs?: number;
 }
 
 export const DEFAULT_VSCODE_CLI_BIN = "/usr/local/bin/code";
 export const DEFAULT_DEVICE_CODE_TIMEOUT_MS = 30_000;
+export const DEFAULT_DEVICE_CODE_AUTH_TIMEOUT_MS = 300_000;
 export const DEFAULT_FORCE_KILL_TIMEOUT_MS = 5_000;
 
 const DEVICE_CODE_PATTERN = /([A-Z0-9]{4}-[A-Z0-9]{4})/;
@@ -98,6 +100,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
   private status: VsCodeTunnelStatus = "stopped";
   private exitWaiters: Array<() => void> = [];
   private deviceCodeTimer: NodeJS.Timeout | null = null;
+  private authTimer: NodeJS.Timeout | null = null;
   private stdoutBuffer: string[] = [];
   private deviceCode: string | null = null;
   private verificationUri: string | null = null;
@@ -141,7 +144,12 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
         await this.stop();
         // fall through to the fresh-spawn path below
       } else {
-        if (this.status === "authorization_pending" && this.deviceCode) {
+        if (this.status === "starting") {
+          emitTunnelEvent({
+            status: "starting",
+            tunnelName: this.opts.tunnelName,
+          });
+        } else if (this.status === "authorization_pending" && this.deviceCode) {
           emitTunnelEvent({
             status: "authorization_pending",
             deviceCode: this.deviceCode,
@@ -189,6 +197,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       this.timedOut = false;
       this.child = null;
       this.clearDeviceCodeTimer();
+      this.clearAuthTimer();
       this.deviceCode = null;
       this.verificationUri = null;
       this.tunnelUrl = null;
@@ -228,6 +237,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
       this.child = null;
       this.status = "error";
       this.clearDeviceCodeTimer();
+      this.clearAuthTimer();
       this.deviceCode = null;
       this.verificationUri = null;
       emitTunnelEvent({
@@ -293,6 +303,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
 
   async stop(): Promise<void> {
     this.clearDeviceCodeTimer();
+    this.clearAuthTimer();
     const child = this.child;
     if (!child) return;
 
@@ -393,6 +404,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
         this.status = "authorization_pending";
         this.deviceCode = codeMatch[1] ?? null;
         this.verificationUri = "https://github.com/login/device";
+        this.armAuthTimer(child);
         emitTunnelEvent({
           status: "authorization_pending",
           deviceCode: this.deviceCode ?? undefined,
@@ -409,6 +421,7 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
     // Check for connected status
     if (this.child === child && CONNECTED_PATTERN.test(line)) {
       this.clearDeviceCodeTimer();
+      this.clearAuthTimer();
       this.status = "connected";
       this.deviceCode = null;
       this.verificationUri = null;
@@ -445,6 +458,52 @@ export class VsCodeTunnelProcessManager implements VsCodeTunnelManager {
     if (this.deviceCodeTimer) {
       clearTimeout(this.deviceCodeTimer);
       this.deviceCodeTimer = null;
+    }
+  }
+
+  // Auth-phase timer is distinct from the starting-phase deviceCodeTimer:
+  // it bounds the human-latency wait between "code printed" and "user finished
+  // browser auth", not the CLI-latency wait between spawn and first code.
+  private armAuthTimer(child: ChildProcess): void {
+    if (this.authTimer) return;
+    const ms =
+      this.opts.authTimeoutMs ?? DEFAULT_DEVICE_CODE_AUTH_TIMEOUT_MS;
+    this.authTimer = setTimeout(() => {
+      if (this.status !== "authorization_pending") return;
+      this.status = "error";
+      const last20 = this.stdoutBuffer.slice(-20).join("\n");
+      emitTunnelEvent({
+        status: "error",
+        error: "Timed out waiting for device-code authorization",
+        details: last20 || undefined,
+        tunnelName: this.opts.tunnelName,
+      });
+      // Route the exit through the timedOut cascade so the exit handler
+      // suppresses the wasPending duplicate emit.
+      this.timedOut = true;
+      try {
+        child.kill("SIGTERM");
+      } catch {
+        // already gone
+      }
+      const forceKillMs =
+        this.opts.forceKillTimeoutMs ?? DEFAULT_FORCE_KILL_TIMEOUT_MS;
+      const forceKillTimer = setTimeout(() => {
+        try {
+          this.child?.kill("SIGKILL");
+        } catch {
+          // already gone
+        }
+      }, forceKillMs);
+      if (typeof forceKillTimer.unref === "function") forceKillTimer.unref();
+    }, ms);
+    if (typeof this.authTimer.unref === "function") this.authTimer.unref();
+  }
+
+  private clearAuthTimer(): void {
+    if (this.authTimer) {
+      clearTimeout(this.authTimer);
+      this.authTimer = null;
     }
   }
 }

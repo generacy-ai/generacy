@@ -815,7 +815,7 @@ describe('GhCliWrapper', () => {
       const args = calls[0]?.args ?? [];
       expect(args.slice(0, 5)).toEqual(['pr', 'view', '42', '--repo', 'o/r']);
       expect(args).toContain('--json');
-      expect(args).toContain('number,state,mergedAt,closedAt,url,isDraft,labels');
+      expect(args).toContain('number,state,mergedAt,closedAt,url,isDraft,labels,headRefOid');
       expect(pr).toEqual({
         number: 42,
         state: 'MERGED',

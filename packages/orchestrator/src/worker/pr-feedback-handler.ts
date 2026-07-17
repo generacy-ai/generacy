@@ -31,6 +31,9 @@ const AGENT_IN_PROGRESS_LABEL = 'agent:in-progress';
 /** Waiting gate cleared alongside `agent:in-progress` on the happy path. */
 const WAITING_FOR_ADDRESS_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
 
+/** #941 FR-002: gate label the fix session must leave present on every exit. */
+const WAITING_FOR_IMPLEMENTATION_REVIEW_LABEL = 'waiting-for:implementation-review';
+
 type OutcomeResult = { ok: true } | { ok: false; error: string };
 
 interface PerThreadOutcome {
@@ -409,6 +412,10 @@ export class PrFeedbackHandler {
       );
       throw error;
     } finally {
+      // #941 FR-002: re-assert waiting-for:implementation-review BEFORE
+      // clearing agent:in-progress, so no terminal transient state is
+      // { agent:in-progress present, waiting-for:implementation-review absent }.
+      await this.ensureImplementationReviewGate(github, owner, repo, issueNumber, prNumber);
       // #926 SC-004: structural single-point clear. Every terminal exit
       // (Case A, Case B, both blocked-stuck dispositions, happy path, and
       // thrown errors) flows through here. Non-fatal on failure.
@@ -797,6 +804,68 @@ Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>`;
       this.logger.warn(
         { error: String(error), issueNumber },
         'Failed to remove agent:in-progress label — non-fatal',
+      );
+    }
+  }
+
+  /**
+   * #941 FR-002: after the fix session terminates, assert that
+   * `waiting-for:implementation-review` is still on the linked issue. If it is
+   * missing (some other code path stripped it between pause and exit), emit a
+   * structured `error` log AND idempotently re-add the label. Non-fatal on
+   * failure — never throws so the shared `finally` in `handle()` cannot break
+   * on `agent:in-progress` cleanup.
+   *
+   * Ordering: called from `handle()`'s shared `finally` BEFORE
+   * `clearInProgressLabel(...)` so the terminal transient state is never
+   * `{ agent:in-progress present, waiting-for:implementation-review absent }`.
+   */
+  private async ensureImplementationReviewGate(
+    github: GitHubClient,
+    owner: string,
+    repo: string,
+    issueNumber: number,
+    prNumber: number,
+  ): Promise<void> {
+    let labels: string[];
+    try {
+      const issue = await github.getIssue(owner, repo, issueNumber);
+      labels = issue.labels.map((l) => (typeof l === 'string' ? l : l.name));
+    } catch (err) {
+      this.logger.warn(
+        { err: String(err), issueNumber, prNumber },
+        'ensureImplementationReviewGate: failed to read labels — non-fatal',
+      );
+      return;
+    }
+
+    if (labels.includes(WAITING_FOR_IMPLEMENTATION_REVIEW_LABEL)) {
+      this.logger.debug(
+        { issueNumber, prNumber },
+        'ensureImplementationReviewGate: gate label already present',
+      );
+      return;
+    }
+
+    this.logger.error(
+      {
+        event: 'gate-label-missing-at-fix-exit',
+        owner,
+        repo,
+        issueNumber,
+        pr: prNumber,
+      },
+      'waiting-for:implementation-review missing at fix-session exit — re-adding (FR-002)',
+    );
+
+    try {
+      await github.addLabels(owner, repo, issueNumber, [
+        WAITING_FOR_IMPLEMENTATION_REVIEW_LABEL,
+      ]);
+    } catch (err) {
+      this.logger.warn(
+        { err: String(err), issueNumber, prNumber },
+        'ensureImplementationReviewGate: failed to re-add gate label — non-fatal',
       );
     }
   }

@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { ClusterRelayClient } from '../types/relay.js';
+import {
+  isRetentionEligible,
+  setRetainedTunnelEvent,
+} from './retained-tunnel-event.js';
 
 const ALLOWED_CHANNELS = [
   'cluster.vscode-tunnel',
@@ -47,6 +51,16 @@ export function setupInternalRelayEventsRoute(
           data,
           timestamp,
         });
+      } else if (event === 'cluster.vscode-tunnel') {
+        const eligibility = isRetentionEligible(data);
+        if (eligibility.eligible) {
+          setRetainedTunnelEvent({
+            event,
+            data,
+            timestamp,
+            status: eligibility.status,
+          });
+        }
       }
 
       return reply.status(204).send();

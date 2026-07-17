@@ -134,6 +134,11 @@ function loadFromEnv(): Record<string, unknown> {
     if (orchSettings.smeeChannelUrl && !smeeEnvUrl) {
       config.smee = { channelUrl: orchSettings.smeeChannelUrl };
     }
+    const smeeChannelFilePath = process.env[`${ENV_PREFIX}SMEE_CHANNEL_FILE_PATH`];
+    if (smeeChannelFilePath) {
+      if (!config.smee) config.smee = {};
+      (config.smee as Record<string, unknown>).channelFilePath = smeeChannelFilePath;
+    }
     if (orchSettings.webhookSetup !== undefined &&
         !process.env['WEBHOOK_SETUP_ENABLED'] && !process.env[`${ENV_PREFIX}WEBHOOK_SETUP_ENABLED`]) {
       config.webhookSetup = { enabled: orchSettings.webhookSetup };
@@ -290,6 +295,17 @@ function loadFromEnv(): Record<string, unknown> {
       config.smee = {};
     }
     (config.smee as Record<string, unknown>).channelUrl = smeeChannelUrl;
+  }
+
+  // Workspace mirror path override. Explicit empty string disables the mirror.
+  const smeeWorkspaceMirrorPath =
+    process.env['SMEE_WORKSPACE_MIRROR_PATH'] ??
+    process.env[`${ENV_PREFIX}SMEE_WORKSPACE_MIRROR_PATH`];
+  if (smeeWorkspaceMirrorPath !== undefined) {
+    if (!config.smee) {
+      config.smee = {};
+    }
+    (config.smee as Record<string, unknown>).workspaceMirrorPath = smeeWorkspaceMirrorPath;
   }
 
   // Label monitor config (LABEL_MONITOR_ENABLED takes precedence, falls back to ORCHESTRATOR_LABEL_MONITOR_ENABLED)

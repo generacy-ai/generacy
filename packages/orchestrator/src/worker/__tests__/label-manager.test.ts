@@ -117,14 +117,17 @@ describe('LabelManager', () => {
   });
 
   describe('onGateHit', () => {
-    it('removes phase:clarify and completed:clarify, adds waiting-for:clarification and agent:paused', async () => {
+    // #958 FR-008 / T012 — `onGateHit` no longer retracts `completed:<phase>`.
+    // `onPhaseComplete(phase)` is now called AFTER the gate check in
+    // phase-loop.ts, so `completed:<phase>` is never present when the gate
+    // fires. Retracting it here would be dead code.
+    it('#958 T012 — removes only phase:clarify, adds waiting-for:clarification and agent:paused', async () => {
       const lm = createLabelManager();
 
       await lm.onGateHit('clarify', 'waiting-for:clarification');
 
       expect(mockGithub.removeLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'phase:clarify',
-        'completed:clarify',
       ]);
       expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
         'waiting-for:clarification',
@@ -157,6 +160,48 @@ describe('LabelManager', () => {
         'agent:in-progress',
       ]);
       expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, ['failed:validate', 'agent:error']);
+    });
+  });
+
+  describe('onRepeatedError (#942)', () => {
+    it('adds failed:implement-repeated and does NOT remove any label', async () => {
+      const lm = createLabelManager();
+
+      await lm.onRepeatedError('implement');
+
+      expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'failed:implement-repeated',
+      ]);
+      // No removals — supplements failed:<phase>, does not replace it.
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+    });
+
+    it('adds failed:validate-repeated for validate phase', async () => {
+      const lm = createLabelManager();
+
+      await lm.onRepeatedError('validate');
+
+      expect(mockGithub.addLabels).toHaveBeenCalledWith('owner', 'repo', 42, [
+        'failed:validate-repeated',
+      ]);
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
+    });
+
+    it('is idempotent: calling twice results in two apply calls with same label (dedup at GH)', async () => {
+      const lm = createLabelManager();
+
+      await lm.onRepeatedError('implement');
+      await lm.onRepeatedError('implement');
+
+      expect(mockGithub.addLabels).toHaveBeenCalledTimes(2);
+      expect(mockGithub.addLabels).toHaveBeenNthCalledWith(1, 'owner', 'repo', 42, [
+        'failed:implement-repeated',
+      ]);
+      expect(mockGithub.addLabels).toHaveBeenNthCalledWith(2, 'owner', 'repo', 42, [
+        'failed:implement-repeated',
+      ]);
+      // Never removes anything on the escalation path.
+      expect(mockGithub.removeLabels).not.toHaveBeenCalled();
     });
   });
 

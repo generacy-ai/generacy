@@ -84,6 +84,11 @@ beforeEach(() => {
 
 describe('SC-008 retry-once success path', () => {
   it('throws once then resolves — answers still ingested on retry, one retry warn, NO REST call', async () => {
+    // #976 — viewerDidAuthor=true no longer requires an engine answer marker;
+    // same-account trust is delegated to `isTrustedCommentAuthor`. Note the
+    // `<!-- generacy-clarification-answers:` marker is now in MACHINE_MARKERS
+    // and would EXCLUDE the comment, so this fixture uses a plain `Q<n>:`
+    // reply — same shape as any human-operator answer.
     const successPayload = [
       {
         id: 1,

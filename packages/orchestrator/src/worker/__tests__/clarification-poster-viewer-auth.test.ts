@@ -106,12 +106,45 @@ beforeEach(() => {
 });
 
 describe('SC-001 / SC-002 App-auth self-authored path', () => {
-  it('trusts a viewerDidAuthor=true + NONE comment (App-identity cluster answer)', async () => {
+  it('#976 — cluster-self marker-relay comment is EXCLUDED (Q2=A deprecates marker-relay integration)', async () => {
+    // Post-#976: `<!-- generacy-clarification-answers:` is in MACHINE_MARKERS,
+    // so the answer-relay comment is filtered by the pre-marker check. The
+    // marker-relay integration path is deprecated; same-account operators
+    // post plain `Q<n>:` replies instead (covered by the next test).
+    const marker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
+    const github = createMockGithub([
+      {
+        id: 1,
+        body: `${marker}\n\nQ1: OAuth 2.0`,
+        author: 'random-account',
+        authorAssociation: 'NONE',
+        viewerDidAuthor: true,
+        created_at: '',
+        updated_at: '',
+      },
+    ]);
+    const context = createContext(github);
+    const logger = createMockLogger();
+
+    const result = await integrateClarificationAnswers(context, logger);
+
+    expect(result.integrated).toBe(0);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    // Migrated path must not fall through to REST `getIssueComments`
+    // (FR-010 / FR-002 — no silent REST fallback).
+    expect(github.getIssueComments).not.toHaveBeenCalled();
+    expect(github.getIssueCommentsWithViewerAuth).toHaveBeenCalledOnce();
+  });
+
+  it('#976 SC-001 — viewerDidAuthor=true plain `Q<n>:` reply (no marker) INTEGRATES', async () => {
+    // Post-#976: the FR-003 authorship gate is removed. Cluster-self plain
+    // replies integrate — same-account trust is delegated to
+    // `isTrustedCommentAuthor` (self-authored → trusted).
     const github = createMockGithub([
       {
         id: 1,
         body: 'Q1: OAuth 2.0',
-        author: 'random-account',
+        author: 'cluster-bot',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,
         created_at: '',
@@ -127,10 +160,6 @@ describe('SC-001 / SC-002 App-auth self-authored path', () => {
     expect(mockWriteFileSync).toHaveBeenCalledOnce();
     const written = mockWriteFileSync.mock.calls[0]![1] as string;
     expect(written).toContain('**Answer**: OAuth 2.0');
-    // Migrated path must not fall through to REST `getIssueComments`
-    // (FR-010 / FR-002 — no silent REST fallback).
-    expect(github.getIssueComments).not.toHaveBeenCalled();
-    expect(github.getIssueCommentsWithViewerAuth).toHaveBeenCalledOnce();
   });
 });
 
@@ -198,12 +227,12 @@ describe('SC-003 Third-party path', () => {
 });
 
 describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', () => {
-  it('excludes a self-authored questions-marker comment from parseAnswersFromComments', async () => {
+  it('excludes a self-authored questions-marker comment; plain follow-up reply still integrates', async () => {
     // Two self-authored comments:
-    // (a) the bot's questions comment carrying the marker — must be filtered
-    //     by isQuestionComment BEFORE parseAnswersFromComments.
-    // (b) a self-authored answers comment — must reach parseAnswersFromComments
-    //     and integrate.
+    // (a) the bot's questions comment carrying the questions marker — filtered
+    //     by the machine-marker pre-filter BEFORE parseAnswersFromComments.
+    // (b) #976: a plain `Q<n>:` follow-up reply (no marker) — reaches
+    //     parseAnswersFromComments and integrates.
     const marker = clarificationMarker(42);
     const github = createMockGithub([
       {
@@ -230,8 +259,8 @@ describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', 
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    // Only comment #2 reaches parseAnswersFromComments; comment #1 (marker)
-    // is filtered out by isQuestionComment.
+    // Only comment #2 reaches the parser; comment #1 (questions marker) is
+    // filtered out by the machine-marker pre-filter.
     expect(result.integrated).toBe(1);
     const written = mockWriteFileSync.mock.calls[0]![1] as string;
     expect(written).toContain('**Answer**: OAuth 2.0');
@@ -281,9 +310,9 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
     const marker = clarificationMarker(42);
     const github = createMockGithub([
       {
-        // (1) Marker-carrying self-authored comment. If the filter is
-        // removed, its body's `Q1: BOGUS_MARKER_ANSWER` would parse as
-        // the answer, overwriting the real answer below.
+        // (1) Marker-carrying self-authored comment. If the machine-marker
+        // pre-filter is removed, its body's `Q1: BOGUS_MARKER_ANSWER` would
+        // parse as the answer, overwriting the real answer below.
         id: 1,
         body: `${marker}\n### Q1: Authentication\n**Question**: Which auth?\n\nQ1: BOGUS_MARKER_ANSWER`,
         author: 'cluster-bot',
@@ -293,7 +322,10 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
         updated_at: '2026-07-10T00:00:00Z',
       },
       {
-        // (2) Distinct self-authored answer comment posted later.
+        // (2) #976: distinct plain follow-up reply — no marker. Same-account
+        // trust is delegated to `isTrustedCommentAuthor`; the machine-marker
+        // pre-filter drops comment (1) but not this one, so the real answer
+        // integrates and the bogus one never reaches the parser.
         id: 2,
         body: 'Q1: REAL_ANSWER_OAUTH2',
         author: 'cluster-bot',
@@ -318,10 +350,14 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
 
 describe('SC-006 no shape-drift warn on healthy self-authored comments', () => {
   it('does NOT emit "viewerDidAuthor missing/non-boolean" when field is populated (true)', async () => {
+    // #958 FR-003 — self-authored comments require the engine answer marker.
+    // Add it here so the comment still reaches the trust helper (which is
+    // what actually exercises the viewerDidAuthor shape-drift warn path).
+    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
         id: 1,
-        body: 'Q1: OAuth 2.0',
+        body: `${answerMarker}\n\nQ1: OAuth 2.0`,
         author: 'cluster',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,

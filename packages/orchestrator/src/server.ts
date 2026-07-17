@@ -20,12 +20,14 @@ import { LabelSyncService } from './services/label-sync-service.js';
 import { LabelMonitorService } from './services/label-monitor-service.js';
 import { PrFeedbackMonitorService } from './services/pr-feedback-monitor-service.js';
 import { MergeConflictMonitorService } from './services/merge-conflict-monitor-service.js';
+import { ClarificationAnswerMonitorService } from './services/clarification-answer-monitor-service.js';
 import { BaseAdvanceMonitorService } from './services/base-advance-monitor-service.js';
 import { PhaseTrackerService } from './services/phase-tracker-service.js';
 import { RedisQueueAdapter } from './services/redis-queue-adapter.js';
 import { InMemoryQueueAdapter } from './services/in-memory-queue-adapter.js';
 import { WorkerDispatcher } from './services/worker-dispatcher.js';
 import { SmeeWebhookReceiver } from './services/smee-receiver.js';
+import { SmeeChannelResolver } from './services/smee-channel-resolver.js';
 import { RelayBridge } from './services/relay-bridge.js';
 import { LeaseManager } from './services/lease-manager.js';
 import { WebhookSetupService } from './services/webhook-setup-service.js';
@@ -178,6 +180,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // service does not emit until monitors call recordResult/maybeRequestRefresh,
   // which happens after server.listen() and (in wizard mode) after activation.
   let relayClientRef: import('./types/relay.js').ClusterRelayClient | null = null;
+  // #972: StatusReporter ref populated by `initializeRelayBridge()` on both
+  // wizard and existing-key paths. Read through by the WebhookSetupService
+  // fail-loud triple's `pushStatus('degraded', ...)` call; safe because the
+  // 403 fires from a network round-trip, so the ref is populated by the time
+  // it dereferences.
+  let statusReporterRef: StatusReporter | null = null;
   const githubAuthHealth = !isWorkerMode
     ? new GitHubAuthHealthService({
         emitEvent: (payload) => {
@@ -330,10 +338,36 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     // absent the worker degrades gracefully to no fix cycle.
     const workerPhaseTracker = new PhaseTrackerService(server.log, redisClient);
 
+    // #942: FailureFingerprintTracker — scans issue failure-alert comments to
+    // count prior same-fingerprint failures. Construction is best-effort:
+    // if it throws (should never happen for the GitHub-scan impl since it's a
+    // pure ctor), we log and pass undefined so escalation degrades to a no-op.
+    let workerFailureFingerprintTracker:
+      | import('./services/failure-fingerprint-tracker.js').FailureFingerprintTracker
+      | undefined;
+    try {
+      const { GitHubCommentFailureFingerprintTracker } = await import(
+        './services/failure-fingerprint-tracker.js'
+      );
+      const trackerGithub = createGitHubClient();
+      workerFailureFingerprintTracker = new GitHubCommentFailureFingerprintTracker(
+        trackerGithub,
+        server.log,
+      );
+    } catch (err) {
+      server.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        'Failed to construct FailureFingerprintTracker — repeat-failure escalation disabled',
+      );
+    }
+
     const cliWorker = new ClaudeCliWorker(config.worker, server.log, {
       jobEventEmitter,
       tokenProvider: githubTokenProvider,
       phaseTracker: workerPhaseTracker,
+      ...(workerFailureFingerprintTracker
+        ? { failureFingerprintTracker: workerFailureFingerprintTracker }
+        : {}),
     });
 
     // #889: terminal-failure recovery handler. On WorkerResult.failed-terminal:
@@ -375,18 +409,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           item.issueNumber,
           server.log,
         );
+        const { computeFailureFingerprint } = await import('./worker/failure-fingerprint.js');
         const runId = crypto.randomUUID();
+        const evidence = {
+          command: `gh (${failureMetadata.labelOp})`,
+          exitDescriptor: 'exited 1',
+          // #890 renamed CommandExitEvidence.stderrTail → outputTail.
+          outputTail: failureMetadata.ghStderr,
+        };
+        // #942: label-op alerts still get a fingerprint marker so the comment
+        // renders consistently. No history lookup — we're outside the phase
+        // loop, occurrence is always 1.
+        const fingerprint = computeFailureFingerprint({ phase: failureMetadata.site, evidence });
         await stageCommentManager.postFailureAlert({
           stage: 'label-op',
           runId,
           phase: failureMetadata.site,
           labelOp: failureMetadata.labelOp,
-          evidence: {
-            command: `gh (${failureMetadata.labelOp})`,
-            exitDescriptor: 'exited 1',
-            // #890 renamed CommandExitEvidence.stderrTail → outputTail.
-            outputTail: failureMetadata.ghStderr,
-          },
+          evidence,
+          fingerprint,
+          occurrence: 1,
         });
       } catch (err) {
         server.log.error(
@@ -425,6 +467,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   let labelMonitorService: LabelMonitorService | null = null;
   let prFeedbackMonitorService: PrFeedbackMonitorService | null = null;
   let mergeConflictMonitorService: MergeConflictMonitorService | null = null;
+  let clarificationAnswerMonitorService: ClarificationAnswerMonitorService | null = null;
   let baseAdvanceMonitorService: BaseAdvanceMonitorService | null = null;
   let smeeReceiver: SmeeWebhookReceiver | null = null;
   if (!isWorkerMode && config.labelMonitor && config.repositories.length > 0) {
@@ -447,19 +490,123 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       githubTokenProvider,
       githubAuthHealth ?? undefined,
       githubAppCredentialId,
+      config.smee.channelUrl != null, // #953: webhooksConfigured
     );
 
-    // Create SmeeWebhookReceiver if Smee channel URL is configured
-    if (config.smee.channelUrl) {
+    // Wire the smee pipeline (receiver + optional webhook setup) for a resolved URL.
+    // Captures labelMonitorService, config, githubTokenProvider, clusterGithubUsername
+    // from the enclosing scope. See specs/952-summary-no-automated-cluster/contracts/server-pipeline.md.
+    const startSmeePipeline = (channelUrl: string): void => {
       const watchedRepos = new Set(
         config.repositories.map(r => `${r.owner}/${r.repo}`)
       );
-      smeeReceiver = new SmeeWebhookReceiver(
+      const receiver = new SmeeWebhookReceiver(
         server.log,
-        labelMonitorService,
-        { channelUrl: config.smee.channelUrl, watchedRepos, clusterGithubUsername },
+        labelMonitorService!,
+        { channelUrl, watchedRepos, clusterGithubUsername },
       );
-      server.log.info({ channelUrl: config.smee.channelUrl }, 'Smee webhook receiver configured');
+      smeeReceiver = receiver;
+      server.log.info({ channelUrl }, 'Smee webhook receiver configured');
+      receiver.start().catch((error) => {
+        server.log.error({ err: error }, 'Smee webhook receiver failed');
+      });
+      if (config.webhookSetup.enabled) {
+        // #972: DI hooks for fail-loud triple on webhook-registration 403.
+        // - sendRelayEvent: mirrors the closure used by PostActivationRetryService
+        //   / BootResumeService at the initializeRelayBridge sites; dereferences
+        //   relayClientRef at emit time so late relay-client init is tolerated.
+        // - statusReporter: exposes the same StatusReporter instance the relay
+        //   bridge init returns; wrapped as a thin object so the ref is read
+        //   at pushStatus() call time (the 403 fires from a network round-trip,
+        //   so the ref is populated by then even on the wizard-mode path).
+        // - channelFilePath: same path SmeeChannelResolver writes to.
+        // - installationIdProvider: null in v1 — installation id is not stored
+        //   in .agency/credentials.yaml (it lives inside the sealed credential
+        //   value in credentials.dat). Diagnostic-only per spec, so falling
+        //   back to null is safe (data-model.md §"WebhookRegistrationForbiddenEvent").
+        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider, {
+          sendRelayEvent: (channel, payload) => {
+            const client = relayClientRef;
+            if (!client || !client.isConnected) return;
+            client.send({
+              type: 'event',
+              event: channel,
+              data: payload,
+              timestamp: new Date().toISOString(),
+            } as unknown as import('./types/relay.js').RelayMessage);
+          },
+          statusReporter: {
+            pushStatus: async (status, reason) => {
+              const reporter = statusReporterRef;
+              if (!reporter) return;
+              await reporter.pushStatus(status, reason);
+            },
+          },
+          channelFilePath: config.smee.channelFilePath,
+          installationIdProvider: async () => null,
+        });
+        webhookSetupService.ensureWebhooks(channelUrl, config.repositories).catch((error) => {
+          server.log.error({ err: error }, 'Webhook setup failed');
+        });
+      } else {
+        // #954: surface the deliberate webhook-setup opt-out rather than
+        // staying silent. Fires whenever a smee pipeline starts (static,
+        // persisted, or provisioned channel) while auto-setup is disabled —
+        // no GitHub webhooks will be created for the monitored repos.
+        server.log.info(
+          { remediation: ['GENERACY_WEBHOOK_SETUP_ENABLED', 'orchestrator.webhookSetup.enabled'] },
+          'Webhook auto-setup disabled; no GitHub webhooks will be created for monitored repos',
+        );
+      }
+    };
+
+    if (config.smee.channelUrl) {
+      // Env/yaml URL path: preserve today's synchronous ordering so `smeeReceiver`
+      // is non-null before onReady runs (existing tests rely on this).
+      startSmeePipeline(config.smee.channelUrl);
+    } else {
+      // No URL configured: kick off async resolver after server.listen() via onReady.
+      // Fire-and-forget; never blocks listen. Belt-and-braces predicate matches the
+      // outer gate so future refactors can't accidentally invoke on worker-mode boot.
+      server.addHook('onReady', async () => {
+        if (isWorkerMode || !config.labelMonitor || config.repositories.length === 0) return;
+        const resolver = new SmeeChannelResolver(server.log, {
+          channelFilePath: config.smee.channelFilePath,
+          workspaceMirrorPath: config.smee.workspaceMirrorPath === ''
+            ? undefined
+            : config.smee.workspaceMirrorPath,
+        });
+        resolver.resolve()
+          .then((result) => {
+            if (result) {
+              server.log.info(
+                { channelUrl: result.channelUrl, source: result.source },
+                'Resolved smee channel URL — starting pipeline',
+              );
+              startSmeePipeline(result.channelUrl);
+            } else {
+              // #954: the cluster is genuinely webhook-less — no static URL,
+              // no persisted channel, and provisioning failed — so polling is
+              // the only feeder. Emit the polling-fallback summary with the
+              // resulting latency characteristics + remediation pointers. This
+              // is the true "no smee" moment under the #952 resolver model
+              // (not construction time, where a channel may still be resolved).
+              server.log.warn(
+                {
+                  pollIntervalMs: monitorConfig.pollIntervalMs,
+                  completedCheckInterval: LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+                  processLatencyMs: monitorConfig.pollIntervalMs,
+                  completedLatencyMs: monitorConfig.pollIntervalMs * LabelMonitorService.COMPLETED_CHECK_INTERVAL,
+                  remediation: ['SMEE_CHANNEL_URL', 'orchestrator.smeeChannelUrl'],
+                },
+                'No smee channel configured; polling fallback active',
+              );
+            }
+          })
+          .catch((error) => {
+            server.log.error({ err: error }, 'Unexpected error resolving smee channel URL');
+          });
+      });
     }
 
     // Initialize PR feedback monitor service (if enabled). #879: in-flight
@@ -475,6 +622,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         githubTokenProvider,
         githubAuthHealth ?? undefined,
         githubAppCredentialId,
+        false, // #953: no reliable feeder signal available at construction
       );
 
       // #898: Merge-conflict monitor reuses the PR-monitor config for poll
@@ -482,6 +630,23 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       // items when the pause label pair (`waiting-for:merge-conflicts` +
       // `agent:paused`) is detected on an assigned open issue.
       mergeConflictMonitorService = new MergeConflictMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
+        false, // #953: recordWebhookEvent() has no callers anywhere
+      );
+
+      // #958 T015: Clarification-answer monitor — sibling of merge-conflict
+      // monitor. Enqueues `continue` resumes when a plain human comment
+      // arrives on a `waiting-for:clarification` + `agent:paused` issue.
+      // Never applies `completed:clarification` (FR-011).
+      clarificationAnswerMonitorService = new ClarificationAnswerMonitorService(
         server.log,
         createGitHubClient,
         queueAdapter,
@@ -580,7 +745,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       relayBridgeRef = bridge;
       conversationManager = convMgr;
       activationPending = false;
-    }, (client) => { relayClientRef = client; }).catch((error) => {
+    }, (client) => { relayClientRef = client; }, (reporter) => { statusReporterRef = reporter; }).catch((error) => {
       activationPending = false;
       server.log.warn(
         `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -591,6 +756,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
     relayBridge = result.relayBridge;
     relayBridgeRef = result.relayBridge;
+    statusReporterRef = result.statusReporter;
 
     // Detect identity split (env GENERACY_CLUSTER_ID vs persisted cluster.json.cluster_id).
     // Best-effort: drops event if relay client unavailable. Once per process lifetime (#750).
@@ -643,6 +809,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           displayName: config.cluster?.displayName,
         },
         githubAuth: () => githubAuthHealth?.snapshot(),
+        smeeConfigured: !!config.smee.channelUrl,
       });
       await setupDispatchRoutes(server, queueAdapter);
     } else {
@@ -671,6 +838,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
             displayName: config.cluster?.displayName,
           },
           githubAuth: () => githubAuthHealth?.snapshot(),
+          smeeConfigured: !!config.smee.channelUrl,
         },
       });
 
@@ -771,27 +939,24 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         });
       }
 
+      if (clarificationAnswerMonitorService) {
+        clarificationAnswerMonitorService.startPolling().catch((error) => {
+          server.log.error({ err: error }, 'Clarification-answer monitor polling failed');
+        });
+      }
+
       if (baseAdvanceMonitorService) {
         baseAdvanceMonitorService.startPolling().catch((error) => {
           server.log.error({ err: error }, 'Base-advance monitor polling failed');
         });
       }
 
-      if (smeeReceiver) {
-        smeeReceiver.start().catch((error) => {
-          server.log.error({ err: error }, 'Smee webhook receiver failed');
-        });
-      }
+      // smeeReceiver.start() and WebhookSetupService.ensureWebhooks() are invoked
+      // from startSmeePipeline() at construction time (sync path) or from the
+      // resolver's .then() callback (async path); no separate onReady wiring needed.
 
       if (credentialExpiryWatcher) {
         credentialExpiryWatcher.start();
-      }
-
-      if (config.webhookSetup.enabled && config.smee.channelUrl) {
-        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider);
-        webhookSetupService.ensureWebhooks(config.smee.channelUrl, config.repositories).catch((error) => {
-          server.log.error({ err: error }, 'Webhook setup failed');
-        });
       }
 
       // Only start relay bridge here if it was initialized synchronously.
@@ -840,6 +1005,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           }
           if (mergeConflictMonitorService) {
             mergeConflictMonitorService.stopPolling();
+          }
+          if (clarificationAnswerMonitorService) {
+            clarificationAnswerMonitorService.stopPolling();
           }
           if (baseAdvanceMonitorService) {
             await baseAdvanceMonitorService.stopPolling();
@@ -939,6 +1107,7 @@ async function activateInBackground(
   apiKeyStore: InMemoryApiKeyStore,
   onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
+  setStatusReporter?: (reporter: StatusReporter) => void,
 ): Promise<void> {
   const initialWorkersRaw = process.env['GENERACY_INITIAL_WORKERS'];
   let initialWorkers: number | undefined;
@@ -981,10 +1150,11 @@ async function activateInBackground(
   server.log.info('Cluster activation complete');
 
   let localRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
-  const { relayBridge } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
+  const { relayBridge, statusReporter } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
     localRelayClient = client;
     setRelayClient?.(client);
   });
+  setStatusReporter?.(statusReporter);
   const conversationManager = await initializeConversationManager(config, server, relayBridge);
 
   onInitialized(relayBridge, conversationManager);

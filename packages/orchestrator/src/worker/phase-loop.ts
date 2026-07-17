@@ -13,6 +13,7 @@ import type { PrManager } from './pr-manager.js';
 import type { ValidateFixHandler } from './validate-fix-handler.js';
 import type { ConversationLogger } from './conversation-logger.js';
 import { postClarifications, hasPendingClarifications, integrateClarificationAnswers } from './clarification-poster.js';
+import { PENDING_ANSWER_LITERAL } from '@generacy-ai/workflow-engine';
 import { buildSiblingPromptBlock } from './sibling-prompt.js';
 import { checkSiblingReviews } from './sibling-review-checker.js';
 import { EXCLUDED_PATH_PREFIXES, computeProductDiff, resolveBaseRef } from './product-diff.js';
@@ -21,10 +22,17 @@ import { synthesizeOutputTail } from './output-tail-synthesis.js';
 import { performBaseMerge, resolveBaseBranch, type BaseMergeRunner } from './base-merge.js';
 import { MERGE_CONFLICT_REMEDY } from './merge-conflict-remedy.js';
 import { writePauseContext } from './pause-context.js';
+import { computeFailureFingerprint, REPEAT_FAILURE_THRESHOLD } from './failure-fingerprint.js';
+import type { FailureFingerprintTracker } from '../services/failure-fingerprint-tracker.js';
 import { randomUUID } from 'node:crypto';
 
 /** Phases that MUST produce file changes to be considered successful. */
 const PHASES_REQUIRING_CHANGES: ReadonlySet<WorkflowPhase> = new Set(['implement']);
+
+/** Narrow a `WorkflowPhase | string` union to WorkflowPhase. */
+function isWorkflowPhase(value: WorkflowPhase | string): value is WorkflowPhase {
+  return (PHASE_SEQUENCE as readonly string[]).includes(value);
+}
 
 /**
  * Dependencies injected into the PhaseLoop.
@@ -53,6 +61,12 @@ export interface PhaseLoopDeps {
    * continue to route through `LabelManager.onError('validate')` (D7).
    */
   validateFixHandler?: ValidateFixHandler;
+  /**
+   * #942: Optional repeat-failure history tracker. When absent, escalation
+   * degrades to a no-op (occurrence is always 1, `-repeated` never fires).
+   * Injected by the worker-mode wiring in server.ts.
+   */
+  failureFingerprintTracker?: FailureFingerprintTracker;
 }
 
 /**
@@ -315,7 +329,6 @@ export class PhaseLoop {
                 'Pre-validate install failed',
               );
               results.push(installResult);
-              await labelManager.onError(phase);
               const evidence = this.buildErrorEvidence(
                 config.preValidateCommand,
                 installResult,
@@ -329,7 +342,7 @@ export class PhaseLoop {
                 startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
                 errorEvidence: evidence,
               });
-              await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+              await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
               return { results, completed: false, lastPhase: phase, gateHit: false };
             }
           }
@@ -418,7 +431,6 @@ export class PhaseLoop {
           { phase, error: String(error) },
           'Unexpected error during phase execution',
         );
-        await labelManager.onError(phase);
         const syntheticResult: PhaseResult = {
           phase,
           success: false,
@@ -440,7 +452,7 @@ export class PhaseLoop {
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
           errorEvidence: evidence,
         });
-        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+        await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
         throw error;
       }
 
@@ -490,7 +502,6 @@ export class PhaseLoop {
             undefined,
             'no-progress',
           );
-          await labelManager.onError(phase);
           await stageCommentManager.updateStageComment({
             stage,
             status: 'error',
@@ -499,7 +510,7 @@ export class PhaseLoop {
             prUrl: context.prUrl,
             errorEvidence: evidence,
           });
-          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
         lastTasksRemaining = tasksRemaining;
@@ -607,7 +618,6 @@ export class PhaseLoop {
           }
         }
 
-        await labelManager.onError(phase);
         const evidence = this.buildErrorEvidence(
           phase === 'validate' ? config.validateCommand : phase,
           result,
@@ -623,7 +633,7 @@ export class PhaseLoop {
           startedAt: phaseTimestamps.get(sequence[startIndex]!)?.startedAt ?? new Date().toISOString(),
           errorEvidence: evidence,
         });
-        await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+        await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
         return { results, completed: false, lastPhase: phase, gateHit: false };
       }
 
@@ -654,7 +664,6 @@ export class PhaseLoop {
             { phase, err: String(err) },
             'product-diff computation threw — treating as detection failure',
           );
-          await labelManager.onError(phase);
           result.success = false;
           result.error = {
             message: `Phase "${phase}" product-diff detection failed: ${String(err)}`,
@@ -675,7 +684,7 @@ export class PhaseLoop {
             prUrl: context.prUrl,
             errorEvidence: evidence,
           });
-          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
 
@@ -684,7 +693,6 @@ export class PhaseLoop {
             { phase, baseRef, changedFiles, excluded: EXCLUDED_PATH_PREFIXES },
             'implement phase produced no product-code changes — all diff lives under excluded paths',
           );
-          await labelManager.onError(phase);
           result.success = false;
           result.error = {
             message:
@@ -707,13 +715,44 @@ export class PhaseLoop {
             prUrl: context.prUrl,
             errorEvidence: evidence,
           });
-          await stageCommentManager.postFailureAlert({ stage, runId, phase, evidence });
+          await this.escalateAndAlert(context, deps, phase, evidence, stage, runId);
           return { results, completed: false, lastPhase: phase, gateHit: false };
         }
       }
 
-      // 5c. Mark phase as completed in labels
-      await labelManager.onPhaseComplete(phase);
+      // 5c. #958 FR-009 safety-net + FR-010 parse-failure reporting.
+      // Runs unconditionally on the clarify phase (used to sit inside the
+      // gate-active branch — went quiet exactly when needed). Integration
+      // happens here so the local clarifications.md reflects any freshly
+      // relayed answers before the gate check.
+      let clarifyIntegration:
+        | Awaited<ReturnType<typeof integrateClarificationAnswers>>
+        | undefined;
+      if (phase === 'clarify') {
+        try {
+          clarifyIntegration = await integrateClarificationAnswers(context, this.logger);
+        } catch (err) {
+          this.logger.warn(
+            { err: String(err) },
+            'integrateClarificationAnswers threw — continuing (gate check will pause on unknown state per FR-007)',
+          );
+        }
+        try {
+          await postClarifications(context, this.logger);
+        } catch (err) {
+          this.logger.warn(
+            { err: err instanceof Error ? err.message : String(err) },
+            'Failed to post clarification questions safety net — continuing',
+          );
+        }
+        // FR-010: surface parse failures on the issue + relay event.
+        if (
+          clarifyIntegration?.parseFailures !== undefined
+          && clarifyIntegration.parseFailures.length > 0
+        ) {
+          await this.reportClarificationParseFailures(context, clarifyIntegration);
+        }
+      }
 
       // 5d. Invoke phase:after handlers (post-commit, pre-gate)
       for (const handler of deps.phaseAfterHandlers ?? []) {
@@ -733,9 +772,9 @@ export class PhaseLoop {
         if (gate.condition === 'always') {
           gateActive = true;
         } else if (gate.condition === 'on-questions') {
-          // Defensive: integrate any GitHub answers into local clarifications.md
-          // before checking for pending questions.
-          await integrateClarificationAnswers(context, this.logger);
+          // #958 FR-008/FR-009 — integration + safety-net posting already ran
+          // in step 5c above. This branch is now a pure boolean check against
+          // the freshly-integrated file (fail-closed per FR-007).
           gateActive = hasPendingClarifications(context.checkoutPath, context.item.issueNumber);
           if (!gateActive) {
             this.logger.info(
@@ -802,17 +841,8 @@ export class PhaseLoop {
 
         await labelManager.onGateHit(phase, gate.gateLabel);
 
-        // Post clarification questions to the issue when clarify gate is hit
-        if (gate.gateLabel === 'waiting-for:clarification') {
-          try {
-            await postClarifications(context, this.logger);
-          } catch (error) {
-            this.logger.warn(
-              { error: error instanceof Error ? error.message : String(error) },
-              'Failed to post clarification questions — continuing gate flow',
-            );
-          }
-        }
+        // #958 FR-009 — safety-net posting moved to step 5c so it runs on any
+        // clarify-phase completion, not only when the gate activates.
 
         // Update the result with gate info
         result.gateHit = {
@@ -835,6 +865,14 @@ export class PhaseLoop {
 
         return { results, completed: false, lastPhase: phase, gateHit: true };
       }
+
+      // 6b. #958 FR-008 — grant `completed:<phase>` only after every gate
+      // evaluation returned "skip" (either not active, or already satisfied).
+      // The pre-#958 placement (before gate check) meant any code path that
+      // skipped the gate left the advance-authorizing label in place. This
+      // ordering also lets `LabelManager.onGateHit` drop its dead-code
+      // retract-the-completed-label branch (T012).
+      await labelManager.onPhaseComplete(phase);
 
       // 7. Record phase completion time
       const phaseTs = phaseTimestamps.get(phase);
@@ -1047,6 +1085,109 @@ export class PhaseLoop {
       lastPhase: phase,
       gateHit: true,
     };
+  }
+
+  /**
+   * #942: Fingerprint the failure, look up prior identical failures on this
+   * issue, escalate labels + post the alert.
+   *
+   * Order (per contract):
+   *   1. Compute fingerprint (pure, non-throwing).
+   *   2. Fetch prior-occurrence count (fail-open — errors already suppressed
+   *      inside the tracker, so this is always a number).
+   *   3. `labelManager.onError(phase)` — unchanged pre-#942 path.
+   *   4. If `occurrence >= REPEAT_FAILURE_THRESHOLD` (N=2), also apply the
+   *      `-repeated` escalation label BEFORE the alert-post.
+   *   5. `stageCommentManager.postFailureAlert({ ..., fingerprint, occurrence })`
+   *      — line-1 v2 marker carries the fingerprint hex + occurrence counter.
+   */
+  private async escalateAndAlert(
+    context: WorkerContext,
+    deps: PhaseLoopDeps,
+    phase: WorkflowPhase | string,
+    evidence: CommandExitEvidence,
+    stage: StageType | 'label-op',
+    runId: string,
+  ): Promise<void> {
+    const fingerprint = computeFailureFingerprint({ phase, evidence });
+    const priorCount = deps.failureFingerprintTracker
+      ? await deps.failureFingerprintTracker.countPriorOccurrences(
+          context.item.owner,
+          context.item.repo,
+          context.item.issueNumber,
+          fingerprint,
+        )
+      : 0;
+    const occurrence = priorCount + 1;
+
+    // Regular error label first (byte-compatible w/ pre-#942 consumers).
+    // `phase` is a WorkflowPhase here for the 6 real phase-loop sites; the
+    // `phase: string` union member exists only for `label-op` failures which
+    // don't route through this helper today.
+    if (isWorkflowPhase(phase)) {
+      await deps.labelManager.onError(phase);
+      if (occurrence >= REPEAT_FAILURE_THRESHOLD) {
+        this.logger.warn(
+          {
+            phase,
+            fingerprint,
+            occurrence,
+            issue: context.item.issueNumber,
+          },
+          'Repeat-identical failure detected — escalating with failed:<phase>-repeated',
+        );
+        await deps.labelManager.onRepeatedError(phase);
+      }
+    }
+
+    await deps.stageCommentManager.postFailureAlert({
+      stage,
+      runId,
+      phase,
+      evidence,
+      fingerprint,
+      occurrence,
+    });
+  }
+
+  /**
+   * #958 FR-010 — Surface parse failures on the issue + relay event so that
+   * "failed to pick up the answers" and "planned anyway" are no longer one
+   * event. Best-effort: failures posting the comment are logged and
+   * swallowed — the pause itself (via the on-questions gate check that
+   * follows) is the load-bearing behavior; this is diagnostic.
+   */
+  private async reportClarificationParseFailures(
+    context: WorkerContext,
+    integration: import('./clarification-poster.js').IntegrationResult,
+  ): Promise<void> {
+    const failures = integration.parseFailures ?? [];
+    if (failures.length === 0) return;
+
+    const { owner, repo, issueNumber } = context.item;
+    const marker = `<!-- generacy-clarification-parse-failures:${issueNumber} -->`;
+    const perQuestion = failures
+      .map((f) => `  - Q${f.questionNumber}: ${f.reason}`)
+      .join('\n');
+    const body = `${marker}\n\n**Clarification answer integration reported parse failures.** The following questions remain \`${PENDING_ANSWER_LITERAL}\` and the phase will re-pause:\n\n${perQuestion}\n\nReply with \`Q<n>: <answer>\` for each failing question; the resume monitor will pick up your reply on the next poll cycle.`;
+
+    try {
+      await context.github.addIssueComment(owner, repo, issueNumber, body);
+    } catch (err) {
+      this.logger.warn(
+        { err: err instanceof Error ? err.message : String(err), issueNumber },
+        'Failed to post clarification parse-failure comment (non-fatal)',
+      );
+    }
+    this.logger.warn(
+      {
+        event: 'clarification.parse_failures',
+        issueNumber,
+        pendingAfter: integration.pendingAfter,
+        failures,
+      },
+      'Clarification integration surfaced parse failures',
+    );
   }
 
   /**

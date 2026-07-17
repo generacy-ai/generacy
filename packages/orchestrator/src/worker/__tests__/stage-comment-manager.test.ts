@@ -215,6 +215,10 @@ function makeAlertGithub(existingComments: { id: number; body: string }[] = []):
   return { github, getIssueComments, addIssueComment, updateComment, lastAddedBody: () => lastBody };
 }
 
+// #942: 16-char hex fingerprint fixture for BASE_ALERT. Test-only sentinel,
+// deliberately readable so failing golden strings surface the marker cleanly.
+const TEST_FINGERPRINT = 'abcdef1234567890';
+
 const BASE_ALERT: FailureAlertData = {
   stage: 'implementation',
   runId: TEST_RUN_ID,
@@ -224,6 +228,8 @@ const BASE_ALERT: FailureAlertData = {
     exitDescriptor: 'exit 1',
     outputTail: 'npm error Missing script: "test"',
   },
+  fingerprint: TEST_FINGERPRINT,
+  occurrence: 1,
 };
 
 describe('StageCommentManager.postFailureAlert', () => {
@@ -236,7 +242,7 @@ describe('StageCommentManager.postFailureAlert', () => {
 
     expect(addIssueComment).toHaveBeenCalledTimes(1);
     const expected = [
-      `<!-- generacy:failure-alert:implementation:${TEST_RUN_ID} -->`,
+      `<!-- generacy:failure-alert:implementation:${TEST_RUN_ID} --> <!-- fp:${TEST_FINGERPRINT}:1 -->`,
       '❌ **validate failed** — `pnpm test` exit 1.',
       '',
       '<details><summary>output (last 1 lines)</summary>',
@@ -344,17 +350,57 @@ describe('StageCommentManager.postFailureAlert', () => {
     expect(lastAddedBody()).toContain(`\`\`\`text\n${marker}\nline body\n\`\`\``);
   });
 
-  it('marker shape matches the contract regex on the first line', async () => {
+  it('marker shape matches the contract regex on the first line (#942 v2)', async () => {
     const { github, lastAddedBody } = makeAlertGithub();
     const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
 
     await manager.postFailureAlert(BASE_ALERT);
 
     const firstLine = lastAddedBody().split('\n')[0];
+    // #942 INV-C1: v1 marker + single space + v2 marker.
     expect(firstLine).toMatch(
-      /^<!-- generacy:failure-alert:(specification|planning|implementation):[0-9a-f-]{36} -->$/,
+      /^<!-- generacy:failure-alert:(specification|planning|implementation):[0-9a-f-]{36} --> <!-- fp:[0-9a-f]{16}:\d+ -->$/,
     );
+    // #942 INV-C2: exactly one space between the two markers.
+    expect(firstLine).toContain(' --> <!-- fp:');
+    expect(firstLine).not.toContain('  --> <!-- fp:');
     expect(firstLine!.startsWith(FAILURE_ALERT_MARKER_PREFIX)).toBe(true);
+  });
+
+  it('#942 — v2 fingerprint marker carries the runtime fingerprint + occurrence', async () => {
+    const { github, lastAddedBody } = makeAlertGithub();
+    const manager = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+
+    await manager.postFailureAlert({
+      ...BASE_ALERT,
+      fingerprint: '9c4d3e2a1b0f8a7b',
+      occurrence: 2,
+    });
+
+    const firstLine = lastAddedBody().split('\n')[0];
+    expect(firstLine).toBe(
+      `<!-- generacy:failure-alert:implementation:${TEST_RUN_ID} --> <!-- fp:9c4d3e2a1b0f8a7b:2 -->`,
+    );
+  });
+
+  it('#942 — INV-C3 body lines 2+ unchanged when only fingerprint / occurrence differ', async () => {
+    const { github, lastAddedBody: bodyA } = makeAlertGithub();
+    const mgrA = new StageCommentManager(github, 'owner', 'repo', 42, makeLogger());
+    await mgrA.postFailureAlert({ ...BASE_ALERT, fingerprint: '1111111111111111', occurrence: 1 });
+    const a = bodyA();
+
+    const { github: g2, lastAddedBody: bodyB } = makeAlertGithub();
+    const mgrB = new StageCommentManager(g2, 'owner', 'repo', 42, makeLogger());
+    await mgrB.postFailureAlert({ ...BASE_ALERT, fingerprint: '2222222222222222', occurrence: 5 });
+    const b = bodyB();
+
+    // Only line 1 differs; body lines 2+ are byte-identical.
+    const linesA = a.split('\n');
+    const linesB = b.split('\n');
+    expect(linesA.length).toBe(linesB.length);
+    for (let i = 1; i < linesA.length; i++) {
+      expect(linesB[i]).toBe(linesA[i]);
+    }
   });
 
   it('does not alter the canonical stage comment (FR-008)', async () => {

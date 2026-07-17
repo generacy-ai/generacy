@@ -39,6 +39,9 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   // add/remove). Both fields are asserted below.
   cockpit_scope_add: 'scope',
   cockpit_scope_remove: 'scope',
+  // #958 — deterministic clarification-answer relay. Wraps an issue ref
+  // (marker-stamped comment posted + completed:clarification applied).
+  cockpit_relay_clarify_answers: 'issue',
 };
 
 /**
@@ -78,6 +81,9 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   cockpit_await_events: null,
   cockpit_scope_add: 'scope.ts',
   cockpit_scope_remove: 'scope.ts',
+  // #958 — MCP-first tool. `runClarifyRelay` is not exposed as a top-level
+  // Commander verb in v1 (the skill invokes the MCP tool directly).
+  cockpit_relay_clarify_answers: null,
 };
 
 const schemasSource = readFileSync(

@@ -15,6 +15,45 @@ pnpm install
 pnpm dev
 ```
 
+## Changesets (required — CI gate)
+
+**If your diff touches a non-test file under `packages/<pkg>/src/`, the PR must add
+a new `.changeset/*.md` file.** Otherwise CI fails with:
+
+> ::error::This PR modifies packages/*/src/ but adds no changeset.
+
+Speckit phases do **not** generate changesets, so the implement phase must write one
+itself — this is the single most common reason a speckit PR lands red. Add it as part
+of the implementation, not as an afterthought:
+
+```bash
+pnpm changeset            # interactive
+# or hand-write .changeset/<issue-number>-<slug>.md
+```
+
+Rules:
+
+- It must be a **newly added** file in the PR diff (the gate greps `--diff-filter=A`
+  against the base). Editing an existing changeset does not satisfy it.
+- **Test-only** changes under `packages/*/src/` are exempt — the gate skips diffs whose
+  in-scope files are all `*.test.ts` / `*.spec.ts` / `__tests__/`.
+- List **every** package whose non-test `src/` changed. The gate only checks that *some*
+  changeset was added, so a changeset missing a package still passes CI but silently
+  ships that package unreleased — get this right by hand.
+- Bump level: new capability → `minor`; defect fix (`workflow:speckit-bugfix`) → `patch`;
+  new label vocabulary in `workflow-engine` → `minor`.
+- New exports that are **not** re-exported from the package's public `index.ts` are
+  internal surface, not API — still `patch`.
+- Genuinely needs no release (comment-only, or a refactor with no public surface)?
+  `pnpm changeset --empty`.
+- When unsure, copy the shape of a comparable existing changeset in `.changeset/`.
+
+Note: `pnpm changeset status --since=origin/develop` will not see your changeset until
+it is committed (it reads git, not the working tree). Plain `changeset status` reads the
+directory.
+
+Gate definition: `.github/workflows/changeset-bot.yml`.
+
 ## MCP Testing Tools
 
 For browser automation and UI testing, see:
@@ -422,6 +461,16 @@ See [/workspaces/tetrad-development/docs/DEVELOPMENT_STACK.md](/workspaces/tetra
 - `packages/orchestrator/src/server.ts` — MODIFIED in #849: worker-mode branch (~line 291) instantiates `PhaseTrackerService(server.log, redisClient)` when `redisClient` is available and threads it via `ClaudeCliWorkerDeps.phaseTracker`. Full-mode `PhaseTrackerService` instantiation at line 347 unchanged; both instances share the same Redis keyspace + key layout, so paired-clear invalidates the same keys `markProcessed` wrote.
 - Single-cycle protection preserved (FR-008): within one pause→resume cycle, `onGateHit` fires once → paired-clear runs once → subsequent resume triggers within the same cycle still hit `isDuplicate → true` because no further pause has fired. The fix runs at *pause start*, not at *resume check*.
 - Non-changes: `PhaseTrackerService` interface + impl unchanged; `label-monitor-service.ts:273-282` `process` clear pattern unchanged (FR-005); `label-monitor-service.ts:339` `markProcessed` after enqueue unchanged; TTL default 86400s unchanged (FR-006); Redis key layout unchanged.
+
+## Adaptive polling engagement for smee-less clusters (#953, planning phase)
+
+- Bug: `updateAdaptivePolling()` at `label-monitor-service.ts:588-609`, `pr-feedback-monitor-service.ts:756-777`, and `merge-conflict-monitor-service.ts:345-360` all carry `if (this.state.lastWebhookEvent === null) return;` as their first line. The safety net only compensates for clusters that once had a working webhook and lost it — never for clusters with no ingress at all. On smee-less clusters (currently every new cluster), the flag `MonitorConfig.adaptivePolling` has no reachable effect.
+- Additional finding (clarifications Q4=C): `MergeConflictMonitorService.recordWebhookEvent()` at `:332` has **no callers anywhere in the codebase** — its adaptive polling is dead unconditionally, not just on smee-less clusters. `PrFeedbackMonitorService` is only fed by direct HTTP (`pr-webhooks.ts:119`) that smee-based clusters don't use by construction — so its adaptive polling is also dead on the exact population the auto-provisioning work (#952) is designed to create.
+- Fix (Q4=C, Q5=A, Q1=A, Q2=A, Q3=A, Q6=A corrected): extract `packages/orchestrator/src/services/adaptive-poll-controller.ts` — pure decision function taking `AdaptivePollParams` (state slice + per-service divisor + min) and returning `AdaptivePollDecision { currentPollIntervalMs, webhookHealthy, transition, reason }`. All three services delegate; each keeps its own divisor (LabelMonitor=3, twins=2) and log strings.
+- `MonitorState` (`packages/orchestrator/src/types/monitor.ts:187-198`) gains `webhooksConfigured: boolean` — construction-time constant, immutable. Distinct from `webhookHealthy` (which stays "the configured webhook path is currently delivering"). Per-service derivation at `server.ts` construction sites: LabelMonitor = `config.smee.channelUrl != null`; PrFeedback = hardcoded `false` (no reliable feeder signal — `PR_MONITOR_WEBHOOK_SECRET` is auth, not existence); MergeConflict = hardcoded `false` (no feeder anywhere).
+- `PrMonitorConfigSchema.adaptivePolling` default flips from `true` to `false` in `packages/orchestrator/src/config/schema.ts:143` — preserves the current 60s cadence for PrFeedback and MergeConflict on every existing cluster (they were sitting at base regardless, dead flag). `MonitorConfigSchema.adaptivePolling` default stays `true` — LabelMonitor's 30s base was tuned assuming smee, so the fast interval restores a real-time-path assumption rather than inventing new behavior.
+- FR-005 satisfied: `adaptivePolling` becomes a reachable knob in both directions on all three services. LabelMonitor smee-less+`true` → 10s; smee-less+`false` → 30s. Twins `false` (default) → 60s; twins `true` → 30s. Smee-configured LabelMonitor unchanged (`server.ts:469-471` still force-overrides to `false`).
+- Note on clamp-vs-divide: at default 30s base + divisor 3 + min 10s, `basePoll / DIVISOR == MIN_POLL_INTERVAL_MS`. Tests that assert the fast interval at defaults are asserting the clamp, not the divide. Contract (`contracts/adaptive-poll-controller.md`) requires at least one test case where the clamp does NOT bind (recommended: base=60s, divisor=3, min=10s → fast=20s).
 
 ## Cockpit `resume` — re-arm a failed phase (#891, planning phase)
 

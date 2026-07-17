@@ -670,8 +670,11 @@ describe('PhaseLoop - phaseAfterHandlers', () => {
     await phaseLoop.executeLoop(context, config, deps, ['specify']);
 
     expect(handler).toHaveBeenCalledTimes(1);
-    // Verify ordering: onPhaseComplete → handler → checkGate
-    expect(callOrder).toEqual(['onPhaseComplete', 'handler', 'checkGate']);
+    // #958 FR-008 — `onPhaseComplete` now runs AFTER the gate check, not
+    // before. New ordering: handler → checkGate → onPhaseComplete (only when
+    // no gate paused). This keeps `completed:<phase>` from being applied
+    // before the gate has a chance to fire.
+    expect(callOrder).toEqual(['handler', 'checkGate', 'onPhaseComplete']);
 
     // Verify handler receives correct context
     const handlerArg: PhaseAfterContext = handler.mock.calls[0][0];

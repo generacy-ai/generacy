@@ -39,6 +39,15 @@ export const WAITING_PIPELINE_ORDER: string[] = [
   'waiting-for:manual-validation',
 ];
 
+// #943: intra-error tie-break — the two enumerated blocked:* labels outrank
+// agent:error and failed:* so cockpit surfaces the specific escalation gate
+// rather than the generic error handler. Full label set remains available on
+// the classified state for consumers that want the generic signal.
+export const ERROR_PIPELINE_ORDER: string[] = [
+  'blocked:stuck-merge-conflicts',
+  'blocked:stuck-validate-fix',
+];
+
 // Latest-phase-wins order for the `stage-complete` tier (FR-005).
 // Reverse of pipeline: labels closer to workflow end come first so lower
 // index wins the sourceLabel slot when multiple demoted completed:* co-occur.
@@ -78,6 +87,17 @@ export function compareSourceLabels(
     const bi = WAITING_PIPELINE_ORDER.indexOf(b);
     if (ai !== -1 || bi !== -1) {
       // At least one is in the pipeline order: listed gates win over unlisted.
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    }
+    // Neither listed: fall through to workflow-index comparison.
+  }
+
+  if (tier === 'error') {
+    const ai = ERROR_PIPELINE_ORDER.indexOf(a);
+    const bi = ERROR_PIPELINE_ORDER.indexOf(b);
+    if (ai !== -1 || bi !== -1) {
       if (ai === -1) return 1;
       if (bi === -1) return -1;
       return ai - bi;

@@ -43,19 +43,16 @@ describe('cockpit watch', () => {
     };
   }
 
-  it('re-resolves the epic body every tick — refs added mid-run join (SC-004)', async () => {
+  it('re-resolves the epic body every 10th tick — refs added mid-run join (SC-004)', async () => {
     const epicRef = 'owner/epic-repo#42';
-    const bodies = [
-      buildBody([{ repo: 'owner/repo-a', number: 1 }]),
-      buildBody([
-        { repo: 'owner/repo-a', number: 1 },
-        { repo: 'owner/repo-a', number: 2 },
-      ]),
-      buildBody([
-        { repo: 'owner/repo-a', number: 1 },
-        { repo: 'owner/repo-a', number: 2 },
-      ]),
-    ];
+    const bodies = Array.from({ length: 20 }, (_, i) =>
+      i === 0
+        ? buildBody([{ repo: 'owner/repo-a', number: 1 }])
+        : buildBody([
+            { repo: 'owner/repo-a', number: 1 },
+            { repo: 'owner/repo-a', number: 2 },
+          ]),
+    );
     let epicCallIndex = 0;
     const queries: string[] = [];
 
@@ -92,7 +89,7 @@ describe('cockpit watch', () => {
       },
     });
 
-    const { controller, onTick } = makeStopper(2);
+    const { controller, onTick } = makeStopper(12);
     await runWatch(
       epicRef,
       {},
@@ -140,7 +137,7 @@ describe('cockpit watch', () => {
     expect(clampWarnings).toHaveLength(1);
   });
 
-  it('mid-run resolver error logs stderr and skips the tick without exiting', async () => {
+  it('mid-run resolver refresh error is logged as a warning and keeps stale resolution', async () => {
     const epicRef = 'owner/epic#42';
     const goodBody = buildBody([{ repo: 'owner/r', number: 1 }]);
     let callIdx = 0;
@@ -163,14 +160,16 @@ describe('cockpit watch', () => {
       },
     });
 
-    const { controller, onTick } = makeStopper(2);
+    // Refresh cadence is every 10th cycle; run past that so the failing
+    // refresh call fires. onTick counts iterations of the poll loop.
+    const { controller, onTick } = makeStopper(12);
     const exit = await runWatch(
       epicRef,
       {},
       { gh, intervalOverride: 5, onTick, abortSignal: controller.signal },
     );
     expect(exit).toBe(0);
-    expect(stderrOut).toContain('cockpit watch: poll error:');
+    expect(stderrOut).toContain('resolveEpic failed');
     expect(stderrOut).toContain('transient network');
   });
 

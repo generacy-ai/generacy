@@ -49,6 +49,7 @@ function createMockMonitorService(
       lastWebhookEvent: null,
       currentPollIntervalMs: 30000,
       basePollIntervalMs: 30000,
+      webhooksConfigured: false,
     }),
     ...overrides,
   } as unknown as LabelMonitorService;
