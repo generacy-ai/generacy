@@ -20,7 +20,7 @@ const COALESCE_WINDOW_MS = 0;
 const MAX_BATCH_SIZE = 100;
 
 export function lineForEvent(event: CockpitStreamEvent): string {
-  return `${event.type}\n`;
+  return `${JSON.stringify(event)}\n`;
 }
 
 export function subscribeAndEmit(

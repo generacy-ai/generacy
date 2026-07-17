@@ -4,6 +4,8 @@ import { AddressInfo } from 'node:net';
 import { SmeeDoorbellSource } from '../smee-source.js';
 import type { CockpitStreamEvent } from '../../watch/stream-event.js';
 import type { GhWrapper } from '@generacy-ai/cockpit';
+import type { ChecksRollup, PrSnapshot, SnapshotMap } from '../../watch/snapshot.js';
+import { snapshotKey } from '../../watch/snapshot.js';
 
 interface FakeServer {
   url: string;
@@ -68,6 +70,45 @@ async function startFakeSmee(): Promise<FakeServer> {
   };
 
   return { url, server, activeSockets, activeResponses, writeFrame, close, dropAllConnections };
+}
+
+function checkRunFrame(opts: {
+  repoOwner?: string;
+  repoName?: string;
+  prNumber?: number;
+}): string {
+  const owner = opts.repoOwner ?? 'o';
+  const repo = opts.repoName ?? 'r';
+  const prNumber = opts.prNumber ?? 42;
+  const payload = {
+    'x-github-event': 'check_run',
+    body: {
+      action: 'completed',
+      repository: { name: repo, owner: { login: owner } },
+      check_run: { pull_requests: [{ number: prNumber }] },
+    },
+  };
+  return `event: message\ndata: ${JSON.stringify(payload)}\n\n`;
+}
+
+function fakePrSnapshot(repo: string, number: number, rollup: ChecksRollup): PrSnapshot {
+  return {
+    kind: 'pr',
+    repo,
+    number,
+    url: `https://github.com/${repo}/pull/${number}`,
+    lifecycle: 'open',
+    state: 'OPEN',
+    stateReason: null,
+    labels: [],
+    classified: { state: 'unknown', sourceLabel: '', labels: [] },
+    checksRollup: rollup,
+    cyclesSinceLastCheckFetch: 0,
+  };
+}
+
+function setPrev(source: SmeeDoorbellSource, prev: SnapshotMap): void {
+  (source as unknown as { prev: SnapshotMap }).prev = prev;
 }
 
 function issueFrame(action: string, opts: {
@@ -231,6 +272,200 @@ describe('SmeeDoorbellSource integration', () => {
 
     await source.stop();
   }, 15_000);
+
+  // T006 (FR-008c, INV-1): no gh calls between webhook receipt and onEvent dispatch.
+  it('smee event path performs zero gh calls between webhook receipt and onEvent dispatch', async () => {
+    const events: CockpitStreamEvent[] = [];
+    const invocations: string[] = [];
+    const trapGh = new Proxy(
+      {},
+      {
+        get(_target, prop): unknown {
+          const name = String(prop);
+          return (...args: unknown[]): never => {
+            invocations.push(`${name}(${args.length})`);
+            throw new Error(`unexpected gh call: ${name}`);
+          };
+        },
+      },
+    ) as unknown as GhWrapper;
+
+    const source = new SmeeDoorbellSource({
+      channelUrl: fake.url,
+      epicRef: 'o/r#100',
+      gh: trapGh,
+      logger: { warn: () => undefined, info: () => undefined },
+      onEvent: async (ev) => {
+        events.push(ev);
+      },
+      onReconnectAttempt: () => undefined,
+      onReconnectSuccess: () => undefined,
+      baseReconnectDelayMs: 10,
+    });
+
+    await source.start();
+    await waitFor(() => fake.activeResponses.size > 0);
+
+    // Fire a pr-checks payload — the code path that would historically call gh.
+    fake.writeFrame(checkRunFrame({ prNumber: 42 }));
+    await waitFor(() => events.length >= 1);
+
+    expect(invocations).toEqual([]);
+    expect(events[0]?.type).toBe('issue-transition');
+
+    await source.stop();
+  }, 10_000);
+
+  // T006 (FR-008d, INV-4): checks stamping mirror the checks-mapping contract table.
+  describe('checks stamping (contracts/checks-mapping.md)', () => {
+    it.each<[ChecksRollup, 'green' | 'red' | undefined]>([
+      ['success', 'green'],
+      ['failure', 'red'],
+      ['error', 'red'],
+      ['pending', undefined],
+      ['none', undefined],
+    ])('pr-checks with cached rollup=%s → wire checks=%s', async (rollup, wire) => {
+      const events: CockpitStreamEvent[] = [];
+      const source = new SmeeDoorbellSource({
+        channelUrl: fake.url,
+        epicRef: 'o/r#100',
+        gh: {} as unknown as GhWrapper,
+        logger: { warn: () => undefined, info: () => undefined },
+        onEvent: async (ev) => {
+          events.push(ev);
+        },
+        onReconnectAttempt: () => undefined,
+        onReconnectSuccess: () => undefined,
+        baseReconnectDelayMs: 10,
+      });
+
+      await source.start();
+      const prev: SnapshotMap = new Map();
+      prev.set(snapshotKey('o/r', 'pr', 42), fakePrSnapshot('o/r', 42, rollup));
+      setPrev(source, prev);
+
+      await waitFor(() => fake.activeResponses.size > 0);
+      fake.writeFrame(checkRunFrame({ prNumber: 42 }));
+      await waitFor(() => events.length >= 1);
+
+      const ev = events[0]!;
+      expect(ev.type).toBe('issue-transition');
+      if (ev.type === 'issue-transition') {
+        expect(ev.event).toBe('pr-checks');
+        expect(ev.checks).toBe(wire);
+      }
+
+      await source.stop();
+    }, 10_000);
+
+    it('pr-checks with cache miss → checks absent', async () => {
+      const events: CockpitStreamEvent[] = [];
+      const source = new SmeeDoorbellSource({
+        channelUrl: fake.url,
+        epicRef: 'o/r#100',
+        gh: {} as unknown as GhWrapper,
+        logger: { warn: () => undefined, info: () => undefined },
+        onEvent: async (ev) => {
+          events.push(ev);
+        },
+        onReconnectAttempt: () => undefined,
+        onReconnectSuccess: () => undefined,
+        baseReconnectDelayMs: 10,
+      });
+
+      await source.start();
+      // prev intentionally left empty — cache miss.
+      await waitFor(() => fake.activeResponses.size > 0);
+      fake.writeFrame(checkRunFrame({ prNumber: 42 }));
+      await waitFor(() => events.length >= 1);
+
+      const ev = events[0]!;
+      if (ev.type === 'issue-transition') {
+        expect(ev.checks).toBeUndefined();
+      }
+
+      await source.stop();
+    }, 10_000);
+
+    it('completed:validate label-change with cached success rollup → checks=green', async () => {
+      const events: CockpitStreamEvent[] = [];
+      const source = new SmeeDoorbellSource({
+        channelUrl: fake.url,
+        epicRef: 'o/r#100',
+        gh: {} as unknown as GhWrapper,
+        logger: { warn: () => undefined, info: () => undefined },
+        onEvent: async (ev) => {
+          events.push(ev);
+        },
+        onReconnectAttempt: () => undefined,
+        onReconnectSuccess: () => undefined,
+        baseReconnectDelayMs: 10,
+      });
+
+      await source.start();
+      const prev: SnapshotMap = new Map();
+      prev.set(snapshotKey('o/r', 'pr', 42), fakePrSnapshot('o/r', 42, 'success'));
+      setPrev(source, prev);
+
+      await waitFor(() => fake.activeResponses.size > 0);
+      fake.writeFrame(
+        issueFrame('labeled', {
+          number: 42,
+          label: 'completed:validate',
+          labels: ['completed:validate'],
+        }),
+      );
+      await waitFor(() => events.length >= 1);
+
+      const ev = events[0]!;
+      if (ev.type === 'issue-transition') {
+        expect(ev.event).toBe('label-change');
+        expect(ev.sourceLabel).toBe('completed:validate');
+        expect(ev.checks).toBe('green');
+      }
+
+      await source.stop();
+    }, 10_000);
+
+    it('unrelated event (label-change, non-validate) does NOT get checks stamped', async () => {
+      const events: CockpitStreamEvent[] = [];
+      const source = new SmeeDoorbellSource({
+        channelUrl: fake.url,
+        epicRef: 'o/r#100',
+        gh: {} as unknown as GhWrapper,
+        logger: { warn: () => undefined, info: () => undefined },
+        onEvent: async (ev) => {
+          events.push(ev);
+        },
+        onReconnectAttempt: () => undefined,
+        onReconnectSuccess: () => undefined,
+        baseReconnectDelayMs: 10,
+      });
+
+      await source.start();
+      // Even with a success-rollup snapshot cached, non-validate label events skip checks.
+      const prev: SnapshotMap = new Map();
+      prev.set(snapshotKey('o/r', 'pr', 42), fakePrSnapshot('o/r', 42, 'success'));
+      setPrev(source, prev);
+
+      await waitFor(() => fake.activeResponses.size > 0);
+      fake.writeFrame(
+        issueFrame('labeled', {
+          number: 42,
+          label: 'agent:paused',
+          labels: ['agent:paused'],
+        }),
+      );
+      await waitFor(() => events.length >= 1);
+
+      const ev = events[0]!;
+      if (ev.type === 'issue-transition') {
+        expect(ev.checks).toBeUndefined();
+      }
+
+      await source.stop();
+    }, 10_000);
+  });
 
   it('p95 latency ≤ 3s for 20 simulated events with fast backoff', async () => {
     const timings: number[] = [];
