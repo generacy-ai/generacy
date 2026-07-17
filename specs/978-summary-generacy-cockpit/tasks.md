@@ -10,7 +10,7 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 [US1] Add `.changeset/978-cockpit-doorbell-smee.md` with a `patch` bump for
+- [X] T001 [US1] Add `.changeset/978-cockpit-doorbell-smee.md` with a `patch` bump for
   `@generacy-ai/generacy`. Body: one-line summary of the wake-source swap
   (smee-first, poll-fallback); note that no CLI surface changes and no
   public schemas move (Q1=A preserved). Required by the changeset CI gate
@@ -19,7 +19,7 @@
 
 ## Phase 2: Pure Functions (all parallel — no shared files)
 
-- [ ] T010 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/channel-discovery.ts`
+- [X] T010 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/channel-discovery.ts`
   exporting `discoverChannelUrl(input: ChannelDiscoveryInput): Promise<ChannelDiscoveryResult | null>`
   per `contracts/channel-discovery.md` and `data-model.md` § ChannelDiscoveryInput/Result.
   - Constants: `DEFAULT_CHANNEL_FILE_PATH = '/var/lib/generacy/smee-channel'`,
@@ -31,7 +31,7 @@
     emit one `logger.warn` and fall through. ENOENT is silent.
   - Return `null` when no tier produces a `SMEE_URL_PATTERN`-matching URL.
 
-- [ ] T011 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/sse-parser.ts`
+- [X] T011 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/sse-parser.ts`
   exporting `parseSseEventBlock(text: string): NormalizedPayload | null` per
   `data-model.md` § NormalizedPayload.
   - Pair `event:` and `data:` lines from a single SSE frame block.
@@ -41,7 +41,7 @@
   - Extract `x-github-event` at top level of the parsed JSON, `body.action`, `body`.
   - Malformed JSON → `null` (silent).
 
-- [ ] T012 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/webhook-to-event.ts`
+- [X] T012 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/webhook-to-event.ts`
   exporting `webhookToStreamEvent(githubEvent, action, body, refSet, now): CockpitStreamEvent | null`
   per `contracts/webhook-to-event-mapping.md`.
   - Implement the Q1=A mapping table exactly: `issues.labeled`/`unlabeled` →
@@ -59,7 +59,7 @@
   - Reuse `CockpitEventSchema` from `packages/generacy/src/cli/commands/cockpit/watch/emit.ts`
     — do NOT extend the enum.
 
-- [ ] T013 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/source-selector.ts`
+- [X] T013 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/source-selector.ts`
   exporting `SourceSelector` class per `contracts/source-selector.md` and
   `data-model.md` § SourceSelector.
   - State machine (Q3=D): `smee-attempt → smee-active → poll-fallback` with 5-min
@@ -79,7 +79,7 @@
 
 ## Phase 3: Aggregate-on-demand (needs poll-mode helpers)
 
-- [ ] T020 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/aggregate-on-demand.ts`
+- [X] T020 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/aggregate-on-demand.ts`
   exporting `maybeRefreshAggregate(input: AggregateRefreshInput): Promise<AggregateRefreshOutput>`
   per `contracts/aggregate-on-demand.md`.
   - `null` trigger short-circuits with zero I/O: return identity output (no `resolveEpic`,
@@ -97,7 +97,7 @@
 
 ## Phase 4: Smee SSE consumer
 
-- [ ] T030 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/smee-source.ts`
+- [X] T030 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/smee-source.ts`
   exporting `SmeeDoorbellSource` class per `contracts/smee-doorbell-source.md` and
   `data-model.md` § SmeeDoorbellSourceOptions.
   - Model after `packages/orchestrator/src/services/smee-receiver.ts` (native
@@ -127,7 +127,7 @@
 
 ## Phase 5: Wire runDoorbell to source-select
 
-- [ ] T040 [US1] Modify `packages/generacy/src/cli/commands/cockpit/doorbell.ts`:
+- [X] T040 [US1] Modify `packages/generacy/src/cli/commands/cockpit/doorbell.ts`:
   - Keep `writeLine(stdout, 'armed\n')` at its current site (immediately after
     argument validation — Q5=A / spec-explicit "unconditional, before source
     selection").
@@ -151,18 +151,18 @@
 
 ## Phase 6: Tests
 
-- [ ] T050 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/channel-discovery.test.ts`
+- [X] T050 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/channel-discovery.test.ts`
   covering every row of `contracts/channel-discovery.md` § Test cases:
   env-first precedence; ENOENT silent; malformed file → null + one warn; env
   invalid → env warn + file fall-through; non-smee URL → null + one warn;
   trailing-whitespace env value → null (regex doesn't match; no fall-through).
 
-- [ ] T051 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/sse-parser.test.ts`
+- [X] T051 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/sse-parser.test.ts`
   covering: single event/data pair; multi-line `data:` joined with `\n`;
   `ready`/`ping` frames → null; malformed JSON → null; missing `x-github-event`
   → null.
 
-- [ ] T052 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/webhook-to-event.test.ts`
+- [X] T052 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/webhook-to-event.test.ts`
   row-by-row per `contracts/webhook-to-event-mapping.md`:
   `issues.labeled` in refSet → `label-change`; `issues.labeled` not in refSet →
   null; `issues.unlabeled` in refSet → `label-change`; `issues.closed` → `issue-closed`;
@@ -172,7 +172,7 @@
   `issue_comment.created` → null; `push`/`ping` → null; repo not in
   `refSet.watchedRepos` → null (coarse pre-filter).
 
-- [ ] T053 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/source-selector.test.ts`
+- [X] T053 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/source-selector.test.ts`
   covering `contracts/source-selector.md` § Test cases:
   construction with `initial: 'smee-attempt'` emits `startup-smee-selected` line;
   construction with `initial: 'poll-fallback'` emits `startup-no-channel` line;
@@ -182,7 +182,7 @@
   `poll-fallback → smee-attempt` silently; subsequent success emits
   `smee-re-promoted`; `stop()` clears timers; failed reconnects reset on success.
 
-- [ ] T054 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/aggregate-on-demand.test.ts`
+- [X] T054 [P] [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/aggregate-on-demand.test.ts`
   covering `contracts/aggregate-on-demand.md` § Test cases:
   `trigger=null` → zero `gh` calls, identity output; `completed:implement` label
   trigger → one `resolveEpic` + one `runOnePoll` + `phase-complete` when all
@@ -190,7 +190,7 @@
   → `epic-complete`; consecutive same-trigger calls idempotent (no double-emit
   via `seenCompletePhases`); `resolveEpic` throws → identity output + one warn.
 
-- [ ] T055 [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/smee-source.integration.test.ts`
+- [X] T055 [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/smee-source.integration.test.ts`
   spinning up an in-process `node:http` server on `127.0.0.1:0` that streams
   SSE frames matching smee.io's format. Cover:
   - Matching payload → exactly one doorbell stdout line with correct `event.type`.
@@ -205,7 +205,7 @@
     ≤ 3 s from SSE frame delivery to `stdout.write` across 100 simulated events
     (with `baseReconnectDelayMs: 10` to keep the test wall-clock bounded).
 
-- [ ] T056 [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/doorbell-source-branch.test.ts`
+- [X] T056 [US1] Add `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/doorbell-source-branch.test.ts`
   covering `runDoorbell` branch selection:
   - No channel file, no env override → poll-mode path taken (spy on
     `acquireEpicBus`); `armed\n` written before selection.
@@ -216,17 +216,17 @@
 
 ## Phase 7: Verification
 
-- [ ] T060 [US1] Run `pnpm -F @generacy-ai/generacy test` and confirm all new
+- [X] T060 [US1] Run `pnpm -F @generacy-ai/generacy test` and confirm all new
   suites pass and the #970 regression suites still pass verbatim:
   `event-bus-catchup-skip.test.ts`, `event-bus-epic-refresh-cadence.test.ts`,
   `pr-state-checks-gate.test.ts`, `gh-cache.test.ts`,
   `rate-limit-scheduler.test.ts`.
 
-- [ ] T061 [US1] Run `pnpm -F @generacy-ai/generacy build` and `pnpm -w typecheck`
+- [X] T061 [US1] Run `pnpm -F @generacy-ai/generacy build` and `pnpm -w typecheck`
   (or the workspace equivalent) to catch type regressions across the
   `packages/generacy/src/cli/commands/cockpit/` surface.
 
-- [ ] T062 [US1] Confirm the changeset gate passes locally: `pnpm changeset status`
+- [X] T062 [US1] Confirm the changeset gate passes locally: `pnpm changeset status`
   should list `.changeset/978-cockpit-doorbell-smee.md` against
   `@generacy-ai/generacy`. Verify no other packages appear (the diff is
   contained inside `packages/generacy/`).

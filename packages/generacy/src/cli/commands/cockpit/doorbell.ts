@@ -2,11 +2,14 @@
  * `generacy cockpit doorbell` — wake sensor for `/cockpit:auto`.
  *
  * Owns its own in-process `acquireEpicBus()` call (Q1=C rationale: the
- * cockpit MCP server is stdio-only and cannot accept a second client). One
- * process → one bus → one poll loop → one stdout line per event.
+ * cockpit MCP server is stdio-only and cannot accept a second client). On
+ * smee-live clusters, the doorbell subscribes to the smee.io SSE stream
+ * (real-time-first — revised FR-011, #978) with the poll bus as fallback.
+ * One process → one wake source at a time → one stdout line per event.
  *
  * Contract: `contracts/cli-surface.md`, `data-model.md`.
  */
+import { promises as fsPromises } from 'node:fs';
 import { Command } from 'commander';
 import {
   GhCliWrapper,
@@ -22,8 +25,15 @@ import {
   type AcquireOptions,
   type Acquired,
 } from './mcp/event-bus-registry.js';
-import { subscribeAndEmit } from './doorbell/subscribe.js';
+import { subscribeAndEmit, lineForEvent } from './doorbell/subscribe.js';
 import type { CockpitStreamEvent } from './watch/stream-event.js';
+import {
+  discoverChannelUrl,
+  DEFAULT_CHANNEL_FILE_PATH,
+  type ChannelDiscoveryResult,
+} from './doorbell/channel-discovery.js';
+import { SourceSelector, type SourceMode } from './doorbell/source-selector.js';
+import { SmeeDoorbellSource } from './doorbell/smee-source.js';
 
 export interface DoorbellOptions {
   tracking?: boolean;
@@ -40,6 +50,18 @@ export interface DoorbellDeps {
   abortSignal?: AbortSignal;
   stdout?: { write(chunk: string, cb?: () => void): boolean | void };
   exit?: (code: number) => void;
+  /** Test seam: override channel discovery. */
+  discoverChannel?: typeof discoverChannelUrl;
+  /** Test seam: override the smee source constructor. */
+  smeeSourceFactory?: (opts: ConstructorParameters<typeof SmeeDoorbellSource>[0]) => SmeeDoorbellSource;
+  /** Test seam: override the source selector constructor. */
+  sourceSelectorFactory?: (opts: ConstructorParameters<typeof SourceSelector>[0]) => SourceSelector;
+  /** Test seam: env passed to `discoverChannelUrl`. Defaults to `process.env`. */
+  env?: NodeJS.ProcessEnv;
+  /** Test seam: filesystem passed to `discoverChannelUrl`. */
+  fs?: Parameters<typeof discoverChannelUrl>[0]['fs'];
+  /** Test seam: channel-file path override. */
+  channelFilePath?: string;
 }
 
 export type Form =
@@ -92,6 +114,134 @@ function writeLine(
   return new Promise<void>((resolve) => {
     stdout.write(line, () => resolve());
   });
+}
+
+interface RunPollModeInput {
+  ref: string;
+  form: Form & { kind: 'form-1' | 'form-2' };
+  options: DoorbellOptions;
+  deps: DoorbellDeps;
+  logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+  stdout: { write(chunk: string, cb?: () => void): boolean | void };
+  stderr: { write(chunk: string): boolean | void };
+  stopPromise: Promise<void>;
+  stop: () => void;
+}
+
+interface RunPollModeHandle {
+  release: () => void;
+  waitForStop: () => Promise<void>;
+}
+
+async function runPollMode(input: RunPollModeInput): Promise<RunPollModeHandle | null> {
+  const acquire = input.deps.acquireBus ?? acquireEpicBus;
+  let acquired: Acquired;
+  try {
+    const acquireOptions: AcquireOptions = {
+      epicRef: input.ref,
+      logger: input.logger,
+    };
+    if (input.deps.runner != null) acquireOptions.runner = input.deps.runner;
+    if (input.deps.gh != null) acquireOptions.gh = input.deps.gh;
+    if (input.deps.rateLimitScheduler != null) {
+      acquireOptions.rateLimitScheduler = input.deps.rateLimitScheduler;
+    }
+    acquired = await acquire(acquireOptions);
+  } catch (err) {
+    input.stderr.write(
+      `cockpit doorbell: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return null;
+  }
+
+  const onEmit = (event: CockpitStreamEvent): void => {
+    if (
+      input.options.exitOnEpicComplete === true &&
+      input.form.kind === 'form-1' &&
+      event.type === 'epic-complete'
+    ) {
+      input.stop();
+    }
+  };
+
+  const unsubscribe = subscribeAndEmit(acquired.bus, { stdout: input.stdout, onEmit });
+
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    unsubscribe();
+    acquired.release();
+  };
+
+  return {
+    release,
+    waitForStop: () => input.stopPromise,
+  };
+}
+
+interface RunSmeeModeInput {
+  ref: string;
+  form: Form & { kind: 'form-1' | 'form-2' };
+  channelUrl: string;
+  options: DoorbellOptions;
+  deps: DoorbellDeps;
+  logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+  stdout: { write(chunk: string, cb?: () => void): boolean | void };
+  selector: SourceSelector;
+  stop: () => void;
+}
+
+interface RunSmeeModeHandle {
+  source: SmeeDoorbellSource;
+}
+
+async function runSmeeMode(input: RunSmeeModeInput): Promise<RunSmeeModeHandle | null> {
+  if (input.deps.gh == null) {
+    input.logger.warn('cockpit doorbell: smee-mode requires a gh wrapper; falling through');
+    return null;
+  }
+  const gh = input.deps.gh;
+
+  const onEvent = async (event: CockpitStreamEvent): Promise<void> => {
+    await new Promise<void>((resolve) => {
+      input.stdout.write(lineForEvent(event), () => resolve());
+    });
+    if (
+      input.options.exitOnEpicComplete === true &&
+      input.form.kind === 'form-1' &&
+      event.type === 'epic-complete'
+    ) {
+      input.stop();
+    }
+  };
+
+  const sourceOptions: ConstructorParameters<typeof SmeeDoorbellSource>[0] = {
+    channelUrl: input.channelUrl,
+    epicRef: input.ref,
+    gh,
+    logger: input.logger,
+    onEvent,
+    onReconnectAttempt: (n) => input.selector.onReconnectAttempt(n),
+    onReconnectSuccess: () => input.selector.onReconnectSuccess(),
+  };
+  if (input.deps.runner != null) sourceOptions.runner = input.deps.runner;
+
+  const source =
+    input.deps.smeeSourceFactory != null
+      ? input.deps.smeeSourceFactory(sourceOptions)
+      : new SmeeDoorbellSource(sourceOptions);
+
+  try {
+    await source.start();
+  } catch (err) {
+    input.logger.warn(
+      `cockpit doorbell: smee source start failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+
+  return { source };
 }
 
 export async function runDoorbell(
@@ -162,8 +312,13 @@ export async function runDoorbell(
     }
   }
 
+  // `armed\n` written before source selection (Q5=A / spec-explicit
+  // "unconditional, before source selection"). Preserves the shipped
+  // contract with agency#431 — the FR-006 `source=…` line on stderr is the
+  // "which source settled" signal.
+  await writeLine(stdout, 'armed\n');
+
   if (form.kind === 'form-3') {
-    await writeLine(stdout, 'armed\n');
     await stopPromise;
     await drainStdout(stdout);
     cleanupSignals();
@@ -175,51 +330,150 @@ export async function runDoorbell(
     return 0;
   }
 
-  const acquire = deps.acquireBus ?? acquireEpicBus;
-  let acquired: Acquired;
-  try {
-    const acquireOptions: AcquireOptions = {
-      epicRef: form.ref,
-      logger,
-    };
-    if (deps.runner != null) acquireOptions.runner = deps.runner;
-    if (deps.gh != null) acquireOptions.gh = deps.gh;
-    if (deps.rateLimitScheduler != null) {
-      acquireOptions.rateLimitScheduler = deps.rateLimitScheduler;
-    }
-    acquired = await acquire(acquireOptions);
-  } catch (err) {
-    stderr.write(
-      `cockpit doorbell: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
-    cleanupSignals();
+  const discover = deps.discoverChannel ?? discoverChannelUrl;
+  const env = deps.env ?? process.env;
+  const fs = deps.fs ?? fsPromises;
+  const channelFilePath = deps.channelFilePath ?? DEFAULT_CHANNEL_FILE_PATH;
+  // Smee-mode needs a gh wrapper for ref-set resolution and aggregate refreshes.
+  // Without one, discovery is wasted work and the code must poll-fallback anyway.
+  let discovery: ChannelDiscoveryResult | null = null;
+  if (deps.gh != null || deps.discoverChannel != null) {
     try {
-      exit(2);
+      discovery = await discover({
+        env,
+        channelFilePath,
+        fs,
+        logger,
+      });
     } catch {
-      /* test seam may throw */
+      discovery = null;
     }
-    return 2;
   }
-  const release: () => void = acquired.release;
 
-  await writeLine(stdout, 'armed\n');
+  const selectorOptions: ConstructorParameters<typeof SourceSelector>[0] = {
+    initial: discovery == null ? 'poll-fallback' : 'smee-attempt',
+    stderr,
+    logger,
+  };
+  const selector =
+    deps.sourceSelectorFactory != null
+      ? deps.sourceSelectorFactory(selectorOptions)
+      : new SourceSelector(selectorOptions);
 
-  const onEmit = (event: CockpitStreamEvent): void => {
-    if (
-      options.exitOnEpicComplete === true &&
-      form.kind === 'form-1' &&
-      event.type === 'epic-complete'
-    ) {
-      stop();
+  let pollHandle: RunPollModeHandle | null = null;
+  let smeeHandle: RunSmeeModeHandle | null = null;
+
+  const tearDownActiveSource = async (): Promise<void> => {
+    if (smeeHandle != null) {
+      const s = smeeHandle;
+      smeeHandle = null;
+      await s.source.stop();
+    }
+    if (pollHandle != null) {
+      const p = pollHandle;
+      pollHandle = null;
+      p.release();
     }
   };
 
-  const unsubscribe = subscribeAndEmit(acquired.bus, { stdout, onEmit });
+  const startPollMode = async (): Promise<boolean> => {
+    if (pollHandle != null) return true;
+    const handle = await runPollMode({
+      ref: form.ref,
+      form,
+      options,
+      deps,
+      logger,
+      stdout,
+      stderr,
+      stopPromise,
+      stop,
+    });
+    if (handle == null) return false;
+    pollHandle = handle;
+    return true;
+  };
+
+  const startSmeeMode = async (url: string): Promise<boolean> => {
+    if (smeeHandle != null) return true;
+    const handle = await runSmeeMode({
+      ref: form.ref,
+      form,
+      channelUrl: url,
+      options,
+      deps,
+      logger,
+      stdout,
+      selector,
+      stop,
+    });
+    if (handle == null) return false;
+    smeeHandle = handle;
+    return true;
+  };
+
+  selector.onModeChange((next: SourceMode) => {
+    if (next === 'poll-fallback') {
+      void (async (): Promise<void> => {
+        if (smeeHandle != null) {
+          const s = smeeHandle;
+          smeeHandle = null;
+          await s.source.stop();
+        }
+        const ok = await startPollMode();
+        if (!ok) stop();
+      })();
+    } else if (next === 'smee-attempt' && discovery != null) {
+      void (async (): Promise<void> => {
+        if (pollHandle != null) {
+          const p = pollHandle;
+          pollHandle = null;
+          p.release();
+        }
+        const ok = await startSmeeMode(discovery.url);
+        if (!ok) {
+          // smee-attempt failed → fall back to poll-mode immediately, without
+          // waiting for the demotion counter.
+          const okPoll = await startPollMode();
+          if (!okPoll) stop();
+        }
+      })();
+    }
+  });
+
+  if (discovery != null) {
+    const ok = await startSmeeMode(discovery.url);
+    if (!ok) {
+      const okPoll = await startPollMode();
+      if (!okPoll) {
+        selector.stop();
+        cleanupSignals();
+        try {
+          exit(2);
+        } catch {
+          /* test seam may throw */
+        }
+        return 2;
+      }
+    }
+  } else {
+    const ok = await startPollMode();
+    if (!ok) {
+      selector.stop();
+      cleanupSignals();
+      try {
+        exit(2);
+      } catch {
+        /* test seam may throw */
+      }
+      return 2;
+    }
+  }
 
   await stopPromise;
 
-  unsubscribe();
-  release();
+  await tearDownActiveSource();
+  selector.stop();
   await drainStdout(stdout);
   cleanupSignals();
   try {
