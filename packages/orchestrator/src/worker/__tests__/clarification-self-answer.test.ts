@@ -160,10 +160,11 @@ describe('#958 SC-001 — snappoll#7 self-answer regression', () => {
     expect(mockWriteFileSync.mock.calls).toHaveLength(0);
   });
 
-  it('cluster-self answer WITHOUT engine marker → zero integrated (FR-003)', async () => {
-    // Even if the cluster posts a bare `Q1: A` comment (no answer marker),
-    // FR-003 requires the marker for viewerDidAuthor=true to be treated as
-    // an answer source. This is the load-bearing correction to #910.
+  it('cluster-self plain Q<n>: reply → integrated (#976 SC-001)', async () => {
+    // #976: the FR-003 authorship gate is removed. Cluster-self plain
+    // `Q<n>:` replies now integrate — same-account trust is delegated to
+    // `isTrustedCommentAuthor` (self-authored → trusted), and there is no
+    // machine marker to exclude the comment via the pre-filter.
     const context = createContext([
       {
         id: 1,
@@ -178,15 +179,21 @@ describe('#958 SC-001 — snappoll#7 self-answer regression', () => {
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(0);
-    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(result.integrated).toBe(5);
+    const written = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(written).toContain('**Answer**: OAuth 2.0');
+    expect(written).toContain('**Answer**: 100/min');
+    expect(written).toContain('**Answer**: JWT');
+    expect(written).toContain('**Answer**: exponential');
+    expect(written).toContain('**Answer**: info');
   });
 
-  it('cluster-self answer WITH engine marker → integrated (FR-003 accept path)', async () => {
-    // Sibling assertion — the marker IS what makes cluster-self answers
-    // authoritative. This proves the gate is authorship + marker, not
-    // authorship alone (which would still fail the human quote-reply flow)
-    // and not marker alone (which would let human-quoted markers waltz in).
+  it('cluster-self marker-relay comment → excluded (#976 Q2=A deprecates marker-relay integration)', async () => {
+    // #976 Q2=A: `<!-- generacy-clarification-answers:` is now in the
+    // MACHINE_MARKERS set — cluster-self relay comments are dropped by the
+    // pre-filter, deprecating the cockpit_relay_clarify_answers integration
+    // path. Same-account human operators post plain `Q<n>:` replies instead
+    // (see the SC-001 case above).
     const markerLine = '<!-- generacy-clarification-answers:1 actor=cockpit ts=2026-07-16T00:00:00.000Z -->';
     const context = createContext([
       {
@@ -202,8 +209,7 @@ describe('#958 SC-001 — snappoll#7 self-answer regression', () => {
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(1);
-    const written = mockWriteFileSync.mock.calls[0]![1] as string;
-    expect(written).toContain('**Answer**: OAuth 2.0');
+    expect(result.integrated).toBe(0);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
   });
 });

@@ -33,6 +33,9 @@ describe('commentCarriesQuestionMarker', () => {
   });
 
   it('returns false for an unrelated marker family', () => {
+    // #976: the question-marker predicate stays narrow. Bot explainer /
+    // stage-status / answer-relay families are covered by MACHINE_MARKERS
+    // (see clarification-machine-markers.test.ts), not by this predicate.
     expect(commentCarriesQuestionMarker('<!-- generacy-untrusted-answer:5 -->')).toBe(false);
   });
 

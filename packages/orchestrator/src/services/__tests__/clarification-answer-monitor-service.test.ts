@@ -16,6 +16,7 @@ import { InMemoryQueueAdapter } from '../in-memory-queue-adapter.js';
 import type { PrMonitorConfig, RepositoryConfig } from '../../config/schema.js';
 import type { Logger } from '../../worker/types.js';
 import type { QueueManager } from '../../types/monitor.js';
+import { MACHINE_MARKERS } from '../../worker/clarification-markers.js';
 
 vi.mock('@generacy-ai/workflow-engine', async () => {
   const actual = await vi.importActual<typeof import('@generacy-ai/workflow-engine')>(
@@ -196,15 +197,52 @@ describe('#958 ClarificationAnswerMonitorService', () => {
     expect(queue.spies.enqueueIfAbsent).not.toHaveBeenCalled();
   });
 
-  it('cluster-self comment only (viewerDidAuthor=true) → no enqueue', async () => {
-    // Even if the cluster's answer comment carries the marker, the monitor
-    // does NOT enqueue on it — the phase loop handles cluster-relayed answers.
+  // #976 case (a): cluster-self comment carrying any MACHINE_MARKERS prefix
+  // is filtered by the pre-marker check; no enqueue regardless of the marker
+  // family (question, stage/status, audit, answer-relay, explainer).
+  it.each(MACHINE_MARKERS.map((m) => [m]))(
+    'cluster-self comment carrying machine marker %s → no enqueue',
+    async (prefix) => {
+      const { factory } = createMockClientFactory({
+        42: [
+          {
+            id: 1,
+            body: `${prefix} -->\n\nQ1: OAuth`,
+            author: 'cluster-bot',
+            authorAssociation: 'NONE',
+            viewerDidAuthor: true,
+          },
+        ],
+      });
+      const svc = new ClarificationAnswerMonitorService(
+        logger,
+        factory,
+        queue,
+        defaultConfig,
+        defaultRepos,
+      );
+
+      const enqueued = await svc.processClarificationAnswerEvent({
+        owner: 'test-org',
+        repo: 'test-repo',
+        issueNumber: 42,
+        issueLabels: PAUSED_LABELS,
+        source: 'poll',
+      });
+
+      expect(enqueued).toBe(false);
+      expect(queue.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    },
+  );
+
+  // #976 case (b) SC-001 positive path — cluster-self plain `Q<n>:` reply
+  // (no machine marker) auto-resumes.
+  it('cluster-self plain `Q<n>:` reply (no marker) → enqueues `continue` (#976 SC-001)', async () => {
     const { factory } = createMockClientFactory({
       42: [
         {
           id: 1,
-          body:
-            '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->\n\nQ1: OAuth',
+          body: 'Q1: OAuth\nQ2: JWT',
           author: 'cluster-bot',
           authorAssociation: 'NONE',
           viewerDidAuthor: true,
@@ -227,8 +265,11 @@ describe('#958 ClarificationAnswerMonitorService', () => {
       source: 'poll',
     });
 
-    expect(enqueued).toBe(false);
-    expect(queue.spies.enqueueIfAbsent).not.toHaveBeenCalled();
+    expect(enqueued).toBe(true);
+    expect(queue.spies.enqueueIfAbsent).toHaveBeenCalledTimes(1);
+    const args = queue.spies.enqueueIfAbsent.mock.calls[0]![0];
+    expect(args.command).toBe('continue');
+    expect(args.queueReason).toBe('resume');
   });
 
   it('in-flight dedupe — second call for same issue returns false', async () => {

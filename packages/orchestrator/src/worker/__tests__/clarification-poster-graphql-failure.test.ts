@@ -84,14 +84,15 @@ beforeEach(() => {
 
 describe('SC-008 retry-once success path', () => {
   it('throws once then resolves — answers still ingested on retry, one retry warn, NO REST call', async () => {
-    // #958 FR-003 — a viewerDidAuthor=true comment must carry the engine
-    // answer marker to be an answer source. Add the marker to keep this
-    // #910 retry regression test passing under the new authorship gate.
-    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
+    // #976 — viewerDidAuthor=true no longer requires an engine answer marker;
+    // same-account trust is delegated to `isTrustedCommentAuthor`. Note the
+    // `<!-- generacy-clarification-answers:` marker is now in MACHINE_MARKERS
+    // and would EXCLUDE the comment, so this fixture uses a plain `Q<n>:`
+    // reply — same shape as any human-operator answer.
     const successPayload = [
       {
         id: 1,
-        body: `${answerMarker}\n\nQ1: OAuth 2.0`,
+        body: 'Q1: OAuth 2.0',
         author: 'cluster',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,

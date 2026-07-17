@@ -39,7 +39,7 @@ import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import type { Logger } from '../worker/types.js';
 import { filterByAssignee } from './identity.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
-import { commentCarriesAnswerMarker } from '../worker/clarification-markers.js';
+import { commentCarriesMachineMarker } from '../worker/clarification-markers.js';
 
 const WAITING_FOR_CLARIFICATION_LABEL = 'waiting-for:clarification';
 const AGENT_PAUSED_LABEL = 'agent:paused';
@@ -196,11 +196,7 @@ export class ClarificationAnswerMonitorService {
 
     let hasHumanTrustedComment = false;
     for (const c of comments) {
-      // Skip cluster-self even if they carry an answer marker (contract
-      // §Preconditions: "Comments carrying the answer-marker prefix are
-      // treated as cluster-self-authored regardless of viewerDidAuthor").
-      if (c.viewerDidAuthor === true) continue;
-      if (commentCarriesAnswerMarker(c.body)) continue;
+      if (commentCarriesMachineMarker(c.body)) continue;
       const decision = isTrustedCommentAuthor(c, 'answer-scanner', trustCtx);
       if (decision.trusted) {
         hasHumanTrustedComment = true;

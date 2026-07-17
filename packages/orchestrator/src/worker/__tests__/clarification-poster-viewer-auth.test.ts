@@ -106,12 +106,11 @@ beforeEach(() => {
 });
 
 describe('SC-001 / SC-002 App-auth self-authored path', () => {
-  it('trusts a viewerDidAuthor=true comment carrying the #958 engine answer marker', async () => {
-    // #958 FR-003 update: viewerDidAuthor=true is only an answer source when
-    // the comment carries the engine-written answer marker. Without the
-    // marker, the cluster-self comment is skipped (the load-bearing
-    // correction to #910). This test adds the marker to preserve the
-    // #910 integration invariant under the new authorship gate.
+  it('#976 — cluster-self marker-relay comment is EXCLUDED (Q2=A deprecates marker-relay integration)', async () => {
+    // Post-#976: `<!-- generacy-clarification-answers:` is in MACHINE_MARKERS,
+    // so the answer-relay comment is filtered by the pre-marker check. The
+    // marker-relay integration path is deprecated; same-account operators
+    // post plain `Q<n>:` replies instead (covered by the next test).
     const marker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
@@ -129,17 +128,18 @@ describe('SC-001 / SC-002 App-auth self-authored path', () => {
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBeGreaterThanOrEqual(1);
-    expect(mockWriteFileSync).toHaveBeenCalledOnce();
-    const written = mockWriteFileSync.mock.calls[0]![1] as string;
-    expect(written).toContain('**Answer**: OAuth 2.0');
+    expect(result.integrated).toBe(0);
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
     // Migrated path must not fall through to REST `getIssueComments`
     // (FR-010 / FR-002 — no silent REST fallback).
     expect(github.getIssueComments).not.toHaveBeenCalled();
     expect(github.getIssueCommentsWithViewerAuth).toHaveBeenCalledOnce();
   });
 
-  it('#958 FR-003 — viewerDidAuthor=true without answer marker is skipped', async () => {
+  it('#976 SC-001 — viewerDidAuthor=true plain `Q<n>:` reply (no marker) INTEGRATES', async () => {
+    // Post-#976: the FR-003 authorship gate is removed. Cluster-self plain
+    // replies integrate — same-account trust is delegated to
+    // `isTrustedCommentAuthor` (self-authored → trusted).
     const github = createMockGithub([
       {
         id: 1,
@@ -156,8 +156,10 @@ describe('SC-001 / SC-002 App-auth self-authored path', () => {
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    expect(result.integrated).toBe(0);
-    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(result.integrated).toBeGreaterThanOrEqual(1);
+    expect(mockWriteFileSync).toHaveBeenCalledOnce();
+    const written = mockWriteFileSync.mock.calls[0]![1] as string;
+    expect(written).toContain('**Answer**: OAuth 2.0');
   });
 });
 
@@ -225,14 +227,13 @@ describe('SC-003 Third-party path', () => {
 });
 
 describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', () => {
-  it('excludes a self-authored questions-marker comment from parseAnswersFromComments', async () => {
+  it('excludes a self-authored questions-marker comment; plain follow-up reply still integrates', async () => {
     // Two self-authored comments:
-    // (a) the bot's questions comment carrying the marker — must be filtered
-    //     by isQuestionComment BEFORE parseAnswersFromComments.
-    // (b) a self-authored answers comment carrying the #958 engine answer
-    //     marker — must reach parseAnswersFromComments and integrate.
+    // (a) the bot's questions comment carrying the questions marker — filtered
+    //     by the machine-marker pre-filter BEFORE parseAnswersFromComments.
+    // (b) #976: a plain `Q<n>:` follow-up reply (no marker) — reaches
+    //     parseAnswersFromComments and integrates.
     const marker = clarificationMarker(42);
-    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
         id: 1,
@@ -245,7 +246,7 @@ describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', 
       },
       {
         id: 2,
-        body: `${answerMarker}\n\nQ1: OAuth 2.0`,
+        body: 'Q1: OAuth 2.0',
         author: 'cluster-bot',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,
@@ -258,8 +259,8 @@ describe('SC-005 + SC-009 Question-marker regression (FR-007 permanent check)', 
 
     const result = await integrateClarificationAnswers(context, logger);
 
-    // Only comment #2 reaches parseAnswersFromComments; comment #1 (marker)
-    // is filtered out by isQuestionComment.
+    // Only comment #2 reaches the parser; comment #1 (questions marker) is
+    // filtered out by the machine-marker pre-filter.
     expect(result.integrated).toBe(1);
     const written = mockWriteFileSync.mock.calls[0]![1] as string;
     expect(written).toContain('**Answer**: OAuth 2.0');
@@ -307,12 +308,11 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
   // parsing, and the real answer must still integrate.
   it('marker-carrying self-authored comment is filtered out even when it contains a plausible Q1 answer', async () => {
     const marker = clarificationMarker(42);
-    const answerMarker = '<!-- generacy-clarification-answers:1 ts=2026-07-16T00:00:00.000Z -->';
     const github = createMockGithub([
       {
-        // (1) Marker-carrying self-authored comment. If the filter is
-        // removed, its body's `Q1: BOGUS_MARKER_ANSWER` would parse as
-        // the answer, overwriting the real answer below.
+        // (1) Marker-carrying self-authored comment. If the machine-marker
+        // pre-filter is removed, its body's `Q1: BOGUS_MARKER_ANSWER` would
+        // parse as the answer, overwriting the real answer below.
         id: 1,
         body: `${marker}\n### Q1: Authentication\n**Question**: Which auth?\n\nQ1: BOGUS_MARKER_ANSWER`,
         author: 'cluster-bot',
@@ -322,11 +322,12 @@ describe('FR-007 ordering invariant: isQuestionComment before parseAnswersFromCo
         updated_at: '2026-07-10T00:00:00Z',
       },
       {
-        // (2) Distinct self-authored answer comment posted later. #958
-        // FR-003: carries the engine answer marker so it's an authoritative
-        // answer source (viewerDidAuthor=true alone would be skipped now).
+        // (2) #976: distinct plain follow-up reply — no marker. Same-account
+        // trust is delegated to `isTrustedCommentAuthor`; the machine-marker
+        // pre-filter drops comment (1) but not this one, so the real answer
+        // integrates and the bogus one never reaches the parser.
         id: 2,
-        body: `${answerMarker}\n\nQ1: REAL_ANSWER_OAUTH2`,
+        body: 'Q1: REAL_ANSWER_OAUTH2',
         author: 'cluster-bot',
         authorAssociation: 'NONE',
         viewerDidAuthor: true,
