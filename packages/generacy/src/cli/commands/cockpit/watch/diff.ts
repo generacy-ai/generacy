@@ -28,6 +28,7 @@ export interface CockpitEvent {
   event: CockpitEventDiscriminator;
   labels: string[];
   initial?: true;
+  checks?: 'green' | 'red' | 'pending';
 }
 
 function nowIso(): string {

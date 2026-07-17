@@ -15,6 +15,7 @@ export const CockpitEventSchema = z.object({
   event: z.enum(['label-change', 'issue-closed', 'pr-merged', 'pr-closed', 'pr-checks']),
   labels: z.array(z.string()),
   initial: z.literal(true).optional(),
+  checks: z.enum(['green', 'red', 'pending']).optional(),
 });
 
 export type CockpitEventValidated = z.infer<typeof CockpitEventSchema>;

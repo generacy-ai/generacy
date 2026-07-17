@@ -12,7 +12,7 @@ function makeIssueTransition(number: number): CockpitStreamEvent {
     kind: 'issue',
     number,
     from: null,
-    to: 'waiting:clarification',
+    to: 'waiting',
     sourceLabel: 'waiting-for:clarification',
     url: `https://github.com/generacy-ai/generacy/issues/${number}`,
     event: 'label-change',
@@ -165,7 +165,10 @@ describe('runDoorbell', () => {
 
     bus.emit(makeIssueTransition(1));
     await flush();
-    expect(stdout.writes).toEqual(['armed\n', 'issue-transition\n']);
+    const nonEmpty = stdout.writes.filter((w) => w.length > 0);
+    expect(nonEmpty[0]).toBe('armed\n');
+    const parsedFirst = JSON.parse(nonEmpty[1]!.slice(0, -1)) as { type: string };
+    expect(parsedFirst.type).toBe('issue-transition');
 
     abortController.abort();
     const code = await runPromise;
@@ -336,7 +339,10 @@ describe('runDoorbell', () => {
 
     const code = await runPromise;
     expect(code).toBe(0);
-    expect(stdout.writes).toContain('epic-complete\n');
+    const types = stdout.writes
+      .filter((w) => w !== 'armed\n' && w.length > 0)
+      .map((w) => (JSON.parse(w.slice(0, -1)) as { type: string }).type);
+    expect(types).toContain('epic-complete');
     expect(exitCalls).toEqual([0]);
     expect(released.count).toBe(1);
   });
@@ -365,11 +371,12 @@ describe('runDoorbell', () => {
     bus.emit(makeIssueTransition(2));
     await flush();
 
-    expect(stdout.writes).toEqual([
-      'armed\n',
-      'epic-complete\n',
-      'issue-transition\n',
-    ]);
+    const nonEmpty = stdout.writes.filter((w) => w.length > 0);
+    expect(nonEmpty[0]).toBe('armed\n');
+    const types = nonEmpty
+      .slice(1)
+      .map((w) => (JSON.parse(w.slice(0, -1)) as { type: string }).type);
+    expect(types).toEqual(['epic-complete', 'issue-transition']);
     expect(exitCalls).toEqual([]);
 
     abortController.abort();

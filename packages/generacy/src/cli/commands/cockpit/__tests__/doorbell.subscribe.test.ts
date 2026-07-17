@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { EpicEventBus } from '../mcp/event-bus.js';
 import { lineForEvent, subscribeAndEmit } from '../doorbell/subscribe.js';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
+import { CockpitStreamEventSchema } from '../watch/stream-event.js';
 
 function makeIssueTransition(number: number): CockpitStreamEvent {
   return {
@@ -11,7 +12,7 @@ function makeIssueTransition(number: number): CockpitStreamEvent {
     kind: 'issue',
     number,
     from: null,
-    to: 'waiting:clarification',
+    to: 'waiting',
     sourceLabel: 'waiting-for:clarification',
     url: `https://github.com/generacy-ai/generacy/issues/${number}`,
     event: 'label-change',
@@ -60,25 +61,45 @@ async function flush(): Promise<void> {
   }
 }
 
-describe('lineForEvent (T10 — FR-005, Q3=B)', () => {
-  it('translates issue-transition to bare type word', () => {
-    expect(lineForEvent(makeIssueTransition(1))).toBe('issue-transition\n');
+describe('lineForEvent — NDJSON line shape (T007, FR-001, INV-3)', () => {
+  function parseAndValidate(line: string): CockpitStreamEvent {
+    expect(line.endsWith('\n')).toBe(true);
+    // Exactly one trailing '\n' — no extra whitespace before it.
+    expect(line.slice(0, -1)).not.toMatch(/\n/);
+    const parsed = JSON.parse(line.slice(0, -1));
+    return CockpitStreamEventSchema.parse(parsed) as CockpitStreamEvent;
+  }
+
+  it('issue-transition serializes as valid NDJSON and parses back through the schema', () => {
+    const ev = makeIssueTransition(1);
+    const line = lineForEvent(ev);
+    const back = parseAndValidate(line);
+    expect(back.type).toBe('issue-transition');
+    if (back.type === 'issue-transition') {
+      expect(back.repo).toBe('generacy-ai/generacy');
+      expect(back.number).toBe(1);
+      expect(back.to).toBe('waiting');
+    }
   });
 
-  it('translates phase-complete to bare type word', () => {
-    expect(lineForEvent(makePhaseComplete())).toBe('phase-complete\n');
+  it('phase-complete serializes as valid NDJSON and parses back through the schema', () => {
+    const ev = makePhaseComplete();
+    const line = lineForEvent(ev);
+    const back = parseAndValidate(line);
+    expect(back.type).toBe('phase-complete');
   });
 
-  it('translates epic-complete to bare type word', () => {
-    expect(lineForEvent(makeEpicComplete())).toBe('epic-complete\n');
+  it('epic-complete serializes as valid NDJSON and parses back through the schema', () => {
+    const ev = makeEpicComplete();
+    const line = lineForEvent(ev);
+    const back = parseAndValidate(line);
+    expect(back.type).toBe('epic-complete');
   });
 
-  it('emits no JSON, no ref, no trailing whitespace before newline', () => {
-    const out = lineForEvent(makeIssueTransition(1));
-    expect(out).toBe('issue-transition\n');
-    expect(out).not.toContain('{');
-    expect(out).not.toContain('generacy');
-    expect(out.slice(0, -1)).not.toMatch(/\s$/);
+  it('emits a single trailing newline and no blank lines', () => {
+    const line = lineForEvent(makeIssueTransition(1));
+    expect(line.match(/\n/g)?.length).toBe(1);
+    expect(line.trim().length).toBeGreaterThan(0);
   });
 });
 
@@ -94,11 +115,12 @@ describe('subscribeAndEmit', () => {
 
     await flush();
 
-    expect(stdout.writes).toEqual([
-      'issue-transition\n',
-      'phase-complete\n',
-      'epic-complete\n',
-    ]);
+    expect(stdout.writes).toHaveLength(3);
+    const types = stdout.writes.map((line) => {
+      expect(line.endsWith('\n')).toBe(true);
+      return (JSON.parse(line.slice(0, -1)) as { type: string }).type;
+    });
+    expect(types).toEqual(['issue-transition', 'phase-complete', 'epic-complete']);
     unsubscribe();
   });
 
@@ -109,7 +131,10 @@ describe('subscribeAndEmit', () => {
 
     bus.emit(makeIssueTransition(1));
     await flush();
-    expect(stdout.writes).toEqual(['issue-transition\n']);
+    expect(stdout.writes).toHaveLength(1);
+    expect((JSON.parse(stdout.writes[0]!.slice(0, -1)) as { type: string }).type).toBe(
+      'issue-transition',
+    );
 
     unsubscribe();
 
@@ -117,7 +142,7 @@ describe('subscribeAndEmit', () => {
     bus.emit(makeIssueTransition(3));
     await flush();
 
-    expect(stdout.writes).toEqual(['issue-transition\n']);
+    expect(stdout.writes).toHaveLength(1);
   });
 
   it('onEmit hook fires exactly once per emitted event, after the stdout drain', async () => {

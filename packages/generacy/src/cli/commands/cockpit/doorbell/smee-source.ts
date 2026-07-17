@@ -15,7 +15,7 @@ import {
 } from '@generacy-ai/cockpit';
 import { initialAggregateState, type AggregateState } from '../watch/aggregate.js';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
-import type { SnapshotMap } from '../watch/snapshot.js';
+import { snapshotKey, type ChecksRollup, type SnapshotMap } from '../watch/snapshot.js';
 import { parseSseEventBlock, type NormalizedPayload } from './sse-parser.js';
 import {
   webhookToStreamEvent,
@@ -97,6 +97,19 @@ function deriveTrigger(payload: NormalizedPayload): AggregateTrigger {
     return { kind: 'pr-closed' };
   }
   return null;
+}
+
+function mapChecks(rollup: ChecksRollup): 'green' | 'red' | undefined {
+  switch (rollup) {
+    case 'success':
+      return 'green';
+    case 'failure':
+    case 'error':
+      return 'red';
+    case 'pending':
+    case 'none':
+      return undefined;
+  }
 }
 
 function isEpicPayload(payload: NormalizedPayload, epicNumber: number): boolean {
@@ -331,8 +344,23 @@ export class SmeeDoorbellSource {
     if (result != null) {
       const events = Array.isArray(result) ? result : [result];
       for (const ev of events) {
+        let stamped: CockpitStreamEvent = ev;
+        if (
+          ev.type === 'issue-transition' &&
+          (ev.event === 'pr-checks' ||
+            (ev.event === 'label-change' && ev.sourceLabel === 'completed:validate'))
+        ) {
+          // no gh calls — read-through PrSnapshot cache only (FR-005)
+          const snap = this.prev.get(snapshotKey(ev.repo, 'pr', ev.number));
+          if (snap?.kind === 'pr') {
+            const wire = mapChecks(snap.checksRollup);
+            if (wire !== undefined) {
+              stamped = { ...ev, checks: wire };
+            }
+          }
+        }
         try {
-          await this.onEvent(ev);
+          await this.onEvent(stamped);
         } catch (err) {
           this.logger.warn(
             `cockpit doorbell: onEvent sink rejected: ${
