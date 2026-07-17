@@ -1,6 +1,10 @@
-# Feature Specification: Honor clarification answers from cluster's own GitHub account
+# Feature Specification: ## Summary
+
+Clarification answers posted from the **cluster's own GitHub account** are silently dropped
 
 **Branch**: `976-summary-clarification-answers` | **Date**: 2026-07-17 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -62,83 +66,66 @@ Honor same-account human answers **without** requiring the engine marker, so sin
 
 Whichever path, apply it to **both** call sites (monitor + phase-loop scanner) so the auto-resume and the integration agree.
 
+## Acceptance
+
+- A plain `Q<n>:` reply authored by the cluster's **own** account, while the issue is at `waiting-for:clarification`, auto-resumes (monitor enqueues `continue`) and integrates into `clarifications.md` — no marker, no manual `completed:clarification`.
+- The cluster's own machine comments (question/stage/status/audit) still never mis-integrate as answers.
+- Regression tests for both same-account and different-account answer paths (extend `clarification-answer-monitor-service.test.ts`, `clarification-poster*.test.ts`, `clarification-self-answer.test.ts`).
+- Failure is no longer silent: if a same-account answer can't be parsed, surface it (the existing untrusted-answer explainer path is a model).
+
+## Clarifications
+
+### Session 1 — 2026-07-17
+
+- **Q1 → A**: Ship marker-based machine exclusion only. No cluster config, no identity classification. Apply at both call sites (monitor at `clarification-answer-monitor-service.ts:202` and phase-loop scanner at `clarification-poster.ts:918-931`).
+- **Q2 → A**: All three cluster-emitted machine comment types (question posts, stage/status, audit) already carry distinguishable markers; fix is scanner-side only, no poster migration. Broaden the scanner's exclusion set from `CLARIFICATION_QUESTION_MARKERS` to one canonical `MACHINE_MARKERS` set covering every family: `generacy-clarifications:`, `generacy-stage:clarification|specification|planning|implementation`, `generacy-cockpit:manual-advance`, `generacy-clarification-answers:`, `generacy-untrusted-answer:`, `generacy-clarification-parse-failures:`, and the `speckit-stage:*` variants.
+- **Q3 → A**: Surface rejected same-account answers via the existing untrusted-answer explainer comment path (`generacy-untrusted-answer:` family / `postUntrustedAnswerExplainers`). No new label.
+- **Q4 → A**: Same-account permissive path is parity with FR-006 different-account path — any trusted, marker-free comment is a candidate; `Q<n>:` parsing decides what integrates. No extra shape or temporal gate for same-account.
+- **Q5 → D**: Not applicable — Q1=A uses no identity signal, so no cluster-login human/bot classification is performed.
+
+Full context and options in [`clarifications.md`](./clarifications.md).
+
 ## Related
 
 - generacy-ai/agency#433 — hit this; unblocked via the marker relay.
 - `cockpit_relay_clarify_answers` / `clarification-answer-marker.ts` — the current (only) working same-account path.
 - Spec `958-found-during-local-snappoll` — introduced FR-001/FR-003, the gates above.
 
+---
+<sub>Filed via Claude Code after diagnosing why agency#433 kept reverting to `waiting-for:clarification`.</sub>
+
+
 ## User Stories
 
-### US1: Developer running cluster under own GitHub credentials
+### US1: [Primary User Story]
 
-**As a** developer running a Generacy cluster under my own GitHub account (not a separate bot),
-**I want** my plain-text `Q<n>:` clarification reply to be recognized and integrated automatically,
-**So that** I don't have to provision a separate bot identity or use the `cockpit_relay_clarify_answers` MCP relay just to answer a clarification question by hand in the GitHub UI.
-
-**Acceptance Criteria**:
-- [ ] A plain `Q<n>:` reply authored by the cluster's own account, while the issue is at `waiting-for:clarification`, auto-resumes (monitor enqueues `continue`).
-- [ ] The reply integrates into `clarifications.md` without requiring the `<!-- generacy-clarification-answers: -->` marker.
-- [ ] No manual `completed:clarification` label application required.
-- [ ] The clarify phase advances to the next phase (e.g. `plan`) rather than looping back to `waiting-for:clarification`.
-
-### US2: Cluster operator whose cluster identity is a bot
-
-**As an** operator whose cluster identity is a GitHub App / `[bot]` account,
-**I want** the cluster's own machine comments (question posts, stage/status comments, audit comments) to continue to be excluded from answer scanning,
-**So that** the cluster does not integrate its own machine output as if it were a human answer.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
 **Acceptance Criteria**:
-- [ ] The cluster's own machine comments (question/stage/status/audit) never mis-integrate as answers.
-- [ ] Existing bot-identity clarification flows (marker-stamped via `cockpit_relay_clarify_answers`) continue to work unchanged.
-
-### US3: Operator receiving a silent failure
-
-**As a** cluster operator posting a same-account clarification answer that the system cannot recognize,
-**I want** a surfaced explanation of why the reply was not accepted,
-**So that** I can correct my reply rather than watch the workflow silently loop back to `waiting-for:clarification`.
-
-**Acceptance Criteria**:
-- [ ] If a same-account answer cannot be parsed or is otherwise rejected, the failure is surfaced (e.g. via the existing untrusted-answer explainer path).
-- [ ] The failure mode is not silent: the operator sees a comment or label reflecting the rejection reason.
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The clarification-answer monitor MUST enqueue a `continue` for a plain-text `Q<n>:` reply authored by the cluster's own GitHub account while the issue is at `waiting-for:clarification`, provided the comment does not carry a known machine marker. | P1 | Fixes gate at `clarification-answer-monitor-service.ts:202`. |
-| FR-002 | The phase-loop answer scanner MUST include a same-account plain-text `Q<n>:` reply as a candidate answer, provided the comment does not carry a known machine marker. | P1 | Fixes gate at `clarification-poster.ts:918-931`. |
-| FR-003 | The system MUST exclude cluster-self comments that carry a known **machine** marker (question, stage/status, audit) from the answer scanner. | P1 | Preserves machine-comment safety. |
-| FR-004 | The auto-resume monitor and the phase-loop answer scanner MUST apply the same acceptance rules for same-account comments, so a comment that triggers the resume also integrates. | P1 | Prevents divergence between call sites. |
-| FR-005 | Existing marker-stamped relay path (`cockpit_relay_clarify_answers`) MUST continue to work for both bot-identity and human-identity clusters. | P1 | Backwards compatibility. |
-| FR-006 | Existing different-account human-answer path MUST continue to be parsed permissively (no marker required). | P1 | Preserves FR-002 behavior from #958. |
-| FR-007 | When a same-account answer cannot be parsed or integrated, the system MUST surface the failure (e.g. via the existing untrusted-answer explainer path) rather than silently re-arming `waiting-for:clarification`. | P2 | Fixes silent-loop failure mode. |
-| FR-008 | The trust layer (`isTrustedCommentAuthor` with `reason: 'self-authored'`) MUST remain the authoritative trust gate for same-account comments after the identity-based exclusion is removed. | P1 | The trust check stays; only the pre-trust identity gate loosens. |
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Plain `Q<n>:` reply from cluster's own account auto-resumes and integrates. | 100% success on the agency#433 repro scenario. | Regression test in `clarification-answer-monitor-service.test.ts` + `clarification-poster*.test.ts` covering the same-account plain-text answer path. |
-| SC-002 | Cluster's own machine comments (question/stage/status/audit) are still excluded from answer integration. | 0 false-positive integrations. | Regression test in `clarification-self-answer.test.ts` covering each machine-marker type. |
-| SC-003 | Auto-resume monitor and phase-loop scanner produce the same accept/reject decision for a given same-account comment. | 100% agreement across both call sites. | Cross-check regression test that feeds identical comment fixtures to both code paths. |
-| SC-004 | Same-account answer rejection is not silent. | Every rejected same-account answer produces a surfaced failure signal (comment, label, or explainer). | Regression test that asserts a surfaced failure when a same-account comment is rejected. |
-| SC-005 | Existing marker-stamped and different-account paths remain green. | 0 regressions in `#958` behavior. | Existing `#958` regression suite continues to pass. |
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The cluster's own machine comments (question posts, stage/status comments, audit comments) each carry a **known, distinguishable machine marker** that the answer scanner can look for. If a machine-comment type does not currently carry a marker, adding one is in scope for this change.
-- The trust layer (`isTrustedCommentAuthor` at `comment-trust.ts:122`) is the correct authoritative gate for same-account answer acceptance; the identity-based pre-trust gates from `#958` are the wrong disambiguator for human-identity clusters.
-- "Cluster identity is human vs. bot" can either (a) be treated identically at the code level by relying on marker-based machine exclusion instead of identity-based, or (b) be surfaced as an explicit or auto-detected config signal (`clusterIdentityIsHuman`). The plan phase will choose between these paths.
-- Applying the change to both the monitor and the phase-loop scanner is required — divergence between them re-creates the silent-loop failure mode.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Broader refactor of the `#958` clarification-answer trust and marker system beyond fixing the same-account gate.
-- Changes to the `cockpit_relay_clarify_answers` MCP relay path.
-- Changes to how clarification questions themselves are posted or discovered.
-- Changes to `clarifications.md` file format or the phase-transition state machine.
-- Support for multi-identity clusters (a cluster acting as multiple GitHub identities) — out of scope until real demand.
+- [Exclusion 1]
 
 ---
 
