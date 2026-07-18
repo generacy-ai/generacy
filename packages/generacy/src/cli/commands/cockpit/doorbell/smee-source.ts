@@ -13,6 +13,7 @@ import {
   type IssueRef,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
+import { calculateBackoffDelay } from '@generacy-ai/smee-backoff';
 import { initialAggregateState, type AggregateState } from '../watch/aggregate.js';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
 import { snapshotKey, type ChecksRollup, type SnapshotMap } from '../watch/snapshot.js';
@@ -27,7 +28,6 @@ import {
 } from './aggregate-on-demand.js';
 
 export const DEFAULT_BASE_RECONNECT_DELAY_MS = 5_000;
-export const MAX_BACKOFF_MS = 300_000;
 export const DEFAULT_REFRESH_DEBOUNCE_MS = 500;
 export const DEFAULT_SAFETY_NET_INTERVAL_MS = 600_000;
 const AGGREGATE_TRIGGER_DEBOUNCE_MS = 500;
@@ -229,11 +229,6 @@ export class SmeeDoorbellSource {
     }
   }
 
-  private calculateBackoffDelay(attempt: number): number {
-    const delay = this.baseReconnectDelayMs * Math.pow(2, attempt);
-    return Math.min(delay, MAX_BACKOFF_MS);
-  }
-
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise<void>((resolve) => {
       if (signal.aborted) {
@@ -255,15 +250,24 @@ export class SmeeDoorbellSource {
     if (signal == null) return;
 
     while (this.running && !signal.aborted) {
-      let sleepMs = this.calculateBackoffDelay(this.reconnectAttempt);
+      let sleepMs = calculateBackoffDelay(this.reconnectAttempt, {
+        base: this.baseReconnectDelayMs,
+        cap: 30_000,
+      });
       try {
         await this.connect(signal);
         this.reconnectAttempt = 0;
-        sleepMs = this.calculateBackoffDelay(this.reconnectAttempt);
+        sleepMs = calculateBackoffDelay(this.reconnectAttempt, {
+          base: this.baseReconnectDelayMs,
+          cap: 30_000,
+        });
       } catch (err) {
         if (signal.aborted) break;
         this.reconnectAttempt++;
-        sleepMs = this.calculateBackoffDelay(this.reconnectAttempt);
+        sleepMs = calculateBackoffDelay(this.reconnectAttempt, {
+          base: this.baseReconnectDelayMs,
+          cap: 30_000,
+        });
         this.logger.warn(
           `cockpit doorbell: smee connection lost, reconnecting in ${sleepMs}ms (attempt ${this.reconnectAttempt}): ${
             err instanceof Error ? err.message : String(err)
