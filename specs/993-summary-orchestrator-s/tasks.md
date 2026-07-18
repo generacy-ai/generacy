@@ -10,7 +10,7 @@
 
 ## Phase 1: Marker matcher (FR-005 — independent leaf)
 
-- [ ] T001 [P] [US1] Rewrite `matchMachineMarker` in `packages/orchestrator/src/worker/clarification-markers.ts` to add a family-prefix pass on new `MACHINE_MARKER_FAMILIES` constant containing `'<!-- generacy-stage:'` and `'<!-- speckit-stage:'` (per contracts/machine-markers-contract.md).
+- [X] T001 [P] [US1] Rewrite `matchMachineMarker` in `packages/orchestrator/src/worker/clarification-markers.ts` to add a family-prefix pass on new `MACHINE_MARKER_FAMILIES` constant containing `'<!-- generacy-stage:'` and `'<!-- speckit-stage:'` (per contracts/machine-markers-contract.md).
   - Add exported `const MACHINE_MARKER_FAMILIES: readonly string[] = ['<!-- generacy-stage:', '<!-- speckit-stage:'] as const;`
   - Remove the six enumerated `<!-- generacy-stage:*` / `<!-- speckit-stage:*` entries from `MACHINE_MARKERS` (specification / planning / implementation for each family). Keep `CLARIFICATION_QUESTION_MARKERS` spread, `generacy-cockpit:manual-advance`, `generacy-clarification-answers:`, `generacy-untrusted-answer:`, `generacy-clarification-parse-failures:`.
   - `matchMachineMarker` implementation: for each line of `body`, first check every prefix in `MACHINE_MARKER_FAMILIES` via `startsWith`; if match, return the family prefix. Otherwise fall back to the enumerated `MACHINE_MARKERS` loop (unchanged semantics). First match wins.
@@ -21,7 +21,7 @@
 ## Phase 2: Monitor predicate rewrite (FR-001, FR-003, FR-004)
 <!-- Phase boundary: T001 does not block T002 (different files); listed sequentially only for reviewer flow -->
 
-- [ ] T002 [US1] Rewrite the answer-candidate loop in `packages/orchestrator/src/services/clarification-answer-monitor-service.ts` (currently `processClarificationAnswerEvent` lines ~156–260, target loop at ~204–212) per contracts/monitor-predicate-contract.md.
+- [X] T002 [US1] Rewrite the answer-candidate loop in `packages/orchestrator/src/services/clarification-answer-monitor-service.ts` (currently `processClarificationAnswerEvent` lines ~156–260, target loop at ~204–212) per contracts/monitor-predicate-contract.md.
   - Add two file-local pure helpers at the bottom of the module (not exported):
     - `function isBotAuthoredLogin(author: string): boolean` → `author.trim().toLowerCase().endsWith('[bot]')`.
     - `function latestQuestionCommentCreatedAt(comments: Comment[]): string | undefined` → scans for the newest `created_at` (ISO-8601 lexicographic `>` compare) among comments where `matchClarificationQuestionMarker(c.body) !== undefined`; returns `undefined` if none.
@@ -44,7 +44,7 @@
 
 ## Phase 3: Tests
 
-- [ ] T003 [P] [US1] Extend `packages/orchestrator/src/worker/__tests__/clarification-markers.test.ts` for SC-004 family-match coverage (per contracts/machine-markers-contract.md §"Test cases").
+- [X] T003 [P] [US1] Extend `packages/orchestrator/src/worker/__tests__/clarification-markers.test.ts` for SC-004 family-match coverage (per contracts/machine-markers-contract.md §"Test cases").
   - Positive family match: `<!-- speckit-stage:tasks -->\nBody\n` → `matchMachineMarker` returns `'<!-- speckit-stage:'`; `commentCarriesMachineMarker` returns `true`.
   - Positive family match on the observed bug prefix: `<!-- speckit-stage:clarification -->\n` → returns `'<!-- speckit-stage:'`.
   - Regression: `<!-- generacy-stage:specification -->\n` still returns truthy — matched by family, not by enumeration.
@@ -54,7 +54,7 @@
   - `> `-quoted marker still not matched: `> <!-- generacy-stage:specification -->\n` → `false`.
   - Empty body: `matchMachineMarker('')` returns `undefined`.
 
-- [ ] T004 [US1] Extend `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts` for SC-001 / SC-002 / SC-003 + tie-and-short-circuit edge cases (per contracts/monitor-predicate-contract.md §"Test cases").
+- [X] T004 [US1] Extend `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts` for SC-001 / SC-002 / SC-003 + tie-and-short-circuit edge cases (per contracts/monitor-predicate-contract.md §"Test cases").
   - **SC-001 — bot-only comments, zero resumes across N poll cycles** (regression for the #5–#8 snappoll loop):
     - Fixture: three comments all authored by `generacy-ai[bot]` — `<!-- generacy-stage:specification -->` at `2026-07-18T09:00:00Z`, `<!-- speckit-stage:clarification -->` at `09:59:00Z`, `<!-- generacy-clarifications:5 -->` at `10:00:00Z`. No other comments.
     - Assert: `processClarificationAnswerEvent` returns `false` on every call across ≥3 iterations; `queueManager.enqueueIfAbsent` NOT called.
@@ -79,7 +79,7 @@
 
 ## Phase 4: Changeset (required — CI gate per CLAUDE.md)
 
-- [ ] T005 [US1] Add `.changeset/993-clarification-answer-bot-filter.md` as a **newly added** file:
+- [X] T005 [US1] Add `.changeset/993-clarification-answer-bot-filter.md` as a **newly added** file:
   - Frontmatter: `'@generacy-ai/orchestrator': patch` (defect fix, `workflow:speckit-bugfix`).
   - One-line description referencing #993 and the bot-comment resume-loop fix.
   - Verify per CLAUDE.md rules: newly added under `.changeset/` (not editing existing); `patch` bump (defect fix); package list covers every touched non-test `src/` under `packages/*/src/` (only `@generacy-ai/orchestrator` — no other package modified).
