@@ -1,6 +1,10 @@
-# Feature Specification: orchestrator monitors stuck in poll mode on auto-provisioned smee channel
+# Feature Specification: ## Summary
+
+On a cluster where the smee channel is **auto-provisioned at runtime** (no static `SMEE_CHANNEL_URL` — the #952 path), the orchestrator registers the webhook, connects the smee receiver, and GitHub delivers events (verified HTTP 200) — yet the label / PR-feedback / merge-conflict / clarification monitors keep ingesting via **poll** at the fast adaptive cadence, logging `Webhooks appear unhealthy … reason=webhooks-not-configured`
 
 **Branch**: `987-summary-cluster-where-smee` | **Date**: 2026-07-18 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -22,75 +26,92 @@ So `startSmeePipeline` runs for static, persisted, AND provisioned channels, but
 
 ## Proposed fix
 
-`startSmeePipeline(channelUrl)` should flip the monitors into "webhooks live" mode at runtime for **all** channel sources (static, persisted, provisioned): set `webhooksConfigured=true` and switch to the smee **fallback (non-adaptive)** cadence (safety-net polling only). Add a runtime setter to each monitor service — `LabelMonitorService`, `PrFeedbackMonitorService`, `MergeConflictMonitorService`, `ClarificationAnswerMonitorService` — e.g. `setWebhooksConfigured(true)` that also resets the current poll interval to `config.smee.fallbackPollIntervalMs` and disables adaptive ratcheting, and call it from `startSmeePipeline`.
+`startSmeePipeline(channelUrl)` flips the monitors into "webhooks live" mode at runtime for **all** channel sources (static, persisted, provisioned). Add a one-way runtime setter — `setWebhooksConfigured(true, opts?)` — to each monitor service (`LabelMonitorService`, `PrFeedbackMonitorService`, `MergeConflictMonitorService`, `ClarificationAnswerMonitorService`) that:
+
+- (i) sets `state.webhooksConfigured = true`;
+- (ii) sets the current poll interval to the smee fallback/base cadence (`opts.basePollIntervalMs`, defaulting to `config.smee.fallbackPollIntervalMs`);
+- (iii) **leaves `options.adaptivePolling` alone**. The controller only consults `adaptivePolling` in the `!webhooksConfigured` branch ([`adaptive-poll-controller.ts:106`](https://github.com/generacy-ai/generacy/blob/develop/packages/orchestrator/src/services/adaptive-poll-controller.ts#L106)); once `webhooksConfigured=true` the staleness/recovery branches govern regardless. Preserving `adaptivePolling=true` keeps the `webhook-stale → to-fast` / `webhook-recovered → to-base` safety net reachable, so smee-receiver death is caught by staleness escalation — no `false` case in the setter is needed (see Q1/Q2 clarifications).
+
+Call the setter from `startSmeePipeline` **once the smee receiver reports `Connected`** (not at function top, and not gated on webhook-registration success). This ties the flip to observable evidence the smee leg is live without disabling the fast-poll safety net during the pre-connect window. A lagging/failed webhook registration is surfaced by the #972 fail-loud path; staying in pre-flip fast-poll during that window is the correct conservative behaviour.
+
+The `ClarificationAnswerMonitorService` hardcoded `webhooksConfigured: false` at `clarification-answer-monitor-service.ts:135` is replaced with an **optional constructor parameter** `webhooksConfigured?: boolean = false` (matching the other three services' existing shape, e.g. `label-monitor-service.ts:99`). The `server.ts` construction site is updated to pass `config.smee.channelUrl != null` explicitly, mirroring the `server.ts:493` pattern for the other three.
+
+Inbound webhook wiring for **all four** monitors' `recordWebhookEvent()` is verified as part of this fix; any gap is wired in this same PR. Without a `recordWebhookEvent()` call from the inbound path, the Q2 staleness safety net cannot escalate (it depends on `lastWebhookEvent` being set at least once, otherwise the monitor sits in the `lastWebhookEvent===null` quiet-grace forever). A monitor without inbound-webhook wiring is `webhooksConfigured` in name only.
 
 (Alternative: defer monitor construction until after channel resolution. Rejected as the default — monitors start before `onReady` and existing tests rely on the synchronous static path, so a runtime setter is the more surgical change.)
 
 ## Acceptance criteria
 
-- On the auto-provisioned / persisted-channel path, once `startSmeePipeline` runs, all four monitors report `webhooksConfigured=true` and poll at the smee **fallback** cadence (safety-net only), not the fast adaptive interval.
-- `Webhooks appear unhealthy` / `reason=webhooks-not-configured` no longer fires once a channel has been resolved and the receiver started.
-- Received webhook events update `lastWebhookEvent` and keep the monitors on the base/fallback cadence; adaptive fast-poll fires only on genuine staleness (`webhook-stale`).
-- The clarification-answer monitor's hardcoded `webhooksConfigured: false` is covered.
+- On the auto-provisioned / persisted-channel path, once the smee receiver reports `Connected` inside `startSmeePipeline`, all four monitors report `webhooksConfigured=true` and their **current** poll interval is the smee fallback/base cadence, not the fast adaptive interval.
+- `Webhooks appear unhealthy` / `reason=webhooks-not-configured` no longer fires for any of the four monitors once a channel has been resolved and the receiver started.
+- Received webhook events reach `recordWebhookEvent()` on the corresponding monitor, update `lastWebhookEvent`, and keep the monitor on the base cadence. Adaptive fast-poll (`reason: 'webhook-stale'`) still fires on genuine staleness, and `reason: 'webhook-recovered'` still fires on recovery — the safety net is preserved.
+- The `ClarificationAnswerMonitorService` hardcoded `webhooksConfigured: false` is replaced with an optional constructor parameter (default `false`), passed explicitly from `server.ts` as `config.smee.channelUrl != null`.
+- Setter is one-way (`setWebhooksConfigured(true, …)` only); no `false` case in the API surface.
+- Inbound-webhook wiring for PR-feedback, merge-conflict, and clarification-answer monitors is verified in code, and any missing `recordWebhookEvent()` call from the inbound dispatcher is added.
 - Changeset included.
 
 ## Impact / context
 
 This is the **App-installation-token** half of the cockpit-auto rate-limit story; #985 (engine content-ful line) + #437 (skill enriched dispatch) fixed the **operator-PAT** half. Companion issue generacy-ai/generacy#988 makes the operator doorbell reuse the same channel. Together they make cockpit-auto genuinely webhook-fed end to end. Prereq #972 (webhook registration) is now working. Related: #952, #953.
 
+
 ## User Stories
 
-### US1: cockpit-auto sessions on auto-provisioned clusters run event-driven, not poll-driven
+### US1: Operator running an auto-provisioned cluster
 
-**As a** developer running `/cockpit:auto` on a preview cluster with an auto-provisioned smee channel (the #952 zero-config path),
-**I want** the label / PR-feedback / merge-conflict / clarification monitors to recognize that webhooks are live once `startSmeePipeline` runs,
-**So that** the session ingests events via smee at the low-cost fallback cadence instead of hammering GitHub with 10s fast-adaptive polls that exhaust the App-installation-token GraphQL quota within an hour.
+**As a** cluster operator on a cluster where the smee channel is auto-provisioned at runtime (no static `SMEE_CHANNEL_URL`),
+**I want** the label / PR-feedback / merge-conflict / clarification-answer monitors to consume events from the webhook path once the smee receiver is Connected,
+**So that** the cluster stops burning GitHub App-installation-token GraphQL on fast adaptive polling and behaves like the event-driven design intends.
 
 **Acceptance Criteria**:
-- [ ] After the async smee-channel resolver fires `startSmeePipeline(...)`, all four monitors report `webhooksConfigured=true`.
-- [ ] All four monitors run at `config.smee.fallbackPollIntervalMs` (safety-net cadence), not at the adaptive fast interval.
-- [ ] Neither `Webhooks appear unhealthy` nor `reason=webhooks-not-configured` fires after the pipeline is up.
-- [ ] Received webhook events call `recordWebhookEvent()` on the target monitor; adaptive fast-poll only fires on genuine `webhook-stale` (no event for `basePoll * 2` after one has been recorded).
-- [ ] The synchronous static-URL path (`config.smee.channelUrl` set at boot) is unchanged — the runtime setter is a no-op when it's already in the target state.
+- [ ] After `startSmeePipeline` sees the smee receiver connect, all four monitors show `webhooksConfigured=true` in logs and their `currentPollIntervalMs` equals the smee fallback cadence.
+- [ ] No monitor emits `reason=webhooks-not-configured` after the receiver connects.
+- [ ] A real GitHub delivery reaches `recordWebhookEvent()` on the monitor for the relevant event family.
+
+### US2: Smee-receiver outage while the cluster is running
+
+**As a** cluster operator whose smee receiver dies mid-run (network drop, channel closed, receiver crashes),
+**I want** the monitors to escalate to fast-poll on genuine staleness and recover to base cadence when events resume,
+**So that** a broken real-time leg doesn't silently strand the cluster on the safety-net cadence.
+
+**Acceptance Criteria**:
+- [ ] When no webhook event has been recorded for the staleness window, the affected monitor's `decideAdaptivePoll` returns `reason: 'webhook-stale'` and switches to the fast interval.
+- [ ] When webhook events resume, `decideAdaptivePoll` returns `reason: 'webhook-recovered'` and the monitor returns to base cadence.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | `LabelMonitorService`, `PrFeedbackMonitorService`, `MergeConflictMonitorService`, and `ClarificationAnswerMonitorService` each expose a runtime setter `setWebhooksConfigured(configured: boolean, opts?: { basePollIntervalMs?: number })`. When called with `true`, it must (a) set `state.webhooksConfigured = true`, (b) set `state.basePollIntervalMs` and `state.currentPollIntervalMs` to `opts.basePollIntervalMs` when provided (else leave unchanged), and (c) set `options.adaptivePolling = false`. | P1 | Mirrors the static-path gate at `server.ts:478-480` + `:493` but applies at runtime after construction. |
-| FR-002 | `startSmeePipeline(channelUrl)` in `server.ts` calls `setWebhooksConfigured(true, { basePollIntervalMs: config.smee.fallbackPollIntervalMs })` on every constructed monitor (label, PR-feedback, merge-conflict, clarification-answer). This runs for **all** channel sources: static-URL (idempotent no-op), persisted-file, and provisioned-runtime. | P1 | Single call site — the existing pipeline entry point. |
-| FR-003 | `ClarificationAnswerMonitorService`'s hardcoded `webhooksConfigured: false` (`clarification-answer-monitor-service.ts:135`) is removed in favor of a constructor arg + the FR-001 setter, matching the other three services. | P1 | Prevents the same regression when the service is later moved to the constructor-arg pattern of the other three. |
-| FR-004 | `SmeeWebhookReceiver` (or the equivalent inbound webhook handler for each event kind) calls `recordWebhookEvent()` on the corresponding monitor when a webhook is dispatched to it. `LabelMonitorService.recordWebhookEvent()` and the sibling methods stay unchanged. | P1 | Prior state: only `LabelMonitorService` was reachable from `SmeeWebhookReceiver`. Verify PR-feedback / merge-conflict / clarification-answer receive their events too. |
-| FR-005 | After `setWebhooksConfigured(true, ...)` runs, `decideAdaptivePoll` for that monitor must return `reason: 'quiet'` (or `'webhook-stale'` on genuine staleness, or `'webhook-recovered'` on recovery). It must never return `'webhooks-not-configured'` or `'operator-opt-out'` again for the lifetime of that monitor. | P1 | Follows from the branch matrix in `adaptive-poll-controller.ts:90-166`. |
-| FR-006 | New/updated unit tests assert: (a) each monitor's `setWebhooksConfigured(true, { basePollIntervalMs: N })` mutates state + options as specified in FR-001; (b) after the flip, `decideAdaptivePoll` returns `reason: 'quiet'` with `webhookHealthy: true` on the first cycle post-flip; (c) `server.ts`'s `startSmeePipeline` calls the setter on all four constructed monitors; (d) the static-URL boot path is unchanged (`monitorConfig` still built with `adaptivePolling:false`, and the runtime setter is a no-op). | P1 | Regression coverage for the four-monitor fan-out. |
-| FR-007 | Changeset entry added under `packages/orchestrator` (`patch` — bug fix, `workflow:speckit-bugfix`, no new public capability). | P1 | CI gate per project CLAUDE.md. |
+| FR-001 | Each of the four monitor services (`LabelMonitorService`, `PrFeedbackMonitorService`, `MergeConflictMonitorService`, `ClarificationAnswerMonitorService`) exposes a **one-way** runtime method `setWebhooksConfigured(true, opts?: { basePollIntervalMs?: number })` that (a) sets `state.webhooksConfigured = true`, (b) sets `currentPollIntervalMs` to `opts.basePollIntervalMs ?? config.smee.fallbackPollIntervalMs`, and (c) does **not** modify `options.adaptivePolling`. There is no `false` overload. | P1 | Q1=A, Q2=A |
+| FR-002 | `startSmeePipeline(channelUrl)` invokes the FR-001 setter on every constructed monitor **once the smee receiver reports `Connected`** — not at function top, and not gated on webhook-registration success. | P1 | Q5=B |
+| FR-003 | `ClarificationAnswerMonitorService` no longer hardcodes `webhooksConfigured: false`. Its constructor accepts `webhooksConfigured?: boolean = false` (matching `label-monitor-service.ts:99`), and the `server.ts` construction site passes `config.smee.channelUrl != null` explicitly (matching the `server.ts:493` pattern used by the other three). | P1 | Q4=C |
+| FR-004 | Inbound-webhook wiring is verified for all four monitors' `recordWebhookEvent()`. Any monitor whose inbound path does not currently reach `recordWebhookEvent()` (from `SmeeWebhookReceiver` or the equivalent inbound dispatcher) is wired as part of this PR. | P1 | Q3=A (in scope, unconditional) |
+| FR-005 | Once FR-001–FR-004 are in place, for each of the four monitors `decideAdaptivePoll` returns `reason: 'quiet'` on steady-state, `reason: 'webhook-stale'` on genuine staleness (setting `currentPollIntervalMs` to the fast interval), and `reason: 'webhook-recovered'` on recovery (back to base). It **never** returns `reason: 'webhooks-not-configured'` after `startSmeePipeline` has flipped the flag. | P1 | Direct consequence of FR-001(c) leaving `adaptivePolling=true` |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | `reason=webhooks-not-configured` log lines emitted by any of the four monitors on an auto-provisioned cluster after `startSmeePipeline` completes. | 0 | Grep orchestrator logs on the snappoll preview cluster (or equivalent) for `reason=webhooks-not-configured` after the "Resolved smee channel URL — starting pipeline" line. |
-| SC-002 | Effective poll cadence for each of the four monitors on the auto-provisioned path, measured after `startSmeePipeline`. | `config.smee.fallbackPollIntervalMs` (per `server.ts:478-479` — today's static-URL cadence). | Instrument or read `currentPollIntervalMs` via a debug endpoint / log line; assert equals `fallbackPollIntervalMs` on both the static and provisioned paths. |
-| SC-003 | GitHub App-installation-token GraphQL points consumed per hour by an idle cluster with the auto-provisioned smee channel, no active work. | Comparable to a cluster with a static `SMEE_CHANNEL_URL` — an order of magnitude below the pre-fix baseline (which exhausted 5000 pts/hr). | `gh api rate_limit` delta over one idle hour, provisioned-path cluster, compared to a static-URL cluster and to the pre-fix baseline. |
-| SC-004 | Regression on the static-URL boot path: existing `LabelMonitorService` + `MergeConflictMonitorService` + `PrFeedbackMonitorService` tests + `server.ts` boot tests. | 0 | All existing tests pass without changes to their assertions. |
+| SC-001 | Monitors on the auto-provisioned path polling at fallback cadence after receiver-connect | 4/4 monitors | Structured log inspection: `currentPollIntervalMs == fallbackPollIntervalMs` and `reason != 'webhooks-not-configured'` after the `Connected to smee.io channel` line |
+| SC-002 | `Webhooks appear unhealthy … reason=webhooks-not-configured` log lines emitted post-receiver-connect | 0 | Log grep on a preview cluster over a 5-minute window after receiver-connect |
+| SC-003 | GitHub App-installation-token GraphQL requests per minute on a steady-state cluster (idle, no work) | Bounded by fallback cadence (4× monitors ÷ fallback interval), not fast cadence (4× ÷ 10s) | Rate-limit headers on outbound gh/graphql calls, sampled over a 5-minute idle window |
+| SC-004 | Real GitHub webhook delivery observed as `source: 'webhook'` on the corresponding monitor's ingest | 1/1 for each event family (`issues`, `pull_request`, PR review) | Structured log inspection after firing a synthetic event of each family |
 
 ## Assumptions
 
-- The fix mutates in-flight monitors via a runtime setter rather than deferring monitor construction until channel resolution completes. Rationale: monitors start synchronously before `onReady`, existing tests rely on the synchronous static-URL path, and the async channel-resolver already fires from within `onReady` — the setter is the narrower change.
-- `config.smee.fallbackPollIntervalMs` is the correct cadence for **all** channel sources once the pipeline is live (static, persisted, provisioned). Static-URL boot already uses this exact value at `server.ts:478-479`; the fix generalizes it to the other two channel sources.
-- Setting `options.adaptivePolling = false` in the setter is safe: after the flip, the adaptive-fast interval is no longer reachable via `webhooks-not-configured`, and staleness is a distinct condition that still triggers `webhook-stale → to-fast` on genuine event drought.
-- `SmeeWebhookReceiver` currently only calls `recordWebhookEvent()` on the label monitor. If FR-004 verification finds that PR-feedback / merge-conflict / clarification-answer inbound webhooks don't reach their monitor's `recordWebhookEvent`, this spec expands to include that wiring. Otherwise it stays out of scope.
-- The clarification-answer monitor's `webhooksConfigured: false` at line 135 is the same construction-time freeze in a slightly different clothes; FR-003 aligns it structurally so future refactors can't reintroduce the divergence.
-- The paired half of the cockpit-auto rate-limit story (operator-PAT doorbell, #985 + agency#437) is a separate change. This spec fixes only the App-installation-token half — the four in-orchestrator monitors.
+- `config.smee.fallbackPollIntervalMs` already exists on the config schema and is a reasonable safety-net cadence; the setter uses it as the default `basePollIntervalMs`.
+- The smee receiver emits a `Connected` signal that `startSmeePipeline` can await/observe before invoking the FR-001 setter (existing behaviour on the static path; verify for the auto-provisioned path).
+- The controller-matrix invariant "when `webhooksConfigured=true`, staleness/recovery branches govern regardless of `adaptivePolling`" (see `adaptive-poll-controller.ts:90-166`) holds — Q2's rationale depends on it.
+- No downstream consumer of `ClarificationAnswerMonitorService`'s constructor relies on the 4-arg positional signature that would be broken by inserting a new **required** parameter. FR-003 picks the optional-with-default shape (Q4=C) to preserve backward compatibility regardless.
+- `startSmeePipeline` is called on **all** channel-source paths (static, persisted, auto-provisioned). This is the current behaviour; the bug is that only the static path also flips the construction-time gate.
 
 ## Out of Scope
 
-- Deferring monitor construction until after channel resolution (rejected — the runtime-setter approach is more surgical and preserves existing tests).
-- Wiring the doorbell/operator-PAT path to reuse the same channel — that's the companion issue #988.
-- The generacy engine content-ful doorbell line + skill dispatch changes (#985 + agency#437 — separate PRs, already landed / in progress).
-- Adding new webhook event types beyond `issues` / `pull_request` / whatever the current receiver dispatches — the fix is about the poll-mode state gate, not event coverage.
-- Rate-limit-error retry classification (#982 defense-in-depth — already merged).
-- Reworking `adaptive-poll-controller.ts`'s branch matrix — the controller is correct; the bug is upstream in the state fed to it.
+- Bidirectional `setWebhooksConfigured(false, …)` for smee-receiver-failure recovery. Handled by the existing `webhook-stale → to-fast` / `webhook-recovered → to-base` controller path (Q1=A, Q2=A).
+- Refactoring monitor construction to defer until after channel resolution. Explicitly rejected as too invasive; runtime setter is the surgical fix.
+- Any change to the adaptive-poll controller matrix (`adaptive-poll-controller.ts`) itself. The fix works by feeding the controller different inputs, not by changing its decision logic.
+- Companion operator-doorbell reuse of the same channel (generacy-ai/generacy#988). Separate PR.
+- Cloud-side or webhook-registration path changes (already covered by #952, #972).
 
 ---
 
