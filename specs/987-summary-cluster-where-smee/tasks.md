@@ -10,32 +10,32 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 [P] Add `SetWebhooksConfiguredOptions` interface + `setWebhooksConfigured(true, opts?)` method signature stubs in each monitor service file (empty method bodies) to unlock parallel work on FR-002 wiring. Files: `packages/orchestrator/src/services/label-monitor-service.ts`, `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`, `packages/orchestrator/src/services/merge-conflict-monitor-service.ts`, `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`. Export the interface from each module (per data-model.md §"SetWebhooksConfiguredOptions").
-- [ ] T002 [P] Update `MonitorState` JSDoc for `webhooksConfigured` and `lastWebhookEvent` fields in `packages/orchestrator/src/types/monitor.ts:187-211` to reflect the new runtime-mutation semantics (per data-model.md §"MonitorState").
+- [X] T001 [P] Add `SetWebhooksConfiguredOptions` interface + `setWebhooksConfigured(true, opts?)` method signature stubs in each monitor service file (empty method bodies) to unlock parallel work on FR-002 wiring. Files: `packages/orchestrator/src/services/label-monitor-service.ts`, `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`, `packages/orchestrator/src/services/merge-conflict-monitor-service.ts`, `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`. Export the interface from each module (per data-model.md §"SetWebhooksConfiguredOptions").
+- [X] T002 [P] Update `MonitorState` JSDoc for `webhooksConfigured` and `lastWebhookEvent` fields in `packages/orchestrator/src/types/monitor.ts:187-211` to reflect the new runtime-mutation semantics (per data-model.md §"MonitorState").
 
 ## Phase 2: Core Implementation — FR-001 (runtime setter on all four monitor services)
 
-- [ ] T010 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/label-monitor-service.ts`. Postconditions per contracts/setter-contract.md §"Postconditions": sets `state.webhooksConfigured = true`; sets both `state.basePollIntervalMs` and `state.currentPollIntervalMs` to `opts.basePollIntervalMs ?? state.basePollIntervalMs`; does NOT touch `options.adaptivePolling`. Add a one-line comment referencing Q1/Q2 rationale (per plan.md Constitution Check "load-bearing comment").
-- [ ] T011 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`. Same contract as T010.
-- [ ] T012 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/merge-conflict-monitor-service.ts`. Same contract as T010.
-- [ ] T013 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`. Same contract as T010.
+- [X] T010 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/label-monitor-service.ts`. Postconditions per contracts/setter-contract.md §"Postconditions": sets `state.webhooksConfigured = true`; sets both `state.basePollIntervalMs` and `state.currentPollIntervalMs` to `opts.basePollIntervalMs ?? state.basePollIntervalMs`; does NOT touch `options.adaptivePolling`. Add a one-line comment referencing Q1/Q2 rationale (per plan.md Constitution Check "load-bearing comment").
+- [X] T011 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/pr-feedback-monitor-service.ts`. Same contract as T010.
+- [X] T012 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/merge-conflict-monitor-service.ts`. Same contract as T010.
+- [X] T013 [P] [US1] Implement `setWebhooksConfigured(configured: true, opts?)` body in `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`. Same contract as T010.
 
 ## Phase 3: FR-003 — ClarificationAnswerMonitorService symmetry
 
-- [ ] T020 [US1] In `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`, extend the constructor (`:102-137`) with a 10th optional-with-default parameter `webhooksConfigured: boolean = false` (per data-model.md §"ClarificationAnswerMonitorService constructor"). Replace the hardcoded `webhooksConfigured: false` at `:135` with `webhooksConfigured,` (reading from the new parameter). No other constructor changes.
-- [ ] T021 [US1, US2] In the same file, rewrite `recordWebhookEvent()` and `updateAdaptivePolling()` (`:404-432`) to delegate to `decideAdaptivePoll` from `packages/orchestrator/src/services/adaptive-poll-controller.ts`, matching the pattern used in `label-monitor-service.ts:574-621` (see research.md §"Question 6"). This makes FR-005's `webhook-stale` / `webhook-recovered` / `quiet` reasons reachable on the clarification monitor; without it, the flip is inert here.
+- [X] T020 [US1] In `packages/orchestrator/src/services/clarification-answer-monitor-service.ts`, extend the constructor (`:102-137`) with a 10th optional-with-default parameter `webhooksConfigured: boolean = false` (per data-model.md §"ClarificationAnswerMonitorService constructor"). Replace the hardcoded `webhooksConfigured: false` at `:135` with `webhooksConfigured,` (reading from the new parameter). No other constructor changes.
+- [X] T021 [US1, US2] In the same file, rewrite `recordWebhookEvent()` and `updateAdaptivePolling()` (`:404-432`) to delegate to `decideAdaptivePoll` from `packages/orchestrator/src/services/adaptive-poll-controller.ts`, matching the pattern used in `label-monitor-service.ts:574-621` (see research.md §"Question 6"). This makes FR-005's `webhook-stale` / `webhook-recovered` / `quiet` reasons reachable on the clarification monitor; without it, the flip is inert here.
 
 ## Phase 4: FR-002 + FR-004 — SmeeWebhookReceiver extensions
 
-- [ ] T030 [US1, US2] In `packages/orchestrator/src/services/smee-receiver.ts`, extend `SmeeReceiverOptions` (`:23-37`) with:
+- [X] T030 [US1, US2] In `packages/orchestrator/src/services/smee-receiver.ts`, extend `SmeeReceiverOptions` (`:23-37`) with:
   - `onConnected?: () => void` (per contracts/smee-receiver-contract.md §"`onConnected` callback"),
   - `prFeedbackMonitor?: PrFeedbackMonitorService`,
   - `mergeConflictMonitor?: MergeConflictMonitorService`,
   - `clarificationAnswerMonitor?: ClarificationAnswerMonitorService`.
   Store each new option on a `private readonly` field in the constructor (mirrors existing `monitorService` pattern). Add `private connectedOnceFired = false`.
-- [ ] T031 [US1] In the same file, at the connect path (immediately after the existing `Connected to smee.io channel` log line at `:143`), invoke `this.options.onConnected?.()` guarded by `!this.connectedOnceFired`, then set `this.connectedOnceFired = true`. Wrap the call in `try/catch`; log a `warn` on thrown error and continue (per contracts/smee-receiver-contract.md §"Failure modes"). Subsequent reconnects must NOT re-fire.
-- [ ] T032 [US2] In `processSSEEvent` in the same file, after the existing SSE-event-type / JSON / body / repo / `watchedRepos` guards (`:190-194` and following), fan out `recordWebhookEvent()` to all four monitor refs: `this.monitorService`, and each optional monitor ref if defined. Fan-out is unconditional on `x-github-event` type (per contracts/smee-receiver-contract.md §"Broad `recordWebhookEvent()` fan-out"). This must fire BEFORE any per-event processing dispatch so a processing error does not disable adaptive-poll health tracking.
-- [ ] T033 [US1] In `processSSEEvent`, add per-event processing dispatch after the fan-out:
+- [X] T031 [US1] In the same file, at the connect path (immediately after the existing `Connected to smee.io channel` log line at `:143`), invoke `this.options.onConnected?.()` guarded by `!this.connectedOnceFired`, then set `this.connectedOnceFired = true`. Wrap the call in `try/catch`; log a `warn` on thrown error and continue (per contracts/smee-receiver-contract.md §"Failure modes"). Subsequent reconnects must NOT re-fire.
+- [X] T032 [US2] In `processSSEEvent` in the same file, after the existing SSE-event-type / JSON / body / repo / `watchedRepos` guards (`:190-194` and following), fan out `recordWebhookEvent()` to all four monitor refs: `this.monitorService`, and each optional monitor ref if defined. Fan-out is unconditional on `x-github-event` type (per contracts/smee-receiver-contract.md §"Broad `recordWebhookEvent()` fan-out"). This must fire BEFORE any per-event processing dispatch so a processing error does not disable adaptive-poll health tracking.
+- [X] T033 [US1] In `processSSEEvent`, add per-event processing dispatch after the fan-out:
   - `x-github-event === 'pull_request_review' && action === 'submitted'` → build `PrReviewEvent` (payload shape per data-model.md §"pull_request_review") and call `this.prFeedbackMonitor?.processPrReviewEvent(event)`. Do NOT apply the assignee filter at the smee layer.
   - `x-github-event === 'pull_request_review_comment' && action === 'created'` → same `PrReviewEvent` shape sourced from `payload.pull_request`, same dispatch.
   - `x-github-event === 'issue_comment' && action === 'created'` → apply the existing smee-receiver assignee filter (`:224-241`), then build `ClarificationAnswerEvent` (payload shape per data-model.md §"issue_comment.created"; `source: 'poll'`) and call `this.clarificationAnswerMonitor?.processClarificationAnswerEvent(event)`.
@@ -43,7 +43,7 @@
 
 ## Phase 5: Server wiring join point
 
-- [ ] T040 [US1] In `packages/orchestrator/src/server.ts`:
+- [X] T040 [US1] In `packages/orchestrator/src/server.ts`:
   - At the `ClarificationAnswerMonitorService` construction site (`:649-659`), pass `config.smee.channelUrl != null` as the 10th positional argument, mirroring the `server.ts:493` pattern used for the other three (per FR-003).
   - At the `SmeeWebhookReceiver` construction site (`:503-507`), pass the three new optional monitor refs (`prFeedbackMonitor`, `mergeConflictMonitor`, `clarificationAnswerMonitor`) plus an `onConnected` callback.
   - Hold references to all four constructed monitors in a scope reachable from the `startSmeePipeline` closure.
@@ -52,17 +52,17 @@
 
 ## Phase 6: Tests
 
-- [ ] T050 [P] [US1, US2] In `packages/orchestrator/src/services/__tests__/label-monitor-service.test.ts`, add the six test cases enumerated in contracts/setter-contract.md §"Test cases":
+- [X] T050 [P] [US1, US2] In `packages/orchestrator/src/services/__tests__/label-monitor-service.test.ts`, add the six test cases enumerated in contracts/setter-contract.md §"Test cases":
   1. Flip flips flag (state fields update to expected values).
   2. `adaptivePolling` untouched after flip.
   3. Staleness still reachable post-flip (`reason: 'webhook-stale'`, `transition: 'to-fast'`, current interval = fast).
   4. Recovery still reachable (`reason: 'webhook-recovered'`, `transition: 'to-base'`, current = base).
   5. Idempotent double-flip (state after 2nd call === state after 1st call).
   6. Type-level `false` rejection via `@ts-expect-error`.
-- [ ] T051 [P] [US1, US2] Add the same six test cases to `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.test.ts`.
-- [ ] T052 [P] [US1, US2] Add the same six test cases to `packages/orchestrator/src/services/__tests__/merge-conflict-monitor-service.test.ts`.
-- [ ] T053 [P] [US1, US2] Add the same six test cases to `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts` PLUS a regression case for T021 (post-rewrite `updateAdaptivePolling` / `recordWebhookEvent` emit the `reason` strings expected by FR-005; the previous inline logic did not).
-- [ ] T054 [US1, US2] Extend `packages/orchestrator/src/services/__tests__/smee-receiver.test.ts` with the seven test cases from contracts/smee-receiver-contract.md §"Test cases":
+- [X] T051 [P] [US1, US2] Add the same six test cases to `packages/orchestrator/src/services/__tests__/pr-feedback-monitor-service.test.ts`.
+- [X] T052 [P] [US1, US2] Add the same six test cases to `packages/orchestrator/src/services/__tests__/merge-conflict-monitor-service.test.ts`.
+- [X] T053 [P] [US1, US2] Add the same six test cases to `packages/orchestrator/src/services/__tests__/clarification-answer-monitor-service.test.ts` PLUS a regression case for T021 (post-rewrite `updateAdaptivePolling` / `recordWebhookEvent` emit the `reason` strings expected by FR-005; the previous inline logic did not).
+- [X] T054 [US1, US2] Extend `packages/orchestrator/src/services/__tests__/smee-receiver.test.ts` with the seven test cases from contracts/smee-receiver-contract.md §"Test cases":
   1. `onConnected` fires exactly once across connect / disconnect / reconnect.
   2. `onConnected` never fires when receiver never connects (`fetch` rejects).
   3. Thrown `onConnected` callback is caught; receiver continues processing subsequent events.
@@ -73,17 +73,17 @@
   8. `issue_comment.created` on assigned issue → `clarificationAnswerMonitor.processClarificationAnswerEvent` called.
   9. `pull_request.synchronize` → `mergeConflictMonitor.recordWebhookEvent` called; NO processing call to any monitor (fan-out only).
   10. Optional monitors absent → no crashes; only required label monitor gets `recordWebhookEvent`.
-- [ ] T055 [US1] Add an integration test (colocated with existing server tests under `packages/orchestrator/src/__tests__/`) that constructs `createServer()` with the auto-provisioned smee path (`config.smee.channelUrl = null`, `SmeeChannelResolver` stubbed to resolve a channel URL asynchronously), fires the `onConnected` callback via a stubbed receiver, and asserts (a) all four monitors report `state.webhooksConfigured === true`, (b) `state.currentPollIntervalMs === config.smee.fallbackPollIntervalMs`, (c) `state.basePollIntervalMs === config.smee.fallbackPollIntervalMs`, (d) no monitor emitted `reason: 'webhooks-not-configured'` after the flip. This is the SC-001 / SC-002 regression gate.
+- [X] T055 [US1] Add an integration test (colocated with existing server tests under `packages/orchestrator/src/__tests__/`) that constructs `createServer()` with the auto-provisioned smee path (`config.smee.channelUrl = null`, `SmeeChannelResolver` stubbed to resolve a channel URL asynchronously), fires the `onConnected` callback via a stubbed receiver, and asserts (a) all four monitors report `state.webhooksConfigured === true`, (b) `state.currentPollIntervalMs === config.smee.fallbackPollIntervalMs`, (c) `state.basePollIntervalMs === config.smee.fallbackPollIntervalMs`, (d) no monitor emitted `reason: 'webhooks-not-configured'` after the flip. This is the SC-001 / SC-002 regression gate.
 
 ## Phase 7: Changeset
 
-- [ ] T060 Add `.changeset/987-monitors-webhook-flip-on-connect.md` with a `patch` bump for `@generacy-ai/orchestrator` (defect fix per CLAUDE.md §Changesets and plan.md Constitution Check). Body: one-line description referencing #987 and the four monitors affected. Must be a newly added file in the PR diff (the changeset-bot gate greps `--diff-filter=A`).
+- [X] T060 Add `.changeset/987-monitors-webhook-flip-on-connect.md` with a `patch` bump for `@generacy-ai/orchestrator` (defect fix per CLAUDE.md §Changesets and plan.md Constitution Check). Body: one-line description referencing #987 and the four monitors affected. Must be a newly added file in the PR diff (the changeset-bot gate greps `--diff-filter=A`).
 
 ## Phase 8: Verification
 
-- [ ] T070 Run `pnpm -r --filter @generacy-ai/orchestrator build && pnpm -r --filter @generacy-ai/orchestrator test` locally. All four new setter test suites, the smee-receiver extension tests, and the integration test must pass.
-- [ ] T071 Run `pnpm changeset status` and verify the new changeset is picked up. Confirm `.changeset/987-monitors-webhook-flip-on-connect.md` shows as an addition in `git status --diff-filter=A`.
-- [ ] T072 Smoke-check via `quickstart.md` steps (if present in the spec directory) — construct a receiver + all four monitors in a test harness, fire a synthetic connect and a synthetic `pull_request_review.submitted`, assert the flip and dispatch paths behave per the SC-001 / SC-004 targets.
+- [X] T070 Run `pnpm -r --filter @generacy-ai/orchestrator build && pnpm -r --filter @generacy-ai/orchestrator test` locally. All four new setter test suites, the smee-receiver extension tests, and the integration test must pass.
+- [X] T071 Run `pnpm changeset status` and verify the new changeset is picked up. Confirm `.changeset/987-monitors-webhook-flip-on-connect.md` shows as an addition in `git status --diff-filter=A`.
+- [X] T072 Smoke-check via `quickstart.md` steps (if present in the spec directory) — construct a receiver + all four monitors in a test harness, fire a synthetic connect and a synthetic `pull_request_review.submitted`, assert the flip and dispatch paths behave per the SC-001 / SC-004 targets.
 
 ## Dependencies & Execution Order
 

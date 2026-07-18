@@ -51,6 +51,19 @@ export interface LabelMonitorOptions {
   maxConcurrentPolls: number;
 }
 
+/**
+ * #987: options for the runtime `setWebhooksConfigured(true, opts?)` flip.
+ * See specs/987-summary-cluster-where-smee/contracts/setter-contract.md.
+ */
+export interface SetWebhooksConfiguredOptions {
+  /**
+   * The base cadence to run at once webhooks are live. Sets both
+   * `state.basePollIntervalMs` and `state.currentPollIntervalMs`.
+   * If omitted, the existing `state.basePollIntervalMs` is kept.
+   */
+  basePollIntervalMs?: number;
+}
+
 const PROCESS_LABEL_PREFIX = 'process:';
 const COMPLETED_LABEL_PREFIX = 'completed:';
 const FAILED_LABEL_PREFIX = 'failed:';
@@ -626,6 +639,21 @@ export class LabelMonitorService {
 
   getState(): Readonly<MonitorState> {
     return { ...this.state };
+  }
+
+  /**
+   * #987: flip `webhooksConfigured` to `true` at runtime once `startSmeePipeline`
+   * observes the smee receiver connect. Q1/Q2: setter is one-way; `adaptivePolling`
+   * stays untouched so the controller's `webhook-stale → to-fast` safety net
+   * remains reachable. See specs/987-summary-cluster-where-smee/clarifications.md.
+   */
+  setWebhooksConfigured(configured: true, opts?: SetWebhooksConfiguredOptions): void {
+    void configured;
+    this.state.webhooksConfigured = true;
+    if (opts?.basePollIntervalMs !== undefined) {
+      this.state.basePollIntervalMs = opts.basePollIntervalMs;
+      this.state.currentPollIntervalMs = opts.basePollIntervalMs;
+    }
   }
 
   // ==========================================================================

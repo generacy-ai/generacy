@@ -40,6 +40,7 @@ import type { Logger } from '../worker/types.js';
 import { filterByAssignee } from './identity.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
 import { commentCarriesMachineMarker } from '../worker/clarification-markers.js';
+import { decideAdaptivePoll } from './adaptive-poll-controller.js';
 
 const WAITING_FOR_CLARIFICATION_LABEL = 'waiting-for:clarification';
 const AGENT_PAUSED_LABEL = 'agent:paused';
@@ -59,6 +60,14 @@ export interface ClarificationAnswerMonitorOptions {
   pollIntervalMs: number;
   adaptivePolling: boolean;
   maxConcurrentPolls: number;
+}
+
+/**
+ * #987: options for the runtime `setWebhooksConfigured(true, opts?)` flip.
+ * See specs/987-summary-cluster-where-smee/contracts/setter-contract.md.
+ */
+export interface SetWebhooksConfiguredOptions {
+  basePollIntervalMs?: number;
 }
 
 /**
@@ -109,6 +118,7 @@ export class ClarificationAnswerMonitorService {
     tokenProvider?: () => Promise<string | undefined>,
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
+    webhooksConfigured: boolean = false,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -129,10 +139,7 @@ export class ClarificationAnswerMonitorService {
       lastWebhookEvent: null,
       currentPollIntervalMs: config.pollIntervalMs,
       basePollIntervalMs: config.pollIntervalMs,
-      // #953: this monitor is poll-driven and has no webhook feeder signal,
-      // so it runs at base cadence (no adaptive backoff). Matches the
-      // `false` default the other poll-fed monitors pass.
-      webhooksConfigured: false,
+      webhooksConfigured,
     };
   }
 
@@ -403,29 +410,45 @@ export class ClarificationAnswerMonitorService {
 
   recordWebhookEvent(): void {
     this.state.lastWebhookEvent = Date.now();
-    const wasUnhealthy = !this.state.webhookHealthy;
     this.state.webhookHealthy = true;
-    if (wasUnhealthy) {
-      this.state.currentPollIntervalMs = this.state.basePollIntervalMs;
+    const decision = decideAdaptivePoll({
+      webhooksConfigured: this.state.webhooksConfigured,
+      adaptivePolling: this.options.adaptivePolling,
+      basePollIntervalMs: this.state.basePollIntervalMs,
+      currentPollIntervalMs: this.state.currentPollIntervalMs,
+      lastWebhookEvent: this.state.lastWebhookEvent,
+      webhookHealthy: this.state.webhookHealthy,
+      adaptiveDivisor: ADAPTIVE_DIVISOR,
+      minPollIntervalMs: MIN_POLL_INTERVAL_MS,
+      nowMs: Date.now(),
+    });
+    this.state.currentPollIntervalMs = decision.currentPollIntervalMs;
+    this.state.webhookHealthy = decision.webhookHealthy;
+    if (decision.transition !== 'none') {
       this.logger.info(
-        { intervalMs: this.state.currentPollIntervalMs },
+        { intervalMs: this.state.currentPollIntervalMs, reason: decision.reason },
         'Webhook reconnected, restoring clarification-answer monitor poll interval',
       );
     }
   }
 
   private updateAdaptivePolling(): void {
-    if (this.state.lastWebhookEvent === null) return;
-    const timeSinceLastWebhook = Date.now() - this.state.lastWebhookEvent;
-    const unhealthyThreshold = this.state.basePollIntervalMs * 2;
-    if (timeSinceLastWebhook > unhealthyThreshold && this.state.webhookHealthy) {
-      this.state.webhookHealthy = false;
-      this.state.currentPollIntervalMs = Math.max(
-        MIN_POLL_INTERVAL_MS,
-        Math.floor(this.state.basePollIntervalMs / ADAPTIVE_DIVISOR),
-      );
+    const decision = decideAdaptivePoll({
+      webhooksConfigured: this.state.webhooksConfigured,
+      adaptivePolling: this.options.adaptivePolling,
+      basePollIntervalMs: this.state.basePollIntervalMs,
+      currentPollIntervalMs: this.state.currentPollIntervalMs,
+      lastWebhookEvent: this.state.lastWebhookEvent,
+      webhookHealthy: this.state.webhookHealthy,
+      adaptiveDivisor: ADAPTIVE_DIVISOR,
+      minPollIntervalMs: MIN_POLL_INTERVAL_MS,
+      nowMs: Date.now(),
+    });
+    this.state.currentPollIntervalMs = decision.currentPollIntervalMs;
+    this.state.webhookHealthy = decision.webhookHealthy;
+    if (decision.transition !== 'none') {
       this.logger.info(
-        { intervalMs: this.state.currentPollIntervalMs, timeSinceLastWebhook },
+        { intervalMs: this.state.currentPollIntervalMs, reason: decision.reason },
         'Webhooks appear unhealthy, increasing clarification-answer poll frequency',
       );
     }
@@ -437,6 +460,20 @@ export class ClarificationAnswerMonitorService {
 
   getState(): Readonly<MonitorState> {
     return { ...this.state };
+  }
+
+  /**
+   * #987: flip `webhooksConfigured` to `true` at runtime. Setter is one-way
+   * (Q1); `adaptivePolling` stays untouched so the staleness safety net is
+   * reachable (Q2). See specs/987-summary-cluster-where-smee/clarifications.md.
+   */
+  setWebhooksConfigured(configured: true, opts?: SetWebhooksConfiguredOptions): void {
+    void configured;
+    this.state.webhooksConfigured = true;
+    if (opts?.basePollIntervalMs !== undefined) {
+      this.state.basePollIntervalMs = opts.basePollIntervalMs;
+      this.state.currentPollIntervalMs = opts.basePollIntervalMs;
+    }
   }
 
   // ==========================================================================

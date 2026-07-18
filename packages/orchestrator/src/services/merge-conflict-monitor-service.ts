@@ -56,6 +56,14 @@ export interface MergeConflictMonitorOptions {
 }
 
 /**
+ * #987: options for the runtime `setWebhooksConfigured(true, opts?)` flip.
+ * See specs/987-summary-cluster-where-smee/contracts/setter-contract.md.
+ */
+export interface SetWebhooksConfiguredOptions {
+  basePollIntervalMs?: number;
+}
+
+/**
  * MergeConflictMonitorService — enqueues `resolve-merge-conflicts` work when
  * the pause state (`waiting-for:merge-conflicts + agent:paused`) is detected
  * on an assigned open issue.
@@ -384,6 +392,20 @@ export class MergeConflictMonitorService {
 
   getState(): Readonly<MonitorState> {
     return { ...this.state };
+  }
+
+  /**
+   * #987: flip `webhooksConfigured` to `true` at runtime. Setter is one-way
+   * (Q1); `adaptivePolling` stays untouched so the staleness safety net is
+   * reachable (Q2). See specs/987-summary-cluster-where-smee/clarifications.md.
+   */
+  setWebhooksConfigured(configured: true, opts?: SetWebhooksConfiguredOptions): void {
+    void configured;
+    this.state.webhooksConfigured = true;
+    if (opts?.basePollIntervalMs !== undefined) {
+      this.state.basePollIntervalMs = opts.basePollIntervalMs;
+      this.state.currentPollIntervalMs = opts.basePollIntervalMs;
+    }
   }
 
   // ==========================================================================
