@@ -255,6 +255,7 @@ async function runSmeeMode(
     onEvent,
     onReconnectAttempt: (n) => input.selector.onReconnectAttempt(n),
     onReconnectSuccess: () => input.selector.onReconnectSuccess(),
+    onSseBytes: () => input.selector.onSseBytes(),
   };
   if (input.deps.runner != null) sourceOptions.runner = input.deps.runner;
 
@@ -436,24 +437,38 @@ export async function runDoorbell(
 
   type StartOutcome = 'ok' | 'transient-fail' | 'permanent-exit';
 
+  // In-flight guard: the startup fall-through calls markStartupSmeeFailed()
+  // (which synchronously fires the poll-fallback callback → fire-and-forget
+  // startPollMode) and then also awaits startPollMode() directly. Without
+  // this guard both would pass the `pollHandle != null` check and create
+  // two subscribers on the same bus.
+  let pollStartInFlight: Promise<StartOutcome> | null = null;
   const startPollMode = async (): Promise<StartOutcome> => {
     if (pollHandle != null) return 'ok';
-    const handle = await runPollMode({
-      ref: form.ref,
-      form,
-      options,
-      deps,
-      logger,
-      stdout,
-      stderr,
-      stopPromise,
-      stop,
-      retryAbortSignal: retryAbortController.signal,
-    });
-    if (handle == null) return 'transient-fail';
-    if ('kind' in handle && handle.kind === 'permanent-exit') return 'permanent-exit';
-    pollHandle = handle as RunPollModeHandle;
-    return 'ok';
+    if (pollStartInFlight != null) return pollStartInFlight;
+    pollStartInFlight = (async (): Promise<StartOutcome> => {
+      try {
+        const handle = await runPollMode({
+          ref: form.ref,
+          form,
+          options,
+          deps,
+          logger,
+          stdout,
+          stderr,
+          stopPromise,
+          stop,
+          retryAbortSignal: retryAbortController.signal,
+        });
+        if (handle == null) return 'transient-fail';
+        if ('kind' in handle && handle.kind === 'permanent-exit') return 'permanent-exit';
+        pollHandle = handle as RunPollModeHandle;
+        return 'ok';
+      } finally {
+        pollStartInFlight = null;
+      }
+    })();
+    return pollStartInFlight;
   };
 
   const startSmeeMode = async (url: string): Promise<StartOutcome> => {
@@ -482,18 +497,24 @@ export async function runDoorbell(
 
   selector.onModeChange((next: SourceMode) => {
     if (next === 'poll-fallback') {
+      // Live bridge: keep smeeHandle alive so its runLoop keeps reconnecting
+      // in the background; open a poll subscriber alongside so stdout stays
+      // hot. Never stop the smee source here.
       void (async (): Promise<void> => {
-        if (smeeHandle != null) {
-          const s = smeeHandle;
-          smeeHandle = null;
-          await s.source.stop();
-        }
         const outcome = await startPollMode();
         if (outcome === 'permanent-exit') {
           permanentExit = true;
           stop();
         } else if (outcome === 'transient-fail') stop();
       })();
+    } else if (next === 'smee-active') {
+      // Runtime bridge exit: background smee reconnected. Release the poll
+      // subscriber; smee source is already streaming.
+      if (pollHandle != null) {
+        const p = pollHandle;
+        pollHandle = null;
+        p.release();
+      }
     } else if (next === 'smee-attempt' && discovery != null) {
       void (async (): Promise<void> => {
         if (pollHandle != null) {
@@ -531,6 +552,7 @@ export async function runDoorbell(
       return 3;
     }
     if (outcome === 'transient-fail') {
+      selector.markStartupSmeeFailed();
       const pollOutcome = await startPollMode();
       if (pollOutcome === 'permanent-exit') {
         selector.stop();

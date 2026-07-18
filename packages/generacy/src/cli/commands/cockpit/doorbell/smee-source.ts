@@ -41,6 +41,7 @@ export interface SmeeDoorbellSourceOptions {
   onEvent: (event: CockpitStreamEvent) => Promise<void>;
   onReconnectAttempt: (failedAttempts: number) => void;
   onReconnectSuccess: () => void;
+  onSseBytes?: () => void;
   onRefSetRefreshFailure?: (err: unknown) => void;
   now?: () => number;
   fetch?: typeof globalThis.fetch;
@@ -135,6 +136,7 @@ export class SmeeDoorbellSource {
   private readonly onEvent: (event: CockpitStreamEvent) => Promise<void>;
   private readonly onReconnectAttempt: (failedAttempts: number) => void;
   private readonly onReconnectSuccess: () => void;
+  private readonly onSseBytes?: () => void;
   private readonly onRefSetRefreshFailure?: (err: unknown) => void;
   private readonly now: () => number;
   private readonly fetchImpl: typeof globalThis.fetch;
@@ -164,6 +166,9 @@ export class SmeeDoorbellSource {
     this.onEvent = options.onEvent;
     this.onReconnectAttempt = options.onReconnectAttempt;
     this.onReconnectSuccess = options.onReconnectSuccess;
+    if (options.onSseBytes != null) {
+      this.onSseBytes = options.onSseBytes;
+    }
     if (options.onRefSetRefreshFailure != null) {
       this.onRefSetRefreshFailure = options.onRefSetRefreshFailure;
     }
@@ -314,6 +319,14 @@ export class SmeeDoorbellSource {
       while (!signal.aborted) {
         const { done, value } = await reader.read();
         if (done) break;
+
+        if (value != null && value.length > 0) {
+          try {
+            this.onSseBytes?.();
+          } catch {
+            /* callback failures don't stop the loop */
+          }
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const events = buffer.split('\n\n');

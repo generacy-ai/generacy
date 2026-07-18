@@ -11,6 +11,7 @@ export type SourceMode = 'smee-attempt' | 'smee-active' | 'poll-fallback';
 export type SourceReason =
   | 'startup-no-channel'
   | 'startup-smee-selected'
+  | 'startup-smee-failed'
   | 'smee-runtime-lost'
   | 'smee-re-promoted';
 
@@ -27,7 +28,7 @@ export interface SourceSelectorOptions {
 export type ModeChangeCallback = (next: SourceMode, reason: SourceReason) => void;
 
 export const DEFAULT_DEMOTE_AFTER_FAILURES = 5;
-export const DEFAULT_DEMOTE_AFTER_MS_WITHOUT_SUCCESS = 300_000;
+export const DEFAULT_DEMOTE_AFTER_MS_WITHOUT_SUCCESS = 90_000;
 export const DEFAULT_RE_PROMOTE_INTERVAL_MS = 300_000;
 const ELAPSED_TICKER_INTERVAL_MS = 1_000;
 
@@ -114,7 +115,30 @@ export class SourceSelector {
           }
         }
       }
+    } else if (this._current === 'poll-fallback') {
+      // Runtime bridge exit: background smee reconnect succeeded → jump
+      // directly back to smee-active, skipping smee-attempt.
+      if (this.rePromoteTimer != null) {
+        clearInterval(this.rePromoteTimer);
+        this.rePromoteTimer = null;
+      }
+      this.transition('smee-active', 'smee-re-promoted');
     }
+  }
+
+  /** Refresh liveness on inbound SSE bytes (keepalive comments or payloads). */
+  onSseBytes(): void {
+    if (this.stopped) return;
+    if (this._current !== 'smee-active') return;
+    this.lastSuccessfulConnectAt = this.now();
+  }
+
+  /** Startup `startSmeeMode` returned `transient-fail`: transition to the live
+   * poll-fallback bridge so `rePromoteTimer` arms and stdout keeps flowing. */
+  markStartupSmeeFailed(): void {
+    if (this.stopped) return;
+    if (this._current !== 'smee-attempt') return;
+    this.transition('poll-fallback', 'startup-smee-failed');
   }
 
   observeElapsed(): void {
