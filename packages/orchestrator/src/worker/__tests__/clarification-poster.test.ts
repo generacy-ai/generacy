@@ -1549,7 +1549,10 @@ describe('parseAnswersFromComments — marker exclusion (#909)', () => {
     const m = meta as Record<string, unknown>;
     expect(m.commentId).toBe(4938943909);
     expect(m.author).toBe('generacy-ai[bot]');
-    expect(m.markerPrefix).toBe('<!-- generacy-stage:clarification');
+    // #993: MACHINE_MARKER_FAMILIES is matched before the enumerated markers,
+    // so a `<!-- generacy-stage:*` comment now logs the family prefix rather
+    // than the specific `<!-- generacy-stage:clarification` enumeration.
+    expect(m.markerPrefix).toBe('<!-- generacy-stage:');
     expect(m.issueNumber).toBe(42);
     expect(m.body).toBeUndefined();
     expect(m.content).toBeUndefined();

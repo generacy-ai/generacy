@@ -6,6 +6,9 @@ import {
   CLARIFICATION_ANSWER_MARKERS,
   commentCarriesAnswerMarker,
   matchClarificationAnswerMarker,
+  MACHINE_MARKER_FAMILIES,
+  commentCarriesMachineMarker,
+  matchMachineMarker,
 } from '../clarification-markers.js';
 
 describe('CLARIFICATION_QUESTION_MARKERS', () => {
@@ -141,6 +144,62 @@ describe('#958 commentCarriesAnswerMarker', () => {
   it('returns true when the marker appears on a non-first line', () => {
     const body = 'preamble\n<!-- generacy-clarification-answers:2 -->\nQ1: A';
     expect(commentCarriesAnswerMarker(body)).toBe(true);
+  });
+});
+
+describe('#993 MACHINE_MARKER_FAMILIES (SC-004)', () => {
+  it('exposes the two stage families in declared order', () => {
+    expect([...MACHINE_MARKER_FAMILIES]).toEqual([
+      '<!-- generacy-stage:',
+      '<!-- speckit-stage:',
+    ]);
+  });
+
+  it('family match — speckit-stage:tasks returns family prefix', () => {
+    const input = '<!-- speckit-stage:tasks -->\nBody\n';
+    expect(commentCarriesMachineMarker(input)).toBe(true);
+    expect(matchMachineMarker(input)).toBe('<!-- speckit-stage:');
+  });
+
+  it('family match — the observed-bug prefix speckit-stage:clarification is caught', () => {
+    const input = '<!-- speckit-stage:clarification -->\n';
+    expect(commentCarriesMachineMarker(input)).toBe(true);
+    expect(matchMachineMarker(input)).toBe('<!-- speckit-stage:');
+  });
+
+  it('family match — previously-enumerated generacy-stage:specification still caught', () => {
+    const input = '<!-- generacy-stage:specification -->\n';
+    expect(commentCarriesMachineMarker(input)).toBe(true);
+    expect(matchMachineMarker(input)).toBe('<!-- generacy-stage:');
+  });
+
+  it('SC-004 — unknown future stage suffix matches without a code change', () => {
+    const input = '<!-- generacy-stage:future-phase-that-does-not-exist-yet -->\n';
+    expect(commentCarriesMachineMarker(input)).toBe(true);
+    expect(matchMachineMarker(input)).toBe('<!-- generacy-stage:');
+  });
+
+  it('anchor preserved — question-batch prefix returns enumerated (not family)', () => {
+    // `<!-- generacy-clarifications:` does not begin with either family
+    // prefix, so the enumerated match fires. The FR-004 anchor set stays
+    // unaffected by the family refactor.
+    const input = '<!-- generacy-clarifications:5 -->\n';
+    expect(matchMachineMarker(input)).toBe('<!-- generacy-clarifications:');
+    expect(commentCarriesQuestionMarker(input)).toBe(true);
+  });
+
+  it('case sensitivity preserved for family match', () => {
+    const input = '<!-- Generacy-Stage:foo -->\n';
+    expect(commentCarriesMachineMarker(input)).toBe(false);
+  });
+
+  it('`> `-quoted family marker still not matched (column-0 rule)', () => {
+    const input = '> <!-- generacy-stage:specification -->\n';
+    expect(commentCarriesMachineMarker(input)).toBe(false);
+  });
+
+  it('empty body returns undefined', () => {
+    expect(matchMachineMarker('')).toBeUndefined();
   });
 });
 
