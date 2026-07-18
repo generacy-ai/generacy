@@ -1,14 +1,17 @@
 /**
- * `findClarificationComment` — implements AD-3 / D-R1:
+ * `findClarificationComment` — marker-first / timeline-fallback strategy (#995).
  *
- *  1. Walk `gh api repos/{o}/{r}/issues/{n}/timeline` for the most-recent event
- *     `event === 'labeled'` with `label.name === 'waiting-for:clarification'`.
- *  2. Take its `created_at` timestamp.
- *  3. Fetch `gh issue view --json comments` and return the first comment whose
- *     `createdAt >= labelEventTs`.
- *  4. Return `null` if no qualifying comment exists.
+ * Primary path: return the latest-by-`createdAt` non-stage-status comment
+ * carrying a `CLARIFICATION_QUESTION_MARKERS` prefix at column 0. This survives
+ * `waiting-for:clarification` re-application (requeue / boot-resume / restart)
+ * that jumps the label timestamp past every question comment.
+ *
+ * Fallback path: today's most-recent-`labeled` + at-or-after scan, preserved
+ * verbatim for legacy marker-less batches. Emits one `warn` per invocation.
  */
+import { matchClarificationQuestionMarker } from '@generacy-ai/orchestrator';
 import type { GhWrapper, IssueComment } from '@generacy-ai/cockpit';
+import { getLogger } from '../../utils/logger.js';
 
 const WAITING_CLARIFICATION = 'waiting-for:clarification';
 
@@ -52,6 +55,22 @@ export async function findClarificationComment(
   repo: string,
   number: number,
 ): Promise<IssueComment | null> {
+  const comments = await gh.fetchIssueComments(repo, number);
+
+  // Marker-first pass: survives waiting-for:clarification re-application that
+  // would otherwise strand the question comment behind the label event.
+  const markerHits = comments
+    .filter((c) => matchClarificationQuestionMarker(c.body) !== undefined)
+    .filter((c) => !isStageStatusComment(c.body))
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  if (markerHits.length > 0) return markerHits[0] ?? null;
+
+  const [owner, repoName] = repo.split('/', 2);
+  getLogger().warn(
+    { owner, repo: repoName, issue: number },
+    `marker-less clarification comment; poster should be updated — issue=${repo}#${number}`,
+  );
+
   const timeline = (await gh.fetchIssueTimeline(repo, number)) as TimelineLabelEvent[];
 
   let latestLabelTs: string | null = null;
@@ -68,7 +87,6 @@ export async function findClarificationComment(
   const labelTime = Date.parse(latestLabelTs);
   if (Number.isNaN(labelTime)) return null;
 
-  const comments = await gh.fetchIssueComments(repo, number);
   const sorted = [...comments].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
   for (const c of sorted) {
     const ct = Date.parse(c.createdAt);
