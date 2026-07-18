@@ -8,6 +8,7 @@
  * This eliminates the need for polling when a smee channel is configured,
  * providing near-instant label event detection with zero GitHub API calls.
  */
+import { calculateBackoffDelay } from '@generacy-ai/smee-backoff';
 import type { LabelMonitorService } from './label-monitor-service.js';
 import type { PrFeedbackMonitorService } from './pr-feedback-monitor-service.js';
 import type { MergeConflictMonitorService } from './merge-conflict-monitor-service.js';
@@ -66,7 +67,6 @@ export interface SmeeReceiverOptions {
  */
 export class SmeeWebhookReceiver {
   private static readonly BASE_RECONNECT_DELAY_MS = 5000;
-  private static readonly MAX_BACKOFF_MS = 300000; // 5 minutes
 
   private readonly channelUrl: string;
   private readonly watchedRepos: Set<string>;
@@ -476,25 +476,11 @@ export class SmeeWebhookReceiver {
     });
   }
 
-  /**
-   * Get the current reconnect delay based on the number of attempts.
-   * Uses exponential backoff with the current attempt count.
-   */
   private get reconnectDelayMs(): number {
-    return this.calculateBackoffDelay(this.reconnectAttempt);
-  }
-
-  /**
-   * Calculate exponential backoff delay for reconnection attempts.
-   * Formula: BASE_RECONNECT_DELAY_MS * 2^attempt, capped at MAX_BACKOFF_MS.
-   * Progression: 5s → 10s → 20s → 40s → 80s → 160s → 300s (capped).
-   *
-   * @param attempt - The current reconnection attempt number (0-indexed)
-   * @returns Delay in milliseconds before next reconnection attempt
-   */
-  private calculateBackoffDelay(attempt: number): number {
-    const delay = this.baseReconnectDelayMs * Math.pow(2, attempt);
-    return Math.min(delay, SmeeWebhookReceiver.MAX_BACKOFF_MS);
+    return calculateBackoffDelay(this.reconnectAttempt, {
+      base: this.baseReconnectDelayMs,
+      cap: 30_000,
+    });
   }
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {

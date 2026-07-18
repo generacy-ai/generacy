@@ -10,21 +10,21 @@
 
 ## Phase 1: New leaf package skeleton
 
-- [ ] T001 [US1] Scaffold `packages/smee-backoff/package.json` — name `@generacy-ai/smee-backoff`, ESM (`"type": "module"`), Node `>=20`, zero runtime deps, `main`/`types`/`exports` all pointing at `dist/index.js` + `dist/index.d.ts`, `build` script `tsc`, `test` script `vitest run`. Copy the shape of `packages/activation-client/package.json` (the sibling precedent named in research.md D4).
-- [ ] T002 [P] [US1] Scaffold `packages/smee-backoff/tsconfig.json` — copy from `packages/activation-client/tsconfig.json` (NodeNext module resolution, `outDir: dist`, `rootDir: src`).
-- [ ] T003 [P] [US1] Add `vitest` devDependency to `packages/smee-backoff/package.json` matching the version pin used by `packages/activation-client` (keep the workspace vitest version consistent so root install doesn't fan out a new version).
+- [X] T001 [US1] Scaffold `packages/smee-backoff/package.json` — name `@generacy-ai/smee-backoff`, ESM (`"type": "module"`), Node `>=20`, zero runtime deps, `main`/`types`/`exports` all pointing at `dist/index.js` + `dist/index.d.ts`, `build` script `tsc`, `test` script `vitest run`. Copy the shape of `packages/activation-client/package.json` (the sibling precedent named in research.md D4).
+- [X] T002 [P] [US1] Scaffold `packages/smee-backoff/tsconfig.json` — copy from `packages/activation-client/tsconfig.json` (NodeNext module resolution, `outDir: dist`, `rootDir: src`).
+- [X] T003 [P] [US1] Add `vitest` devDependency to `packages/smee-backoff/package.json` matching the version pin used by `packages/activation-client` (keep the workspace vitest version consistent so root install doesn't fan out a new version).
 
 ## Phase 2: Core helper — pure function + unit tests
 
 Contract source: `specs/991-summary-both-smee-sse/contracts/calculate-backoff-delay.md`.
 
-- [ ] T010 [US1] Create `packages/smee-backoff/src/calculate-backoff-delay.ts` implementing the equal-jitter algorithm exactly as specified in the contract §Algorithm and data-model.md §`calculateBackoffDelay`. Exports:
+- [X] T010 [US1] Create `packages/smee-backoff/src/calculate-backoff-delay.ts` implementing the equal-jitter algorithm exactly as specified in the contract §Algorithm and data-model.md §`calculateBackoffDelay`. Exports:
   - `interface BackoffOptions { base: number; cap: number; random?: () => number }` with the JSDoc from `data-model.md` (one short block per field).
   - `function calculateBackoffDelay(attempt: number, opts: BackoffOptions): number` with the equal-jitter formula: `raw = base * 2 ** attempt`; `capped = Math.min(raw, cap)`; return `capped/2 + rng() * (capped/2)` where `rng = opts.random ?? Math.random`.
   - Precondition guards throwing `RangeError` per contract §Errors: `base <= 0` → `'base must be > 0'`; `cap < base` → `'cap must be >= base'`; `!Number.isFinite(attempt) || attempt < 0` → `'attempt must be a non-negative finite number'`.
   - No logging, no self-timing, synchronous return (per contract §Non-goals).
-- [ ] T011 [US1] Create `packages/smee-backoff/src/index.ts` — barrel that re-exports `BackoffOptions` and `calculateBackoffDelay` from `./calculate-backoff-delay.js`. No other exports.
-- [ ] T012 [US1] Create `packages/smee-backoff/tests/unit/calculate-backoff-delay.test.ts` implementing every row of the contract §Test cases table (T1–T10). Each vitest `it()` block corresponds to one contract row:
+- [X] T011 [US1] Create `packages/smee-backoff/src/index.ts` — barrel that re-exports `BackoffOptions` and `calculateBackoffDelay` from `./calculate-backoff-delay.js`. No other exports.
+- [X] T012 [US1] Create `packages/smee-backoff/tests/unit/calculate-backoff-delay.test.ts` implementing every row of the contract §Test cases table (T1–T10). Each vitest `it()` block corresponds to one contract row:
   - T1: attempt=0, random=()=>0 → exactly `2500` (G2 lower bound).
   - T2: attempt=0, random=()=>0.9999 → `< 5000` and `> 4999` (G2 upper bound approach).
   - T3: attempt=3, random=()=>0 → exactly `15000` (`cap/2`); asserts G3 lower + G5.
@@ -35,7 +35,7 @@ Contract source: `specs/991-summary-both-smee-sse/contracts/calculate-backoff-de
   - T8: `base=0` throws `RangeError`.
   - T9: `cap=1000, base=5000` throws `RangeError`.
   - T10 (off-by-one guard): attempt=2, random=()=>0.5 → exactly `15000` (raw=20000 not yet capped; `10000 + 0.5*10000`).
-- [ ] T013 [US1] Confirm `pnpm --filter @generacy-ai/smee-backoff test` runs green locally before Phase 3 begins (helper is the dependency both consumers depend on).
+- [X] T013 [US1] Confirm `pnpm --filter @generacy-ai/smee-backoff test` runs green locally before Phase 3 begins (helper is the dependency both consumers depend on).
 
 ## Phase 3: Consumer integration
 
@@ -43,8 +43,8 @@ Contract source: `specs/991-summary-both-smee-sse/contracts/calculate-backoff-de
 
 ### Orchestrator receiver
 
-- [ ] T020 [US1] Add `"@generacy-ai/smee-backoff": "workspace:^"` to `packages/orchestrator/package.json` `dependencies`, matching orchestrator's existing `workspace:^` convention (research.md §Package.json wiring).
-- [ ] T021 [US1] Refactor `packages/orchestrator/src/services/smee-receiver.ts`:
+- [X] T020 [US1] Add `"@generacy-ai/smee-backoff": "workspace:^"` to `packages/orchestrator/package.json` `dependencies`, matching orchestrator's existing `workspace:^` convention (research.md §Package.json wiring).
+- [X] T021 [US1] Refactor `packages/orchestrator/src/services/smee-receiver.ts`:
   - Add `import { calculateBackoffDelay } from '@generacy-ai/smee-backoff';` at the top of the imports block.
   - Delete `private static readonly MAX_BACKOFF_MS = 300000;` (`:69`).
   - Delete the private `calculateBackoffDelay` method body (`:495-498`).
@@ -62,13 +62,13 @@ Contract source: `specs/991-summary-both-smee-sse/contracts/calculate-backoff-de
 
 ### Generacy doorbell
 
-- [ ] T030 [P] [US1] Add `"@generacy-ai/smee-backoff": "workspace:*"` to `packages/generacy/package.json` `dependencies`, matching generacy's `workspace:*` convention (research.md §Package.json wiring).
-- [ ] T031 [P] [US1] Before deleting the exported `MAX_BACKOFF_MS`, run the importer sweep documented in research.md:
+- [X] T030 [P] [US1] Add `"@generacy-ai/smee-backoff": "workspace:*"` to `packages/generacy/package.json` `dependencies`, matching generacy's `workspace:*` convention (research.md §Package.json wiring).
+- [X] T031 [P] [US1] Before deleting the exported `MAX_BACKOFF_MS`, run the importer sweep documented in research.md:
   ```bash
   rg "MAX_BACKOFF_MS" packages/generacy/src
   ```
   If any file **outside** `smee-source.ts` imports `MAX_BACKOFF_MS`, update it to import from `@generacy-ai/smee-backoff` **first** (should be zero hits — the constant is loop-internal today).
-- [ ] T032 [US1] Refactor `packages/generacy/src/cli/commands/cockpit/doorbell/smee-source.ts`:
+- [X] T032 [US1] Refactor `packages/generacy/src/cli/commands/cockpit/doorbell/smee-source.ts`:
   - Add `import { calculateBackoffDelay } from '@generacy-ai/smee-backoff';`.
   - Delete `export const MAX_BACKOFF_MS = 300_000;` (`:30`).
   - Delete the private `calculateBackoffDelay` method (`:232-235`).
@@ -84,7 +84,7 @@ Contract source: `specs/991-summary-both-smee-sse/contracts/calculate-backoff-de
 
 ## Phase 4: Consumer regression test (FR-007b)
 
-- [ ] T040 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/smee-source-reconnect.test.ts` per contracts/consumer-integration.md §Fake-timer loop test contract:
+- [X] T040 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/smee-source-reconnect.test.ts` per contracts/consumer-integration.md §Fake-timer loop test contract:
   - `vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })`.
   - Mock `fetch`: first N calls reject / return non-2xx so `reconnectAttempt` climbs to cap-saturation; the (N+1)th returns a successful SSE-shaped stream.
   - Construct `SmeeDoorbellSource` with the mock `fetch` and a minimal `gh` stub.
@@ -94,19 +94,19 @@ Contract source: `specs/991-summary-both-smee-sse/contracts/calculate-backoff-de
 
 ## Phase 5: Verification & changeset
 
-- [ ] T050 [US1] SC-003 grep-parity sweep (must be clean before opening the PR):
+- [X] T050 [US1] SC-003 grep-parity sweep (must be clean before opening the PR):
   ```bash
   rg 'MAX_BACKOFF_MS' packages/orchestrator/src packages/generacy/src   # → zero hits
   rg 'Math\.pow\(2, [^)]*attempt' packages/orchestrator/src packages/generacy/src   # → zero hits
   ```
   Any surviving hit outside `packages/smee-backoff/` is a regression against FR-005.
-- [ ] T051 [P] [US1] Run all three packages' test suites and confirm green:
+- [X] T051 [P] [US1] Run all three packages' test suites and confirm green:
   ```bash
   pnpm --filter @generacy-ai/smee-backoff test
   pnpm --filter @generacy-ai/orchestrator test
   pnpm --filter @generacy-ai/generacy test -- smee-source-reconnect
   ```
-- [ ] T052 [P] [US1] Create `.changeset/991-smee-backoff.md` per contracts/consumer-integration.md §Changeset — a **new** file (not an edit), `minor` bump for all three packages:
+- [X] T052 [P] [US1] Create `.changeset/991-smee-backoff.md` per contracts/consumer-integration.md §Changeset — a **new** file (not an edit), `minor` bump for all three packages:
   ```md
   ---
   "@generacy-ai/smee-backoff": minor
