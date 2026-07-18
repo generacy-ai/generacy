@@ -1,17 +1,21 @@
 /**
  * `discoverChannelUrl` — resolves the smee.io channel URL for the doorbell to
- * consume. Four-stage lookup: env override → workspace walk-up →
- * absolute workspace-mirror path → cluster-internal fallback. Never throws;
- * malformed input logs a warning and returns null.
+ * consume. Five-stage lookup: env override → webhook-config (via `gh api
+ * /hooks`) → workspace walk-up → absolute workspace-mirror path →
+ * cluster-internal fallback. Never throws; malformed input logs a warning and
+ * returns null.
  *
- * Contract: `specs/980-summary-978-shipped-working/contracts/channel-discovery.md`.
+ * Contract: `specs/988-summary-cockpit-auto-doorbell/contracts/channel-discovery.md`.
  */
 import type { PathLike } from 'node:fs';
 import { dirname, join, parse as parsePath } from 'node:path';
+import { z } from 'zod';
+import type { CommandRunner } from '@generacy-ai/cockpit';
 
 export const DEFAULT_CHANNEL_FILE_PATH = '/var/lib/generacy/smee-channel';
 export const DEFAULT_WORKSPACE_MIRROR_PATH =
   '/workspaces/.generacy/cockpit/smee-channel';
+export const DEFAULT_WEBHOOK_CONFIG_TIMEOUT_MS = 5_000;
 
 // Copied verbatim from packages/orchestrator/src/services/smee-channel-resolver.ts:27
 // to avoid an orchestrator import in the CLI.
@@ -19,6 +23,7 @@ export const SMEE_URL_PATTERN = /^https:\/\/smee\.io\/[A-Za-z0-9_-]+$/;
 
 export type ChannelSource =
   | 'env'
+  | 'webhook-config'
   | 'workspace-walkup'
   | 'workspace-absolute'
   | 'file';
@@ -41,6 +46,52 @@ export interface ChannelDiscoveryInput {
   cwd?: string;
   /** Absolute fallback if walk-up produces no hit. */
   workspaceMirrorPath?: string;
+  /**
+   * Pre-parsed target repos for the webhook-config stage, primary-first.
+   * The caller (`doorbell.ts`) derives this via `resolveWebhookTargets`.
+   * When absent or empty, the webhook-config stage is skipped.
+   */
+  targets?: Array<{ owner: string; repo: string }>;
+  /**
+   * Command runner used to invoke `gh api …/hooks`. When absent, the
+   * webhook-config stage is skipped even if `targets` is non-empty.
+   */
+  runner?: CommandRunner;
+  /**
+   * Per-call timeout for the `gh api …/hooks` invocation. Default 5000ms
+   * (spec FR-009). Exposed for tests.
+   */
+  webhookConfigTimeoutMs?: number;
+}
+
+export const SmeeHookSchema = z
+  .object({
+    id: z.number().int(),
+    active: z.boolean(),
+    config: z.object({ url: z.string() }),
+    updated_at: z.string(),
+  })
+  .passthrough();
+
+export type SmeeHook = z.infer<typeof SmeeHookSchema>;
+
+/**
+ * Pure tie-break for `/hooks` payloads (FR-005).
+ * 1. Keep only `active === true`.
+ * 2. Keep only entries whose `config.url` matches `SMEE_URL_PATTERN`.
+ * 3. Sort by `Date.parse(updated_at)` desc; `NaN` sorts last (`-Infinity`).
+ * 4. Return the first entry or `null`.
+ */
+export function pickSmeeHook(hooks: SmeeHook[]): SmeeHook | null {
+  const candidates = hooks.filter(
+    (h) => h.active === true && SMEE_URL_PATTERN.test(h.config.url),
+  );
+  const scored = candidates.map((h) => {
+    const t = Date.parse(h.updated_at);
+    return { h, t: Number.isNaN(t) ? -Infinity : t };
+  });
+  scored.sort((a, b) => b.t - a.t);
+  return scored[0]?.h ?? null;
 }
 
 const ENV_KEY = 'COCKPIT_DOORBELL_SMEE_URL';
@@ -82,6 +133,65 @@ async function tryReadUrl(
   return null;
 }
 
+async function runWebhookConfigStage(
+  input: ChannelDiscoveryInput,
+): Promise<string | null> {
+  if (input.runner == null) return null;
+  const targets = input.targets;
+  if (targets == null || targets.length === 0) return null;
+  const timeoutMs =
+    input.webhookConfigTimeoutMs != null && input.webhookConfigTimeoutMs > 0
+      ? input.webhookConfigTimeoutMs
+      : DEFAULT_WEBHOOK_CONFIG_TIMEOUT_MS;
+  const runner = input.runner;
+  for (const target of targets) {
+    const label = `${target.owner}/${target.repo}`;
+    let result;
+    try {
+      result = await runner(
+        'gh',
+        ['api', `/repos/${target.owner}/${target.repo}/hooks`],
+        { timeoutMs },
+      );
+    } catch (err) {
+      warn(
+        input,
+        `cockpit doorbell: webhook-config stage failed for ${label}: exit=1 (${errMessage(err)})`,
+      );
+      continue;
+    }
+    if (result.exitCode !== 0) {
+      warn(
+        input,
+        `cockpit doorbell: webhook-config stage failed for ${label}: exit=${result.exitCode}`,
+      );
+      continue;
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(result.stdout);
+    } catch {
+      warn(
+        input,
+        `cockpit doorbell: webhook-config stage: malformed JSON for ${label}`,
+      );
+      continue;
+    }
+    const parsed = z.array(SmeeHookSchema).safeParse(raw);
+    if (!parsed.success) {
+      warn(
+        input,
+        `cockpit doorbell: webhook-config stage: unexpected /hooks shape for ${label}`,
+      );
+      continue;
+    }
+    const hook = pickSmeeHook(parsed.data);
+    if (hook == null) continue; // routine — no smee hook here, try next
+    return hook.config.url;
+  }
+  return null;
+}
+
 export async function discoverChannelUrl(
   input: ChannelDiscoveryInput,
 ): Promise<ChannelDiscoveryResult | null> {
@@ -98,7 +208,14 @@ export async function discoverChannelUrl(
     );
   }
 
-  // Stage 2: walk-up scan starting at cwd.
+  // Stage 2: webhook-config (gh api /hooks). Silent no-op when runner or
+  // targets are absent — the FS stages below still run.
+  const webhookUrl = await runWebhookConfigStage(input);
+  if (webhookUrl != null) {
+    return { url: webhookUrl, source: 'webhook-config' };
+  }
+
+  // Stage 3: walk-up scan starting at cwd.
   const startCwd = input.cwd ?? process.cwd();
   const root = parsePath(startCwd).root;
   let dir = startCwd;
@@ -126,7 +243,7 @@ export async function discoverChannelUrl(
     dir = parent;
   }
 
-  // Stage 3: absolute workspace mirror path.
+  // Stage 4: absolute workspace mirror path.
   const mirrorPath = input.workspaceMirrorPath ?? DEFAULT_WORKSPACE_MIRROR_PATH;
   const mirrorUrl = await tryReadUrl(
     input,
@@ -146,7 +263,7 @@ export async function discoverChannelUrl(
     return { url: mirrorUrl, source: 'workspace-absolute' };
   }
 
-  // Stage 4: cluster-internal channel file.
+  // Stage 5: cluster-internal channel file.
   let raw: string;
   try {
     raw = await input.fs.readFile(input.channelFilePath, 'utf-8');

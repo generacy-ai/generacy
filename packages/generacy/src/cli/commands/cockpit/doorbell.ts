@@ -32,6 +32,7 @@ import {
   DEFAULT_CHANNEL_FILE_PATH,
   type ChannelDiscoveryResult,
 } from './doorbell/channel-discovery.js';
+import { resolveWebhookTargets } from './doorbell/webhook-target-resolver.js';
 import { SourceSelector, type SourceMode } from './doorbell/source-selector.js';
 import { SmeeDoorbellSource } from './doorbell/smee-source.js';
 import { runStartupRetry } from './doorbell/startup-retry.js';
@@ -380,13 +381,28 @@ export async function runDoorbell(
   // Without one, discovery is wasted work and the code must poll-fallback anyway.
   let discovery: ChannelDiscoveryResult | null = null;
   if (deps.gh != null || deps.discoverChannel != null) {
+    let targets: Array<{ owner: string; repo: string }> = [];
+    if (deps.gh != null) {
+      try {
+        targets = await resolveWebhookTargets({
+          epicRef: form.ref,
+          gh: deps.gh,
+          logger,
+        });
+      } catch {
+        targets = [];
+      }
+    }
+    const discoveryInput: Parameters<typeof discoverChannelUrl>[0] = {
+      env,
+      channelFilePath,
+      fs,
+      logger,
+      targets,
+      runner: deps.runner ?? nodeChildProcessRunner,
+    };
     try {
-      discovery = await discover({
-        env,
-        channelFilePath,
-        fs,
-        logger,
-      });
+      discovery = await discover(discoveryInput);
     } catch {
       discovery = null;
     }
