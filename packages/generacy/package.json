@@ -45,6 +45,7 @@
     "@generacy-ai/config": "workspace:*",
     "@generacy-ai/orchestrator": "workspace:*",
     "@generacy-ai/orchestrator-types": "workspace:*",
+    "@generacy-ai/smee-backoff": "workspace:*",
     "@generacy-ai/workflow-engine": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "chalk": "^5",
