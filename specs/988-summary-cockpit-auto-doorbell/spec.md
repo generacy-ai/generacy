@@ -46,63 +46,70 @@ Removes the #980 interim workaround (`export COCKPIT_DOORBELL_SMEE_URL=…`) as 
 
 ## User Stories
 
-### US1: `/cockpit:auto` picks up the orchestrator's smee channel without shared filesystem or env var
+### US1: Operator runs `/cockpit:auto` without exporting a channel URL
 
-**As an** operator running `/cockpit:auto` from a session that does not share the cluster's filesystem (the common case — the operator's devcontainer, a laptop shell, a Codespace against a remote cluster),
-**I want** the doorbell to discover the smee channel URL from the same source the orchestrator did — the registered repo webhook —
-**So that** I get `source=smee` real-time delivery by default, without having to `export COCKPIT_DOORBELL_SMEE_URL=…` or mount the cluster's `/workspaces` / `/var/lib/generacy`.
+**As an** operator running `/cockpit:auto` on an epic in a devcontainer session that does not share the cluster's filesystem,
+**I want** the doorbell to auto-discover the smee channel the orchestrator is already using,
+**So that** I don't need the `COCKPIT_DOORBELL_SMEE_URL` workaround and the doorbell reports `source=smee` end-to-end without manual configuration.
 
 **Acceptance Criteria**:
-- [ ] With no `COCKPIT_DOORBELL_SMEE_URL` and no reachable FS mirror, `discoverChannelUrl` returns a result whose `url` matches the smee webhook registered on the target repo and whose `source` is a new `webhook-config` value.
-- [ ] `armed\n` sentinel line and the `source=…` stderr signal (agency#431 contract) are preserved unchanged.
-- [ ] When the `gh` token lacks the scope to list repo hooks, or no smee-pattern hook is registered, discovery falls through to today's FS stages, then to the poll heartbeat — no hard failure, no thrown exception, no non-zero exit.
+- [ ] With `COCKPIT_DOORBELL_SMEE_URL` unset and no shared cluster filesystem, `discoverChannelUrl` returns the same smee URL that the orchestrator registered on the primary repo's webhook config, and the doorbell startup line records `source=smee`.
+- [ ] When the primary repo has no smee-pattern hook but a sibling repo in the resolved ref set does, discovery still succeeds by iterating repos primary-first and stopping on the first match.
+- [ ] When the token lacks `admin:repo_hook` scope on every target repo (or no smee-pattern hook exists on any of them), discovery falls through to the existing FS stages, then to the heartbeat fallback — no hard failure, doorbell still starts with a fallback `source=…` line.
+
+### US2: Stale prior webhook does not strangle the doorbell
+
+**As an** operator whose orchestrator has been re-registered (channel URL rotated) leaving a stale disabled webhook alongside the fresh active one,
+**I want** discovery to pick the current active hook,
+**So that** the doorbell binds to the channel that is actually receiving events, not a dead one.
+
+**Acceptance Criteria**:
+- [ ] When a repo has both an inactive stale smee hook and an active current smee hook, discovery returns the active one.
+- [ ] When multiple active smee hooks exist, discovery returns the one with the most recent `updated_at`.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | Add a new discovery stage `webhook-config` to `discoverChannelUrl` (`packages/generacy/src/cli/commands/cockpit/doorbell/channel-discovery.ts`) that calls `gh api repos/{owner}/{repo}/hooks` and returns the first hook whose `config.url` matches `SMEE_URL_PATTERN`. | P1 | Reuses the existing `SMEE_URL_PATTERN = /^https:\/\/smee\.io\/[A-Za-z0-9_-]+$/`. |
-| FR-002 | Extend `ChannelSource` union to include `'webhook-config'`. | P1 | Emitted on the `source=webhook-config` stderr line and returned in `ChannelDiscoveryResult.source`. |
-| FR-003 | Extend `ChannelDiscoveryInput` with a `gh` dependency (e.g. `gh?: GhCliWrapper`) and a target-repo selector — either `owner`/`repo` fields or a `refs: string[]` array derived from `form.ref` at the doorbell call-site. | P1 | Passed from `doorbell.ts:375-393` where `deps.gh` is already available. |
-| FR-004 | Discovery-stage ordering: (1) env override, (2) `webhook-config`, (3) workspace walk-up, (4) workspace-absolute mirror, (5) cluster-internal file. | P1 | Env override remains first (explicit operator intent wins). Webhook-config is authoritative and current, so it precedes the possibly-stale FS mirror stages — see [NEEDS CLARIFICATION: order confirmed?] in issue text. |
-| FR-005 | When multiple webhooks are registered on the repo, select the first one whose `config.url` matches `SMEE_URL_PATTERN`. Non-smee hooks (custom URLs, other services) are ignored, not treated as errors. | P1 | GitHub's `/hooks` endpoint returns hooks in creation order; stability across doorbell restarts is not required as long as *some* smee hook is picked. |
-| FR-006 | Graceful degradation on ambient failure modes — all of the following fall through to the next stage instead of throwing, with a single `logger.warn` line: (a) `gh` returns non-zero (auth / scope / offline), (b) `gh` returns 404 (repo not found / no access), (c) no hook matches `SMEE_URL_PATTERN`, (d) `gh` wrapper is not supplied by the caller. | P1 | Mirrors the existing FS-stage warn-and-continue pattern (`onNonEnoentError` / `onMalformed`). |
-| FR-007 | Exactly one `gh api …/hooks` call per doorbell startup, per resolved repo. Zero per-event calls. | P1 | Result is captured in `discovery` at `doorbell.ts:381-393` before source selection; no re-query on smee reconnect. |
-| FR-008 | Multi-repo epics: [NEEDS CLARIFICATION — pick one repo, query all, or defer?] For single-repo/single-ref epics (the current majority), query the one repo. See Assumptions for the working default. | P2 | Multi-repo epic support is the ambiguity — a `refs: string[]` form suggests iterating, but that spends the "one call at startup" budget per repo. |
-| FR-009 | Preserve the `COCKPIT_DOORBELL_SMEE_URL` env-override escape hatch at stage 1. | P1 | Explicit operator intent must remain the highest-precedence signal. |
-| FR-010 | Preserve `armed\n` sentinel, `source=…` stderr line, and `--exit-on-epic-complete` / `epic-complete` exit semantics. | P1 | Backward compat with agency#431 / #437 skill parser. |
-| FR-011 | Update `discoverChannelUrl` unit tests to cover: (a) webhook-config success, (b) fall-through on `gh` error, (c) fall-through when no smee hook exists, (d) multi-hook scenario with one smee-pattern match, (e) ordering — env still wins over webhook-config, webhook-config wins over FS mirror. | P1 | Existing tests at `channel-discovery.test.ts` are the pattern to extend. |
-| FR-012 | Changeset entry added (`patch` — `workflow:speckit-bugfix`, no public API change beyond the internal `ChannelSource` union widening). | P1 | Project CLAUDE.md CI gate. |
+| FR-001 | `discoverChannelUrl` MUST add a `webhook-config` discovery stage that reads the smee channel from `gh api repos/{owner}/{repo}/hooks` on the target repo(s). | P1 | Reuses the `gh` binary the doorbell already has; no new credentials required. |
+| FR-002 | The `webhook-config` stage MUST select the hook whose `config.url` matches `^https://smee\.io/[A-Za-z0-9_-]+$` (the smee URL pattern used by orchestrator's `ensureWebhooks`). | P1 | Non-smee webhooks (e.g. project-management integrations) MUST be ignored. |
+| FR-003 | `ChannelDiscoveryInput` MUST accept `targets: Array<{ owner: string; repo: string }>` (pre-parsed by the caller). | P1 | Q3=C — caller (doorbell) already resolves refs via `resolveEpic`/`resolveRefSet`; keeps `channel-discovery.ts` free of ref parsing. Primary-only is expressed as `targets.length === 1`. |
+| FR-004 | Discovery stage ordering MUST be: `env (COCKPIT_DOORBELL_SMEE_URL) → webhook-config → workspace walk-up → workspace-absolute (/workspaces/.generacy/cockpit/smee-channel) → cluster-internal file (/var/lib/generacy/smee-channel)`. | P1 | Q1=A — env stays as explicit operator override; webhook-config is authoritative and current (beats a possibly-stale FS mirror); FS stages remain as fallback when webhook-config can't resolve. |
+| FR-005 | Tie-break when multiple smee-pattern hooks exist on a single repo MUST be: filter to `active: true`, then sort by `updated_at` descending, take the first. | P1 | Q4=D — defends against stale-hook-alongside-fresh-hook after orchestrator re-registration; both fields are already in the `/hooks` response, deterministic and free. |
+| FR-006 | Discovery MUST fall through to the next stage when the `gh api …/hooks` call fails with a scope error (403), the endpoint returns zero smee-pattern hooks, or the `gh` invocation returns non-zero. | P1 | Graceful degradation — no hard failure, existing FS/heartbeat fallback path preserved. |
+| FR-007 | Each `webhook-config` stage MUST issue at most one `gh api …/hooks` call per repo per doorbell startup — not per event. | P1 | Zero per-event cost preserved; startup budget bounded by `targets.length` (typically 1). |
+| FR-008 | For multi-repo epics with N distinct `{owner, repo}` pairs, the `webhook-config` stage MUST iterate targets primary-first and return the first repo whose hooks yield a match (early-stop). | P1 | Q2=B — cluster registers one webhook per watched repo pointing at the SAME channel via `ensureWebhooks(channelUrl, config.repositories)`, so the primary usually resolves in one call; bounded at ≤N calls. Repos where the token lacks scope are skipped, not fatal. |
+| FR-009 | The `webhook-config` `gh api` call MUST have a bounded timeout of 5 seconds; on timeout, the stage logs a warn line (with the target repo) and falls through to the next stage. | P1 | Q5=B — a network call isn't OS-bounded like FS reads; a hang would stall the doorbell's `armed\n` + `source=…` line that agency#437 parses. Caps startup latency, degrades cleanly to FS/poll. |
+| FR-010 | The doorbell startup log MUST emit `source=smee` (and the discovered URL prefix / stage name) when webhook-config resolves the channel, so downstream consumers (agency#431/#437) can distinguish it from the FS-mirror path. | P2 | Consistent with the existing `source=…` contract; the specific stage-name string is an implementation detail. |
+| FR-011 | The changeset MUST be included in the PR. | P1 | Enforced by CI gate (`.github/workflows/changeset-bot.yml`). |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Doorbell startup on a non-cluster-filesystem operator session, with no `COCKPIT_DOORBELL_SMEE_URL` and a registered smee webhook, resolves `source=smee`. | 100% (down from 0% today, per verified 2026-07-18 snappoll observation). | Manual verification on snappoll cluster from the operator devcontainer — run `/cockpit:auto` and confirm stderr shows `source=smee` (not `source=poll-fallback`). |
-| SC-002 | Net-new `gh` / GraphQL calls added by discovery per doorbell session. | ≤ 1 per resolved repo, at startup only. | Static analysis of the discovery path; unit test FR-011 asserts single `gh.api` invocation. |
-| SC-003 | Hard-failure rate when the token lacks scope or no smee webhook is registered. | 0. | Unit tests FR-011(b)/(c) — discovery returns `null` and falls through, doorbell continues to FS stages, no thrown exception, no non-zero exit. |
-| SC-004 | `armed\n` sentinel and `source=…` line contract regressions. | 0. | Existing doorbell integration tests pass unchanged. |
-| SC-005 | Necessity of the `COCKPIT_DOORBELL_SMEE_URL` workaround from #980 for operator sessions on the standard cluster shape. | 0 (workaround becomes optional escape hatch, not requirement). | Update project docs / operator runbook to reflect that `export COCKPIT_DOORBELL_SMEE_URL` is no longer needed by default. |
+| SC-001 | Operator sessions that do not share the cluster filesystem no longer require `COCKPIT_DOORBELL_SMEE_URL` to reach `source=smee`. | 100% of `/cockpit:auto` invocations against a repo whose orchestrator has registered a smee hook resolve to `source=smee` without env override. | Run `/cockpit:auto` on a fresh epic from the operator devcontainer with `COCKPIT_DOORBELL_SMEE_URL` unset and no shared FS mount; assert the doorbell startup line contains `source=smee`. |
+| SC-002 | Discovery adds at most one `gh api …/hooks` call per repo per doorbell startup, zero per-event. | ≤ `targets.length` calls at startup (typically 1); 0 additional calls during event stream. | Instrument the `gh` wrapper (or capture via `NODE_DEBUG`); assert the call count over a doorbell session with N events is ≤ `targets.length`. |
+| SC-003 | Graceful degradation: token without `admin:repo_hook` scope MUST NOT crash the doorbell. | Discovery falls through to FS/heartbeat; doorbell still emits a startup line with a fallback `source=…`. | Run `/cockpit:auto` with a token that lacks `admin:repo_hook`; assert exit code 0 and a `source=fallback|heartbeat|fs-*` startup line. |
+| SC-004 | Stale prior smee webhook alongside a fresh one does not strangle the doorbell. | Discovery picks the active, most-recently-updated hook. | Fixture: mock `gh api …/hooks` returning one inactive + one active smee hook with different `updated_at`; assert the active newer URL is chosen. |
+| SC-005 | `webhook-config` stage never blocks doorbell startup > 5s. | 100% of startups complete within 5s of the webhook-config stage entering (or fall through). | Fixture: mock `gh api …/hooks` to hang; assert the stage times out at ~5s, emits a warn line, and the doorbell reaches `armed\n` via a downstream stage. |
 
 ## Assumptions
 
-- **`gh` wrapper availability**: The doorbell already has `deps.gh` in scope at `doorbell.ts:382` — the guard `if (deps.gh != null || deps.discoverChannel != null)` already predicates discovery on it. Passing it through to `discoverChannelUrl` is a plumbing change, not a new dependency.
-- **Target repo derivation**: For the single-repo/single-ref case (the majority today), the target `{owner, repo}` is extracted from `form.ref` (issue/PR/epic URL or `owner/repo#N` form) at the doorbell call site. `discoverChannelUrl` itself stays repo-agnostic — the caller supplies the target.
-- **Multi-repo epic default (FR-008 clarify placeholder)**: Working assumption — query only the *primary* repo of the epic (the one hosting the epic tracking issue). Multi-repo webhook aggregation is deferred; if the primary repo has no smee hook but a sibling does, discovery still falls through to FS/poll and does not attempt sibling repos. This may be revisited during `/speckit:clarify`.
-- **Ordering rationale (FR-004)**: Webhook-config is preferred over FS mirror because the mirror can go stale (e.g. after the orchestrator re-registers a new smee channel post-restart) while the webhook config is by definition current — it's what the orchestrator will actually deliver to. Env override still wins first because operator intent must override discovery.
-- **Selection rule for multiple smee hooks (FR-005)**: The first smee-pattern match wins. If a repo has two smee hooks (unusual — indicates operator misconfiguration or a stale second registration), discovery is non-deterministic across restarts but still yields *some* valid channel. Explicit tie-break logic (e.g. "prefer active" or "prefer most recently updated") is deferred as scope-creep.
-- **Cost profile (FR-007)**: One `gh api …/hooks` call per doorbell session. GitHub's REST rate limit (5000/hr) makes this negligible even for aggressive restart loops. Not on the per-event path; unrelated to the #985 GraphQL-quota fix.
-- **Scope isolation from #987**: This change is about doorbell input discovery, not orchestrator poll-gate behavior. Both are needed to make cockpit-auto genuinely webhook-fed end to end, but they land independently.
+- The orchestrator registers webhooks via `ensureWebhooks(channelUrl, config.repositories)` in a single, coordinated pass — every watched repo's hook points at the same smee channel URL. Discovery therefore only needs the first matching repo.
+- `gh api repos/{owner}/{repo}/hooks` returns hooks in creation order and includes `id`, `config.url`, `active`, and `updated_at` fields. GitHub's REST API contract for these fields is stable.
+- The token available to the doorbell (`gh auth token`) either has `admin:repo_hook` read scope (typical operator/PAT case) or falls through cleanly on 403. No new scope grants are being asked of the operator.
+- The smee URL pattern is stable at `^https://smee\.io/[A-Za-z0-9_-]+$`. If orchestrator registers a hook pointing at anything else (e.g. a smee-lookalike or a `--target` override), the pattern MUST NOT match — those are treated as non-smee and ignored.
+- The doorbell's `resolveEpic`/`resolveRefSet` already returns a well-formed `{owner, repo}` list; discovery does not re-validate ref parsing.
+- Primary repo is defined as the repo hosting the epic's tracking issue (`form.ref`'s repo), and appears first in the `targets` array passed to discovery.
 
 ## Out of Scope
 
-- Multi-repo epic webhook aggregation (querying every ref's repo). Deferred pending a real multi-repo epic exercise.
-- Automatic smee-webhook *registration* by the doorbell — the doorbell reads existing registrations only. Registration remains the orchestrator's job (#972).
-- Removing the `COCKPIT_DOORBELL_SMEE_URL` env var entirely — it stays as an intentional operator escape hatch (spec explicit).
-- Removing the workspace walk-up / mirror / cluster-file stages — they remain as fallback for legacy cluster shapes and for local-only sessions where the operator does share the FS.
-- Caching the discovery result across doorbell restarts (not needed — one REST call per startup is already zero-cost at practical restart frequencies).
-- The paired orchestrator poll-gate fix in generacy-ai/generacy#987 — that's a separate change; this issue depends on #987 for full end-to-end correctness but does not implement it.
-- Any change to the smee URL pattern regex or the way the orchestrator selects the channel URL — the doorbell simply reads what the orchestrator registered.
+- Refactoring the four existing FS stages (`walk-up`, `workspace-absolute`, `cluster-file`) — they remain unchanged as fallback paths.
+- Cache invalidation for the webhook-config result across the doorbell's lifetime — one call at startup is authoritative for the session (a mid-session channel rotation would require doorbell restart, matching today's behavior for FS-mirror rotation).
+- Adding a new `gh` scope or credential-helper integration — discovery uses the same token the operator already has.
+- Aggregate multi-repo channel-divergence detection (Q2 option C) — orchestrator's `ensureWebhooks` guarantees a single channel per cluster, so aggregate-consistency validation is unnecessary.
+- Reworking the heartbeat/poll fallback path — it stays as the terminal stage when both webhook-config and all FS stages return null.
+- Non-smee webhook receivers (e.g. direct-delivery / VPC webhook proxies) — this spec is scoped to the smee URL pattern the orchestrator uses today.
 
 ---
 
