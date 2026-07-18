@@ -124,8 +124,6 @@ describe('#987 SC-001/SC-002: monitors flip to webhook mode on smee receiver con
     // We can access the monitor refs from the receiver mock's ctor args
     // (they're captured in options as `*Monitor` fields):
     const optsFull = opts as unknown as Record<string, { getState: () => { webhooksConfigured: boolean; basePollIntervalMs: number; currentPollIntervalMs: number } }>;
-    const labelMon = (opts as unknown as { }); // second constructor positional
-    void labelMon;
 
     // The SmeeWebhookReceiver mock is invoked as `new Receiver(logger, labelMonitor, opts)`.
     // The label monitor is the second positional arg — reconstruct via the mock's calls.
