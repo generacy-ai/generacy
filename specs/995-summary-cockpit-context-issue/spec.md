@@ -65,8 +65,8 @@ Secondary defect: not every question comment currently carries a leading HTML ma
 | FR-001 | `findClarificationComment` MUST return a non-null `IssueComment` when the issue carries a comment matching the `CLARIFICATION_QUESTION_MARKERS` registry, regardless of the relative ordering of comment vs label events. | P1       | Core fix. |
 | FR-002 | When multiple question-marker comments exist on the issue, `findClarificationComment` MUST return the one with the *latest* `createdAt`.                                                                                | P1       | Multi-batch case. |
 | FR-003 | `findClarificationComment` MUST continue to skip stage-status comments (`<!-- generacy-stage:planning`, `specification`, `implementation`, and the `speckit-*` variants).                                                | P1       | Existing exclusion preserved. |
-| FR-004 | The finder MUST NOT fall through to `null` for the marker-less "human-readable Batch N heading" case if a sibling marker-tagged comment (`<!-- generacy-clarifications:N -->`) carries the same question set. [NEEDS CLARIFICATION: whether we (a) rely on always-marker-tagged batch comments emitted by an updated poster, or (b) extend the finder to correlate marker-less batch headings with marker-tagged siblings, or (c) both.] | P2       | See "Secondary inconsistency" in root cause. |
-| FR-005 | If no comment carries a question marker, the finder MAY fall back to the current label-timeline heuristic before returning `null`. [NEEDS CLARIFICATION: keep the timeline fallback (union strategy) or drop it (marker-only strategy)? Union is safer against pre-marker legacy issues; marker-only is simpler and matches the fix's spirit.] | P2       | Decision point. |
+| FR-004 | The finder MUST NOT introduce a heading-based matcher for marker-less batch comments. The durable fix is poster-side: the clarification poster MUST emit a `<!-- generacy-clarifications:N -->` marker at column 0 on EVERY batch comment (one comment per batch, no marker-less-heading + separate-marker-sibling split). Legacy marker-less batches remain unrecoverable by this finder and fall through to FR-005's fallback (and, in `/cockpit:auto`, its existing `gh` degradation path) until re-posted. The poster change is tracked as a REQUIRED companion issue/PR in this repo, landed promptly. | P1       | Resolved via clarification Q1: option A. Companion PR covers the poster; this PR keeps the finder marker-only. Adding a heading matcher (options B/C) is explicitly rejected as the divergent, brittle matcher FR-006 warns against. |
+| FR-005 | If no comment carries a question marker, the finder MUST fall back to the current label-timeline heuristic (post-label comment, skipping stage-status comments) before returning `null`. The fallback path MUST emit a single-line `warn`-level log (`marker-less clarification comment; poster should be updated — issue=<owner/repo#N>`) so we can measure how many issues still hit it. The fallback is removed in a follow-up once FR-004's poster fix has made markers universal. | P1       | Resolved via clarification Q2: option C (union with deprecation warning). Prevents regressing marker-less-but-normal-timing issues that work today via the label-timeline heuristic. The fallback is literally today's code path — no new complexity. |
 | FR-006 | Marker matching MUST be line-anchored at column 0, case-sensitive, as defined by `matchClarificationQuestionMarker` — the finder must not introduce a divergent matcher.                                                | P1       | Prevents parser drift. |
 | FR-007 | The change MUST ship with a `.changeset/*.md` entry (patch bump for `@generacy-ai/generacy`, per `workflow:speckit-bugfix` convention).                                                                                  | P1       | CI gate. |
 | FR-008 | No changes to the label protocol, the resume-loop plumbing (#993), or the `waiting-for:clarification` label lifecycle. Fix is confined to comment identification.                                                       | P1       | Scope guard. |
@@ -90,18 +90,18 @@ Secondary defect: not every question comment currently carries a leading HTML ma
 
 ## Out of Scope
 
-- Changes to the poster that emits clarification-question comments. If FR-004 resolution requires always-marker-tagged batch comments, that work lands in a companion PR (or a follow-up issue) and is not blocked by this fix.
+- Changes to the poster that emits clarification-question comments live in a REQUIRED companion PR (per FR-004 resolution), tracked as a follow-up issue in this repo. That companion PR is not blocked by this fix and vice versa, but SC-003 assumes both have landed before the snappoll measurement.
 - Changes to the `waiting-for:clarification` label lifecycle, boot-resume behavior (#824), or the resume loop (#993).
 - Changes to the answer-scanner (`clarification-poster.ts::integrateClarificationAnswers`) or the answer-monitor (`clarification-answer-monitor-service.ts`).
 - Cross-repo / multi-issue clarification correlation.
 - Any refactor of `findClarificationComment`'s public signature — it stays `(gh, repo, number) → Promise<IssueComment | null>`.
 
-## Open Clarifications
+## Clarifications
 
-- **Q1** (FR-004): Should the finder additionally correlate marker-less batch heading comments with marker-tagged siblings, or is emitting a marker on every batch comment (poster-side change) sufficient?
-- **Q2** (FR-005): Marker-only strategy or union-with-timeline-fallback? Preference is marker-only (simpler, matches spirit), but a fallback preserves compatibility with any pre-marker legacy issue timelines that may still be in-flight.
+All open clarifications resolved on 2026-07-18 (see `clarifications.md` Batch 1):
 
-Both are candidates for `/speckit:clarify`.
+- **Q1** (FR-004): Poster-side fix only. The finder stays marker-only; a companion PR updates the poster to emit `<!-- generacy-clarifications:N -->` on every batch comment. Heading-based finder matchers (options B/C) are explicitly rejected as the divergent matcher FR-006 warns against.
+- **Q2** (FR-005): Union with deprecation warning. Marker-based primary, label-timeline fallback when zero markers exist, `warn`-level log on fallback for measurement. Fallback removed in a follow-up once Q1's poster fix has made markers universal.
 
 ---
 
