@@ -10,7 +10,7 @@
 
 ## Phase 1: Implementation
 
-- [ ] T001 [US1] Rewrite `findClarificationComment` in `packages/generacy/src/cli/commands/cockpit/clarification-comment-finder.ts` to marker-first / timeline-fallback.
+- [X] T001 [US1] Rewrite `findClarificationComment` in `packages/generacy/src/cli/commands/cockpit/clarification-comment-finder.ts` to marker-first / timeline-fallback.
   - Add imports: `matchClarificationQuestionMarker` from `@generacy-ai/orchestrator`; `getLogger` from `../../utils/logger.js`.
   - Pass 1: filter comments by `matchClarificationQuestionMarker(c.body) !== undefined` AND `!isStageStatusComment(c.body)`; sort descending by `Date.parse(c.createdAt)`; return `markerHits[0]` when non-empty (FR-001, FR-002, FR-003, FR-006).
   - Pass 2 (fallback): emit exactly one `warn` log — `getLogger().warn({ owner, repo, issue: number }, `marker-less clarification comment; poster should be updated — issue=${repo}#${number}`)` at branch entry (FR-005, contract §Logging).
@@ -22,38 +22,38 @@
 
 ## Phase 2: Tests
 
-- [ ] T002 [US1] Add regression test `US1: returns marker-carrying comment when label re-applied after question comment (regression for #995)` in `packages/generacy/src/cli/commands/cockpit/__tests__/clarification-comment-finder.test.ts`.
+- [X] T002 [US1] Add regression test `US1: returns marker-carrying comment when label re-applied after question comment (regression for #995)` in `packages/generacy/src/cli/commands/cockpit/__tests__/clarification-comment-finder.test.ts`.
   - Fixture: timeline has a `labeled` event for `waiting-for:clarification` at `2026-07-18T04:31:08Z`; comments include one marker-carrying comment (`<!-- generacy-clarifications:42 -->` at column 0) with `createdAt: 2026-07-18T03:02:00Z` (i.e., before the label event).
   - Assert `c?.url` equals the marker comment's url (not `null`). (SC-001, SC-005.)
 
-- [ ] T003 [US2] Add multi-batch test `FR-002: returns latest-by-createdAt marker comment when multiple exist` in the same test file.
+- [X] T003 [US2] Add multi-batch test `FR-002: returns latest-by-createdAt marker comment when multiple exist` in the same test file.
   - Fixture: two marker-carrying comments (`<!-- generacy-clarifications:1 -->` at `T1`, `<!-- generacy-clarifications:2 -->` at `T2 > T1`), no timeline events required.
   - Assert `c?.url` equals the `T2` batch comment. (FR-002, SC-002.)
 
-- [ ] T004 [US2] Add fallback test `FR-005: falls back to label-timeline heuristic when no marker present, emits warn` in the same test file.
+- [X] T004 [US2] Add fallback test `FR-005: falls back to label-timeline heuristic when no marker present, emits warn` in the same test file.
   - Fixture: no marker-carrying comment; timeline has a `waiting-for:clarification` `labeled` event; one non-stage-status comment created at-or-after the label event.
   - Spy on `getLogger()` (via `vi.spyOn`, or `vi.mock('../../utils/logger.js')` returning a stub whose `warn` is a `vi.fn`) to assert exactly one `warn` call whose message contains `marker-less clarification comment; poster should be updated — issue=<repo>#<n>` and whose fields include `{ owner, repo, issue }` (contract §Logging).
   - Assert the returned comment is the post-label comment (fallback still works). (FR-005, contract return #2.)
 
-- [ ] T005 [US2] Adjust existing tests in `packages/generacy/src/cli/commands/cockpit/__tests__/clarification-comment-finder.test.ts` per plan §Test Plan (per-line walkthrough).
+- [X] T005 [US2] Adjust existing tests in `packages/generacy/src/cli/commands/cockpit/__tests__/clarification-comment-finder.test.ts` per plan §Test Plan (per-line walkthrough).
   - Lines 23, 43, 59, 69, 92, 185, 206: no marker in fixture — pass 1 misses, fallback runs. Existing `c?.url` / `null` assertions stay the same. Update any strict "no log lines" assertions to tolerate exactly one `warn` (or add an explicit "warn fired once" assertion where useful).
   - Lines 113, 135, 163: fixture carries a `<!-- generacy-stage:clarification-batch-*` marker which IS in `CLARIFICATION_QUESTION_MARKERS` — pass 1 wins. Existing `c?.url` assertions unchanged; verify **no** warn log fires for these tests.
   - Do NOT weaken any existing assertion to make a test pass. If an existing assertion appears to conflict with the new contract, verify against `contracts/finder.md` first.
 
 ## Phase 3: Changeset
 
-- [ ] T006 [US1] Add new file `.changeset/995-cockpit-clarification-finder-marker.md` (CLAUDE.md changeset gate; FR-007).
+- [X] T006 [US1] Add new file `.changeset/995-cockpit-clarification-finder-marker.md` (CLAUDE.md changeset gate; FR-007).
   - Frontmatter: `'@generacy-ai/generacy': patch`.
   - Body: one-line summary followed by the paragraph from `quickstart.md` §Step 4 (`fix: cockpit_context now finds clarification comments after ...`), ending with `Resolves #995.`.
   - Must be a **newly added** file (the CI gate matches `--diff-filter=A`); do not edit an existing changeset (CLAUDE.md).
 
 ## Phase 4: Verification
 
-- [ ] T007 [US1] Run the targeted test suite: `cd packages/generacy && pnpm test clarification-comment-finder`. All existing tests plus the 3 new tests (T002–T004) must pass green (SC-004).
+- [X] T007 [US1] Run the targeted test suite: `cd packages/generacy && pnpm test clarification-comment-finder`. All existing tests plus the 3 new tests (T002–T004) must pass green (SC-004).
 
-- [ ] T008 [US1] Run the package lint + build: `pnpm --filter @generacy-ai/generacy lint && pnpm --filter @generacy-ai/generacy build`. No new errors.
+- [X] T008 [US1] Run the package lint + build: `pnpm --filter @generacy-ai/generacy lint && pnpm --filter @generacy-ai/generacy build`. No new errors.
 
-- [ ] T009 [US1] SC-005 regression proof: temporarily revert T001's finder change (`git stash` the file), re-run `pnpm test clarification-comment-finder`, confirm the US1 regression test (T002) fails. Restore the fix (`git stash pop`) and re-run to confirm green.
+- [X] T009 [US1] SC-005 regression proof: temporarily revert T001's finder change (`git stash` the file), re-run `pnpm test clarification-comment-finder`, confirm the US1 regression test (T002) fails. Restore the fix (`git stash pop`) and re-run to confirm green.
 
 - [ ] T010 [US1] SC-003 spot-check (manual, optional if snappoll unavailable): after merge or against a synthetic reproduction, run `/cockpit:auto` on an issue whose `waiting-for:clarification` label has been re-applied *after* the question comments were posted; confirm D.1 uses the engine bundle (`cockpit_context.clarificationComment` is non-null) with no `gh issue view` fallback path fired. Snappoll #8 (2026-07-18) is the natural reproduction.
 
