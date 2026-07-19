@@ -93,7 +93,10 @@ describe('app-config routes', () => {
   });
 
   describe('GET /app-config/manifest', () => {
-    it('returns null when no appConfig in cluster.yaml', async () => {
+    it('returns an empty (non-null) manifest when cluster.yaml exists but declares no appConfig', async () => {
+      // #626: a cloned workspace that declares no appConfig is "ready, empty",
+      // distinct from "still cloning" — so it returns a non-null empty manifest
+      // (not null) and the cloud UI can stop polling immediately.
       await fs.writeFile(
         path.join(generacyDir, 'cluster.yaml'),
         YAML.stringify({ channel: 'stable', workers: 1 }),
@@ -104,7 +107,10 @@ describe('app-config routes', () => {
 
       expect(res.writeHead).toHaveBeenCalledWith(200);
       const body = JSON.parse(res.end.mock.calls[0][0]);
-      expect(body).toBeNull();
+      expect(body).not.toBeNull();
+      expect(body.schemaVersion).toBe('1');
+      expect(body.env).toEqual([]);
+      expect(body.files).toEqual([]);
     });
 
     it('returns parsed appConfig when present', async () => {
