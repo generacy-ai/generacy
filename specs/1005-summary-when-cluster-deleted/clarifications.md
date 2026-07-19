@@ -17,7 +17,7 @@
 - **C**: URL prefix **plus** a Generacy-owned marker written into the hook `name` or `config` (e.g. a fixed `name` string) at create time — deterministic but requires a compatible create-side change and misses hooks created by older cluster versions.
 - **D**: Other heuristic (please describe).
 
-**Answer**: *Pending*
+**Answer**: **A** — smee.io URL prefix (matches current classifier at `webhook-setup-service.ts:498-504`; a marker would miss the pre-existing orphaned hooks this fix targets, since they predate any marker). Suggest *also* writing a Generacy-owned marker into the hook `config`/`name` at create time going forward for future positive ID — but do not require it for adopt/take-over. Operator-installed smee.io hooks on a Generacy-managed repo are negligible.
 
 ---
 
@@ -31,7 +31,7 @@
 - **C**: Refuse to adopt when repos disagree (fall through to provision-new); log a warning identifying the divergent set.
 - **D**: Other (please describe).
 
-**Answer**: *Pending*
+**Answer**: **A** — first-repo-first-hook wins (deterministic by configured `repos` order); log the divergence. The single adopted channel becomes current and take-over (Q5) converges the other repos' hooks onto it over subsequent self-heal passes. (Refusing/provision-new would orphan everything — the opposite of the goal.)
 
 ---
 
@@ -45,7 +45,7 @@
 - **C**: Adopt the first match; repoint the extras via `update-url` to the adopted channel (leaves the repo with N identical hooks — safe but wasteful).
 - **D**: Other (please describe).
 
-**Answer**: *Pending*
+**Answer**: **A** — adopt the first match, leave extras in place (non-destructive; matches the "one-time ops repair out of scope" bullet). Extras are dead hooks with no listener (harmless), and once adopt ships, relaunches reuse rather than create, so they stop accumulating — remaining cruft is legacy, best swept by a one-time ops cleanup. Explicitly avoid repointing multiples to one channel (option C): GitHub would then deliver duplicate events → duplicate processing.
 
 ---
 
@@ -59,7 +59,7 @@
 - **C**: Retry a bounded number of times (e.g. reuse `MAX_ATTEMPTS = 2` / `RETRY_DELAY_MS = 1000`) before falling through to provision-new.
 - **D**: Other (please describe).
 
-**Answer**: *Pending*
+**Answer**: **C** — retry bounded (reuse `MAX_ATTEMPTS=2` / `RETRY_DELAY_MS=1000`), then fall through to provision-new. Transient failures (network, 403 during token refresh, momentary rate-limit) are the common case and retry clears them, preserving adopt. Falling through on persistent failure is safe because take-over (Q5) repoints the existing single hook onto the freshly-provisioned channel, so we don't re-orphan.
 
 ---
 
@@ -73,6 +73,8 @@
 - **C**: Only when there is exactly *one* Generacy smee hook and its URL is stale (bail out on 0 or ≥2 to avoid clobbering ambiguous states); repeat on every self-heal pass.
 - **D**: Other (please describe).
 
-**Answer**: *Pending*
+**Answer**: **C** — take-over `update-url` only when exactly ONE Generacy smee hook exists and its URL is stale (neither current nor persisted); bail on 0 or ≥2. Runs at boot and on every self-heal poll. Combined with Q3-A this guarantees we never repoint multiple hooks to the same channel (the duplicate-delivery trap). Self-consistent: after adopt fires, current == the adopted hook's channel, so that hook isn't "stale" and take-over leaves it alone.
+
+**Coupling note**: Q3/Q4/Q5 are chosen as a coherent set. Adopt-first restores delivery on relaunch; take-over heals the single-hook case adopt missed; nothing destructive; and no path ever creates two hooks pointing at one channel. The conservative A/A/C/C picks trade a little leftover cruft for zero risk of clobbering operator hooks or double-processing.
 
 ---

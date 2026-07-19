@@ -1,6 +1,10 @@
-# Feature Specification: Adopt existing smee channel on cluster delete→relaunch
+# Feature Specification: ## Summary
 
-**Branch**: `1005-summary-when-cluster-deleted` | **Date**: 2026-07-19 | **Status**: Draft | **Issue**: [#1005](https://github.com/generacy-ai/generacy/issues/1005)
+When a cluster is deleted and a new one is launched for the same repo (common with our **serial, one-active-cluster-per-repo** model where clusters churn often), the new cluster provisions a brand-new smee channel and **orphans the existing GitHub webhook**
+
+**Branch**: `1005-summary-when-cluster-deleted` | **Date**: 2026-07-19 | **Status**: Draft
+
+## Summary
 
 ## Summary
 
@@ -41,89 +45,110 @@ Rationale for the placement: a normal `docker restart` still hits the persisted 
 
 **(B) Serial-model take-over (hardening).** Now that one-active-cluster-per-repo is confirmed, a Generacy `smee.io` hook pointing at a *stale* channel should be **repointed** (`update-url`) to the cluster's channel rather than abandoned as `foreign`. Belt-and-braces for cases (A) doesn't catch. Keep the guard for genuinely non-smee/operator webhooks.
 
-## User Stories
-
-### US1: Operator relaunches cluster and gets instant label delivery
-
-**As a** Generacy operator managing a serial one-active-cluster-per-repo deployment,
-**I want** a newly (re)launched cluster to reuse the smee channel GitHub is already delivering to,
-**So that** labeled issues and PR events are processed within seconds of relaunch — not stuck on the 5-minute poll fallback.
-
-**Acceptance Criteria**:
-- [ ] Deleting a cluster and relaunching for the same repo results in the new cluster **reusing the existing smee channel** (log line indicates `source=adopted`).
-- [ ] No new smee channel is provisioned when a Generacy smee webhook already exists on the repo.
-- [ ] No orphaned webhook remains on the repo after relaunch settles.
-- [ ] Label events are delivered via smee (webhook mode / `source=webhook`), not the 5-min poll (`source=poll`), within seconds of relaunch.
-
-### US2: Normal restart path stays fast and quiet
-
-**As a** Generacy operator restarting a healthy cluster (e.g. `docker restart`),
-**I want** the persisted smee channel file to short-circuit resolution as it does today,
-**So that** no extra GitHub API call is made on the common restart path.
-
-**Acceptance Criteria**:
-- [ ] With the persisted-channel file intact, resolution completes at the persisted-file tier — no repo-hook query occurs.
-- [ ] No extra webhook churn (create/update/delete) occurs on the persisted-hit path.
-
-### US3: Foreign (non-Generacy) webhooks stay untouched
-
-**As a** repo administrator running non-Generacy webhooks alongside a Generacy cluster,
-**I want** the cluster's webhook self-heal logic to leave non-smee / operator-owned webhooks alone,
-**So that** unrelated integrations continue to receive their deliveries.
-
-**Acceptance Criteria**:
-- [ ] Webhooks whose URL is not on `smee.io` are classified `foreign` and left untouched.
-- [ ] The take-over path (B) applies only to Generacy `smee.io` webhooks pointing at a stale channel.
-
-## Functional Requirements
-
-| ID | Requirement | Priority | Notes |
-|----|-------------|----------|-------|
-| FR-001 | `SmeeChannelResolver.resolve()` MUST attempt an "adopt-existing" tier between `persisted-file` and `provision-new` that discovers an existing Generacy smee webhook on the configured repos and reuses its channel URL. | P1 | New injected `discoverExistingChannel?()` callback + `'adopted'` source. |
-| FR-002 | On successful adopt, the resolved channel URL MUST be persisted to the same file the `persisted-file` tier reads, so the next boot short-circuits without a GitHub call. | P1 | Reuse existing persistence writer. |
-| FR-003 | `WebhookSetupService` MUST expose `findExistingSmeeChannel(repos)` that lists repo webhooks and returns the first `smee.io` hook URL matching Generacy's channel pattern. | P1 | Reuse existing hook-list + smee.io detection. |
-| FR-004 | On startup, `server.ts` MUST construct `WebhookSetupService` before `SmeeChannelResolver` and wire `findExistingSmeeChannel` into the resolver as the `discoverExistingChannel` callback. | P1 | Construction-order change only. |
-| FR-005 | `WebhookSetupService` MUST classify a Generacy `smee.io` webhook pointing at a stale channel as an eligible take-over target and issue `update-url` to repoint it to the current channel. | P2 | Hardening (B); serial model only. |
-| FR-006 | Non-smee webhooks (operator-owned, other integrations) MUST continue to be classified `foreign` and left untouched. | P1 | Preserve existing safety guard. |
-| FR-007 | The `persisted-file` tier MUST retain priority over the new adopt tier — the persisted-hit path performs no additional GitHub API call. | P1 | Common-path preservation. |
-| FR-008 | The PR MUST include a `patch`-level changeset for `@generacy-ai/orchestrator`. | P1 | Bugfix per CLAUDE.md changeset rules. |
-
-## Success Criteria
-
-| ID | Metric | Target | Measurement |
-|----|--------|--------|-------------|
-| SC-001 | Post-relaunch smee delivery latency | Label events processed via `source=webhook` within 10s of cluster settling (was ~5–10 min via `source=poll`). | Orchestrator log lines: first post-relaunch label event's `source` field + timestamp vs. "Smee receiver connected" line. |
-| SC-002 | Orphaned webhooks after relaunch | 0 orphaned Generacy `smee.io` webhooks on the repo after new cluster settles. | `gh api repos/<owner>/<repo>/hooks` shows exactly one Generacy `smee.io` hook and its URL matches the live cluster's channel. |
-| SC-003 | Extra GitHub API calls on the common restart path | 0 additional hook-list calls when `persisted-file` tier hits. | Instrument or mock: `discoverExistingChannel` must not be invoked when persisted file is present. |
-| SC-004 | Unit test coverage | Tests cover (a) adopt-existing tier hit, (b) adopt-existing tier miss → provision, (c) take-over of stale Generacy smee hook, (d) persisted-hit fast path skips discovery, (e) foreign non-smee hook untouched. | `pnpm test` in `packages/orchestrator` — all five cases pass. |
-
-## Assumptions
-
-- **Serial concurrency model**: exactly one active cluster per repo at any time. smee is a broadcast, so channel reuse is safe under this assumption; concurrent same-repo clusters are already problematic at the processing layer (per-cluster Redis, no cross-cluster dedup) and are out of scope.
-- The existing Generacy smee webhook detection (URL prefix on `smee.io`) is reliable enough to distinguish Generacy hooks from unrelated smee.io hooks a repo owner may have set up manually.
-- Persisted-file wipes on volume deletion are the dominant trigger for this bug (delete→relaunch clears `.generacy` volume state).
-- GitHub webhook list API latency is acceptable on the fresh-cluster path (one-time cost during first boot after a delete).
-
-## Out of Scope
-
-- **Concurrent same-repo clusters.** The processing layer (per-cluster Redis, no cross-cluster dedup) makes this an unrelated problem; smee channel reuse alone would not make it safe.
-- **One-time ops repair of already-stuck clusters.** Manually repointing an orphaned webhook to the live channel is a separate ops action, tracked outside this issue.
-- **Cluster-managed webhook lifecycle on cluster deletion.** Actively cleaning up webhooks when a cluster is torn down (vs. adopting on next boot) is a different design and not needed once adopt-existing works.
-- **Redesign of `WebhookSetupService.foreign` classification** beyond the narrow serial-model take-over allowance in (B).
-- **Non-smee webhook transports** (direct HTTP delivery, alternative relays).
-
 ## Scope / files (generacy repo, `@generacy-ai/orchestrator`)
 
 - `packages/orchestrator/src/services/smee-channel-resolver.ts` — new tier + injected `discoverExistingChannel?()` callback + `'adopted'` source; persist on adopt.
 - `packages/orchestrator/src/services/webhook-setup-service.ts` — new `findExistingSmeeChannel(repos)` (reuse existing hook-list + `smee.io` detection); loosen the `foreign` handling for own smee hooks (B).
 - `packages/orchestrator/src/server.ts` — construct `WebhookSetupService` before the resolver and wire the callback.
-- `.changeset/1005-*.md` — `patch`-level changeset for `@generacy-ai/orchestrator`.
+- Changeset (patch).
+
+## Acceptance criteria
+
+- Deleting a cluster and relaunching for the same repo results in the new cluster **reusing the existing smee channel** (log: adopted source) with **no newly-provisioned channel** and **no orphaned webhook**.
+- Label events are delivered via smee (webhook mode), not the 5-min poll, within seconds of the relaunch settling.
+- A normal `docker restart` (persisted file intact) behaves exactly as today — no extra webhook churn, no extra GitHub API call on the persisted-hit path.
+- A genuinely foreign (non-smee / operator) webhook is still left untouched.
+- Unit tests cover: adopt-existing tier hit/miss, take-over of a stale Generacy smee hook, and the persisted-hit fast path.
 
 ## Context / constraints
 
-- **Concurrency model: serial** (one active cluster per repo; frequent redeploys). smee is a broadcast, so channel reuse is safe here.
+- **Concurrency model: serial** (one active cluster per repo; frequent redeploys). smee is a broadcast, so channel reuse is safe here; concurrent same-repo clusters are out of scope (already problematic at the processing layer — per-cluster Redis, no cross-cluster dedup).
 - Discovered while investigating the App Config onboarding stall (PR #1003, the non-blocking label-sync change).
 - The immediate unblock for an already-stuck cluster (repoint the orphaned hook to the live channel) is a one-time manual/ops action, separate from this fix.
+
+## Clarifications (Batch 1 — 2026-07-19)
+
+Decisions resolved via [clarifications.md](./clarifications.md):
+
+- **Q1 — Generacy-owned smee hook heuristic → A**: URL-prefix-only (`https://smee.io/…`). Any smee.io hook on a Generacy-managed repo is treated as ours for both adopt (FR-003) and take-over (FR-005). No config-shape or name-marker gate is required; a Generacy marker MAY be added on hook-create going forward, but adopt/take-over MUST NOT depend on it (would miss pre-existing orphans this fix targets).
+- **Q2 — Multi-repo channel divergence → A**: When configured repos disagree on Generacy smee channel URLs, **first-repo-first-hook wins** (deterministic by configured `repos` order). Log the divergence at `warn`. Convergence of the losing repos onto the adopted channel is left to take-over (FR-005) on subsequent self-heal passes.
+- **Q3 — Multiple Generacy smee hooks on the same repo → A**: Adopt the first match; **leave extras in place** (non-destructive). Explicitly forbid repointing multiple hooks to the same channel (would cause GitHub to deliver duplicate events → duplicate processing). One-time ops cleanup of legacy extras is out of scope.
+- **Q4 — Adopt-tier failure fallback → C**: On `discoverExistingChannel()` throw/timeout, **retry a bounded number of times** (reuse `MAX_ATTEMPTS = 2`, `RETRY_DELAY_MS = 1000`), then fall through to `provision-new`. Persistent-failure fallthrough is safe because take-over (FR-005) will repoint the surviving single hook onto the freshly-provisioned channel on the next self-heal pass.
+- **Q5 — Take-over (B) trigger scope → C**: `update-url`-repoint a Generacy smee hook **only when exactly ONE Generacy smee hook exists on the repo AND its URL is stale** (neither the current cluster's channel nor the persisted URL). Bail out on 0 or ≥2 Generacy smee hooks. Runs at boot and on every self-heal poll. Combined with Q3-A this guarantees the cluster never repoints multiple hooks to the same channel.
+
+## User Stories
+
+### US1: Cluster relaunch preserves near-instant webhook delivery
+
+**As a** cluster operator running the serial one-active-cluster-per-repo model,
+**I want** a relaunched cluster to reuse the existing repo smee channel instead of provisioning a new one,
+**So that** GitHub label/PR events continue to hit the new cluster in seconds instead of degrading to the 5-minute polling fallback.
+
+**Acceptance Criteria**:
+- [ ] After `cluster destroy` + `cluster up` for the same repo, orchestrator logs show `source=adopted` (not `source=provisioned`) for the smee channel URL.
+- [ ] The repo's existing GitHub webhook is not orphaned: its URL still matches the channel the new cluster is listening on.
+- [ ] Label events arrive in webhook mode (`source=webhook`) within seconds of relaunch, not on the 5-minute poll boundary.
+
+### US2: Normal restart path is unchanged
+
+**As a** cluster operator doing a `docker restart` on a healthy cluster,
+**I want** the resolver to short-circuit at the persisted-file tier as it does today,
+**So that** we don't pay an extra GitHub API call or churn webhooks on the common no-op restart.
+
+**Acceptance Criteria**:
+- [ ] When the persisted channel file is present and valid, the resolver returns at the persisted tier (no `list-hooks` call is issued).
+- [ ] No new webhook create / update-url / delete calls fire on the healthy-restart path.
+
+### US3: Operator-installed webhooks are left alone
+
+**As a** repo operator with a pre-existing non-smee (or non-Generacy) webhook on my repo,
+**I want** the cluster to leave that webhook untouched,
+**So that** cluster deployment doesn't silently break my own integrations.
+
+**Acceptance Criteria**:
+- [ ] Webhooks whose URL does not start with `https://smee.io/` are classified `foreign` and never modified.
+- [ ] The self-heal path never `DELETE`s any pre-existing webhook.
+
+## Functional Requirements
+
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | `SmeeChannelResolver` MUST insert a new `adopt-existing` tier ordered `env-or-yaml preset → persisted file → adopt-existing → provision-new`. | P1 | Placement matters: adopt only runs when persisted is absent (fresh/relaunched cluster). |
+| FR-002 | The `adopt-existing` tier MUST call an injected `discoverExistingChannel(repos)` callback and, on hit, persist the returned URL so the next boot short-circuits at the persisted tier. | P1 | Callback source: `WebhookSetupService.findExistingSmeeChannel(repos)`. |
+| FR-003 | `WebhookSetupService.findExistingSmeeChannel(repos)` MUST identify Generacy-owned smee hooks using **URL-prefix-only** (`https://smee.io/`) — no config-shape or marker check required. | P1 | Q1-A. Operator-installed smee.io hooks on Generacy-managed repos are considered negligible. |
+| FR-004 | When repos disagree on the discovered channel URL, `findExistingSmeeChannel` MUST return the first-repo-first-hook URL and MUST log the divergence at `warn`. | P1 | Q2-A. Iteration order = configured `repos` order. |
+| FR-005 | When exactly ONE Generacy smee hook exists on a repo AND its URL is stale (neither the current cluster's channel nor the persisted URL), the self-heal path MUST `update-url` that hook to the current channel. Bail out on 0 or ≥2 Generacy smee hooks per repo. | P1 | Q5-C. Runs at boot and on every self-heal poll. |
+| FR-006 | When >1 Generacy smee hook exists on a single repo, the resolver MUST adopt the first match and MUST leave the extras in place. It MUST NOT `update-url` extras onto the adopted channel (avoids duplicate-delivery). | P1 | Q3-A. |
+| FR-007 | On `discoverExistingChannel` throw/timeout, the adopt tier MUST retry up to `MAX_ATTEMPTS = 2` with `RETRY_DELAY_MS = 1000`, then fall through to `provision-new`. | P1 | Q4-C. Reuse existing resolver retry constants. |
+| FR-008 | When `adopt-existing` fires successfully, the resolver MUST emit `source: 'adopted'` in its result and log at `info`. | P1 | Distinguishable from `preset` / `persisted` / `provisioned` for observability. |
+| FR-009 | Non-smee webhooks (URL not starting with `https://smee.io/`) MUST continue to be classified `foreign` and left untouched by both adopt (A) and take-over (B). | P1 | Preserves existing operator-webhook guarantee. |
+| FR-010 | The persisted-file fast path (US2) MUST NOT issue a GitHub `list-hooks` call when the persisted channel is present and valid. | P2 | Perf / rate-limit guard for the common restart case. |
+
+## Success Criteria
+
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | Time from cluster relaunch to first webhook-mode label event on a repo with a pre-existing orphaned smee hook. | < 30 s (was ~5–10 min via polling). | Log timestamp between `Smee receiver connected` and first `source=webhook` label event on a scripted relaunch. |
+| SC-002 | Newly-provisioned smee channels on relaunch of a cluster whose repo already has a Generacy smee hook. | 0 | Grep orchestrator boot logs for `source=provisioned` when a `smee.io` hook was already present pre-boot; must be absent. |
+| SC-003 | Extra GitHub API calls on healthy `docker restart` (persisted file intact). | 0 additional `list-hooks` calls vs. today. | GitHub API request count in orchestrator boot logs between today's baseline and the healthy-restart path after the change. |
+| SC-004 | Duplicate label-event processing after relaunch. | 0 | Assert single `Processing … source=webhook` per label change under a repo with (post-fix) multiple hooks. |
+| SC-005 | Foreign (non-smee) webhooks modified by the cluster. | 0 | Log inspection: no `update-url` / `DELETE` calls against hooks whose URL doesn't start with `https://smee.io/`. |
+
+## Assumptions
+
+- **Serial concurrency model.** One active cluster per repo at any time. smee's broadcast semantics make channel reuse safe under this assumption; concurrent same-repo clusters are out of scope (would require processing-layer dedup that doesn't exist).
+- **All smee.io hooks on a Generacy-managed repo are Generacy-owned.** Basis for FR-003 (Q1-A). Operator-installed smee.io hooks on the same repo are considered negligible; if they exist, adopt/take-over will treat them as ours.
+- **Existing resolver retry constants (`MAX_ATTEMPTS = 2`, `RETRY_DELAY_MS = 1000`) are appropriate for the adopt tier's GitHub call** (Q4-C). If the resolver's constants diverge from what `WebhookSetupService` uses for its own hook-list calls, reuse the resolver's for consistency at the tier level.
+- **Persisted file survival is coupled to volume survival.** `cluster destroy` wipes the volume ⇒ persisted file is gone ⇒ adopt tier will run. `docker restart` preserves the volume ⇒ persisted tier hits ⇒ adopt tier is skipped.
+- **Multiple Generacy smee hooks accumulate only as legacy cruft** from pre-fix clusters that never cleaned up on shutdown. Post-fix, relaunches reuse instead of create, so multi-hook state stops growing.
+
+## Out of Scope
+
+- **One-time ops cleanup of legacy multi-hook state.** Repos that today carry >1 Generacy smee hook (Q3-A) are not swept by this change. A separate ops-side script/manual sweep is the fix for accumulated cruft.
+- **Concurrent same-repo clusters.** Excluded by the serial-model assumption; would require processing-layer dedup (per-cluster Redis, cross-cluster dedup) that is not planned.
+- **Repointing an already-orphaned webhook for a *currently* stuck cluster.** Immediate unblock of the field-observed stuck cluster (per issue evidence) is a one-time manual/ops action, separate from this fix.
+- **Writing a Generacy-owned marker onto new hooks at create time.** Recommended as a follow-up (Q1 suggestion) but explicitly not a dependency of this fix; adopt/take-over MUST NOT rely on the marker's presence.
+- **Cross-cluster webhook coordination or handoff protocol.** Not needed under the serial model; adopt-existing is the mechanism.
 
 ---
 
