@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { EpicEventBus, encodeCursor, decodeCursor, INSTANCE_NONCE } from '../event-bus.js';
+import {
+  DEFAULT_QUIET_HORIZON_MS,
+  EpicEventBus,
+  encodeCursor,
+  decodeCursor,
+  INSTANCE_NONCE,
+} from '../event-bus.js';
 import type { CockpitStreamEvent } from '../../watch/stream-event.js';
 
 function makeEvent(number: number, ts = '2026-07-11T00:00:00.000Z'): CockpitStreamEvent {
@@ -185,6 +191,26 @@ describe('EpicEventBus', () => {
     // The serialized body should be the same JSON emit() would write.
     const serialized = JSON.stringify(entry.event);
     expect(serialized).toBe(JSON.stringify(evt));
+  });
+
+  it('SC-005: DEFAULT_QUIET_HORIZON_MS is 7_200_000 and a positive integer', () => {
+    expect(DEFAULT_QUIET_HORIZON_MS).toBe(7_200_000);
+    expect(Number.isInteger(DEFAULT_QUIET_HORIZON_MS)).toBe(true);
+    expect(DEFAULT_QUIET_HORIZON_MS).toBeGreaterThan(0);
+  });
+
+  it('constructor default retentionMs derives from DEFAULT_QUIET_HORIZON_MS', () => {
+    let clock = 1000;
+    const bus = new EpicEventBus({ epic: 'generacy-ai/generacy#917', now: () => clock });
+    bus.emit(makeEvent(918));
+    // Just inside the horizon → the entry is still buffered.
+    clock = 1000 + (DEFAULT_QUIET_HORIZON_MS - 1);
+    bus.emit(makeEvent(919));
+    expect(bus.size()).toBe(2);
+    // Just past the horizon → the first entry is trimmed on the next emit.
+    clock = 1000 + (DEFAULT_QUIET_HORIZON_MS + 1);
+    bus.emit(makeEvent(920));
+    expect(bus.size()).toBe(2);
   });
 
   it('waitFor ordering across cursor resumes', async () => {
