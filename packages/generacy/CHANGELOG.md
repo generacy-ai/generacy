@@ -1,5 +1,47 @@
 # @generacy-ai/generacy
 
+## 0.7.0
+
+### Minor Changes
+
+- 31ce4d3: `cockpit doorbell` now emits each event as a full NDJSON line instead of the bare
+  event-type discriminator (#985). The wire shape mirrors `cockpit watch` and
+  carries `{ type, repo, kind, number, event, to, labels, url, … }` at minimum, so
+  `/cockpit:auto` can dispatch without re-querying GitHub per wake — removing the
+  ~5000 pts/hr GraphQL rate-limit amplifier. The smee path also populates `to`
+  locally via `classifyIssue` (zero added `gh` calls) and stamps an optional
+  `checks: 'green' | 'red'` verdict on `pr-checks` / `completed:validate` events
+  using the periodic poll's cached `PrSnapshot.checksRollup`.
+- d8f5388: Cap smee.io SSE reconnect backoff at 30s (was 5min) and add equal jitter, sharing
+  the algorithm via a new `@generacy-ai/smee-backoff` package. Reduces real-time
+  recovery latency for the orchestrator webhook receiver and the cockpit doorbell
+  after a transient smee.io outage.
+
+### Patch Changes
+
+- ca865c3: Add a `webhook-config` stage to the `/cockpit:auto` doorbell channel discovery that reads the smee.io URL directly from the registered repo webhook via `gh api /repos/{owner}/{repo}/hooks`, removing the `COCKPIT_DOORBELL_SMEE_URL` workaround for operator sessions that do not share the cluster's filesystem.
+- 887242f: fix: cockpit_context now finds clarification comments after `waiting-for:clarification` label re-application
+
+  `findClarificationComment` used to anchor on the most-recent `labeled` timeline event, which failed whenever requeue / boot-resume / cluster-restart re-applied the label without re-posting questions. It now positively identifies clarification-question comments via the shared `CLARIFICATION_QUESTION_MARKERS` registry (marker-first), falling back to the label-timeline heuristic with a deprecation warn when no marker-carrying comment exists. Resolves #995.
+
+- 7f9abdf: Runtime demotion in the cockpit doorbell is now a non-terminal live bridge that
+  keeps the sensor stdout stream open across smee.io outages and quiet windows
+  (#997, `workflow:speckit-bugfix`).
+- aeef996: Raise the cockpit MCP event-bus retention window and registry idle-TTL defaults
+  from 10 min to 120 min, expressed as a single shared exported constant
+  (`DEFAULT_QUIET_HORIZON_MS`) in
+  `packages/generacy/src/cli/commands/cockpit/mcp/event-bus.ts` so the two
+  horizons cannot silently desync (FR-001 / FR-002 / FR-003, #999). Fixes
+  `resetFrom:"discarded"` / `"expired"` cursor recoveries during long quiet
+  implementation phases of `/cockpit:auto`. Env-var override surface
+  (`COCKPIT_MCP_BUS_IDLE_TTL_MS`, `COCKPIT_MCP_EVENT_RETENTION_MS`) and
+  constructor/options seams unchanged; `retentionCount = 10_000` unchanged.
+- Updated dependencies [e4d91d7]
+- Updated dependencies [d8f5388]
+- Updated dependencies [890a2e3]
+  - @generacy-ai/orchestrator@0.10.0
+  - @generacy-ai/smee-backoff@0.2.0
+
 ## 0.6.0
 
 ### Minor Changes

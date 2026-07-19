@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/smee-backoff",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared equal-jitter exponential backoff helper for smee.io SSE reconnect loops",
   "type": "module",
   "main": "./dist/index.js",

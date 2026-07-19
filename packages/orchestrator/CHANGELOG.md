@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.10.0
+
+### Minor Changes
+
+- d8f5388: Cap smee.io SSE reconnect backoff at 30s (was 5min) and add equal jitter, sharing
+  the algorithm via a new `@generacy-ai/smee-backoff` package. Reduces real-time
+  recovery latency for the orchestrator webhook receiver and the cockpit doorbell
+  after a transient smee.io outage.
+
+### Patch Changes
+
+- e4d91d7: Flip monitors to webhook mode after smee receiver connects (#987). On the
+  auto-provisioned / persisted smee-channel path, the label / PR-feedback /
+  merge-conflict / clarification-answer monitors were stuck at fast adaptive
+  poll cadence with `reason=webhooks-not-configured` because `webhooksConfigured`
+  was frozen at construction time from the static `config.smee.channelUrl`.
+  `startSmeePipeline` now calls a one-way runtime setter on all four monitors
+  once the smee receiver reports Connected, and the receiver fans out
+  `recordWebhookEvent()` to all four monitors on every parsed inbound event so
+  the controller's `webhook-stale → to-fast` safety net remains reachable.
+- 890a2e3: Fix ClarificationAnswerMonitorService resuming on its own bot comments (#993).
+
+  The monitor's answer predicate now filters `[bot]`-suffix authors upstream of
+  the trust helper, and only accepts a candidate whose `created_at` is strictly
+  newer than the latest question-marker comment on the issue. `matchMachineMarker`
+  gains a `MACHINE_MARKER_FAMILIES` prefix pass so every `<!-- generacy-stage:*`
+  and `<!-- speckit-stage:*` marker (including the previously-missed
+  `<!-- speckit-stage:clarification`) is skipped without a code change.
+
+- Updated dependencies [d8f5388]
+  - @generacy-ai/smee-backoff@0.2.0
+
 ## 0.9.0
 
 ### Minor Changes
