@@ -182,7 +182,7 @@ describe('renderTable (plain non-TTY path)', () => {
 
     const flat = groups.flatMap((g) => g.rows);
     const envelope = JSON.parse(
-      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, flat),
+      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, flat, []),
     );
     expect(envelope.rows).toHaveLength(2);
     expect(envelope.rows[0].phase).toBe('p1');
@@ -275,6 +275,7 @@ describe('renderJsonEnvelope', () => {
     const json = renderJsonEnvelope(
       { owner: 'o', repo: 'r', issue: 42 },
       [row()],
+      [],
     );
     expect(json).not.toContain('\n');
     const parsed = JSON.parse(json);
@@ -306,7 +307,7 @@ describe('renderJsonEnvelope', () => {
     );
     const flat = groups.flatMap((g) => g.rows);
     const parsed = JSON.parse(
-      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, flat),
+      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, flat, []),
     );
     expect(parsed.rows).toHaveLength(4);
     for (const r of parsed.rows) {
@@ -347,7 +348,7 @@ describe('renderJsonEnvelope', () => {
       }),
     ];
     const parsed = JSON.parse(
-      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, rows),
+      renderJsonEnvelope({ owner: 'o', repo: 'r', issue: 1 }, rows, []),
     );
     expect(parsed.rows).toHaveLength(3);
     expect(parsed.rows[0]).toMatchObject({
