@@ -240,22 +240,19 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       })
     : undefined;
 
-  // Sync labels for watched repositories (skip in worker mode)
+  // Label sync for watched repos. Constructed here but RUN fire-and-forget in
+  // the onReady hook (after server.listen), not awaited here: syncAll walks
+  // dozens of sequential GitHub label create/update calls (~30s on a fresh repo
+  // creating ~68 labels), and awaiting it before listen blocks the server from
+  // becoming ready. That is on the critical path of a wizard cluster's
+  // post-activation restart — a blocking sync kept the orchestrator (and thus
+  // the relay + cloud UI) unreachable for the full sync duration. Labels aren't
+  // needed for the server to serve requests, and the label monitor tolerates
+  // definitions being created concurrently (a freshly-cloned repo has no issues
+  // to label yet).
+  let labelSyncService: LabelSyncService | null = null;
   if (!isWorkerMode && config.repositories.length > 0) {
-    const labelSyncService = new LabelSyncService(server.log, createGitHubClient, githubTokenProvider);
-    try {
-      const syncResult = await labelSyncService.syncAll(config.repositories);
-      server.log.info(
-        `Label sync complete: ${syncResult.successfulRepos}/${syncResult.totalRepos} repos succeeded`
-      );
-      if (syncResult.failedRepos > 0) {
-        server.log.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
-      }
-    } catch (error) {
-      server.log.warn(
-        `Label sync failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    labelSyncService = new LabelSyncService(server.log, createGitHubClient, githubTokenProvider);
   }
 
   // Initialize Redis client (shared across services)
@@ -948,6 +945,27 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     } else {
       // Full mode: start monitors, Smee, webhook setup (no dispatcher)
+
+      // Fire-and-forget label sync (see the construction site above): kicked off
+      // after listen so its sequential GitHub API calls never block server-ready.
+      if (labelSyncService) {
+        labelSyncService
+          .syncAll(config.repositories)
+          .then((syncResult) => {
+            server.log.info(
+              `Label sync complete: ${syncResult.successfulRepos}/${syncResult.totalRepos} repos succeeded`
+            );
+            if (syncResult.failedRepos > 0) {
+              server.log.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
+            }
+          })
+          .catch((error) => {
+            server.log.warn(
+              `Label sync failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+      }
+
       if (labelMonitorService) {
         labelMonitorService.startPolling().catch((error) => {
           server.log.error({ err: error }, 'Label monitor polling failed');

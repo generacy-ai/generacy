@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import type http from 'node:http';
 import path from 'node:path';
 import { z } from 'zod';
@@ -50,6 +51,56 @@ export async function readManifest(): Promise<AppConfig | null> {
   return AppConfigSchema.parse(merged.appConfig);
 }
 
+/** Manifest returned once the workspace is cloned but declares no appConfig. */
+const EMPTY_MANIFEST: AppConfig = AppConfigSchema.parse({ schemaVersion: '1' });
+
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Readiness-aware manifest read for the cloud bootstrap UI.
+ *
+ * The bare `readManifest()` returns `null` for two different states, which the
+ * cloud UI can't tell apart from a single response:
+ *   - the workspace repo hasn't been cloned yet, and
+ *   - it's cloned but the app declares no `appConfig`.
+ * The UI therefore has to poll a fixed window (300s) before it can safely show
+ * the empty state. This disambiguates them by the presence of a cluster config
+ * file at the resolved `.generacy` dir:
+ *   - `{ ready: false }` — no cluster.yaml / cluster.local.yaml on disk yet
+ *     (still cloning). The handler surfaces this as HTTP-200 `null` so the UI
+ *     keeps polling, exactly as before.
+ *   - `{ ready: true, manifest }` — cloned. `manifest` is the parsed appConfig,
+ *     or an empty (but non-null) manifest when the app declares none, so the UI
+ *     can advance the instant the clone lands instead of waiting out its window.
+ */
+export async function readManifestState(): Promise<
+  { ready: false } | { ready: true; manifest: AppConfig }
+> {
+  const generacyDir = await resolveGeneracyDir();
+  const [canonicalExists, localExists] = await Promise.all([
+    fileExists(path.join(generacyDir, 'cluster.yaml')),
+    fileExists(path.join(generacyDir, 'cluster.local.yaml')),
+  ]);
+
+  if (!canonicalExists && !localExists) {
+    return { ready: false };
+  }
+
+  const { merged } = await readMergedClusterConfig(generacyDir);
+  if (merged.appConfig === undefined || merged.appConfig === null) {
+    return { ready: true, manifest: EMPTY_MANIFEST };
+  }
+
+  return { ready: true, manifest: AppConfigSchema.parse(merged.appConfig) };
+}
+
 // --- Store instances (injected from bin/control-plane.ts) ---
 
 let envStoreInstance: AppConfigEnvStore | undefined;
@@ -98,10 +149,12 @@ export async function handleGetManifest(
   _params: Record<string, string>,
 ): Promise<void> {
   try {
-    const appConfig = await readManifest();
+    const state = await readManifestState();
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(200);
-    res.end(JSON.stringify(appConfig));
+    // Not-ready → `null` so the cloud UI keeps polling; ready → the (possibly
+    // empty) manifest so it can advance immediately.
+    res.end(JSON.stringify(state.ready ? state.manifest : null));
   } catch (err: unknown) {
     res.setHeader('Content-Type', 'application/json');
     res.writeHead(500);
