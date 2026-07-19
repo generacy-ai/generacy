@@ -50,6 +50,12 @@ function fmtRow(row: StatusRow, colorizer: Colorizer): string {
 export interface StatusEnvelope {
   scope: { kind: 'epic'; owner: string; repo: string; issue: number };
   rows: StatusRow[];
+  /**
+   * #1006 (FR-012): additive, non-breaking. Verbatim copy of
+   * `parsed.warnings` from the resolver; empty array on clean bodies.
+   * See `specs/1006-summary-llm-authored-epic/data-model.md § StatusEnvelope`.
+   */
+  warnings: string[];
 }
 
 export interface RenderOptions {
@@ -74,6 +80,7 @@ export function renderTable(groups: RowGroup[], options: RenderOptions): string 
 export function renderJsonEnvelope(
   epic: { owner: string; repo: string; issue: number },
   rows: StatusRow[],
+  warnings: string[],
 ): string {
   const envelope: StatusEnvelope = {
     scope: {
@@ -83,6 +90,7 @@ export function renderJsonEnvelope(
       issue: epic.issue,
     },
     rows,
+    warnings,
   };
   return JSON.stringify(envelope);
 }

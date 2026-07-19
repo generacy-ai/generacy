@@ -168,6 +168,7 @@ export async function runStatus(
     const line = renderJsonEnvelope(
       { owner: ownerStr!, repo: repoStr!, issue: resolved.epic.number },
       orderedRows,
+      resolved.parsed.warnings,
     );
     stdout(line);
     return 0;

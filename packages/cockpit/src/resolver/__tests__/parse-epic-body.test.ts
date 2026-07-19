@@ -7,6 +7,7 @@ import { parseEpicBody } from '../parse-epic-body.js';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SNIPLINK_BODY = readFileSync(join(HERE, 'fixtures', 'epic-826-sniplink.md'), 'utf-8');
 const TETRAD_88_BODY = readFileSync(join(HERE, 'fixtures', 'epic-826-tetrad-88.md'), 'utf-8');
+const SNAPPOLL_BODY = readFileSync(join(HERE, 'fixtures', 'epic-1006-snappoll.md'), 'utf-8');
 
 // Ground truth for fixtures/epic-826-sniplink.md (T003 — read the markdown).
 const SNIPLINK_EXPECTED: Array<{ heading: string; refs: Array<{ repo: string; number: number }> }> = [
@@ -449,5 +450,88 @@ describe('parseEpicBody', () => {
     const result = parseEpicBody(body);
     expect(result.phases[0]!.refs).toEqual([{ repo: 'owner/repo', number: 1 }]);
     expect(result.warnings).toEqual([]);
+  });
+
+  // #1006 (FR-009): LLM-authored epics that nest `####` phase headers under a
+  // single `### Delivery phases` H3 silently route every child ref to
+  // `__adhoc__`. The detector emits a stable-marker warning; the marker
+  // substring `phase headers must be '###'` is contractual (SC-006).
+  describe("H4 phase-header detector (#1006)", () => {
+    const MARKER = "phase headers must be '###'";
+
+    it('fires on the snappoll fixture (all-adhoc + zero-populated phases + phase-shaped ####)', () => {
+      const result = parseEpicBody(SNAPPOLL_BODY);
+      expect(result.warnings).toEqual(
+        expect.arrayContaining([expect.stringContaining(MARKER)]),
+      );
+      expect(result.phases.length).toBeGreaterThan(0);
+      expect(result.phases.every((p) => p.refs.length === 0)).toBe(true);
+      expect(result.adhocRefs).toHaveLength(12);
+    });
+
+    // Q1=C false-positive gates: `#### Notes` / `#### Follow-ups` /
+    // `#### Rephrase X` under a populated `###` phase must NOT fire.
+    it('does not fire on `#### Notes` under a populated phase (Q1=C false-positive gate)', () => {
+      const body = [
+        '### S1 — planning',
+        '- [ ] owner/repo#1',
+        '#### Notes',
+        '- [ ] owner/repo#2',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
+    });
+
+    it('does not fire on `#### Follow-ups` under a populated phase (Q1=C false-positive gate)', () => {
+      const body = [
+        '### S1 — planning',
+        '- [ ] owner/repo#1',
+        '#### Follow-ups',
+        '- [ ] owner/repo#2',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
+    });
+
+    it('does not fire on `#### Rephrase the API` — `\\bphase\\b` word-boundary is load-bearing', () => {
+      const body = [
+        '### S1 — planning',
+        '- [ ] owner/repo#1',
+        '#### Rephrase the API',
+        '- [ ] owner/repo#2',
+      ].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
+    });
+
+    // SC-002 vacuous-guard: flat-list bodies have `phases.length === 0`;
+    // `phases.every(...)` is vacuously true. Guard (a) rules this out.
+    it('does not fire on flat-list bodies (SC-002 vacuous-guard case, guard (a) load-bearing)', () => {
+      const body = ['## Scope', '- [ ] owner/repo#1', '- [ ] owner/repo#2'].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toHaveLength(0);
+      expect(result.adhocRefs).toHaveLength(2);
+      expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
+    });
+
+    // Empty-phases-but-no-phase-shaped-####: H4 closes the phase, ref falls
+    // to adhoc, but `#### Notes` does not match the detector. Guard (d)
+    // load-bearing.
+    it('does not fire when the only #### heading is not phase-shaped (guard (d) load-bearing)', () => {
+      const body = ['### S1', '#### Notes', '- [ ] owner/repo#1'].join('\n');
+      const result = parseEpicBody(body);
+      expect(result.phases).toHaveLength(1);
+      expect(result.phases[0]!.refs).toEqual([]);
+      expect(result.adhocRefs).toEqual([{ repo: 'owner/repo', number: 1 }]);
+      expect(result.warnings.every((w) => !w.includes(MARKER))).toBe(true);
+    });
+
+    // SC-006: marker substring must appear in exactly one warning-emission
+    // site inside parse-epic-body.ts (no accidental duplicates elsewhere).
+    it('marker substring appears in exactly one place in parse-epic-body.ts (SC-006)', () => {
+      const source = readFileSync(join(HERE, '..', 'parse-epic-body.ts'), 'utf-8');
+      const matches = source.match(/phase headers must be '###'/g) ?? [];
+      expect(matches).toHaveLength(1);
+    });
   });
 });
