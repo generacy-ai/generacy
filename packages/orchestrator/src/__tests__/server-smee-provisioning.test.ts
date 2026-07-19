@@ -50,9 +50,11 @@ vi.mock('../services/smee-receiver.js', () => ({
 
 // Mock WebhookSetupService — track ensureWebhooks calls.
 const ensureWebhooksMock = vi.fn().mockResolvedValue({ total: 0, created: 0, skipped: 0, reactivated: 0, failed: 0 });
+const findExistingSmeeChannelMock = vi.fn().mockResolvedValue(null);
 vi.mock('../services/webhook-setup-service.js', () => ({
   WebhookSetupService: vi.fn().mockImplementation(() => ({
     ensureWebhooks: ensureWebhooksMock,
+    findExistingSmeeChannel: findExistingSmeeChannelMock,
   })),
 }));
 

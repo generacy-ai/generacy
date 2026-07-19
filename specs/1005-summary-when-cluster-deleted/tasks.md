@@ -10,7 +10,7 @@
 
 ## Phase 1: Type Surface
 
-- [ ] T001 [US1] Extend `ChannelSource` in `packages/orchestrator/src/services/smee-channel-resolver.ts`
+- [X] T001 [US1] Extend `ChannelSource` in `packages/orchestrator/src/services/smee-channel-resolver.ts`
   to include `'adopted'` between `'persisted'` and `'provisioned'`
   (order: `'env-or-yaml' | 'persisted' | 'adopted' | 'provisioned'`).
   Also extend `SmeeChannelResolverOptions` with two new optional fields per
@@ -23,7 +23,7 @@
 ## Phase 2: Discovery Callback (WebhookSetupService)
 <!-- Depends on Phase 1: SmeeChannelResolverOptions.discoverExistingChannel signature must exist -->
 
-- [ ] T002 [US1] Implement `findExistingSmeeChannel(repos)` as a public async method on
+- [X] T002 [US1] Implement `findExistingSmeeChannel(repos)` as a public async method on
   `WebhookSetupService` in `packages/orchestrator/src/services/webhook-setup-service.ts`.
   Signature: `public async findExistingSmeeChannel(repos: RepositoryConfig[]): Promise<string | null>`.
   Algorithm per `contracts/find-existing-smee-channel.md` §Discovery algorithm:
@@ -47,7 +47,7 @@
 ## Phase 3: Resolver Adopt Tier
 <!-- Depends on Phase 1 (types) and Phase 2 (callback exists on WebhookSetupService) -->
 
-- [ ] T003 [US1] Add `runAdoptTier()` private async method to `SmeeChannelResolver` in
+- [X] T003 [US1] Add `runAdoptTier()` private async method to `SmeeChannelResolver` in
   `packages/orchestrator/src/services/smee-channel-resolver.ts`.
   Behavior per `contracts/smee-channel-resolver-adopt-tier.md` §`runAdoptTier()`:
     - Guard: if `!this.options.discoverExistingChannel || !this.options.repos || this.options.repos.length === 0`
@@ -65,7 +65,7 @@
       with `{ attempts: MAX_ATTEMPTS, lastError, source: 'adopted' }`, return `null`.
   MUST NEVER THROW. Required by FR-007.
 
-- [ ] T004 [US1] Insert tier-3 (adopt-existing) invocation into `SmeeChannelResolver.resolve()`
+- [X] T004 [US1] Insert tier-3 (adopt-existing) invocation into `SmeeChannelResolver.resolve()`
   in `packages/orchestrator/src/services/smee-channel-resolver.ts`. Placement per
   `contracts/smee-channel-resolver-adopt-tier.md` §Tier ordering: AFTER the persisted-file
   return short-circuit (`:85-93`) and BEFORE the `provision()` call. Logic:
@@ -86,7 +86,7 @@
 ## Phase 4: Take-Over Branch (WebhookSetupService)
 <!-- Independent of Phases 2-3; can run in parallel with Phase 2 (T002) but touches same file -->
 
-- [ ] T005 [US1] Refactor `_selectExistingHookForUpdate` in
+- [X] T005 [US1] Refactor `_selectExistingHookForUpdate` in
   `packages/orchestrator/src/services/webhook-setup-service.ts` to insert the take-over
   branch per `contracts/webhook-setup-takeover.md` §Ordering. Insert the new branch
   BETWEEN the existing `persisted-match update-url` branch and the existing `foreign` branch:
@@ -108,7 +108,7 @@
 ## Phase 5: Wiring (server.ts)
 <!-- Phase boundary: Phases 1-4 must be complete before wiring can compile -->
 
-- [ ] T006 [US1] Hoist `WebhookSetupService` construction ABOVE `SmeeChannelResolver` construction
+- [X] T006 [US1] Hoist `WebhookSetupService` construction ABOVE `SmeeChannelResolver` construction
   in `packages/orchestrator/src/server.ts` (`onReady` closure at `:641-679`, and
   `startSmeePipeline` at `:597-617`). Per plan.md §Line-of-effect Wiring row:
     - Construct one `WebhookSetupService` instance inside the `onReady` closure using the same
@@ -128,7 +128,7 @@
 ## Phase 6: Tests
 <!-- Phase boundary: Phases 1-5 must be implemented so tests reflect real signatures -->
 
-- [ ] T007 [P] [US1, US2] Add resolver tests to
+- [X] T007 [P] [US1, US2] Add resolver tests to
   `packages/orchestrator/src/services/__tests__/smee-channel-resolver.test.ts`
   per plan.md §Line-of-effect (`smee-channel-resolver.test.ts` row):
     - **T-adopt-1**: callback returns a valid smee URL → result is `{ source: 'adopted', channelUrl }`;
@@ -151,7 +151,7 @@
       (`expect(discoverExistingChannel).not.toHaveBeenCalled()`).
   Required by FR-002, FR-007, FR-008, FR-010, SC-003.
 
-- [ ] T008 [P] [US1, US3] Add webhook-setup tests to
+- [X] T008 [P] [US1, US3] Add webhook-setup tests to
   `packages/orchestrator/src/services/__tests__/webhook-setup-service.test.ts`
   per plan.md §Line-of-effect (`webhook-setup-service.test.ts` row):
     - **T-find-1**: single repo, `_listRepoWebhooks` returns one smee.io hook → returns that URL.
@@ -186,7 +186,7 @@
 ## Phase 7: Changeset
 <!-- Independent of implementation phases; can run in parallel once file paths are known -->
 
-- [ ] T009 [P] [US1] Create `.changeset/1005-adopt-existing-smee-channel.md` with:
+- [X] T009 [P] [US1] Create `.changeset/1005-adopt-existing-smee-channel.md` with:
     - Frontmatter: `'@generacy-ai/orchestrator': patch`.
     - Body: one-line summary of the adopt tier + single-hook take-over branch, referencing
       issue #1005. Internal observability + wiring behavior; no public API surface change.
@@ -195,7 +195,7 @@
 ## Phase 8: Verification
 <!-- Phase boundary: Phases 1-7 complete before verification -->
 
-- [ ] T010 [US1, US2, US3] Manual verification per `quickstart.md`:
+- [X] T010 [US1, US2, US3] Manual verification per `quickstart.md`:
     - Follow §Repro / validation steps 1-4 on a real relaunched cluster (or a
       staging equivalent), verifying `source=adopted` in the orchestrator log
       and near-instant webhook-mode label delivery (SC-001: < 30 s).

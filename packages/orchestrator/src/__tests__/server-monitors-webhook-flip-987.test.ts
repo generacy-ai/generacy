@@ -56,6 +56,7 @@ vi.mock('../services/smee-channel-resolver.js', () => ({
 vi.mock('../services/webhook-setup-service.js', () => ({
   WebhookSetupService: vi.fn().mockImplementation(() => ({
     ensureWebhooks: vi.fn().mockResolvedValue({ total: 0, created: 0, skipped: 0, reactivated: 0, failed: 0 }),
+    findExistingSmeeChannel: vi.fn().mockResolvedValue(null),
   })),
 }));
 
