@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { webhookToStreamEvent, type RefSetView } from '../webhook-to-event.js';
 import type { CockpitEventValidated } from '../../watch/emit.js';
+import { classifyIssue } from '../../shared/classify-issue.js';
 
 function refSetOf(): RefSetView {
   return {
@@ -34,7 +35,7 @@ describe('webhookToStreamEvent — Q1=A mapping table', () => {
     expect(ev.number).toBe(42);
     expect(ev.sourceLabel).toBe('foo');
     expect(ev.from).toBeNull();
-    expect(ev.to).toBeNull();
+    expect(ev.to).toBe('unknown');
     expect(ev.repo).toBe('o/r');
     expect(ev.labels).toEqual(['foo']);
     expect(ev.url).toBe('https://github.com/o/r/issues/42');
@@ -187,4 +188,43 @@ describe('webhookToStreamEvent — Q1=A mapping table', () => {
       webhookToStreamEvent('pull_request', 'synchronize', body, refSetOf(), ts),
     ).toBeNull();
   });
+});
+
+describe('buildEvent — FR-003 / FR-008b / INV-2: to === classifyIssue(labels).state', () => {
+  const cases: Array<{ name: string; labels: string[] }> = [
+    { name: 'waiting-for + process labels', labels: ['waiting-for:clarification', 'process:speckit-feature'] },
+    { name: 'completed:validate label', labels: ['completed:validate'] },
+    { name: 'agent:error label', labels: ['agent:error'] },
+    { name: 'phase:implement label', labels: ['phase:implement'] },
+    { name: 'unknown-only labels', labels: ['random-thing'] },
+    { name: 'empty labels', labels: [] },
+  ];
+
+  for (const { name, labels } of cases) {
+    it(`${name} — to matches classifyIssue().state, from stays null`, () => {
+      const body = {
+        ...repoBody(),
+        issue: { number: 42, labels: labels.map((n) => ({ name: n })) },
+        label: { name: labels[0] ?? 'placeholder' },
+      };
+      const result = webhookToStreamEvent(
+        'issues',
+        'labeled',
+        body,
+        refSetOf(),
+        ts,
+      );
+      expect(result).not.toBeNull();
+      const ev = result as CockpitEventValidated;
+      const classified = classifyIssue(labels);
+      expect(ev.to).toBe(classified.state);
+      expect(ev.from).toBeNull();
+      if (classified.sourceLabel !== '') {
+        expect(ev.sourceLabel).toBe(classified.sourceLabel);
+      } else {
+        // fall back to the label passed by the labeled event
+        expect(ev.sourceLabel).toBe(labels[0] ?? 'placeholder');
+      }
+    });
+  }
 });

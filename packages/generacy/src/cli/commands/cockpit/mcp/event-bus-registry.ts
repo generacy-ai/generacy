@@ -14,7 +14,7 @@
  * A soft cap on live buses evicts the least-recently-active on overflow.
  *
  * Env knobs:
- *   `COCKPIT_MCP_BUS_IDLE_TTL_MS` — idle-TTL for refcount-0 buses (default 600_000).
+ *   `COCKPIT_MCP_BUS_IDLE_TTL_MS` — idle-TTL for refcount-0 buses (default 7_200_000, sourced from the shared `DEFAULT_QUIET_HORIZON_MS` constant in `event-bus.ts`).
  *   `COCKPIT_MCP_BUS_MAX`         — soft cap on live buses (default 100).
  */
 import {
@@ -35,12 +35,12 @@ import {
 } from '../watch/aggregate.js';
 import type { SnapshotMap } from '../watch/snapshot.js';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
-import { EpicEventBus } from './event-bus.js';
+import { DEFAULT_QUIET_HORIZON_MS, EpicEventBus } from './event-bus.js';
 
 const DEFAULT_INTERVAL_MS = 30_000;
 
 /** Env knob `COCKPIT_MCP_BUS_IDLE_TTL_MS` — idle-TTL for refcount-0 buses. */
-const DEFAULT_IDLE_TTL_MS = 600_000;
+const DEFAULT_IDLE_TTL_MS = DEFAULT_QUIET_HORIZON_MS;
 /** Env knob `COCKPIT_MCP_BUS_MAX` — soft cap on live buses. */
 const DEFAULT_MAX_BUSES = 100;
 

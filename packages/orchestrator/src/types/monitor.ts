@@ -193,8 +193,9 @@ export interface MonitorState {
    */
   webhookHealthy: boolean;
   /**
-   * Timestamp of the last webhook event received.
-   * Stays `null` on smee-less clusters (no receiver ever calls `recordWebhookEvent`).
+   * Timestamp of the last webhook event received. Stays `null` until the
+   * corresponding inbound path calls `recordWebhookEvent`. On smee clusters,
+   * the receiver fans out to all four monitors (#987 FR-004).
    */
   lastWebhookEvent: number | null;
   /** Current effective poll interval (adaptive) */
@@ -203,9 +204,11 @@ export interface MonitorState {
   basePollIntervalMs: number;
   /**
    * #953: Whether a webhook feeder is configured for this service.
-   * Set once at construction from a per-service derivation rule; never mutated.
-   * Distinguishes "webhooks configured but quiet" (grace applies) from
-   * "no webhook path exists at all" (engage fast interval when adaptive).
+   * Set at construction from a per-service derivation rule; may be
+   * flipped `false → true` at runtime by #987's `setWebhooksConfigured(true)`
+   * once `startSmeePipeline` observes the smee receiver connect.
+   * Never flipped back to `false` — receiver-death recovery is handled by
+   * the controller's `webhook-stale → to-fast` branch.
    */
   webhooksConfigured: boolean;
 }

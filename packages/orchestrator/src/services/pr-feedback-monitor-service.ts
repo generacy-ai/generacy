@@ -33,6 +33,14 @@ export interface PrFeedbackMonitorOptions {
   maxConcurrentPolls: number;
 }
 
+/**
+ * #987: options for the runtime `setWebhooksConfigured(true, opts?)` flip.
+ * See specs/987-summary-cluster-where-smee/contracts/setter-contract.md.
+ */
+export interface SetWebhooksConfiguredOptions {
+  basePollIntervalMs?: number;
+}
+
 const WAITING_FOR_PR_FEEDBACK_LABEL = 'waiting-for:address-pr-feedback';
 const MIN_POLL_INTERVAL_MS = 10000;
 /**
@@ -794,6 +802,20 @@ export class PrFeedbackMonitorService {
 
   getState(): Readonly<MonitorState> {
     return { ...this.state };
+  }
+
+  /**
+   * #987: flip `webhooksConfigured` to `true` at runtime. Setter is one-way
+   * (Q1); `adaptivePolling` stays untouched so the staleness safety net is
+   * reachable (Q2). See specs/987-summary-cluster-where-smee/clarifications.md.
+   */
+  setWebhooksConfigured(configured: true, opts?: SetWebhooksConfiguredOptions): void {
+    void configured;
+    this.state.webhooksConfigured = true;
+    if (opts?.basePollIntervalMs !== undefined) {
+      this.state.basePollIntervalMs = opts.basePollIntervalMs;
+      this.state.currentPollIntervalMs = opts.basePollIntervalMs;
+    }
   }
 
   // ==========================================================================

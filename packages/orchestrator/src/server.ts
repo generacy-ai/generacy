@@ -493,9 +493,58 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       config.smee.channelUrl != null, // #953: webhooksConfigured
     );
 
+    // #987: construct the three sibling monitors before `startSmeePipeline` so
+    // the receiver's fan-out closure captures live refs (the sync
+    // `config.smee.channelUrl` path runs the pipeline before the previous
+    // construction site at line ~615). #953 initial-webhooksConfigured is
+    // still `config.smee.channelUrl != null` — the runtime flip via
+    // setWebhooksConfigured happens in the `onConnected` callback below.
+    if (config.prMonitor.enabled) {
+      prFeedbackMonitorService = new PrFeedbackMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
+        config.smee.channelUrl != null,
+      );
+
+      mergeConflictMonitorService = new MergeConflictMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
+        config.smee.channelUrl != null,
+      );
+
+      clarificationAnswerMonitorService = new ClarificationAnswerMonitorService(
+        server.log,
+        createGitHubClient,
+        queueAdapter,
+        config.prMonitor,
+        config.repositories,
+        clusterGithubUsername,
+        githubTokenProvider,
+        githubAuthHealth ?? undefined,
+        githubAppCredentialId,
+        config.smee.channelUrl != null,
+      );
+    }
+
     // Wire the smee pipeline (receiver + optional webhook setup) for a resolved URL.
-    // Captures labelMonitorService, config, githubTokenProvider, clusterGithubUsername
-    // from the enclosing scope. See specs/952-summary-no-automated-cluster/contracts/server-pipeline.md.
+    // Captures labelMonitorService (+ sibling monitors), config, githubTokenProvider,
+    // clusterGithubUsername from the enclosing scope. See
+    // specs/952-summary-no-automated-cluster/contracts/server-pipeline.md
+    // and specs/987-summary-cluster-where-smee/contracts/smee-receiver-contract.md.
     const startSmeePipeline = (channelUrl: string): void => {
       const watchedRepos = new Set(
         config.repositories.map(r => `${r.owner}/${r.repo}`)
@@ -503,7 +552,31 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       const receiver = new SmeeWebhookReceiver(
         server.log,
         labelMonitorService!,
-        { channelUrl, watchedRepos, clusterGithubUsername },
+        {
+          channelUrl,
+          watchedRepos,
+          clusterGithubUsername,
+          // #987 FR-004: broad `recordWebhookEvent()` fan-out + per-event
+          // processing dispatch (PR-review → PR-feedback, issue_comment →
+          // clarification). Refs may be null when `prMonitor.enabled === false`.
+          ...(prFeedbackMonitorService ? { prFeedbackMonitor: prFeedbackMonitorService } : {}),
+          ...(mergeConflictMonitorService ? { mergeConflictMonitor: mergeConflictMonitorService } : {}),
+          ...(clarificationAnswerMonitorService ? { clarificationAnswerMonitor: clarificationAnswerMonitorService } : {}),
+          // #987 FR-002: on receiver-connect, flip `webhooksConfigured=true`
+          // on all four monitors and align their base cadence to the smee
+          // fallback interval. Fires exactly once; idempotent by construction.
+          onConnected: () => {
+            const opts = { basePollIntervalMs: config.smee.fallbackPollIntervalMs };
+            labelMonitorService?.setWebhooksConfigured(true, opts);
+            prFeedbackMonitorService?.setWebhooksConfigured(true, opts);
+            mergeConflictMonitorService?.setWebhooksConfigured(true, opts);
+            clarificationAnswerMonitorService?.setWebhooksConfigured(true, opts);
+            server.log.info(
+              { basePollIntervalMs: opts.basePollIntervalMs },
+              'Smee receiver connected — monitors flipped to webhook mode',
+            );
+          },
+        },
       );
       smeeReceiver = receiver;
       server.log.info({ channelUrl }, 'Smee webhook receiver configured');
@@ -609,55 +682,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       });
     }
 
-    // Initialize PR feedback monitor service (if enabled). #879: in-flight
-    // dedupe via QueueManager.enqueueIfAbsent; no PhaseTracker dependency.
-    if (config.prMonitor.enabled) {
-      prFeedbackMonitorService = new PrFeedbackMonitorService(
-        server.log,
-        createGitHubClient,
-        queueAdapter,
-        config.prMonitor,
-        config.repositories,
-        clusterGithubUsername,
-        githubTokenProvider,
-        githubAuthHealth ?? undefined,
-        githubAppCredentialId,
-        false, // #953: no reliable feeder signal available at construction
-      );
-
-      // #898: Merge-conflict monitor reuses the PR-monitor config for poll
-      // cadence (same order of magnitude). Enqueues `resolve-merge-conflicts`
-      // items when the pause label pair (`waiting-for:merge-conflicts` +
-      // `agent:paused`) is detected on an assigned open issue.
-      mergeConflictMonitorService = new MergeConflictMonitorService(
-        server.log,
-        createGitHubClient,
-        queueAdapter,
-        config.prMonitor,
-        config.repositories,
-        clusterGithubUsername,
-        githubTokenProvider,
-        githubAuthHealth ?? undefined,
-        githubAppCredentialId,
-        false, // #953: recordWebhookEvent() has no callers anywhere
-      );
-
-      // #958 T015: Clarification-answer monitor — sibling of merge-conflict
-      // monitor. Enqueues `continue` resumes when a plain human comment
-      // arrives on a `waiting-for:clarification` + `agent:paused` issue.
-      // Never applies `completed:clarification` (FR-011).
-      clarificationAnswerMonitorService = new ClarificationAnswerMonitorService(
-        server.log,
-        createGitHubClient,
-        queueAdapter,
-        config.prMonitor,
-        config.repositories,
-        clusterGithubUsername,
-        githubTokenProvider,
-        githubAuthHealth ?? undefined,
-        githubAppCredentialId,
-      );
-    }
+    // #987: PR-feedback, merge-conflict, and clarification-answer monitors
+    // were moved above `startSmeePipeline` so the receiver's fan-out closure
+    // captures live refs. See the construction block after LabelMonitorService.
 
     // #892: Initialize base-advance monitor. Enqueues a resume for any open PR
     // sitting at `failed:validate` whose base branch head SHA has advanced.

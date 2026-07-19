@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import {
   CLARIFICATION_QUESTION_MARKERS,
   MACHINE_MARKERS,
+  MACHINE_MARKER_FAMILIES,
   commentCarriesMachineMarker,
   matchMachineMarker,
 } from '../clarification-markers.js';
@@ -35,12 +36,33 @@ describe('#976 MACHINE_MARKERS structural invariants', () => {
 });
 
 describe('#976 commentCarriesMachineMarker / matchMachineMarker', () => {
-  it.each(MACHINE_MARKERS.map((m) => [m]))(
-    'positively matches marker %s at column 0',
+  // #993: MACHINE_MARKERS entries that ALSO start with a MACHINE_MARKER_FAMILIES
+  // prefix (only `<!-- generacy-stage:clarification` today) still match, but the
+  // family match runs first and returns the family prefix. See
+  // specs/993-summary-orchestrator-s/contracts/machine-markers-contract.md.
+  const enumeratedOnly = MACHINE_MARKERS.filter(
+    (m) => !MACHINE_MARKER_FAMILIES.some((f) => m.startsWith(f)),
+  );
+  const familySwept = MACHINE_MARKERS.filter((m) =>
+    MACHINE_MARKER_FAMILIES.some((f) => m.startsWith(f)),
+  );
+
+  it.each(enumeratedOnly.map((m) => [m]))(
+    'positively matches enumerated marker %s at column 0 (returns exact prefix)',
     (prefix) => {
       const body = `${prefix} -->\n\nQ1: something`;
       expect(commentCarriesMachineMarker(body)).toBe(true);
       expect(matchMachineMarker(body)).toBe(prefix);
+    },
+  );
+
+  it.each(familySwept.map((m) => [m]))(
+    'positively matches family-swept marker %s at column 0 (returns family prefix)',
+    (prefix) => {
+      const body = `${prefix} -->\n\nQ1: something`;
+      const family = MACHINE_MARKER_FAMILIES.find((f) => prefix.startsWith(f))!;
+      expect(commentCarriesMachineMarker(body)).toBe(true);
+      expect(matchMachineMarker(body)).toBe(family);
     },
   );
 
@@ -51,9 +73,9 @@ describe('#976 commentCarriesMachineMarker / matchMachineMarker', () => {
   });
 
   it('returns undefined when the marker has leading whitespace (I-M2)', () => {
-    expect(commentCarriesMachineMarker('  <!-- generacy-stage:planning -->')).toBe(false);
+    expect(commentCarriesMachineMarker('  <!-- generacy-stage:foo -->')).toBe(false);
     expect(commentCarriesMachineMarker('\t<!-- generacy-clarifications:1 -->')).toBe(false);
-    expect(matchMachineMarker('  <!-- generacy-stage:planning -->')).toBeUndefined();
+    expect(matchMachineMarker('  <!-- generacy-stage:foo -->')).toBeUndefined();
   });
 
   it('returns undefined for marker-shaped prose without a `<!--` wrapper', () => {

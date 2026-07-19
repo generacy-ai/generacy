@@ -13,9 +13,10 @@ import {
   type IssueRef,
   type ResolvedEpic,
 } from '@generacy-ai/cockpit';
+import { calculateBackoffDelay } from '@generacy-ai/smee-backoff';
 import { initialAggregateState, type AggregateState } from '../watch/aggregate.js';
 import type { CockpitStreamEvent } from '../watch/stream-event.js';
-import type { SnapshotMap } from '../watch/snapshot.js';
+import { snapshotKey, type ChecksRollup, type SnapshotMap } from '../watch/snapshot.js';
 import { parseSseEventBlock, type NormalizedPayload } from './sse-parser.js';
 import {
   webhookToStreamEvent,
@@ -27,7 +28,6 @@ import {
 } from './aggregate-on-demand.js';
 
 export const DEFAULT_BASE_RECONNECT_DELAY_MS = 5_000;
-export const MAX_BACKOFF_MS = 300_000;
 export const DEFAULT_REFRESH_DEBOUNCE_MS = 500;
 export const DEFAULT_SAFETY_NET_INTERVAL_MS = 600_000;
 const AGGREGATE_TRIGGER_DEBOUNCE_MS = 500;
@@ -41,6 +41,7 @@ export interface SmeeDoorbellSourceOptions {
   onEvent: (event: CockpitStreamEvent) => Promise<void>;
   onReconnectAttempt: (failedAttempts: number) => void;
   onReconnectSuccess: () => void;
+  onSseBytes?: () => void;
   onRefSetRefreshFailure?: (err: unknown) => void;
   now?: () => number;
   fetch?: typeof globalThis.fetch;
@@ -99,6 +100,19 @@ function deriveTrigger(payload: NormalizedPayload): AggregateTrigger {
   return null;
 }
 
+function mapChecks(rollup: ChecksRollup): 'green' | 'red' | undefined {
+  switch (rollup) {
+    case 'success':
+      return 'green';
+    case 'failure':
+    case 'error':
+      return 'red';
+    case 'pending':
+    case 'none':
+      return undefined;
+  }
+}
+
 function isEpicPayload(payload: NormalizedPayload, epicNumber: number): boolean {
   if (payload.githubEvent !== 'issues') return false;
   if (
@@ -122,6 +136,7 @@ export class SmeeDoorbellSource {
   private readonly onEvent: (event: CockpitStreamEvent) => Promise<void>;
   private readonly onReconnectAttempt: (failedAttempts: number) => void;
   private readonly onReconnectSuccess: () => void;
+  private readonly onSseBytes?: () => void;
   private readonly onRefSetRefreshFailure?: (err: unknown) => void;
   private readonly now: () => number;
   private readonly fetchImpl: typeof globalThis.fetch;
@@ -151,6 +166,9 @@ export class SmeeDoorbellSource {
     this.onEvent = options.onEvent;
     this.onReconnectAttempt = options.onReconnectAttempt;
     this.onReconnectSuccess = options.onReconnectSuccess;
+    if (options.onSseBytes != null) {
+      this.onSseBytes = options.onSseBytes;
+    }
     if (options.onRefSetRefreshFailure != null) {
       this.onRefSetRefreshFailure = options.onRefSetRefreshFailure;
     }
@@ -216,11 +234,6 @@ export class SmeeDoorbellSource {
     }
   }
 
-  private calculateBackoffDelay(attempt: number): number {
-    const delay = this.baseReconnectDelayMs * Math.pow(2, attempt);
-    return Math.min(delay, MAX_BACKOFF_MS);
-  }
-
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
     return new Promise<void>((resolve) => {
       if (signal.aborted) {
@@ -242,15 +255,24 @@ export class SmeeDoorbellSource {
     if (signal == null) return;
 
     while (this.running && !signal.aborted) {
-      let sleepMs = this.calculateBackoffDelay(this.reconnectAttempt);
+      let sleepMs = calculateBackoffDelay(this.reconnectAttempt, {
+        base: this.baseReconnectDelayMs,
+        cap: 30_000,
+      });
       try {
         await this.connect(signal);
         this.reconnectAttempt = 0;
-        sleepMs = this.calculateBackoffDelay(this.reconnectAttempt);
+        sleepMs = calculateBackoffDelay(this.reconnectAttempt, {
+          base: this.baseReconnectDelayMs,
+          cap: 30_000,
+        });
       } catch (err) {
         if (signal.aborted) break;
         this.reconnectAttempt++;
-        sleepMs = this.calculateBackoffDelay(this.reconnectAttempt);
+        sleepMs = calculateBackoffDelay(this.reconnectAttempt, {
+          base: this.baseReconnectDelayMs,
+          cap: 30_000,
+        });
         this.logger.warn(
           `cockpit doorbell: smee connection lost, reconnecting in ${sleepMs}ms (attempt ${this.reconnectAttempt}): ${
             err instanceof Error ? err.message : String(err)
@@ -298,6 +320,14 @@ export class SmeeDoorbellSource {
         const { done, value } = await reader.read();
         if (done) break;
 
+        if (value != null && value.length > 0) {
+          try {
+            this.onSseBytes?.();
+          } catch {
+            /* callback failures don't stop the loop */
+          }
+        }
+
         buffer += decoder.decode(value, { stream: true });
         const events = buffer.split('\n\n');
         buffer = events.pop() ?? '';
@@ -331,8 +361,23 @@ export class SmeeDoorbellSource {
     if (result != null) {
       const events = Array.isArray(result) ? result : [result];
       for (const ev of events) {
+        let stamped: CockpitStreamEvent = ev;
+        if (
+          ev.type === 'issue-transition' &&
+          (ev.event === 'pr-checks' ||
+            (ev.event === 'label-change' && ev.sourceLabel === 'completed:validate'))
+        ) {
+          // no gh calls — read-through PrSnapshot cache only (FR-005)
+          const snap = this.prev.get(snapshotKey(ev.repo, 'pr', ev.number));
+          if (snap?.kind === 'pr') {
+            const wire = mapChecks(snap.checksRollup);
+            if (wire !== undefined) {
+              stamped = { ...ev, checks: wire };
+            }
+          }
+        }
         try {
-          await this.onEvent(ev);
+          await this.onEvent(stamped);
         } catch (err) {
           this.logger.warn(
             `cockpit doorbell: onEvent sink rejected: ${

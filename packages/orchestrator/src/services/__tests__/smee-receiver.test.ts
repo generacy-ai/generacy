@@ -6,6 +6,30 @@ import type { LabelMonitorService } from '../label-monitor-service.js';
 const mockFetch = vi.fn();
 global.fetch = mockFetch as unknown as typeof fetch;
 
+/**
+ * Equal-jitter band for `calculateBackoffDelay(attempt, { base, cap: 30_000 })`:
+ *   raw    = base * 2^attempt
+ *   capped = min(raw, 30_000)
+ *   band   = [capped / 2, capped)
+ */
+function backoffBand(base: number, attempt: number): { min: number; max: number } {
+  const raw = base * Math.pow(2, attempt);
+  const capped = Math.min(raw, 30_000);
+  return { min: capped / 2, max: capped };
+}
+
+function expectBackoffAttempt(
+  msg: unknown,
+  attempt: number,
+  base: number,
+): void {
+  const { min, max } = backoffBand(base, attempt);
+  const m = msg as { attempt: number; reconnectMs: number };
+  expect(m.attempt).toBe(attempt);
+  expect(m.reconnectMs).toBeGreaterThanOrEqual(min);
+  expect(m.reconnectMs).toBeLessThan(max);
+}
+
 describe('SmeeWebhookReceiver', () => {
   let receiver: SmeeWebhookReceiver;
   let mockLogger: {
@@ -60,14 +84,12 @@ describe('SmeeWebhookReceiver', () => {
       receiver.stop();
       await startPromise;
 
-      // Assert - should warn with default 5 second delay
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reconnectMs: 5000,
-          attempt: 0,
-        }),
-        'Smee connection lost, reconnecting...'
+      // Assert - default base=5000 → attempt=0 delay in [2500, 5000)
+      const warnCall = mockLogger.warn.mock.calls.find(
+        (call) => call[1] === 'Smee connection lost, reconnecting...',
       );
+      expect(warnCall).toBeDefined();
+      expectBackoffAttempt(warnCall![0], 0, 5000);
     });
 
     it('should use custom base reconnect delay when provided', async () => {
@@ -86,14 +108,12 @@ describe('SmeeWebhookReceiver', () => {
       receiver.stop();
       await startPromise;
 
-      // Assert - should use custom base delay
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          reconnectMs: 10000,
-          attempt: 0,
-        }),
-        'Smee connection lost, reconnecting...'
+      // Assert - custom base=10000 → attempt=0 delay in [5000, 10000)
+      const warnCall = mockLogger.warn.mock.calls.find(
+        (call) => call[1] === 'Smee connection lost, reconnecting...',
       );
+      expect(warnCall).toBeDefined();
+      expectBackoffAttempt(warnCall![0], 0, 10000);
     });
 
     it('should exponentially increase delay on consecutive failures', async () => {
@@ -126,17 +146,20 @@ describe('SmeeWebhookReceiver', () => {
       );
 
       expect(warnCalls.length).toBeGreaterThanOrEqual(5);
-      expect(warnCalls[0][0]).toMatchObject({ attempt: 0, reconnectMs: 5000 });
-      expect(warnCalls[1][0]).toMatchObject({ attempt: 1, reconnectMs: 10000 });
-      expect(warnCalls[2][0]).toMatchObject({ attempt: 2, reconnectMs: 20000 });
-      expect(warnCalls[3][0]).toMatchObject({ attempt: 3, reconnectMs: 40000 });
-      expect(warnCalls[4][0]).toMatchObject({ attempt: 4, reconnectMs: 80000 });
+      // With base=5000, cap=30_000: bands per attempt:
+      //   0 → [2500, 5000), 1 → [5000, 10000), 2 → [10000, 20000),
+      //   3+ → [15000, 30000) (capped).
+      expectBackoffAttempt(warnCalls[0][0], 0, 5000);
+      expectBackoffAttempt(warnCalls[1][0], 1, 5000);
+      expectBackoffAttempt(warnCalls[2][0], 2, 5000);
+      expectBackoffAttempt(warnCalls[3][0], 3, 5000);
+      expectBackoffAttempt(warnCalls[4][0], 4, 5000);
 
       // Stop the receiver
       receiver.stop();
     });
 
-    it('should cap backoff delay at 5 minutes (300s)', async () => {
+    it('should cap backoff delay at 30s', async () => {
       // Arrange
       receiver = new SmeeWebhookReceiver(mockLogger, mockMonitorService, {
         channelUrl: 'https://smee.io/test',
@@ -152,28 +175,32 @@ describe('SmeeWebhookReceiver', () => {
       // Let first connection attempt complete
       await vi.advanceTimersByTimeAsync(0);
 
-      // Advance through reconnect cycles to reach and exceed the cap
-      await vi.advanceTimersByTimeAsync(5000);    // attempt 1: 5s
-      await vi.advanceTimersByTimeAsync(10000);   // attempt 2: 10s
-      await vi.advanceTimersByTimeAsync(20000);   // attempt 3: 20s
-      await vi.advanceTimersByTimeAsync(40000);   // attempt 4: 40s
-      await vi.advanceTimersByTimeAsync(80000);   // attempt 5: 80s
-      await vi.advanceTimersByTimeAsync(160000);  // attempt 6: 160s
-      await vi.advanceTimersByTimeAsync(300000);  // attempt 7: 300s (capped)
+      // Advance through reconnect cycles. Each advance must exceed the
+      // upper bound of the current attempt's jitter band (cap=30_000).
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 1 sleep
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 2 sleep
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 3 sleep
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 4 sleep
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 5 sleep
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 6 sleep
+      await vi.advanceTimersByTimeAsync(30_000); // attempt 7 sleep (still capped)
 
-      // Assert - check that backoff is capped at 300s
+      // Assert - check that backoff is capped at 30s
       const warnCalls = mockLogger.warn.mock.calls.filter(call =>
         call[1] === 'Smee connection lost, reconnecting...'
       );
 
       expect(warnCalls.length).toBeGreaterThanOrEqual(7);
-      expect(warnCalls[0][0]).toMatchObject({ attempt: 0, reconnectMs: 5000 });
-      expect(warnCalls[1][0]).toMatchObject({ attempt: 1, reconnectMs: 10000 });
-      expect(warnCalls[2][0]).toMatchObject({ attempt: 2, reconnectMs: 20000 });
-      expect(warnCalls[3][0]).toMatchObject({ attempt: 3, reconnectMs: 40000 });
-      expect(warnCalls[4][0]).toMatchObject({ attempt: 4, reconnectMs: 80000 });
-      expect(warnCalls[5][0]).toMatchObject({ attempt: 5, reconnectMs: 160000 });
-      expect(warnCalls[6][0]).toMatchObject({ attempt: 6, reconnectMs: 300000 }); // Capped
+      // Bands (base=5000, cap=30000):
+      //   attempt 0 → [2500, 5000), 1 → [5000, 10000), 2 → [10000, 20000),
+      //   attempt 3+ → [15000, 30000) capped.
+      for (let i = 0; i < 7; i++) {
+        expectBackoffAttempt(warnCalls[i][0], i, 5000);
+      }
+      // Explicit cap assertions for attempts >= 3.
+      for (let i = 3; i < 7; i++) {
+        expect((warnCalls[i][0] as { reconnectMs: number }).reconnectMs).toBeLessThan(30_000);
+      }
 
       // Stop the receiver
       receiver.stop();
@@ -209,10 +236,10 @@ describe('SmeeWebhookReceiver', () => {
 
       // First failure
       await vi.advanceTimersByTimeAsync(0);
-      // Wait 5s and reconnect (second failure)
-      await vi.advanceTimersByTimeAsync(5000);
-      // Wait 10s and reconnect (success)
+      // Advance past attempt-0 sleep band [2500, 5000)
       await vi.advanceTimersByTimeAsync(10000);
+      // Advance past attempt-1 sleep band [5000, 10000)
+      await vi.advanceTimersByTimeAsync(20000);
       // Success -> let connection complete
       await vi.advanceTimersByTimeAsync(0);
 
@@ -221,14 +248,14 @@ describe('SmeeWebhookReceiver', () => {
         call[1] === 'Smee connection lost, reconnecting...'
       );
 
-      // First two failures with increasing backoff
+      // First two failures with increasing backoff band
       expect(warnCalls.length).toBeGreaterThanOrEqual(2);
-      expect(warnCalls[0][0]).toMatchObject({ attempt: 0, reconnectMs: 5000 });
-      expect(warnCalls[1][0]).toMatchObject({ attempt: 1, reconnectMs: 10000 });
+      expectBackoffAttempt(warnCalls[0][0], 0, 5000);
+      expectBackoffAttempt(warnCalls[1][0], 1, 5000);
 
       // After successful connection, if it fails again, backoff should reset
       if (warnCalls.length >= 3) {
-        expect(warnCalls[2][0]).toMatchObject({ attempt: 0, reconnectMs: 5000 });
+        expectBackoffAttempt(warnCalls[2][0], 0, 5000);
       }
 
       // Should log successful connection
@@ -251,36 +278,27 @@ describe('SmeeWebhookReceiver', () => {
       // Act
       const startPromise = receiver.start();
 
-      // Test progression: 2s → 4s → 8s → 16s → 32s → 64s → 128s → 256s → 300s (capped)
-      const expectedDelays = [
-        { attempt: 0, delay: 2000 },
-        { attempt: 1, delay: 4000 },
-        { attempt: 2, delay: 8000 },
-        { attempt: 3, delay: 16000 },
-        { attempt: 4, delay: 32000 },
-        { attempt: 5, delay: 64000 },
-        { attempt: 6, delay: 128000 },
-        { attempt: 7, delay: 256000 },
-        { attempt: 8, delay: 300000 }, // Capped
-      ];
+      // Equal-jitter progression with base=2000, cap=30_000:
+      //   attempt 0 → [1000, 2000)
+      //   attempt 1 → [2000, 4000)
+      //   attempt 2 → [4000, 8000)
+      //   attempt 3 → [8000, 16000)
+      //   attempt 4+ → [15000, 30000) capped (raw=32000 > 30000)
+      // Advance by 30_000 per iteration — guaranteed > band upper bound.
+      const iterations = 6;
 
       // Process first fetch rejection to trigger the first warn + sleep
       await vi.advanceTimersByTimeAsync(0);
 
-      for (const { attempt, delay } of expectedDelays) {
-        // At this point, the warn for this attempt has already been logged
-        expect(mockLogger.warn).toHaveBeenLastCalledWith(
-          expect.objectContaining({
-            reconnectMs: delay,
-            attempt,
-          }),
-          'Smee connection lost, reconnecting...'
+      for (let attempt = 0; attempt < iterations; attempt++) {
+        const warnCalls = mockLogger.warn.mock.calls.filter(
+          (call) => call[1] === 'Smee connection lost, reconnecting...',
         );
+        expect(warnCalls.length).toBeGreaterThanOrEqual(attempt + 1);
+        expectBackoffAttempt(warnCalls[attempt][0], attempt, 2000);
 
-        // Advance past the sleep timer to trigger next iteration
-        // (sleep duration matches the logged reconnectMs)
-        if (attempt < expectedDelays.length - 1) {
-          await vi.advanceTimersByTimeAsync(delay);
+        if (attempt < iterations - 1) {
+          await vi.advanceTimersByTimeAsync(30_000);
         }
       }
 
@@ -367,11 +385,12 @@ describe('SmeeWebhookReceiver', () => {
 
       // First failure
       await vi.advanceTimersByTimeAsync(0);
-      // Wait 5s and reconnect (500 error)
-      await vi.advanceTimersByTimeAsync(5000);
+      // Fire only the pending attempt-0 sleep (jitter-band [2500, 5000)) →
+      // attempt 1 fetch fires (500 error path).
+      await vi.runOnlyPendingTimersAsync();
       await vi.advanceTimersByTimeAsync(0);
-      // Wait 10s and reconnect (third failure)
-      await vi.advanceTimersByTimeAsync(10000);
+      // Fire only the pending attempt-1 sleep → attempt 2 fires (third failure).
+      await vi.runOnlyPendingTimersAsync();
       await vi.advanceTimersByTimeAsync(0);
 
       // Assert - all failures should increment backoff
@@ -380,9 +399,9 @@ describe('SmeeWebhookReceiver', () => {
       );
 
       expect(warnCalls.length).toBe(3);
-      expect(warnCalls[0][0]).toMatchObject({ attempt: 0, reconnectMs: 5000 });
-      expect(warnCalls[1][0]).toMatchObject({ attempt: 1, reconnectMs: 10000 });
-      expect(warnCalls[2][0]).toMatchObject({ attempt: 2, reconnectMs: 20000 });
+      expectBackoffAttempt(warnCalls[0][0], 0, 5000);
+      expectBackoffAttempt(warnCalls[1][0], 1, 5000);
+      expectBackoffAttempt(warnCalls[2][0], 2, 5000);
 
       receiver.stop();
     });
@@ -406,8 +425,8 @@ describe('SmeeWebhookReceiver', () => {
 
       // First failure (no body)
       await vi.advanceTimersByTimeAsync(0);
-      // Wait 5s and reconnect (second failure)
-      await vi.advanceTimersByTimeAsync(5000);
+      // Advance past attempt-0 sleep band [2500, 5000) → attempt 1 fires
+      await vi.advanceTimersByTimeAsync(10_000);
       await vi.advanceTimersByTimeAsync(0);
 
       // Assert - both failures should increment backoff
@@ -418,13 +437,9 @@ describe('SmeeWebhookReceiver', () => {
       expect(warnCalls.length).toBeGreaterThanOrEqual(2);
       expect(warnCalls[0][0]).toMatchObject({
         err: 'Error: Smee response has no body',
-        reconnectMs: 5000,
-        attempt: 0,
       });
-      expect(warnCalls[1][0]).toMatchObject({
-        reconnectMs: 10000,
-        attempt: 1,
-      });
+      expectBackoffAttempt(warnCalls[0][0], 0, 5000);
+      expectBackoffAttempt(warnCalls[1][0], 1, 5000);
 
       receiver.stop();
     });

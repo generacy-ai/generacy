@@ -71,6 +71,13 @@ interface Waiter {
  */
 export const INSTANCE_NONCE: string = crypto.randomBytes(8).toString('hex');
 
+/**
+ * Shared default horizon (ms) for BOTH the in-memory buffer retention window
+ * AND the registry's idle-TTL for refcount-0 buses. Any change here changes
+ * both call sites in lockstep — FR-003.
+ */
+export const DEFAULT_QUIET_HORIZON_MS = 7_200_000;
+
 const NONCE_SHAPE = /^[0-9a-f]{16}$/;
 
 export function encodeCursor(
@@ -129,7 +136,7 @@ export class EpicEventBus {
   constructor(options: EpicEventBusOptions) {
     this.epic = options.epic;
     this.retentionCount = options.retentionCount ?? 10_000;
-    this.retentionMs = options.retentionMs ?? 600_000;
+    this.retentionMs = options.retentionMs ?? DEFAULT_QUIET_HORIZON_MS;
     this.clock = options.now ?? Date.now;
     this.busNonce = options.nonce ?? crypto.randomBytes(8).toString('hex');
   }

@@ -42,6 +42,7 @@
     "@generacy-ai/control-plane": "workspace:^",
     "@generacy-ai/credhelper": "workspace:^",
     "@generacy-ai/generacy-plugin-claude-code": "workspace:^",
+    "@generacy-ai/smee-backoff": "workspace:^",
     "@generacy-ai/workflow-engine": "workspace:^",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.0",

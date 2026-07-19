@@ -10,6 +10,7 @@
  * enum. `from`/`to` are best-effort null (see contract § "Emitted shape").
  */
 import type { CockpitEventValidated } from '../watch/emit.js';
+import { classifyIssue } from '../shared/classify-issue.js';
 
 export interface RefSetView {
   epicRef: string;
@@ -112,10 +113,12 @@ function buildEvent(
   repo: string,
   kind: 'issue' | 'pr',
   number: number,
-  sourceLabel: string | null,
+  sourceLabelArg: string | null,
   labels: string[],
   now: () => string,
 ): CockpitEventValidated {
+  const classified = classifyIssue(labels);
+  const classifiedSource = classified.sourceLabel !== '' ? classified.sourceLabel : null;
   return {
     type: 'issue-transition',
     ts: now(),
@@ -123,8 +126,8 @@ function buildEvent(
     kind,
     number,
     from: null,
-    to: null,
-    sourceLabel,
+    to: classified.state,
+    sourceLabel: classifiedSource ?? sourceLabelArg,
     url: `https://github.com/${owner}/${repo}/${kind === 'pr' ? 'pull' : 'issues'}/${number}`,
     event,
     labels,

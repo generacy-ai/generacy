@@ -39,7 +39,13 @@ import type { RepositoryConfig, PrMonitorConfig } from '../config/schema.js';
 import type { Logger } from '../worker/types.js';
 import { filterByAssignee } from './identity.js';
 import type { AuthHealthSink } from './label-monitor-service.js';
-import { commentCarriesMachineMarker } from '../worker/clarification-markers.js';
+import {
+  commentCarriesAnswerMarker,
+  commentCarriesMachineMarker,
+  matchClarificationQuestionMarker,
+} from '../worker/clarification-markers.js';
+import type { Comment } from '@generacy-ai/workflow-engine';
+import { decideAdaptivePoll } from './adaptive-poll-controller.js';
 
 const WAITING_FOR_CLARIFICATION_LABEL = 'waiting-for:clarification';
 const AGENT_PAUSED_LABEL = 'agent:paused';
@@ -59,6 +65,14 @@ export interface ClarificationAnswerMonitorOptions {
   pollIntervalMs: number;
   adaptivePolling: boolean;
   maxConcurrentPolls: number;
+}
+
+/**
+ * #987: options for the runtime `setWebhooksConfigured(true, opts?)` flip.
+ * See specs/987-summary-cluster-where-smee/contracts/setter-contract.md.
+ */
+export interface SetWebhooksConfiguredOptions {
+  basePollIntervalMs?: number;
 }
 
 /**
@@ -109,6 +123,7 @@ export class ClarificationAnswerMonitorService {
     tokenProvider?: () => Promise<string | undefined>,
     authHealth?: AuthHealthSink,
     githubAppCredentialId?: string,
+    webhooksConfigured: boolean = false,
   ) {
     this.logger = logger;
     this.createClient = createClient;
@@ -129,10 +144,7 @@ export class ClarificationAnswerMonitorService {
       lastWebhookEvent: null,
       currentPollIntervalMs: config.pollIntervalMs,
       basePollIntervalMs: config.pollIntervalMs,
-      // #953: this monitor is poll-driven and has no webhook feeder signal,
-      // so it runs at base cadence (no adaptive backoff). Matches the
-      // `false` default the other poll-fed monitors pass.
-      webhooksConfigured: false,
+      webhooksConfigured,
     };
   }
 
@@ -194,20 +206,11 @@ export class ClarificationAnswerMonitorService {
       ...(trustConfig ? { config: trustConfig } : {}),
     };
 
-    let hasHumanTrustedComment = false;
-    for (const c of comments) {
-      if (commentCarriesMachineMarker(c.body)) continue;
-      const decision = isTrustedCommentAuthor(c, 'answer-scanner', trustCtx);
-      if (decision.trusted) {
-        hasHumanTrustedComment = true;
-        break;
-      }
-    }
-
-    if (!hasHumanTrustedComment) {
+    const candidate = this.findAnswerCandidate(comments, trustCtx);
+    if (!candidate) {
       this.logger.debug(
         { owner, repo, issueNumber },
-        'No trusted human-authored comment found — nothing to resume on',
+        'No answer candidate found — nothing to resume on (no question-marker comment, or no comment newer than the latest question by a non-bot trusted author)',
       );
       return false;
     }
@@ -250,6 +253,51 @@ export class ClarificationAnswerMonitorService {
       'Clarification-answer resume enqueued',
     );
     return true;
+  }
+
+  /**
+   * #993 — positive answer predicate. Returns the first comment that qualifies
+   * as a real clarification answer, or `undefined` if none exists on the issue.
+   *
+   * Short-circuits when the issue carries no question-marker comment (data-
+   * integrity signal — the clarify phase always posts one before applying
+   * `waiting-for:clarification`).
+   */
+  private findAnswerCandidate(
+    comments: Comment[],
+    trustCtx: CommentTrustContext,
+  ): Comment | undefined {
+    // `created_at`-only newness is intentional (replay-safe); blocks the
+    // `<!-- generacy-stage:specification -->` summary re-trigger vector where
+    // the bot updates its own summary and advances `updated_at` every poll.
+    const questionAnchor = latestQuestionCommentCreatedAt(comments);
+    if (questionAnchor === undefined) return undefined;
+
+    for (const c of comments) {
+      // `[bot]`-suffix authors are dropped upstream of the trust helper.
+      // Cluster-relayed answers flow through the `completed:clarification`
+      // label / LabelMonitorService path, never through this monitor.
+      if (isBotAuthoredLogin(c.author)) continue;
+      if (c.created_at <= questionAnchor) continue;
+
+      // Branch (a) runs before the machine-marker skip: `commentCarriesAnswerMarker`
+      // is a positive signal, and the answer-marker prefix is present in
+      // MACHINE_MARKERS as a #976 engine-noise entry. Without this order, a
+      // non-bot human posting `<!-- generacy-clarification-answers:1 -->` would
+      // be filtered out as machine noise (SC-003 regression).
+      if (commentCarriesAnswerMarker(c.body)) return c;
+      if (commentCarriesMachineMarker(c.body)) continue;
+
+      const decision = isTrustedCommentAuthor(c, 'answer-scanner', trustCtx);
+      if (
+        decision.trusted &&
+        decision.reason !== 'bot' &&
+        decision.reason !== 'self-authored'
+      ) {
+        return c;
+      }
+    }
+    return undefined;
   }
 
   // ==========================================================================
@@ -403,29 +451,45 @@ export class ClarificationAnswerMonitorService {
 
   recordWebhookEvent(): void {
     this.state.lastWebhookEvent = Date.now();
-    const wasUnhealthy = !this.state.webhookHealthy;
     this.state.webhookHealthy = true;
-    if (wasUnhealthy) {
-      this.state.currentPollIntervalMs = this.state.basePollIntervalMs;
+    const decision = decideAdaptivePoll({
+      webhooksConfigured: this.state.webhooksConfigured,
+      adaptivePolling: this.options.adaptivePolling,
+      basePollIntervalMs: this.state.basePollIntervalMs,
+      currentPollIntervalMs: this.state.currentPollIntervalMs,
+      lastWebhookEvent: this.state.lastWebhookEvent,
+      webhookHealthy: this.state.webhookHealthy,
+      adaptiveDivisor: ADAPTIVE_DIVISOR,
+      minPollIntervalMs: MIN_POLL_INTERVAL_MS,
+      nowMs: Date.now(),
+    });
+    this.state.currentPollIntervalMs = decision.currentPollIntervalMs;
+    this.state.webhookHealthy = decision.webhookHealthy;
+    if (decision.transition !== 'none') {
       this.logger.info(
-        { intervalMs: this.state.currentPollIntervalMs },
+        { intervalMs: this.state.currentPollIntervalMs, reason: decision.reason },
         'Webhook reconnected, restoring clarification-answer monitor poll interval',
       );
     }
   }
 
   private updateAdaptivePolling(): void {
-    if (this.state.lastWebhookEvent === null) return;
-    const timeSinceLastWebhook = Date.now() - this.state.lastWebhookEvent;
-    const unhealthyThreshold = this.state.basePollIntervalMs * 2;
-    if (timeSinceLastWebhook > unhealthyThreshold && this.state.webhookHealthy) {
-      this.state.webhookHealthy = false;
-      this.state.currentPollIntervalMs = Math.max(
-        MIN_POLL_INTERVAL_MS,
-        Math.floor(this.state.basePollIntervalMs / ADAPTIVE_DIVISOR),
-      );
+    const decision = decideAdaptivePoll({
+      webhooksConfigured: this.state.webhooksConfigured,
+      adaptivePolling: this.options.adaptivePolling,
+      basePollIntervalMs: this.state.basePollIntervalMs,
+      currentPollIntervalMs: this.state.currentPollIntervalMs,
+      lastWebhookEvent: this.state.lastWebhookEvent,
+      webhookHealthy: this.state.webhookHealthy,
+      adaptiveDivisor: ADAPTIVE_DIVISOR,
+      minPollIntervalMs: MIN_POLL_INTERVAL_MS,
+      nowMs: Date.now(),
+    });
+    this.state.currentPollIntervalMs = decision.currentPollIntervalMs;
+    this.state.webhookHealthy = decision.webhookHealthy;
+    if (decision.transition !== 'none') {
       this.logger.info(
-        { intervalMs: this.state.currentPollIntervalMs, timeSinceLastWebhook },
+        { intervalMs: this.state.currentPollIntervalMs, reason: decision.reason },
         'Webhooks appear unhealthy, increasing clarification-answer poll frequency',
       );
     }
@@ -437,6 +501,20 @@ export class ClarificationAnswerMonitorService {
 
   getState(): Readonly<MonitorState> {
     return { ...this.state };
+  }
+
+  /**
+   * #987: flip `webhooksConfigured` to `true` at runtime. Setter is one-way
+   * (Q1); `adaptivePolling` stays untouched so the staleness safety net is
+   * reachable (Q2). See specs/987-summary-cluster-where-smee/clarifications.md.
+   */
+  setWebhooksConfigured(configured: true, opts?: SetWebhooksConfiguredOptions): void {
+    void configured;
+    this.state.webhooksConfigured = true;
+    if (opts?.basePollIntervalMs !== undefined) {
+      this.state.basePollIntervalMs = opts.basePollIntervalMs;
+      this.state.currentPollIntervalMs = opts.basePollIntervalMs;
+    }
   }
 
   // ==========================================================================
@@ -457,6 +535,31 @@ export class ClarificationAnswerMonitorService {
       signal.addEventListener('abort', onAbort, { once: true });
     });
   }
+}
+
+/**
+ * #993 FR-001 — case-insensitive, whitespace-tolerant `[bot]`-suffix test.
+ * Mirrors `normalizeLogin`'s trim+lowercase shape without stripping the
+ * suffix (we're detecting it, not removing it). Any App bot identity
+ * (`generacy-ai[bot]`, `staging-generacy[bot]`, `dependabot[bot]`, …)
+ * is treated identically.
+ */
+function isBotAuthoredLogin(author: string): boolean {
+  return author.trim().toLowerCase().endsWith('[bot]');
+}
+
+/**
+ * #993 FR-004 — newness anchor. Returns the newest `created_at` (ISO-8601
+ * lexicographic compare) among comments carrying a question marker.
+ * `undefined` when the issue has no question-marker comment.
+ */
+function latestQuestionCommentCreatedAt(comments: Comment[]): string | undefined {
+  let latest: string | undefined;
+  for (const c of comments) {
+    if (matchClarificationQuestionMarker(c.body) === undefined) continue;
+    if (latest === undefined || c.created_at > latest) latest = c.created_at;
+  }
+  return latest;
 }
 
 /**

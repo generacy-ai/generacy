@@ -111,14 +111,6 @@ export const MACHINE_MARKERS: readonly string[] = [
   // Question-family (superset invariant — spread from CLARIFICATION_QUESTION_MARKERS)
   ...CLARIFICATION_QUESTION_MARKERS,
 
-  // Stage/status comments
-  '<!-- generacy-stage:specification',
-  '<!-- generacy-stage:planning',
-  '<!-- generacy-stage:implementation',
-  '<!-- speckit-stage:specification',
-  '<!-- speckit-stage:planning',
-  '<!-- speckit-stage:implementation',
-
   // Audit / lifecycle bot comments
   '<!-- generacy-cockpit:manual-advance',
 
@@ -131,6 +123,18 @@ export const MACHINE_MARKERS: readonly string[] = [
 ] as const;
 
 /**
+ * #993 — engine-authored stage-marker *families*. Any suffix under these
+ * prefixes is treated as a machine marker without a per-stage enumeration.
+ * Kills the enumeration-drift class that let `<!-- speckit-stage:clarification`
+ * slip through and reopen the clarification-answer resume loop. Safe: both
+ * prefixes are strictly engine-authored.
+ */
+export const MACHINE_MARKER_FAMILIES: readonly string[] = [
+  '<!-- generacy-stage:',
+  '<!-- speckit-stage:',
+] as const;
+
+/**
  * True iff `body` contains one of the `MACHINE_MARKERS` prefixes at column 0
  * of some line.
  */
@@ -140,11 +144,16 @@ export function commentCarriesMachineMarker(body: string): boolean {
 
 /**
  * Same semantics as `commentCarriesMachineMarker`; returns the specific prefix
- * string that matched (identity from `MACHINE_MARKERS`) or `undefined` if no
- * match.
+ * string that matched. For lines matching a family prefix in
+ * `MACHINE_MARKER_FAMILIES`, returns the family prefix (not the full suffix);
+ * for lines matching an enumerated `MACHINE_MARKERS` entry, returns that
+ * entry. `undefined` if no line matches either.
  */
 export function matchMachineMarker(body: string): string | undefined {
   for (const line of body.split('\n')) {
+    for (const familyPrefix of MACHINE_MARKER_FAMILIES) {
+      if (line.startsWith(familyPrefix)) return familyPrefix;
+    }
     for (const prefix of MACHINE_MARKERS) {
       if (line.startsWith(prefix)) return prefix;
     }

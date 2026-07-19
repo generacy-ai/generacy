@@ -8,8 +8,16 @@
  * This eliminates the need for polling when a smee channel is configured,
  * providing near-instant label event detection with zero GitHub API calls.
  */
+import { calculateBackoffDelay } from '@generacy-ai/smee-backoff';
 import type { LabelMonitorService } from './label-monitor-service.js';
+import type { PrFeedbackMonitorService } from './pr-feedback-monitor-service.js';
+import type { MergeConflictMonitorService } from './merge-conflict-monitor-service.js';
+import type {
+  ClarificationAnswerEvent,
+  ClarificationAnswerMonitorService,
+} from './clarification-answer-monitor-service.js';
 import type { GitHubWebhookPayload } from '../types/index.js';
+import type { PrReviewEvent } from '../types/monitor.js';
 
 interface Logger {
   info(msg: string): void;
@@ -34,6 +42,23 @@ export interface SmeeReceiverOptions {
    * @default 5000
    */
   baseReconnectDelayMs?: number;
+  /**
+   * #987: called exactly once, after the first successful SSE connect
+   * (immediately after the `Connected to smee.io channel` log line).
+   * Subsequent reconnects do NOT re-invoke. Callers use this to flip
+   * `webhooksConfigured=true` on the constructed monitors.
+   */
+  onConnected?: () => void;
+  /**
+   * #987 FR-004: sibling monitor refs for broad `recordWebhookEvent()`
+   * fan-out. On every inbound event whose repo matches `watchedRepos`,
+   * the receiver calls `recordWebhookEvent()` on each provided monitor.
+   * Per-event processing dispatch fires only where the receiver has a
+   * natural entry point (see contracts/smee-receiver-contract.md).
+   */
+  prFeedbackMonitor?: PrFeedbackMonitorService;
+  mergeConflictMonitor?: MergeConflictMonitorService;
+  clarificationAnswerMonitor?: ClarificationAnswerMonitorService;
 }
 
 /**
@@ -42,15 +67,19 @@ export interface SmeeReceiverOptions {
  */
 export class SmeeWebhookReceiver {
   private static readonly BASE_RECONNECT_DELAY_MS = 5000;
-  private static readonly MAX_BACKOFF_MS = 300000; // 5 minutes
 
   private readonly channelUrl: string;
   private readonly watchedRepos: Set<string>;
   private readonly clusterGithubUsername: string | undefined;
   private readonly baseReconnectDelayMs: number;
+  private readonly onConnected: (() => void) | undefined;
+  private readonly prFeedbackMonitor: PrFeedbackMonitorService | undefined;
+  private readonly mergeConflictMonitor: MergeConflictMonitorService | undefined;
+  private readonly clarificationAnswerMonitor: ClarificationAnswerMonitorService | undefined;
   private abortController: AbortController | null = null;
   private running = false;
   private reconnectAttempt = 0;
+  private connectedOnceFired = false;
 
   constructor(
     private readonly logger: Logger,
@@ -61,6 +90,10 @@ export class SmeeWebhookReceiver {
     this.watchedRepos = options.watchedRepos;
     this.clusterGithubUsername = options.clusterGithubUsername;
     this.baseReconnectDelayMs = options.baseReconnectDelayMs ?? SmeeWebhookReceiver.BASE_RECONNECT_DELAY_MS;
+    this.onConnected = options.onConnected;
+    this.prFeedbackMonitor = options.prFeedbackMonitor;
+    this.mergeConflictMonitor = options.mergeConflictMonitor;
+    this.clarificationAnswerMonitor = options.clarificationAnswerMonitor;
   }
 
   /**
@@ -142,6 +175,23 @@ export class SmeeWebhookReceiver {
 
     this.logger.info('Connected to smee.io channel');
 
+    // #987: fire the `onConnected` callback exactly once per receiver instance.
+    // Subsequent reconnects do NOT re-invoke — the setter is idempotent, but
+    // firing once is semantically clearer.
+    if (!this.connectedOnceFired) {
+      this.connectedOnceFired = true;
+      if (this.onConnected) {
+        try {
+          this.onConnected();
+        } catch (error) {
+          this.logger.warn(
+            { err: String(error) },
+            'onConnected callback threw; continuing',
+          );
+        }
+      }
+    }
+
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -206,21 +256,57 @@ export class SmeeWebhookReceiver {
     // Smee wraps the webhook payload in a 'body' field
     const githubEvent = data['x-github-event'] as string | undefined;
     const body = data['body'] as Record<string, unknown> | undefined;
+    if (!body) return;
 
-    if (!body || githubEvent !== 'issues') {
-      return; // Only interested in issue events
-    }
-
-    const payload = body as unknown as GitHubWebhookPayload;
-
-    // Only handle "labeled" action
-    if (payload.action !== 'labeled') return;
-
-    // Check if this is a watched repository
-    if (!payload.repository?.owner?.login || !payload.repository?.name) return;
-    const repoKey = `${payload.repository.owner.login}/${payload.repository.name}`;
+    // Extract repository once — every supported webhook family carries this
+    // block. Missing/malformed → drop before any monitor call.
+    const repository = body['repository'] as
+      | { owner?: { login?: string }; name?: string }
+      | undefined;
+    if (!repository?.owner?.login || !repository.name) return;
+    const owner = repository.owner.login;
+    const repo = repository.name;
+    const repoKey = `${owner}/${repo}`;
     if (!this.watchedRepos.has(repoKey)) return;
 
+    // #987 FR-004: broad `recordWebhookEvent()` fan-out. Fires before any
+    // per-event processing dispatch so a processing error doesn't disable
+    // adaptive-poll health tracking. Unconditional on `x-github-event` type —
+    // the staleness safety net only needs `lastWebhookEvent` to be non-null.
+    this.monitorService.recordWebhookEvent();
+    this.prFeedbackMonitor?.recordWebhookEvent();
+    this.mergeConflictMonitor?.recordWebhookEvent();
+    this.clarificationAnswerMonitor?.recordWebhookEvent();
+
+    const action = body['action'] as string | undefined;
+
+    // Per-event processing dispatch.
+    if (githubEvent === 'issues' && action === 'labeled') {
+      await this.dispatchIssueLabeled(body as unknown as GitHubWebhookPayload, repoKey);
+      return;
+    }
+    if (
+      (githubEvent === 'pull_request_review' && action === 'submitted')
+      || (githubEvent === 'pull_request_review_comment' && action === 'created')
+    ) {
+      this.dispatchPrReviewLike(body, owner, repo, repoKey, githubEvent);
+      return;
+    }
+    if (githubEvent === 'issue_comment' && action === 'created') {
+      this.dispatchIssueCommentCreated(body, owner, repo, repoKey);
+      return;
+    }
+    // Any other event type: fan-out already fired above, no per-event dispatch.
+  }
+
+  /**
+   * Handle `issues.labeled` — existing label-monitor path. `recordWebhookEvent`
+   * has already been fired by the caller's fan-out.
+   */
+  private async dispatchIssueLabeled(
+    payload: GitHubWebhookPayload,
+    repoKey: string,
+  ): Promise<void> {
     // Assignee filtering: only process issues assigned to this cluster
     if (this.clusterGithubUsername) {
       const assigneeLogins = (payload.issue?.assignees ?? []).map(a => a.login);
@@ -240,7 +326,6 @@ export class SmeeWebhookReceiver {
       }
     }
 
-    // Parse and process the label event
     const issueLabels = payload.issue?.labels?.map(l => l.name) ?? [];
     const event = this.monitorService.parseLabelEvent(
       payload.label.name,
@@ -259,7 +344,6 @@ export class SmeeWebhookReceiver {
           { label: payload.label.name, repo: repoKey, issue: payload.issue.number },
           'Webhook completed:* label has no matching waiting-for:* in payload, attempting re-fetch',
         );
-        this.monitorService.recordWebhookEvent();
         try {
           await this.monitorService.verifyAndProcessCompletedLabel(
             payload.repository.owner.login,
@@ -287,10 +371,6 @@ export class SmeeWebhookReceiver {
       'Smee webhook received label event',
     );
 
-    // Record webhook event for adaptive polling health tracking
-    this.monitorService.recordWebhookEvent();
-
-    // Process the event
     try {
       await this.monitorService.processLabelEvent(event);
     } catch (error) {
@@ -302,24 +382,105 @@ export class SmeeWebhookReceiver {
   }
 
   /**
-   * Get the current reconnect delay based on the number of attempts.
-   * Uses exponential backoff with the current attempt count.
+   * Handle `pull_request_review.submitted` / `pull_request_review_comment.created`
+   * — dispatch to the PR-feedback monitor. Assignee filter is NOT applied here;
+   * `PrFeedbackMonitorService.processPrReviewEvent` performs its own PR-link +
+   * assignee resolution.
    */
-  private get reconnectDelayMs(): number {
-    return this.calculateBackoffDelay(this.reconnectAttempt);
+  private dispatchPrReviewLike(
+    body: Record<string, unknown>,
+    owner: string,
+    repo: string,
+    repoKey: string,
+    githubEvent: string,
+  ): void {
+    const monitor = this.prFeedbackMonitor;
+    if (!monitor) return;
+    const pr = body['pull_request'] as
+      | { number?: number; body?: string | null; head?: { ref?: string } }
+      | undefined;
+    if (!pr?.number || !pr.head?.ref) {
+      this.logger.warn(
+        { repo: repoKey, githubEvent },
+        'Smee: skipping PR-review event without pull_request.number / head.ref',
+      );
+      return;
+    }
+    const event: PrReviewEvent = {
+      owner,
+      repo,
+      prNumber: pr.number,
+      prBody: pr.body ?? '',
+      branchName: pr.head.ref,
+      source: 'webhook',
+    };
+    monitor.processPrReviewEvent(event).catch((error) => {
+      this.logger.error(
+        { err: String(error), repo: repoKey, pr: pr.number, githubEvent },
+        'Error processing smee PR-review event',
+      );
+    });
   }
 
   /**
-   * Calculate exponential backoff delay for reconnection attempts.
-   * Formula: BASE_RECONNECT_DELAY_MS * 2^attempt, capped at MAX_BACKOFF_MS.
-   * Progression: 5s → 10s → 20s → 40s → 80s → 160s → 300s (capped).
-   *
-   * @param attempt - The current reconnection attempt number (0-indexed)
-   * @returns Delay in milliseconds before next reconnection attempt
+   * Handle `issue_comment.created` — dispatch to the clarification-answer
+   * monitor after the assignee filter (mirrors the label-event pattern).
    */
-  private calculateBackoffDelay(attempt: number): number {
-    const delay = this.baseReconnectDelayMs * Math.pow(2, attempt);
-    return Math.min(delay, SmeeWebhookReceiver.MAX_BACKOFF_MS);
+  private dispatchIssueCommentCreated(
+    body: Record<string, unknown>,
+    owner: string,
+    repo: string,
+    repoKey: string,
+  ): void {
+    const monitor = this.clarificationAnswerMonitor;
+    if (!monitor) return;
+    const issue = body['issue'] as
+      | {
+          number?: number;
+          labels?: Array<{ name: string }>;
+          assignees?: Array<{ login: string }>;
+        }
+      | undefined;
+    if (!issue?.number) return;
+    const assignees = issue.assignees ?? [];
+    if (this.clusterGithubUsername) {
+      const assigneeLogins = assignees.map(a => a.login);
+      if (assigneeLogins.length === 0) {
+        this.logger.warn(
+          { issue: issue.number, repo: repoKey },
+          'Smee: skipping issue_comment event on issue with no assignees',
+        );
+        return;
+      }
+      if (!assigneeLogins.includes(this.clusterGithubUsername)) {
+        this.logger.info(
+          { issue: issue.number, repo: repoKey, assignees: assigneeLogins },
+          'Smee: skipping issue_comment event on issue not assigned to this cluster',
+        );
+        return;
+      }
+    }
+    const issueLabels = (issue.labels ?? []).map(l => l.name);
+    const event: ClarificationAnswerEvent = {
+      owner,
+      repo,
+      issueNumber: issue.number,
+      issueLabels,
+      source: 'poll',
+    };
+    monitor.processClarificationAnswerEvent(event).catch((error) => {
+      this.logger.error(
+        { err: String(error), repo: repoKey, issue: issue.number },
+        'Error processing smee issue_comment event',
+      );
+    });
+  }
+
+  private get reconnectDelayMs(): number {
+    return calculateBackoffDelay(this.reconnectAttempt, {
+      base: this.baseReconnectDelayMs,
+      cap: 30_000,
+    });
   }
 
   private sleep(ms: number, signal: AbortSignal): Promise<void> {
