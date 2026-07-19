@@ -207,6 +207,64 @@ describe('event-bus-registry lifecycle', () => {
     reAcquiredA.release();
   });
 
+  it('SC-001/FR-008(a): quiet gap ≥ old TTL but ≤ new horizon → pre-gap cursor still classifies valid', async () => {
+    // The injected `idleTtlMs: 60_000` stands in for the production 120-min
+    // horizon at test scale. The pre-gap advance of 30_000 ms stands in for a
+    // gap that used to fire the old 10-min TTL — long enough to reproduce the
+    // failure mode, safely inside the injected horizon.
+    vi.useFakeTimers();
+    const runner = stubRunner();
+    const first = await acquireEpicBus({
+      epicRef: 'generacy-ai/generacy#917',
+      runner,
+      noPoll: true,
+      runCycle: async () => undefined,
+      idleTtlMs: 60_000,
+    });
+    const originalNonce = first.bus.busNonce;
+    first.release();
+
+    // Gap larger than the old 10-min TTL, still well under the injected horizon.
+    vi.advanceTimersByTime(30_000);
+
+    const rearm = await acquireEpicBus({
+      epicRef: 'generacy-ai/generacy#917',
+      runner,
+      noPoll: true,
+      runCycle: async () => undefined,
+      idleTtlMs: 60_000,
+    });
+    expect(rearm.bus.busNonce).toBe(originalNonce);
+    rearm.release();
+  });
+
+  it('SC-003/FR-008(b): gap exceeds horizon → bus IS torn down (idle-TTL reclaim still fires)', async () => {
+    vi.useFakeTimers();
+    const runner = stubRunner();
+    const first = await acquireEpicBus({
+      epicRef: 'generacy-ai/generacy#917',
+      runner,
+      noPoll: true,
+      runCycle: async () => undefined,
+      idleTtlMs: 60_000,
+    });
+    const originalNonce = first.bus.busNonce;
+    first.release();
+
+    // Gap past the horizon → idle-TTL fires, bus torn down.
+    vi.advanceTimersByTime(60_001);
+
+    const rebuilt = await acquireEpicBus({
+      epicRef: 'generacy-ai/generacy#917',
+      runner,
+      noPoll: true,
+      runCycle: async () => undefined,
+      idleTtlMs: 60_000,
+    });
+    expect(rebuilt.bus.busNonce).not.toBe(originalNonce);
+    rebuilt.release();
+  });
+
   it('existing-bus acquire runs catch-up only when the poller was paused', async () => {
     const runner = stubRunner();
     let cycles = 0;
