@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.10.1
+
+### Patch Changes
+
+- d15dba7: Adopt existing smee channel on cluster delete→relaunch (#1005).
+
+  `SmeeChannelResolver` gains a new `adopted` tier between `persisted` and
+  `provisioned`. When the persisted channel file is missing (e.g. after a
+  cluster destroy), the resolver calls an injected discovery callback that
+  scans configured repos' GitHub webhooks and reuses any existing Generacy
+  smee channel URL — persisting it so the next boot short-circuits at the
+  `persisted` tier. `WebhookSetupService._selectExistingHookForUpdate` gains
+  a single-hook take-over branch: exactly one stale Generacy smee hook (URL
+  neither current nor persisted) is `update-url`-repointed to the current
+  channel; zero and ≥2 preserve today's `create` / `foreign` behavior to
+  avoid duplicate delivery.
+
+  Internal observability + wiring change only — no public API surface change.
+
+- 47ba255: Run repo label sync fire-and-forget after `server.listen()` instead of blocking boot.
+
+  `LabelSyncService.syncAll` walks dozens of sequential GitHub label create/update
+  calls (~30s on a fresh repo creating ~68 labels) and was `await`ed before the
+  server started listening. On a wizard cluster's post-activation self-restart —
+  where the label monitor first becomes enabled with the repo present — that kept
+  the orchestrator, and therefore the relay and the cloud bootstrap UI, unreachable
+  for the entire sync. Label sync now runs in the onReady hook (like the existing
+  monitors), so the server becomes ready and reconnects the relay immediately;
+  labels sync in the background. Cuts ~30s off the onboarding restart window.
+
+- Updated dependencies [47ba255]
+  - @generacy-ai/control-plane@0.7.4
+
 ## 0.10.0
 
 ### Minor Changes
