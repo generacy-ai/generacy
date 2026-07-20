@@ -12,6 +12,7 @@ import { readFile } from 'node:fs/promises';
 import { executeCommand } from '@generacy-ai/workflow-engine';
 import { JitTokenError } from '@generacy-ai/control-plane';
 import type { ClusterStatus } from './status-reporter.js';
+import { SMEE_URL_PATTERN } from './smee-channel-resolver.js';
 
 /**
  * Logger interface matching Pino/Fastify logger shape.
@@ -284,6 +285,76 @@ export class WebhookSetupService {
   }
 
   /**
+   * Discover an existing Generacy smee channel URL across configured repos.
+   *
+   * Injected into `SmeeChannelResolver` as the `discoverExistingChannel`
+   * callback for the tier-3 adopt path (spec #1005 FR-002/FR-003/FR-004).
+   * Iterates `repos` in the passed order, calls `_listRepoWebhooks` per repo,
+   * and returns the first repo's first `https://smee.io/…` hook URL that
+   * matches `SMEE_URL_PATTERN`. Later repos whose first smee hook disagrees
+   * emit one `warn` per divergent repo — convergence is left to the take-over
+   * branch on subsequent self-heal passes.
+   *
+   * NEVER THROWS. Per-repo errors are caught, logged at `warn`, and skipped;
+   * discovery continues to the next repo. The load-bearing property is the
+   * resolver's fail-open contract: any unhandled throw here would break the
+   * whole adopt tier.
+   */
+  public async findExistingSmeeChannel(
+    repos: RepositoryConfig[],
+  ): Promise<string | null> {
+    let chosenUrl: string | null = null;
+    let chosenRepo: { owner: string; repo: string } | null = null;
+
+    for (const { owner, repo } of repos) {
+      let hooks: GitHubWebhook[];
+      try {
+        hooks = await this._listRepoWebhooks(owner, repo);
+      } catch (err) {
+        this._logger.warn(
+          { owner, repo, error: String(err) },
+          'Failed to list webhooks during smee channel discovery — skipping repo',
+        );
+        continue;
+      }
+
+      const smeeHook = hooks.find(
+        (h) => (h.config?.url ?? '').toLowerCase().startsWith('https://smee.io/'),
+      );
+      if (!smeeHook) continue;
+
+      const url = smeeHook.config?.url ?? '';
+      if (!SMEE_URL_PATTERN.test(url)) {
+        this._logger.warn(
+          { owner, repo, url },
+          'Repo webhook has smee-prefixed URL that does not match SMEE_URL_PATTERN — skipping',
+        );
+        continue;
+      }
+
+      if (chosenUrl === null) {
+        chosenUrl = url;
+        chosenRepo = { owner, repo };
+        continue;
+      }
+
+      if (url !== chosenUrl) {
+        this._logger.warn(
+          {
+            chosenRepo: `${chosenRepo!.owner}/${chosenRepo!.repo}`,
+            chosenUrl,
+            divergentRepo: `${owner}/${repo}`,
+            divergentUrl: url,
+          },
+          'Repo Generacy smee channel disagrees with first-repo winner — deferring to take-over on next self-heal',
+        );
+      }
+    }
+
+    return chosenUrl;
+  }
+
+  /**
    * Ensure webhook exists for a single repository.
    *
    * Implements rows 1-11 of the per-repo decision matrix in
@@ -489,6 +560,22 @@ export class WebhookSetupService {
       if (persistedMatch) {
         return { kind: 'update-url', hook: persistedMatch };
       }
+    }
+
+    // #1005 take-over (Q5-C): exactly one Generacy smee hook whose URL is
+    // stale (matches neither current nor persisted) → repoint it. Bail on 0
+    // (fall through to create) or ≥2 (fall through to existing foreign
+    // log-and-skip) to avoid duplicate delivery per SC-004.
+    const staleGeneracySmee = hooks.filter((h) => {
+      const url = (h.config?.url ?? '').toLowerCase();
+      return (
+        url.startsWith('https://smee.io/') &&
+        url !== currentNormalized &&
+        (persistedNormalized === null || url !== persistedNormalized)
+      );
+    });
+    if (staleGeneracySmee.length === 1) {
+      return { kind: 'update-url', hook: staleGeneracySmee[0]! };
     }
 
     // Row 8: existing foreign smee hook — do not touch, log-and-skip.

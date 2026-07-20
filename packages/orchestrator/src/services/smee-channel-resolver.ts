@@ -10,6 +10,7 @@
  */
 import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { RepositoryConfig } from './webhook-setup-service.js';
 
 /**
  * Logger interface matching Pino/Fastify logger shape.
@@ -32,7 +33,7 @@ const RETRY_DELAY_MS = 1000;
 const MAX_ATTEMPTS = 2;
 const CONTENT_PREVIEW_MAX = 64;
 
-export type ChannelSource = 'env-or-yaml' | 'persisted' | 'provisioned';
+export type ChannelSource = 'env-or-yaml' | 'persisted' | 'adopted' | 'provisioned';
 
 export interface SmeeChannelResolverOptions {
   /** Absolute path to the persisted channel file. */
@@ -49,6 +50,20 @@ export interface SmeeChannelResolverOptions {
    * logged and non-fatal. Undefined or empty string disables the mirror.
    */
   workspaceMirrorPath?: string;
+  /**
+   * Repos to inspect for an existing Generacy smee webhook when persisted is
+   * absent (tier 3 "adopt-existing"). When absent or empty, the adopt tier is
+   * skipped and the resolver falls straight through to tier 4 (provision).
+   */
+  repos?: RepositoryConfig[];
+  /**
+   * Discovery callback for the adopt tier. When set (and `repos` is non-empty
+   * and persisted returned null), the resolver calls this to find a live
+   * smee.io channel URL already registered on a configured repo's GitHub
+   * webhooks. Must return `null` (not throw) on "no match" or unrecoverable
+   * failure. Throws are caught and retried once (MAX_ATTEMPTS = 2).
+   */
+  discoverExistingChannel?: (repos: RepositoryConfig[]) => Promise<string | null>;
 }
 
 export interface SmeeChannelResolverResult {
@@ -92,7 +107,32 @@ export class SmeeChannelResolver {
       return { channelUrl: persisted, source: 'persisted' };
     }
 
-    // Tier 3: provision from smee.io
+    // Tier 3: adopt an existing Generacy smee channel URL from a configured
+    // repo's GitHub webhooks. Only fires when a discovery callback and a
+    // non-empty repo list are configured (activation predicate). Fail-open:
+    // any failure returns null and falls through to provision.
+    const adoptedUrl = await this.runAdoptTier();
+    if (adoptedUrl !== null) {
+      // Persist-on-adopt is best-effort. Diverges from provisioned (which
+      // returns null on persist failure) because the channel already exists
+      // on GitHub — persist failure just re-runs the adopt tier next boot,
+      // no orphan risk.
+      const persistedOk = await this.writePersistedFile(adoptedUrl);
+      if (!persistedOk) {
+        this.logger.warn(
+          { path: this.options.channelFilePath, url: adoptedUrl },
+          'Adopted smee channel URL but failed to persist — next boot will re-run adopt tier',
+        );
+      }
+      await this.mirrorToWorkspace(adoptedUrl);
+      this.logger.info(
+        { channelUrl: adoptedUrl, source: 'adopted' },
+        'Adopted existing smee channel URL from repo webhook',
+      );
+      return { channelUrl: adoptedUrl, source: 'adopted' };
+    }
+
+    // Tier 4: provision from smee.io
     const provisioned = await this.provision();
     if (!provisioned) {
       return null;
@@ -112,6 +152,69 @@ export class SmeeChannelResolver {
       'Provisioned new smee channel URL',
     );
     return { channelUrl: provisioned, source: 'provisioned' };
+  }
+
+  /**
+   * Tier-3 adopt: call the injected discovery callback (bounded retry) to
+   * find an existing Generacy smee channel URL registered on a configured
+   * repo's GitHub webhooks. Returns the URL on success, or `null` on miss /
+   * exhaustion / malformed response. NEVER THROWS.
+   *
+   * Activation predicate: both `discoverExistingChannel` and a non-empty
+   * `repos` list MUST be configured on options. Otherwise the tier is a
+   * silent no-op (no log — it's a legitimate configuration miss, not a
+   * failure).
+   *
+   * Retry semantics: throws are retried once (up to `MAX_ATTEMPTS = 2`).
+   * `null` returns and malformed-URL returns are legitimate misses — no
+   * retry.
+   */
+  private async runAdoptTier(): Promise<string | null> {
+    if (
+      !this.options.discoverExistingChannel ||
+      !this.options.repos ||
+      this.options.repos.length === 0
+    ) {
+      return null;
+    }
+
+    const { discoverExistingChannel, repos } = this.options;
+    let lastError: string | undefined;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      let result: string | null;
+      try {
+        result = await discoverExistingChannel(repos);
+      } catch (err) {
+        lastError = (err as Error).message ?? String(err);
+        if (attempt < MAX_ATTEMPTS) {
+          await this.sleepImpl(RETRY_DELAY_MS);
+        }
+        continue;
+      }
+
+      if (result === null) {
+        return null;
+      }
+
+      if (!SMEE_URL_PATTERN.test(result)) {
+        this.logger.warn(
+          { result, source: 'adopted' },
+          'Adopt callback returned URL not matching SMEE_URL_PATTERN — falling through',
+        );
+        return null;
+      }
+
+      return result;
+    }
+
+    if (lastError !== undefined) {
+      this.logger.warn(
+        { attempts: MAX_ATTEMPTS, lastError, source: 'adopted' },
+        'Adopt callback failed after N attempts — falling through to provision',
+      );
+    }
+    return null;
   }
 
   private async readPersistedFile(): Promise<string | null> {

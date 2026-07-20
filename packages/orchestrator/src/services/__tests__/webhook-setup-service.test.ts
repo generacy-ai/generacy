@@ -603,9 +603,11 @@ describe('WebhookSetupService', () => {
   });
 
   describe('webhook matching', () => {
-    it('should not match webhooks with trailing slashes in URLs', async () => {
+    it('should take-over single smee.io hook with trailing-slash URL (#1005 FR-005)', async () => {
       // Arrange — pre-existing smee.io hook whose URL differs from ours only
-      // by a trailing slash.
+      // by a trailing slash. Under #1005 this is a stale Generacy smee hook
+      // (exactly one, prefix-match on https://smee.io/) → take-over branch
+      // PATCHes it to the current URL rather than log-and-skipping.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
@@ -615,31 +617,32 @@ describe('WebhookSetupService', () => {
         },
       ];
 
-      executeCommandMock.mockResolvedValueOnce({
-        exitCode: 0,
-        stdout: JSON.stringify(mockWebhooks),
-        stderr: '',
-      });
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(mockWebhooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 123 }),
+          stderr: '',
+        });
 
       // Act - URL without trailing slash
       const result = await service.ensureWebhooks('https://smee.io/abc123', [
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert — #972 row 8 (clobber-prevention): a smee.io hook that
-      // doesn't match current or persisted URL is treated as foreign and
-      // left alone; we do NOT create a duplicate hook.
+      // Assert — take-over branch fires: repointed, not skipped.
       expect(result.total).toBe(1);
       expect(result.created).toBe(0);
-      expect(result.skipped).toBe(1);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          owner: 'testorg',
-          repo: 'testrepo',
-          webhookId: 123,
-        }),
-        'Foreign webhook present; not modifying',
-      );
+      expect(result.reactivated).toBe(1);
+      const patchCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('PATCH');
+      });
+      expect(patchCall).toBeDefined();
     });
 
     it('should not match webhooks with different protocols', async () => {
@@ -753,9 +756,10 @@ describe('WebhookSetupService', () => {
       expect(result.skipped).toBe(0);
     });
 
-    it('should match exact URL including query parameters', async () => {
+    it('should take-over single smee.io hook with query-param URL (#1005 FR-005)', async () => {
       // Arrange — pre-existing smee.io hook whose URL differs from ours by
-      // a query string.
+      // a query string. Under #1005 this is a stale Generacy smee hook →
+      // take-over branch PATCHes it, does NOT create a duplicate.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 123,
@@ -765,22 +769,27 @@ describe('WebhookSetupService', () => {
         },
       ];
 
-      executeCommandMock.mockResolvedValueOnce({
-        exitCode: 0,
-        stdout: JSON.stringify(mockWebhooks),
-        stderr: '',
-      });
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(mockWebhooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 123 }),
+          stderr: '',
+        });
 
       // Act - URL without query param
       const result = await service.ensureWebhooks('https://smee.io/abc123', [
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert — #972 row 8 (clobber-prevention): differing smee.io hooks
-      // are foreign; log-and-skip, do NOT create a duplicate.
+      // Assert — take-over branch fires: repointed, not skipped, no duplicate created.
       expect(result.total).toBe(1);
       expect(result.created).toBe(0);
-      expect(result.skipped).toBe(1);
+      expect(result.reactivated).toBe(1);
     });
 
     it('should match first webhook when multiple webhooks point to same URL', async () => {
@@ -1670,8 +1679,11 @@ describe('WebhookSetupService', () => {
       }
     });
 
-    it('#972 case 6: foreign smee hook (no match on current or persisted) is log-and-skipped (row 8)', async () => {
+    it('#972 case 6 / #1005 FR-005: exactly one stale smee hook is take-over-repointed (was: log-and-skipped)', async () => {
       // Arrange — hook URL matches neither current nor persisted (null).
+      // Pre-#1005 this hit the foreign log-and-skip branch. Under #1005 the
+      // single-hook take-over branch fires first and PATCHes the hook to the
+      // current channel URL. The ≥2-hook case still lands on foreign.
       const mockWebhooks: GitHubWebhook[] = [
         {
           id: 555,
@@ -1680,11 +1692,17 @@ describe('WebhookSetupService', () => {
           events: ['issues'],
         },
       ];
-      executeCommandMock.mockResolvedValueOnce({
-        exitCode: 0,
-        stdout: JSON.stringify(mockWebhooks),
-        stderr: '',
-      });
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(mockWebhooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 555 }),
+          stderr: '',
+        });
       const svc = buildService(null);
 
       // Act
@@ -1692,19 +1710,19 @@ describe('WebhookSetupService', () => {
         { owner: 'testorg', repo: 'testrepo' },
       ]);
 
-      // Assert — skipped without PATCH.
-      expect(result.skipped).toBe(1);
+      // Assert — take-over repointed the hook. No foreign warn.
+      expect(result.reactivated).toBe(1);
+      expect(result.skipped).toBe(0);
       expect(result.created).toBe(0);
-      // Only one gh call (list). No PATCH, no POST.
-      expect(executeCommandMock).toHaveBeenCalledTimes(1);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          owner: 'testorg',
-          repo: 'testrepo',
-          webhookId: 555,
-        }),
-        'Foreign webhook present; not modifying',
+      const patchCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('PATCH');
+      });
+      expect(patchCall).toBeDefined();
+      const foreignWarn = mockLogger.warn.mock.calls.find(
+        (c) => c[1] === 'Foreign webhook present; not modifying',
       );
+      expect(foreignWarn).toBeUndefined();
     });
 
     it('#972 case 7: create-time payload includes all four locked events', async () => {
@@ -1784,6 +1802,323 @@ describe('WebhookSetupService', () => {
 
       // Assert — same-boot dedup: no new event for repo1.
       expect(sendRelayEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  // #1005: Adopt tier's discovery callback + single-hook take-over branch.
+  // See specs/1005-summary-when-cluster-deleted/contracts/{find-existing-smee-channel,webhook-setup-takeover}.md
+  describe('#1005 findExistingSmeeChannel', () => {
+    it('T-find-1: single repo with one smee.io hook → returns that URL', async () => {
+      const hooks: GitHubWebhook[] = [
+        {
+          id: 100,
+          active: true,
+          config: { url: 'https://smee.io/foundURL' },
+          events: ['issues'],
+        },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(hooks),
+        stderr: '',
+      });
+
+      const result = await service.findExistingSmeeChannel([
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      expect(result).toBe('https://smee.io/foundURL');
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    it('T-find-2: single repo with no smee.io hooks → returns null', async () => {
+      const hooks: GitHubWebhook[] = [
+        {
+          id: 200,
+          active: true,
+          config: { url: 'https://operator.example.com/webhook' },
+          events: ['issues'],
+        },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(hooks),
+        stderr: '',
+      });
+
+      const result = await service.findExistingSmeeChannel([
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      expect(result).toBeNull();
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    });
+
+    it('T-find-3: two repos both returning the same smee URL → returns URL, no divergence warn', async () => {
+      const sharedUrl = 'https://smee.io/sharedURL';
+      const hooks1: GitHubWebhook[] = [
+        { id: 300, active: true, config: { url: sharedUrl }, events: ['issues'] },
+      ];
+      const hooks2: GitHubWebhook[] = [
+        { id: 301, active: true, config: { url: sharedUrl }, events: ['issues'] },
+      ];
+      executeCommandMock
+        .mockResolvedValueOnce({ exitCode: 0, stdout: JSON.stringify(hooks1), stderr: '' })
+        .mockResolvedValueOnce({ exitCode: 0, stdout: JSON.stringify(hooks2), stderr: '' });
+
+      const result = await service.findExistingSmeeChannel([
+        { owner: 'org1', repo: 'repo1' },
+        { owner: 'org2', repo: 'repo2' },
+      ]);
+
+      expect(result).toBe(sharedUrl);
+      // No divergence warn — URLs matched.
+      const divergenceWarn = mockLogger.warn.mock.calls.find(
+        (c) =>
+          c[1] ===
+          'Repo Generacy smee channel disagrees with first-repo winner — deferring to take-over on next self-heal',
+      );
+      expect(divergenceWarn).toBeUndefined();
+    });
+
+    it('T-find-4 (FR-004): two repos with different smee URLs → first-repo URL wins + one divergence warn', async () => {
+      const firstUrl = 'https://smee.io/firstWINS';
+      const secondUrl = 'https://smee.io/secondLOSES';
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 400, active: true, config: { url: firstUrl }, events: ['issues'] },
+          ]),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 401, active: true, config: { url: secondUrl }, events: ['issues'] },
+          ]),
+          stderr: '',
+        });
+
+      const result = await service.findExistingSmeeChannel([
+        { owner: 'org1', repo: 'repo1' },
+        { owner: 'org2', repo: 'repo2' },
+      ]);
+
+      expect(result).toBe(firstUrl);
+      const divergenceWarns = mockLogger.warn.mock.calls.filter(
+        (c) =>
+          c[1] ===
+          'Repo Generacy smee channel disagrees with first-repo winner — deferring to take-over on next self-heal',
+      );
+      expect(divergenceWarns).toHaveLength(1);
+      const [ctx] = divergenceWarns[0] as [Record<string, unknown>, string];
+      expect(ctx.chosenRepo).toBe('org1/repo1');
+      expect(ctx.chosenUrl).toBe(firstUrl);
+      expect(ctx.divergentRepo).toBe('org2/repo2');
+      expect(ctx.divergentUrl).toBe(secondUrl);
+    });
+
+    it('T-find-5: first repo _listRepoWebhooks throws, second returns smee hook → returns second URL, one warn', async () => {
+      const secondUrl = 'https://smee.io/RECOVERED';
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'HTTP 500: transient GitHub failure',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([
+            { id: 500, active: true, config: { url: secondUrl }, events: ['issues'] },
+          ]),
+          stderr: '',
+        });
+
+      const result = await service.findExistingSmeeChannel([
+        { owner: 'org1', repo: 'repo1' },
+        { owner: 'org2', repo: 'repo2' },
+      ]);
+
+      expect(result).toBe(secondUrl);
+      const skipWarn = mockLogger.warn.mock.calls.find(
+        (c) =>
+          c[1] ===
+          'Failed to list webhooks during smee channel discovery — skipping repo',
+      );
+      expect(skipWarn).toBeDefined();
+      const [ctx] = skipWarn as [Record<string, unknown>, string];
+      expect(ctx.owner).toBe('org1');
+      expect(ctx.repo).toBe('repo1');
+    });
+  });
+
+  describe('#1005 take-over branch (_selectExistingHookForUpdate)', () => {
+    /** Build a service configured with a nonexistent persisted-URL file so
+     * `_readPersistedChannelUrl` returns null. */
+    const buildNoPersistedService = (): WebhookSetupService =>
+      new WebhookSetupService(mockLogger, undefined, {
+        channelFilePath: '/tmp/1005-test-nonexistent',
+      });
+
+    it('T-takeover-1 (FR-005): exactly one stale Generacy smee hook → update-url fires', async () => {
+      const currentUrl = 'https://smee.io/currentCHAN';
+      const staleUrl = 'https://smee.io/staleORPHAN';
+      const staleHooks: GitHubWebhook[] = [
+        { id: 700, active: true, config: { url: staleUrl }, events: ['issues'] },
+      ];
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(staleHooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 700 }),
+          stderr: '',
+        });
+
+      const svc = buildNoPersistedService();
+      const result = await svc.ensureWebhooks(currentUrl, [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      expect(result.reactivated).toBe(1);
+      expect(result.results[0]).toEqual({
+        owner: 'testorg',
+        repo: 'testrepo',
+        action: 'reactivated',
+        webhookId: 700,
+      });
+      // Assert PATCH sent the current URL.
+      const patchCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('PATCH');
+      });
+      expect(patchCall).toBeDefined();
+      const patchArgs = patchCall![1] as string[];
+      expect(patchArgs).toContain(`config[url]=${currentUrl}`);
+    });
+
+    it('T-takeover-2 (SC-004): two stale Generacy smee hooks → no update-url, existing foreign log-and-skip', async () => {
+      const currentUrl = 'https://smee.io/currentCHAN';
+      const staleA = 'https://smee.io/staleA';
+      const staleB = 'https://smee.io/staleB';
+      const staleHooks: GitHubWebhook[] = [
+        { id: 800, active: true, config: { url: staleA }, events: ['issues'] },
+        { id: 801, active: true, config: { url: staleB }, events: ['issues'] },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(staleHooks),
+        stderr: '',
+      });
+
+      const svc = buildNoPersistedService();
+      const result = await svc.ensureWebhooks(currentUrl, [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Skipped (via foreign branch), no PATCH.
+      expect(result.skipped).toBe(1);
+      expect(executeCommandMock).toHaveBeenCalledTimes(1);
+      const foreignWarn = mockLogger.warn.mock.calls.find(
+        (c) => c[1] === 'Foreign webhook present; not modifying',
+      );
+      expect(foreignWarn).toBeDefined();
+    });
+
+    it('T-takeover-3: zero Generacy smee hooks → create path fires', async () => {
+      const currentUrl = 'https://smee.io/currentCHAN';
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify([]),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 900 }),
+          stderr: '',
+        });
+
+      const svc = buildNoPersistedService();
+      const result = await svc.ensureWebhooks(currentUrl, [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      expect(result.created).toBe(1);
+      const postCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('POST');
+      });
+      expect(postCall).toBeDefined();
+    });
+
+    it('T-takeover-4 (regression guard): after adopt, surviving hook URL === current → skip-active, no re-fire', async () => {
+      const currentUrl = 'https://smee.io/adoptedFROMboot';
+      // Post-adopt state: the surviving hook now matches the current channel.
+      const hooks: GitHubWebhook[] = [
+        { id: 1000, active: true, config: { url: currentUrl }, events: ['issues', 'pull_request', 'check_run', 'check_suite'] },
+      ];
+      executeCommandMock.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: JSON.stringify(hooks),
+        stderr: '',
+      });
+
+      const svc = buildNoPersistedService();
+      const result = await svc.ensureWebhooks(currentUrl, [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      expect(result.skipped).toBe(1);
+      // No PATCH — take-over branch not re-firing on the now-current hook.
+      expect(executeCommandMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('T-us3-guard (FR-009): non-smee foreign hook → classified foreign, untouched', async () => {
+      const currentUrl = 'https://smee.io/currentCHAN';
+      const hooks: GitHubWebhook[] = [
+        {
+          id: 1100,
+          active: true,
+          config: { url: 'https://operator.example.com/webhook' },
+          events: ['issues'],
+        },
+      ];
+      executeCommandMock
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify(hooks),
+          stderr: '',
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: JSON.stringify({ id: 1101 }),
+          stderr: '',
+        });
+
+      const svc = buildNoPersistedService();
+      const result = await svc.ensureWebhooks(currentUrl, [
+        { owner: 'testorg', repo: 'testrepo' },
+      ]);
+
+      // Non-smee foreign is not classified as foreign by _selectExistingHookForUpdate
+      // (only smee.io hooks are); it falls through to the create path.
+      // The operator's hook is untouched (no PATCH, no DELETE).
+      expect(result.created).toBe(1);
+      const patchCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('PATCH');
+      });
+      expect(patchCall).toBeUndefined();
+      const deleteCall = executeCommandMock.mock.calls.find((call) => {
+        const args = call[1] as string[];
+        return args.includes('DELETE');
+      });
+      expect(deleteCall).toBeUndefined();
     });
   });
 });
