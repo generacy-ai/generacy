@@ -240,22 +240,19 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       })
     : undefined;
 
-  // Sync labels for watched repositories (skip in worker mode)
+  // Label sync for watched repos. Constructed here but RUN fire-and-forget in
+  // the onReady hook (after server.listen), not awaited here: syncAll walks
+  // dozens of sequential GitHub label create/update calls (~30s on a fresh repo
+  // creating ~68 labels), and awaiting it before listen blocks the server from
+  // becoming ready. That is on the critical path of a wizard cluster's
+  // post-activation restart — a blocking sync kept the orchestrator (and thus
+  // the relay + cloud UI) unreachable for the full sync duration. Labels aren't
+  // needed for the server to serve requests, and the label monitor tolerates
+  // definitions being created concurrently (a freshly-cloned repo has no issues
+  // to label yet).
+  let labelSyncService: LabelSyncService | null = null;
   if (!isWorkerMode && config.repositories.length > 0) {
-    const labelSyncService = new LabelSyncService(server.log, createGitHubClient, githubTokenProvider);
-    try {
-      const syncResult = await labelSyncService.syncAll(config.repositories);
-      server.log.info(
-        `Label sync complete: ${syncResult.successfulRepos}/${syncResult.totalRepos} repos succeeded`
-      );
-      if (syncResult.failedRepos > 0) {
-        server.log.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
-      }
-    } catch (error) {
-      server.log.warn(
-        `Label sync failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+    labelSyncService = new LabelSyncService(server.log, createGitHubClient, githubTokenProvider);
   }
 
   // Initialize Redis client (shared across services)
@@ -540,12 +537,43 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       );
     }
 
+    // #1005: Construct WebhookSetupService up front so it can be injected
+    // into SmeeChannelResolver (adopt tier's discoverExistingChannel callback)
+    // AND reused inside startSmeePipeline for ensureWebhooks. The 972 DI shape
+    // is preserved verbatim — findExistingSmeeChannel is a pure read against
+    // GitHub webhooks and does not touch sendRelayEvent/statusReporter.
+    const constructWebhookSetupService = (): WebhookSetupService =>
+      new WebhookSetupService(server.log, githubTokenProvider, {
+        sendRelayEvent: (channel, payload) => {
+          const client = relayClientRef;
+          if (!client || !client.isConnected) return;
+          client.send({
+            type: 'event',
+            event: channel,
+            data: payload,
+            timestamp: new Date().toISOString(),
+          } as unknown as import('./types/relay.js').RelayMessage);
+        },
+        statusReporter: {
+          pushStatus: async (status, reason) => {
+            const reporter = statusReporterRef;
+            if (!reporter) return;
+            await reporter.pushStatus(status, reason);
+          },
+        },
+        channelFilePath: config.smee.channelFilePath,
+        installationIdProvider: async () => null,
+      });
+
     // Wire the smee pipeline (receiver + optional webhook setup) for a resolved URL.
     // Captures labelMonitorService (+ sibling monitors), config, githubTokenProvider,
     // clusterGithubUsername from the enclosing scope. See
     // specs/952-summary-no-automated-cluster/contracts/server-pipeline.md
     // and specs/987-summary-cluster-where-smee/contracts/smee-receiver-contract.md.
-    const startSmeePipeline = (channelUrl: string): void => {
+    const startSmeePipeline = (
+      channelUrl: string,
+      webhookSetupService: WebhookSetupService,
+    ): void => {
       const watchedRepos = new Set(
         config.repositories.map(r => `${r.owner}/${r.repo}`)
       );
@@ -584,40 +612,6 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
         server.log.error({ err: error }, 'Smee webhook receiver failed');
       });
       if (config.webhookSetup.enabled) {
-        // #972: DI hooks for fail-loud triple on webhook-registration 403.
-        // - sendRelayEvent: mirrors the closure used by PostActivationRetryService
-        //   / BootResumeService at the initializeRelayBridge sites; dereferences
-        //   relayClientRef at emit time so late relay-client init is tolerated.
-        // - statusReporter: exposes the same StatusReporter instance the relay
-        //   bridge init returns; wrapped as a thin object so the ref is read
-        //   at pushStatus() call time (the 403 fires from a network round-trip,
-        //   so the ref is populated by then even on the wizard-mode path).
-        // - channelFilePath: same path SmeeChannelResolver writes to.
-        // - installationIdProvider: null in v1 — installation id is not stored
-        //   in .agency/credentials.yaml (it lives inside the sealed credential
-        //   value in credentials.dat). Diagnostic-only per spec, so falling
-        //   back to null is safe (data-model.md §"WebhookRegistrationForbiddenEvent").
-        const webhookSetupService = new WebhookSetupService(server.log, githubTokenProvider, {
-          sendRelayEvent: (channel, payload) => {
-            const client = relayClientRef;
-            if (!client || !client.isConnected) return;
-            client.send({
-              type: 'event',
-              event: channel,
-              data: payload,
-              timestamp: new Date().toISOString(),
-            } as unknown as import('./types/relay.js').RelayMessage);
-          },
-          statusReporter: {
-            pushStatus: async (status, reason) => {
-              const reporter = statusReporterRef;
-              if (!reporter) return;
-              await reporter.pushStatus(status, reason);
-            },
-          },
-          channelFilePath: config.smee.channelFilePath,
-          installationIdProvider: async () => null,
-        });
         webhookSetupService.ensureWebhooks(channelUrl, config.repositories).catch((error) => {
           server.log.error({ err: error }, 'Webhook setup failed');
         });
@@ -636,18 +630,26 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     if (config.smee.channelUrl) {
       // Env/yaml URL path: preserve today's synchronous ordering so `smeeReceiver`
       // is non-null before onReady runs (existing tests rely on this).
-      startSmeePipeline(config.smee.channelUrl);
+      startSmeePipeline(config.smee.channelUrl, constructWebhookSetupService());
     } else {
       // No URL configured: kick off async resolver after server.listen() via onReady.
       // Fire-and-forget; never blocks listen. Belt-and-braces predicate matches the
       // outer gate so future refactors can't accidentally invoke on worker-mode boot.
       server.addHook('onReady', async () => {
         if (isWorkerMode || !config.labelMonitor || config.repositories.length === 0) return;
+        // #1005: hoist WebhookSetupService above the resolver so its
+        // findExistingSmeeChannel method can be wired into the adopt tier.
+        // The same instance is reused by startSmeePipeline downstream so
+        // ensureWebhooks runs on a single, coherent service state.
+        const webhookSetupService = constructWebhookSetupService();
         const resolver = new SmeeChannelResolver(server.log, {
           channelFilePath: config.smee.channelFilePath,
           workspaceMirrorPath: config.smee.workspaceMirrorPath === ''
             ? undefined
             : config.smee.workspaceMirrorPath,
+          repos: config.repositories,
+          discoverExistingChannel:
+            webhookSetupService.findExistingSmeeChannel.bind(webhookSetupService),
         });
         resolver.resolve()
           .then((result) => {
@@ -656,7 +658,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
                 { channelUrl: result.channelUrl, source: result.source },
                 'Resolved smee channel URL — starting pipeline',
               );
-              startSmeePipeline(result.channelUrl);
+              startSmeePipeline(result.channelUrl, webhookSetupService);
             } else {
               // #954: the cluster is genuinely webhook-less — no static URL,
               // no persisted channel, and provisioning failed — so polling is
@@ -948,6 +950,27 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       }
     } else {
       // Full mode: start monitors, Smee, webhook setup (no dispatcher)
+
+      // Fire-and-forget label sync (see the construction site above): kicked off
+      // after listen so its sequential GitHub API calls never block server-ready.
+      if (labelSyncService) {
+        labelSyncService
+          .syncAll(config.repositories)
+          .then((syncResult) => {
+            server.log.info(
+              `Label sync complete: ${syncResult.successfulRepos}/${syncResult.totalRepos} repos succeeded`
+            );
+            if (syncResult.failedRepos > 0) {
+              server.log.warn(`Label sync: ${syncResult.failedRepos} repo(s) failed`);
+            }
+          })
+          .catch((error) => {
+            server.log.warn(
+              `Label sync failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+      }
+
       if (labelMonitorService) {
         labelMonitorService.startPolling().catch((error) => {
           server.log.error({ err: error }, 'Label monitor polling failed');

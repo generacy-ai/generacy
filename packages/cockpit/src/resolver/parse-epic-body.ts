@@ -5,6 +5,11 @@ import type { IssueRef, ParsedEpicBody, ParsedPhase } from './types.js';
 const HEADING_L3_RE = /^###\s+(.+?)\s*$/;
 const HEADING_L4_PLUS_RE = /^####+\s+/;
 const HEADING_L2_RE = /^##\s+/;
+// #1006 (Q1=C, word-boundaried): trimmed L4+ heading text is "phase-shaped"
+// iff it matches `P\d+\b` OR contains a word-boundaried `phase`. See
+// contracts/parser-behavior.md for matches / non-matches. Load-bearing:
+// `\bphase\b` (not `phase`) so `#### Rephrase …` does not fire the detector.
+const PHASE_SHAPED_H4_RE = /^\s*(?:P\d+\b|.*\bphase\b)/i;
 // Case-insensitive first-token match: closes current phase (parses like L4+),
 // and marks subsequent refs as adhoc rather than dropped.
 const AD_HOC_HEADING_RE = /^##\s+ad-hoc\s*$/i;
@@ -65,6 +70,7 @@ export function parseEpicBody(body: string): ParsedEpicBody {
 
   let current: ParsedPhase | null = null;
   let currentSeen = new Set<string>();
+  let sawPhaseShapedH4 = false;
 
   const lines = body.split(/\r?\n/);
   for (let i = 0; i < lines.length; i++) {
@@ -72,6 +78,10 @@ export function parseEpicBody(body: string): ParsedEpicBody {
     const lineNumber = i + 1;
 
     if (HEADING_L4_PLUS_RE.test(line)) {
+      const text = line.replace(/^####+\s+/, '').trim();
+      if (PHASE_SHAPED_H4_RE.test(text)) {
+        sawPhaseShapedH4 = true;
+      }
       current = null;
       currentSeen = new Set();
       continue;
@@ -148,6 +158,23 @@ export function parseEpicBody(body: string): ParsedEpicBody {
   }
 
   const allRefs = sortRefs(globalRefs.values());
+
+  // #1006 (FR-009): loud signal for LLM-authored epics whose phase headers
+  // dropped an H-level. All four conditions required — see
+  // contracts/parser-behavior.md §Loud-signal gating rule. The marker
+  // substring in the pushed string below is contractual (grep-audited per
+  // SC-006); the surrounding sentence is free to evolve.
+  if (
+    phases.length > 0 &&
+    phases.every((p) => p.refs.length === 0) &&
+    adhocRefs.length > 0 &&
+    sawPhaseShapedH4
+  ) {
+    const n = adhocRefs.length;
+    warnings.push(
+      `cockpit: ${n} task ref${n === 1 ? '' : 's'} fell to ad-hoc; phase headers must be '###', found '####'`,
+    );
+  }
 
   return { phases, adhocRefs, allRefs, warnings };
 }

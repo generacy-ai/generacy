@@ -1,7 +1,30 @@
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { runStatus } from '../status.js';
 import { FakeGh, makeIssue, makePr } from './helpers/fake-gh.js';
 import type { CommandRunner, Issue } from '@generacy-ai/cockpit';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SNAPPOLL_BODY = readFileSync(
+  join(
+    HERE,
+    '..',
+    '..',
+    '..',
+    '..',
+    '..',
+    '..',
+    'cockpit',
+    'src',
+    'resolver',
+    '__tests__',
+    'fixtures',
+    'epic-1006-snappoll.md',
+  ),
+  'utf-8',
+);
 
 function epicBody(refs: string[]): string {
   return ['### S2 — cohort', ...refs.map((r) => `- [ ] ${r}`)].join('\n');
@@ -246,5 +269,51 @@ describe('runStatus', () => {
     expect(joined).toContain('(phased, 1 refs)');
     expect(joined).toContain('— S1 alpha —');
     expect(joined).not.toContain('— Ad-hoc —');
+  });
+
+  // #1006 (FR-012): --json envelope always carries a `warnings: string[]`
+  // field — empty on clean bodies, populated on the H4-phase-header defect.
+  describe('--json envelope carries parsed.warnings (#1006 FR-012)', () => {
+    it('emits `warnings: []` (present, empty) on a clean epic body', async () => {
+      const body = epicBody(['owner/repo#1']);
+      const gh = new FakeGh({
+        bodyByIssue: { 'owner/epic#42': body },
+        issuesByQuery: (): Issue[] => [
+          makeIssue({ number: 1, url: 'https://github.com/owner/repo/issues/1' }),
+        ],
+      });
+      const out: string[] = [];
+      const code = await runStatus(
+        'owner/epic#42',
+        { json: true },
+        { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(out[0]!);
+      expect(Array.isArray(parsed.warnings)).toBe(true);
+      expect(parsed.warnings).toEqual([]);
+    });
+
+    it('emits H4-phase-header marker on the snappoll fixture body', async () => {
+      const gh = new FakeGh({
+        bodyByIssue: { 'christrudelpw/snappoll#1': SNAPPOLL_BODY },
+        // All 12 refs fall to ad-hoc, so issuesByQuery is exercised per repo
+        // batch — but the resolver's warning fires regardless of GH results.
+        issuesByQuery: (): Issue[] => [],
+      });
+      const out: string[] = [];
+      const code = await runStatus(
+        'christrudelpw/snappoll#1',
+        { json: true },
+        { gh, stdout: (l) => out.push(l), logger: { warn: () => {} } },
+      );
+      expect(code).toBe(0);
+      const parsed = JSON.parse(out[0]!);
+      expect(Array.isArray(parsed.warnings)).toBe(true);
+      expect(parsed.warnings.length).toBeGreaterThanOrEqual(1);
+      expect(
+        parsed.warnings.some((w: string) => w.includes("phase headers must be '###'")),
+      ).toBe(true);
+    });
   });
 });

@@ -602,4 +602,200 @@ describe('SmeeChannelResolver', () => {
       expect(mirrorWarn).toBeUndefined();
     });
   });
+
+  describe('adopt tier (#1005)', () => {
+    const repos = [{ owner: 'testorg', repo: 'testrepo' }];
+
+    it('T-adopt-1: callback returns valid smee URL → source: adopted, persisted written, no fetch', async () => {
+      const adoptedUrl = 'https://smee.io/ADOPTED123';
+      const fetchMock = vi.fn();
+      const discoverExistingChannel = vi.fn().mockResolvedValue(adoptedUrl);
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: adoptedUrl, source: 'adopted' });
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(discoverExistingChannel).toHaveBeenCalledTimes(1);
+      expect(discoverExistingChannel).toHaveBeenCalledWith(repos);
+      // Persisted file was written.
+      expect(readFileSync(channelFilePath, 'utf-8')).toBe(adoptedUrl);
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { channelUrl: adoptedUrl, source: 'adopted' },
+        'Adopted existing smee channel URL from repo webhook',
+      );
+    });
+
+    it('T-adopt-2: callback returns null → falls through to provision, no persist-adopt write', async () => {
+      const provisionedUrl = 'https://smee.io/PROVISIONED456';
+      const fetchMock = vi.fn().mockResolvedValue(make302(provisionedUrl));
+      const discoverExistingChannel = vi.fn().mockResolvedValue(null);
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+      expect(discoverExistingChannel).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('T-adopt-3: callback throws once then returns URL → sleep(1000) once, callback called twice, source: adopted', async () => {
+      const adoptedUrl = 'https://smee.io/RETRYADOPT';
+      const fetchMock = vi.fn();
+      const sleepMock = vi.fn().mockResolvedValue(undefined);
+      const discoverExistingChannel = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('transient GH 403'))
+        .mockResolvedValueOnce(adoptedUrl);
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        sleep: sleepMock,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: adoptedUrl, source: 'adopted' });
+      expect(discoverExistingChannel).toHaveBeenCalledTimes(2);
+      expect(sleepMock).toHaveBeenCalledTimes(1);
+      expect(sleepMock).toHaveBeenCalledWith(1000);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('T-adopt-4: callback throws twice → falls through to provision, sleep called once, no persist-adopt write', async () => {
+      const provisionedUrl = 'https://smee.io/AFTERRETRYFAIL';
+      const fetchMock = vi.fn().mockResolvedValue(make302(provisionedUrl));
+      const sleepMock = vi.fn().mockResolvedValue(undefined);
+      const discoverExistingChannel = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('gh 500 #1'))
+        .mockRejectedValueOnce(new Error('gh 500 #2'));
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        sleep: sleepMock,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+      expect(discoverExistingChannel).toHaveBeenCalledTimes(2);
+      // sleep(1000) called once between adopt attempts (adopt-tier retry).
+      // provision succeeded first try so no additional sleep from provision.
+      expect(sleepMock).toHaveBeenCalledTimes(1);
+      const adoptFailWarn = mockLogger.warn.mock.calls.find(
+        (c) => c[1] === 'Adopt callback failed after N attempts — falling through to provision',
+      );
+      expect(adoptFailWarn).toBeDefined();
+      const [ctx] = adoptFailWarn as [Record<string, unknown>, string];
+      expect(ctx.attempts).toBe(2);
+      expect(ctx.lastError).toBe('gh 500 #2');
+    });
+
+    it('T-adopt-5: callback returns URL, persist fails → still returns source: adopted, warn logged', async () => {
+      // Skip if root (chmod 0500 is ignored for root)
+      if (process.getuid && process.getuid() === 0) return;
+
+      const roDir = join(baseDir, 'ro-adopt');
+      mkdirSync(roDir, { mode: 0o500 });
+      const roPath = join(roDir, 'smee-channel');
+
+      const adoptedUrl = 'https://smee.io/PERSISTFAIL';
+      const fetchMock = vi.fn();
+      const discoverExistingChannel = vi.fn().mockResolvedValue(adoptedUrl);
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath: roPath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      // Restore for cleanup
+      chmodSync(roDir, 0o700);
+
+      expect(result).toEqual({ channelUrl: adoptedUrl, source: 'adopted' });
+      const persistWarn = mockLogger.warn.mock.calls.find(
+        (c) =>
+          c[1] ===
+          'Adopted smee channel URL but failed to persist — next boot will re-run adopt tier',
+      );
+      expect(persistWarn).toBeDefined();
+      const [ctx] = persistWarn as [Record<string, unknown>, string];
+      expect(ctx.path).toBe(roPath);
+      expect(ctx.url).toBe(adoptedUrl);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('T-adopt-6: callback returns malformed URL → treated as null, falls through to provision, no retry', async () => {
+      const provisionedUrl = 'https://smee.io/AFTERMALFORMED';
+      const fetchMock = vi.fn().mockResolvedValue(make302(provisionedUrl));
+      const sleepMock = vi.fn().mockResolvedValue(undefined);
+      const discoverExistingChannel = vi.fn().mockResolvedValue('not-a-smee-url');
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        sleep: sleepMock,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: provisionedUrl, source: 'provisioned' });
+      // No adopt retry on malformed URL — legitimate miss.
+      expect(discoverExistingChannel).toHaveBeenCalledTimes(1);
+      const malformedWarn = mockLogger.warn.mock.calls.find(
+        (c) =>
+          c[1] ===
+          'Adopt callback returned URL not matching SMEE_URL_PATTERN — falling through',
+      );
+      expect(malformedWarn).toBeDefined();
+      const [ctx] = malformedWarn as [Record<string, unknown>, string];
+      expect(ctx.result).toBe('not-a-smee-url');
+      expect(ctx.source).toBe('adopted');
+    });
+
+    it('T-adopt-7 (SC-003): valid persisted file → discoverExistingChannel is NEVER called', async () => {
+      const persistedUrl = 'https://smee.io/PERSISTEDHIT';
+      writeFileSync(channelFilePath, persistedUrl);
+
+      const fetchMock = vi.fn();
+      const discoverExistingChannel = vi.fn();
+
+      const resolver = new SmeeChannelResolver(mockLogger, {
+        channelFilePath,
+        fetch: fetchMock as unknown as typeof globalThis.fetch,
+        repos,
+        discoverExistingChannel,
+      });
+
+      const result = await resolver.resolve();
+
+      expect(result).toEqual({ channelUrl: persistedUrl, source: 'persisted' });
+      expect(discoverExistingChannel).not.toHaveBeenCalled();
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });
