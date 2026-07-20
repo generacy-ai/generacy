@@ -62,6 +62,7 @@ import { SessionService } from './services/session-service.js';
 import { activate } from './activation/index.js';
 import { StatusReporter } from './services/status-reporter.js';
 import { runPostActivationBranch } from './services/post-activation-dispatch.js';
+import { PostActivationSettledMonitor } from './services/post-activation-settled-monitor.js';
 import { detectIdentitySplit } from './services/identity-split-detector.js';
 import {
   TunnelHandler,
@@ -746,6 +747,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
 
   // Initialize relay bridge (full mode only, when API key is configured)
   let relayBridge: RelayBridge | null = null;
+  let postActivationSettledMonitor: PostActivationSettledMonitor | null = null;
   let activationPending = false;
 
   // Register internal relay events route BEFORE server.listen() (deferred binding pattern).
@@ -769,12 +771,20 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   if (!isWorkerMode && !config.relay.apiKey) {
     // Wizard mode: background the activation so server.listen() is not blocked
     activationPending = true;
-    activateInBackground(config, server, apiKeyStore, (bridge, convMgr) => {
-      relayBridge = bridge;
-      relayBridgeRef = bridge;
-      conversationManager = convMgr;
-      activationPending = false;
-    }, (client) => { relayClientRef = client; }, (reporter) => { statusReporterRef = reporter; }).catch((error) => {
+    activateInBackground(
+      config,
+      server,
+      apiKeyStore,
+      (bridge, convMgr) => {
+        relayBridge = bridge;
+        relayBridgeRef = bridge;
+        conversationManager = convMgr;
+        activationPending = false;
+      },
+      (client) => { relayClientRef = client; },
+      (reporter) => { statusReporterRef = reporter; },
+      (monitor) => { postActivationSettledMonitor = monitor; },
+    ).catch((error) => {
       activationPending = false;
       server.log.warn(
         `Cluster activation skipped: ${error instanceof Error ? error.message : String(error)}`,
@@ -786,6 +796,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     relayBridge = result.relayBridge;
     relayBridgeRef = result.relayBridge;
     statusReporterRef = result.statusReporter;
+    postActivationSettledMonitor = result.postActivationSettledMonitor;
 
     // Detect identity split (env GENERACY_CLUSTER_ID vs persisted cluster.json.cluster_id).
     // Best-effort: drops event if relay client unavailable. Once per process lifetime (#750).
@@ -1044,6 +1055,9 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           if (relayBridge) {
             await relayBridge.stop();
           }
+          if (postActivationSettledMonitor) {
+            postActivationSettledMonitor.stop();
+          }
           if (smeeReceiver) {
             smeeReceiver.stop();
           }
@@ -1158,6 +1172,7 @@ async function activateInBackground(
   onInitialized: (relayBridge: RelayBridge | null, conversationManager: ConversationManager | null) => void,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
   setStatusReporter?: (reporter: StatusReporter) => void,
+  setPostActivationSettledMonitor?: (monitor: PostActivationSettledMonitor | null) => void,
 ): Promise<void> {
   const initialWorkersRaw = process.env['GENERACY_INITIAL_WORKERS'];
   let initialWorkers: number | undefined;
@@ -1200,11 +1215,17 @@ async function activateInBackground(
   server.log.info('Cluster activation complete');
 
   let localRelayClient: import('./types/relay.js').ClusterRelayClient | null = null;
-  const { relayBridge, statusReporter } = await initializeRelayBridge(config, server, apiKeyStore, (client) => {
-    localRelayClient = client;
-    setRelayClient?.(client);
-  });
+  const { relayBridge, statusReporter, postActivationSettledMonitor } = await initializeRelayBridge(
+    config,
+    server,
+    apiKeyStore,
+    (client) => {
+      localRelayClient = client;
+      setRelayClient?.(client);
+    },
+  );
   setStatusReporter?.(statusReporter);
+  setPostActivationSettledMonitor?.(postActivationSettledMonitor);
   const conversationManager = await initializeConversationManager(config, server, relayBridge);
 
   onInitialized(relayBridge, conversationManager);
@@ -1261,13 +1282,18 @@ async function initializeRelayBridge(
   server: FastifyInstance,
   apiKeyStore: InMemoryApiKeyStore,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
-): Promise<{ relayBridge: RelayBridge | null; statusReporter: StatusReporter }> {
+): Promise<{
+  relayBridge: RelayBridge | null;
+  statusReporter: StatusReporter;
+  postActivationSettledMonitor: PostActivationSettledMonitor | null;
+}> {
   const controlPlaneSocket = process.env['CONTROL_PLANE_SOCKET_PATH'] ?? '/run/generacy-control-plane/control.sock';
   const statusReporter = new StatusReporter({ socketPath: controlPlaneSocket });
 
   let relayBridge: RelayBridge | null = null;
+  let postActivationSettledMonitor: PostActivationSettledMonitor | null = null;
   if (!config.relay.apiKey) {
-    return { relayBridge, statusReporter };
+    return { relayBridge, statusReporter, postActivationSettledMonitor };
   }
   try {
     const { ClusterRelayClient: RelayClientImpl } = await import('@generacy-ai/cluster-relay');
@@ -1345,6 +1371,19 @@ async function initializeRelayBridge(
 
     relayBridge.setStatusReporter(statusReporter);
 
+    // Post-activation settled monitor: pushes metadata to the cloud immediately
+    // when the post-activation-restart-done marker appears. No-op when the
+    // predicate is already true at construction (local clusters + wizard clusters
+    // that reboot post-restart).
+    const bridge = relayBridge;
+    postActivationSettledMonitor = new PostActivationSettledMonitor({
+      onSettled: () => {
+        void bridge.sendMetadata();
+      },
+      logger: server.log,
+    });
+    postActivationSettledMonitor.start();
+
     server.log.info('Relay bridge configured');
   } catch (error) {
     server.log.info(
@@ -1352,7 +1391,7 @@ async function initializeRelayBridge(
     );
   }
 
-  return { relayBridge, statusReporter };
+  return { relayBridge, statusReporter, postActivationSettledMonitor };
 }
 
 /**

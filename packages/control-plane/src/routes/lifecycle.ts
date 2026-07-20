@@ -11,6 +11,7 @@ import { scaleWorkers, PartialScaleError } from '../services/worker-scaler.js';
 import { DockerDaemonUnavailableError } from '../services/docker-engine-types.js';
 import { writeWizardEnvFile } from '../services/wizard-env-writer.js';
 import { getRelayPushEvent } from '../relay-events.js';
+import { isPostActivationSettledSync } from '../services/post-activation-settled.js';
 
 export async function handlePostLifecycle(
   req: http.IncomingMessage,
@@ -75,6 +76,23 @@ export async function handlePostLifecycle(
   }
 
   if (parsed.data === 'vscode-tunnel-start') {
+    if (!isPostActivationSettledSync()) {
+      console.info(
+        'Skipped vscode-tunnel-start: cluster pre-restart (postActivationReady=false)',
+      );
+      res.writeHead(200);
+      res.end(
+        JSON.stringify({
+          accepted: false,
+          action: parsed.data,
+          deferred: false,
+          reason: 'post-activation-not-settled',
+          message: 'Cluster is still starting up; retry once postActivationReady is true',
+        }),
+      );
+      return;
+    }
+
     const tunnelManager = getVsCodeTunnelManager();
     let result;
     try {
@@ -195,12 +213,22 @@ export async function handlePostLifecycle(
         // code-server start failure is non-fatal; metadata will report codeServerReady: false
       });
 
-      // Auto-start VS Code tunnel after bootstrap completes
-      try {
-        const tunnelManager = getVsCodeTunnelManager();
-        await tunnelManager.start();
-      } catch {
-        // Best-effort: don't fail bootstrap-complete if tunnel start fails
+      // Auto-start VS Code tunnel after bootstrap completes — but only once the
+      // post-activation self-restart has settled. Starting the tunnel pre-restart
+      // races SIGTERM and silently destroys any in-flight device-code auth (#1009).
+      // Steps (a) writeWizardEnvFile and (b) sentinel write must fire regardless;
+      // they are what causes the post-activation restart (and marker) to happen.
+      if (isPostActivationSettledSync()) {
+        try {
+          const tunnelManager = getVsCodeTunnelManager();
+          await tunnelManager.start();
+        } catch {
+          // Best-effort: don't fail bootstrap-complete if tunnel start fails
+        }
+      } else {
+        console.info(
+          'Skipped tunnelManager.start() in bootstrap-complete: cluster pre-restart (postActivationReady=false)',
+        );
       }
     } else {
       // GitHub token not sealed yet — defer the clone. The one-shot

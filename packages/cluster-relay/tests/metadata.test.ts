@@ -36,6 +36,7 @@ function createMockFetch(options?: {
           uptime: 7200,
           codeServerReady: true,
           controlPlaneReady: true,
+          postActivationReady: true,
         }),
         { status: 200 },
       );
@@ -78,6 +79,7 @@ describe('collectMetadata', () => {
       uptime: 7200,
       codeServerReady: true,
       controlPlaneReady: true,
+      postActivationReady: true,
     });
 
     expect(mockFetch).toHaveBeenCalledTimes(2);
@@ -139,6 +141,7 @@ describe('collectMetadata', () => {
       uptime: 0,
       codeServerReady: false,
       controlPlaneReady: false,
+      postActivationReady: false,
     });
   });
 
