@@ -1,6 +1,6 @@
 {
   "name": "@generacy-ai/orchestrator",
-  "version": "0.10.1",
+  "version": "0.11.0",
   "description": "Orchestrator service - main API server for Generacy workflow orchestration",
   "type": "module",
   "main": "./dist/index.js",
