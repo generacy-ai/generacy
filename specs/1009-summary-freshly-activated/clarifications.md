@@ -11,7 +11,7 @@
 - C: The orchestrator's own startup code writes the marker on the first boot after `post-activation-complete` was set, gated on a "this is not the pre-restart boot" heuristic.
 - D: Some other mechanism (please describe).
 
-**Answer**: *Pending*
+**Answer**: A — Keep the existing write: `entrypoint-post-activation.sh` already writes `/var/lib/generacy/post-activation-restart-done` immediately before `docker restart "$self_container"` (log line: "Wrote restart marker"). Its "restart-scheduled" semantics leave only a sub-second pre-restart window, which is fully covered by the Q4 defer-and-fire handler, so B's more invasive boot-time write isn't needed. IMPORTANT fallback: the readiness bit MUST also treat a non-wizard / local cluster — one where `post-activation-complete` is absent, so no self-restart ever occurs — as already settled; otherwise the tunnel would be permanently ungated on local `generacy launch` clusters. Compute it as `restart-done present OR post-activation-complete absent`.
 
 ### Q2: Readiness signal source in orchestrator
 **Context**: FR-004 says the settled bit must "propagate to the cloud within the existing metadata heartbeat window (seconds, not the 60s heartbeat)" and points at "#586's `codeServerReady` propagation pattern." In practice, #586/#596 landed as: `/health` returns `codeServerReady` via a live socket probe; `RelayBridge.collectMetadata()` reads the same probe; transitions trigger `sendMetadata()` for seconds-latency propagation instead of waiting on the 60s heartbeat. This bit is a **file marker**, not a socket, so the analog is `fs.existsSync` / `fs.stat`. Multiple valid mirror choices exist.
@@ -21,7 +21,7 @@
 - B: Probe-only: `/health` and `collectMetadata()` read via `fs.existsSync`; rely on the standard 60s metadata heartbeat to carry the transition. Simpler; slower first-tunnel-ready surface (worst case ~60s).
 - C: Push-only: A one-shot watcher on the marker path fires `sendMetadata()` once when it appears; `/health` does not surface the bit. Cloud only learns via relay push.
 
-**Answer**: *Pending*
+**Answer**: A — Full mirror of the #586/#596 `codeServerReady` pattern. Both `/health` (routes/health.ts) and `RelayBridge.collectMetadata()` (services/relay-bridge.ts) compute the bit via a filesystem check (`fs.existsSync`/`fs.stat` on the marker, plus the Q1 local-cluster fallback), and a one-shot `fs.watch` on the marker path installed at boot (only when the marker is not yet present) fires `sendMetadata()` when it appears — giving the same seconds-latency push the socket probes get. Reject B: its reliance on the ~60s heartbeat would leave the tunnel button dead for up to a minute after settle, in the exact first-connect flow this bug is about.
 
 ### Q3: Field name on the wire
 **Context**: The spec references `codeServerReady` and `controlPlaneReady` as prior art (#586, #624) but does not name the new field. This name is a cross-repo contract (generacy + generacy-cloud) and must be agreed before either side ships. Nothing in the spec picks it.
@@ -32,7 +32,7 @@
 - C: `postActivationReady` (parallel construction with `codeServerReady`, `controlPlaneReady`).
 - D: Other (please supply).
 
-**Answer**: *Pending*
+**Answer**: C — `postActivationReady`. Parallel construction with the existing `codeServerReady` / `controlPlaneReady` booleans on `ClusterMetadataPayload` (types/relay.ts, types/api.ts) and the `/health` response, and deliberately decoupled from the marker filename so the cross-repo wire contract survives any future change to Q1's write mechanism.
 
 ### Q4: Pre-settled lifecycle-action handling
 **Context**: FR-002 says `bootstrap-complete` MUST NOT auto-start the VS Code tunnel pre-settled. FR-005 says a `vscode-tunnel-start` request during the pre-settled window MUST NOT attempt device-code auth (and MAY re-emit `starting` on settle). Neither FR pins the **response** contract to the caller, nor whether the request is discarded, deferred, or queued. This determines UI behavior on retries and how the cloud reasons about lifecycle POST results.
@@ -43,7 +43,7 @@
 - C: **Accept-no-op**: Return 200; do nothing; caller must re-issue after settle. UI drives everything via metadata.
 - D: Split behavior — `bootstrap-complete` gets one treatment (e.g., always defer, since it's system-triggered), `vscode-tunnel-start` gets another (e.g., refuse, since it's user-driven and the UI is expected to gate on FR-003).
 
-**Answer**: *Pending*
+**Answer**: A — Defer-and-fire, unified for both the `bootstrap-complete` auto-start and the user-initiated `vscode-tunnel-start` paths. A request arriving before the settled marker exists returns 200 with `{ deferred: true }`, installs a one-shot watcher on the marker, and fires the real `tunnelManager.start()` once it appears; idempotent — multiple deferred requests collapse to a single pending start. Rationale: belt-and-suspenders behind the FR-003 UI gate; subsumes FR-002 (auto-start simply becomes deferred rather than suppressed) and satisfies FR-005's "MAY re-emit `starting` on settle"; and it avoids inventing a new error code — the `ControlPlaneError` enum (control-plane/src/errors.ts) has no 409/CONFLICT, which a refuse-path (B) would require adding.
 
 ### Q5: Cluster-image variants in scope
 **Context**: Root cause explicitly names both `cluster-microservices/.devcontainer/generacy/scripts/entrypoint-post-activation.sh` **and** `cluster-base` as sources of the self-restart. The FR set is silent on which variant(s) must ship the fix. Wizard-provisioned clusters (the failure mode #1009 was reported on) currently run one of these variants selected via `CLUSTER_VARIANT`. Companion cluster-image PRs may or may not be required alongside the generacy-repo fix.
@@ -54,4 +54,4 @@
 - C: **Only `cluster-base`** (base is the default wizard variant).
 - D: **Neither** — the generacy repo alone owns the fix (e.g., orchestrator startup writes its own marker; no entrypoint changes needed on either image).
 
-**Answer**: *Pending*
+**Answer**: D — The generacy repo alone owns the fix. Under Q1=A the marker is already written by the existing cluster-image entrypoint in BOTH variants, so the orchestrator only needs to READ `/var/lib/generacy/post-activation-restart-done` (on the `generacy-data` volume, already mounted) and surface the bit per Q2/Q3 — no companion cluster-base or cluster-microservices PR is required. (Revisit only if a future change adopts Q1=B, which would move the write into both entrypoints.)
