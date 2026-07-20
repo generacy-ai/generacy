@@ -92,21 +92,11 @@ This one is distinct: the auth **succeeds** but is destroyed by the post-activat
 
 ## Assumptions
 
-- **Marker write mechanism (Q1)**: `entrypoint-post-activation.sh` in both `cluster-base` and `cluster-microservices` already writes `/var/lib/generacy/post-activation-restart-done` immediately before issuing `docker restart "$self_container"` on itself ("Wrote restart marker" log line). The sub-second window between the marker write and the SIGTERM is covered by the Q4 defer-and-fire handler. No cluster-image change is required.
-- **Local-cluster fallback (Q1)**: On non-wizard / local `generacy launch` clusters, `post-activation-complete` is never written and no self-restart ever runs. The readiness bit MUST treat this as already-settled — computed as `restart-done present OR post-activation-complete absent` — otherwise the tunnel button would be permanently ungated on local clusters.
-- **Marker volume**: `/var/lib/generacy/` is on the `generacy-data` volume, already mounted into the orchestrator container; no compose change is needed to READ the marker.
-- **Readiness surface (Q2)**: The bit is exposed the same way `codeServerReady` (#586/#596) and `controlPlaneReady` (#624) are: `/health` reads it via a filesystem check (`fs.existsSync`/`fs.stat`), `RelayBridge.collectMetadata()` reads it the same way, and a one-shot `fs.watch` installed at boot (only if the marker is not already present) fires `sendMetadata()` when it appears — giving seconds-latency propagation instead of waiting for the 60s heartbeat.
-- **Wire field name (Q3)**: `postActivationReady` on `ClusterMetadataPayload` (types/relay.ts, types/api.ts) and on the `/health` response, parallel to `codeServerReady` / `controlPlaneReady`. Deliberately decoupled from the marker filename so the cross-repo wire contract is stable if the write mechanism ever changes.
-- **Pre-settled lifecycle-action handling (Q4)**: Both `bootstrap-complete` (auto-start path) and `vscode-tunnel-start` (user-initiated path) use the same defer-and-fire treatment in the control-plane. Requests arriving before the settled marker exists return `200` with `{ deferred: true }`, install a one-shot marker watcher, and fire `tunnelManager.start()` exactly once when the marker appears. Multiple deferred requests collapse to a single pending start (idempotent). This is belt-and-suspenders behind the FR-003 UI gate and avoids adding a new 409/CONFLICT variant to the `ControlPlaneError` enum (control-plane/src/errors.ts).
-- **Scope (Q5)**: This fix ships entirely in the `generacy` repo. Both cluster-image variants already write the marker via their existing entrypoints; the orchestrator only needs to READ it. Companion cluster-base and cluster-microservices PRs are NOT required.
-- **Companion cloud change**: The generacy-cloud UI/API must consume the new `postActivationReady` field to gate the "Connect with VS Code Desktop" button (FR-003). That change ships separately in the generacy-cloud repo and is out of scope for this issue.
+- [Assumption 1]
 
 ## Out of Scope
 
-- Companion changes to `cluster-base` and `cluster-microservices` entrypoints (Q5 = D — not required).
-- Cloud-side UI/API wiring that consumes `postActivationReady` to gate the tunnel button (separate generacy-cloud issue).
-- Recovery flow for existing broken clusters where a mid-restart auth already destroyed `token.json` (documented manual recovery in spec §Evidence is sufficient for now).
-- Adding a 409/CONFLICT variant to the `ControlPlaneError` enum (rejected under Q4 = A in favor of `{ deferred: true }`).
+- [Exclusion 1]
 
 ---
 
