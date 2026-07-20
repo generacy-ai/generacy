@@ -23,6 +23,13 @@ vi.mock('../src/services/wizard-env-writer.js', () => ({
     .mockResolvedValue({ written: ['github-app'], failed: [], hasGitHubToken: true }),
 }));
 
+// Default: cluster has settled post-activation (matches unit test host with no
+// /var/lib/generacy/cluster-api-key file). Individual tests override to `false`
+// to exercise the pre-restart gate introduced in #1009.
+vi.mock('../src/services/post-activation-settled.js', () => ({
+  isPostActivationSettledSync: vi.fn(() => true),
+}));
+
 function createMockReq(method: string, url: string) {
   return { method, url, headers: {} } as unknown as http.IncomingMessage;
 }
@@ -171,6 +178,83 @@ describe('lifecycle vscode-tunnel actions', () => {
         accepted: true,
         action: 'bootstrap-complete',
         sentinel: '/tmp/generacy-bootstrap-complete',
+      });
+    });
+  });
+
+  // Post-activation-settled gate (#1009): tunnel start must be deferred when
+  // the cluster is still in its pre-restart window.
+  describe('post-activation-settled gate', () => {
+    it('vscode-tunnel-start returns skip response when NOT settled', async () => {
+      const { isPostActivationSettledSync } = await import(
+        '../src/services/post-activation-settled.js'
+      );
+      vi.mocked(isPostActivationSettledSync).mockReturnValueOnce(false);
+
+      const req = createMockReq('POST', '/lifecycle/vscode-tunnel-start');
+      const res = createMockRes();
+
+      await handlePostLifecycle(req, res, actor, { action: 'vscode-tunnel-start' });
+
+      expect(tunnelManager.start).not.toHaveBeenCalled();
+      expect((res as any).statusCode).toBe(200);
+      const body = JSON.parse((res as any).body);
+      expect(body).toEqual({
+        accepted: false,
+        action: 'vscode-tunnel-start',
+        deferred: false,
+        reason: 'post-activation-not-settled',
+        message: 'Cluster is still starting up; retry once postActivationReady is true',
+      });
+    });
+
+    it('bootstrap-complete skips step (d) tunnel start when NOT settled but still writes sentinel + starts code-server', async () => {
+      const { isPostActivationSettledSync } = await import(
+        '../src/services/post-activation-settled.js'
+      );
+      vi.mocked(isPostActivationSettledSync).mockReturnValueOnce(false);
+      const { writeFile } = await import('node:fs/promises');
+
+      const req = createMockReq('POST', '/lifecycle/bootstrap-complete');
+      const res = createMockRes();
+
+      await handlePostLifecycle(req, res, actor, { action: 'bootstrap-complete' });
+
+      expect(writeFile).toHaveBeenCalledWith(
+        '/tmp/generacy-bootstrap-complete',
+        '',
+        { flag: 'w' },
+      );
+      expect(tunnelManager.start).not.toHaveBeenCalled();
+      expect((res as any).statusCode).toBe(200);
+      const body = JSON.parse((res as any).body);
+      expect(body).toEqual({
+        accepted: true,
+        action: 'bootstrap-complete',
+        sentinel: '/tmp/generacy-bootstrap-complete',
+      });
+    });
+
+    it('bootstrap-complete without github token — awaiting-credentials path unchanged (regression guard)', async () => {
+      const { writeWizardEnvFile } = await import('../src/services/wizard-env-writer.js');
+      vi.mocked(writeWizardEnvFile).mockResolvedValueOnce({
+        written: [],
+        failed: [],
+        hasGitHubToken: false,
+      });
+
+      const req = createMockReq('POST', '/lifecycle/bootstrap-complete');
+      const res = createMockRes();
+
+      await handlePostLifecycle(req, res, actor, { action: 'bootstrap-complete' });
+
+      expect(tunnelManager.start).not.toHaveBeenCalled();
+      expect((res as any).statusCode).toBe(200);
+      const body = JSON.parse((res as any).body);
+      expect(body).toEqual({
+        accepted: true,
+        action: 'bootstrap-complete',
+        sentinel: null,
       });
     });
   });

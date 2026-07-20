@@ -266,6 +266,14 @@ export interface ClusterMetadataPayload {
   /** Whether the control-plane Unix socket is accepting connections */
   controlPlaneReady?: boolean;
 
+  /**
+   * Whether the cluster has settled after the post-activation self-restart
+   * (or was never going to restart — local `generacy launch` clusters). When
+   * `false`, callers should defer starting the VS Code tunnel to avoid
+   * racing SIGTERM.
+   */
+  postActivationReady?: boolean;
+
   /** Init results from the control-plane daemon (read from init-result.json) */
   initResult?: {
     stores: Record<string, 'ok' | 'fallback' | 'disabled'>;
