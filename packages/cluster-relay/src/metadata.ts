@@ -24,6 +24,7 @@ export async function collectMetadata(
     uptime: health.uptime,
     codeServerReady: health.codeServerReady,
     controlPlaneReady: health.controlPlaneReady,
+    postActivationReady: health.postActivationReady,
   };
 
   if (health.displayName) {
@@ -42,6 +43,7 @@ interface HealthData {
   uptime: number;
   codeServerReady: boolean;
   controlPlaneReady: boolean;
+  postActivationReady: boolean;
   displayName?: string;
   clusterId?: string;
 }
@@ -59,6 +61,7 @@ async function fetchHealth(config: RelayConfig): Promise<HealthData> {
         uptime: Number(data['uptime'] ?? 0),
         codeServerReady: data['codeServerReady'] === true,
         controlPlaneReady: data['controlPlaneReady'] === true,
+        postActivationReady: data['postActivationReady'] === true,
       };
       if (typeof data['displayName'] === 'string') {
         result.displayName = data['displayName'];
@@ -71,7 +74,7 @@ async function fetchHealth(config: RelayConfig): Promise<HealthData> {
   } catch {
     // Orchestrator unreachable — use defaults
   }
-  return { version: '0.0.0', channel: 'stable', uptime: 0, codeServerReady: false, controlPlaneReady: false };
+  return { version: '0.0.0', channel: 'stable', uptime: 0, codeServerReady: false, controlPlaneReady: false, postActivationReady: false };
 }
 
 interface MetricsData {

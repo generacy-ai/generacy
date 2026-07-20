@@ -214,6 +214,7 @@ export const HealthResponseSchema = z.object({
   version: z.string(),
   codeServerReady: z.boolean().optional(),
   controlPlaneReady: z.boolean().optional(),
+  postActivationReady: z.boolean().optional(),
   displayName: z.string().optional(),
   clusterId: z.string().optional(),
   githubAuth: GitHubAuthSnapshotSchema.optional(),

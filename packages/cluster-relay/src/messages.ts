@@ -116,6 +116,7 @@ export interface ClusterMetadata {
   uptime: number;
   codeServerReady?: boolean;
   controlPlaneReady?: boolean;
+  postActivationReady?: boolean;
   displayName?: string;
   clusterId?: string;
 }

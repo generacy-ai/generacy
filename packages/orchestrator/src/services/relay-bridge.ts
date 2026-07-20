@@ -37,6 +37,7 @@ import type { StatusReporter } from './status-reporter.js';
 import { readFile } from 'node:fs/promises';
 import { probeCodeServerSocket } from './code-server-probe.js';
 import { probeControlPlaneSocket } from './control-plane-probe.js';
+import { isPostActivationSettledSync } from './post-activation-settled-probe.js';
 import {
   clearRetainedTunnelEvent,
   getRetainedTunnelEvent,
@@ -708,6 +709,7 @@ export class RelayBridge {
       probeCodeServerSocket(),
       probeControlPlaneSocket(),
     ]);
+    const postActivationReady = isPostActivationSettledSync();
 
     const metadata: ClusterMetadataPayload = {
       version: this.getVersion(),
@@ -717,6 +719,7 @@ export class RelayBridge {
       reportedAt: new Date().toISOString(),
       codeServerReady,
       controlPlaneReady,
+      postActivationReady,
     };
 
     if (this.cluster?.displayName) {

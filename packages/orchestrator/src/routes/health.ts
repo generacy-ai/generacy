@@ -3,6 +3,7 @@ import type { HealthResponse, HealthStatus, ServiceStatus } from '../types/index
 import type { GitHubAuthSnapshot } from '../types/github-auth.js';
 import { probeCodeServerSocket } from '../services/code-server-probe.js';
 import { probeControlPlaneSocket } from '../services/control-plane-probe.js';
+import { isPostActivationSettledSync } from '../services/post-activation-settled-probe.js';
 import { resolveOrchestratorVersion } from '../services/orchestrator-version.js';
 
 /**
@@ -86,6 +87,7 @@ export async function setupHealthRoutes(
               version: { type: 'string' },
               codeServerReady: { type: 'boolean' },
               controlPlaneReady: { type: 'boolean' },
+              postActivationReady: { type: 'boolean' },
               smeeConfigured: { type: 'boolean' },
               displayName: { type: 'string' },
               clusterId: { type: 'string' },
@@ -104,6 +106,7 @@ export async function setupHealthRoutes(
               version: { type: 'string' },
               codeServerReady: { type: 'boolean' },
               controlPlaneReady: { type: 'boolean' },
+              postActivationReady: { type: 'boolean' },
               smeeConfigured: { type: 'boolean' },
               displayName: { type: 'string' },
               clusterId: { type: 'string' },
@@ -140,6 +143,7 @@ export async function setupHealthRoutes(
         probeCodeServerSocket(),
         probeControlPlaneSocket(),
       ]);
+      const postActivationReady = isPostActivationSettledSync();
 
       const response: HealthResponse = {
         status: overallStatus,
@@ -148,6 +152,7 @@ export async function setupHealthRoutes(
         version: resolvedVersion,
         codeServerReady,
         controlPlaneReady,
+        postActivationReady,
       };
 
       if (options.smeeConfigured !== undefined) {
