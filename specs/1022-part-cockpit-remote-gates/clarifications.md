@@ -19,7 +19,7 @@ Branch: `1022-part-cockpit-remote-gates`
 - B: `transport` for network/5xx, add new `cloud-inactive` class for the not-cloud-activated case (two-way distinction the skill can dispatch on)
 - C: Collapse both under a new dedicated class `gate-cloud-unavailable` (single matchable class, but disjoint from other transports)
 
-**Answer**: *Pending*
+**Answer**: A — Reuse the existing `transport` ErrorClass for both cloud-unavailability modes (orchestrator-unreachable/network/5xx and cluster-not-cloud-activated). Rationale: `auto.md` falls back to local `AskUserQuestion` on any gate-open error, so a two-way distinction unlocks no skill behavior; `transport` already exists and is already the class emitted for orchestrator-unreachable (CockpitExit code 1 → transport), so reuse matches convention and adds no unused surface.
 
 ---
 
@@ -34,7 +34,7 @@ Branch: `1022-part-cockpit-remote-gates`
 - B: Thread a `orchestratorBaseUrl` field through `BuildMcpServerDeps` and `startMcp()` options, populated at bootstrap from the same env var — matches the existing MCP-server injection convention
 - C: Both — options-bag override with env-var fallback (env is default; options bag lets tests inject without shimming `process.env`)
 
-**Answer**: *Pending*
+**Answer**: C — Both: options-bag override with env-var fallback — `options.orchestratorUrl ?? process.env.ORCHESTRATOR_URL ?? 'http://127.0.0.1:3100'`. Rationale: This is the exact shape the cited in-cluster caller (`worker-scaler.ts:345`) uses, so it is what "consistent with existing in-cluster callers" (FR-006) actually means; it honors the MCP injection convention (`BuildMcpServerDeps`) and lets unit tests inject the URL without shimming `process.env`.
 
 ---
 
@@ -49,7 +49,7 @@ Branch: `1022-part-cockpit-remote-gates`
 - B: Add public CLI verbs — preserves invariant #1 uniformly, at the cost of a barely-usable UX (operators would hand-type a full gate record)
 - C: Add hidden/`--internal` CLI verbs — invariant preserved for internal testing/debugging without polluting `--help`
 
-**Answer**: *Pending*
+**Answer**: A — Skip CLI verbs: MCP-tool-only pair; document the exception to design invariant #1 in `server.ts`. Rationale: Invariant #1 exists because the other 12 tools wrap independently-useful CLI verbs; these two are thin HTTP clients of the orchestrator's localhost gate routes with no standalone operator use. Mocked-orchestrator unit tests cover them, so hidden verbs are redundant and public verbs ship barely-usable UX.
 
 ---
 
@@ -64,7 +64,7 @@ Branch: `1022-part-cockpit-remote-gates`
 - B: 400 → `invalid-args`; 404 → new `unknown-gate` class (already in `ErrorClass` union at `mcp/errors.ts:18`); 409 → `invalid-args`; other 4xx → `internal`
 - C: All 4xx → `internal` (the tool's pre-flight validation should have prevented 4xx entirely, so any 4xx is an unexpected orchestrator/tool disagreement)
 
-**Answer**: *Pending*
+**Answer**: B — 400 → `invalid-args`; 404 → `unknown-gate` (already in ErrorClass); 409 → `invalid-args`; other 4xx → `internal`. Rationale: The codebase already commits to granular reason-based mapping (the #928 `toMcpResult` table, marked "Q4 → B"), and `unknown-gate` already exists and is exactly a 404-on-gate-ack, so B reuses established classes while preserving the bug(400)/semantic(404)/conflict(409) distinctions that collapsing would discard.
 
 ---
 
@@ -79,4 +79,4 @@ Branch: `1022-part-cockpit-remote-gates`
 - B: `COCKPIT_GATE_TIMEOUT_MS` env override with 5s default (5000); read at request time
 - C: Options-bag argument on `startMcp()` with 5s default; no env var (matches Q2 option B if chosen)
 
-**Answer**: *Pending*
+**Answer**: C — Options-bag argument on `startMcp()` with a 5s default and no env var. Rationale: Coherent with Q2's options-bag seam — base URL and timeout thread through the same `BuildMcpServerDeps`/`startMcp()` options, giving tests one injection surface with no fake-timer 5s waits (which hardcoding forces); Assumption #6 calls the concrete value an impl detail, arguing against an operational env knob for a timeout with no per-deployment tuning need.
