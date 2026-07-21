@@ -8,6 +8,10 @@
 import { z } from 'zod';
 import { listGates } from '../gate-vocabulary.js';
 import { SESSION_ID_REGEX } from './claim/payload.js';
+import {
+  GateRecordSchema as InternalGateRecordSchema,
+  GateAckInputSchema as InternalGateAckInputSchema,
+} from './gates/schemas.js';
 
 /** Structured issue/epic reference. */
 export const IssueRefObjectSchema = z
@@ -182,3 +186,15 @@ export const CockpitRelayClarifyAnswersInputSchema = z
 export type CockpitRelayClarifyAnswersInput = z.infer<
   typeof CockpitRelayClarifyAnswersInputSchema
 >;
+
+/**
+ * #1022 — remote-gate MCP-boundary schemas. Re-exported from
+ * `./gates/schemas.ts` so the tool handlers (and the parity/audit tests)
+ * consume a stable public-import surface. Wire contracts owned by the epic —
+ * see `contracts/cockpit_gate_open.md`.
+ */
+export const CockpitGateOpenInputSchema = InternalGateRecordSchema;
+export type CockpitGateOpenInput = z.infer<typeof CockpitGateOpenInputSchema>;
+
+export const CockpitGateAckInputSchema = InternalGateAckInputSchema;
+export type CockpitGateAckInput = z.infer<typeof CockpitGateAckInputSchema>;

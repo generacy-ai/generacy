@@ -24,6 +24,8 @@ import { cockpitScopeRemove } from './tools/cockpit_scope_remove.js';
 import { cockpitRelayClarifyAnswers } from './tools/cockpit_relay_clarify_answers.js';
 import { cockpitClaim } from './tools/cockpit_claim.js';
 import { cockpitRelease } from './tools/cockpit_release.js';
+import { cockpitGateOpen } from './tools/cockpit_gate_open.js';
+import { cockpitGateAck } from './tools/cockpit_gate_ack.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -36,11 +38,23 @@ import {
   CockpitRelayClarifyAnswersInputSchema,
   CockpitClaimInputSchema,
   CockpitReleaseInputSchema,
+  CockpitGateOpenInputSchema,
+  CockpitGateAckInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
 export interface BuildMcpServerDeps {
   runner?: CommandRunner;
+  /**
+   * #1022 — remote-gate tools only. Base URL of the in-cluster orchestrator.
+   * Precedence: arg > `$ORCHESTRATOR_URL` > `http://127.0.0.1:3100` (resolved in
+   * `gates/options.ts`, not here).
+   */
+  orchestratorUrl?: string;
+  /** #1022 — per-request HTTP timeout in ms for remote-gate tools. Default 5000. */
+  orchestratorTimeoutMs?: number;
+  /** #1022 — test-only fetch override for remote-gate tools. Production leaves undefined. */
+  fetchImpl?: typeof fetch;
 }
 
 function toCallToolResult<T>(result: ToolResult<T>): CallToolResult {
@@ -175,6 +189,37 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
       inputSchema: AwaitEventsInputSchema,
     },
     async (args) => toCallToolResult(await cockpitAwaitEvents(args as never, deps)),
+  );
+
+  // #1022 — Design-invariant-#1 exception (Q3 → A):
+  //
+  // The other 12 cockpit MCP tools wrap standalone `generacy cockpit <verb>`
+  // CLI commands so an operator can drive them by hand. `cockpit_gate_open`
+  // and `cockpit_gate_ack` intentionally do NOT ship a `generacy cockpit
+  // gate-open|gate-ack` CLI twin: they are only meaningful inside an active
+  // `/cockpit:auto` session (opening a gate outside that ledger is a bug, not
+  // a feature). Mocked-orchestrator unit tests cover the same code paths a
+  // CLI twin would exercise (see gates/__tests__/client.test.ts and the
+  // parity-gate-*.test.ts suites). See spec.md § "Clarified decisions" and
+  // research.md R8 for the full rationale.
+  server.registerTool(
+    'cockpit_gate_open',
+    {
+      description:
+        "Open a remote gate on the orchestrator so it surfaces in the generacy.ai operator inbox. Thin HTTP client; cluster-not-cloud-activated and network failures collapse to class:'transport' for the local AskUserQuestion fallback.",
+      inputSchema: CockpitGateOpenInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateOpen(args, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_gate_ack',
+    {
+      description:
+        "Ack a previously-opened gate with an outcome (e.g. 'approved'/'rejected'). Thin HTTP client over POST /cockpit/gates/:id/ack.",
+      inputSchema: CockpitGateAckInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitGateAck(args, deps)),
   );
 
   return server;
