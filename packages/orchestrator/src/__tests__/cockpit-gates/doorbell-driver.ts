@@ -29,6 +29,14 @@ export interface DoorbellDriverOptions {
   nodeBin?: string;
   /** Path to the built generacy bin; default `<repo-root>/packages/generacy/dist/bin/generacy.js`. */
   generacyBin?: string;
+  /**
+   * Test seam: full argv override for the spawned child. When provided,
+   * this replaces `[generacyBin, 'cockpit', 'doorbell', ...extraArgs]`
+   * verbatim — useful for harness self-tests that need to swap the real
+   * doorbell binary for a synthetic child script that just proves the
+   * spawn/stop/restart mechanics. `nodeBin` is still used as the binary.
+   */
+  spawnArgv?: string[];
 }
 
 export interface DoorbellEvent {
@@ -107,14 +115,13 @@ export function createDoorbellDriver(opts: DoorbellDriverOptions): DoorbellDrive
     // set it in `env` — belt and braces.
     env.COCKPIT_ANSWERS_FILE = opts.answersFilePath;
 
-    child = spawn(
-      nodeBin,
-      [generacyBin, 'cockpit', 'doorbell', ...(opts.extraArgs ?? [])],
-      {
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+    const argv =
+      opts.spawnArgv ??
+      [generacyBin, 'cockpit', 'doorbell', ...(opts.extraArgs ?? [])];
+    child = spawn(nodeBin, argv, {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
     child.stderr?.setEncoding('utf8');
     child.stderr?.on('data', (chunk: string) => {
