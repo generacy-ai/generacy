@@ -1,169 +1,72 @@
-# Feature Specification: Cockpit gate routes, cluster.cockpit relay channel, answers-file writer
+# Feature Specification: Part of the **Cockpit Remote Gates** epic — a central operator inbox on generacy
 
 **Branch**: `1021-part-cockpit-remote-gates` | **Date**: 2026-07-21 | **Status**: Draft
-**Issue**: [generacy-ai/generacy#1021](https://github.com/generacy-ai/generacy/issues/1021)
-**Design doc**: [cockpit-remote-gates-plan.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/cockpit-remote-gates-plan.md)
-**Epic**: Cockpit Remote Gates (tracked in `generacy-ai/generacy-cloud`)
 
 ## Summary
 
-Cluster-side plumbing for the Cockpit Remote Gates operator inbox: the orchestrator
-gains three localhost/relay routes (`POST /cockpit/gates`, `POST /cockpit/gates/:id/ack`,
-`POST /cockpit/answers`), a new allow-listed `cluster.cockpit` relay-event channel with
-retain-and-replay across disconnects, and an append-only NDJSON answers file at
-`/workspaces/.generacy/cockpit/answers.ndjson`. This is Phase 1 (P1) of the epic — the
-substrate the MCP `cockpit_gate_open` / `cockpit_gate_ack` tools, the doorbell answers-
-file tail, and the cloud-side gates collection all depend on.
-
-Wire contracts are frozen in the design doc. This issue implements them as written; any
-contract change ships as an amendment on the epic first.
+Part of the **Cockpit Remote Gates** epic — a central operator inbox on generacy.ai for answering `/cockpit:auto` human gates so the driving session never blocks. Epic tracking issue: generacy-ai/generacy-cloud (see epic for phase ordering). Full design and **wire contracts** (gate record, answer NDJSON line, outcome ack, gateId/generation rules): [cockpit-remote-gates-plan.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/cockpit-remote-gates-plan.md). Implement against the contracts as written; propose contract changes on the epic before diverging.
 
 ## Context
 
-`/cockpit:auto` today surfaces every human gate as an in-session `AskUserQuestion`,
-which blocks the driving conversation while other issues' doorbell events pile up. The
-Remote Gates epic moves gate answering to a central operator inbox on generacy.ai so
-the session keeps dispatching. Answers must ride the API-key-authenticated relay
-WebSocket in both directions — the unauthenticated smee.io channel is never used for
-gate content or answers (anyone with the smee URL could otherwise inject an "approve
-merge").
+The orchestrator is the cluster-side hub: the in-session MCP server posts gates to it over localhost; generacy-cloud pushes answers down to it over the authenticated relay WebSocket (`api_request`). The unauthenticated smee channel is **never** used for gate content or answers.
 
-The orchestrator is the cluster-side hub: the in-session cockpit MCP server posts gates
-to it over localhost; generacy-cloud pushes answers down to it as relay-proxied
-`api_request`s. This spec covers only the orchestrator's half — the MCP tools that
-call these routes (Phase 1 issue #3), the doorbell that tails the answers file
-(Phase 1 issue #4), and the cloud side (Phase 2/3) are separate work.
+## Scope
 
-The `cluster.cockpit` channel joins the five existing allow-listed channels in
-`packages/orchestrator/src/routes/internal-relay-events.ts` (`cluster.vscode-tunnel`,
-`cluster.audit`, `cluster.credentials`, `cluster.bootstrap`, `cluster.identity-split`).
-Retain-and-replay follows the `cluster.vscode-tunnel` pattern in `retained-tunnel-event.ts`
-— events emitted while the relay is disconnected are held in-memory and re-sent on
-handshake so the cloud never misses a gate open/ack. The answers-file location mirrors
-the smee-channel workspace mirror (`/workspaces/.generacy/cockpit/smee-channel`),
-placing operator answers where in-workspace consumers (the doorbell subprocess) can tail
-them.
+- `POST /cockpit/gates` and `POST /cockpit/gates/:id/ack` (localhost routes, called by the cockpit MCP server): validate against the gates schemas (`packages/cockpit/src/gates/`), then re-emit as relay `event`s on a new allow-listed channel `cluster.cockpit` (extend the `routes/internal-relay-events.ts` allow-list / emit path), with retain-and-replay while the relay is disconnected (same pattern as `cluster.vscode-tunnel`).
+- `POST /cockpit/answers` (relay-proxied `api_request` from cloud): validate GateAnswer, dedup by `deliveryId`, append one NDJSON line to the **answers file** `/workspaces/.generacy/cockpit/answers.ndjson` (0644, append-only, parent dir created like the smee-channel workspace mirror), with size-capped rotation that tailing consumers can tolerate.
+- Malformed payloads: 400 + structured log; never partially written lines (write line atomically).
+
+## Out of scope
+
+MCP tools (separate issue); doorbell tailing (separate issue); cloud side.
+
+## Acceptance criteria
+
+- Gate open/ack observed as `cluster.cockpit` relay events, including after a disconnect/reconnect (replay).
+- Duplicate `deliveryId` appends exactly once; answers file rotation covered by tests.
+- Invalid GateAnswer rejected with 400 and logged; nothing written.
+
+## Clarified decisions
+
+Resolved in [clarifications.md](./clarifications.md) — implement against these; changes go back through clarify.
+
+- **Retain-and-replay for `cluster.cockpit` (Q1 → A)**: single ordered FIFO over all `cluster.cockpit` events, bounded by count/bytes per FR-014, drop-oldest with a warn log. No per-event dedup — the cloud upserts by `gateId`. `vscode-tunnel`'s single-slot logic is NOT reused; ordering across gate-open / ack pairs is guaranteed by insertion order.
+- **Answers-file rotation retention (Q2 → A)**: keep N most-recent rotated files (default N=3, configurable via env var, e.g. `COCKPIT_ANSWERS_ROTATION_KEEP`); on rotation, promote `.N-1` → `.N` and unlink `.N`. Disk footprint ~N × threshold.
+- **`deliveryId` cross-restart dedup (Q3 → A)**: on boot, rebuild the in-memory dedup set by scanning `answers.ndjson` (current file only). Rotated siblings are NOT scanned. The reader (doorbell / cloud replay) is authoritative for cross-restart dedup; the writer only suppresses reconnect-redelivery duplicates targeting recent answers. No sidecar file.
+- **Localhost enforcement for gate routes (Q4 → C)**: reuse the existing `apiKeyStore` auth pattern with a new `COCKPIT_INTERNAL_API_KEY` env var — the in-cluster MCP reads it from a shared file (same shape as `ORCHESTRATOR_INTERNAL_API_KEY` per #598). `/cockpit/gates*` and `/cockpit/answers` MUST NOT be added to `skipRoutes`; the existing `authMiddleware` covers them by default. No separate Unix socket, no loopback IP guard (relay-proxied cloud calls also arrive on `127.0.0.1`).
+- **Relay routing for `POST /cockpit/answers` (Q5 → A)**: no new route entry in `initializeRelayBridge()` — the dispatcher's implicit `orchestratorUrl` fallback (`proxy.ts` forwards unmatched prefixes to `${orchestratorUrl}${request.path}` with the full path preserved) already delivers `/cockpit/answers` to the orchestrator. Fastify registers the route as `/cockpit/answers` (not `/answers`).
 
 ## User Stories
 
-### US1 — Driving session posts a gate without blocking
+### US1: [Primary User Story]
 
-**As** the cockpit MCP server running inside a `/cockpit:auto` session,
-**I want** to POST a gate record to `/cockpit/gates` on the orchestrator and get an
-immediate 2xx back,
-**So that** the session can register the gate with the cloud inbox and return to its
-dispatch loop instead of blocking on `AskUserQuestion`.
+**As a** [user type],
+**I want** [capability],
+**So that** [benefit].
 
-**Acceptance**:
-- [ ] `POST /cockpit/gates` with a valid `GateRecord` returns 2xx synchronously and
-  emits a `cluster.cockpit` relay event carrying the record.
-- [ ] `POST /cockpit/gates/:id/ack` with a valid `GateOutcomeAck` returns 2xx and
-  emits a `cluster.cockpit` outcome event.
-- [ ] Malformed payloads return 400 with a structured log line; no relay event is
-  emitted.
-
-### US2 — Cloud pushes an answer down and the session sees it exactly once
-
-**As** generacy-cloud (via the authenticated relay `api_request` transport),
-**I want** to POST a `GateAnswer` to `/cockpit/answers` on the target cluster's
-orchestrator,
-**So that** the answer lands in the workspace answers file where the doorbell tail
-picks it up and re-injects it into the session — even if the same answer is delivered
-twice.
-
-**Acceptance**:
-- [ ] Valid `GateAnswer` returns 2xx and appends exactly one NDJSON line to
-  `/workspaces/.generacy/cockpit/answers.ndjson` (parent dir created if missing, mode
-  0644).
-- [ ] Second delivery with the same `deliveryId` returns 2xx but writes nothing.
-- [ ] Invalid `GateAnswer` returns 400 with structured log; the file is untouched.
-
-### US3 — Gate events survive a relay disconnect
-
-**As** the operator watching the generacy.ai inbox,
-**I want** gate open/ack events emitted during a relay outage to arrive at the cloud as
-soon as the cluster reconnects,
-**So that** I never miss a gate because the WebSocket briefly dropped.
-
-**Acceptance**:
-- [ ] Emitting a `cluster.cockpit` event while `relay.isConnected === false` retains
-  it in-memory (same pattern as `cluster.vscode-tunnel`).
-- [ ] On the next successful relay handshake, retained events are re-sent in order
-  before any new event on the channel.
+**Acceptance Criteria**:
+- [ ] [Criterion 1]
+- [ ] [Criterion 2]
 
 ## Functional Requirements
 
-| ID     | Requirement                                                                                                                                                       | Priority | Notes |
-|--------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------|
-| FR-001 | Register `POST /cockpit/gates` on the orchestrator's public Fastify instance (localhost-callable by the in-cluster MCP server; no auth beyond the socket boundary). | P1       | Body: `GateRecord` from `packages/cockpit/src/gates/`. |
-| FR-002 | Register `POST /cockpit/gates/:id/ack`; body validated as `GateOutcomeAck`; `:id` must match `body.gateId`.                                                       | P1       | Mismatch → 400. |
-| FR-003 | Register `POST /cockpit/answers` reachable via the relay `api_request` path prefix; body validated as `GateAnswer`.                                                | P1       | Cloud dispatches via `RequestRouter.routeRequest`. |
-| FR-004 | Extend `ALLOWED_CHANNELS` in `routes/internal-relay-events.ts` to include `cluster.cockpit`.                                                                       | P1       | Gates and acks emit through this channel. |
-| FR-005 | Retain-and-replay for `cluster.cockpit` when `relay.isConnected === false`, following the `cluster.vscode-tunnel` pattern in `retained-tunnel-event.ts`.           | P1       | Preserve emission order; re-send on handshake. |
-| FR-006 | Import + reuse the `GateRecord`, `GateOutcomeAck`, and `GateAnswer` zod schemas from `packages/cockpit/src/gates/` (Phase 1 issue #1's contracts module).           | P1       | Do not redeclare shapes. Depends on the contracts issue landing first. |
-| FR-007 | `POST /cockpit/answers` deduplicates by `deliveryId`; second delivery of the same id returns 2xx and writes nothing.                                              | P1       | Dedup state may be persisted alongside the answers file to survive orchestrator restarts. |
-| FR-008 | Answers file path is `/workspaces/.generacy/cockpit/answers.ndjson`, mode 0644, append-only. Parent directory created on first write.                              | P1       | Matches the smee-channel workspace mirror. |
-| FR-009 | Each answer is written as exactly one NDJSON line, atomically (no partially written lines even under crash or concurrent writes).                                  | P1       | Serialize writes; write full line + `\n` in one syscall (or via a mutex). |
-| FR-010 | Size-capped rotation: when the file exceeds a configured threshold, rotate to a numbered sibling (e.g. `answers.ndjson.1`); tailing consumers must tolerate rotation. | P1       | Rotation covered by tests. |
-| FR-011 | Malformed payloads on any of the three routes return HTTP 400 with a structured `pino` warn/error log; nothing is written or emitted.                             | P1       | No partially applied side effects. |
-| FR-012 | On successful gate open/ack, the emitted relay event uses the `{ type: 'event', event: 'cluster.cockpit', data: <payload>, timestamp }` wire shape (as fixed in #600). | P1       | Same envelope as other `cluster.*` channels. |
-| FR-013 | The answers file must never contain secrets; malformed input never reaches the file (validated first).                                                            | P1       | Defense in depth for the workspace-visible mirror. |
-| FR-014 | Retained-event storage bounds memory: cap retained-event count/bytes and drop-oldest with a warn log when exceeded.                                               | P2       | Prevents unbounded growth if the relay stays down for hours. |
+| ID | Requirement | Priority | Notes |
+|----|-------------|----------|-------|
+| FR-001 | [Description] | P1 | |
 
 ## Success Criteria
 
-| ID     | Metric                                                                                                                       | Target                                | Measurement |
-|--------|-------------------------------------------------------------------------------------------------------------------------------|---------------------------------------|-------------|
-| SC-001 | Gate open observed as a `cluster.cockpit` event on the relay after `POST /cockpit/gates` returns 2xx.                         | 100 %                                 | Integration test with a fake relay peer. |
-| SC-002 | Gate ack observed as a `cluster.cockpit` event on the relay after `POST /cockpit/gates/:id/ack` returns 2xx.                  | 100 %                                 | Integration test. |
-| SC-003 | Gate open/ack emitted during a relay outage arrive at the fake peer in order after reconnect.                                | 100 %                                 | Integration test toggling `relay.isConnected`. |
-| SC-004 | Duplicate `deliveryId` on `POST /cockpit/answers` appends exactly one NDJSON line total.                                     | 100 % (0 double-appends across N=1000 duplicates) | Unit + integration test. |
-| SC-005 | Answers file rotates when the size cap is crossed and the tail resumes on the new file without dropping in-flight answers.   | 0 drops in the rotation test          | Rotation-specific test. |
-| SC-006 | Invalid `GateRecord` / `GateOutcomeAck` / `GateAnswer` payload returns 400, produces a structured log line, and leaves the answers file and retained-event store untouched. | 100 %              | Table-driven negative tests. |
-| SC-007 | Zero cross-package leakage: gate schemas live in `packages/cockpit/src/gates/` and are imported by the orchestrator (no local re-declarations). | 100 %                | Grep test in CI. |
+| ID | Metric | Target | Measurement |
+|----|--------|--------|-------------|
+| SC-001 | [Metric] | [Target] | [How to measure] |
 
 ## Assumptions
 
-- The `packages/cockpit/src/gates/` contracts module (Phase 1 issue #1) lands before or
-  alongside this issue; the orchestrator imports its zod schemas rather than
-  re-declaring shapes.
-- The `POST /cockpit/answers` route is reachable via the existing relay path-prefix
-  dispatcher pattern (same mechanism as `/control-plane/*` per #574 and
-  `/code-server/*` per #586). If a new prefix is required, orchestrator's
-  `initializeRelayBridge()` adds a `{ prefix: '/cockpit', target: '...' }` route
-  entry.
-- The answers file's parent (`/workspaces/.generacy/cockpit/`) may not exist on first
-  boot; the writer creates it with the same permissions strategy as the smee-channel
-  mirror.
-- Retain-and-replay for `cluster.cockpit` uses the same in-memory pattern as
-  `cluster.vscode-tunnel` (module-scoped state, no persistence across orchestrator
-  restart). Cross-restart durability is provided by the cloud re-delivering answers
-  on cluster handshake (out of scope here, handled Phase 2).
-- The orchestrator process itself is authoritative for `deliveryId` dedup within a
-  single run; cross-restart dedup is provided by the append-only file (readers skip
-  already-processed lines by `deliveryId`).
-- Rotation threshold is configurable via env var with a sensible default (e.g. 10 MB).
+- [Assumption 1]
 
 ## Out of Scope
 
-- **MCP tools** `cockpit_gate_open` / `cockpit_gate_ack` — separate Phase 1 issue #3.
-- **Doorbell answers-file tail** and event-bus feed — separate Phase 1 issue #4.
-- **Cloud-side** gates Firestore collection, SSE stream, REST endpoints, respond
-  route, `RequestRouter` delivery, context endpoint, inbox UI — Phase 2/3.
-- **agency `auto.md` rework** (`--gates=ui`, D.12 dispatch, supersession validation) —
-  Phase 4.
-- **Gate schemas themselves** — Phase 1 issue #1 (`packages/cockpit/src/gates/`); this
-  issue only *consumes* them.
-- Any change to the smee-channel or doorbell paths beyond adding the new answers-file
-  mirror.
-
-## References
-
-- Design doc: [cockpit-remote-gates-plan.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/cockpit-remote-gates-plan.md) — authoritative wire contracts (§ Wire contracts) and phase ordering (§ Epic structure).
-- Retain-and-replay reference: `packages/orchestrator/src/routes/retained-tunnel-event.ts` and the `cluster.vscode-tunnel` branch in `routes/internal-relay-events.ts:54-64`.
-- Allow-list extension point: `packages/orchestrator/src/routes/internal-relay-events.ts:9-15`.
-- Relay path-prefix dispatcher pattern: `packages/cluster-relay/src/dispatcher.ts` (introduced #489), plus `initializeRelayBridge()` route registration in `packages/orchestrator/src/server.ts` (#574, #586).
-- Event wire-shape (fixed in #600): `{ type: 'event', event, data, timestamp }`.
+- [Exclusion 1]
 
 ---
 

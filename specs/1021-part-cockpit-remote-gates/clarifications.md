@@ -14,7 +14,9 @@
 - C: Two-slot pattern *literally* mirroring `vscode-tunnel` (one retained event, replaced by newer). Sacrifices multi-gate correctness — an ack for gate A followed by an open for gate B during the outage would drop the gate A ack. (Included only if the spec's "same pattern" language is taken literally.)
 - D: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — Single ordered FIFO over all `cluster.cockpit` events, bounded by count/bytes (FR-014), drop-oldest with a warn; no per-event dedup, order guaranteed by insertion.
+
+**Rationale**: `cluster.vscode-tunnel`'s single-slot is status-only and is not reused; gates are distinct transitions (open A, ack A, open B) where FR-005 order+replay and FR-014 cap are exactly FIFO semantics. Per-gateId slotting is redundant (cloud already upserts by gateId) and drops intermediate transitions; a two-slot mirror literally breaks the ack-A-then-open-B case.
 
 ---
 
@@ -29,7 +31,9 @@
 - D: Keep only the current file and one immediate predecessor (`answers.ndjson.1`); on next rotation, unlink `.1` then rename. Minimal footprint; requires the doorbell to be actively tailing.
 - E: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — Keep the N most-recent rotated files (N=3, configurable via env var); on rotation promote `.N-1`→`.N` and drop `.N`.
+
+**Rationale**: The doorbell replays unacked lines on start and must tolerate rotations that happened during its own outage; a single predecessor risks losing unacked lines across multiple rotations, while N=3 gives a safe catch-up window at ~N×threshold disk, and reader dedup by `deliveryId` makes extra retained files harmless.
 
 ---
 
@@ -44,7 +48,9 @@
 - D: In-memory only; on restart, dedup starts empty and the reader (doorbell / cloud replay strategy) is authoritative for cross-restart dedup. Matches the Assumptions text literally; makes FR-007's "may be persisted" a definite "isn't".
 - E: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — Rebuild the in-memory dedup set at boot by scanning `answers.ndjson` (current file only); rotated siblings not scanned.
+
+**Rationale**: The reader is authoritative for cross-restart dedup (readers skip processed lines by `deliveryId`); the writer only needs to suppress duplicate appends from cloud reconnect-redelivery, which targets recent answers in the current file, so scanning all rotations buys negligible coverage and a sidecar adds surface.
 
 ---
 
@@ -59,7 +65,9 @@
 - D: **No enforcement in this phase** — accept that any in-cluster caller can post gates; document the trust boundary and defer hardening to a follow-up. Matches FR-001's literal "no auth beyond the socket boundary" if the socket boundary is interpreted as the cluster boundary.
 - E: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: **C** — API-key layer: reuse the existing `apiKeyStore` pattern with a new `COCKPIT_INTERNAL_API_KEY` the in-cluster MCP reads from a shared file.
+
+**Rationale**: `/internal/relay-events` already sits behind `authMiddleware`/`apiKeyStore` (it is not in `skipRoutes`, which lists only health/metrics/webhooks), so a new `/cockpit` route inherits key auth by default; a loopback IP guard cannot distinguish MCP-localhost from relay-proxied calls because the relay reaches the orchestrator via `127.0.0.1`, and a second Unix socket is heavy for two routes.
 
 ---
 
@@ -73,6 +81,8 @@
 - C: **Explicit `/cockpit/answers` prefix → orchestrator with no strip** — a dispatcher change or a route entry that preserves the full path. Explicit and symmetric with A's Fastify path but a new dispatcher shape.
 - D: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: **A** — Implicit fallback: no route entry needed; the dispatcher's `orchestratorUrl` default catches `/cockpit/answers` with the full path preserved.
+
+**Rationale**: `proxy.ts` forwards unmatched prefixes to `${orchestratorUrl}${request.path}` (path preserved) — exactly what a self-served `/cockpit/answers` needs; `/control-plane/*` and `/code-server/*` are explicit only because they target Unix sockets and must strip the prefix. `/cockpit/*` is unclaimed, so the fallback already yields the desired behavior; an explicit prefix would force renaming the Fastify route to `/answers`.
 
 ---
