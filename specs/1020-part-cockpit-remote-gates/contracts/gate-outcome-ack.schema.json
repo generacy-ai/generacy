@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit-gates/gate-outcome-ack.json",
+  "title": "GateOutcomeAck",
+  "description": "Driving-session acknowledgement that a GateAnswer was applied, superseded (a newer answer arrived first), or failed (validation/runtime error).",
+  "type": "object",
+  "required": ["gateId", "outcome", "at"],
+  "properties": {
+    "gateId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{24}$"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": ["applied", "superseded", "failed"]
+    },
+    "detail": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable explanation. Optional but strongly recommended on 'failed' outcomes."
+    },
+    "at": { "type": "string", "format": "date-time" }
+  }
+}
