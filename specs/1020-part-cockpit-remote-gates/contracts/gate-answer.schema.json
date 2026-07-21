@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://generacy.ai/schemas/cockpit-gates/gate-answer.json",
+  "title": "GateAnswer",
+  "description": "NDJSON line sent by the cloud inbox (or a local operator) in response to an open GateRecord. Correlated to the gate by gateId.",
+  "type": "object",
+  "required": [
+    "type",
+    "gateId",
+    "gateKey",
+    "optionId",
+    "actor",
+    "answeredAt",
+    "deliveryId"
+  ],
+  "properties": {
+    "type": {
+      "const": "gate-answer",
+      "description": "NDJSON discriminant so a single stream can carry multiple record types."
+    },
+    "gateId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{24}$"
+    },
+    "gateKey": { "type": "string", "minLength": 1 },
+    "optionId": {
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        { "type": "null" }
+      ],
+      "description": "Chosen option id, or null when the operator supplied only freeText."
+    },
+    "freeText": {
+      "type": "string",
+      "description": "Present when the operator typed a free-text answer. Required whenever optionId is null."
+    },
+    "actor": {
+      "type": "object",
+      "required": ["userId", "email", "displayName"],
+      "properties": {
+        "userId": { "type": "string", "minLength": 1 },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string", "minLength": 1 }
+      }
+    },
+    "answeredAt": { "type": "string", "format": "date-time" },
+    "deliveryId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Dedupe key on the driving session — same deliveryId must not be applied twice."
+    }
+  },
+  "allOf": [
+    {
+      "description": "optionId=null requires a non-empty freeText — mirrored by the Zod .refine() on the driving side.",
+      "if": { "properties": { "optionId": { "type": "null" } } },
+      "then": {
+        "required": ["freeText"],
+        "properties": {
+          "freeText": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ]
+}
