@@ -10,7 +10,7 @@
 - B: **Recomputed from unacked state on start** — the doorbell asks the MCP event-bus (or an in-memory ack registry) which `deliveryId`s are already acked and skips them, but always re-reads the file from head.
 - C: **Always re-read from head, dedup as the guard** — the doorbell holds no persisted position; every restart re-tails from the beginning and relies on `deliveryId` dedup at the MCP-bus / session layer to prevent double delivery.
 
-**Answer**: *Pending*
+**Answer**: B — Recomputed from unacked state on start. On restart the doorbell asks the MCP event-bus / ack registry which `deliveryId`s are already acked and skips them, but always re-reads the answers file from head. Rationale: the plan keeps position "persisted per epic scope in-process" (ruling out an on-disk sidecar) and "replay[s] unacked lines on start" — stronger than blind re-emit-and-hope-dedup: the doorbell actively re-derives which lines are still unacked rather than re-emitting everything from head.
 
 ### Q2: `deliveryId` dedup ownership
 **Context**: FR-008 requires "one file line, one doorbell stdout event, one `cockpit_await_events` batch entry" across duplicate injections. Which layer holds the dedup state determines where the harness must assert (byte-count the file, count stdout lines, count bus entries — or all three) and which sibling P1 issue owns the fix if the dedup breaks.
@@ -20,7 +20,7 @@
 - B: **Doorbell only** — dedup happens before emit; the file may contain duplicates (append-only audit log), but the doorbell tracks seen `deliveryId`s in-memory and never emits the same one twice.
 - C: **Both layers, file as the audit record** — writer dedups so the file stays clean AND the doorbell dedups on top to survive restart replays where a `deliveryId` was already emitted before the crash but the file line stays.
 
-**Answer**: *Pending*
+**Answer**: C — Both layers, file as the audit record. The orchestrator writer dedups by `deliveryId` before append (file stays clean) AND the doorbell dedups in-process to survive restart replays. Rationale: writer-only dedup cannot satisfy exactly-once re-emit for a doorbell restarted mid-flow, which re-reads from head, so it must also dedup in-process; the wire contract itself notes `deliveryId` is "unique per delivery attempt; session dedups".
 
 ### Q3: Harness process model
 **Context**: NEEDS-CLARIFICATION-3 in the spec. In-process is faster and easier to assert against but does not exercise the real spawn/exit path; child processes prove the spawn/exit lifecycle at the cost of speed and determinism. FR-007 (kill and restart the doorbell mid-flow) in particular is only fully meaningful if the doorbell is a real child process.
@@ -30,7 +30,7 @@
 - B: **All as real child processes with IPC** — `spawn()` for orchestrator, doorbell, and MCP server; proves the real spawn/exit lifecycle at every seam.
 - C: **Hybrid** — orchestrator + MCP bus in-process, doorbell as a real child process (since FR-007's kill-and-restart assertion is only meaningful against a real `spawn()`).
 
-**Answer**: *Pending*
+**Answer**: C — Hybrid. Orchestrator + MCP bus run in-process under Vitest; the doorbell is spawned as a real child process. Rationale: in production the doorbell is a real subprocess (`generacy cockpit doorbell`) whose stdout NDJSON is watched via Monitor, so FR-007's kill-and-restart assertion is only meaningful against a real `spawn()`/kill — reconstructing an in-process object proves nothing. Spawning orchestrator + MCP bus as processes too would add IPC overhead for no additional integration-seam coverage.
 
 ### Q4: Failure-mode coverage
 **Context**: NEEDS-CLARIFICATION-4 in the spec. The Scope section lists only five happy-path scenarios; adding failure modes closes more P1 seams but expands scope beyond what the issue text describes. Which cut lands here vs. deferred to per-sibling unit tests changes the harness's size and reviewer expectations.
@@ -40,4 +40,4 @@
 - B: **Happy-path + a targeted failure-mode set** — add three specific assertions: (i) malformed answer NDJSON line is skipped-and-logged (doorbell does not crash), (ii) `POST /cockpit/gates` with an invalid gate record returns 4xx and emits **no** `cluster.cockpit` event, (iii) doorbell tolerates answers-file rotation without losing pending unacked lines.
 - C: **Full failure-mode sweep** — every documented failure mode across all four P1 siblings is asserted here, on the argument that this issue is the integration-seam closer.
 
-**Answer**: *Pending*
+**Answer**: B — Happy-path + a targeted failure-mode set. Add three specific assertions: (i) a malformed answer NDJSON line is skipped-and-logged (doorbell does not crash), (ii) `POST /cockpit/gates` with an invalid gate record returns 4xx and emits no `cluster.cockpit` event, (iii) the doorbell tolerates answers-file rotation without losing pending unacked lines. Rationale: the issue charges this harness with closing integration seams between the P1 issues, and these three assertions are precisely cross-component seams (writer↔doorbell, route-validation↔relay-emit, rotation↔tail); happy-path-only leaves them unverified, while a full sweep duplicates failure cases the siblings' own acceptance criteria already own.
