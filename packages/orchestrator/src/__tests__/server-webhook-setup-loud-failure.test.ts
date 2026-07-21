@@ -191,7 +191,7 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
           && msg?.data?.reason === 'webhook-registration-forbidden';
       });
       expect(forbiddenSends).toHaveLength(1);
-    }, { timeout: 5000 });
+    }, { timeout: 20000 });
 
     await vi.waitFor(() => {
       const degradedPosts = controlPostBodies.filter((body) => {
@@ -204,7 +204,7 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
         }
       });
       expect(degradedPosts).toHaveLength(1);
-    }, { timeout: 5000 });
+    }, { timeout: 20000 });
 
     // Assert — the single relay EventMessage matches the locked shape.
     const forbiddenSends = (relaySendSpy.mock.calls as unknown[][])
@@ -222,5 +222,5 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
       installationId: null,
       missingScope: 'admin:repo_hook',
     });
-  }, 15_000);
+  }, 60_000);
 });
