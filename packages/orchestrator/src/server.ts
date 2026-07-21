@@ -784,6 +784,12 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // (`relayClientRef` is declared above so the GitHubAuthHealthService's emit closure can capture it.)
   let relayBridgeRef: RelayBridge | null = null;
   let cockpitRetainer: RetainedCockpitEvents | null = null;
+  // #1021: writer + its deferred init. The `init()` call performs real
+  // filesystem I/O (mkdir/open) which yields to the event loop; it MUST run
+  // AFTER relayClientRef is assigned (below) so it cannot reorder the
+  // fire-and-forget webhook fail-loud path. See the deferred-init note where
+  // cockpitWriter.init() is finally awaited.
+  let cockpitWriter: CockpitAnswersWriter | null = null;
   if (!isWorkerMode) {
     const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
     if (controlPlaneKey) {
@@ -835,21 +841,21 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       10,
     );
 
-    const cockpitWriter = new CockpitAnswersWriter({
+    cockpitWriter = new CockpitAnswersWriter({
       path: cockpitAnswersPath,
       rotationBytes: cockpitRotationBytes,
       rotationKeep: cockpitRotationKeep,
       logger: server.log,
     });
-    try {
-      await cockpitWriter.init();
-    } catch (err) {
-      server.log.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        'cockpit-answers-writer init failed — /cockpit/answers will return 503',
-      );
-      cockpitWriter.markUnhealthy();
-    }
+    // NOTE: cockpitWriter.init() is intentionally deferred until AFTER the
+    // relay-bridge init below. init() does real fs I/O (mkdir/open) that yields
+    // to the event loop; running it here — before relayClientRef is assigned —
+    // let the fire-and-forget ensureWebhooks() fail-loud chain reach
+    // sendRelayEvent() while relayClientRef was still null, silently dropping
+    // the `cluster.bootstrap` webhook-registration loud-failure event (#1021
+    // regression against #972 SC-002). The route is already registered below
+    // with the (uninitialized) writer; it guards on isHealthy()/503 until init
+    // completes, so deferring init does not expose a half-open writer.
 
     cockpitRetainer = createRetainedCockpitEvents({
       maxCount: cockpitRetainMaxCount,
@@ -927,6 +933,24 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
           } as unknown as import('./types/relay.js').RelayMessage)
         : undefined,
     });
+  }
+
+  // #1021 deferred cockpit-answers-writer init. Runs here — after relayClientRef
+  // has been assigned by the relay-bridge init above — so the real fs I/O in
+  // init() (which yields to the event loop) cannot let the fire-and-forget
+  // ensureWebhooks() fail-loud chain observe a null relayClientRef and drop the
+  // `cluster.bootstrap` loud-failure event (#972 SC-002). Failure is non-fatal:
+  // the writer is marked unhealthy and /cockpit/answers degrades to 503.
+  if (!isWorkerMode && cockpitWriter) {
+    try {
+      await cockpitWriter.init();
+    } catch (err) {
+      server.log.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        'cockpit-answers-writer init failed — /cockpit/answers will return 503',
+      );
+      cockpitWriter.markUnhealthy();
+    }
   }
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
