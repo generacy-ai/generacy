@@ -1,0 +1,4 @@
+---
+---
+
+Add cluster-side integration harness for the Cockpit Remote Gates epic (#1024). Introduces `packages/orchestrator/src/__tests__/cockpit-gates-integration.integration.test.ts` and its three helper modules (`fake-peer.ts`, `doorbell-driver.ts`, `scenario-helpers.ts`) — a fake `ws` peer + a real `spawn()`'d doorbell + an in-process orchestrator, composed to exercise the eight cross-component scenarios spec'd in `specs/1024-part-cockpit-remote-gates/`. Also documents the wire shapes in `packages/cockpit/README.md` (§"Gates protocol") for the generacy-cloud (P2) fake-cluster tests to mirror. Test-only + docs — no product surface changes. All eight scenarios are currently `.skip()`'d with follow-up TODOs; each unskips as its sibling P1 issue (#1020 contracts, #1021 routes + `cluster.cockpit` + writer, #1022 MCP tools, #1023 doorbell tail) lands.

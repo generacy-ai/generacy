@@ -78,6 +78,116 @@ cockpit:
   owner: alice   # optional; defaults to `gh auth status` login
 ```
 
+## Gates protocol (Cockpit Remote Gates epic, P2 mirror-doc)
+
+**Audience**: engineers implementing the P2 cloud-side fake-cluster tests in
+`generacy-ai/generacy-cloud`. This section pins the wire shapes exchanged
+between the cluster-side integration harness (`packages/orchestrator/src/__tests__/cockpit-gates-integration.integration.test.ts`)
+and the fake relay peer, so the cloud side can emit and expect the exact
+same bytes without cross-repo copy-paste.
+
+**Provisional**: the gates module (`packages/cockpit/src/gates/`) has not
+yet landed on `develop` as of this section's introduction (it's owned by
+`generacy-ai/generacy#1020`). Once it lands, this section will be moved to
+`packages/cockpit/src/gates/README.md` and this stub will point there.
+
+### Wire framing
+
+All messages are JSON-encoded WebSocket text frames matching
+`RelayMessageSchema` from `@generacy-ai/cluster-relay`. No custom framing,
+no compression, no TLS in tests (fake peer is `ws://127.0.0.1:<port>`).
+
+### Cluster → Cloud
+
+**Gate-open event** (emitted when a `POST /cockpit/gates` succeeds):
+
+```jsonc
+{
+  "type": "event",
+  "event": "cluster.cockpit",
+  "timestamp": "2026-07-21T12:34:56.789Z",
+  "data": {
+    "kind": "gate-open",
+    "gate": { /* GateOpen shape — see @generacy-ai/cockpit/gates */ }
+  }
+}
+```
+
+**Outcome-ack event** (emitted when a `POST /cockpit/gates/:id/ack` succeeds):
+
+```jsonc
+{
+  "type": "event",
+  "event": "cluster.cockpit",
+  "timestamp": "…",
+  "data": {
+    "kind": "outcome",
+    "outcome": { /* GateOutcome shape */ }
+  }
+}
+```
+
+Both events use `data.kind` as the discriminator on the `cluster.cockpit`
+channel. Consumers narrow the union on `kind` before reading `gate` or
+`outcome`.
+
+### Cloud → Cluster
+
+**Answer down-path** — the cloud injects operator-authored answers into the
+cluster via an `api_request` frame that the orchestrator proxies to its
+`POST /cockpit/answers` route:
+
+```jsonc
+{
+  "type": "api_request",
+  "correlationId": "<uuid v4>",
+  "method": "POST",
+  "path": "/cockpit/answers",
+  "headers": { "content-type": "application/json" },
+  "body": { /* GateAnswer shape */ }
+}
+```
+
+Response frame (200 on happy path, 4xx on validation error):
+
+```jsonc
+{
+  "type": "api_response",
+  "correlationId": "<same as request>",
+  "status": 200,
+  "body": {}
+}
+```
+
+### Connection lifecycle
+
+1. Orchestrator dials `wss://…/relay` (or `ws://127.0.0.1:<port>` in tests).
+2. Orchestrator sends a `handshake` frame carrying its cluster metadata.
+3. Peer responds with a `heartbeat` frame — this transitions the client from
+   `authenticating → connected`. (Fake peer mirrors this pattern; see
+   `packages/cluster-relay/tests/relay.test.ts:93-100`.)
+4. Steady state: `event` / `api_request` / `api_response` frames in both
+   directions, `heartbeat` at the configured interval.
+
+### Retain-and-replay across disconnect
+
+When the peer disconnects while a `cluster.cockpit` event is pending, the
+orchestrator retains the event and replays it on the next successful
+connection. Mirror of the `cluster.vscode-tunnel` pattern in
+`packages/orchestrator/src/routes/retained-tunnel-event.ts`.
+
+Assertion pattern (harness scenario S1b): `disconnect → POST /cockpit/gates
+→ reconnect → assert peer sees the event exactly once on the new socket`.
+
+### Further reading
+
+- Harness invocation and troubleshooting:
+  [`specs/1024-part-cockpit-remote-gates/quickstart.md`](../../specs/1024-part-cockpit-remote-gates/quickstart.md).
+- Fake-peer wire contract in full:
+  [`specs/1024-part-cockpit-remote-gates/contracts/fake-peer-protocol.md`](../../specs/1024-part-cockpit-remote-gates/contracts/fake-peer-protocol.md).
+- 8-scenario catalog:
+  [`specs/1024-part-cockpit-remote-gates/contracts/scenario-catalog.md`](../../specs/1024-part-cockpit-remote-gates/contracts/scenario-catalog.md).
+
 ## References
 
 - Spec: [`specs/806-epic-generacy-ai-tetrad/spec.md`](../../specs/806-epic-generacy-ai-tetrad/spec.md)

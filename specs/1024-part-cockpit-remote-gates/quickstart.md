@@ -10,10 +10,14 @@
 # From the repo root
 pnpm install
 pnpm --filter @generacy-ai/generacy build           # builds bin/generacy.js (doorbell spawn target)
-pnpm --filter @generacy-ai/orchestrator test -- cockpit-gates-integration
+pnpm --filter @generacy-ai/orchestrator test:integration -- cockpit-gates-integration
 ```
 
 The harness lives at `packages/orchestrator/src/__tests__/cockpit-gates-integration.integration.test.ts`. It requires the built `packages/generacy/dist/bin/generacy.js` because it spawns the doorbell as a real child process (per clarification Q3 → C).
+
+**Why `test:integration` and not `test`**: the orchestrator package's `vitest.config.ts` `exclude`s `**/*.integration.test.ts` from the default `pnpm test` run; the integration-specific config in `vitest.integration.config.ts` `include`s them with a wider 30 s timeout. CI runs both via `pnpm -r --if-present run test:integration` (`.github/workflows/ci.yml:85`).
+
+**Current status (2026-07-21)**: all 8 scenarios are authored as `it.skip(...)` with follow-up TODOs — none of the four sibling P1 issues (#1020 contracts, #1021 orchestrator routes, #1022 MCP tools, #1023 doorbell tail) have landed yet. Running the harness above will report 8 skipped tests. As each sibling lands, its unskip PR replaces the corresponding `it.skip` with a real assertion. See `tasks.md` §"T001 audit result" for the full seam matrix.
 
 **Node**: ≥22 (per repo constitution and `packages/generacy/package.json`).
 
