@@ -1,6 +1,9 @@
 // @generacy-ai/cockpit — public API surface.
 // Internal modules (state/label-map) are NOT exported.
 
+// Gates (wire schemas)
+export * from './gates/index.js';
+
 // State + classifier
 export {
   COCKPIT_STATES,

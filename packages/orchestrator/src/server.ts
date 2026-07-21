@@ -72,6 +72,13 @@ import {
 } from '@generacy-ai/control-plane';
 import { setupInternalRelayEventsRoute } from './routes/internal-relay-events.js';
 import { setupInternalRefreshMetadataRoute } from './routes/internal-refresh-metadata.js';
+import { setupCockpitGatesRoute } from './routes/cockpit-gates.js';
+import { setupCockpitAnswersRoute } from './routes/cockpit-answers.js';
+import {
+  createRetainedCockpitEvents,
+  type RetainedCockpitEvents,
+} from './routes/retained-cockpit-events.js';
+import { CockpitAnswersWriter } from './services/cockpit-answers-writer.js';
 
 /**
  * Server creation options
@@ -776,6 +783,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // The getter resolves to null until activation completes; the route returns 503 in that window.
   // (`relayClientRef` is declared above so the GitHubAuthHealthService's emit closure can capture it.)
   let relayBridgeRef: RelayBridge | null = null;
+  let cockpitRetainer: RetainedCockpitEvents | null = null;
   if (!isWorkerMode) {
     const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
     if (controlPlaneKey) {
@@ -788,6 +796,76 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       setupInternalRefreshMetadataRoute(server, () => relayBridgeRef);
       server.log.info('Control-plane relay event IPC endpoint registered');
     }
+
+    // Cockpit remote gates (#1021) — API key, retainer, writer, and routes.
+    // Deferred-binding pattern mirrors setupInternalRelayEventsRoute so wizard-mode
+    // background activation works: routes register before server.listen(); the
+    // relay-client getter returns null until activation completes (routes then
+    // enqueue into the retainer instead of dropping).
+    const cockpitKey = process.env['COCKPIT_INTERNAL_API_KEY'];
+    if (cockpitKey) {
+      apiKeyStore.addKey(cockpitKey, {
+        name: 'cockpit-internal',
+        scopes: ['admin'],
+        createdAt: new Date().toISOString(),
+      });
+    } else {
+      server.log.warn(
+        'COCKPIT_INTERNAL_API_KEY not set — cockpit gate routes will reject all requests',
+      );
+    }
+
+    const cockpitAnswersPath =
+      process.env['COCKPIT_ANSWERS_FILE'] ??
+      '/workspaces/.generacy/cockpit/answers.ndjson';
+    const cockpitRotationBytes = Number.parseInt(
+      process.env['COCKPIT_ANSWERS_ROTATION_BYTES'] ?? '33554432',
+      10,
+    );
+    const cockpitRotationKeep = Number.parseInt(
+      process.env['COCKPIT_ANSWERS_ROTATION_KEEP'] ?? '3',
+      10,
+    );
+    const cockpitRetainMaxCount = Number.parseInt(
+      process.env['COCKPIT_RETAIN_MAX_COUNT'] ?? '1000',
+      10,
+    );
+    const cockpitRetainMaxBytes = Number.parseInt(
+      process.env['COCKPIT_RETAIN_MAX_BYTES'] ?? '4194304',
+      10,
+    );
+
+    const cockpitWriter = new CockpitAnswersWriter({
+      path: cockpitAnswersPath,
+      rotationBytes: cockpitRotationBytes,
+      rotationKeep: cockpitRotationKeep,
+      logger: server.log,
+    });
+    try {
+      await cockpitWriter.init();
+    } catch (err) {
+      server.log.error(
+        { err: err instanceof Error ? err.message : String(err) },
+        'cockpit-answers-writer init failed — /cockpit/answers will return 503',
+      );
+      cockpitWriter.markUnhealthy();
+    }
+
+    cockpitRetainer = createRetainedCockpitEvents({
+      maxCount: cockpitRetainMaxCount,
+      maxBytes: cockpitRetainMaxBytes,
+    });
+
+    setupCockpitGatesRoute(server, {
+      retainer: cockpitRetainer,
+      getRelayClient: () => relayClientRef,
+      logger: server.log,
+    });
+    setupCockpitAnswersRoute(server, {
+      writer: cockpitWriter,
+      logger: server.log,
+    });
+    server.log.info('Cockpit gate routes registered');
   }
 
   if (!isWorkerMode && !config.relay.apiKey) {
@@ -806,6 +884,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       (client) => { relayClientRef = client; },
       (reporter) => { statusReporterRef = reporter; },
       (monitor) => { postActivationSettledMonitor = monitor; },
+      cockpitRetainer,
     ).catch((error) => {
       activationPending = false;
       server.log.warn(
@@ -814,7 +893,7 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     });
   } else if (!isWorkerMode && config.relay.apiKey) {
     // API key already exists: initialize relay bridge synchronously
-    const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; });
+    const result = await initializeRelayBridge(config, server, apiKeyStore, (client) => { relayClientRef = client; }, cockpitRetainer);
     relayBridge = result.relayBridge;
     relayBridgeRef = result.relayBridge;
     statusReporterRef = result.statusReporter;
@@ -1195,6 +1274,7 @@ async function activateInBackground(
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
   setStatusReporter?: (reporter: StatusReporter) => void,
   setPostActivationSettledMonitor?: (monitor: PostActivationSettledMonitor | null) => void,
+  cockpitRetainer?: RetainedCockpitEvents | null,
 ): Promise<void> {
   const initialWorkersRaw = process.env['GENERACY_INITIAL_WORKERS'];
   let initialWorkers: number | undefined;
@@ -1245,6 +1325,7 @@ async function activateInBackground(
       localRelayClient = client;
       setRelayClient?.(client);
     },
+    cockpitRetainer,
   );
   setStatusReporter?.(statusReporter);
   setPostActivationSettledMonitor?.(postActivationSettledMonitor);
@@ -1304,6 +1385,7 @@ async function initializeRelayBridge(
   server: FastifyInstance,
   apiKeyStore: InMemoryApiKeyStore,
   setRelayClient?: (client: import('./types/relay.js').ClusterRelayClient) => void,
+  cockpitRetainer?: RetainedCockpitEvents | null,
 ): Promise<{
   relayBridge: RelayBridge | null;
   statusReporter: StatusReporter;
@@ -1369,6 +1451,7 @@ async function initializeRelayBridge(
         displayName: config.cluster?.displayName,
       },
       engineClient,
+      cockpitRetainer: cockpitRetainer ?? undefined,
     });
 
     const fullModeLeaseManager = new LeaseManager(relayClient, server.log, config.lease);

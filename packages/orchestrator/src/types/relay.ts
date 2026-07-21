@@ -362,4 +362,12 @@ export interface RelayBridgeOptions {
    * shared across all RelayBridge calls.
    */
   engineClient: DockerEngineClient;
+
+  /**
+   * Optional retainer for `cluster.cockpit` events. When present, the bridge
+   * drains its FIFO into the relay client on each reconnect (parallel to the
+   * single-slot `cluster.vscode-tunnel` retainer). Omitted in test builds or
+   * when the cockpit gate routes are not wired.
+   */
+  cockpitRetainer?: import('../routes/retained-cockpit-events.js').RetainedCockpitEvents;
 }
