@@ -35,6 +35,7 @@ export type {
   IssueRef,
   ParsedPhase,
   ParsedEpicBody,
+  ParseEpicBodyOptions,
   ResolvedEpic,
   ResolveEpicOptions,
 } from './resolver/types.js';
