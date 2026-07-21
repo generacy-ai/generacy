@@ -12,6 +12,7 @@ const ALLOWED_CHANNELS = [
   'cluster.credentials',
   'cluster.bootstrap',
   'cluster.identity-split',
+  'cluster.cockpit',
 ] as const;
 
 export const RelayEventRequestSchema = z.object({

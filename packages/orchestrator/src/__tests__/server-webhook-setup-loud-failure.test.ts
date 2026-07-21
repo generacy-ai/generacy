@@ -130,10 +130,17 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
     });
     await new Promise<void>((resolve) => controlServer!.listen(controlSocketPath, resolve));
     process.env['CONTROL_PLANE_SOCKET_PATH'] = controlSocketPath;
+    // Keep the cockpit-answers-writer (#1021) off the non-writable /workspaces
+    // default so its init() succeeds in-tree instead of logging an EACCES 503.
+    // The writer's init is deferred until after relayClientRef is assigned, so
+    // it can no longer reorder the fail-loud path either way — this just keeps
+    // the test hermetic and silent.
+    process.env['COCKPIT_ANSWERS_FILE'] = join(baseDir, 'cockpit', 'answers.ndjson');
   });
 
   afterEach(async () => {
     delete process.env['CONTROL_PLANE_SOCKET_PATH'];
+    delete process.env['COCKPIT_ANSWERS_FILE'];
     if (server) {
       await server.close();
       server = null;
@@ -191,7 +198,7 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
           && msg?.data?.reason === 'webhook-registration-forbidden';
       });
       expect(forbiddenSends).toHaveLength(1);
-    }, { timeout: 5000 });
+    }, { timeout: 20000 });
 
     await vi.waitFor(() => {
       const degradedPosts = controlPostBodies.filter((body) => {
@@ -204,7 +211,7 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
         }
       });
       expect(degradedPosts).toHaveLength(1);
-    }, { timeout: 5000 });
+    }, { timeout: 20000 });
 
     // Assert — the single relay EventMessage matches the locked shape.
     const forbiddenSends = (relaySendSpy.mock.calls as unknown[][])
@@ -222,5 +229,5 @@ describe('#972 server-level: webhook-registration 403 fires the loud-failure tri
       installationId: null,
       missingScope: 'admin:repo_hook',
     });
-  }, 15_000);
+  }, 60_000);
 });

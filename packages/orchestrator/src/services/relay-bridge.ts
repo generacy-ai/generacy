@@ -42,6 +42,7 @@ import {
   clearRetainedTunnelEvent,
   getRetainedTunnelEvent,
 } from '../routes/retained-tunnel-event.js';
+import type { RetainedCockpitEvents } from '../routes/retained-cockpit-events.js';
 
 export interface TunnelHandlerLike {
   handleOpen(msg: { tunnelId: string; target: string }): Promise<void>;
@@ -63,6 +64,7 @@ export class RelayBridge {
   private readonly config: RelayBridgeOptions['config'];
   private readonly cluster: RelayBridgeOptions['cluster'];
   private readonly engineClient: DockerEngineClient;
+  private readonly cockpitRetainer: RetainedCockpitEvents | null;
   private conversationManager: ConversationManager | null = null;
   private leaseManager: LeaseManager | null = null;
   private statusReporter: StatusReporter | null = null;
@@ -93,6 +95,7 @@ export class RelayBridge {
     this.config = options.config;
     this.cluster = options.cluster;
     this.engineClient = options.engineClient;
+    this.cockpitRetainer = options.cockpitRetainer ?? null;
 
     // Bind handlers once so they can be removed with off()
     this.messageHandler = (msg: RelayMessage) => this.handleMessage(msg);
@@ -206,6 +209,7 @@ export class RelayBridge {
     this.setupEventForwarding();
 
     this.replayRetainedTunnelEvent();
+    this.drainRetainedCockpitEvents();
 
     // Send metadata immediately on connect
     this.sendMetadata().catch((err) => {
@@ -221,6 +225,18 @@ export class RelayBridge {
     // Push ready status to control-plane
     if (this.statusReporter) {
       this.statusReporter.pushStatus('ready').catch(() => {});
+    }
+  }
+
+  private drainRetainedCockpitEvents(): void {
+    if (!this.cockpitRetainer) return;
+    if (!this.client.isConnected) return;
+    const result = this.cockpitRetainer.drainInto(this.client);
+    if (result.sent > 0 || result.failed > 0) {
+      this.logger.info(
+        { sent: result.sent, failed: result.failed },
+        'drained retained cluster.cockpit events',
+      );
     }
   }
 

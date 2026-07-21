@@ -89,6 +89,13 @@ export {
 // We re-export the gates version as `GateIssueRef`. `IssueRefSchema` is unique so
 // it stays unaliased.
 export {
+  // Wire-envelope schemas (transport contracts)
+  GateOpenSchema,
+  GateAckSchema,
+  GateAnswerEnvelopeSchema,
+  type GateOpen,
+  type GateAck,
+  type GateAnswerEnvelope,
   // Schemas
   GateRecordSchema,
   GateAnswerSchema,
