@@ -12,19 +12,19 @@
 
 The tailer, its unit tests, and the doorbell wiring all import from these two files, so they land first.
 
-- [ ] T001 [US1] Create `packages/generacy/src/cli/commands/cockpit/watch/gate-answer.ts` with:
+- [X] T001 [US1] Create `packages/generacy/src/cli/commands/cockpit/watch/gate-answer.ts` with:
   - `GateAnswerLineSchema` — Zod object, `.passthrough()`, fields per contracts/gate-answer-event.md and data-model §E-1: required `gateId`/`deliveryId`/`scope`/`answer`/`answeredAt`; optional `answeredBy`/`generation`.
   - `GateAnswerEventSchema` — Zod object with `type: z.literal('gate-answer')`, `ts` (ISO datetime), `gateId`, `deliveryId`, `epic` (regex `^[^/]+\/[^/]+#\d+$`), `line: GateAnswerLineSchema`.
   - Exported types `GateAnswerLine` and `GateAnswerEvent` via `z.infer`.
   - No mapping helper needed on file creation — the tailer will build events inline in T003.
 
-- [ ] T002 [US1] Modify `packages/generacy/src/cli/commands/cockpit/watch/stream-event.ts`: add `GateAnswerEventSchema` as the fourth arm of the `discriminatedUnion('type', […])`. Import from `./gate-answer.js`. No changes to existing arms. Preserve export names (`CockpitStreamEventSchema`, `CockpitStreamEvent`) so downstream consumers pick up the new variant transparently.
+- [X] T002 [US1] Modify `packages/generacy/src/cli/commands/cockpit/watch/stream-event.ts`: add `GateAnswerEventSchema` as the fourth arm of the `discriminatedUnion('type', […])`. Import from `./gate-answer.js`. No changes to existing arms. Preserve export names (`CockpitStreamEventSchema`, `CockpitStreamEvent`) so downstream consumers pick up the new variant transparently.
 
 ## Phase 2: Tailer Implementation
 
 Depends on Phase 1 (imports schemas from `watch/gate-answer.ts`).
 
-- [ ] T003 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/answers-file-source.ts` implementing the contract in `contracts/answers-file-source.md`:
+- [X] T003 [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/answers-file-source.ts` implementing the contract in `contracts/answers-file-source.md`:
   - Export `class AnswersFileSource` with `constructor(options: AnswersFileSourceOptions)`, `start(): Promise<void>`, `stop(): Promise<void>`, `getState()`.
   - Export `interface AnswersFileSourceOptions` per data-model §E-3 (all seams present: `epicRef`, `filePath?` default `/workspaces/.generacy/cockpit/answers.ndjson`, `onEvent`, `logger`, `replayLineCap?` default 10 000, `pollIntervalMs?` default 2 000, `useFsWatch?` default `true`, `now?`, `fs?`).
   - Constructor validation per data-model §E-3: `epicRef` matches `^[^/]+\/[^/]+#\d+$`, `replayLineCap > 0 || === Infinity`, `pollIntervalMs >= 100`. Throw synchronously on violation.
@@ -41,7 +41,7 @@ Depends on Phase 1 (imports schemas from `watch/gate-answer.ts`).
 
 Depends on Phase 2 (constructs `AnswersFileSource`).
 
-- [ ] T004 [US1] Modify `packages/generacy/src/cli/commands/cockpit/doorbell.ts`:
+- [X] T004 [US1] Modify `packages/generacy/src/cli/commands/cockpit/doorbell.ts`:
   - Import `AnswersFileSource` from `./doorbell/answers-file-source.js`.
   - After parsing `epicRef` (existing code around `:98-101`), instantiate `new AnswersFileSource({ epicRef, onEvent: <bridge>, logger, now })` in both `runSmeeMode` and `runPollMode` branches — the tailer runs in parallel with whichever primary source `source-selector` picks (per plan §Summary invariant "answers tailer runs concurrently under whatever source the selector reports").
   - `<bridge>` is a callback that (a) calls the shared stdout writer `lineForEvent(event)` (same path smee/poll use — `doorbell/subscribe.ts:22`) and (b) calls `bus.emit(event)` on the same `EpicEventBus` instance the primary source uses. Do NOT introduce a new stdout serialisation path — reuse `lineForEvent`.
@@ -53,7 +53,7 @@ Depends on Phase 2 (constructs `AnswersFileSource`).
 
 Depends on Phases 1–3 (imports schemas, constructs tailer, exercises wiring).
 
-- [ ] T005 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/answers-file-source.unit.test.ts` — pure schema + line-pipeline unit coverage (no real filesystem). Use the `fs` façade seam. Cases mirror contracts/gate-answer-line.md §Test cases:
+- [X] T005 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/answers-file-source.unit.test.ts` — pure schema + line-pipeline unit coverage (no real filesystem). Use the `fs` façade seam. Cases mirror contracts/gate-answer-line.md §Test cases:
   - Happy path: valid line matching `epicRef` → one `onEvent` call with correct `GateAnswerEvent` shape (round-trip through `CockpitStreamEventSchema.parse(JSON.parse(lineForEvent(event)))` returns equivalent event — contract §Invariants §3).
   - Missing `gateId` / missing `scope.number` / empty-string `gateId` / `scope.number` as string → skipped with `logger.warn`, no `onEvent`.
   - Malformed JSON (line is not valid JSON) → skipped with `logger.warn` including byte offset.
@@ -62,21 +62,21 @@ Depends on Phases 1–3 (imports schemas, constructs tailer, exercises wiring).
   - Constructor validation: `epicRef` regex, `replayLineCap > 0`, `pollIntervalMs >= 100` — all three throw synchronously.
   - `event.ts` uses the injected `now()` clock (deterministic).
 
-- [ ] T006 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/answers-file-source.tail.test.ts` — filesystem-level tail + rotation coverage. Use a real temp dir (`node:fs/promises.mkdtemp`) so `fs.watch` and `stat` behave naturally. Set `pollIntervalMs` low (e.g., 50 ms) for fast suites.
+- [X] T006 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/answers-file-source.tail.test.ts` — filesystem-level tail + rotation coverage. Use a real temp dir (`node:fs/promises.mkdtemp`) so `fs.watch` and `stat` behave naturally. Set `pollIntervalMs` low (e.g., 50 ms) for fast suites.
   - Dir-then-file appearance: start tailer with parent dir absent → state `waiting-for-dir`; `mkdir` parent → state `waiting-for-file`; write file → state transitions through `replaying` to `tailing` and consumes the initial line.
   - Live append: write file with 1 line → tailer emits; append another line → tailer emits second event; assert byte-order of emits equals file-append order (contract §Emit Contract Order guarantee).
   - Rotation (unlink + rewrite): unlink file, create new file with different inode, write a fresh line → tailer emits one `logger.info` rotation entry (old ino + new ino) and re-enters `replaying`, then emits the new line.
   - Truncation (`fs.truncate` or open + write): file same inode, size shrank → tailer emits one `logger.info` truncation entry (ino + old size + new size) and reopens at offset 0.
   - `stop()` while `tailing`: subsequent appends produce zero emits; second `stop()` call is a no-op; `getState() === 'stopped'`.
 
-- [ ] T007 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/answers-file-source.replay.test.ts` — startup replay + cross-source interleave coverage. Prefer the `fs` façade seam over real fs so timing is deterministic; use `useFsWatch: false` per contract §Test Seams.
+- [X] T007 [P] [US1] Create `packages/generacy/src/cli/commands/cockpit/doorbell/__tests__/answers-file-source.replay.test.ts` — startup replay + cross-source interleave coverage. Prefer the `fs` façade seam over real fs so timing is deterministic; use `useFsWatch: false` per contract §Test Seams.
   - Cap enforcement: pre-populate file with 15 lines, set `replayLineCap: 10` → exactly 10 `onEvent` calls (the last 10 in file order); one `logger.warn` with `[skippedFromByte, skippedToByte]` naming the head 5 lines and skipped count = 5.
   - Cap not hit: pre-populate with 3 lines, default cap → 3 `onEvent` calls; no cap-truncation warn.
   - `replayLineCap: Infinity` disables the cap — replay all lines regardless of count.
   - Cross-source interleave (Q3 → A / research R-7): construct a fake smee source that emits `issue-transition` events into the same `bus` while startup replay is draining → assert the bus receives both event types interleaved (no drain barrier). Cursor monotonicity is the only ordering guarantee, per plan §Constitution Re-Check.
   - Replay ordering: pre-populated lines emit in file-append order (byte offset).
 
-- [ ] T008 [US1] Modify `packages/generacy/src/cli/commands/cockpit/__tests__/doorbell.test.ts` — extend existing doorbell suites per plan §Modified — tests that need extension. Add cases covering:
+- [X] T008 [US1] Modify `packages/generacy/src/cli/commands/cockpit/__tests__/doorbell.test.ts` — extend existing doorbell suites per plan §Modified — tests that need extension. Add cases covering:
   - `runSmeeMode`: assert `AnswersFileSource` is constructed with the correct `epicRef` and started.
   - `runPollMode`: same assertion — the tailer runs in both modes.
   - SIGINT: assert `AnswersFileSource.stop()` is invoked alongside `SmeeDoorbellSource.stop()`; no emit-after-stop.
@@ -84,13 +84,13 @@ Depends on Phases 1–3 (imports schemas, constructs tailer, exercises wiring).
 
 ## Phase 5: Changeset & Verification
 
-- [ ] T009 [US1] Create `.changeset/1023-cockpit-doorbell-answers-tailer.md` per CLAUDE.md gate and plan §Constitution Check:
+- [X] T009 [US1] Create `.changeset/1023-cockpit-doorbell-answers-tailer.md` per CLAUDE.md gate and plan §Constitution Check:
   - Bump `@generacy-ai/generacy` **minor** (new capability: `gate-answer` event variant + tailer wake source surfaced by the shared `CockpitStreamEvent` union that other consumers parse).
   - Only `@generacy-ai/generacy/src/` is touched — no other package needs a bump.
   - Copy the shape of a comparable existing changeset in `.changeset/` (see CLAUDE.md).
   - Verify the file appears as `--diff-filter=A` in the PR diff (a newly added file, not an edit of an existing one) so the changeset-bot gate passes.
 
-- [ ] T010 [US1] Run the full package test + typecheck locally and confirm green before pushing:
+- [X] T010 [US1] Run the full package test + typecheck locally and confirm green before pushing:
   - `pnpm --filter @generacy-ai/generacy test` — passes T005/T006/T007/T008.
   - `pnpm --filter @generacy-ai/generacy build` — clean.
   - `pnpm --filter @generacy-ai/generacy typecheck` — no diagnostics from the extended discriminated union.
