@@ -61,11 +61,13 @@ describe('cockpit_status parity', () => {
     expect(mcpResult.data).toEqual(cliParsed);
   });
 
-  // #1006 (FR-012): the H4-phase-header warning surfaces on the MCP tool
-  // return, and MCP data.warnings deep-equals the CLI envelope's warnings.
-  // Parity check confirms `cockpit_status.ts` passes `parsedJson` through
-  // verbatim — no code change to that handler is required.
-  it('surfaces H4-phase-header warnings on the MCP tool return and matches CLI --json warnings', async () => {
+  // #1006 (FR-012) / #1014: parser warnings surface on the MCP tool return
+  // verbatim and match the CLI --json envelope's warnings. Under #1014, the
+  // snappoll fixture emits the `mixed phase heading levels` warning (both
+  // `###` and phase-shaped `####` present) instead of the old H4-phase-header
+  // marker. Parity check confirms `cockpit_status.ts` passes `parsedJson`
+  // through verbatim — no code change to that handler is required.
+  it('surfaces parser warnings on the MCP tool return and matches CLI --json warnings', async () => {
     const buildGh = (): FakeGh =>
       new FakeGh({
         bodyByIssue: { 'christrudelpw/snappoll#1': SNAPPOLL_BODY },
@@ -91,7 +93,7 @@ describe('cockpit_status parity', () => {
 
     expect(Array.isArray(mcpData.warnings)).toBe(true);
     expect(
-      mcpData.warnings.some((w: string) => w.includes("phase headers must be '###'")),
+      mcpData.warnings.some((w: string) => w.includes('mixed phase heading levels')),
     ).toBe(true);
     expect(mcpData.warnings).toEqual(cliParsed.warnings);
   });

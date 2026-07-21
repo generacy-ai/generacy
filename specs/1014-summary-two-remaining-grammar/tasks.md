@@ -12,14 +12,14 @@
 
 ## Phase 1: Types (foundation)
 
-- [ ] T001 [US1,US2] Add `ParseEpicBodyOptions` interface in
+- [X] T001 [US1,US2] Add `ParseEpicBodyOptions` interface in
   `packages/cockpit/src/resolver/types.ts`. Single optional field
   `defaultRepo?: string`, with the JSDoc from `data-model.md §New: ParseEpicBodyOptions`
   (validation pattern documented; malformed → warn + treat as absent; never throws).
   No changes to `IssueRef`, `ParsedPhase`, `ParsedEpicBody`, `ResolvedEpic`,
   `ResolveEpicOptions`.
 
-- [ ] T002 [US1,US2] Re-export `ParseEpicBodyOptions` from
+- [X] T002 [US1,US2] Re-export `ParseEpicBodyOptions` from
   `packages/cockpit/src/index.ts` next to the existing `parseEpicBody` export
   (per `data-model.md §Modified: parseEpicBody signature`).
 
@@ -27,7 +27,7 @@
 
 ## Phase 2: Parser core — H4 promotion (US1)
 
-- [ ] T010 [US1] Modify the H4+ heading branch in
+- [X] T010 [US1] Modify the H4+ heading branch in
   `packages/cockpit/src/resolver/parse-epic-body.ts` (~lines 80–88).
   When a `####+` line's trimmed text matches `PHASE_SHAPED_H4_RE`, **open a phase**
   (push a new `ParsedPhase` onto `phases[]`, reset `currentSeen`, set
@@ -38,14 +38,14 @@
   (no widening — per research.md D-1). Reference impl in `research.md §D-4`.
   Satisfies FR-001, FR-002.
 
-- [ ] T011 [US1] In the same file, track `sawH3Phase = true` inside the existing
+- [X] T011 [US1] In the same file, track `sawH3Phase = true` inside the existing
   H3 branch. After the parse loop finishes, if `sawH3Phase && sawPhaseShapedH4`,
   push exactly ONE warning with the stable marker substring `mixed phase heading levels`
   and wording per `research.md §D-5`
   (`cockpit: body mixes '###' and '####' phase headings; every phase-shaped heading opens a top-level phase (mixed phase heading levels)`).
   Satisfies FR-012.
 
-- [ ] T012 [US1] Preserve the #1006 warning path (`sawPhaseShapedH4` flag +
+- [X] T012 [US1] Preserve the #1006 warning path (`sawPhaseShapedH4` flag +
   all-adhoc-zero-populated-phases loud signal, existing conditions at
   `parse-epic-body.ts` ~lines 167–177). Confirm no regression: the warning
   MUST still fire for bodies whose phase-shaped H4 sits outside any structure
@@ -55,13 +55,13 @@
 
 ## Phase 3: Parser core — bare `#N` in checkboxes (US2)
 
-- [ ] T020 [US2] Change `parseEpicBody` signature in
+- [X] T020 [US2] Change `parseEpicBody` signature in
   `packages/cockpit/src/resolver/parse-epic-body.ts` (~line 64) to
   `parseEpicBody(body: string, options?: ParseEpicBodyOptions): ParsedEpicBody`.
   Additive-only; existing single-arg callers compile unchanged. Import
   `ParseEpicBodyOptions` from `./types`.
 
-- [ ] T021 [US2] At the top of `parseEpicBody`, validate `options?.defaultRepo`:
+- [X] T021 [US2] At the top of `parseEpicBody`, validate `options?.defaultRepo`:
   add `const DEFAULT_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/` (mirrors
   `OWNER_REPO` character class in `ref-shapes.ts:3`). On mismatch, push warning
   with marker substring `invalid defaultRepo`
@@ -69,7 +69,7 @@
   and treat as if the option were absent. NEVER throw. Compute a single
   `effectiveDefaultRepo: string | undefined` and use it downstream. Satisfies FR-003.
 
-- [ ] T022 [US2] At the ref-token resolution site in `parse-epic-body.ts`
+- [X] T022 [US2] At the ref-token resolution site in `parse-epic-body.ts`
   (~line 121, where `parseRef(refToken)` is called from within a `TASK_LIST_RE`
   branch), when `parseRef(refToken) === null` AND `effectiveDefaultRepo` is set
   AND `BARE_HASH_N_RE.test(refToken)`, synthesize `{ repo: effectiveDefaultRepo, number }`
@@ -84,7 +84,7 @@
 
 ## Phase 4: `resolveEpic` integration (US2)
 
-- [ ] T030 [US2] In `packages/cockpit/src/resolver/resolve.ts` (~line 51),
+- [X] T030 [US2] In `packages/cockpit/src/resolver/resolve.ts` (~line 51),
   change the `parseEpicBody(body)` call site to
   `parseEpicBody(body, { defaultRepo: epic.repo })`. `epic.repo` is the
   canonical `"owner/repo"` string already parsed at ~line 40 via `parseEpicRef`.
@@ -94,7 +94,7 @@
 
 ## Phase 5: Writer — `detectShape` mirrors parser (US3)
 
-- [ ] T040 [US3] Modify `detectShape` in
+- [X] T040 [US3] Modify `detectShape` in
   `packages/generacy/src/cli/commands/cockpit/scope/writer.ts` (~lines 31–37).
   Add local constants `HEADING_L4_PLUS_RE = /^####+\s+/` and
   `PHASE_SHAPED_H4_RE = /^\s*(?:P\d+\b|.*\bphase\b)/i` **immediately above**
@@ -110,7 +110,7 @@
 ## Phase 6: Tests — parser (Verification)
 <!-- Depends on Phase 2, 3 -->
 
-- [ ] T050 [US1] Extend
+- [X] T050 [US1] Extend
   `packages/cockpit/src/resolver/__tests__/parse-epic-body.test.ts` with cases for
   FR-001 (phase-shaped `#### P1 …` and `#### Phase 1: …` open phases and carry
   refs; `adhocRefs.length === 0`) and FR-002 (non-phase-shaped `#### Notes`
@@ -118,26 +118,26 @@
   `#### Notes` outside any open phase is a no-op). Mirror the shape of existing
   H3 tests in the same file.
 
-- [ ] T051 [US1] Add test in the same file for FR-012: body containing both
+- [X] T051 [US1] Add test in the same file for FR-012: body containing both
   `### Phase 1` and `#### Phase 2` produces two flat sibling phases (order
   preserved) and `warnings` contains exactly one entry matching
   `/mixed phase heading levels/`. Assert count is 1 regardless of how many
   phase-shaped headings appear.
 
-- [ ] T052 [US2] Add tests in the same file for FR-004 (positive:
+- [X] T052 [US2] Add tests in the same file for FR-004 (positive:
   `parseEpicBody('- [ ] #223 body', { defaultRepo: 'my-org/my-repo' })` produces
   a ref `{repo: 'my-org/my-repo', number: 223}` and no bare-ref warning) and
   FR-005 (negative: same body with no options → today's warning behavior
   preserved; ref dropped from `phases[]`; warning marker substring `bare '#N'`
   present).
 
-- [ ] T053 [US2] Add tests for FR-013 (bare `#N` outside checkbox is NOT
+- [X] T053 [US2] Add tests for FR-013 (bare `#N` outside checkbox is NOT
   scanned: `- #99`, `1. #99`, prose `see #99` under `defaultRepo` all
   produce no refs and no warnings) and FR-007 (cross-repo qualified
   `other/other-repo#5` inside a checkbox stays qualified — `defaultRepo` does
   not override).
 
-- [ ] T054 [US2] Add tests for FR-003 (malformed `defaultRepo`): three
+- [X] T054 [US2] Add tests for FR-003 (malformed `defaultRepo`): three
   variants — `'not-owner-repo'`, `'owner/repo/extra'`, `''` — each produces
   exactly one warning matching `/invalid defaultRepo/` and behaves as if
   the option were absent (bare `#N` inside checkbox rejected, matches
@@ -148,14 +148,14 @@
 ## Phase 7: Tests — fixtures (Verification)
 <!-- Depends on Phase 2, 3 -->
 
-- [ ] T060 [US1] Re-pin snapshot for
+- [X] T060 [US1] Re-pin snapshot for
   `packages/cockpit/src/resolver/__tests__/fixtures/epic-1006-snappoll.md`.
   Run `pnpm --filter @generacy-ai/cockpit test -u` (or the project's snapshot
   update flag), then verify by inspection: H4-authored phases now populated
   with their child refs; `adhocRefs` is empty for those phases. Reference
   expected behavior in `research.md §D-8` and `spec.md SC-001`. Satisfies SC-001.
 
-- [ ] T061 [US2] Create new fixture
+- [X] T061 [US2] Create new fixture
   `packages/cockpit/src/resolver/__tests__/fixtures/epic-1014-bare-refs.md`
   with the content in `research.md §D-8` (bare `#N` checkboxes + one plain
   bullet `- #99` control + one cross-repo qualified ref). Add snapshot
@@ -166,7 +166,7 @@
     - negative (without `defaultRepo`): warnings contain 4 entries with
       marker `bare '#N'`; refs collapse accordingly. Satisfies FR-009.
 
-- [ ] T062 [US3] Confirm zero snapshot diffs for all non-re-pinned fixtures
+- [X] T062 [US3] Confirm zero snapshot diffs for all non-re-pinned fixtures
   (particularly `epic-826-*` — H3-authored, qualified refs). Run
   `pnpm --filter @generacy-ai/cockpit test` — if any fixture other than
   `epic-1006-snappoll.md` shows a diff, investigate before updating.
@@ -177,7 +177,7 @@
 ## Phase 8: Tests — resolveEpic + writer (Verification)
 <!-- Depends on Phase 4, 5 -->
 
-- [ ] T070 [P] [US2] Extend
+- [X] T070 [P] [US2] Extend
   `packages/cockpit/src/resolver/__tests__/resolve.test.ts` with a case for
   FR-006: mock `gh.getIssue` to return a body containing `- [ ] #223`; call
   `resolveEpic({ epicRef: 'my-org/my-repo#1', gh })`; assert
@@ -185,7 +185,7 @@
   and `r.parsed.warnings.length === 0` (i.e. `defaultRepo` was passed
   through). Reference the recipe in `quickstart.md §Recipe 3`. Satisfies SC-002.
 
-- [ ] T071 [P] [US3] Extend
+- [X] T071 [P] [US3] Extend
   `packages/generacy/src/cli/commands/cockpit/scope/__tests__/writer.test.ts`
   with `detectShape` cases:
     - H4-phased body (`#### P1 — Scaffold\n- [ ] owner/repo#1`) → `'phased'`.
@@ -197,7 +197,7 @@
       ad-hoc ref under a `## Ad-hoc` section at the tail, not appended at EOF
       (per `quickstart.md §Recipe 7`). Verifies FR-011 downstream effect.
 
-- [ ] T072 [P] [US3] Confirm SC-005: direct `parseEpicBody(body)` (no options)
+- [X] T072 [P] [US3] Confirm SC-005: direct `parseEpicBody(body)` (no options)
   behavior is byte-identical to today. Add a single regression test in
   `parse-epic-body.test.ts` that runs a canonical body through both signatures
   (`parseEpicBody(body)` and `parseEpicBody(body, undefined)`) and asserts
@@ -207,7 +207,7 @@
 
 ## Phase 9: Changeset & CI gate
 
-- [ ] T080 [US1,US2,US3] Add `.changeset/1014-h4-phase-and-bare-refs.md`
+- [X] T080 [US1,US2,US3] Add `.changeset/1014-h4-phase-and-bare-refs.md`
   with the content in `quickstart.md §CI gate`:
 
   ```

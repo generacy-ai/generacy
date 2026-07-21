@@ -49,3 +49,23 @@ export interface ResolveEpicOptions {
   logger?: { warn: (m: string) => void };
   now?: () => Date;
 }
+
+/**
+ * Options for `parseEpicBody`. All fields are optional; passing no options
+ * (or an empty object) is equivalent to calling `parseEpicBody(body)`.
+ */
+export interface ParseEpicBodyOptions {
+  /**
+   * Canonical `"owner/repo"` string. When set, a bare `#N` ref inside a
+   * task-list checkbox item (`- [ ] #N` / `- [x] #N`) is accepted and
+   * resolved to `<defaultRepo>#N`. Bare refs outside checkbox items
+   * remain unaffected. When absent (or undefined), the parser rejects
+   * bare refs with the existing #826 warning.
+   *
+   * Validation: MUST match `/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/`.
+   * Malformed input is treated as if the option were absent, and a
+   * warning is emitted (marker substring: `invalid defaultRepo`).
+   * Never throws.
+   */
+  defaultRepo?: string;
+}
