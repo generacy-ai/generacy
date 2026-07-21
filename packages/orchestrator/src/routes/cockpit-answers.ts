@@ -1,6 +1,6 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { GateAnswerSchema } from '@generacy-ai/cockpit';
+import { GateAnswerEnvelopeSchema } from '@generacy-ai/cockpit';
 import type { CockpitAnswersWriter } from '../services/cockpit-answers-writer.js';
 
 interface Logger {
@@ -34,7 +34,7 @@ export function setupCockpitAnswersRoute(
       }
 
       try {
-        const parsed = GateAnswerSchema.parse(request.body);
+        const parsed = GateAnswerEnvelopeSchema.parse(request.body);
         // Fast path: avoid the mutex acquisition when we can already tell
         // this deliveryId is a duplicate. The authoritative check happens
         // inside append() under its mutex so concurrent redeliveries of the

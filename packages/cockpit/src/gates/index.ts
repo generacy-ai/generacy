@@ -1,8 +1,8 @@
 export {
   GateOpenSchema,
   GateAckSchema,
-  GateAnswerSchema,
+  GateAnswerEnvelopeSchema,
   type GateOpen,
   type GateAck,
-  type GateAnswer,
+  type GateAnswerEnvelope,
 } from './schema.js';

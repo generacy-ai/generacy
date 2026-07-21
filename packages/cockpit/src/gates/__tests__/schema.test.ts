@@ -3,7 +3,7 @@ import { ZodError } from 'zod';
 import {
   GateOpenSchema,
   GateAckSchema,
-  GateAnswerSchema,
+  GateAnswerEnvelopeSchema,
 } from '../schema.js';
 
 const canonicalOpen = {
@@ -160,13 +160,13 @@ describe('GateAckSchema', () => {
   });
 });
 
-describe('GateAnswerSchema', () => {
+describe('GateAnswerEnvelopeSchema', () => {
   it('parses a canonical wire example', () => {
-    expect(() => GateAnswerSchema.parse(canonicalAnswer)).not.toThrow();
+    expect(() => GateAnswerEnvelopeSchema.parse(canonicalAnswer)).not.toThrow();
   });
 
   it('preserves passthrough fields', () => {
-    const parsed = GateAnswerSchema.parse({
+    const parsed = GateAnswerEnvelopeSchema.parse({
       ...canonicalAnswer,
       extra: 'kept',
     });
@@ -176,7 +176,7 @@ describe('GateAnswerSchema', () => {
   it('rejects missing deliveryId', () => {
     const { deliveryId: _deliveryId, ...withoutDeliveryId } = canonicalAnswer;
     void _deliveryId;
-    const result = GateAnswerSchema.safeParse(withoutDeliveryId);
+    const result = GateAnswerEnvelopeSchema.safeParse(withoutDeliveryId);
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(
@@ -186,7 +186,7 @@ describe('GateAnswerSchema', () => {
   });
 
   it('rejects empty deliveryId', () => {
-    const result = GateAnswerSchema.safeParse({
+    const result = GateAnswerEnvelopeSchema.safeParse({
       ...canonicalAnswer,
       deliveryId: '',
     });
@@ -194,7 +194,7 @@ describe('GateAnswerSchema', () => {
   });
 
   it('rejects wrong kind literal', () => {
-    const result = GateAnswerSchema.safeParse({
+    const result = GateAnswerEnvelopeSchema.safeParse({
       ...canonicalAnswer,
       kind: 'gate-open',
     });
@@ -202,7 +202,7 @@ describe('GateAnswerSchema', () => {
   });
 
   it('rejects non-ISO8601 answeredAt', () => {
-    const result = GateAnswerSchema.safeParse({
+    const result = GateAnswerEnvelopeSchema.safeParse({
       ...canonicalAnswer,
       answeredAt: 'not-a-date',
     });
@@ -211,13 +211,13 @@ describe('GateAnswerSchema', () => {
 
   it('accepts answer field of any type', () => {
     expect(() =>
-      GateAnswerSchema.parse({ ...canonicalAnswer, answer: 'string' }),
+      GateAnswerEnvelopeSchema.parse({ ...canonicalAnswer, answer: 'string' }),
     ).not.toThrow();
     expect(() =>
-      GateAnswerSchema.parse({ ...canonicalAnswer, answer: 42 }),
+      GateAnswerEnvelopeSchema.parse({ ...canonicalAnswer, answer: 42 }),
     ).not.toThrow();
     expect(() =>
-      GateAnswerSchema.parse({ ...canonicalAnswer, answer: null }),
+      GateAnswerEnvelopeSchema.parse({ ...canonicalAnswer, answer: null }),
     ).not.toThrow();
   });
 });

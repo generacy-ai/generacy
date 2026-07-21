@@ -20,7 +20,7 @@ export const GateAckSchema = z
   })
   .passthrough();
 
-export const GateAnswerSchema = z
+export const GateAnswerEnvelopeSchema = z
   .object({
     kind: z.literal('gate-answer'),
     deliveryId: z.string().min(1),
@@ -33,4 +33,4 @@ export const GateAnswerSchema = z
 
 export type GateOpen = z.infer<typeof GateOpenSchema>;
 export type GateAck = z.infer<typeof GateAckSchema>;
-export type GateAnswer = z.infer<typeof GateAnswerSchema>;
+export type GateAnswerEnvelope = z.infer<typeof GateAnswerEnvelopeSchema>;
