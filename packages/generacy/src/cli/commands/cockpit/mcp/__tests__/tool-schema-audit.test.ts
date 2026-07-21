@@ -12,12 +12,13 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { buildMcpServer } from '../server.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TOOLS_DIR = join(__dirname, '..', 'tools');
 const CLI_DIR = join(__dirname, '..', '..');
 
-type RefKind = 'issue' | 'epic' | 'scope';
+type RefKind = 'issue' | 'epic' | 'scope' | 'gate';
 
 /**
  * The audit table. Each entry names the wrapped CLI verb's REF kind — this
@@ -25,6 +26,10 @@ type RefKind = 'issue' | 'epic' | 'scope';
  *
  *   'issue' — the wrapped verb operates on a single issue ref
  *   'epic'  — the wrapped verb operates on an epic ref
+ *   'scope' — the wrapped verb operates on a scope issue's body (add/remove)
+ *   'gate'  — #1022 remote-gate tools; no ref field (input is a gate record
+ *             or a `{gateId,outcome,detail?}` triple). Ref-field assertion is
+ *             skipped for this kind — see the per-kind block below.
  */
 const EXPECTED_KIND: Record<string, RefKind> = {
   cockpit_status: 'epic',
@@ -46,6 +51,9 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   // (the epic-or-tracking issue whose claim state is being manipulated).
   cockpit_claim: 'scope',
   cockpit_release: 'scope',
+  // #1022 — remote-gate tools. No ref field; see the 'gate' RefKind doc.
+  cockpit_gate_open: 'gate',
+  cockpit_gate_ack: 'gate',
 };
 
 /**
@@ -57,6 +65,8 @@ const SCHEMA_FIELD_BY_KIND: Record<RefKind, string> = {
   issue: 'issue',
   epic: 'epic',
   scope: 'scope',
+  // 'gate' kind has no canonical ref field — assertion is skipped below.
+  gate: '',
 };
 
 /**
@@ -68,6 +78,7 @@ const CLI_TOKENS_BY_KIND: Record<RefKind, string[]> = {
   issue: ['<issue>', '<issue-ref>', '[issue]'],
   epic: ['<epic>', '<epic-ref>'],
   scope: ['<scope-ref>'],
+  gate: [],
 };
 
 /**
@@ -91,6 +102,12 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   // #1015 — MCP-only tools. Skill-side CLI wiring lives in the agency repo.
   cockpit_claim: null,
   cockpit_release: null,
+  // #1022 — Q3 → A exception to design invariant #1: no CLI twin. Rationale
+  // documented in server.ts above the two registrations. Mocked-orchestrator
+  // parity tests (parity-gate-*.test.ts) exercise the code paths a CLI twin
+  // would have.
+  cockpit_gate_open: null,
+  cockpit_gate_ack: null,
 };
 
 const schemasSource = readFileSync(
@@ -113,24 +130,55 @@ describe('#928 Q3 → B tool-schema audit table', () => {
     }
   });
 
+  it('buildMcpServer({}) registers every cockpit_* tool named in the audit table (#1022)', () => {
+    const server = buildMcpServer({});
+    // Access the SDK's private registered-tools map for introspection.
+    const registered = (server as unknown as { _registeredTools: Record<string, unknown> })
+      ._registeredTools;
+    expect(registered, 'buildMcpServer must expose registered tools').toBeDefined();
+    const registeredNames = Object.keys(registered);
+    for (const tool of Object.keys(EXPECTED_KIND)) {
+      expect(
+        registeredNames,
+        `${tool} must be registered by buildMcpServer`,
+      ).toContain(tool);
+    }
+    // Sanity: the two #1022 tools are in the built server.
+    expect(registeredNames).toContain('cockpit_gate_open');
+    expect(registeredNames).toContain('cockpit_gate_ack');
+  });
+
   for (const [toolName, kind] of Object.entries(EXPECTED_KIND)) {
     describe(`${toolName} → ${kind}`, () => {
-      it(`schemas.ts declares a "${SCHEMA_FIELD_BY_KIND[kind]}:" field on the tool's input schema`, () => {
-        const schemaName = mcpToolToSchemaName(toolName);
-        const source = schemasSource;
-        // Extract the schema definition body.
-        const bodyRegex = new RegExp(
-          `${schemaName}\\s*=\\s*z[\\s\\S]*?\\.strict\\(\\)`,
-          'm',
-        );
-        const match = bodyRegex.exec(source);
-        expect(match, `${schemaName} not found or not .strict() in schemas.ts`).not.toBeNull();
-        const body = match![0];
-        const fieldRegex = new RegExp(
-          `\\b${SCHEMA_FIELD_BY_KIND[kind]}\\s*:`,
-        );
-        expect(fieldRegex.test(body), `${schemaName} must declare a "${SCHEMA_FIELD_BY_KIND[kind]}:" field`).toBe(true);
-      });
+      if (kind === 'gate') {
+        // #1022 — gate tools carry no ref field; the schema-field audit does
+        // not apply. Assert instead that the two symbols are exported from
+        // schemas.ts so the tool handlers have a stable import surface.
+        it(`schemas.ts exports the tool's input schema symbol`, () => {
+          const schemaName = mcpToolToSchemaName(toolName);
+          const exportRegex = new RegExp(`export const ${schemaName}\\b`);
+          expect(exportRegex.test(schemasSource), `${schemaName} must be exported from schemas.ts`).toBe(
+            true,
+          );
+        });
+      } else {
+        it(`schemas.ts declares a "${SCHEMA_FIELD_BY_KIND[kind]}:" field on the tool's input schema`, () => {
+          const schemaName = mcpToolToSchemaName(toolName);
+          const source = schemasSource;
+          // Extract the schema definition body.
+          const bodyRegex = new RegExp(
+            `${schemaName}\\s*=\\s*z[\\s\\S]*?\\.strict\\(\\)`,
+            'm',
+          );
+          const match = bodyRegex.exec(source);
+          expect(match, `${schemaName} not found or not .strict() in schemas.ts`).not.toBeNull();
+          const body = match![0];
+          const fieldRegex = new RegExp(
+            `\\b${SCHEMA_FIELD_BY_KIND[kind]}\\s*:`,
+          );
+          expect(fieldRegex.test(body), `${schemaName} must declare a "${SCHEMA_FIELD_BY_KIND[kind]}:" field`).toBe(true);
+        });
+      }
 
       const verbFile = CLI_VERB_FILE[toolName];
       if (verbFile !== null) {
