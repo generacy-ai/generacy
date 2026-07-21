@@ -120,7 +120,7 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -196,7 +196,7 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -264,7 +264,7 @@ describe('doorbell bridge-mode regression (FR-007)', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 

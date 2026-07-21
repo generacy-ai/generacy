@@ -75,7 +75,7 @@ describe('runDoorbell branch selection', () => {
           /* do not throw */
         },
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -113,7 +113,7 @@ describe('runDoorbell branch selection', () => {
         channelFilePath: '/tmp/nonexistent',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn: () => undefined },
+        logger: { warn: () => undefined, info: () => undefined },
       },
     );
 
@@ -148,7 +148,7 @@ describe('runDoorbell branch selection', () => {
         channelFilePath: '/tmp/bogus',
         exit: () => undefined,
         abortSignal: abort.signal,
-        logger: { warn },
+        logger: { warn, info: () => undefined },
       },
     );
 
@@ -229,7 +229,7 @@ describe('runDoorbell branch selection', () => {
           channelFilePath: '/tmp/nonexistent',
           exit: () => undefined,
           abortSignal: abort.signal,
-          logger: { warn: () => undefined },
+          logger: { warn: () => undefined, info: () => undefined },
         },
       );
 

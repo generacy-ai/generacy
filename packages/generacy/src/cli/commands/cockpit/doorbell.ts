@@ -49,7 +49,7 @@ export interface DoorbellDeps {
   runner?: CommandRunner;
   gh?: GhWrapper;
   rateLimitScheduler?: RateLimitScheduler;
-  logger?: { warn: (msg: string) => void; info?: (msg: string) => void };
+  logger?: { warn: (msg: string) => void; info: (msg: string) => void };
   acquireBus?: (options: AcquireOptions) => Promise<Acquired>;
   abortSignal?: AbortSignal;
   stdout?: { write(chunk: string, cb?: () => void): boolean | void };
@@ -131,7 +131,7 @@ interface RunPollModeInput {
   form: Form & { kind: 'form-1' | 'form-2' };
   options: DoorbellOptions;
   deps: DoorbellDeps;
-  logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+  logger: { warn: (msg: string) => void; info: (msg: string) => void };
   stdout: { write(chunk: string, cb?: () => void): boolean | void };
   stderr: { write(chunk: string): boolean | void };
   stopPromise: Promise<void>;
@@ -226,7 +226,7 @@ interface RunSmeeModeInput {
   channelUrl: string;
   options: DoorbellOptions;
   deps: DoorbellDeps;
-  logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+  logger: { warn: (msg: string) => void; info: (msg: string) => void };
   stdout: { write(chunk: string, cb?: () => void): boolean | void };
   selector: SourceSelector;
   stop: () => void;
@@ -334,8 +334,10 @@ export async function runDoorbell(
     return 2;
   }
 
-  const logger =
-    deps.logger ?? { warn: (msg: string) => process.stderr.write(`${msg}\n`) };
+  const logger = deps.logger ?? {
+    warn: (msg: string) => process.stderr.write(`${msg}\n`),
+    info: (msg: string) => process.stderr.write(`${msg}\n`),
+  };
 
   let stopResolve: () => void = () => undefined;
   const stopPromise = new Promise<void>((resolve) => {
