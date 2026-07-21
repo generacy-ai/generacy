@@ -12,8 +12,7 @@ import type {
   LeaseRequestResult,
   LeaseConfig,
   ILeaseManager,
-  RelayLeaseGranted,
-  RelayLeaseDenied,
+  RelayLeaseResponse,
   RelaySlotAvailable,
   RelayTierInfo,
   RelayClusterRejected,
@@ -45,6 +44,8 @@ export class LeaseManager extends EventEmitter implements ILeaseManager {
   private readonly activeLeases = new Map<string, Lease>();
   /** Pending lease requests: correlationId → PendingRequest */
   private readonly pendingRequests = new Map<string, PendingRequest>();
+  /** Outstanding release correlationIds awaiting their `released` ack */
+  private readonly pendingReleases = new Set<string>();
 
   private _userTierLimit: number | null = null;
   private _clusterRejected = false;
@@ -123,12 +124,22 @@ export class LeaseManager extends EventEmitter implements ILeaseManager {
       this.activeLeases.delete(leaseId);
     }
 
-    // Send lease_release (fire-and-forget)
+    // Send lease_release (fire-and-forget). The cloud REQUIRES a
+    // correlationId and refuses the release without one; it acks with a
+    // lease_response {status: 'released'} we swallow via pendingReleases.
+    const correlationId = randomUUID();
     try {
       this.client.send({
         type: 'lease_release',
+        correlationId,
         leaseId,
       } as RelayMessage);
+      this.pendingReleases.add(correlationId);
+      // Drop the tracking entry if the ack never arrives.
+      const timer = setTimeout(() => {
+        this.pendingReleases.delete(correlationId);
+      }, this.config.requestTimeoutMs);
+      timer.unref?.();
       this.logger.debug({ leaseId }, 'Lease released');
     } catch (error) {
       this.logger.warn(
@@ -139,14 +150,21 @@ export class LeaseManager extends EventEmitter implements ILeaseManager {
   }
 
   /**
-   * Handle an inbound lease response from the relay.
-   * Called by RelayBridge when it receives lease_granted or lease_denied.
+   * Handle an inbound lease_response from the relay (#1016).
+   * Answers both lease_request (granted/denied/error) and lease_release
+   * (released) by correlationId.
    */
-  handleLeaseResponse(msg: RelayLeaseGranted | RelayLeaseDenied): void {
+  handleLeaseResponse(msg: RelayLeaseResponse): void {
+    // Acks for fire-and-forget releases are expected and silently consumed.
+    if (this.pendingReleases.delete(msg.correlationId)) {
+      this.logger.debug({ correlationId: msg.correlationId, status: msg.status }, 'Lease release acked');
+      return;
+    }
+
     const pending = this.pendingRequests.get(msg.correlationId);
     if (!pending) {
       this.logger.warn(
-        { correlationId: msg.correlationId, type: msg.type },
+        { correlationId: msg.correlationId, status: msg.status },
         'Received lease response for unknown correlation ID',
       );
       return;
@@ -155,15 +173,47 @@ export class LeaseManager extends EventEmitter implements ILeaseManager {
     clearTimeout(pending.timer);
     this.pendingRequests.delete(msg.correlationId);
 
-    if (msg.type === 'lease_granted') {
-      this.logger.info({ leaseId: msg.leaseId }, 'Lease granted');
-      pending.resolve({ status: 'granted', leaseId: msg.leaseId });
-    } else {
-      this.logger.info(
-        { reason: msg.reason, correlationId: msg.correlationId },
-        'Lease denied',
-      );
-      pending.resolve({ status: 'denied', reason: msg.reason });
+    switch (msg.status) {
+      case 'granted': {
+        if (!msg.leaseId) {
+          this.logger.error(
+            { correlationId: msg.correlationId },
+            'lease_response granted without leaseId — treating as error',
+          );
+          pending.resolve({ status: 'error', message: 'granted response missing leaseId' });
+          return;
+        }
+        this.logger.info({ leaseId: msg.leaseId }, 'Lease granted');
+        pending.resolve({ status: 'granted', leaseId: msg.leaseId });
+        return;
+      }
+      case 'denied': {
+        // The denial payload carries the tier's concurrency limit — the only
+        // place the cloud currently reports it (tier_info is never sent).
+        if (typeof msg.limit === 'number') {
+          this._userTierLimit = msg.limit;
+        }
+        this.logger.info(
+          { reason: msg.reason, currentCount: msg.currentCount, limit: msg.limit },
+          'Lease denied',
+        );
+        pending.resolve({ status: 'denied', reason: msg.reason ?? 'denied' });
+        return;
+      }
+      case 'released': {
+        // A release ack matched a request correlation — protocol confusion,
+        // but resolve as error rather than leaving the caller to time out.
+        pending.resolve({ status: 'error', message: 'unexpected released status for lease_request' });
+        return;
+      }
+      case 'error': {
+        this.logger.warn(
+          { correlationId: msg.correlationId, message: msg.message },
+          'Lease request errored on cloud',
+        );
+        pending.resolve({ status: 'error', message: msg.message ?? 'unknown cloud error' });
+        return;
+      }
     }
   }
 
@@ -211,13 +261,13 @@ export class LeaseManager extends EventEmitter implements ILeaseManager {
     this.logger.error(
       {
         reason: msg.reason,
-        tier: msg.tier,
-        maxActiveClusters: msg.maxActiveClusters,
-        currentActiveClusters: msg.currentActiveClusters,
+        tierName: msg.tierName,
+        currentLimit: msg.currentLimit,
+        upgradeHint: msg.upgradeHint,
       },
       'Cluster rejected by cloud',
     );
-    this.emit('cluster:rejected', { reason: msg.reason, tier: msg.tier });
+    this.emit('cluster:rejected', { reason: msg.reason, tier: msg.tierName ?? 'unknown' });
   }
 
   /**

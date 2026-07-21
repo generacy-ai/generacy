@@ -172,6 +172,8 @@ export const DispatchConfigSchema = z.object({
   shutdownTimeoutMs: z.number().int().min(5000).default(60000),
   /** Maximum retry attempts before dead-lettering */
   maxRetries: z.number().int().min(1).default(3),
+  /** Backstop delay before resuming polling after a lease denial when no slot_available arrives (ms) */
+  denialResumeMs: z.number().int().min(5000).default(60000),
 });
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 

@@ -167,10 +167,16 @@ describe('messages', () => {
   });
 
   describe('RelayMessageSchema', () => {
-    it('validates all 11 message types', () => {
-      const types = ['api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error', 'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close'];
+    it('validates all 18 message types', () => {
+      const types = [
+        'api_request', 'api_response', 'event', 'conversation', 'heartbeat', 'handshake', 'error',
+        'lease_request', 'lease_release', 'lease_heartbeat', 'lease_response', 'slot_available',
+        'cluster_rejected', 'tier_info',
+        'tunnel_open', 'tunnel_open_ack', 'tunnel_data', 'tunnel_close',
+      ];
+      expect(types).toHaveLength(18);
       // Confirm schema accepts these types by checking discriminator key
-      expect(RelayMessageSchema.options).toHaveLength(11);
+      expect(RelayMessageSchema.options).toHaveLength(18);
     });
   });
 
@@ -312,6 +318,121 @@ describe('messages', () => {
       };
       const result = parseRelayMessage(msg);
       expect(result).toBeNull();
+    });
+  });
+
+  describe('lease protocol message types (#1016)', () => {
+    it('parses a valid lease_request message', () => {
+      const msg = {
+        type: 'lease_request',
+        correlationId: 'corr-1',
+        queueItemId: 'owner/repo#42',
+        jobId: 'owner/repo#42',
+        userId: 'user-1',
+      };
+      const result = parseRelayMessage(msg);
+      expect(result).toEqual(msg);
+    });
+
+    it('parses a lease_request without optional userId', () => {
+      const msg = {
+        type: 'lease_request',
+        correlationId: 'corr-1',
+        queueItemId: 'owner/repo#42',
+        jobId: 'owner/repo#42',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a valid lease_release message', () => {
+      const msg = {
+        type: 'lease_release',
+        correlationId: 'corr-2',
+        leaseId: 'lease-1',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('rejects a lease_release without correlationId (cloud requires it)', () => {
+      const msg = { type: 'lease_release', leaseId: 'lease-1' };
+      expect(parseRelayMessage(msg)).toBeNull();
+    });
+
+    it('parses a valid lease_heartbeat message', () => {
+      const msg = { type: 'lease_heartbeat', leaseId: 'lease-1' };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a granted lease_response with full payload', () => {
+      const msg = {
+        type: 'lease_response',
+        correlationId: 'corr-1',
+        status: 'granted',
+        leaseId: 'lease-1',
+        ttlSeconds: 300,
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a denied lease_response with limit context', () => {
+      const msg = {
+        type: 'lease_response',
+        correlationId: 'corr-1',
+        status: 'denied',
+        reason: 'at_capacity',
+        currentCount: 1,
+        limit: 1,
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses released and error lease_response statuses', () => {
+      expect(
+        parseRelayMessage({ type: 'lease_response', correlationId: 'c', status: 'released' }),
+      ).not.toBeNull();
+      expect(
+        parseRelayMessage({ type: 'lease_response', correlationId: 'c', status: 'error', message: 'boom' }),
+      ).not.toBeNull();
+    });
+
+    it('rejects a lease_response with an unknown status', () => {
+      const msg = { type: 'lease_response', correlationId: 'c', status: 'maybe' };
+      expect(parseRelayMessage(msg)).toBeNull();
+    });
+
+    it('parses a slot_available broadcast (org-broadcast shape)', () => {
+      const msg = {
+        type: 'slot_available',
+        userId: 'user-1',
+        orgId: 'org-1',
+        timestamp: '2026-07-21T00:00:00.000Z',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a minimal slot_available with only userId', () => {
+      const msg = { type: 'slot_available', userId: 'user-1' };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a cluster_rejected message with cloud field names', () => {
+      const msg = {
+        type: 'cluster_rejected',
+        reason: 'cluster_limit_reached',
+        currentLimit: 1,
+        tierName: 'free',
+        upgradeHint: 'Upgrade to run more clusters.',
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
+    });
+
+    it('parses a tier_info message', () => {
+      const msg = {
+        type: 'tier_info',
+        tier: 'professional',
+        maxConcurrentWorkflows: 5,
+      };
+      expect(parseRelayMessage(msg)).toEqual(msg);
     });
   });
 

@@ -89,6 +89,65 @@ export interface TunnelCloseMessage {
   reason?: string;
 }
 
+// --- Lease protocol messages (#418 / #1016) ---
+// Wire shapes mirror generacy-cloud services/api/src/services/relay/relay-types.ts.
+// Cluster → cloud: lease_request / lease_release / lease_heartbeat.
+// Cloud → cluster: lease_response / slot_available / cluster_rejected / tier_info.
+
+export interface LeaseRequestMessage {
+  type: 'lease_request';
+  correlationId: string;
+  queueItemId: string;
+  jobId: string;
+  userId?: string;
+}
+
+export interface LeaseReleaseMessage {
+  type: 'lease_release';
+  correlationId: string;
+  leaseId: string;
+}
+
+export interface LeaseHeartbeatMessage {
+  type: 'lease_heartbeat';
+  leaseId: string;
+}
+
+export interface LeaseResponseMessage {
+  type: 'lease_response';
+  correlationId: string;
+  status: 'granted' | 'denied' | 'released' | 'error';
+  leaseId?: string;
+  ttlSeconds?: number;
+  reason?: string;
+  currentCount?: number;
+  limit?: number;
+  message?: string;
+}
+
+export interface SlotAvailableMessage {
+  type: 'slot_available';
+  userId: string;
+  orgId?: string;
+  timestamp?: string;
+  availableSlots?: number;
+}
+
+export interface ClusterRejectedMessage {
+  type: 'cluster_rejected';
+  reason: string;
+  currentLimit?: number;
+  tierName?: string;
+  upgradeHint?: string;
+}
+
+export interface TierInfoMessage {
+  type: 'tier_info';
+  tier: string;
+  maxConcurrentWorkflows: number;
+  maxActiveClusters?: number;
+}
+
 export type RelayMessage =
   | ApiRequestMessage
   | ApiResponseMessage
@@ -97,6 +156,13 @@ export type RelayMessage =
   | HeartbeatMessage
   | HandshakeMessage
   | ErrorMessage
+  | LeaseRequestMessage
+  | LeaseReleaseMessage
+  | LeaseHeartbeatMessage
+  | LeaseResponseMessage
+  | SlotAvailableMessage
+  | ClusterRejectedMessage
+  | TierInfoMessage
   | TunnelOpenMessage
   | TunnelOpenAckMessage
   | TunnelDataMessage
@@ -237,6 +303,60 @@ const TunnelCloseMessageSchema = z.object({
   reason: z.string().optional(),
 });
 
+const LeaseRequestMessageSchema = z.object({
+  type: z.literal('lease_request'),
+  correlationId: z.string().min(1),
+  queueItemId: z.string().min(1),
+  jobId: z.string().min(1),
+  userId: z.string().optional(),
+});
+
+const LeaseReleaseMessageSchema = z.object({
+  type: z.literal('lease_release'),
+  correlationId: z.string().min(1),
+  leaseId: z.string().min(1),
+});
+
+const LeaseHeartbeatMessageSchema = z.object({
+  type: z.literal('lease_heartbeat'),
+  leaseId: z.string().min(1),
+});
+
+const LeaseResponseMessageSchema = z.object({
+  type: z.literal('lease_response'),
+  correlationId: z.string().min(1),
+  status: z.enum(['granted', 'denied', 'released', 'error']),
+  leaseId: z.string().optional(),
+  ttlSeconds: z.number().optional(),
+  reason: z.string().optional(),
+  currentCount: z.number().optional(),
+  limit: z.number().optional(),
+  message: z.string().optional(),
+});
+
+const SlotAvailableMessageSchema = z.object({
+  type: z.literal('slot_available'),
+  userId: z.string().min(1),
+  orgId: z.string().optional(),
+  timestamp: z.string().optional(),
+  availableSlots: z.number().optional(),
+});
+
+const ClusterRejectedMessageSchema = z.object({
+  type: z.literal('cluster_rejected'),
+  reason: z.string(),
+  currentLimit: z.number().optional(),
+  tierName: z.string().optional(),
+  upgradeHint: z.string().optional(),
+});
+
+const TierInfoMessageSchema = z.object({
+  type: z.literal('tier_info'),
+  tier: z.string(),
+  maxConcurrentWorkflows: z.number(),
+  maxActiveClusters: z.number().optional(),
+});
+
 export const RelayMessageSchema = z.discriminatedUnion('type', [
   ApiRequestMessageSchema,
   ApiResponseMessageSchema,
@@ -245,6 +365,13 @@ export const RelayMessageSchema = z.discriminatedUnion('type', [
   HeartbeatMessageSchema,
   HandshakeMessageSchema,
   ErrorMessageSchema,
+  LeaseRequestMessageSchema,
+  LeaseReleaseMessageSchema,
+  LeaseHeartbeatMessageSchema,
+  LeaseResponseMessageSchema,
+  SlotAvailableMessageSchema,
+  ClusterRejectedMessageSchema,
+  TierInfoMessageSchema,
   TunnelOpenMessageSchema,
   TunnelOpenAckMessageSchema,
   TunnelDataMessageSchema,

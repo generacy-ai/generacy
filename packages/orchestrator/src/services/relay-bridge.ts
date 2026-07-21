@@ -312,7 +312,7 @@ export class RelayBridge {
         this.handleApiRequest(msg);
       } else if (msg.type === 'conversation') {
         this.handleConversationMessage(msg as RelayMessage & { type: 'conversation'; conversationId: string; data: unknown });
-      } else if (msg.type === 'lease_granted' || msg.type === 'lease_denied') {
+      } else if (msg.type === 'lease_response') {
         if (this.leaseManager) {
           this.leaseManager.handleLeaseResponse(msg);
         }
@@ -335,7 +335,7 @@ export class RelayBridge {
           data: {
             message: 'Active cluster limit reached for your plan.',
             reason: msg.reason,
-            tier: msg.tier,
+            tier: msg.tierName ?? 'unknown',
           },
           timestamp: new Date().toISOString(),
         } as SSEEvent);

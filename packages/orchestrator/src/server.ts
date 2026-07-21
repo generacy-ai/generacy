@@ -458,6 +458,21 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     if (workerRelayClient) {
       const workerLeaseManager = new LeaseManager(workerRelayClient, server.log, config.lease);
       workerDispatcher.setLeaseManager(workerLeaseManager);
+
+      // Route inbound lease-protocol messages to the lease manager (#1016).
+      // Without this, worker mode had no inbound routing at all: lease
+      // responses were dropped and the dispatch gate never engaged.
+      workerRelayClient.on('message', (msg) => {
+        if (msg.type === 'lease_response') {
+          workerLeaseManager.handleLeaseResponse(msg);
+        } else if (msg.type === 'slot_available') {
+          workerLeaseManager.handleSlotAvailable(msg);
+        } else if (msg.type === 'tier_info') {
+          workerLeaseManager.handleTierInfo(msg);
+        } else if (msg.type === 'cluster_rejected') {
+          workerLeaseManager.handleClusterRejected(msg);
+        }
+      });
     }
   }
 
