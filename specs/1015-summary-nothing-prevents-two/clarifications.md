@@ -14,7 +14,7 @@
 - C: Comment + label combination — structured comment carries the payload (sessionId, heartbeatAt, ledger); a `cockpit:claimed` label acts as an enumeration index. Two writes per acquire/release, but discoverable and detailed.
 - D: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: C — Structured comment as the source of truth (fenced JSON carrying `sessionId`, `heartbeatAt`, ledger pointer; heartbeat = edit that comment) plus a `cockpit:claimed` label as a pure enumeration/status index. On any disagreement the comment wins: a stale/absent comment means no claim even if the label is present, and arm-time logic must tolerate an orphaned label (remove it and proceed). The `cockpit:` prefix is a new namespace, so no collision with `agent:*` / `waiting-for:*`. Acquire/release write both artifacts; heartbeat touches only the comment.
 
 ---
 
@@ -28,7 +28,7 @@
 - C: Hybrid: `cockpit_claim` (acquire + heartbeat combined) + separate `cockpit_release`; takeover is a flag on `cockpit_claim` (e.g. `takeover: true`).
 - D: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: C — `cockpit_claim` as an idempotent acquire-or-refresh (calling it while already holding the claim IS the heartbeat; on conflict it returns the current holder's payload for the refusal message) with `takeover: true` as a flag, plus a separate explicit `cockpit_release`. This keeps the surface small and makes the heartbeat trivially piggybackable — the auto loop just calls `cockpit_claim` on each wake.
 
 ---
 
@@ -43,7 +43,7 @@
 - D: Piggyback exclusively on the existing auto-loop tick (no dedicated interval) with a distinct absolute threshold (e.g. 10 min). Specify the target absolute threshold.
 - E: Other (specify cadence + threshold pair).
 
-**Answer**: *Pending*
+**Answer**: D — Piggyback on the auto-loop wake cycle: refresh the claim (via the Q2 `cockpit_claim` call) on every dispatch/heartbeat tick, with a **10-minute** staleness threshold. Rationale: the auto loop is a prose-driven session woken by events and heartbeat fallback — it cannot reliably hold a dedicated 60–120s timer (A/B), and fixed fast cadences burn the shared 5k/hr GitHub budget. Live-session wake gaps are comfortably under 10 minutes, and 10 minutes is an acceptable worst-case block after a crash.
 
 ---
 
@@ -58,7 +58,7 @@
 - D: All three surfaces (CLI flag + gate + MCP arg) — maximum flexibility, more code paths to test.
 - E: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: D — All three, because they compose rather than compete: the MCP `takeover: true` argument is the primitive mechanism; `--takeover` on `/cockpit:auto` expresses deliberate takeover at arm time; and when an arm WITHOUT the flag hits a live claim, the refusal surfaces as a gate-style confirmation offering takeover. Every surface funnels through the same MCP primitive.
 
 ---
 
@@ -72,7 +72,7 @@
 - C: On heartbeat + on any dispatch that is itself already touching the scope issue (opportunistic re-check) — no extra reads, but detection lag varies by dispatch pattern.
 - D: Other (specify).
 
-**Answer**: *Pending*
+**Answer**: C — Verify on heartbeat plus opportunistically on any dispatch that already reads the scope issue. With the Q2 tool shape, every claim refresh already reports a lost claim at zero additional cost, so detection lag is bounded by the wake cadence (≤ the Q3 threshold); a mandatory extra GitHub read on every advance/queue/merge (A) spends rate budget for marginal latency gain.
 
 ---
 

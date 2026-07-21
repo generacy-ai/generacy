@@ -1,14 +1,16 @@
-# Feature Specification: Active-driver claim per cockpit scope
+# Feature Specification: ## Summary
 
-Nothing prevents two `/cockpit:auto` conversations from driving the **same** scope (epic or tracking issue) at the same time. Add an active-driver claim per scope, enforced by an MCP tool, so a same-scope double-drive is refused with an explicit takeover path — while concurrent sessions on different scopes stay unaffected.
+Nothing prevents two `/cockpit:auto` conversations from driving the **same** scope (epic or tracking issue) at the same time
 
-**Branch**: `1015-summary-nothing-prevents-two` | **Date**: 2026-07-21 | **Status**: Draft | **Issue**: [#1015](https://github.com/generacy-ai/generacy/issues/1015)
+**Branch**: `1015-summary-nothing-prevents-two` | **Date**: 2026-07-21 | **Status**: Draft
 
 ## Summary
 
-`/cockpit:auto` has no coordination layer for concurrent drivers of the same scope. Both sessions independently dispatch `cockpit_advance` / `cockpit_queue` / `cockpit_merge` against the same issues, both fire human gates, and both mutate the scope body — GitHub-level races with no coordination layer. As multi-conversation usage becomes normal, an accidental same-scope double-drive needs to be detected and refused, with an explicit takeover path.
+## Summary
 
-Concurrent sessions on **different** scopes are already fine (per-scope refcounted event buses keyed by scope-ref, per-session ledger files) and must stay unaffected.
+Nothing prevents two `/cockpit:auto` conversations from driving the **same** scope (epic or tracking issue) at the same time. Both sessions independently dispatch `cockpit_advance` / `cockpit_queue` / `cockpit_merge` against the same issues, both fire human gates, and both mutate the scope body — GitHub-level races with no coordination layer. As multi-conversation usage becomes normal (different issue sets per conversation), an accidental same-scope double-drive needs to be detected and refused, with an explicit takeover path.
+
+Concurrent sessions on **different** scopes are already fine (per-scope refcounted event buses, timestamped ledger files) and must stay unaffected.
 
 ## Current behavior
 
@@ -18,150 +20,129 @@ Concurrent sessions on **different** scopes are already fine (per-scope refcount
 
 ## Proposed change
 
-Add an **active-driver claim** per scope-ref, checked when an auto run arms and released when it finishes.
+Add an **active-driver claim** per scope ref, checked when an auto run arms and released when it finishes.
 
-**Mechanism**: a claim marker **on the scope issue itself** (structured marker in a comment, and/or a label). Carries a session id and a heartbeat timestamp. Rationale:
+Recommended mechanism: a claim marker **on the scope issue itself** (comment with a structured marker, or a label + comment), carrying a session id and a heartbeat timestamp. Rationale:
 
 - Scope state already lives on GitHub (the task-list body); a GitHub-based claim works regardless of process topology (multiple MCP server instances, orchestrator vs. operator containers) and survives restarts/crashes via heartbeat staleness.
 - In-process registry claims cannot span conversations if each conversation has its own stdio MCP server process; a disk lock file has the same reach problem across containers.
 
-**Placement**: an MCP-tool-backed claim (recommended: `cockpit_claim` / `cockpit_release` and heartbeat piggy-backing on an existing periodic tool) keeps the invariant enforceable outside the auto skill's playbook prose. A skill-side check in `auto.md` alone would be bypassable and unenforced in future non-playbook drivers.
-
 Behavior:
 
-- **Arm**: before entering the main loop, attempt to claim the scope. If a live claim by another session exists (heartbeat fresher than the staleness threshold), refuse with a clear message identifying the other session (session id, ledger path, last heartbeat) and offer explicit takeover.
-- **Takeover**: an explicit operator choice (e.g. `--takeover` / a gate confirmation) replaces the claim; the superseded session's next dispatch detects the lost claim and downgrades to observer / exits cleanly.
-- **Heartbeat**: refresh the claim on a coarse interval (piggyback on the existing heartbeat cadence); a crashed session's claim goes stale after the threshold and can be claimed without takeover ceremony.
+- **Arm**: before entering the main loop, attempt to claim the scope. If a live claim by another session exists (heartbeat fresher than a staleness threshold), refuse with a clear message identifying the other session and its ledger, and offer explicit takeover.
+- **Takeover**: an explicit operator choice (e.g. `--takeover` or a gate confirmation) replaces the claim; the superseded session's next dispatch detects the lost claim and downgrades to observer/exits cleanly.
+- **Heartbeat**: refresh the claim on a coarse interval (piggyback on the existing heartbeat cadence); a crashed session's claim goes stale and can be claimed without takeover ceremony.
 - **Release**: on terminal (`epic-complete` / scope-drained finish) or clean exit, remove the claim.
-- **Observers unaffected**: `cockpit_status`, `/cockpit:watch`, and additional `cockpit_await_events` subscribers do not require or consume a claim — the claim gates *driving* (advance/queue/merge dispatch), not watching.
+- Observers (`cockpit_status`, `/cockpit:watch`, additional `cockpit_await_events` subscribers) are unaffected — the claim gates *driving* (advance/queue/merge dispatch), not watching.
+
+Exact placement (skill-side check in auto.md vs. an MCP tool like `cockpit_claim` / arm-time check inside `cockpit_await_events`) to be decided in spec phase; an MCP-tool-backed claim keeps the invariant enforceable outside the playbook prose and is recommended.
+
+## Out of scope
+
+- Parallelizing execution across sessions (per-user worker lease cap is a separate orchestrator concern).
+- Cross-session dedup of overlapping issue *sets* under different scopes (label collisions are pre-existing and unchanged).
+
+## Acceptance criteria
+
+- [ ] Arming auto on a scope with a live claim from another session refuses (or gates) with an actionable message; explicit takeover succeeds and the superseded session stops dispatching.
+- [ ] A crashed session's stale claim does not block a new session beyond the staleness threshold.
+- [ ] Claims are released on clean finish; observer tools never require or consume a claim.
+- [ ] Concurrent sessions on different scopes behave exactly as today.
+- [ ] Changeset included.
+
 
 ## User Stories
 
-### US1: Refuse a same-scope double-drive
+### US1: Second driver on the same scope is refused
 
-**As an** operator who accidentally arms `/cockpit:auto` in a second conversation against a scope another session is already driving,
-**I want** the second session to be refused with an actionable message identifying the incumbent,
-**So that** I do not create GitHub-level races (double advance / double queue / double merge / duplicate human gates / conflicting scope-body edits).
-
-**Acceptance Criteria**:
-- [ ] Arming an auto run on a scope with a live incumbent claim from another session is refused before any driving dispatch (`cockpit_advance` / `cockpit_queue` / `cockpit_merge`) fires.
-- [ ] The refusal message names the incumbent session id, its ledger path, and its last heartbeat timestamp — enough for the operator to find the other conversation.
-- [ ] No mutations occur on the scope issue or its child issues from the refused session.
-
-### US2: Explicit takeover of a stuck / abandoned driver
-
-**As an** operator whose earlier `/cockpit:auto` session is stuck, abandoned in another conversation, or otherwise unreachable, and who needs to resume driving from a new conversation,
-**I want** an explicit `--takeover` (or equivalent gate confirmation) that replaces the incumbent claim,
-**So that** I can regain control without waiting the full staleness threshold.
+**As an** operator who already has one `/cockpit:auto` conversation driving an epic,
+**I want** a second `/cockpit:auto` invocation against the same scope to refuse at arm time with an actionable message,
+**So that** two sessions cannot silently race on `cockpit_advance` / `cockpit_queue` / `cockpit_merge` against the same issues.
 
 **Acceptance Criteria**:
-- [ ] An explicit takeover request succeeds against a live claim and installs the new session id on the scope.
-- [ ] The superseded session detects the lost claim on its next driving dispatch and stops driving (downgrades to observer or exits cleanly), without further advance/queue/merge calls.
-- [ ] Takeover is auditable: both the takeover event and the superseded session's clean stop appear in their respective ledgers.
+- [ ] Arming auto on a scope with a live claim from another session refuses (or surfaces a takeover gate) with a message naming the other session id and its ledger path.
+- [ ] Concurrent auto sessions on **different** scopes are unaffected — no shared refusal, no shared claim.
+- [ ] Observer tools (`cockpit_status`, `/cockpit:watch`, additional `cockpit_await_events` subscribers) are never gated by the claim.
 
-### US3: Crashed driver does not block indefinitely
+### US2: Explicit takeover replaces the incumbent
 
-**As an** operator whose previous `/cockpit:auto` session crashed (MCP server killed, container restart, network partition) without releasing its claim,
-**I want** the stale claim to expire after a bounded staleness threshold,
-**So that** I can arm a new session without ceremony after that window.
-
-**Acceptance Criteria**:
-- [ ] A claim whose heartbeat has not been refreshed for longer than the staleness threshold does not block a new arm; the new session takes the claim as if it were absent.
-- [ ] Live claims (heartbeat within the threshold) continue to block per US1 — staleness is time-based, not "any restart wipes."
-
-### US4: Clean release on terminal / normal exit
-
-**As an** operator finishing an auto run normally (`epic-complete`, scope drained, or clean `SIGINT`),
-**I want** the claim released immediately,
-**So that** a follow-up session on the same scope does not need takeover or a staleness wait.
+**As an** operator whose original session is stuck / abandoned / owned by a different terminal,
+**I want** an explicit way to take over the scope's claim from a fresh conversation,
+**So that** I can resume driving without waiting out the staleness threshold.
 
 **Acceptance Criteria**:
-- [ ] On terminal (`epic-complete` / drained-finish) the claim is removed synchronously before the auto skill exits.
-- [ ] On clean `SIGINT` / graceful shutdown the claim is removed.
-- [ ] After a released claim, a new arm on the same scope succeeds immediately.
+- [ ] Passing `--takeover` on `/cockpit:auto`, confirming the gate presented on a refused arm, or calling the MCP claim tool with `takeover: true` all succeed against a live claim and replace it with the new session's id.
+- [ ] The superseded session's next `cockpit_claim` refresh reports a lost claim and the session downgrades to observer / exits cleanly without further dispatch.
+- [ ] The refusal message from an arm-without-takeover surfaces the takeover options (CLI flag, MCP arg, gate confirmation).
 
-### US5: Observers stay unaffected
+### US3: A crashed session's claim self-clears
 
-**As an** operator or maintainer running `cockpit_status`, `/cockpit:watch`, or an additional `cockpit_await_events` subscriber against a scope some other session is driving,
-**I want** observation to work without any claim interaction,
-**So that** watching a live epic never blocks it and never requires takeover.
-
-**Acceptance Criteria**:
-- [ ] `cockpit_status` returns without consulting or mutating the claim.
-- [ ] `/cockpit:watch` (and any observer-only `cockpit_await_events` subscriber) works against a claimed scope without triggering a claim check, refresh, or release.
-- [ ] Multiple concurrent observers against a claimed scope do not interfere with the incumbent driver's heartbeat or release.
-
-### US6: Different-scope concurrency unchanged
-
-**As a** power operator running two `/cockpit:auto` sessions in parallel against **different** scopes,
-**I want** both sessions to arm, drive, heartbeat, and release independently,
-**So that** the claim mechanism does not regress the already-supported multi-scope workflow.
+**As an** operator whose previous auto session crashed / lost its terminal without releasing the claim,
+**I want** the stale claim to be treated as absent after the staleness threshold,
+**So that** I can arm a new session without manual cleanup.
 
 **Acceptance Criteria**:
-- [ ] Two auto sessions armed against distinct scope refs both succeed with no cross-blocking.
-- [ ] Each session's claim, heartbeat, ledger, and release are isolated to its own scope.
-- [ ] Per-scope event-bus refcount/sharing semantics are unchanged.
+- [ ] A claim whose comment `heartbeatAt` is older than 10 minutes is treated as absent by arm-time logic — a new session acquires without a takeover ceremony.
+- [ ] An orphaned `cockpit:claimed` label with no matching comment (or with a stale comment) is tolerated at arm time: the label is removed and the arm proceeds.
 
 ## Functional Requirements
 
 | ID | Requirement | Priority | Notes |
 |----|-------------|----------|-------|
-| FR-001 | The engine MUST expose an MCP-tool-backed claim primitive (recommended: `cockpit_claim` acquire + `cockpit_release` release) that writes and reads a claim marker on the scope issue on GitHub. Skill-side-only enforcement in `auto.md` is prohibited as the sole gate. | P0 | Enforceable outside the playbook; future non-playbook drivers inherit the guard. |
-| FR-002 | The claim marker MUST carry at minimum: `sessionId`, `heartbeatAt` (ISO-8601), and a pointer to the session's ledger path (e.g. `.generacy/cockpit/auto-runs/<slug>-<timestamp>.ledger`). Exact storage shape (structured comment marker vs. label + comment vs. both) is a clarification. | P0 | Fields required for actionable refusal messages (US1). |
-| FR-003 | Before the auto loop enters its main dispatch cycle, the engine MUST attempt to acquire the scope claim. If a live claim by another session exists, the acquire MUST refuse and no driving dispatch (`cockpit_advance` / `cockpit_queue` / `cockpit_merge`) may fire from the refused session. | P0 | US1 primary gate. |
-| FR-004 | The refusal path MUST return a structured, actionable payload naming the incumbent's `sessionId`, its `ledger` path, and its `heartbeatAt`, plus an indicator of the takeover mechanism (e.g. `--takeover` flag). | P0 | Powers the operator-facing refusal message (US1 AC-2). |
-| FR-005 | The engine MUST support explicit takeover: a distinct acquire mode (e.g. `takeover: true`) that replaces a live incumbent claim with the caller's session id atomically on GitHub. | P0 | US2. |
-| FR-006 | On any driving dispatch (`cockpit_advance` / `cockpit_queue` / `cockpit_merge`), the engine MUST verify the caller still holds the scope claim. If the current claim on GitHub does not match the caller's `sessionId`, the dispatch MUST be refused and the caller MUST stop driving (downgrade to observer or exit cleanly). | P0 | Enforces the superseded-session stop half of US2. |
-| FR-007 | The engine MUST refresh the caller's claim `heartbeatAt` on a coarse interval, piggy-backed on an existing periodic tool call (e.g. within `cockpit_await_events` while driver-armed, or a dedicated heartbeat call in the loop). The exact cadence is a clarification. | P0 | Keeps live claims from being reaped mid-run; matches auto loop's existing heartbeat cadence. |
-| FR-008 | The engine MUST treat a claim whose `heartbeatAt` is older than a staleness threshold as absent — a new acquire succeeds without takeover ceremony. The exact threshold (e.g. 3× heartbeat interval) is a clarification. | P0 | US3. |
-| FR-009 | On terminal (`epic-complete`, scope-drained finish) the engine MUST remove the claim marker synchronously before the auto skill exits. | P0 | US4. |
-| FR-010 | On clean shutdown (`SIGINT` / graceful exit) the engine MUST remove the claim marker if it is still held. Best-effort — failure to remove is logged and left to the staleness backstop. | P1 | US4. |
-| FR-011 | Observer tools MUST NOT read, refresh, or write the claim marker. Enumerated: `cockpit_status`, `/cockpit:watch`, and any `cockpit_await_events` subscriber not paired with a claim acquire. | P0 | US5. |
-| FR-012 | The claim mechanism MUST be keyed by expanded scope-ref (`owner/repo#number`) using the same expansion path as `event-bus-registry.ts`. Concurrent sessions on distinct scope refs MUST not cross-block. | P0 | US6. |
-| FR-013 | Ledger integration: acquire, takeover, heartbeat refresh, superseded-session stop, and release events MUST each write a structured line to the calling session's ledger (`.generacy/cockpit/auto-runs/<slug>-<timestamp>.ledger`) using the existing ledger schema. | P1 | Auditability (US2 AC-3). |
-| FR-014 | A changeset MUST be included in the PR. Bump level (`patch` for fix, `minor` for the new MCP tool surface) is a clarification. | P0 | Per CI gate documented in CLAUDE.md. |
+| FR-001 | An MCP tool primitive (`cockpit_claim`) implements acquire, heartbeat-refresh (same call, idempotent when already-held), and takeover (via `takeover: true` flag). A separate `cockpit_release` MCP tool ends the claim. | P1 | Q2 → C. Single acquire-or-refresh entry point + explicit release. |
+| FR-002 | The claim marker is a structured HTML-comment-fenced JSON payload posted as a dedicated comment on the scope issue, carrying `sessionId`, `heartbeatAt` (ISO-8601), and a ledger pointer (relative path to the session's `.generacy/cockpit/auto-runs/<slug>-<timestamp>.ledger`). | P1 | Q1 → C. Source of truth for state. |
+| FR-003 | A `cockpit:claimed` label is applied to the scope issue as a pure enumeration/status index; the label carries no per-session state. If the label is present without a matching non-stale comment (orphaned label), arm-time logic MUST tolerate it by removing the label and proceeding. | P1 | Q1 → C. Comment always wins over label. |
+| FR-004 | On arm against a live claim held by another session, `cockpit_claim` returns the incumbent's payload; the caller MUST surface a refusal identifying the other session id and ledger path, and MUST list the three takeover surfaces (Q4). | P1 | Q4 → D. |
+| FR-005 | Takeover is invocable via three surfaces, all funneling through `cockpit_claim` with `takeover: true`: (a) `--takeover` CLI flag on `/cockpit:auto`, (b) an interactive gate-style confirmation offered by the auto skill after a refusal, (c) direct `takeover: true` MCP argument for scripted callers. | P1 | Q4 → D. |
+| FR-006 | The claim holder MUST verify it still holds the claim on every `cockpit_claim` refresh (which the auto loop calls on each wake — this is the primary detection path) and MAY opportunistically re-verify on any dispatch that already reads the scope issue. Every driving dispatch MUST NOT add a dedicated GitHub read solely for claim verification. | P1 | Q5 → C. |
+| FR-007 | The auto loop refreshes the claim by calling `cockpit_claim` (idempotent when already-held) on every dispatch tick / heartbeat wake — no dedicated timer. The refresh updates the comment's `heartbeatAt`; the label is not touched. | P1 | Q3 → D + Q2 → C. |
+| FR-008 | A claim whose comment `heartbeatAt` is older than **10 minutes** MUST be treated as absent by arm-time logic; a new arm can acquire without a takeover ceremony. | P1 | Q3 → D. |
+| FR-009 | On terminal outcomes (`epic-complete`, scope-drained, clean exit), `cockpit_release` MUST remove both the comment (or mark it released) and the `cockpit:claimed` label. | P1 | |
+| FR-010 | A session that detects a lost claim (Q5 path — `cockpit_claim` refresh returns another session as holder) MUST stop dispatching, log the takeover in its ledger, and exit cleanly. It MUST NOT attempt to reclaim. | P1 | |
+| FR-011 | Observer surfaces (`cockpit_status`, `/cockpit:watch`, standalone `cockpit_await_events` subscribers) MUST NOT acquire, refresh, verify, or release claims. Attaching an observer to a claimed scope MUST succeed regardless of the claim's holder. | P1 | |
+| FR-012 | A changeset entry MUST accompany the implementation PR, bumping `@generacy-ai/generacy` at least `minor` (new MCP tools + user-visible CLI flag). | P1 | |
 
 ## Success Criteria
 
 | ID | Metric | Target | Measurement |
 |----|--------|--------|-------------|
-| SC-001 | Same-scope double-drive from two concurrent `/cockpit:auto` sessions | Second session refused before any driving dispatch fires; zero duplicated advance/queue/merge calls on scope child issues | Integration test: arm two sessions in sequence on the same scope; assert refusal payload on the second and zero driving-dispatch tool calls from it. |
-| SC-002 | Explicit takeover flow | Takeover succeeds; superseded session stops driving on next dispatch attempt with no further advance/queue/merge; both events logged | Integration test: session A holds claim, session B takes over, session A next dispatch refused and stops. |
-| SC-003 | Stale-claim recovery after crash | New session succeeds without takeover once `heartbeatAt` exceeds staleness threshold | Test with injectable clock: hold claim, stop heartbeating, advance clock past threshold, new acquire succeeds. |
-| SC-004 | Clean release on terminal | Follow-up arm on same scope succeeds immediately (no takeover, no staleness wait) after `epic-complete` or drained-finish exit | Integration test: drive to terminal, arm again, assert immediate success. |
-| SC-005 | Observer non-interference | Observer tools (`cockpit_status`, `/cockpit:watch`, observer `cockpit_await_events`) do not touch the claim marker on GitHub | Static: grep observer tool sources for claim-marker read/write paths returns none. Dynamic: run observers against a claimed scope and assert no writes to the marker comment/label. |
-| SC-006 | Multi-scope isolation | Two auto sessions on distinct scope refs both arm and drive concurrently | Integration test: arm both, assert both hold their own claims, both dispatch independently, and both release cleanly. |
-| SC-007 | Refusal message actionability | Refusal payload includes `incumbent.sessionId`, `incumbent.ledger`, `incumbent.heartbeatAt`, and takeover instructions | Unit test on the refusal payload shape. |
-
-## Clarifications
-
-The following are open and expected to be resolved in `/speckit:clarify`:
-
-- **Q1 — Storage shape of the claim marker**: structured comment marker only, label only, or comment + label combination? (Label collides with existing `agent:*` / `waiting-for:*` label vocabulary; comment marker avoids collision but is harder to enumerate via label search.)
-- **Q2 — Session id derivation**: reuse existing per-session identifier (ledger slug/timestamp, MCP `pnonce`, or a distinct new id)? Trade-off is discoverability from the ledger vs. process-lifetime stability.
-- **Q3 — Heartbeat cadence**: exact interval (piggyback on `cockpit_await_events` drains, or dedicated heartbeat cadence like 60 s / 120 s)?
-- **Q4 — Staleness threshold**: multiple of the heartbeat interval (e.g. 3×) or a distinct absolute floor (e.g. 5 min)?
-- **Q5 — Takeover surface**: `--takeover` CLI flag on `/cockpit:auto`, a gate-style operator confirmation inside the skill, an MCP-tool argument (`takeover: true` on `cockpit_claim`), or all three?
-- **Q6 — Bugfix vs. feature workflow labeling**: this changes MCP-tool surface (new tools + new refusal payload); does it ship under `workflow:speckit-feature` (current label) or split with `workflow:speckit-bugfix`? Bump level `minor` (new capability) vs. `patch` follows from this.
-- **Q7 — MCP tool boundary**: single `cockpit_claim` with `{ acquire | takeover | release | heartbeat }` verbs vs. discrete tools (`cockpit_claim` / `cockpit_release` / `cockpit_heartbeat`)?
-- **Q8 — Superseded-session detection cost**: verify claim on **every** driving dispatch (extra GitHub call per advance/queue/merge) or piggy-back on heartbeat refresh (bounded lag before superseded session notices)?
+| SC-001 | Same-scope double-drive rate | 0 concurrent live claims per scope | Integration test: arm session B against session A's live claim without `--takeover` — session B refuses, session A continues; no dispatch from B is observable in the ledger. |
+| SC-002 | Different-scope concurrency preserved | No regression vs. current behavior | Integration test: two auto sessions on different scopes run to completion in parallel; each holds its own claim; no cross-refusal. |
+| SC-003 | Stale-claim recovery latency | ≤ 10 minutes after the last heartbeat | Timed test: kill session A, then poll `cockpit_claim` from session B until it acquires. Time-to-acquire ≤ 10 min from A's last heartbeat. |
+| SC-004 | Takeover semantics | Superseded session stops within one wake cycle | Timed test: acquire claim in A, then invoke takeover from B. A's next `cockpit_claim` call returns "lost", A logs the takeover to its ledger, A stops dispatching. |
+| SC-005 | Observer independence | 100% of observer operations succeed against a claimed scope | Test: while session A holds a claim, run `cockpit_status`, `/cockpit:watch`, and a standalone `cockpit_await_events` subscription against the same scope — all succeed with no claim interaction. |
+| SC-006 | GitHub write budget | Claim traffic ≤ 1 write per auto-loop wake | Static review: the only claim writes on the hot path are `cockpit_claim` (one comment edit) on wake; no per-dispatch write, no dedicated timer write. |
 
 ## Assumptions
 
-- Every `/cockpit:auto` session already has a unique per-session identifier writable to GitHub (ledger slug + timestamp at minimum). If not, one is added.
-- GitHub is a sufficient coordination substrate — no separate lock service is introduced. Rate limits on comment/label writes for heartbeat are tolerable at the chosen cadence.
-- The auto skill's existing heartbeat cadence is coarse enough that a claim heartbeat piggy-backed on it does not spam GitHub.
-- Concurrent observers against a live epic remain a first-class supported pattern and must not require any claim-side change.
-- The per-scope event-bus refcount/sharing model in `event-bus-registry.ts` remains as-is — this spec adds a coordination layer above it, not a replacement.
+- The auto loop's wake cadence (event-driven with heartbeat fallback via `cockpit_await_events`) reliably produces at least one wake per 10-minute window in live sessions — otherwise a healthy session's claim would go stale and be reaped. This is treated as a load-bearing property of the auto loop, not something this feature must enforce.
+- The scope issue is writable by the caller (comment create/edit, label apply/remove). Repos where the auto operator lacks `issues:write` are out of scope; the refusal path would surface the underlying gh error unchanged.
+- Session ids are opaque to the claim mechanism; any value that is stable within a session and probabilistically unique across sessions works. The concrete derivation (UUID, INSTANCE_NONCE, ledger-slug hash, …) is a plan-phase decision, called out as deferred in this file.
+- The comment/label combination on the scope issue is not consumed by any existing tool with a semantic dependency on absent claim comments — the `cockpit:` label namespace is new and no existing skill parses `<!-- cockpit:claim v1 -->` markers.
+- The 10-minute staleness threshold is a fixed default; making it configurable is out of scope for this feature.
 
 ## Out of Scope
 
-- Parallelizing execution *across* sessions on the same scope (per-user worker lease cap is a separate orchestrator concern).
-- Cross-session dedup of overlapping issue *sets* under different scopes — label collisions between issues shared across scopes are pre-existing and unchanged.
-- Replacing the per-scope event-bus registry model or the ledger format.
-- Enforcing the claim on non-driving dispatches (observer tools remain unaffected — FR-011).
-- A generic distributed-lock service — the mechanism is GitHub-native and scope-issue-local by construction.
-- Cross-repo scope claims — claim keying is `owner/repo#number` and does not need a cross-repo coordination model in this iteration.
+- Parallelizing execution *across* sessions (per-user worker lease cap is a separate orchestrator concern).
+- Cross-session dedup of overlapping issue *sets* under different scopes (label collisions on shared issues are pre-existing and unchanged).
+- Making the staleness threshold, heartbeat cadence, or claim comment shape user-configurable.
+- Claims on non-scope artifacts (individual child issues, PRs) — the claim is per-scope only (epic or tracking issue).
+- Retrofitting the claim onto in-flight auto sessions started before this feature ships — the change takes effect on the next `/cockpit:auto` arm.
+
+## Clarifications
+
+The following clarifications from batch 1 (2026-07-21) are resolved and incorporated into FR-001..FR-012 and the assumptions above:
+
+- **Q1 → C**: Comment + label; comment is source of truth, label is enumeration index.
+- **Q2 → C**: `cockpit_claim` (idempotent acquire-or-refresh, with `takeover: true` flag) + explicit `cockpit_release`.
+- **Q3 → D**: Piggyback on auto-loop wake cadence; 10-minute staleness threshold.
+- **Q4 → D**: All three takeover surfaces (CLI flag, gate confirmation, MCP argument).
+- **Q5 → C**: Verify on heartbeat + opportunistically on dispatches that already read the scope issue; no dedicated per-dispatch read.
+
+Deferred to `/speckit:plan` (implementer-selectable, non-blocking):
+
+- Session id derivation (UUID / INSTANCE_NONCE / ledger-slug hash).
+- Workflow labeling / changeset bump level for the `.changeset/` file (minor per FR-012, but the label vocabulary bump policy is a plan-phase call).
 
 ---
 
