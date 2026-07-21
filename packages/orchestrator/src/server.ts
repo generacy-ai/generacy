@@ -784,11 +784,11 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
   // (`relayClientRef` is declared above so the GitHubAuthHealthService's emit closure can capture it.)
   let relayBridgeRef: RelayBridge | null = null;
   let cockpitRetainer: RetainedCockpitEvents | null = null;
-  // #1021: writer + its deferred init. The `init()` call performs real
-  // filesystem I/O (mkdir/open) which yields to the event loop; it MUST run
-  // AFTER relayClientRef is assigned (below) so it cannot reorder the
-  // fire-and-forget webhook fail-loud path. See the deferred-init note where
-  // cockpitWriter.init() is finally awaited.
+  // #1021: writer + its out-of-band init. The `init()` call performs real
+  // filesystem I/O (mkdir/open) which yields to the event loop, so it is NEVER
+  // awaited inside this bootstrap window — it is scheduled fire-and-forget from
+  // the onReady hook (post-listen) so it cannot reorder any bootstrap
+  // fire-and-forget chain. See the onReady scheduling site below.
   let cockpitWriter: CockpitAnswersWriter | null = null;
   if (!isWorkerMode) {
     const controlPlaneKey = process.env['ORCHESTRATOR_INTERNAL_API_KEY'];
@@ -847,15 +847,16 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       rotationKeep: cockpitRotationKeep,
       logger: server.log,
     });
-    // NOTE: cockpitWriter.init() is intentionally deferred until AFTER the
-    // relay-bridge init below. init() does real fs I/O (mkdir/open) that yields
-    // to the event loop; running it here — before relayClientRef is assigned —
-    // let the fire-and-forget ensureWebhooks() fail-loud chain reach
-    // sendRelayEvent() while relayClientRef was still null, silently dropping
-    // the `cluster.bootstrap` webhook-registration loud-failure event (#1021
-    // regression against #972 SC-002). The route is already registered below
-    // with the (uninitialized) writer; it guards on isHealthy()/503 until init
-    // completes, so deferring init does not expose a half-open writer.
+    // NOTE: cockpitWriter.init() is NOT called here. init() does real fs I/O
+    // (mkdir/open) that yields to the event loop; running it anywhere in this
+    // bootstrap window let the fire-and-forget ensureWebhooks() fail-loud chain
+    // reach sendRelayEvent() while relayClientRef was still null, silently
+    // dropping the `cluster.bootstrap` loud-failure event (#1021 regression vs
+    // #972 SC-002) and likewise perturbing the wizard post-activation dispatch
+    // (#834 SC-003). init() is scheduled fire-and-forget from the onReady hook
+    // (post-listen) instead. The route is registered below with the
+    // (uninitialized) writer; it guards on isHealthy()/503 until init completes,
+    // so serving before init does not expose a half-open writer.
 
     cockpitRetainer = createRetainedCockpitEvents({
       maxCount: cockpitRetainMaxCount,
@@ -935,23 +936,17 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
     });
   }
 
-  // #1021 deferred cockpit-answers-writer init. Runs here — after relayClientRef
-  // has been assigned by the relay-bridge init above — so the real fs I/O in
-  // init() (which yields to the event loop) cannot let the fire-and-forget
-  // ensureWebhooks() fail-loud chain observe a null relayClientRef and drop the
-  // `cluster.bootstrap` loud-failure event (#972 SC-002). Failure is non-fatal:
-  // the writer is marked unhealthy and /cockpit/answers degrades to 503.
-  if (!isWorkerMode && cockpitWriter) {
-    try {
-      await cockpitWriter.init();
-    } catch (err) {
-      server.log.error(
-        { err: err instanceof Error ? err.message : String(err) },
-        'cockpit-answers-writer init failed — /cockpit/answers will return 503',
-      );
-      cockpitWriter.markUnhealthy();
-    }
-  }
+  // #1021 cockpit-answers-writer init is scheduled fully out-of-band in the
+  // onReady hook (after server.listen), NOT awaited here. init() does real fs
+  // I/O (mkdir/open) that yields to the event loop; awaiting it anywhere inside
+  // this bootstrap window interleaves with the fire-and-forget bootstrap chains
+  // (webhook fail-loud → `cluster.bootstrap`; wizard background activation →
+  // post-activation dispatch → triggerBootResume) and reorders them relative to
+  // when refs (relayClientRef) and the dispatch are wired — silently dropping
+  // events/dispatches that must fire exactly once (#972 SC-002, #834 SC-003).
+  // Deferring to onReady reintroduces develop's exact ordering: createServer
+  // introduces no init-induced yield, and the route already guards on
+  // isHealthy()/503 until init completes, so serving before init is safe.
 
   // Initialize ConversationManager (full mode only, when workspaces are configured)
   let conversationManager: ConversationManager | null = null;
@@ -1150,6 +1145,25 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       if (relayBridge && !activationPending) {
         relayBridge.start().catch((error) => {
           server.log.error({ err: error }, 'Relay bridge start failed');
+        });
+      }
+
+      // #1021 cockpit-answers-writer init — fire-and-forget, out-of-band. Runs
+      // here (post-listen, last in onReady) so its yielding fs I/O cannot
+      // interleave with any bootstrap fire-and-forget chain set up in
+      // createServer (webhook fail-loud, wizard post-activation dispatch): those
+      // chains and all refs are already wired, and the server is already
+      // listening. NEVER awaited and always .catch()'d (no unhandled rejection).
+      // On failure the writer is marked unhealthy so /cockpit/answers returns
+      // 503 until a later successful init; until init resolves the route also
+      // guards on isHealthy(), so serving before init completes is safe.
+      if (cockpitWriter) {
+        void cockpitWriter.init().catch((err) => {
+          server.log.error(
+            { err: err instanceof Error ? err.message : String(err) },
+            'cockpit-answers-writer init failed — /cockpit/answers will return 503',
+          );
+          cockpitWriter?.markUnhealthy();
         });
       }
     }
