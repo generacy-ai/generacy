@@ -10,7 +10,7 @@
 - B: Preserve today's behavior — close the current phase. Refs after the H4 fall to `__adhoc__` unless a new `###` (or phase-shaped `####`) opens next.
 - C: Transparent only when inside an open `###` phase; close when at top level. Preserves top-level "sections" semantics but allows in-phase sub-sections.
 
-**Answer**: *Pending*
+**Answer**: A — Transparent everywhere: a non-phase-shaped `####+` heading never closes the current phase, so refs after `#### Notes` inside `### Phase 1` still attribute to Phase 1. Note that C is behaviorally identical to A whenever no phase is open (closing with nothing open is a no-op), so prefer the single-rule formulation. The `## Ad-hoc` H2 rule and other H2/H3 closing semantics are unchanged.
 
 ### Q2: `detectShape` for H4-only-phased bodies
 **Context**: FR-011 is marked `[NEEDS CLARIFICATION]`. `scope/writer.ts`'s `detectShape` currently treats `### ` as the sole phased-shape marker; `scope add` uses this to decide ad-hoc-insertion placement. If H4 promotion ships and an epic body uses only `#### Phase N` headers, `detectShape` will still classify it as unphased and `scope add` will insert refs at the wrong location (or into the wrong section).
@@ -20,7 +20,7 @@
 - B: No — `phased` remains `###`-only. H4-authored bodies fall back to the flat/unphased writer path. Simpler, but re-introduces an author-visible inconsistency between parser and writer.
 - C: Yes, but also auto-normalize on `scope add` — the writer bumps the body's `####` phase headings to `###` when it edits. Aggressive; changes author-provided formatting on write.
 
-**Answer**: *Pending*
+**Answer**: A — Mirror the parser: any phase-shaped heading (H3 or phase-shaped H4) classifies the body as `phased`, so `scope add` places ad-hoc refs correctly in H4-authored bodies. Do not auto-normalize author formatting on write (C) — surprising edits to a body the author just wrote erode trust in the writer.
 
 ### Q3: `defaultRepo` option shape
 **Context**: FR-003 defers the shape of the new `parseEpicBody` option to plan phase, but the shape leaks into every call site of a public export in `@generacy-ai/cockpit` — `resolveEpic`'s pass-through, downstream direct callers, TypeScript types, and any changeset classification of the API surface. Deciding it now avoids a plan-phase gate.
@@ -30,7 +30,7 @@
 - B: `{ owner: string; repo: string }` object. More explicit, no in-band parsing; but requires callers to split their own `owner/repo` string.
 - C: `IssueRef`-shaped (`{ repo, number }`, with `number` ignored). Reuses an existing type but the semantic mismatch (only `repo` is meaningful) is worse than either A or B.
 
-**Answer**: *Pending*
+**Answer**: A — `defaultRepo: string` in canonical `"owner/repo"` form. It matches how `IssueRef.repo` is stored and how `resolveEpic` already carries the ref, so plumbing is minimal. Validate the shape on entry (reject/warn on malformed strings rather than silently producing bogus refs).
 
 ### Q4: H3 + H4 phase interaction in the same body
 **Context**: FR-001 says a phase-shaped `####` heading opens a phase "exactly as `###` does today," but the spec does not describe what happens when both levels appear in the same body — e.g. `### Phase 1` followed later by `#### Phase 2`. Today's parser has no such interaction (H4 always closes); after promotion, three interpretations are possible and they produce different `phases[]` outputs. This directly determines fixture expectations and downstream `phase-complete` behavior.
@@ -40,7 +40,7 @@
 - B: H4 nests inside H3 — a phase-shaped `####` under an open `###` phase becomes a sub-phase (extends parent's ref list). Only phase-shaped H4s outside any H3 open new top-level phases.
 - C: Level-strict — treat H3 and phase-shaped H4 as separate phase namespaces. Mixed bodies emit a warning; `phases[]` uses whichever level came first as the "canonical" level and demotes the other.
 
-**Answer**: *Pending*
+**Answer**: A — Flat siblings: every phase-shaped heading opens a new top-level phase regardless of level. `ParsedPhase[]` is a flat list and everything downstream (phase tokens, queue-by-phase, phase-complete detection) has no nesting concept — B would silently change the unit of phase-completion. Additionally, emit a resolver warning when both levels appear in one body so authors notice the mixed style.
 
 ### Q5: Bare `#N` acceptance scope
 **Context**: US2 and FR-004 describe bare `#N` acceptance in "task lists" and show `- [ ] #223`. The current parser (`TASK_LIST_RE` in `parse-epic-body.ts:16`) only accepts refs inside `- [ ]` / `- [x]` checkbox items — plain bullets (`- #223`), ordered items (`1. #223`), and prose mentions are not scanned for refs. It's ambiguous whether `defaultRepo` extends the ref surface as well, or only rescues bare `#N` inside the surface the parser already sees.
@@ -50,4 +50,4 @@
 - B: Any bullet — extend the surface to plain bullets (`- #223`, `* #223`) and ordered items (`1. #223`). More permissive; widens the parser's grammar in the same PR.
 - C: Anywhere ref-shaped — scan any line for bare `#N`. Highest risk of false positives (e.g. prose "see #223 for context").
 
-**Answer**: *Pending*
+**Answer**: A — Checkbox task-list items only (`- [ ]` / `- [x]`). This matches what the scope writer emits and keeps the blast radius of this change minimal; the checkbox is also the completion-tracking affordance, so refs outside checkboxes have ambiguous semantics anyway. Widening the acceptance surface can be its own issue later if demand appears.
