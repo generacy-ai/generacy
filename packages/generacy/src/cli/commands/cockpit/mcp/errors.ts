@@ -22,6 +22,7 @@ export type ErrorClass =
   | 'invalid-cursor'
   | 'not-worker'
   | 'contended'
+  | 'claim-conflict'
   | 'scope-not-found'
   | 'internal';
 

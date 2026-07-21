@@ -22,6 +22,8 @@ import { cockpitAwaitEvents } from './tools/cockpit_await_events.js';
 import { cockpitScopeAdd } from './tools/cockpit_scope_add.js';
 import { cockpitScopeRemove } from './tools/cockpit_scope_remove.js';
 import { cockpitRelayClarifyAnswers } from './tools/cockpit_relay_clarify_answers.js';
+import { cockpitClaim } from './tools/cockpit_claim.js';
+import { cockpitRelease } from './tools/cockpit_release.js';
 import {
   CockpitStatusInputSchema,
   CockpitContextInputSchema,
@@ -32,6 +34,8 @@ import {
   CockpitScopeAddInputSchema,
   CockpitScopeRemoveInputSchema,
   CockpitRelayClarifyAnswersInputSchema,
+  CockpitClaimInputSchema,
+  CockpitReleaseInputSchema,
   AwaitEventsInputSchema,
 } from './schemas.js';
 
@@ -141,6 +145,26 @@ export function buildMcpServer(deps: BuildMcpServerDeps = {}): McpServer {
     },
     async (args) =>
       toCallToolResult(await cockpitRelayClarifyAnswers(args as never, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_claim',
+    {
+      description:
+        'Idempotent acquire-or-refresh-or-takeover of the active-driver claim on a scope. Called at arm time and per-wake by /cockpit:auto.',
+      inputSchema: CockpitClaimInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitClaim(args as never, deps)),
+  );
+
+  server.registerTool(
+    'cockpit_release',
+    {
+      description:
+        'Explicit release of the active-driver claim. Idempotent — no-op success when caller is not the holder or when no claim exists.',
+      inputSchema: CockpitReleaseInputSchema,
+    },
+    async (args) => toCallToolResult(await cockpitRelease(args as never, deps)),
   );
 
   server.registerTool(

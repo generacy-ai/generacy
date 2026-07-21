@@ -42,6 +42,10 @@ const EXPECTED_KIND: Record<string, RefKind> = {
   // #958 — deterministic clarification-answer relay. Wraps an issue ref
   // (marker-stamped comment posted + completed:clarification applied).
   cockpit_relay_clarify_answers: 'issue',
+  // #1015 — active-driver claim MCP tools. Both take a `scope` field
+  // (the epic-or-tracking issue whose claim state is being manipulated).
+  cockpit_claim: 'scope',
+  cockpit_release: 'scope',
 };
 
 /**
@@ -84,6 +88,9 @@ const CLI_VERB_FILE: Record<string, string | null> = {
   // #958 — MCP-first tool. `runClarifyRelay` is not exposed as a top-level
   // Commander verb in v1 (the skill invokes the MCP tool directly).
   cockpit_relay_clarify_answers: null,
+  // #1015 — MCP-only tools. Skill-side CLI wiring lives in the agency repo.
+  cockpit_claim: null,
+  cockpit_release: null,
 };
 
 const schemasSource = readFileSync(
