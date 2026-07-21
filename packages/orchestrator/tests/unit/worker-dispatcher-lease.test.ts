@@ -70,6 +70,9 @@ const testConfig: DispatchConfig = {
   heartbeatCheckIntervalMs: 20,
   shutdownTimeoutMs: 100,
   maxRetries: 3,
+  // Large so the denial backstop never fires unless a test opts into a
+  // shorter value explicitly.
+  denialResumeMs: 60_000,
 };
 
 /** Wait for a short period to let poll/reaper ticks happen */
@@ -99,7 +102,7 @@ describe('WorkerDispatcher lease integration', () => {
     }
   });
 
-  describe('dispatch gated on lease_granted', () => {
+  describe('dispatch gated on granted lease', () => {
     it('should request a lease after claim and run handler on granted', async () => {
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -151,7 +154,7 @@ describe('WorkerDispatcher lease integration', () => {
     });
   });
 
-  describe('dispatch blocked and re-enqueued on lease_denied', () => {
+  describe('dispatch blocked and re-enqueued on denied lease', () => {
     it('should release item and pause polling when lease is denied', async () => {
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
@@ -385,7 +388,59 @@ describe('WorkerDispatcher lease integration', () => {
         expect.objectContaining({ issueNumber: 99 }),
       );
 
-      expect(logger.info).toHaveBeenCalledWith('Slot available, resuming polling');
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'slot_available' }),
+        'Resuming polling',
+      );
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+
+    it('should resume polling via the denialResumeMs backstop timer when no slot_available arrives', async () => {
+      // Short backstop so the timer fires within the test
+      const backstopConfig: DispatchConfig = { ...testConfig, denialResumeMs: 120 };
+      dispatcher = new WorkerDispatcher(queue, null, logger, backstopConfig, handler);
+
+      let claimCallCount = 0;
+      (queue.claim as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        claimCallCount++;
+        if (claimCallCount === 1) return { ...sampleItem };
+        if (claimCallCount === 2) return { ...sampleItem, issueNumber: 99 };
+        return null;
+      });
+
+      // First request denied, second granted
+      (leaseManager.requestLease as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ status: 'denied', reason: 'tier limit reached' })
+        .mockResolvedValue({ status: 'granted', leaseId: 'lease-after-backstop' });
+
+      dispatcher.setLeaseManager(leaseManager);
+
+      const startPromise = dispatcher.start();
+      await tick();
+
+      // Denied and paused — claim count stays flat while paused
+      expect(queue.release).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ issueNumber: 42 }),
+      );
+      const claimCountAfterDenial = claimCallCount;
+      expect(handler).not.toHaveBeenCalled();
+
+      // No slot:available is emitted — wait past denialResumeMs for the backstop
+      await tick(250);
+
+      // Backstop resumed polling and the next item dispatched
+      expect(claimCallCount).toBeGreaterThan(claimCountAfterDenial);
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 99 }),
+      );
+
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'denial backstop timer' }),
+        'Resuming polling',
+      );
 
       await dispatcher.stop();
       await startPromise;
@@ -443,8 +498,8 @@ describe('WorkerDispatcher lease integration', () => {
     });
   });
 
-  describe('lease timeout re-enqueues item', () => {
-    it('should release item back to queue on lease timeout', async () => {
+  describe('lease timeout fails open (dispatch without lease)', () => {
+    it('should dispatch without a lease when the lease request times out', async () => {
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
         .mockResolvedValue(null);
@@ -457,7 +512,53 @@ describe('WorkerDispatcher lease integration', () => {
       const startPromise = dispatcher.start();
       await tick();
 
-      // Item was released back to queue
+      // Fail-open: handler runs even though no lease was granted
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: sampleItem.owner,
+          issueNumber: sampleItem.issueNumber,
+        }),
+      );
+
+      // No queue.release for the timeout — the item is dispatched, not re-enqueued
+      expect(queue.release).not.toHaveBeenCalled();
+
+      // No lease heartbeat (there is no lease to track)
+      expect(leaseManager.startHeartbeat).not.toHaveBeenCalled();
+      expect(leaseManager.releaseLease).not.toHaveBeenCalled();
+
+      // A warning documents the fail-open dispatch
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: 'test-org/test-repo#42' }),
+        'Lease request timed out — dispatching without lease (fail-open)',
+      );
+
+      // Worker completed normally
+      expect(queue.complete).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({ owner: sampleItem.owner }),
+      );
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+  });
+
+  describe('lease error re-enqueues item without pausing', () => {
+    it('should release item back to queue on lease error and keep polling', async () => {
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      (leaseManager.requestLease as ReturnType<typeof vi.fn>)
+        .mockResolvedValue({ status: 'error', message: 'internal failure' });
+
+      dispatcher.setLeaseManager(leaseManager);
+
+      const startPromise = dispatcher.start();
+      await tick();
+
+      // Item was released back to queue for retry
       expect(queue.release).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
@@ -472,10 +573,41 @@ describe('WorkerDispatcher lease integration', () => {
       // Heartbeat should NOT have been started
       expect(leaseManager.startHeartbeat).not.toHaveBeenCalled();
 
-      // Polling should NOT be paused (timeout doesn't pause, only denied does)
+      // Polling should NOT be paused (error does not pause, only denied does)
       // Verify by checking that subsequent claims are attempted
       await tick();
       expect((queue.claim as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThan(1);
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+  });
+
+  describe('lease gate engages whenever a lease manager is set', () => {
+    it('should request a lease even when userTierLimit is null (no tier_info)', async () => {
+      leaseManager = createMockLeaseManager({ userTierLimit: null });
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      (leaseManager.requestLease as ReturnType<typeof vi.fn>)
+        .mockResolvedValue({ status: 'granted', leaseId: 'lease-no-tier' });
+
+      dispatcher.setLeaseManager(leaseManager);
+
+      const startPromise = dispatcher.start();
+      await tick();
+
+      // The gate no longer waits for tier_info — the lease is requested anyway
+      expect(leaseManager.requestLease).toHaveBeenCalledWith(
+        'user-123',
+        'test-org/test-repo#42',
+        'test-org/test-repo#42',
+      );
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({ issueNumber: 42 }),
+      );
 
       await dispatcher.stop();
       await startPromise;

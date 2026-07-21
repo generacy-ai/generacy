@@ -172,6 +172,8 @@ export const DispatchConfigSchema = z.object({
   shutdownTimeoutMs: z.number().int().min(5000).default(60000),
   /** Maximum retry attempts before dead-lettering */
   maxRetries: z.number().int().min(1).default(3),
+  /** Backstop delay before resuming polling after a lease denial when no slot_available arrives (ms) */
+  denialResumeMs: z.number().int().min(5000).default(60000),
 });
 export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
 
@@ -179,6 +181,14 @@ export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
  * Lease configuration for per-user execution lease protocol
  */
 export const LeaseConfigSchema = z.object({
+  /**
+   * Whether to gate dispatch on per-user cloud execution leases (#1016).
+   * Default OFF: the lease path was dead since #418, so real clusters run
+   * many worker replicas unmetered — flipping enforcement on changes their
+   * effective concurrency to the org's tier limit. Enable deliberately
+   * (ORCHESTRATOR_LEASE_ENFORCE=true) once tier limits/overrides are set.
+   */
+  enforce: z.boolean().default(false),
   /** Timeout for lease_request response (ms) */
   requestTimeoutMs: z.number().int().min(5000).default(30000),
   /** Interval between lease heartbeats (ms) */

@@ -454,10 +454,32 @@ export async function createServer(options: CreateServerOptions = {}): Promise<F
       terminalFailureHandler,
     );
 
-    // Wire lease manager into dispatcher (if relay client is available)
-    if (workerRelayClient) {
+    // Wire lease manager into dispatcher (#1016). Opt-in via
+    // lease.enforce / ORCHESTRATOR_LEASE_ENFORCE=true: the lease path was
+    // dead since #418, so existing clusters run workers: N unmetered —
+    // enabling enforcement caps effective concurrency at the org's tier
+    // limit. When off, dispatch behaves exactly as before (ungated).
+    if (workerRelayClient && config.lease.enforce) {
       const workerLeaseManager = new LeaseManager(workerRelayClient, server.log, config.lease);
       workerDispatcher.setLeaseManager(workerLeaseManager);
+
+      // Route inbound lease-protocol messages to the lease manager (#1016).
+      // Without this, worker mode had no inbound routing at all: lease
+      // responses were dropped and the dispatch gate never engaged.
+      workerRelayClient.on('message', (msg) => {
+        if (msg.type === 'lease_response') {
+          workerLeaseManager.handleLeaseResponse(msg);
+        } else if (msg.type === 'slot_available') {
+          workerLeaseManager.handleSlotAvailable(msg);
+        } else if (msg.type === 'tier_info') {
+          workerLeaseManager.handleTierInfo(msg);
+        } else if (msg.type === 'cluster_rejected') {
+          workerLeaseManager.handleClusterRejected(msg);
+        }
+      });
+      server.log.info('Lease enforcement enabled — dispatch gated on cloud execution leases');
+    } else if (workerRelayClient) {
+      server.log.info('Lease enforcement disabled (lease.enforce=false) — dispatch ungated');
     }
   }
 

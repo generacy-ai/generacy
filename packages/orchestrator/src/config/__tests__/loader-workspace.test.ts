@@ -33,6 +33,7 @@ let envSnapshot: Record<string, string | undefined>;
 
 /** Env vars that the loader reads — cleared before each test. */
 const LOADER_ENV_KEYS = [
+  'ORCHESTRATOR_LEASE_ENFORCE',
   'MONITORED_REPOS',
   'ORCHESTRATOR_REPOSITORIES',
   'ORCHESTRATOR_PORT',
@@ -404,5 +405,28 @@ describe('orchestrator loader – cloud URL disambiguation (#549, #551)', () => 
 
     const config = loadConfig({ loadEnv: true });
     expect(config.relay.cloudUrl).toBe('wss://api.generacy.ai/relay');
+  });
+
+  it('lease enforcement defaults to OFF (#1016 — existing clusters run unmetered)', () => {
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.lease.enforce).toBe(false);
+  });
+
+  it('ORCHESTRATOR_LEASE_ENFORCE=true enables lease enforcement', () => {
+    process.env['ORCHESTRATOR_LEASE_ENFORCE'] = 'true';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.lease.enforce).toBe(true);
+  });
+
+  it('ORCHESTRATOR_LEASE_ENFORCE=false keeps lease enforcement off', () => {
+    process.env['ORCHESTRATOR_LEASE_ENFORCE'] = 'false';
+    Object.assign(process.env, AUTH_ENV);
+
+    const config = loadConfig({ loadEnv: true });
+    expect(config.lease.enforce).toBe(false);
   });
 });

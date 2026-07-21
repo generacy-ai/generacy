@@ -112,6 +112,9 @@ const dispatchConfig: DispatchConfig = {
   heartbeatCheckIntervalMs: 20,
   shutdownTimeoutMs: 100,
   maxRetries: 3,
+  // Large so the denial backstop never fires unless a test opts into a
+  // shorter value explicitly.
+  denialResumeMs: 60_000,
 };
 
 const leaseConfig: LeaseConfig = {
@@ -144,16 +147,9 @@ describe('Lease + Relay integration', () => {
     leaseManager = new LeaseManager(relay, logger, leaseConfig);
     dispatcher = new WorkerDispatcher(queue, null, logger, dispatchConfig, handler);
 
-    // Wire up the lease manager
+    // Wire up the lease manager. The gate engages as soon as a manager is
+    // set — the cloud never sends tier_info (#1016), so no tier bootstrap here.
     dispatcher.setLeaseManager(leaseManager);
-
-    // Simulate cloud sending tier_info on connect (enables lease gating)
-    leaseManager.handleTierInfo({
-      type: 'tier_info',
-      tier: 'standard',
-      maxConcurrentWorkflows: 5,
-      maxActiveClusters: 3,
-    });
   });
 
   afterEach(async () => {
@@ -170,14 +166,27 @@ describe('Lease + Relay integration', () => {
         .mockResolvedValueOnce({ ...sampleItem })
         .mockResolvedValue(null);
 
-      // Auto-respond to lease_request with lease_granted (via async onSend hook)
+      // Auto-respond via the async onSend hook, routing on msg.type the same
+      // way the relay bridge does (relay-bridge routes 'lease_response' to
+      // leaseManager.handleLeaseResponse).
       relay.onSend = (msg) => {
         if (msg.type === 'lease_request') {
           const request = msg as RelayMessage & { correlationId: string };
           leaseManager.handleLeaseResponse({
-            type: 'lease_granted',
+            type: 'lease_response',
+            status: 'granted',
             correlationId: request.correlationId,
             leaseId: 'integration-lease-1',
+            ttlSeconds: 300,
+          });
+        }
+        if (msg.type === 'lease_release') {
+          const release = msg as RelayMessage & { correlationId: string };
+          // Cloud acks every release with a lease_response {status: 'released'}
+          leaseManager.handleLeaseResponse({
+            type: 'lease_response',
+            status: 'released',
+            correlationId: release.correlationId,
           });
         }
       };
@@ -209,13 +218,22 @@ describe('Lease + Relay integration', () => {
         expect.objectContaining({ owner: 'test-org' }),
       );
 
-      // 4. lease_release was sent after worker finished
+      // 4. lease_release was sent after worker finished — WITH a correlationId
+      //    (the cloud refuses releases without one)
       const leaseRelease = relay.sentMessages.find((m) => m.type === 'lease_release');
       expect(leaseRelease).toBeDefined();
       expect(leaseRelease).toMatchObject({
         type: 'lease_release',
+        correlationId: expect.any(String),
         leaseId: 'integration-lease-1',
       });
+
+      // 5. The released ack (sent by the onSend hook) was silently consumed —
+      //    no "unknown correlation ID" warning
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Received lease response for unknown correlation ID',
+      );
 
       await dispatcher.stop();
       await startPromise;
@@ -240,13 +258,17 @@ describe('Lease + Relay integration', () => {
           const request = msg as RelayMessage & { correlationId: string };
           if (leaseRequestCount === 1) {
             leaseManager.handleLeaseResponse({
-              type: 'lease_denied',
+              type: 'lease_response',
+              status: 'denied',
               correlationId: request.correlationId,
               reason: 'at_capacity',
+              currentCount: 1,
+              limit: 1,
             });
           } else {
             leaseManager.handleLeaseResponse({
-              type: 'lease_granted',
+              type: 'lease_response',
+              status: 'granted',
               correlationId: request.correlationId,
               leaseId: `lease-recovery-${leaseRequestCount}`,
             });
@@ -266,6 +288,9 @@ describe('Lease + Relay integration', () => {
       // Handler should NOT have run yet
       expect(handler).not.toHaveBeenCalled();
 
+      // Tier limit was learned from the denial payload (cloud never sends tier_info)
+      expect(leaseManager.userTierLimit).toBe(1);
+
       // Simulate cloud sending slot_available
       leaseManager.handleSlotAvailable({
         type: 'slot_available',
@@ -279,6 +304,48 @@ describe('Lease + Relay integration', () => {
       // Polling should have resumed and handler should have run
       expect(handler).toHaveBeenCalled();
       expect(leaseRequestCount).toBe(2);
+
+      await dispatcher.stop();
+      await startPromise;
+    });
+  });
+
+  describe('lease-less cloud: request timeout fails open', () => {
+    it('should dispatch without a lease when the cloud never answers', async () => {
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      // No onSend hook — the relay swallows lease_request and never responds,
+      // like a cloud without an ExecutionLeaseService.
+      relay.onSend = null;
+
+      const startPromise = dispatcher.start();
+
+      // Wait past requestTimeoutMs (500ms) for the fail-open dispatch
+      await tick(700);
+
+      // Handler ran even though no lease was ever granted
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-org',
+          repo: 'test-repo',
+          issueNumber: 42,
+        }),
+      );
+
+      // The item completed; it was never released back for the timeout
+      expect(queue.complete).toHaveBeenCalled();
+      expect(queue.release).not.toHaveBeenCalled();
+
+      // No lease existed, so no lease_release was sent
+      expect(relay.sentMessages.find((m) => m.type === 'lease_release')).toBeUndefined();
+
+      // The fail-open dispatch was logged
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: 'test-org/test-repo#42' }),
+        'Lease request timed out — dispatching without lease (fail-open)',
+      );
 
       await dispatcher.stop();
       await startPromise;
@@ -306,7 +373,8 @@ describe('Lease + Relay integration', () => {
         if (msg.type === 'lease_request') {
           const request = msg as RelayMessage & { correlationId: string };
           leaseManager.handleLeaseResponse({
-            type: 'lease_granted',
+            type: 'lease_response',
+            status: 'granted',
             correlationId: request.correlationId,
             leaseId: 'lease-heartbeat-fail',
           });
@@ -354,13 +422,13 @@ describe('Lease + Relay integration', () => {
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValue({ ...sampleItem });
 
-      // Simulate cluster_rejected
+      // Simulate cluster_rejected (cloud field names: reason/currentLimit/tierName)
       leaseManager.handleClusterRejected({
         type: 'cluster_rejected',
-        reason: 'Active cluster limit reached',
-        tier: 'free',
-        maxActiveClusters: 1,
-        currentActiveClusters: 1,
+        reason: 'cluster_limit_reached',
+        tierName: 'free',
+        currentLimit: 1,
+        upgradeHint: 'Upgrade to run more clusters',
       });
 
       expect(leaseManager.isClusterRejected).toBe(true);

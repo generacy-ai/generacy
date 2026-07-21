@@ -62,6 +62,9 @@ const testConfig: DispatchConfig = {
   heartbeatCheckIntervalMs: 20,
   shutdownTimeoutMs: 100,
   maxRetries: 3,
+  // Large so the denial backstop never fires unless a test opts into a
+  // shorter value explicitly.
+  denialResumeMs: 60_000,
 };
 
 const testLeaseConfig: LeaseConfig = {
@@ -121,18 +124,11 @@ describe('WorkerDispatcher lease integration', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 1. Dispatch is gated on lease_granted
+  // 1. Dispatch is gated on a granted lease_response
   // -------------------------------------------------------------------------
-  describe('dispatch gated on lease_granted', () => {
-    it('should call requestLease before dispatching when lease manager is set and userTierLimit is set', async () => {
-      // Set tier limit so lease gating activates
-      leaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'basic',
-        maxConcurrentWorkflows: 2,
-        maxActiveClusters: 1,
-      });
-
+  describe('dispatch gated on granted lease_response', () => {
+    it('should call requestLease before dispatching whenever a lease manager is set', async () => {
+      // No tier_info needed — the gate engages as soon as a manager is set (#1016)
       dispatcher.setLeaseManager(leaseManager);
 
       // Queue returns one item, then nothing
@@ -159,10 +155,11 @@ describe('WorkerDispatcher lease integration', () => {
       // Handler should NOT have been called yet (waiting for lease response)
       expect(handler).not.toHaveBeenCalled();
 
-      // Simulate lease_granted response
+      // Simulate a granted lease_response
       const correlationId = extractCorrelationId(relayClient);
       leaseManager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId,
         leaseId: 'lease-abc',
       });
@@ -184,17 +181,10 @@ describe('WorkerDispatcher lease integration', () => {
   });
 
   // -------------------------------------------------------------------------
-  // 2. Dispatch blocked and re-enqueued on lease_denied
+  // 2. Dispatch blocked and re-enqueued on denied lease_response
   // -------------------------------------------------------------------------
-  describe('dispatch blocked on lease_denied', () => {
+  describe('dispatch blocked on denied lease_response', () => {
     it('should release item back to queue and pause polling when lease is denied', async () => {
-      leaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'free',
-        maxConcurrentWorkflows: 1,
-        maxActiveClusters: 1,
-      });
-
       dispatcher.setLeaseManager(leaseManager);
 
       (queue.claim as ReturnType<typeof vi.fn>)
@@ -206,12 +196,15 @@ describe('WorkerDispatcher lease integration', () => {
 
       await tick(20);
 
-      // Simulate lease_denied
+      // Simulate a denied lease_response
       const correlationId = extractCorrelationId(relayClient);
       leaseManager.handleLeaseResponse({
-        type: 'lease_denied',
+        type: 'lease_response',
+        status: 'denied',
         correlationId,
         reason: 'at_capacity',
+        currentCount: 1,
+        limit: 1,
       });
 
       await pollPromise;
@@ -228,6 +221,9 @@ describe('WorkerDispatcher lease integration', () => {
 
       // Handler should NOT have been called
       expect(handler).not.toHaveBeenCalled();
+
+      // Tier limit was learned from the denial payload (cloud never sends tier_info)
+      expect(leaseManager.userTierLimit).toBe(1);
 
       // Polling should now be paused — calling pollOnce again should be a no-op
       (queue.claim as ReturnType<typeof vi.fn>).mockClear();
@@ -273,13 +269,6 @@ describe('WorkerDispatcher lease integration', () => {
   // -------------------------------------------------------------------------
   describe('heartbeat expiry cancels worker and re-enqueues', () => {
     it('should cancel worker and re-enqueue with priority 0 when lease heartbeat expires', async () => {
-      leaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'basic',
-        maxConcurrentWorkflows: 2,
-        maxActiveClusters: 1,
-      });
-
       dispatcher.setLeaseManager(leaseManager);
 
       // Handler that never resolves (long-running worker)
@@ -294,10 +283,11 @@ describe('WorkerDispatcher lease integration', () => {
 
       await tick(20);
 
-      // Simulate lease_granted
+      // Simulate a granted lease_response
       const correlationId = extractCorrelationId(relayClient);
       leaseManager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId,
         leaseId: 'lease-expire-test',
       });
@@ -334,13 +324,6 @@ describe('WorkerDispatcher lease integration', () => {
     });
 
     it('should not re-enqueue if duplicate already in queue', async () => {
-      leaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'basic',
-        maxConcurrentWorkflows: 2,
-        maxActiveClusters: 1,
-      });
-
       dispatcher.setLeaseManager(leaseManager);
 
       handler.mockImplementation(() => new Promise<void>(() => {}));
@@ -359,7 +342,8 @@ describe('WorkerDispatcher lease integration', () => {
 
       const correlationId = extractCorrelationId(relayClient);
       leaseManager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId,
         leaseId: 'lease-dup-test',
       });
@@ -389,14 +373,7 @@ describe('WorkerDispatcher lease integration', () => {
   // 5. slot_available triggers pollOnce()
   // -------------------------------------------------------------------------
   describe('slot_available triggers pollOnce', () => {
-    it('should resume polling when slot_available is received after lease_denied pause', async () => {
-      leaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'free',
-        maxConcurrentWorkflows: 1,
-        maxActiveClusters: 1,
-      });
-
+    it('should resume polling when slot_available is received after a denial pause', async () => {
       dispatcher.setLeaseManager(leaseManager);
 
       // First poll: item claimed, lease denied
@@ -410,7 +387,8 @@ describe('WorkerDispatcher lease integration', () => {
       // Deny the lease to trigger pause
       const correlationId = extractCorrelationId(relayClient);
       leaseManager.handleLeaseResponse({
-        type: 'lease_denied',
+        type: 'lease_response',
+        status: 'denied',
         correlationId,
         reason: 'at_capacity',
       });
@@ -438,7 +416,50 @@ describe('WorkerDispatcher lease integration', () => {
       // Polling should have resumed — claim should have been called
       expect(queue.claim).toHaveBeenCalled();
 
-      expect(logger.info).toHaveBeenCalledWith('Slot available, resuming polling');
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'slot_available' }),
+        'Resuming polling',
+      );
+    });
+
+    it('should resume polling via the denialResumeMs backstop when no slot_available arrives', async () => {
+      // Short backstop so the timer fires within the test
+      const backstopConfig: DispatchConfig = { ...testConfig, denialResumeMs: 120 };
+      dispatcher = new WorkerDispatcher(queue, null, logger, backstopConfig, handler);
+      dispatcher.setLeaseManager(leaseManager);
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      const pollPromise = (dispatcher as any).pollOnce();
+      await tick(20);
+
+      // Deny the lease to trigger pause (and arm the backstop timer)
+      const correlationId = extractCorrelationId(relayClient);
+      leaseManager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'denied',
+        correlationId,
+        reason: 'at_capacity',
+      });
+
+      await pollPromise;
+
+      // Paused: an explicit pollOnce is a no-op
+      (queue.claim as ReturnType<typeof vi.fn>).mockClear();
+      await (dispatcher as any).pollOnce();
+      expect(queue.claim).not.toHaveBeenCalled();
+
+      // No slot_available — wait past denialResumeMs for the backstop
+      await tick(250);
+
+      // Backstop resumed and triggered a poll
+      expect(queue.claim).toHaveBeenCalled();
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.objectContaining({ reason: 'denial backstop timer' }),
+        'Resuming polling',
+      );
     });
   });
 
@@ -473,8 +494,9 @@ describe('WorkerDispatcher lease integration', () => {
       expect(relayClient.send).not.toHaveBeenCalled();
     });
 
-    it('should dispatch normally when lease manager is set but userTierLimit is null', async () => {
-      // Set lease manager but do NOT call handleTierInfo — userTierLimit stays null
+    it('should gate dispatch even when userTierLimit is null (no tier_info received)', async () => {
+      // Set lease manager but do NOT provide tier info — the gate still engages
+      // (#1016: the cloud never sends tier_info, so the gate must not wait for it)
       dispatcher.setLeaseManager(leaseManager);
 
       (queue.claim as ReturnType<typeof vi.fn>)
@@ -483,10 +505,31 @@ describe('WorkerDispatcher lease integration', () => {
 
       handler.mockResolvedValue(undefined);
 
-      await (dispatcher as any).pollOnce();
+      const pollPromise = (dispatcher as any).pollOnce();
       await tick(20);
 
-      // Handler should be called without lease gating
+      // A lease_request WAS sent despite userTierLimit being null
+      const sendMock = relayClient.send as ReturnType<typeof vi.fn>;
+      const leaseRequests = sendMock.mock.calls.filter(
+        (call: unknown[]) => (call[0] as { type: string }).type === 'lease_request',
+      );
+      expect(leaseRequests).toHaveLength(1);
+
+      // Handler waits for the response
+      expect(handler).not.toHaveBeenCalled();
+
+      // Grant the lease so dispatch proceeds
+      const correlationId = extractCorrelationId(relayClient);
+      leaseManager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'granted',
+        correlationId,
+        leaseId: 'lease-null-tier',
+      });
+
+      await pollPromise;
+      await tick(20);
+
       expect(handler).toHaveBeenCalledWith(
         expect.objectContaining({
           owner: 'test-org',
@@ -494,13 +537,6 @@ describe('WorkerDispatcher lease integration', () => {
           issueNumber: 42,
         }),
       );
-
-      // No lease_request should have been sent (tier limit not yet known)
-      const sendMock = relayClient.send as ReturnType<typeof vi.fn>;
-      const leaseRequests = sendMock.mock.calls.filter(
-        (call: unknown[]) => (call[0] as { type: string }).type === 'lease_request',
-      );
-      expect(leaseRequests).toHaveLength(0);
     });
   });
 
@@ -509,13 +545,6 @@ describe('WorkerDispatcher lease integration', () => {
   // -------------------------------------------------------------------------
   describe('lease release on worker completion', () => {
     it('should release lease when worker completes successfully', async () => {
-      leaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'basic',
-        maxConcurrentWorkflows: 2,
-        maxActiveClusters: 1,
-      });
-
       dispatcher.setLeaseManager(leaseManager);
 
       (queue.claim as ReturnType<typeof vi.fn>)
@@ -530,7 +559,8 @@ describe('WorkerDispatcher lease integration', () => {
       // Grant the lease
       const correlationId = extractCorrelationId(relayClient);
       leaseManager.handleLeaseResponse({
-        type: 'lease_granted',
+        type: 'lease_response',
+        status: 'granted',
         correlationId,
         leaseId: 'lease-release-test',
       });
@@ -549,8 +579,22 @@ describe('WorkerDispatcher lease integration', () => {
       expect(releaseMessages[0][0]).toEqual(
         expect.objectContaining({
           type: 'lease_release',
+          correlationId: expect.any(String),
           leaseId: 'lease-release-test',
         }),
+      );
+
+      // The cloud's released ack is silently consumed (no unknown-correlation warn)
+      const releaseCorrelationId = (releaseMessages[0][0] as { correlationId: string })
+        .correlationId;
+      leaseManager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'released',
+        correlationId: releaseCorrelationId,
+      });
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'Received lease response for unknown correlation ID',
       );
 
       // Worker should be cleaned up
@@ -559,10 +603,10 @@ describe('WorkerDispatcher lease integration', () => {
   });
 
   // -------------------------------------------------------------------------
-  // Lease request timeout
+  // Lease request timeout → fail-open dispatch (#1016)
   // -------------------------------------------------------------------------
   describe('lease request timeout', () => {
-    it('should release item back to queue on lease request timeout', async () => {
+    it('should dispatch WITHOUT a lease when the lease request times out (fail-open)', async () => {
       // Use a very short timeout for this test
       const shortTimeoutLeaseConfig: LeaseConfig = {
         requestTimeoutMs: 50,
@@ -576,23 +620,65 @@ describe('WorkerDispatcher lease integration', () => {
         shortTimeoutLeaseConfig,
       );
 
-      shortTimeoutLeaseManager.handleTierInfo({
-        type: 'tier_info',
-        tier: 'basic',
-        maxConcurrentWorkflows: 2,
-        maxActiveClusters: 1,
-      });
-
       dispatcher.setLeaseManager(shortTimeoutLeaseManager);
 
       (queue.claim as ReturnType<typeof vi.fn>)
         .mockResolvedValueOnce({ ...sampleItem })
         .mockResolvedValue(null);
 
+      // Return a real completion so the worker doesn't fail and release the item
+      handler.mockResolvedValue({ status: 'completed' });
+
       // Do NOT respond to the lease request — let it time out
       await (dispatcher as any).pollOnce();
+      await tick(20);
 
-      // Item should be released back to queue
+      // Fail-open: the item is dispatched, not released back to the queue
+      expect(queue.release).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-org',
+          repo: 'test-repo',
+          issueNumber: 42,
+        }),
+      );
+
+      // A warning documents the fail-open dispatch
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ queueItemId: 'test-org/test-repo#42' }),
+        'Lease request timed out — dispatching without lease (fail-open)',
+      );
+
+      await shortTimeoutLeaseManager.shutdown();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Lease request error → re-enqueue without pausing (#1016)
+  // -------------------------------------------------------------------------
+  describe('lease request error', () => {
+    it('should release item back to queue and keep polling on an error response', async () => {
+      dispatcher.setLeaseManager(leaseManager);
+
+      (queue.claim as ReturnType<typeof vi.fn>)
+        .mockResolvedValueOnce({ ...sampleItem })
+        .mockResolvedValue(null);
+
+      const pollPromise = (dispatcher as any).pollOnce();
+      await tick(20);
+
+      // Cloud answers with a transient error
+      const correlationId = extractCorrelationId(relayClient);
+      leaseManager.handleLeaseResponse({
+        type: 'lease_response',
+        status: 'error',
+        correlationId,
+        message: 'internal failure',
+      });
+
+      await pollPromise;
+
+      // Item released for retry, handler not run
       expect(queue.release).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
@@ -601,11 +687,13 @@ describe('WorkerDispatcher lease integration', () => {
           issueNumber: 42,
         }),
       );
-
-      // Handler should NOT have been called
       expect(handler).not.toHaveBeenCalled();
 
-      await shortTimeoutLeaseManager.shutdown();
+      // Polling is NOT paused — a subsequent pollOnce still claims
+      (queue.claim as ReturnType<typeof vi.fn>).mockClear();
+      (queue.claim as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+      await (dispatcher as any).pollOnce();
+      expect(queue.claim).toHaveBeenCalled();
     });
   });
 });

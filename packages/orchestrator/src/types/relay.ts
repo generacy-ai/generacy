@@ -11,8 +11,7 @@ import type { EventMessage } from '@generacy-ai/cluster-relay';
 import type { DockerEngineClient } from '@generacy-ai/control-plane';
 import type {
   RelayLeaseRequest,
-  RelayLeaseGranted,
-  RelayLeaseDenied,
+  RelayLeaseResponse,
   RelayLeaseRelease,
   RelayLeaseHeartbeat,
   RelaySlotAvailable,
@@ -158,8 +157,7 @@ export type RelayMessage =
   | RelayConversationInput
   | RelayConversationOutput
   | RelayLeaseRequest
-  | RelayLeaseGranted
-  | RelayLeaseDenied
+  | RelayLeaseResponse
   | RelayLeaseRelease
   | RelayLeaseHeartbeat
   | RelaySlotAvailable
@@ -173,8 +171,7 @@ export type RelayMessage =
 // Re-export lease protocol types
 export type {
   RelayLeaseRequest,
-  RelayLeaseGranted,
-  RelayLeaseDenied,
+  RelayLeaseResponse,
   RelayLeaseRelease,
   RelayLeaseHeartbeat,
   RelaySlotAvailable,
