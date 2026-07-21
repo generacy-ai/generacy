@@ -27,7 +27,7 @@ export function formatMarker(payload: ClaimPayload): string {
 }
 
 export function parseMarker(body: string): ClaimPayload | null {
-  const trimmed = body.replace(/[\s﻿\xA0]+$/, '');
+  const trimmed = body.replace(/[\s\uFEFF\xA0]+$/, '');
   if (!trimmed.startsWith(MARKER_PREFIX)) return null;
   const fenceMatch = FENCE_REGEX.exec(trimmed);
   if (fenceMatch === null || fenceMatch[1] === undefined) return null;

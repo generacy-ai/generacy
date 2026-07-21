@@ -95,22 +95,21 @@ export class ClaimMockGh {
   }
 
   build(): GhWrapper {
-    const self = this;
     return {
       fetchIssueLabels: async (repo, issue) => {
-        self.calls.push({ method: 'fetchIssueLabels', args: [repo, issue] });
-        return { labels: [...self.state(repo, issue).labels] };
+        this.calls.push({ method: 'fetchIssueLabels', args: [repo, issue] });
+        return { labels: [...this.state(repo, issue).labels] };
       },
       fetchIssueComments: async (repo, issue) => {
-        self.calls.push({ method: 'fetchIssueComments', args: [repo, issue] });
-        return [...self.state(repo, issue).comments];
+        this.calls.push({ method: 'fetchIssueComments', args: [repo, issue] });
+        return [...this.state(repo, issue).comments];
       },
       postIssueComment: async (repo, issue, body) => {
-        self.calls.push({ method: 'postIssueComment', args: [repo, issue, body] });
-        self.maybeFail('postIssueComment');
-        const s = self.state(repo, issue);
+        this.calls.push({ method: 'postIssueComment', args: [repo, issue, body] });
+        this.maybeFail('postIssueComment');
+        const s = this.state(repo, issue);
         const id = s.nextCommentId++;
-        const url = self.commentUrl(repo, issue, id);
+        const url = this.commentUrl(repo, issue, id);
         s.comments.push({
           id,
           body,
@@ -121,9 +120,9 @@ export class ClaimMockGh {
         return { url };
       },
       editIssueComment: async (repo, commentId, body) => {
-        self.calls.push({ method: 'editIssueComment', args: [repo, commentId, body] });
-        self.maybeFail('editIssueComment');
-        for (const [key, s] of self.issues) {
+        this.calls.push({ method: 'editIssueComment', args: [repo, commentId, body] });
+        this.maybeFail('editIssueComment');
+        for (const [key, s] of this.issues) {
           if (!key.startsWith(`${repo}#`)) continue;
           const comment = s.comments.find((c) => c.id === commentId);
           if (comment !== undefined) {
@@ -134,9 +133,9 @@ export class ClaimMockGh {
         throw new Error(`editIssueComment: comment ${commentId} not found in ${repo}`);
       },
       deleteIssueComment: async (repo, commentId) => {
-        self.calls.push({ method: 'deleteIssueComment', args: [repo, commentId] });
-        self.maybeFail('deleteIssueComment');
-        for (const [key, s] of self.issues) {
+        this.calls.push({ method: 'deleteIssueComment', args: [repo, commentId] });
+        this.maybeFail('deleteIssueComment');
+        for (const [key, s] of this.issues) {
           if (!key.startsWith(`${repo}#`)) continue;
           const idx = s.comments.findIndex((c) => c.id === commentId);
           if (idx >= 0) {
@@ -147,15 +146,15 @@ export class ClaimMockGh {
         // treat missing as idempotent success (matches real wrapper's 404 handling)
       },
       addLabels: async (repo, issue, labels) => {
-        self.calls.push({ method: 'addLabels', args: [repo, issue, labels] });
-        self.maybeFail('addLabels');
-        const s = self.state(repo, issue);
+        this.calls.push({ method: 'addLabels', args: [repo, issue, labels] });
+        this.maybeFail('addLabels');
+        const s = this.state(repo, issue);
         for (const l of labels) s.labels.add(l);
       },
       removeLabels: async (repo, issue, labels) => {
-        self.calls.push({ method: 'removeLabels', args: [repo, issue, labels] });
-        self.maybeFail('removeLabels');
-        const s = self.state(repo, issue);
+        this.calls.push({ method: 'removeLabels', args: [repo, issue, labels] });
+        this.maybeFail('removeLabels');
+        const s = this.state(repo, issue);
         for (const l of labels) s.labels.delete(l);
       },
     } as unknown as GhWrapper;
