@@ -36,6 +36,8 @@ import { resolveWebhookTargets } from './doorbell/webhook-target-resolver.js';
 import { SourceSelector, type SourceMode } from './doorbell/source-selector.js';
 import { SmeeDoorbellSource } from './doorbell/smee-source.js';
 import { runStartupRetry } from './doorbell/startup-retry.js';
+import { AnswersFileSource } from './doorbell/answers-file-source.js';
+import type { GateAnswerEvent } from './watch/gate-answer.js';
 
 export interface DoorbellOptions {
   tracking?: boolean;
@@ -47,7 +49,7 @@ export interface DoorbellDeps {
   runner?: CommandRunner;
   gh?: GhWrapper;
   rateLimitScheduler?: RateLimitScheduler;
-  logger?: { warn: (msg: string) => void; info?: (msg: string) => void };
+  logger?: { warn: (msg: string) => void; info: (msg: string) => void };
   acquireBus?: (options: AcquireOptions) => Promise<Acquired>;
   abortSignal?: AbortSignal;
   stdout?: { write(chunk: string, cb?: () => void): boolean | void };
@@ -58,6 +60,12 @@ export interface DoorbellDeps {
   smeeSourceFactory?: (opts: ConstructorParameters<typeof SmeeDoorbellSource>[0]) => SmeeDoorbellSource;
   /** Test seam: override the source selector constructor. */
   sourceSelectorFactory?: (opts: ConstructorParameters<typeof SourceSelector>[0]) => SourceSelector;
+  /** Test seam: override the answers-file tailer constructor. */
+  answersFileSourceFactory?: (
+    opts: ConstructorParameters<typeof AnswersFileSource>[0],
+  ) => AnswersFileSource;
+  /** Test seam: override the answers-file path. */
+  answersFilePath?: string;
   /** Test seam: env passed to `discoverChannelUrl`. Defaults to `process.env`. */
   env?: NodeJS.ProcessEnv;
   /** Test seam: filesystem passed to `discoverChannelUrl`. */
@@ -123,7 +131,7 @@ interface RunPollModeInput {
   form: Form & { kind: 'form-1' | 'form-2' };
   options: DoorbellOptions;
   deps: DoorbellDeps;
-  logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+  logger: { warn: (msg: string) => void; info: (msg: string) => void };
   stdout: { write(chunk: string, cb?: () => void): boolean | void };
   stderr: { write(chunk: string): boolean | void };
   stopPromise: Promise<void>;
@@ -192,7 +200,11 @@ async function runPollMode(
     }
   };
 
-  const unsubscribe = subscribeAndEmit(acquired.bus, { stdout: input.stdout, onEmit });
+  const unsubscribe = subscribeAndEmit(acquired.bus, {
+    stdout: input.stdout,
+    onEmit,
+    skipTypes: ['gate-answer'],
+  });
 
   let released = false;
   const release = (): void => {
@@ -214,7 +226,7 @@ interface RunSmeeModeInput {
   channelUrl: string;
   options: DoorbellOptions;
   deps: DoorbellDeps;
-  logger: { warn: (msg: string) => void; info?: (msg: string) => void };
+  logger: { warn: (msg: string) => void; info: (msg: string) => void };
   stdout: { write(chunk: string, cb?: () => void): boolean | void };
   selector: SourceSelector;
   stop: () => void;
@@ -322,8 +334,10 @@ export async function runDoorbell(
     return 2;
   }
 
-  const logger =
-    deps.logger ?? { warn: (msg: string) => process.stderr.write(`${msg}\n`) };
+  const logger = deps.logger ?? {
+    warn: (msg: string) => process.stderr.write(`${msg}\n`),
+    info: (msg: string) => process.stderr.write(`${msg}\n`),
+  };
 
   let stopResolve: () => void = () => undefined;
   const stopPromise = new Promise<void>((resolve) => {
@@ -372,6 +386,67 @@ export async function runDoorbell(
       /* test seam may throw */
     }
     return 0;
+  }
+
+  // Answers-file tailer — peer wake source that runs concurrently with
+  // whichever primary source `source-selector` picks. Bound to the same
+  // epicRef as the doorbell; writes gate-answer events to stdout and emits
+  // them into a shared bus so `cockpit_await_events` sees them too. Wrapped
+  // in the same startup-retry envelope as poll-mode acquire so transient
+  // ECONNRESET / rate-limit responses are retried consistently.
+  const acquireForTailer = deps.acquireBus ?? acquireEpicBus;
+  const tailerAcquireOptions: AcquireOptions = {
+    epicRef: form.ref,
+    logger,
+  };
+  if (deps.runner != null) tailerAcquireOptions.runner = deps.runner;
+  if (deps.gh != null) tailerAcquireOptions.gh = deps.gh;
+  if (deps.rateLimitScheduler != null) {
+    tailerAcquireOptions.rateLimitScheduler = deps.rateLimitScheduler;
+  }
+  let answersTailer: AnswersFileSource | null = null;
+  let answersBusHandle: Acquired | null = null;
+  const tailerAcquireOutcome = await runStartupRetry<Acquired>({
+    task: () => acquireForTailer(tailerAcquireOptions),
+    label: 'acquireEpicBus',
+    rateLimitScheduler: deps.rateLimitScheduler ?? noopScheduler(),
+    abortSignal: retryAbortController.signal,
+    stderr,
+    logger,
+  });
+  if (tailerAcquireOutcome.kind === 'success') {
+    answersBusHandle = tailerAcquireOutcome.value;
+  } else if (tailerAcquireOutcome.kind === 'permanent') {
+    logger.warn(
+      'cockpit doorbell: answers tailer disabled — bus acquire hit permanent error',
+    );
+  }
+  if (answersBusHandle != null) {
+    const busForTailer = answersBusHandle.bus;
+    const answersOnEvent = async (event: GateAnswerEvent): Promise<void> => {
+      await new Promise<void>((resolve) => {
+        stdout.write(lineForEvent(event), () => resolve());
+      });
+      busForTailer.emit(event);
+    };
+    const tailerOptions: ConstructorParameters<typeof AnswersFileSource>[0] = {
+      epicRef: form.ref,
+      onEvent: answersOnEvent,
+      logger,
+    };
+    if (deps.answersFilePath != null) tailerOptions.filePath = deps.answersFilePath;
+    answersTailer =
+      deps.answersFileSourceFactory != null
+        ? deps.answersFileSourceFactory(tailerOptions)
+        : new AnswersFileSource(tailerOptions);
+    // Fire-and-forget start — replay drains concurrently with source setup.
+    void answersTailer.start().catch((err) => {
+      logger.warn(
+        `cockpit doorbell: answers tailer start failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    });
   }
 
   const discover = deps.discoverChannel ?? discoverChannelUrl;
@@ -432,6 +507,27 @@ export async function runDoorbell(
       const p = pollHandle;
       pollHandle = null;
       p.release();
+    }
+  };
+
+  const tearDownAnswersTailer = async (): Promise<void> => {
+    if (answersTailer != null) {
+      const t = answersTailer;
+      answersTailer = null;
+      try {
+        await t.stop();
+      } catch {
+        /* best-effort */
+      }
+    }
+    if (answersBusHandle != null) {
+      const h = answersBusHandle;
+      answersBusHandle = null;
+      try {
+        h.release();
+      } catch {
+        /* best-effort */
+      }
     }
   };
 
@@ -542,6 +638,7 @@ export async function runDoorbell(
   if (discovery != null) {
     const outcome = await startSmeeMode(discovery.url);
     if (outcome === 'permanent-exit') {
+      await tearDownAnswersTailer();
       selector.stop();
       cleanupSignals();
       try {
@@ -565,6 +662,7 @@ export async function runDoorbell(
         return 3;
       }
       if (pollOutcome === 'transient-fail' && !stopped) {
+        await tearDownAnswersTailer();
         selector.stop();
         cleanupSignals();
         try {
@@ -578,6 +676,7 @@ export async function runDoorbell(
   } else {
     const outcome = await startPollMode();
     if (outcome === 'permanent-exit') {
+      await tearDownAnswersTailer();
       selector.stop();
       cleanupSignals();
       try {
@@ -588,6 +687,7 @@ export async function runDoorbell(
       return 3;
     }
     if (outcome === 'transient-fail' && !stopped) {
+      await tearDownAnswersTailer();
       selector.stop();
       cleanupSignals();
       try {
@@ -602,6 +702,7 @@ export async function runDoorbell(
   await stopPromise;
 
   await tearDownActiveSource();
+  await tearDownAnswersTailer();
   selector.stop();
   await drainStdout(stdout);
   cleanupSignals();
