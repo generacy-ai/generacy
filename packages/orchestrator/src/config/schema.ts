@@ -181,6 +181,14 @@ export type DispatchConfig = z.infer<typeof DispatchConfigSchema>;
  * Lease configuration for per-user execution lease protocol
  */
 export const LeaseConfigSchema = z.object({
+  /**
+   * Whether to gate dispatch on per-user cloud execution leases (#1016).
+   * Default OFF: the lease path was dead since #418, so real clusters run
+   * many worker replicas unmetered — flipping enforcement on changes their
+   * effective concurrency to the org's tier limit. Enable deliberately
+   * (ORCHESTRATOR_LEASE_ENFORCE=true) once tier limits/overrides are set.
+   */
+  enforce: z.boolean().default(false),
   /** Timeout for lease_request response (ms) */
   requestTimeoutMs: z.number().int().min(5000).default(30000),
   /** Interval between lease heartbeats (ms) */

@@ -29,6 +29,11 @@ Changes:
   server-side and only expired by TTL), and swallows release acks.
 - `orchestrator`: worker mode wires inbound relay messages to the dispatcher's
   LeaseManager.
+- **Enforcement is opt-in** (`lease.enforce` / `ORCHESTRATOR_LEASE_ENFORCE=true`,
+  default OFF): because the lease path has been dead since #418, existing
+  clusters run `workers: N` replicas unmetered — silently enabling enforcement
+  would cap their effective concurrency at the org's tier limit (free tier: 1).
+  With enforcement off, dispatch behaves exactly as before this change.
 - `WorkerDispatcher`: the lease gate engages whenever a lease manager is
   configured (previously also gated on receiving `tier_info`, which never
   arrives). Denials pause claiming and now auto-resume via a
