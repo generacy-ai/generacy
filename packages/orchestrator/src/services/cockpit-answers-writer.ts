@@ -112,13 +112,19 @@ export class CockpitAnswersWriter {
     return this.dedup.has(deliveryId);
   }
 
-  async append(payload: CockpitAnswer): Promise<void> {
-    const run = async (): Promise<void> => {
+  async append(payload: CockpitAnswer): Promise<{ deduped: boolean }> {
+    const run = async (): Promise<{ deduped: boolean }> => {
       if (this.unhealthy) {
         throw new Error('cockpit-answers-writer is unhealthy');
       }
       if (!this.fd) {
         throw new Error('cockpit-answers-writer not initialized');
+      }
+      // Re-check dedup inside the mutex so a concurrent redelivery of the
+      // same deliveryId does not double-append when both callers raced past
+      // the route-level hasDelivered() check before either write completed.
+      if (this.dedup.has(payload.deliveryId)) {
+        return { deduped: true };
       }
       const line = `${JSON.stringify(payload)}\n`;
       const buffer = Buffer.from(line, 'utf8');
@@ -128,6 +134,7 @@ export class CockpitAnswersWriter {
       if (this.currentBytes >= this.rotationBytes) {
         await this.rotate();
       }
+      return { deduped: false };
     };
 
     const previous = this.mutex;
@@ -138,7 +145,7 @@ export class CockpitAnswersWriter {
     this.mutex = previous.then(() => next);
     await previous;
     try {
-      await run();
+      return await run();
     } finally {
       releaseResolve();
     }

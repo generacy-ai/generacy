@@ -35,6 +35,10 @@ export function setupCockpitAnswersRoute(
 
       try {
         const parsed = GateAnswerSchema.parse(request.body);
+        // Fast path: avoid the mutex acquisition when we can already tell
+        // this deliveryId is a duplicate. The authoritative check happens
+        // inside append() under its mutex so concurrent redeliveries of the
+        // same deliveryId can't both slip past the pre-check and double-write.
         if (options.writer.hasDelivered(parsed.deliveryId)) {
           options.logger.debug(
             { deliveryId: parsed.deliveryId, gateId: parsed.gateId },
@@ -42,8 +46,14 @@ export function setupCockpitAnswersRoute(
           );
           return reply.status(200).send({ accepted: true, deduped: true });
         }
-        await options.writer.append(parsed);
-        return reply.status(200).send({ accepted: true, deduped: false });
+        const { deduped } = await options.writer.append(parsed);
+        if (deduped) {
+          options.logger.debug(
+            { deliveryId: parsed.deliveryId, gateId: parsed.gateId },
+            'cockpit answer deduped',
+          );
+        }
+        return reply.status(200).send({ accepted: true, deduped });
       } catch (err) {
         if (err instanceof ZodError) {
           options.logger.warn(

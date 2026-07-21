@@ -20,7 +20,7 @@ function makeFakeWriter(overrides: Partial<FakeWriter> = {}): FakeWriter {
   return {
     isHealthy: vi.fn(() => true),
     hasDelivered: vi.fn(() => false),
-    append: vi.fn(async () => {}),
+    append: vi.fn(async () => ({ deduped: false })),
     ...overrides,
   };
 }
@@ -120,16 +120,36 @@ describe('POST /cockpit/answers', () => {
     expect(writer.append).not.toHaveBeenCalled();
   });
 
-  it('concurrent deliveries with same deliveryId are serialized by writer mutex', async () => {
-    let deliveredCount = 0;
+  it('concurrent deliveries with same deliveryId append exactly once', async () => {
+    // Emulates the real writer's mutex-scoped dedup: both requests race past
+    // the route-level hasDelivered() pre-check, then serialize inside append()
+    // and the second call sees the deliveryId already present.
+    let appendedCount = 0;
     const delivered = new Set<string>();
+    let chain: Promise<void> = Promise.resolve();
     const writer = {
       isHealthy: () => true,
       hasDelivered: (id: string) => delivered.has(id),
-      append: async (payload: { deliveryId: string }) => {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-        delivered.add(payload.deliveryId);
-        deliveredCount += 1;
+      append: (payload: { deliveryId: string }) => {
+        const previous = chain;
+        let release: () => void = () => {};
+        const next = new Promise<void>((r) => {
+          release = r;
+        });
+        chain = previous.then(() => next);
+        return previous.then(async () => {
+          try {
+            await new Promise((resolve) => setTimeout(resolve, 10));
+            if (delivered.has(payload.deliveryId)) {
+              return { deduped: true };
+            }
+            delivered.add(payload.deliveryId);
+            appendedCount += 1;
+            return { deduped: false };
+          } finally {
+            release();
+          }
+        });
       },
     };
     setupCockpitAnswersRoute(server, {
@@ -145,10 +165,11 @@ describe('POST /cockpit/answers', () => {
     expect([r1.statusCode, r2.statusCode].sort()).toEqual([200, 200]);
     const b1 = JSON.parse(r1.body);
     const b2 = JSON.parse(r2.body);
-    // At most one write actually happened at the writer level.
-    expect(deliveredCount).toBeLessThanOrEqual(2);
-    // At least one accepted (deduped=false); the other may be deduped depending on scheduling.
+    // Exactly one write happened at the writer level — the mutex-scoped
+    // dedup check inside append() blocks the second request.
+    expect(appendedCount).toBe(1);
+    // Exactly one response reports deduped:false; the other reports deduped:true.
     const outcomes = [b1.deduped, b2.deduped].sort();
-    expect(outcomes[0]).toBe(false);
+    expect(outcomes).toEqual([false, true]);
   });
 });

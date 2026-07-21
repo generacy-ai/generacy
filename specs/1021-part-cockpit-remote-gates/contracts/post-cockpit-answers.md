@@ -36,15 +36,16 @@ Minimum required fields:
 
 1. `GateAnswerSchema.parse(request.body)` → payload or `ZodError`.
 2. On `ZodError`: log `warn { route: '/cockpit/answers', code: 'VALIDATION', issues }`, respond `400`. **File untouched.**
-3. `if (writer.hasDelivered(payload.deliveryId))`: respond `200 { accepted: true, deduped: true }`. **File untouched.**
-4. `await writer.append(payload)`:
-   - Serialize as `JSON.stringify(payload) + '\n'`.
+3. `if (writer.hasDelivered(payload.deliveryId))`: respond `200 { accepted: true, deduped: true }`. **File untouched.** This is a fast path — the authoritative dedup check happens inside `append()` (step 4).
+4. `await writer.append(payload)` → `{ deduped: boolean }`:
    - Take the writer's append mutex.
+   - **Re-check `dedup.has(payload.deliveryId)` inside the mutex.** If already delivered (a concurrent request wrote the same `deliveryId` while this one was waiting on the mutex), release the mutex and return `{ deduped: true }` without writing. This closes the TOCTOU window between the route-level `hasDelivered()` fast path and the actual write.
+   - Otherwise serialize as `JSON.stringify(payload) + '\n'`.
    - Single `fs.write(fd, buffer)` — no partial-line writes.
    - After the write, `dedup.add(payload.deliveryId)`.
    - Check size against rotation threshold; if exceeded, rotate under the same mutex (see `data-model.md §3.1`).
-   - Release the mutex.
-5. Respond `200 { accepted: true, deduped: false }`.
+   - Release the mutex. Return `{ deduped: false }`.
+5. Respond `200 { accepted: true, deduped }` using the value `append()` returned.
 
 ## Rotation triggered inline
 

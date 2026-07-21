@@ -122,7 +122,7 @@ describe('CockpitAnswersWriter', () => {
     expect(parsed.deliveryId).toBe('dlv_a');
   });
 
-  it('same deliveryId — dedup blocks (but append does not itself check)', async () => {
+  it('same deliveryId — second append inside mutex is a no-op and returns deduped:true', async () => {
     writer = new CockpitAnswersWriter({
       path: answersPath,
       rotationBytes: 10_000,
@@ -130,8 +130,39 @@ describe('CockpitAnswersWriter', () => {
       logger: silentLogger,
     });
     await writer.init();
-    await writer.append(makeAnswer('dlv_dup'));
+    const first = await writer.append(makeAnswer('dlv_dup'));
+    const second = await writer.append(makeAnswer('dlv_dup'));
+    expect(first).toEqual({ deduped: false });
+    expect(second).toEqual({ deduped: true });
     expect(writer.hasDelivered('dlv_dup')).toBe(true);
+
+    const contents = await fs.readFile(answersPath, 'utf8');
+    const lines = contents.split('\n').filter((l) => l.length > 0);
+    expect(lines).toHaveLength(1);
+  });
+
+  it('concurrent appends of same deliveryId write exactly once', async () => {
+    writer = new CockpitAnswersWriter({
+      path: answersPath,
+      rotationBytes: 10_000,
+      rotationKeep: 3,
+      logger: silentLogger,
+    });
+    await writer.init();
+
+    const results = await Promise.all([
+      writer.append(makeAnswer('dlv_race')),
+      writer.append(makeAnswer('dlv_race')),
+      writer.append(makeAnswer('dlv_race')),
+    ]);
+    const dedupedCount = results.filter((r) => r.deduped).length;
+    const appendedCount = results.filter((r) => !r.deduped).length;
+    expect(appendedCount).toBe(1);
+    expect(dedupedCount).toBe(2);
+
+    const contents = await fs.readFile(answersPath, 'utf8');
+    const lines = contents.split('\n').filter((l) => l.length > 0);
+    expect(lines).toHaveLength(1);
   });
 
   it('rotates when threshold is crossed', async () => {
