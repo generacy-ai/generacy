@@ -51,6 +51,10 @@ export interface DoorbellDriver {
   /** Parsed events (JSON.parse) surfaced by the doorbell. */
   readonly events: DoorbellEvent[];
 
+  /** All stderr the child has written so far (diagnostics + `logger.warn`
+   *  lines, e.g. the "malformed line" warning FR-013 asserts on). */
+  stderrText(): string;
+
   /** Wait until the doorbell has emitted an event matching the predicate. */
   waitForEvent(
     match: (event: DoorbellEvent) => boolean,
@@ -97,7 +101,7 @@ async function waitForPredicate<T>(
 export function createDoorbellDriver(opts: DoorbellDriverOptions): DoorbellDriver {
   const nodeBin = opts.nodeBin ?? process.execPath;
   const generacyBin =
-    opts.generacyBin ?? path.join(repoRoot(), 'packages/generacy/dist/bin/generacy.js');
+    opts.generacyBin ?? path.join(repoRoot(), 'packages/generacy/bin/generacy.js');
 
   const stdoutLines: string[] = [];
   const events: DoorbellEvent[] = [];
@@ -207,6 +211,7 @@ export function createDoorbellDriver(opts: DoorbellDriverOptions): DoorbellDrive
   return {
     stdoutLines,
     events,
+    stderrText: () => stderrChunks.join(''),
     async waitForEvent(match, timeoutMs = DEFAULT_TIMEOUT_MS) {
       return waitForPredicate<DoorbellEvent>(
         () => events.find((e) => match(e)) ?? null,

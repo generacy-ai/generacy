@@ -25,6 +25,7 @@ import {
   type AcquireOptions,
   type Acquired,
 } from './mcp/event-bus-registry.js';
+import { EpicEventBus } from './mcp/event-bus.js';
 import { subscribeAndEmit, lineForEvent } from './doorbell/subscribe.js';
 import type { CockpitStreamEvent } from './watch/stream-event.js';
 import {
@@ -739,6 +740,37 @@ export function doorbellCommand(): Command {
       false,
     )
     .action(async (epicRef: string | undefined, options: DoorbellOptions) => {
+      const answersFileOverride = process.env['COCKPIT_ANSWERS_FILE'];
+
+      // Hermetic integration-harness mode (#1024): tail the answers file with a
+      // local in-process bus and NO GitHub — no epic resolution, no smee, no
+      // poll bus. Lets the #1024 cluster-side harness spawn the REAL doorbell
+      // binary as a child and assert FR-005/007/013/015 fully offline. Env-gated
+      // so the production wake-sensor path below is untouched.
+      // see #1024 — cluster-side gates integration seam.
+      if (process.env['COCKPIT_DOORBELL_HARNESS'] === '1') {
+        const localBus = new EpicEventBus({ epic: epicRef ?? 'harness/harness#0' });
+        // Poll-only tailer (useFsWatch:false): fs.watch's async-iterator
+        // teardown can wedge a graceful SIGTERM exit. But the poll timer is
+        // `unref()`-d, so with no other live handle the process would exit
+        // before any live append is tailed — a ref'd keep-alive holds the loop
+        // open until SIGTERM resolves runDoorbell.
+        const keepAlive = setInterval(() => undefined, 1 << 30);
+        const code = await runDoorbell(epicRef, options, {
+          // No gh → discovery/smee are skipped; poll-mode + tailer both resolve
+          // their bus through this local no-op acquire instead of GitHub.
+          acquireBus: async () => ({ bus: localBus, release: () => undefined }),
+          answersFileSourceFactory: (opts) =>
+            new AnswersFileSource({ ...opts, useFsWatch: false, pollIntervalMs: 150 }),
+          ...(answersFileOverride != null
+            ? { answersFilePath: answersFileOverride }
+            : {}),
+        });
+        clearInterval(keepAlive);
+        process.exit(code);
+        return;
+      }
+
       const runner: CommandRunner = nodeChildProcessRunner;
       const cache = createGhResponseCache();
       const rateLimitScheduler = createRateLimitScheduler({ runner });
@@ -747,6 +779,12 @@ export function doorbellCommand(): Command {
         runner,
         gh,
         rateLimitScheduler,
+        // S-5 (#1024): honour COCKPIT_ANSWERS_FILE for the answers-file tailer
+        // target even on the production path; falls back to the default inside
+        // AnswersFileSource when unset.
+        ...(answersFileOverride != null
+          ? { answersFilePath: answersFileOverride }
+          : {}),
       });
       process.exit(code);
     });

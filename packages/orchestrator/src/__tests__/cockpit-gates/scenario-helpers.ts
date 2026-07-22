@@ -1,33 +1,39 @@
 /**
  * Per-scenario wire-up for the cockpit gates integration harness (#1024).
  *
- * Composes: (1) a fresh temp dir with `COCKPIT_ANSWERS_FILE` pointing into
- * it, (2) a fake relay peer on a random port, (3) an in-process
- * orchestrator (via `createTestServer` + `listen({ port: 0 })`), and
- * (optionally) (4) a doorbell child process driver. Every scenario gets a
- * fresh copy; `cleanup()` is idempotent so `beforeEach`/`afterEach` can
- * rely on the same handle.
+ * Composes the REAL cluster-side gate surface end-to-end, no cloud, no live
+ * GitHub, no smee (FR-002, FR-010):
  *
- * Current sibling state (2026-07-21): #1020 fixture builders + #1021
- * gate routes + `cluster.cockpit` `ALLOWED_CHANNELS` entry + retain-and-
- * replay + answers-file writer + #1023 doorbell answers-file tail have
- * NOT landed on `develop` (PRs #1025, #1027, #1028, #1029 are open). So
- * this file exercises what CAN be exercised today:
+ *   1. A per-scenario temp dir with `COCKPIT_ANSWERS_FILE` pointing into it,
+ *      so the real answers-file writer and the doorbell tail an isolated file
+ *      (spec Assumption §100, seam S-1/S-5).
+ *   2. A fake relay peer (`ws` WebSocketServer) on a random port that plays the
+ *      role of the generacy-cloud relay ingress.
+ *   3. A light in-process orchestrator that wires the REAL gate modules —
+ *      `setupCockpitGatesRoute`, `setupCockpitAnswersRoute`, the real
+ *      `CockpitAnswersWriter`, and the real `createRetainedCockpitEvents`
+ *      retainer — onto a bare Fastify instance (plan D-1 "lighter fixture that
+ *      only wires the gate routes"; the full `createServer` boot pulls in
+ *      redis/workflow/smee that this harness does not exercise).
+ *   4. A REAL `ClusterRelayClient` (`@generacy-ai/cluster-relay`) pointed at the
+ *      fake peer's `ws://` url — the same client the orchestrator uses in
+ *      production, so the outbound `cluster.cockpit` framing and the inbound
+ *      `api_request` proxy path are exercised for real (plan D-3). The
+ *      `retainer.drainInto(client)` replay on (re)connect mirrors
+ *      `RelayBridge.handleConnected()`.
+ *   5. (optionally) A REAL doorbell child process spawned in hermetic mode
+ *      (`COCKPIT_DOORBELL_HARNESS=1`) that tails the answers file — clarification
+ *      Q3 → C requires a real `spawn()`/kill so FR-007's restart-replay is
+ *      genuine.
  *
- *   - The `createTestServer` + `server.listen({ port: 0 })` boot path
- *     (`orchestrator`, `orchestratorUrl` populated on every scenario).
- *   - The fake peer WS lifecycle (start/close/disconnect/reconnect,
- *     handshake handling, api_request/response correlation).
- *   - The doorbell driver's spawn/stop/restart mechanics via injectable
- *     `nodeBin` + `generacyBin` overrides (see `doorbell-driver.ts`).
- *
- * The scenarios in `cockpit-gates-integration.integration.test.ts` that
- * assert against the sibling routes (`POST /cockpit/gates`, `POST
- * /cockpit/answers`), the writer's file-level dedup, and the doorbell's
- * answers-file tail remain `.skip()` with `TODO(#<sibling>):` comments;
- * they unskip when their responsible sibling lands. The "Harness plumbing"
- * describe block in the same file DOES run today and provides real
- * regression signal against the harness scaffolding itself.
+ * **On the `cockpit_await_events` / in-process MCP bus (assertion primitive #5):**
+ * the bus registry lives in `@generacy-ai/generacy`, which depends on
+ * `@generacy-ai/orchestrator` (`workspace:*`). Importing it here would close a
+ * build cycle, so the harness cannot drain the bus in-process. The doorbell
+ * emits every `gate-answer` to BOTH its stdout NDJSON AND its in-process
+ * `EpicEventBus` from the same object (`doorbell.ts` `answersOnEvent`), so the
+ * doorbell's parsed stdout stream (`ctx.doorbell.events`) is the byte-identical,
+ * cross-process-observable surface the bus would hold. Scenarios assert on it.
  *
  * See `specs/1024-part-cockpit-remote-gates/data-model.md` §"ScenarioContext".
  */
@@ -35,8 +41,14 @@ import type { AddressInfo } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { FastifyInstance } from 'fastify';
-import { createTestServer } from '../../server.js';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { ClusterRelayClient } from '@generacy-ai/cluster-relay';
+import { DEFAULT_WIRE_EPIC_REF } from '@generacy-ai/cockpit';
+import type { ClusterRelayClient as ClusterRelayClientType } from '../../types/relay.js';
+import { setupCockpitGatesRoute } from '../../routes/cockpit-gates.js';
+import { setupCockpitAnswersRoute } from '../../routes/cockpit-answers.js';
+import { createRetainedCockpitEvents } from '../../routes/retained-cockpit-events.js';
+import { CockpitAnswersWriter } from '../../services/cockpit-answers-writer.js';
 import { startFakePeer, type FakePeer } from './fake-peer.js';
 import {
   createDoorbellDriver,
@@ -44,63 +56,106 @@ import {
   type DoorbellDriverOptions,
 } from './doorbell-driver.js';
 
+/** Epic ref the harness binds the doorbell + answer scope to. Matches
+ *  `DEFAULT_WIRE_SCOPE` in `@generacy-ai/cockpit` so `answerLineFixture()`
+ *  scope passes the doorbell's epic-scope filter. */
+export const HARNESS_EPIC_REF = DEFAULT_WIRE_EPIC_REF;
+
+const SILENT_LOGGER = {
+  info: () => undefined,
+  warn: () => undefined,
+  error: () => undefined,
+  debug: () => undefined,
+};
+
 export interface ScenarioContext {
   peer: FakePeer;
-  doorbell: DoorbellDriver;
-  /** Fastify instance booted via `createTestServer`. Listens on a random
-   *  port (`orchestratorUrl` below). Uses `skipRoutes: true`, so it has NO
-   *  gate routes registered — scenarios that assert against `POST
-   *  /cockpit/gates` etc. must remain `.skip()` until sibling #1021 lands
-   *  the real route. Tests are free to register their own routes on this
-   *  instance via `orchestrator.post(...)` before assertions run. */
+  /** Real doorbell child driver. `null` unless the scenario opted in via
+   *  `startDoorbell` / a `doorbellDriverOptions` override. */
+  doorbell: DoorbellDriver | null;
+  /** Bare Fastify instance wired with the real gate + answers routes. */
   orchestrator: FastifyInstance;
+  /** Real relay client connected to the fake peer. */
+  relayClient: ClusterRelayClientType;
   answersFilePath: string;
   tempDir: string;
-  /** `http://127.0.0.1:<port>` — always populated after `setupScenario`. */
+  /** `http://127.0.0.1:<port>` — the light orchestrator's HTTP base. */
   orchestratorUrl: string;
+  /** Epic ref the doorbell is bound to (`HARNESS_EPIC_REF`). */
+  epicRef: string;
   cleanup: () => Promise<void>;
 }
 
 export interface ScenarioSetupOptions {
-  /** Skip starting the doorbell child (default: true — the real doorbell
-   *  answers-file tail lives in sibling #1023 which has not landed yet, so
-   *  starting the current `generacy cockpit doorbell` binary would be
-   *  meaningless. Individual harness self-tests that want to exercise the
-   *  spawn/restart mechanics pass `skipDoorbell: false` with a
-   *  `generacyBin` override pointing at a synthetic script). */
-  skipDoorbell?: boolean;
-  /** Extra CLI args for the doorbell child. */
-  doorbellArgs?: string[];
-  /** Override the doorbell driver options (e.g. `generacyBin` for a
-   *  synthetic child script during harness plumbing self-tests). */
+  /** Spawn the real hermetic doorbell child bound to `HARNESS_EPIC_REF`.
+   *  Default false (many scenarios only assert the relay path). */
+  startDoorbell?: boolean;
+  /** Override the doorbell driver options (e.g. `spawnArgv` for a synthetic
+   *  child during harness plumbing self-tests). Implies `startDoorbell`. */
   doorbellDriverOptions?: Partial<DoorbellDriverOptions>;
+  /** Base reconnect delay for the relay client (ms). Small so S1b's
+   *  disconnect→reconnect completes quickly. Default 200. */
+  relayReconnectMs?: number;
+}
+
+const CONNECT_TIMEOUT_MS = 5000;
+const CONNECT_POLL_MS = 20;
+
+async function waitUntil(
+  predicate: () => boolean,
+  timeoutMs: number,
+  onTimeout: () => string,
+): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error(onTimeout());
+    await new Promise((r) => setTimeout(r, CONNECT_POLL_MS));
+  }
 }
 
 /**
- * Spin up a fresh scenario context. Call `cleanup()` in `afterEach`; safe
- * to call multiple times.
+ * Spin up a fresh scenario context. Call `cleanup()` in `afterEach`; safe to
+ * call multiple times.
  */
 export async function setupScenario(
   opts: ScenarioSetupOptions = {},
 ): Promise<ScenarioContext> {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'cockpit-gates-1024-'));
   const answersFilePath = path.join(tempDir, 'answers.ndjson');
+  const epicRef = HARNESS_EPIC_REF;
 
-  // Set COCKPIT_ANSWERS_FILE for the in-process orchestrator boot — the
-  // writer sibling (#1021) reads it at construction, and the doorbell
-  // sibling (#1023) reads it at spawn. Set BEFORE createTestServer so any
-  // future writer that reads it at construction time sees the temp path.
+  // Redirect the writer's answers file into the temp dir. Set before the
+  // writer is constructed. Restored in cleanup.
   const previousAnswersFileEnv = process.env['COCKPIT_ANSWERS_FILE'];
   process.env['COCKPIT_ANSWERS_FILE'] = answersFilePath;
 
   const peer = await startFakePeer();
 
-  // Boot the orchestrator on a random port. `createTestServer` uses
-  // `skipRoutes: true`, so no gate routes are registered — scenarios that
-  // hit them must either register their own inline routes on this
-  // instance (harness self-tests do this) or remain `.skip()` until
-  // sibling #1021 lands the real route.
-  const orchestrator = await createTestServer();
+  // --- Light orchestrator: real gate modules on a bare Fastify instance. ----
+  const orchestrator = Fastify({ logger: false });
+  const writer = new CockpitAnswersWriter({
+    path: answersFilePath,
+    rotationBytes: 32 * 1024 * 1024,
+    rotationKeep: 3,
+    logger: SILENT_LOGGER,
+  });
+  await writer.init();
+  const retainer = createRetainedCockpitEvents({
+    maxCount: 1000,
+    maxBytes: 4 * 1024 * 1024,
+  });
+
+  // Deferred-binding relay-client ref, mirroring server.ts: the gate route
+  // reads it lazily so a POST that arrives before the client connects retains
+  // instead of dropping.
+  let relayClientRef: ClusterRelayClientType | null = null;
+  setupCockpitGatesRoute(orchestrator, {
+    retainer,
+    getRelayClient: () => relayClientRef,
+    logger: SILENT_LOGGER,
+  });
+  setupCockpitAnswersRoute(orchestrator, { writer, logger: SILENT_LOGGER });
+
   await orchestrator.listen({ port: 0, host: '127.0.0.1' });
   const address = orchestrator.server.address() as AddressInfo | string | null;
   if (address == null || typeof address === 'string') {
@@ -110,29 +165,52 @@ export async function setupScenario(
   }
   const orchestratorUrl = `http://127.0.0.1:${address.port}`;
 
-  const doorbellDriverOptions: DoorbellDriverOptions = {
-    answersFilePath,
-    env: { COCKPIT_ANSWERS_FILE: answersFilePath },
-    extraArgs: opts.doorbellArgs ?? [],
-    ...(opts.doorbellDriverOptions ?? {}),
-  };
-  const doorbell = createDoorbellDriver(doorbellDriverOptions);
+  // --- Real relay client → fake peer. --------------------------------------
+  const relayClient = new ClusterRelayClient(
+    {
+      apiKey: 'test-cluster-key',
+      cloudUrl: peer.url,
+      orchestratorUrl,
+      orchestratorApiKey: 'test-orchestrator-key',
+      baseReconnectDelayMs: opts.relayReconnectMs ?? 200,
+      routes: [],
+    },
+    SILENT_LOGGER,
+  ) as unknown as ClusterRelayClientType;
+  relayClientRef = relayClient;
 
-  // The `generacy cockpit doorbell` binary currently ships as a smee/wake
-  // sensor (issue-monitoring), NOT as an answers-file tail — the tail
-  // behavior lives in unlanded sibling #1023. Auto-starting the current
-  // binary would fail (it expects `--tracking` / `--new` / an issue ref
-  // and connects to GitHub) and provide no useful signal for #1024.
-  //
-  // Individual scenarios that want to exercise `child spawn / SIGTERM /
-  // restart` mechanics right now do so via `skipDoorbell: false` combined
-  // with a synthetic `generacyBin` override — see the "Harness plumbing"
-  // describe block in the sibling `.integration.test.ts`.
-  //
-  // When #1023 lands the real answers-file tail, flip the default to
-  // `false` and delete this comment.
-  const shouldStartDoorbell = opts.skipDoorbell === false;
-  if (shouldStartDoorbell) {
+  // Replay retained cluster.cockpit events on every (re)connect — mirrors
+  // RelayBridge.handleConnected() → drainRetainedCockpitEvents() (FR-004).
+  (relayClient as unknown as {
+    on: (event: string, handler: () => void) => void;
+  }).on('connected', () => {
+    retainer.drainInto(relayClient);
+  });
+
+  // connect() runs an internal reconnect loop that only resolves on
+  // disconnect(), so kick it off fire-and-forget and poll isConnected.
+  void (relayClient as unknown as { connect: () => Promise<void> }).connect();
+  await waitUntil(
+    () => relayClient.isConnected,
+    CONNECT_TIMEOUT_MS,
+    () => `[scenario-helpers] relay client did not connect to fake peer within ${CONNECT_TIMEOUT_MS}ms`,
+  );
+
+  // --- Optional real doorbell child. ---------------------------------------
+  let doorbell: DoorbellDriver | null = null;
+  const wantsDoorbell =
+    opts.startDoorbell === true || opts.doorbellDriverOptions != null;
+  if (wantsDoorbell) {
+    const driverOptions: DoorbellDriverOptions = {
+      answersFilePath,
+      env: {
+        COCKPIT_ANSWERS_FILE: answersFilePath,
+        COCKPIT_DOORBELL_HARNESS: '1',
+      },
+      extraArgs: [epicRef],
+      ...(opts.doorbellDriverOptions ?? {}),
+    };
+    doorbell = createDoorbellDriver(driverOptions);
     await doorbell.start();
   }
 
@@ -140,13 +218,25 @@ export async function setupScenario(
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
     cleanedUp = true;
+    if (doorbell != null) {
+      try {
+        await doorbell.stop(1500);
+      } catch {
+        /* best-effort */
+      }
+    }
     try {
-      await doorbell.stop();
+      await (relayClient as unknown as { disconnect: () => Promise<void> }).disconnect();
     } catch {
       /* best-effort */
     }
     try {
       await orchestrator.close();
+    } catch {
+      /* best-effort */
+    }
+    try {
+      await writer.close();
     } catch {
       /* best-effort */
     }
@@ -171,36 +261,29 @@ export async function setupScenario(
     peer,
     doorbell,
     orchestrator,
+    relayClient,
     answersFilePath,
     tempDir,
     orchestratorUrl,
+    epicRef,
     cleanup,
   };
 }
 
 /**
- * Drain the in-process cockpit MCP event-bus registry from a given cursor.
- *
- * Returns an empty batch stub until sibling #1023 lands the doorbell
- * answers-file tail and an in-process bus surface that
- * `cockpit_await_events` also consumes. Callers can compose against this
- * shape today; when the bus surface lands, this function will start
- * returning real entries and the sibling-dependent scenarios in the
- * integration test file can unskip.
- *
- * The stub returns rather than throwing so scenario bodies that call it
- * during wire-up don't crash — the caller distinguishes "no events yet"
- * from "bus not wired" via the empty `entries` array vs. real data.
- *
- * TODO(#1023): return real entries from the in-process bus registry once
- * `cockpit_await_events` is reachable from the harness (either via a
- * direct import of the same accessor the MCP tool uses, or via a
- * test-only export from the doorbell module). See
- * `specs/1024-part-cockpit-remote-gates/contracts/env-seams.md` §S-7.
+ * Poll a predicate until true or timeout. Small helper for scenario bodies
+ * that wait on a file/stdout side effect the fixtures do not expose a
+ * dedicated waiter for (e.g. "exactly N lines in the answers file").
  */
-export async function awaitCockpitEvents(_sinceCursor: number): Promise<{
-  entries: Array<{ event: { type: string; [k: string]: unknown } }>;
-  cursor: number;
-}> {
-  return { entries: [], cursor: _sinceCursor };
+export async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  timeoutMs = 5000,
+  message = 'waitFor timed out',
+): Promise<void> {
+  const start = Date.now();
+  for (;;) {
+    if (await predicate()) return;
+    if (Date.now() - start > timeoutMs) throw new Error(message);
+    await new Promise((r) => setTimeout(r, 25));
+  }
 }

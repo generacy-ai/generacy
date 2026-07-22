@@ -62,3 +62,15 @@ export {
   VALID_ANSWER_FIXTURES,
   VALID_ACK_FIXTURES,
 } from './fixtures.js';
+
+export {
+  gateOpenFixture,
+  gateAckFixture,
+  answerLineFixture,
+  DEFAULT_WIRE_SCOPE,
+  DEFAULT_WIRE_EPIC_REF,
+  type WireScope,
+  type GateOpenFixtureOverrides,
+  type GateAckFixtureOverrides,
+  type AnswerLineFixtureOverrides,
+} from './wire-fixtures.js';

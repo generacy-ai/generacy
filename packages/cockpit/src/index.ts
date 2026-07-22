@@ -136,4 +136,14 @@ export {
   MALFORMED_FIXTURES,
   VALID_ANSWER_FIXTURES,
   VALID_ACK_FIXTURES,
+  // Wire-envelope fixture builders (#1024 integration harness)
+  gateOpenFixture,
+  gateAckFixture,
+  answerLineFixture,
+  DEFAULT_WIRE_SCOPE,
+  DEFAULT_WIRE_EPIC_REF,
+  type WireScope,
+  type GateOpenFixtureOverrides,
+  type GateAckFixtureOverrides,
+  type AnswerLineFixtureOverrides,
 } from './gates/index.js';

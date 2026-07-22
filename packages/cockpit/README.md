@@ -86,10 +86,19 @@ between the cluster-side integration harness (`packages/orchestrator/src/__tests
 and the fake relay peer, so the cloud side can emit and expect the exact
 same bytes without cross-repo copy-paste.
 
-**Provisional**: the gates module (`packages/cockpit/src/gates/`) has not
-yet landed on `develop` as of this section's introduction (it's owned by
-`generacy-ai/generacy#1020`). Once it lands, this section will be moved to
-`packages/cockpit/src/gates/README.md` and this stub will point there.
+**Single-source the shapes**: build every wire body through the fixture
+builders exported from `@generacy-ai/cockpit` so cluster and cloud stay
+byte-identical — never hand-inline a literal:
+
+```ts
+import {
+  gateOpenFixture,   // POST /cockpit/gates body           → GateOpenSchema
+  gateAckFixture,    // POST /cockpit/gates/:id/ack body    → GateAckSchema
+  answerLineFixture, // POST /cockpit/answers body + tail   → GateAnswerEnvelopeSchema (+ scope)
+  DEFAULT_WIRE_SCOPE,   // { owner, repo, number }
+  DEFAULT_WIRE_EPIC_REF // "owner/repo#number"
+} from '@generacy-ai/cockpit';
+```
 
 ### Wire framing
 
@@ -99,7 +108,10 @@ no compression, no TLS in tests (fake peer is `ws://127.0.0.1:<port>`).
 
 ### Cluster → Cloud
 
-**Gate-open event** (emitted when a `POST /cockpit/gates` succeeds):
+**Gate-open event** (emitted when a `POST /cockpit/gates` succeeds). The
+route echoes the validated `GateOpen` envelope as `data` verbatim — the
+`kind` discriminator lives at the top of `data`, not nested under a `gate`
+key:
 
 ```jsonc
 {
@@ -108,12 +120,18 @@ no compression, no TLS in tests (fake peer is `ws://127.0.0.1:<port>`).
   "timestamp": "2026-07-21T12:34:56.789Z",
   "data": {
     "kind": "gate-open",
-    "gate": { /* GateOpen shape — see @generacy-ai/cockpit/gates */ }
+    "gateId": "g_…",
+    "generation": 0,
+    "scope": { "owner": "generacy-ai", "repo": "generacy", "number": 1024 },
+    "openedAt": "2026-07-21T12:00:00.000Z"
+    // …plus any passthrough keys (e.g. `payload`) — GateOpenSchema is .passthrough()
   }
 }
 ```
 
-**Outcome-ack event** (emitted when a `POST /cockpit/gates/:id/ack` succeeds):
+**Gate-ack event** (emitted when a `POST /cockpit/gates/:id/ack` succeeds).
+`data` is the validated `GateAck` envelope; the route injects the path `:id`
+as `gateId`:
 
 ```jsonc
 {
@@ -121,15 +139,18 @@ no compression, no TLS in tests (fake peer is `ws://127.0.0.1:<port>`).
   "event": "cluster.cockpit",
   "timestamp": "…",
   "data": {
-    "kind": "outcome",
-    "outcome": { /* GateOutcome shape */ }
+    "kind": "gate-ack",
+    "gateId": "g_…",
+    "generation": 0,
+    "outcome": "answered",
+    "ackedAt": "2026-07-21T12:05:01.000Z"
+    // …plus any passthrough keys (e.g. `answer`)
   }
 }
 ```
 
-Both events use `data.kind` as the discriminator on the `cluster.cockpit`
-channel. Consumers narrow the union on `kind` before reading `gate` or
-`outcome`.
+Both events use `data.kind` (`"gate-open"` | `"gate-ack"`) as the
+discriminator on the `cluster.cockpit` channel.
 
 ### Cloud → Cluster
 
@@ -144,18 +165,35 @@ cluster via an `api_request` frame that the orchestrator proxies to its
   "method": "POST",
   "path": "/cockpit/answers",
   "headers": { "content-type": "application/json" },
-  "body": { /* GateAnswer shape */ }
+  "body": {
+    "kind": "gate-answer",
+    "deliveryId": "dlv_…",   // dedup key — the writer keeps one file line per deliveryId
+    "gateId": "g_…",
+    "generation": 0,
+    "answeredAt": "2026-07-21T12:05:00.000Z",
+    "answer": { /* operator's choice */ },
+    "scope": { "owner": "generacy-ai", "repo": "generacy", "number": 1024 }
+    // `answeredBy` optional
+  }
 }
 ```
 
-Response frame (200 on happy path, 4xx on validation error):
+> **Seam pinned by the harness**: the answers route validates
+> `GateAnswerEnvelopeSchema` (which does not require `scope`), but the doorbell
+> tailer validates `GateAnswerLineSchema` (which does). A body **without**
+> `scope` is written to the answers file yet silently dropped by the doorbell.
+> `answerLineFixture()` carries `scope` so the single wire shape satisfies both
+> ends — mirror it exactly.
+
+Response frame (200 on happy path, `{ accepted, deduped }`; 4xx on validation
+error):
 
 ```jsonc
 {
   "type": "api_response",
   "correlationId": "<same as request>",
   "status": 200,
-  "body": {}
+  "body": { "accepted": true, "deduped": false }
 }
 ```
 
