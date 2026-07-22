@@ -19,6 +19,7 @@ const BASE_DEPS = {
 
 const CANONICAL_INPUT = {
   gateId: 'gate_01HK7Z',
+  generation: 1,
   outcome: 'approved',
 };
 
@@ -170,9 +171,9 @@ describe('cockpit_gate_ack parity (#1022)', () => {
     expect(result.detail).toMatch(/timed out after 15ms/);
   });
 
-  it('detail present + happy path → wire body contains {outcome, detail} verbatim', async () => {
+  it('detail present + happy path → wire body carries outcome + detail (in the full envelope)', async () => {
     const spy = vi.fn(async () => jsonResponse(200, { ok: true }));
-    const input = { gateId: 'g_5', outcome: 'approved', detail: 'batch 1 answers look correct' };
+    const input = { gateId: 'g_5', generation: 1, outcome: 'approved', detail: 'batch 1 answers look correct' };
     const result = await cockpitGateAck(input, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -180,18 +181,61 @@ describe('cockpit_gate_ack parity (#1022)', () => {
     expect(result.status).toBe('ok');
     // Verify the URL includes the encoded gateId.
     expect(spy.mock.calls[0]?.[0]).toBe('http://mock.local/cockpit/gates/g_5/ack');
-    // Verify the wire body carries {outcome, detail}, not gateId.
+    // Verify the wire body carries outcome + detail (gateId travels in the path).
     const init = spy.mock.calls[0]?.[1] as RequestInit;
     const body = JSON.parse(String(init.body));
-    expect(body).toEqual({ outcome: 'approved', detail: 'batch 1 answers look correct' });
+    expect(body.outcome).toBe('approved');
+    expect(body.detail).toBe('batch 1 answers look correct');
+    expect(body.gateId).toBeUndefined();
   });
 
   it('encodes gateId in URL path', async () => {
     const spy = vi.fn(async () => jsonResponse(200, {}));
-    await cockpitGateAck({ gateId: 'g/with spaces', outcome: 'approved' }, {
+    await cockpitGateAck({ gateId: 'g/with spaces', generation: 1, outcome: 'approved' }, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
     });
     expect(spy.mock.calls[0]?.[0]).toBe('http://mock.local/cockpit/gates/g%2Fwith%20spaces/ack');
+  });
+});
+
+describe('cockpit_gate_ack envelope (GateAckSchema reconciliation)', () => {
+  // The orchestrator's authoritative GateAckSchema requires
+  // { kind:'gate-ack', gateId, generation:number, outcome, ackedAt }.
+  // The tool must build that full envelope from the caller's
+  // { gateId, generation, outcome, detail? } — gateId in the path, kind +
+  // ackedAt added here — or gate resolution 400s.
+  it('POSTs a full envelope: kind=gate-ack, generation (number), outcome, ackedAt', async () => {
+    let sentBody: unknown;
+    const spy = vi.fn(async (_url: string, init: RequestInit) => {
+      sentBody = JSON.parse(String(init.body));
+      return jsonResponse(200, { accepted: true });
+    });
+    const result = await cockpitGateAck(
+      { gateId: 'g_1', generation: 3, outcome: 'applied', detail: 'ok' },
+      { ...BASE_DEPS, fetchImpl: spy as unknown as typeof fetch },
+    );
+    expect(result.status).toBe('ok');
+    const body = sentBody as Record<string, unknown>;
+    expect(body.kind).toBe('gate-ack');
+    expect(body.generation).toBe(3);
+    expect(typeof body.generation).toBe('number');
+    expect(body.outcome).toBe('applied');
+    expect(typeof body.ackedAt).toBe('string');
+    expect(body.detail).toBe('ok');
+    // gateId travels in the path, not the body.
+    expect(body.gateId).toBeUndefined();
+  });
+
+  it('missing generation → invalid-args (no fetch)', async () => {
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true }));
+    const result = await cockpitGateAck(
+      { gateId: 'g_1', outcome: 'applied' } as unknown,
+      { ...BASE_DEPS, fetchImpl: spy as unknown as typeof fetch },
+    );
+    expect(result.status).toBe('error');
+    if (result.status !== 'error') return;
+    expect(result.class).toBe('invalid-args');
+    expect(spy).not.toHaveBeenCalled();
   });
 });

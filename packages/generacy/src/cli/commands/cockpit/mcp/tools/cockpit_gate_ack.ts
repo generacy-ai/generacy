@@ -29,7 +29,21 @@ export function cockpitGateAck(
     }
 
     const options = resolveGateOptions(deps);
-    const body: { outcome: string; detail?: string } = { outcome: parsed.data.outcome };
+    // Build the full gate-ack envelope the orchestrator's GateAckSchema
+    // requires. `gateId` travels in the path; `kind` and `ackedAt` are added
+    // here (the caller supplies gateId/generation/outcome/detail?).
+    const body: {
+      kind: 'gate-ack';
+      generation: number;
+      outcome: string;
+      ackedAt: string;
+      detail?: string;
+    } = {
+      kind: 'gate-ack',
+      generation: parsed.data.generation,
+      outcome: parsed.data.outcome,
+      ackedAt: new Date().toISOString(),
+    };
     if (parsed.data.detail !== undefined) body.detail = parsed.data.detail;
 
     return invokeGate<CockpitGateAckData>(

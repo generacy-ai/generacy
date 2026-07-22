@@ -48,12 +48,20 @@ export const GateRecordSchema = z
 export type GateRecord = z.infer<typeof GateRecordSchema>;
 
 /**
- * Strict three-field ack input. `.strict()` catches typos (`gate_id` vs
- * `gateId`) at the tool boundary with a clear `invalid-args` error.
+ * Ack input. `.strict()` catches typos (`gate_id` vs `gateId`) at the tool
+ * boundary with a clear `invalid-args` error.
+ *
+ * `generation` is REQUIRED: the orchestrator's authoritative `GateAckSchema`
+ * (`@generacy-ai/cockpit`) needs it, and the cloud's `upsertGate` uses it for
+ * the stale-generation no-op guard (a lower generation is dropped). The
+ * caller passes the answered delivery's `generation`; the tool then builds the
+ * full `{ kind:'gate-ack', gateId, generation, outcome, ackedAt, detail? }`
+ * envelope (adding `kind` + `ackedAt`).
  */
 export const GateAckInputSchema = z
   .object({
     gateId: z.string().min(1),
+    generation: z.number().int().nonnegative(),
     outcome: z.string().min(1),
     detail: z.string().optional(),
   })
