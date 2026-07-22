@@ -14,6 +14,7 @@ function createMockRequest(overrides: Partial<{
   jwtVerify: () => Promise<unknown>;
   user: unknown;
   auth: unknown;
+  socket: { remoteAddress?: string };
 }> = {}): FastifyRequest {
   const req: Record<string, unknown> = {
     headers: {},
@@ -23,6 +24,9 @@ function createMockRequest(overrides: Partial<{
     jwtVerify: vi.fn().mockRejectedValue(new Error('No JWT configured')),
     user: null,
     auth: undefined,
+    // Default TCP peer is loopback (tests run locally). The loopback-only gate
+    // exemption keys off this un-spoofable socket address, not request.ip.
+    socket: { remoteAddress: '127.0.0.1' },
     ...overrides,
   };
   return req as unknown as FastifyRequest;
@@ -91,6 +95,89 @@ describe('createAuthMiddleware', () => {
         scopes: [],
       });
       expect(reply._statusCode).toBe(0); // no error status set
+    });
+  });
+
+  describe('loopback-only gate exemption (/cockpit/gates)', () => {
+    // The co-located cockpit MCP POSTs gate open/ack over 127.0.0.1 with no API
+    // key by design; the route is exempt ONLY for a loopback TCP peer so the
+    // host-published 0.0.0.0 listener does not expose it to the network.
+    it('exempts /cockpit/gates from a loopback peer (no key required)', async () => {
+      const middleware = createAuthMiddleware({ apiKeyStore, enabled: true });
+      const request = createMockRequest({
+        url: '/cockpit/gates',
+        routeOptions: { url: '/cockpit/gates' },
+        socket: { remoteAddress: '127.0.0.1' },
+      });
+      const reply = createMockReply();
+
+      await middleware(request, reply);
+
+      expect(request.auth).toEqual({
+        userId: 'cockpit-mcp-loopback',
+        method: 'api-key',
+        scopes: [],
+      });
+      expect(reply._statusCode).toBe(0);
+    });
+
+    it('exempts /cockpit/gates/:id/ack from a loopback peer', async () => {
+      const middleware = createAuthMiddleware({ apiKeyStore, enabled: true });
+      const request = createMockRequest({
+        url: '/cockpit/gates/abc123/ack',
+        routeOptions: { url: '/cockpit/gates/:id/ack' },
+        socket: { remoteAddress: '::ffff:127.0.0.1' },
+      });
+      const reply = createMockReply();
+
+      await middleware(request, reply);
+
+      expect(request.auth?.userId).toBe('cockpit-mcp-loopback');
+      expect(reply._statusCode).toBe(0);
+    });
+
+    it('exempts an IPv6 loopback (::1) peer', async () => {
+      const middleware = createAuthMiddleware({ apiKeyStore, enabled: true });
+      const request = createMockRequest({
+        url: '/cockpit/gates',
+        routeOptions: { url: '/cockpit/gates' },
+        socket: { remoteAddress: '::1' },
+      });
+      const reply = createMockReply();
+
+      await middleware(request, reply);
+
+      expect(request.auth?.userId).toBe('cockpit-mcp-loopback');
+      expect(reply._statusCode).toBe(0);
+    });
+
+    it('does NOT exempt /cockpit/gates from a non-loopback peer — 401', async () => {
+      const middleware = createAuthMiddleware({ apiKeyStore, enabled: true });
+      const request = createMockRequest({
+        url: '/cockpit/gates',
+        routeOptions: { url: '/cockpit/gates' },
+        socket: { remoteAddress: '172.17.0.1' }, // docker bridge gateway
+      });
+      const reply = createMockReply();
+
+      await middleware(request, reply);
+
+      expect(reply._statusCode).toBe(401);
+      expect(request.auth).toBeUndefined();
+    });
+
+    it('does NOT exempt a non-gate route even from loopback — 401', async () => {
+      const middleware = createAuthMiddleware({ apiKeyStore, enabled: true });
+      const request = createMockRequest({
+        url: '/workflows',
+        routeOptions: { url: '/workflows' },
+        socket: { remoteAddress: '127.0.0.1' },
+      });
+      const reply = createMockReply();
+
+      await middleware(request, reply);
+
+      expect(reply._statusCode).toBe(401);
     });
   });
 
