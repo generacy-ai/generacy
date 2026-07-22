@@ -82,3 +82,58 @@ export {
   type RateLimitScheduler,
   type RateLimitProbeResult,
 } from './gh/rate-limit-scheduler.js';
+
+// Wire contracts — see specs/1020-part-cockpit-remote-gates/
+// NB: gates' `IssueRef` type collides with resolver's `IssueRef` (different shapes:
+// resolver = { owner, repo, issueNumber }; gates = { owner, repo, number }).
+// We re-export the gates version as `GateIssueRef`. `IssueRefSchema` is unique so
+// it stays unaliased.
+export {
+  // Wire-envelope schemas (transport contracts)
+  GateOpenSchema,
+  GateAckSchema,
+  GateAnswerEnvelopeSchema,
+  type GateOpen,
+  type GateAck,
+  type GateAnswerEnvelope,
+  // Schemas
+  GateRecordSchema,
+  GateAnswerSchema,
+  GateOutcomeAckSchema,
+  GateOptionSchema,
+  IssueRefSchema,
+  ActorSchema,
+  // Enums
+  GateTypeSchema,
+  GATE_TYPES,
+  ArtifactReviewKindSchema,
+  ARTIFACT_REVIEW_KINDS,
+  GateOutcomeSchema,
+  GATE_OUTCOMES,
+  // Types
+  type GateType,
+  type ArtifactReviewKind,
+  type GateOutcome,
+  type GateOption,
+  type IssueRef as GateIssueRef,
+  type Actor,
+  type GateRecord,
+  type GateAnswer,
+  type GateOutcomeAck,
+  // Derivation
+  deriveGateKey,
+  deriveGateId,
+  deriveClarificationGeneration,
+  deriveArtifactReviewGeneration,
+  deriveImplementationReviewGeneration,
+  deriveManualValidationGeneration,
+  deriveEscalationGeneration,
+  derivePhaseQueueGeneration,
+  deriveFilingGeneration,
+  deriveScopeDrainedGeneration,
+  // Fixtures
+  VALID_FIXTURES,
+  MALFORMED_FIXTURES,
+  VALID_ANSWER_FIXTURES,
+  VALID_ACK_FIXTURES,
+} from './gates/index.js';

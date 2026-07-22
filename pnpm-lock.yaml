@@ -552,6 +552,9 @@ importers:
       '@generacy-ai/cluster-relay':
         specifier: workspace:^
         version: link:../cluster-relay
+      '@generacy-ai/cockpit':
+        specifier: workspace:*
+        version: link:../cockpit
       '@generacy-ai/config':
         specifier: workspace:^
         version: link:../config
