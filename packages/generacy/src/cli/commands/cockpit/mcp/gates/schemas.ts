@@ -17,12 +17,34 @@
 import { z } from 'zod';
 
 /**
- * Caller-supplied gate record. Local schema is a passthrough object so the
- * orchestrator remains the sole authority on `GateRecord` shape.
+ * Caller-supplied gate record. MUST be a flat `z.object({...}).passthrough()`
+ * — NOT a `z.record().and(...)` intersection.
+ *
+ * An intersection has no `.shape`, so the MCP SDK advertised an EMPTY input
+ * schema for `cockpit_gate_open`. With no declared property types, the tool-
+ * call boundary stringified the typed `generation` (number) and `scope`
+ * (object) fields, and the orchestrator's authoritative `GateOpenSchema`
+ * rejected the envelope as `invalid-args`. Enumerating the fields with their
+ * true types makes the SDK advertise a real schema so the harness sends
+ * numbers as numbers and objects as objects.
+ *
+ * Field types mirror `@generacy-ai/cockpit`'s `GateOpenSchema` (the sole
+ * authority the orchestrator validates against) but stay intentionally more
+ * lenient — `kind` is a plain string (not the `'gate-open'` literal),
+ * `openedAt` is a plain string (not `.datetime()`) — so this boundary never
+ * rejects an envelope the orchestrator would accept. `.passthrough()` still
+ * forwards unknown fields verbatim, keeping the orchestrator the sole
+ * authority on the full `GateRecord` shape.
  */
 export const GateRecordSchema = z
-  .record(z.unknown())
-  .and(z.object({}).passthrough());
+  .object({
+    kind: z.string().optional(),
+    gateId: z.string().min(1),
+    generation: z.number().int().nonnegative(),
+    scope: z.object({}).passthrough(),
+    openedAt: z.string(),
+  })
+  .passthrough();
 export type GateRecord = z.infer<typeof GateRecordSchema>;
 
 /**

@@ -8,6 +8,7 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 import { cockpitGateOpen } from '../tools/cockpit_gate_open.js';
+import { CockpitGateOpenInputSchema } from '../schemas.js';
 
 function jsonResponse(status: number, body: unknown, text?: string): Response {
   return new Response(text ?? (body === undefined ? '' : JSON.stringify(body)), {
@@ -21,11 +22,15 @@ const BASE_DEPS = {
   orchestratorTimeoutMs: 5000,
 };
 
+// A realistic gate-open envelope matching the authoritative GateOpenSchema:
+// `generation` is a number and `scope` is an object (the two fields whose
+// mistyping caused the empty-input-schema stringification bug).
 const CANONICAL_GATE: Record<string, unknown> = {
-  kind: 'clarification-review',
-  scope: 'generacy-ai/generacy#1022',
-  phase: 'clarify',
+  kind: 'gate-open',
+  gateId: 'g_1022',
   generation: 1,
+  scope: { kind: 'clarification-review', ref: 'generacy-ai/generacy#1022', phase: 'clarify' },
+  openedAt: '2026-07-22T00:00:00.000Z',
 };
 
 describe('cockpit_gate_open parity (#1022)', () => {
@@ -164,5 +169,48 @@ describe('cockpit_gate_open parity (#1022)', () => {
     if (result.status !== 'error') return;
     expect(result.class).toBe('internal');
     expect(result.detail).toBe('orchestrator returned malformed gate-open response');
+  });
+});
+
+describe('cockpit_gate_open input schema — empty-schema/stringification regression', () => {
+  // Root cause of the invalid-args bug: GateRecordSchema was a
+  // `z.record().and(z.object({}).passthrough())` intersection. A ZodIntersection
+  // has no `.shape`, so the MCP SDK advertised an EMPTY input schema and the
+  // tool-call boundary stringified the typed `generation` (number) and `scope`
+  // (object) fields; the orchestrator then rejected them as invalid-args.
+  it('is a flat object schema exposing a .shape with generation + scope', () => {
+    const shape = (
+      CockpitGateOpenInputSchema as unknown as { shape?: Record<string, unknown> }
+    ).shape;
+    expect(shape, 'gate-open input schema must be a flat z.object with a .shape').toBeDefined();
+    expect(Object.keys(shape ?? {})).toEqual(
+      expect.arrayContaining(['gateId', 'generation', 'scope', 'openedAt']),
+    );
+  });
+
+  it('accepts a valid envelope, preserving generation:number and scope:object', () => {
+    const parsed = CockpitGateOpenInputSchema.safeParse({
+      kind: 'gate-open',
+      gateId: 'g_1',
+      generation: 2,
+      scope: { ref: 'o/r#1' },
+      openedAt: '2026-07-22T00:00:00.000Z',
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const data = parsed.data as Record<string, unknown>;
+    expect(typeof data.generation).toBe('number');
+    expect(typeof data.scope).toBe('object');
+  });
+
+  it('rejects a stringified generation (the mistyping the bug produced)', () => {
+    const parsed = CockpitGateOpenInputSchema.safeParse({
+      kind: 'gate-open',
+      gateId: 'g_1',
+      generation: '2',
+      scope: { ref: 'o/r#1' },
+      openedAt: '2026-07-22T00:00:00.000Z',
+    });
+    expect(parsed.success).toBe(false);
   });
 });
