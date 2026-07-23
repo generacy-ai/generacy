@@ -170,12 +170,16 @@ export type GateOutcomeWire = z.infer<typeof GateOutcomeWireSchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Response envelope for `POST /cockpit/gates`. Asserts the two fields the tool
- * contract promises callers; additional fields (e.g. `coalescedWith`,
- * `inboxUrl`) pass through opaquely.
+ * Response envelope for `POST /cockpit/gates`. The orchestrator route is
+ * fire-and-forget: it validates the frozen gate-open, EMITS it on the
+ * `cluster.cockpit` relay channel (or retains it when the relay is down), and
+ * replies `202 { accepted, retained, retainQueue? }` — it does NOT echo a
+ * `gateId` (the cluster already knows it; the inbox URL is assigned cloud-side,
+ * asynchronously). The tool maps this ack to the caller-facing `{ gateId, status }`
+ * using the `gateId` IT derived. Extra fields (`retainQueue`, …) pass through.
  */
 export const GateOpenResponseSchema = z
-  .object({ gateId: z.string(), status: z.string() })
+  .object({ accepted: z.boolean(), retained: z.boolean() })
   .passthrough();
 export type GateOpenResponse = z.infer<typeof GateOpenResponseSchema>;
 

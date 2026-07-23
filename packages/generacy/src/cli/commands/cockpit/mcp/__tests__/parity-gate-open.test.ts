@@ -62,7 +62,7 @@ const CANONICAL_INPUT: Record<string, unknown> = {
 
 describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   it('derives gateKey + gateId and forwards the flat frozen record', async () => {
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(CANONICAL_INPUT, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -103,7 +103,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
     const epicRef = 'generacy-ai/generacy#1000';
     const key = `${epicRef}:phase-queue:2`;
     const id = gateIdFor(key);
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: id, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
       {
         ...CANONICAL_INPUT,
@@ -124,7 +124,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   it('forwards branch + prNumber when supplied (implementation-review)', async () => {
     const key = `${ISSUE_REF}:implementation-review:deadbeefcafe`;
     const id = gateIdFor(key);
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: id, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
       {
         ...CANONICAL_INPUT,
@@ -142,7 +142,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   });
 
   it('omits optional wire fields (branch/prNumber) when absent', async () => {
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     await cockpitGateOpen(CANONICAL_INPUT, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -154,7 +154,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
 
   it('defaults askedAt to a fresh ISO timestamp when omitted', async () => {
     const { askedAt: _drop, ...noAskedAt } = CANONICAL_INPUT;
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(noAskedAt, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -168,7 +168,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
 
   it('defaults allowFreeText to true when omitted', async () => {
     const { allowFreeText: _drop, ...noFreeText } = CANONICAL_INPUT;
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     await cockpitGateOpen(noFreeText, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -179,8 +179,8 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   it('passthrough response field forwarded (e.g. inboxUrl)', async () => {
     const spy = vi.fn(async () =>
       jsonResponse(200, {
-        gateId: EXPECTED_ID,
-        status: 'open',
+        accepted: true,
+        retained: false,
         inboxUrl: 'https://app.example/inbox/g_2',
       }),
     );
@@ -193,8 +193,54 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
     expect(result.data['inboxUrl']).toBe('https://app.example/inbox/g_2');
   });
 
-  it('input not an object → class: invalid-args (no HTTP call)', async () => {
+  // Regression pins for the orchestrator response contract (#1036 follow-up):
+  // the route is fire-and-forget and replies `{ accepted, retained }` — NOT a
+  // `{ gateId, status }` echo. The tool maps that ack to `{ gateId (derived),
+  // status }`. The old fictional `{ gateId, status }` mock hid this mismatch.
+  it('maps the real orchestrator ack { accepted, retained:false } → status "open" + derived gateId', async () => {
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
+    const result = await cockpitGateOpen(CANONICAL_INPUT, {
+      ...BASE_DEPS,
+      fetchImpl: spy as unknown as typeof fetch,
+    });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.data.gateId).toBe(EXPECTED_ID);
+    expect(result.data.status).toBe('open');
+  });
+
+  it('retained ack { accepted, retained:true } → status "retained" (relay down; queued)', async () => {
+    const spy = vi.fn(async () =>
+      jsonResponse(200, {
+        accepted: true,
+        retained: true,
+        retainQueue: { count: 1, bytes: 512 },
+      }),
+    );
+    const result = await cockpitGateOpen(CANONICAL_INPUT, {
+      ...BASE_DEPS,
+      fetchImpl: spy as unknown as typeof fetch,
+    });
+    expect(result.status).toBe('ok');
+    if (result.status !== 'ok') return;
+    expect(result.data.gateId).toBe(EXPECTED_ID);
+    expect(result.data.status).toBe('retained');
+  });
+
+  it('a response missing accepted/retained (e.g. the old { gateId, status } echo) → internal error', async () => {
     const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const result = await cockpitGateOpen(CANONICAL_INPUT, {
+      ...BASE_DEPS,
+      fetchImpl: spy as unknown as typeof fetch,
+    });
+    expect(result.status).toBe('error');
+    if (result.status !== 'error') return;
+    expect(result.class).toBe('internal');
+    expect(result.detail).toMatch(/malformed gate-open response/);
+  });
+
+  it('input not an object → class: invalid-args (no HTTP call)', async () => {
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen('not-an-object' as unknown, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -207,7 +253,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
 
   it('missing required field (sessionId) → class: invalid-args (no HTTP call)', async () => {
     const { sessionId: _drop, ...noSession } = CANONICAL_INPUT;
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(noSession, {
       ...BASE_DEPS,
       fetchImpl: spy as unknown as typeof fetch,
@@ -219,7 +265,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   });
 
   it('unknown gateType → class: invalid-args (no HTTP call)', async () => {
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
       { ...CANONICAL_INPUT, gateType: 'not-a-gate-type' },
       { ...BASE_DEPS, fetchImpl: spy as unknown as typeof fetch },
@@ -231,7 +277,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   });
 
   it('extra/unknown key (strict) → class: invalid-args (no HTTP call)', async () => {
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
       { ...CANONICAL_INPUT, gateId: 'hand-built-should-be-rejected' },
       { ...BASE_DEPS, fetchImpl: spy as unknown as typeof fetch },
@@ -243,7 +289,7 @@ describe('cockpit_gate_open parity — frozen contract (#1022/#843)', () => {
   });
 
   it('non-URL issueUrl → class: invalid-args (no HTTP call)', async () => {
-    const spy = vi.fn(async () => jsonResponse(200, { gateId: EXPECTED_ID, status: 'open' }));
+    const spy = vi.fn(async () => jsonResponse(200, { accepted: true, retained: false }));
     const result = await cockpitGateOpen(
       { ...CANONICAL_INPUT, issueUrl: 'generacy-ai/generacy#1022' },
       { ...BASE_DEPS, fetchImpl: spy as unknown as typeof fetch },
