@@ -1,6 +1,10 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { GateAnswerEnvelopeSchema } from '@generacy-ai/cockpit';
+// Canonical frozen down-path schema (Shape 3). type:'gate-answer', flat:
+// gateId, gateKey, optionId (nullable), freeText (nullable), actor
+// {userId,email?,displayName?}, answeredAt, deliveryId. Emitted verbatim by the
+// cloud (cockpit-gate-delivery.ts) and dedup-keyed here on deliveryId.
+import { GateAnswerSchema } from '@generacy-ai/cockpit';
 import type { CockpitAnswersWriter } from '../services/cockpit-answers-writer.js';
 
 interface Logger {
@@ -34,7 +38,7 @@ export function setupCockpitAnswersRoute(
       }
 
       try {
-        const parsed = GateAnswerEnvelopeSchema.parse(request.body);
+        const parsed = GateAnswerSchema.parse(request.body);
         // Fast path: avoid the mutex acquisition when we can already tell
         // this deliveryId is a duplicate. The authoritative check happens
         // inside append() under its mutex so concurrent redeliveries of the

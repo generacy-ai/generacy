@@ -53,7 +53,19 @@ export interface AnswersFileSourceLogger {
 }
 
 export interface AnswersFileSourceOptions {
-  /** Bound epic ref in "owner/repo#number" form. Used to filter GateAnswerLine.scope. */
+  /**
+   * Bound epic ref in "owner/repo#number" form. The frozen down-path
+   * gate-answer carries no `scope`; the repo-scope filter compares this epic's
+   * owner/repo against the owner/repo parsed from each answer's `gateKey`
+   * issue-ref (see `parseIssueRefFromGateKey`).
+   *
+   * KNOWN LIMITATION (cross-repo epics): the filter matches owner/repo only, so
+   * an answer for a child issue that lives in a DIFFERENT repo than the epic is
+   * dropped as cross-epic. Cross-repo remote gates are not yet exercised (the
+   * dogfood is single-repo); tracked as a follow-up — thread the epic's child
+   * ref-set into the tailer, or drop the repo filter and rely on downstream
+   * gateId matching (no open gate ⇒ no match ⇒ harmless over-delivery).
+   */
   epicRef: string;
   /** Absolute path to the answers NDJSON file. */
   filePath?: string;
@@ -150,22 +162,23 @@ function extractGateIdBestEffort(line: string): string | undefined {
   return undefined;
 }
 
-function stringifyScope(scope: unknown): string {
-  if (scope != null && typeof scope === 'object') {
-    const rec = scope as Record<string, unknown>;
-    if (
-      typeof rec.owner === 'string' &&
-      typeof rec.repo === 'string' &&
-      typeof rec.number === 'number'
-    ) {
-      return `${rec.owner}/${rec.repo}#${rec.number}`;
-    }
-  }
-  try {
-    return JSON.stringify(scope);
-  } catch {
-    return String(scope);
-  }
+/**
+ * Parse the issue-ref portion of a frozen gate-answer `gateKey`
+ * (`<owner>/<repo>#<issue>:<gateType>:<generation>`) into owner/repo/number.
+ * The issue-ref is the substring up to the FIRST `:` — `gateType` and
+ * `generation` may themselves contain `:` (e.g. escalation
+ * `subtype:state:occurrence`), but the issue-ref never does. Returns null for a
+ * non-issue target (filing / scope-drained may key on a tracking ref that is
+ * not an `owner/repo#N` issue); such lines skip the scope filter and are
+ * emitted (downstream keys on gateId).
+ */
+function parseIssueRefFromGateKey(
+  gateKey: string,
+): { owner: string; repo: string; number: number } | null {
+  const issueRef = gateKey.split(':', 1)[0] ?? '';
+  const m = issueRef.match(/^([^/]+)\/([^/]+)#(\d+)$/);
+  if (m == null) return null;
+  return { owner: m[1]!, repo: m[2]!, number: Number(m[3]!) };
 }
 
 export class AnswersFileSource {
@@ -620,14 +633,23 @@ export class AnswersFileSource {
     }
     const gateLine: GateAnswerLine = parsed.data;
 
-    // (c) Epic scope filter
+    // (c) Repo-scope filter. The frozen down-path gate-answer carries no
+    // `scope`; the bound epic is compared against the owner/repo parsed out of
+    // the answer's `gateKey` issue-ref. Per-issue gates (a child issue of the
+    // epic, or the epic itself for a phase-queue gate) share the epic's
+    // owner/repo, so the filter matches on owner/repo only — NOT the issue
+    // number — so legitimate child-issue answers are not dropped. A gateKey
+    // whose issue-ref cannot be parsed (a non-issue filing / scope-drained
+    // target) is emitted; downstream matches on gateId. Foreign-repo answers
+    // are dropped + logged.
+    const gateScope = parseIssueRefFromGateKey(gateLine.gateKey);
     if (
-      gateLine.scope.owner !== this.epicScope.owner ||
-      gateLine.scope.repo !== this.epicScope.repo ||
-      gateLine.scope.number !== this.epicScope.number
+      gateScope != null &&
+      (gateScope.owner !== this.epicScope.owner ||
+        gateScope.repo !== this.epicScope.repo)
     ) {
       this.logger.info?.(
-        `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${stringifyScope(gateLine.scope)} boundEpic=${this.epicRef}`,
+        `cockpit doorbell: answers file: cross-epic drop file=${this.filePath} byteOffset=${byteOffset} gateId=${gateLine.gateId} scope=${gateScope.owner}/${gateScope.repo}#${gateScope.number} boundEpic=${this.epicRef}`,
       );
       return;
     }

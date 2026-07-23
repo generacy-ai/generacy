@@ -1,6 +1,12 @@
 import { ZodError } from 'zod';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { GateOpenSchema, GateAckSchema } from '@generacy-ai/cockpit';
+// Canonical frozen wire schemas (tetrad-development/docs/cockpit-remote-gates-plan.md
+// § "Wire contracts"; generacy-cloud specs/843 gates-wire.md Shapes 1 & 2).
+// GateOpenSchema  → up-path Shape 1 (type:'gate-open', flat, gateId/gateKey DERIVED
+//                   by the cockpit_gate_open MCP tool before the POST reaches here).
+// GateOutcomeSchema → up-path Shape 2, THE ACK (type:'gate-outcome', outcome enum,
+//                   detail?, at) — replaces the removed gate-ack.
+import { GateOpenSchema, GateOutcomeSchema } from '@generacy-ai/cockpit';
 import type {
   ClusterRelayClient,
   RelayMessage,
@@ -29,7 +35,8 @@ interface EmitContext {
   timestamp: string;
   approxBytes: number;
   gateId: string;
-  kind: string;
+  // Cloud sub-event discriminator (message-handler.ts:721): 'gate-open' | 'gate-outcome'.
+  type: string;
 }
 
 function tryEmitOrRetain(
@@ -45,7 +52,7 @@ function tryEmitOrRetain(
       timestamp: ctx.timestamp,
     } as unknown as RelayMessage);
     options.logger.info(
-      { gateId: ctx.gateId, kind: ctx.kind },
+      { gateId: ctx.gateId, type: ctx.type },
       'cockpit gate emitted',
     );
     return { retained: false, retainQueue: null };
@@ -63,7 +70,7 @@ function tryEmitOrRetain(
     );
   }
   options.logger.debug(
-    { gateId: ctx.gateId, kind: ctx.kind },
+    { gateId: ctx.gateId, type: ctx.type },
     'retained cockpit event queued',
   );
   return { retained: true, retainQueue: options.retainer.size() };
@@ -73,6 +80,9 @@ export function setupCockpitGatesRoute(
   server: FastifyInstance,
   options: SetupCockpitGatesRouteOptions,
 ): void {
+  // Up-path Shape 1 — gate-open. Body is the fully-assembled frozen record
+  // (type:'gate-open', derived gateId/gateKey, gateType, presentation fields);
+  // the route validates and forwards it verbatim onto the relay.
   server.post(
     '/cockpit/gates',
     async (request: FastifyRequest, reply: FastifyReply) => {
@@ -86,7 +96,7 @@ export function setupCockpitGatesRoute(
             timestamp,
             approxBytes,
             gateId: parsed.gateId,
-            kind: parsed.kind,
+            type: parsed.type,
           },
           options,
         );
@@ -115,6 +125,10 @@ export function setupCockpitGatesRoute(
     },
   );
 
+  // Up-path Shape 2 — gate-outcome (THE ACK). The MCP client (cockpit_gate_ack)
+  // POSTs the semantic ack ({ outcome, detail? }); the route stamps
+  // type:'gate-outcome' + the path gateId, defaults `at`, validates against the
+  // frozen GateOutcomeSchema, and emits it as the 'gate-outcome' cloud subtype.
   server.post<{ Params: { id: string } }>(
     '/cockpit/gates/:id/ack',
     async (request, reply) => {
@@ -139,8 +153,20 @@ export function setupCockpitGatesRoute(
       }
 
       try {
-        const merged = { ...(body ?? {}), gateId: pathGateId };
-        const parsed = GateAckSchema.parse(merged);
+        // Build the frozen gate-outcome record. Path `:id` is authoritative for
+        // gateId; `type` is always 'gate-outcome' (never client-supplied); `at`
+        // defaults to now when the client omits it. `kind`/`generation`/`ackedAt`
+        // from the old gate-ack shape are dropped — GateOutcomeSchema is closed.
+        const candidate = {
+          ...(body ?? {}),
+          type: 'gate-outcome' as const,
+          gateId: pathGateId,
+          at:
+            typeof body?.at === 'string' && body.at.length > 0
+              ? body.at
+              : new Date().toISOString(),
+        };
+        const parsed = GateOutcomeSchema.parse(candidate);
         const timestamp = new Date().toISOString();
         const approxBytes = JSON.stringify(parsed).length;
         const outcome = tryEmitOrRetain(
@@ -149,7 +175,7 @@ export function setupCockpitGatesRoute(
             timestamp,
             approxBytes,
             gateId: parsed.gateId,
-            kind: parsed.kind,
+            type: parsed.type,
           },
           options,
         );
@@ -165,10 +191,10 @@ export function setupCockpitGatesRoute(
         if (err instanceof ZodError) {
           options.logger.warn(
             { route: '/cockpit/gates/:id/ack', code: 'VALIDATION' },
-            'Invalid gate-ack payload',
+            'Invalid gate-outcome payload',
           );
           return reply.status(400).send({
-            error: 'Invalid gate-ack payload',
+            error: 'Invalid gate-outcome payload',
             code: 'VALIDATION',
             details: err.issues,
           });

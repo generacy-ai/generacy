@@ -1,41 +1,40 @@
-export {
-  GateOpenSchema,
-  GateAckSchema,
-  GateAnswerEnvelopeSchema,
-  type GateOpen,
-  type GateAck,
-  type GateAnswerEnvelope,
-} from './schema.js';
+// Canonical cockpit gate wire contract — single source is ./schema.ts.
+// See tetrad-development/docs/cockpit-remote-gates-plan.md § "Wire contracts".
 
 export {
-  GateRecordSchema,
-  GateAnswerSchema,
-  GateOutcomeAckSchema,
-  GateOptionSchema,
-  IssueRefSchema,
-  ActorSchema,
-  GateTypeSchema,
-  GATE_TYPES,
-  ArtifactReviewKindSchema,
-  ARTIFACT_REVIEW_KINDS,
+  // Wire shapes (the frozen contract, Shapes 1/2/3)
+  GateOpenSchema,
   GateOutcomeSchema,
-  GATE_OUTCOMES,
-  type GateType,
-  type ArtifactReviewKind,
+  GateAnswerSchema,
+  type GateOpen,
   type GateOutcome,
-  type GateOption,
-  type IssueRef,
-  type Actor,
-  type GateRecord,
   type GateAnswer,
-  type GateOutcomeAck,
+  // Enum + option
+  GateTypeSchema,
+  GateOptionSchema,
+  type GateType,
+  type GateOption,
+  // gateKey/gateId derivation
+  deriveGateKey,
+  deriveGateId,
+} from './schema.js';
+
+import { GateTypeSchema } from './schema.js';
+
+/** The 8 gate-type values as a readonly tuple (single source: GateTypeSchema). */
+export const GATE_TYPES = GateTypeSchema.options;
+
+export {
+  IssueRefSchema,
+  issueRefToString,
+  type IssueRef,
 } from './schemas.js';
 
 export {
-  deriveGateKey,
-  deriveGateId,
-  type DeriveGateKeyInput,
-} from './gate-id.js';
+  ArtifactReviewKindSchema,
+  ARTIFACT_REVIEW_KINDS,
+  type ArtifactReviewKind,
+} from './types.js';
 
 export {
   deriveClarificationGeneration,
@@ -65,12 +64,12 @@ export {
 
 export {
   gateOpenFixture,
-  gateAckFixture,
+  gateOutcomeFixture,
   answerLineFixture,
   DEFAULT_WIRE_SCOPE,
   DEFAULT_WIRE_EPIC_REF,
   type WireScope,
   type GateOpenFixtureOverrides,
-  type GateAckFixtureOverrides,
+  type GateOutcomeFixtureOverrides,
   type AnswerLineFixtureOverrides,
 } from './wire-fixtures.js';

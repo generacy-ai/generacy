@@ -1,19 +1,30 @@
 /**
- * `cockpit_gate_open` MCP tool (#1022).
+ * `cockpit_gate_open` MCP tool (#1022 / #843).
  *
- * Thin HTTP client: validates the caller's gate record, POSTs to the
- * orchestrator's `POST /cockpit/gates` route, returns the response inside the
- * standard `ToolResult` envelope. No local business logic, no persistence,
- * no CLI-verb twin.
+ * DERIVES the gate identity and assembles the frozen gate-open wire record:
+ * the plugin/LLM passes SEMANTIC + presentation fields (issueRef, gateType,
+ * generation discriminator, title/body/options/allowFreeText, epicRef,
+ * issueTitle, issueUrl, branch?, prNumber?, sessionId, askedAt?); this tool
+ * computes gateKey + gateId, sets `type:'gate-open'`, self-validates against the
+ * frozen shape, and POSTs the flat record to the orchestrator's
+ * `POST /cockpit/gates` route (which relays it verbatim to the cloud). The
+ * plugin never hand-builds a sha256.
  *
  * Contract: contracts/cockpit_gate_open.md
- * Error mapping: contracts/error-mapping.md (mirror of `gates/client.ts`)
+ * Wire: tetrad-development/docs/cockpit-remote-gates-plan.md § "Wire contracts".
+ * Error mapping: contracts/error-mapping.md (mirror of `gates/client.ts`).
  */
 import { wrapToolBoundary, type ToolResult } from '../errors.js';
 import { CockpitGateOpenInputSchema } from '../schemas.js';
 import { invokeGate } from '../gates/client.js';
 import { resolveGateOptions } from '../gates/options.js';
-import { GateOpenResponseSchema } from '../gates/schemas.js';
+import {
+  deriveGateId,
+  deriveGateKey,
+  GateOpenResponseSchema,
+  GateOpenWireSchema,
+  type GateOpenWire,
+} from '../gates/schemas.js';
 import type { BuildMcpServerDeps } from '../server.js';
 
 export interface CockpitGateOpenData {
@@ -36,9 +47,46 @@ export function cockpitGateOpen(
       };
     }
 
+    const s = parsed.data;
+    const gateKey = deriveGateKey(s.issueRef, s.gateType, s.generation);
+    const gateId = deriveGateId(gateKey);
+
+    // Assemble the FLAT frozen record. Optional wire fields are omitted (not
+    // set to `undefined`) so the serialized frame matches the cloud schema.
+    const record: GateOpenWire = {
+      type: 'gate-open',
+      gateId,
+      gateKey,
+      gateType: s.gateType,
+      epicRef: s.epicRef,
+      issueRef: s.issueRef,
+      issueTitle: s.issueTitle,
+      issueUrl: s.issueUrl,
+      ...(s.branch !== undefined ? { branch: s.branch } : {}),
+      ...(s.prNumber !== undefined ? { prNumber: s.prNumber } : {}),
+      title: s.title,
+      body: s.body,
+      options: s.options,
+      allowFreeText: s.allowFreeText,
+      sessionId: s.sessionId,
+      askedAt: s.askedAt ?? new Date().toISOString(),
+    };
+
+    // Self-check: never emit a frame the cloud would warn-drop as malformed.
+    const wire = GateOpenWireSchema.safeParse(record);
+    if (!wire.success) {
+      return {
+        status: 'error',
+        class: 'internal',
+        detail: `assembled gate-open record failed frozen-shape validation: ${wire.error.issues
+          .map((i) => i.message)
+          .join('; ')}`,
+      };
+    }
+
     const options = resolveGateOptions(deps);
     const result = await invokeGate<CockpitGateOpenData>(
-      { method: 'POST', path: '/cockpit/gates', body: parsed.data },
+      { method: 'POST', path: '/cockpit/gates', body: wire.data },
       options,
     );
 

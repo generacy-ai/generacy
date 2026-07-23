@@ -15,18 +15,22 @@ Add a fourth discriminated-union member to `CockpitStreamEventSchema` so that op
 
 import { z } from 'zod';
 
+// FROZEN down-path Shape 3 (flat). No `scope` / nested `answer` / `generation`.
+export const GateAnswerActorSchema = z.object({
+  userId: z.string().min(1),
+  email: z.string().email().nullable(),
+  displayName: z.string().nullable(),
+});
+
 export const GateAnswerLineSchema = z.object({
+  type: z.literal('gate-answer'),
   gateId: z.string().min(1),
-  deliveryId: z.string().min(1),
-  scope: z.object({
-    owner: z.string().min(1),
-    repo: z.string().min(1),
-    number: z.number().int().positive(),
-  }),
-  answer: z.unknown(),
+  gateKey: z.string().min(1),
+  optionId: z.string().nullable(),
+  freeText: z.string().nullable(),
+  actor: GateAnswerActorSchema,
   answeredAt: z.string().datetime(),
-  answeredBy: z.string().optional(),
-  generation: z.number().int().nonnegative().optional(),
+  deliveryId: z.string().min(1),
 }).passthrough();
 
 export type GateAnswerLine = z.infer<typeof GateAnswerLineSchema>;
