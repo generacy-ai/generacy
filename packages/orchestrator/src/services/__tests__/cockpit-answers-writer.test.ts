@@ -15,14 +15,19 @@ const silentLogger = {
   debug: () => {},
 };
 
+// The writer is shape-agnostic (dedups on deliveryId; persists opaquely), but
+// use the FROZEN down-path gate-answer shape so the fixture matches what the
+// /cockpit/answers route actually appends.
 function makeAnswer(deliveryId: string, extra: Record<string, unknown> = {}): CockpitAnswer {
   return {
-    kind: 'gate-answer',
+    type: 'gate-answer',
     deliveryId,
-    gateId: 'g_test',
-    generation: 0,
+    gateId: 'a1a1a1a1a1a1a1a1a1a1a1a1',
+    gateKey: 'owner/repo#5:clarification:b1',
+    optionId: 'proceed',
+    freeText: null,
+    actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
     answeredAt: '2026-07-21T15:04:11.100Z',
-    answer: { choice: 'proceed' },
     ...extra,
   };
 }

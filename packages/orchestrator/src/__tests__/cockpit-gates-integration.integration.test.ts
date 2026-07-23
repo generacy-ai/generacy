@@ -20,8 +20,12 @@
  *
  * SC-004 (wire-shape single-sourcing): every wire body is built through the
  * fixture builders exported by `@generacy-ai/cockpit` (`gateOpenFixture`,
- * `gateAckFixture`, `answerLineFixture`) — never an inline schema literal.
+ * `gateOutcomeFixture`, `answerLineFixture`) — never an inline schema literal.
  * Invalid-body scenarios (F2) derive from a fixture, then drop a field.
+ *
+ * Wire shape is the FROZEN contract (`type`-keyed; `gate-outcome` ack; 24-hex
+ * gateId). Scenario gateIds are 24-char hex (the routes validate `.length(24)`);
+ * `gid()` pads a short hex tag — correlation only, not `sha256(gateKey)`.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { once } from 'node:events';
@@ -29,7 +33,7 @@ import { readFile, appendFile, rename, writeFile } from 'node:fs/promises';
 import { WebSocket as WsWebSocket } from 'ws';
 import {
   gateOpenFixture,
-  gateAckFixture,
+  gateOutcomeFixture,
   answerLineFixture,
 } from '@generacy-ai/cockpit';
 import {
@@ -39,6 +43,18 @@ import {
 } from './cockpit-gates/scenario-helpers.js';
 
 const JSON_HEADERS = { 'content-type': 'application/json' };
+
+/** 24-char hex gate id from a short hex tag (test correlation only). */
+const gid = (hexTag: string): string => hexTag.padEnd(24, '0');
+const GID_S1A = gid('a51a');
+const GID_S1B = gid('a51b');
+const GID_S3 = gid('a530');
+const GID_F2 = gid('af20');
+const GID_S2 = gid('a520');
+const GID_S4 = gid('a540');
+const GID_S5 = gid('a550');
+const GID_F1 = gid('af10');
+const GID_F3 = gid('af30');
 
 // A synthetic doorbell child that stands in for the real answers-file tail in
 // the driver plumbing self-tests. Emits one `{ type: 'ready', ... }` JSON line
@@ -178,7 +194,7 @@ describe('Cockpit gates integration', () => {
 
     // S1a — Gate open → cluster.cockpit event (FR-003).
     it('S1a — gate-open POST emits a cluster.cockpit event equal to the wire body', async () => {
-      const body = gateOpenFixture({ gateId: 'g_s1a' });
+      const body = gateOpenFixture({ gateId: GID_S1A });
       const res = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
         method: 'POST',
         headers: JSON_HEADERS,
@@ -189,7 +205,7 @@ describe('Cockpit gates integration', () => {
 
       const event = await ctx.peer.waitForEvent(
         'cluster.cockpit',
-        (d) => (d as { gateId?: string }).gateId === 'g_s1a',
+        (d) => (d as { gateId?: string }).gateId === GID_S1A,
       );
       expect(event.data).toMatchObject(body);
     });
@@ -203,7 +219,7 @@ describe('Cockpit gates integration', () => {
         'relay client never observed the disconnect',
       );
 
-      const body = gateOpenFixture({ gateId: 'g_s1b' });
+      const body = gateOpenFixture({ gateId: GID_S1B });
       const res = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
         method: 'POST',
         headers: JSON_HEADERS,
@@ -216,20 +232,22 @@ describe('Cockpit gates integration', () => {
       // On reconnect the retainer drains; the event lands on the new socket.
       const event = await ctx.peer.waitForEvent(
         'cluster.cockpit',
-        (d) => (d as { gateId?: string }).gateId === 'g_s1b',
+        (d) => (d as { gateId?: string }).gateId === GID_S1B,
         8000,
       );
       expect(event.data).toMatchObject(body);
 
       // Exactly once — no duplicate from a double-drain.
       await new Promise((r) => setTimeout(r, 300));
-      expect(cockpitEvents(ctx, 'g_s1b')).toHaveLength(1);
+      expect(cockpitEvents(ctx, GID_S1B)).toHaveLength(1);
     });
 
-    // S3 — Ack → outcome relay event (FR-006).
-    it('S3 — ack POST emits a cluster.cockpit gate-ack event carrying the path gateId', async () => {
-      const gateId = 'g_s3';
-      const ack = gateAckFixture({ gateId, outcome: 'answered' });
+    // S3 — Ack → gate-outcome relay event (FR-006).
+    it('S3 — ack POST emits a cluster.cockpit gate-outcome event carrying the path gateId', async () => {
+      const gateId = GID_S3;
+      // The MCP client POSTs the semantic ack ({ outcome, detail? }); the route
+      // stamps type:'gate-outcome' + the path gateId + defaults `at`.
+      const ack = gateOutcomeFixture({ gateId, outcome: 'applied' });
       const res = await fetch(
         `${ctx.orchestratorUrl}/cockpit/gates/${gateId}/ack`,
         { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(ack) },
@@ -239,18 +257,18 @@ describe('Cockpit gates integration', () => {
       const event = await ctx.peer.waitForEvent(
         'cluster.cockpit',
         (d) =>
-          (d as { kind?: string }).kind === 'gate-ack' &&
+          (d as { type?: string }).type === 'gate-outcome' &&
           (d as { gateId?: string }).gateId === gateId,
       );
       expect((event.data as { gateId: string }).gateId).toBe(gateId);
-      expect((event.data as { outcome: string }).outcome).toBe('answered');
+      expect((event.data as { outcome: string }).outcome).toBe('applied');
     });
 
     // F2 — Invalid gate-open body → 4xx + no relay event (FR-014).
     it('F2 — invalid gate-open body → 400 and no cluster.cockpit event leaks to the peer', async () => {
-      // Derive from the fixture (SC-004), then drop a required field.
-      const invalid = gateOpenFixture({ gateId: 'g_f2' }) as Record<string, unknown>;
-      delete invalid['openedAt'];
+      // Derive from the fixture (SC-004), then drop a required frozen field.
+      const invalid = gateOpenFixture({ gateId: GID_F2 }) as Record<string, unknown>;
+      delete invalid['askedAt'];
 
       const res = await fetch(`${ctx.orchestratorUrl}/cockpit/gates`, {
         method: 'POST',
@@ -298,7 +316,7 @@ describe('Cockpit gates integration', () => {
 
     // S2 — Answer down-path: peer api_request → file + doorbell (FR-005).
     it('S2 — peer POST /cockpit/answers writes one file line and surfaces a doorbell gate-answer', async () => {
-      const answer = answerLineFixture({ deliveryId: 'dlv_s2', gateId: 'g_s2' });
+      const answer = answerLineFixture({ deliveryId: 'dlv_s2', gateId: GID_S2 });
       const res = await ctx.peer.sendApiRequest('POST', '/cockpit/answers', answer);
       expect(res.status).toBe(200);
 
@@ -314,12 +332,12 @@ describe('Cockpit gates integration', () => {
       const emitted = await ctx.doorbell!.waitForEvent(
         (e) => e.type === 'gate-answer' && e['deliveryId'] === 'dlv_s2',
       );
-      expect(emitted).toMatchObject({ type: 'gate-answer', gateId: 'g_s2' });
+      expect(emitted).toMatchObject({ type: 'gate-answer', gateId: GID_S2 });
     });
 
     // S4 — Restart replay of unacked answers exactly once (FR-007).
     it('S4 — doorbell kill+restart mid-flow re-emits the unacked answer exactly once', async () => {
-      const answer = answerLineFixture({ deliveryId: 'dlv_s4', gateId: 'g_s4' });
+      const answer = answerLineFixture({ deliveryId: 'dlv_s4', gateId: GID_S4 });
       await ctx.peer.sendApiRequest('POST', '/cockpit/answers', answer);
       await ctx.doorbell!.waitForEvent(
         (e) => e.type === 'gate-answer' && e['deliveryId'] === 'dlv_s4',
@@ -342,8 +360,8 @@ describe('Cockpit gates integration', () => {
 
     // S5 — deliveryId dedup end-to-end (FR-008).
     it('S5 — the same deliveryId twice yields one file line and one doorbell event', async () => {
-      const first = answerLineFixture({ deliveryId: 'dlv_dup', gateId: 'g_s5' });
-      const second = answerLineFixture({ deliveryId: 'dlv_dup', gateId: 'g_s5' });
+      const first = answerLineFixture({ deliveryId: 'dlv_dup', gateId: GID_S5 });
+      const second = answerLineFixture({ deliveryId: 'dlv_dup', gateId: GID_S5 });
       const r1 = await ctx.peer.sendApiRequest('POST', '/cockpit/answers', first);
       const r2 = await ctx.peer.sendApiRequest('POST', '/cockpit/answers', second);
       expect(r1.status).toBe(200);
@@ -377,7 +395,7 @@ describe('Cockpit gates integration', () => {
       await appendFile(ctx.answersFilePath, 'this is not valid json\n');
       const answer = answerLineFixture({
         deliveryId: 'dlv_after_garbage',
-        gateId: 'g_f1',
+        gateId: GID_F1,
       });
       await ctx.peer.sendApiRequest('POST', '/cockpit/answers', answer);
 
@@ -401,7 +419,7 @@ describe('Cockpit gates integration', () => {
 
     // F3 — Answers-file rotation preserves the tail (FR-015).
     it('F3 — rename+recreate the answers file mid-flow; subsequent lines still surface', async () => {
-      const first = answerLineFixture({ deliveryId: 'dlv_pre_rot', gateId: 'g_f3' });
+      const first = answerLineFixture({ deliveryId: 'dlv_pre_rot', gateId: GID_F3 });
       await ctx.peer.sendApiRequest('POST', '/cockpit/answers', first);
       await ctx.doorbell!.waitForEvent(
         (e) => e.type === 'gate-answer' && e['deliveryId'] === 'dlv_pre_rot',
@@ -412,14 +430,14 @@ describe('Cockpit gates integration', () => {
       await writeFile(ctx.answersFilePath, '', 'utf8');
 
       // A post-rotation line appended to the fresh file must still be tailed.
-      const second = answerLineFixture({ deliveryId: 'dlv_post_rot', gateId: 'g_f3' });
+      const second = answerLineFixture({ deliveryId: 'dlv_post_rot', gateId: GID_F3 });
       await appendFile(ctx.answersFilePath, `${JSON.stringify(second)}\n`);
 
       const emitted = await ctx.doorbell!.waitForEvent(
         (e) => e.type === 'gate-answer' && e['deliveryId'] === 'dlv_post_rot',
         6000,
       );
-      expect(emitted).toMatchObject({ type: 'gate-answer', gateId: 'g_f3' });
+      expect(emitted).toMatchObject({ type: 'gate-answer', gateId: GID_F3 });
     });
   });
 });
