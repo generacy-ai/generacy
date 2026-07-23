@@ -16,7 +16,7 @@
 - C: The literal comment body/timestamp of the most recent `<!-- generacy-stage:clarification -->` batch comment on the issue (single string in, hash out). Purely GitHub-durable, zero parsing.
 - D: The `Batch N — <ISO date>` header string from `clarifications.md` (batch id in the classic sense). Simplest, but requires the file to be readable during a sweep.
 
-**Answer**: *Pending*
+**Answer**: A — Canonical hash input is the sorted-by-question-number list of `{ questionNumber, questionText }` for every question in the current unanswered batch (question identity only; drafted answers excluded). "Same round of asks → same generation."
 
 ---
 
@@ -29,7 +29,7 @@
 - C: `open` = `open`. `answered` = `answered | delivered | applied`. `absent` = no matching gate OR terminal-negative states (`superseded | failed | expired`) — sweep is free to re-draft terminal-negative because the gate is dead.
 - D: Query returns the raw cloud status verbatim; the three-state contract in FR-001 is dropped. Sweep decides its own collapse.
 
-**Answer**: *Pending*
+**Answer**: C — `open` = cloud `open`; `answered` = `answered | delivered | applied`; `absent` = no matching gate OR terminal-negative (`superseded | failed | expired`), so the sweep is free to re-draft a dead gate.
 
 ---
 
@@ -42,7 +42,7 @@
 - C: **Tool returns a new fourth status `'unknown'`** (extending FR-001's contract). Sweep skips re-drafting AND does not treat as absent — the gate is left alone until the next sweep. Fail-open on drafting, fail-closed on duplicates.
 - D: **Tool retries with bounded backoff** (e.g. 3 attempts / ~5s) then falls back to option A. Handles transient connection races at startup; still fails loud on sustained outages.
 
-**Answer**: *Pending*
+**Answer**: D — `cockpit_gate_status` retries with bounded backoff (~3 attempts / ~5s) to ride out the startup relay-not-connected race, then falls back to a distinct fail-loud/fail-closed `query-unreachable` MCP error on sustained outage (never returns `absent`).
 
 ---
 
@@ -55,7 +55,7 @@
 - C: **Compatibility shim in `@generacy-ai/cockpit`**: `deriveGateId` returns *both* the new-derivation ID and the legacy `generation=1` ID; the query layer checks both. Adds a small permanent overhead to preserve zero-duplicate guarantee across cutover.
 - D: **Migration step**: a one-time cloud-side task rewrites `generation=1` gates to their new-derivation `gateId` before this code lands. Cutover is atomic; no cluster-side compat logic needed. Coordination cost lives in generacy-cloud.
 
-**Answer**: *Pending*
+**Answer**: B — The sweep queries by `(issueRef, gateType)` prefix (not full `gateId`); if any gate for that pair is currently `open`, skip drafting regardless of generation match. This makes `cockpit_gate_list` the primary sweep primitive and kills the gen=1 cutover duplicate without permanent legacy-ID overhead or a cloud migration.
 
 ---
 
@@ -68,4 +68,4 @@
 - C: **Only gates opened by the calling cluster/session.** Predecessor-cluster gates are invisible; use `cockpit_gate_status` per-`(issueRef, gateType, generation)` for takeover discovery. Simpler contract but forces N per-issue queries after takeover.
 - D: **Configurable via input flags.** Accepts `{ statuses?: GateStatus[]; scope?: 'session' | 'cluster' | 'project' }` and callers pick. Broadest surface; largest schema.
 
-**Answer**: *Pending*
+**Answer**: A — `cockpit_gate_list` returns all non-terminal gates (`open | answered | delivered`) project-wide (from any cluster in the project, so a serial-cluster takeover sees the predecessor's gates); terminal statuses (`applied | superseded | failed | expired`) are excluded as history. Caller filters further as needed.
