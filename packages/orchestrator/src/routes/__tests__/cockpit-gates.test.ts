@@ -23,21 +23,39 @@ function makeMockClient(overrides: Partial<ClusterRelayClient> = {}): ClusterRel
   };
 }
 
+// Frozen up-path Shape 1 — gate-open. gateId is a 24-char hex (derived from
+// gateKey by the cockpit_gate_open MCP tool); the route only validates + emits.
+const GATE_ID = 'a1b2c3d4e5f6a7b8c9d0e1f2';
 const validOpen = {
-  kind: 'gate-open',
-  gateId: 'g_test_1',
-  generation: 0,
-  scope: { owner: 'generacy-ai', repo: 'generacy', issueNumber: 1021 },
-  openedAt: '2026-07-21T15:04:05.123Z',
-  payload: { question: 'proceed?' },
+  type: 'gate-open' as const,
+  gateId: GATE_ID,
+  gateKey: 'generacy-ai/generacy#1021:clarification:batch-1',
+  gateType: 'clarification' as const,
+  epicRef: 'generacy-ai/generacy#1000',
+  issueRef: 'generacy-ai/generacy#1021',
+  issueTitle: 'Do the thing',
+  issueUrl: 'https://github.com/generacy-ai/generacy/issues/1021',
+  title: 'Clarification needed',
+  body: 'Please choose how to proceed.',
+  options: [
+    { id: 'proceed', label: 'Proceed' },
+    { id: 'hold', label: 'Hold', description: 'Wait for review' },
+  ],
+  allowFreeText: true,
+  sessionId: 'sess_1',
+  askedAt: '2026-07-21T15:04:05.123Z',
 };
 
+function openWithGateId(gateId: string) {
+  return { ...validOpen, gateId };
+}
+
+// Frozen up-path Shape 2 — gate-outcome (THE ACK). The MCP client posts only the
+// semantic ack; the route stamps type + path gateId and defaults `at`.
 const validAckBody = {
-  kind: 'gate-ack',
-  generation: 0,
-  outcome: 'answered',
-  ackedAt: '2026-07-21T15:04:11.900Z',
-  answer: { choice: 'proceed' },
+  outcome: 'applied' as const,
+  detail: 'answer applied to the issue',
+  at: '2026-07-21T15:04:11.900Z',
 };
 
 describe('cockpit gates routes', () => {
@@ -50,7 +68,7 @@ describe('cockpit gates routes', () => {
   });
 
   describe('POST /cockpit/gates (open)', () => {
-    it('happy path connected — sends on relay, returns retained:false', async () => {
+    it('happy path connected — sends the frozen gate-open on relay, retained:false', async () => {
       const client = makeMockClient();
       setupCockpitGatesRoute(server, {
         retainer,
@@ -70,12 +88,14 @@ describe('cockpit gates routes', () => {
       const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
         type: string;
         event: string;
-        data: unknown;
+        data: { type: string; gateId: string; gateType: string };
         timestamp: string;
       };
       expect(call.type).toBe('event');
       expect(call.event).toBe('cluster.cockpit');
+      // The emitted relay data carries `type` as the cloud subtype discriminator.
       expect(call.data).toMatchObject(validOpen);
+      expect(call.data.type).toBe('gate-open');
       expect(typeof call.timestamp).toBe('string');
     });
 
@@ -119,7 +139,7 @@ describe('cockpit gates routes', () => {
       expect(retainer.size().count).toBe(1);
     });
 
-    it('400 on schema failure', async () => {
+    it('400 on schema failure (bare type is not a full gate-open)', async () => {
       setupCockpitGatesRoute(server, {
         retainer,
         getRelayClient: () => makeMockClient(),
@@ -130,12 +150,46 @@ describe('cockpit gates routes', () => {
       const res = await server.inject({
         method: 'POST',
         url: '/cockpit/gates',
-        payload: { kind: 'gate-open' /* missing everything else */ },
+        payload: { type: 'gate-open' /* missing everything else */ },
       });
       expect(res.statusCode).toBe(400);
       const body = JSON.parse(res.body);
       expect(body.code).toBe('VALIDATION');
       expect(Array.isArray(body.details)).toBe(true);
+    });
+
+    it('400 when gateType is not one of the 8 frozen enum values', async () => {
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => makeMockClient(),
+        logger: silentLogger,
+      });
+      await server.ready();
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/cockpit/gates',
+        // 'clarification-batch' is the ledger original-action, NOT a gateType.
+        payload: { ...validOpen, gateType: 'clarification-batch' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('VALIDATION');
+    });
+
+    it('400 when issueUrl is a bare ref rather than a URL', async () => {
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => makeMockClient(),
+        logger: silentLogger,
+      });
+      await server.ready();
+
+      const res = await server.inject({
+        method: 'POST',
+        url: '/cockpit/gates',
+        payload: { ...validOpen, issueUrl: 'generacy-ai/generacy#1021' },
+      });
+      expect(res.statusCode).toBe(400);
     });
 
     it('warn fires on overflow drops', async () => {
@@ -152,7 +206,7 @@ describe('cockpit gates routes', () => {
       const res = await server.inject({
         method: 'POST',
         url: '/cockpit/gates',
-        payload: { ...validOpen, gateId: 'g_test_2' },
+        payload: openWithGateId('a1b2c3d4e5f6a7b8c9d0e100'),
       });
       expect(res.statusCode).toBe(202);
       expect(warn).toHaveBeenCalled();
@@ -166,11 +220,16 @@ describe('cockpit gates routes', () => {
       });
       await server.ready();
 
-      for (let i = 0; i < 3; i += 1) {
+      const ids = [
+        'a1b2c3d4e5f6a7b8c9d0e1a0',
+        'a1b2c3d4e5f6a7b8c9d0e1a1',
+        'a1b2c3d4e5f6a7b8c9d0e1a2',
+      ];
+      for (const id of ids) {
         await server.inject({
           method: 'POST',
           url: '/cockpit/gates',
-          payload: { ...validOpen, gateId: `g_seq_${i}` },
+          payload: openWithGateId(id),
         });
       }
       expect(retainer.size().count).toBe(3);
@@ -180,12 +239,12 @@ describe('cockpit gates routes', () => {
       const seqs = (drainClient.send as ReturnType<typeof vi.fn>).mock.calls.map(
         (call) => ((call[0] as { data: { gateId: string } }).data.gateId),
       );
-      expect(seqs).toEqual(['g_seq_0', 'g_seq_1', 'g_seq_2']);
+      expect(seqs).toEqual(ids);
     });
   });
 
-  describe('POST /cockpit/gates/:id/ack', () => {
-    it('happy path — merges path gateId into body and emits', async () => {
+  describe('POST /cockpit/gates/:id/ack (gate-outcome)', () => {
+    it('happy path — stamps type:gate-outcome + path gateId and emits', async () => {
       const client = makeMockClient();
       setupCockpitGatesRoute(server, {
         retainer,
@@ -196,14 +255,44 @@ describe('cockpit gates routes', () => {
 
       const res = await server.inject({
         method: 'POST',
-        url: '/cockpit/gates/g_test_ack/ack',
+        url: `/cockpit/gates/${GATE_ID}/ack`,
         payload: validAckBody,
       });
       expect(res.statusCode).toBe(202);
       const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-        data: { gateId: string };
+        data: { type: string; gateId: string; outcome: string; detail?: string; at: string };
       };
-      expect(call.data.gateId).toBe('g_test_ack');
+      expect(call.data.type).toBe('gate-outcome');
+      expect(call.data.gateId).toBe(GATE_ID);
+      expect(call.data.outcome).toBe('applied');
+      expect(call.data.detail).toBe('answer applied to the issue');
+      // No leftover gate-ack fields on the wire.
+      expect(call.data).not.toHaveProperty('kind');
+      expect(call.data).not.toHaveProperty('generation');
+      expect(call.data).not.toHaveProperty('ackedAt');
+    });
+
+    it('defaults `at` when the client omits it', async () => {
+      const client = makeMockClient();
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => client,
+        logger: silentLogger,
+      });
+      await server.ready();
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/cockpit/gates/${GATE_ID}/ack`,
+        payload: { outcome: 'superseded' },
+      });
+      expect(res.statusCode).toBe(202);
+      const call = (client.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
+        data: { outcome: string; at: string };
+      };
+      expect(call.data.outcome).toBe('superseded');
+      expect(typeof call.data.at).toBe('string');
+      expect(Number.isNaN(Date.parse(call.data.at))).toBe(false);
     });
 
     it('400 when body.gateId differs from path :id', async () => {
@@ -216,13 +305,16 @@ describe('cockpit gates routes', () => {
 
       const res = await server.inject({
         method: 'POST',
-        url: '/cockpit/gates/g_path/ack',
-        payload: { ...validAckBody, gateId: 'g_body' },
+        url: `/cockpit/gates/${GATE_ID}/ack`,
+        payload: { ...validAckBody, gateId: 'b0b0b0b0b0b0b0b0b0b0b0b0' },
       });
       expect(res.statusCode).toBe(400);
       const body = JSON.parse(res.body);
       expect(body.code).toBe('VALIDATION');
-      expect(body.details).toEqual({ pathGateId: 'g_path', bodyGateId: 'g_body' });
+      expect(body.details).toEqual({
+        pathGateId: GATE_ID,
+        bodyGateId: 'b0b0b0b0b0b0b0b0b0b0b0b0',
+      });
     });
 
     it('accepts body.gateId when it matches path :id', async () => {
@@ -235,13 +327,13 @@ describe('cockpit gates routes', () => {
 
       const res = await server.inject({
         method: 'POST',
-        url: '/cockpit/gates/g_same/ack',
-        payload: { ...validAckBody, gateId: 'g_same' },
+        url: `/cockpit/gates/${GATE_ID}/ack`,
+        payload: { ...validAckBody, gateId: GATE_ID },
       });
       expect(res.statusCode).toBe(202);
     });
 
-    it('400 on ack schema failure', async () => {
+    it('400 on gate-outcome schema failure (missing outcome)', async () => {
       setupCockpitGatesRoute(server, {
         retainer,
         getRelayClient: () => makeMockClient(),
@@ -251,8 +343,25 @@ describe('cockpit gates routes', () => {
 
       const res = await server.inject({
         method: 'POST',
-        url: '/cockpit/gates/g_x/ack',
-        payload: { kind: 'gate-ack' /* missing outcome, generation, ackedAt */ },
+        url: `/cockpit/gates/${GATE_ID}/ack`,
+        payload: { detail: 'no outcome here' },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(JSON.parse(res.body).code).toBe('VALIDATION');
+    });
+
+    it('400 when outcome is outside the applied|superseded|failed enum', async () => {
+      setupCockpitGatesRoute(server, {
+        retainer,
+        getRelayClient: () => makeMockClient(),
+        logger: silentLogger,
+      });
+      await server.ready();
+
+      const res = await server.inject({
+        method: 'POST',
+        url: `/cockpit/gates/${GATE_ID}/ack`,
+        payload: { outcome: 'answered' }, // old free-string value, now rejected
       });
       expect(res.statusCode).toBe(400);
     });

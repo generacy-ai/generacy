@@ -25,13 +25,19 @@ function makeFakeWriter(overrides: Partial<FakeWriter> = {}): FakeWriter {
   };
 }
 
+const GATE_ID = 'a1b2c3d4e5f6a7b8c9d0e1f2';
+
+// Frozen down-path Shape 3 — gate-answer. Flat, type:'gate-answer', with
+// gateKey, nullable optionId/freeText, and actor{userId,email?,displayName?}.
 const validAnswer = {
-  kind: 'gate-answer',
-  deliveryId: 'dlv_1',
-  gateId: 'g_1',
-  generation: 0,
+  type: 'gate-answer' as const,
+  gateId: GATE_ID,
+  gateKey: 'generacy-ai/generacy#1021:clarification:batch-1',
+  optionId: 'proceed',
+  freeText: null,
+  actor: { userId: 'u_1', email: 'ada@example.com', displayName: 'Ada' },
   answeredAt: '2026-07-21T15:04:11.100Z',
-  answer: { choice: 'proceed' },
+  deliveryId: 'dlv_1',
 };
 
 describe('POST /cockpit/answers', () => {
@@ -41,7 +47,7 @@ describe('POST /cockpit/answers', () => {
     server = Fastify();
   });
 
-  it('fresh delivery — appends and returns deduped:false', async () => {
+  it('fresh delivery — appends the frozen answer and returns deduped:false', async () => {
     const writer = makeFakeWriter();
     setupCockpitAnswersRoute(server, {
       writer: writer as unknown as CockpitAnswersWriter,
@@ -58,9 +64,58 @@ describe('POST /cockpit/answers', () => {
     expect(JSON.parse(res.body)).toEqual({ accepted: true, deduped: false });
     expect(writer.append).toHaveBeenCalledTimes(1);
     expect(writer.append).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'gate-answer',
       deliveryId: 'dlv_1',
-      gateId: 'g_1',
+      gateId: GATE_ID,
+      gateKey: 'generacy-ai/generacy#1021:clarification:batch-1',
+      optionId: 'proceed',
     }));
+  });
+
+  it('accepts a pure free-text answer (optionId:null, freeText set)', async () => {
+    const writer = makeFakeWriter();
+    setupCockpitAnswersRoute(server, {
+      writer: writer as unknown as CockpitAnswersWriter,
+      logger: silentLogger,
+    });
+    await server.ready();
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/cockpit/answers',
+      payload: {
+        ...validAnswer,
+        optionId: null,
+        freeText: 'do the other thing',
+        deliveryId: 'dlv_free',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(writer.append).toHaveBeenCalledWith(expect.objectContaining({
+      optionId: null,
+      freeText: 'do the other thing',
+    }));
+  });
+
+  it('accepts an actor with null email / displayName (partial profile)', async () => {
+    const writer = makeFakeWriter();
+    setupCockpitAnswersRoute(server, {
+      writer: writer as unknown as CockpitAnswersWriter,
+      logger: silentLogger,
+    });
+    await server.ready();
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/cockpit/answers',
+      payload: {
+        ...validAnswer,
+        deliveryId: 'dlv_anon',
+        actor: { userId: 'u_2', email: null, displayName: null },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(writer.append).toHaveBeenCalledTimes(1);
   });
 
   it('duplicate deliveryId — returns deduped:true and does not append', async () => {
@@ -92,11 +147,35 @@ describe('POST /cockpit/answers', () => {
     const res = await server.inject({
       method: 'POST',
       url: '/cockpit/answers',
-      payload: { kind: 'gate-answer' /* missing everything else */ },
+      payload: { type: 'gate-answer' /* missing everything else */ },
     });
     expect(res.statusCode).toBe(400);
     const body = JSON.parse(res.body);
     expect(body.code).toBe('VALIDATION');
+    expect(writer.append).not.toHaveBeenCalled();
+  });
+
+  it('400 on the old `kind`/nested-answer envelope shape', async () => {
+    const writer = makeFakeWriter();
+    setupCockpitAnswersRoute(server, {
+      writer: writer as unknown as CockpitAnswersWriter,
+      logger: silentLogger,
+    });
+    await server.ready();
+
+    const res = await server.inject({
+      method: 'POST',
+      url: '/cockpit/answers',
+      payload: {
+        kind: 'gate-answer',
+        deliveryId: 'dlv_old',
+        gateId: GATE_ID,
+        generation: 0,
+        answeredAt: '2026-07-21T15:04:11.100Z',
+        answer: { choice: 'proceed' },
+      },
+    });
+    expect(res.statusCode).toBe(400);
     expect(writer.append).not.toHaveBeenCalled();
   });
 

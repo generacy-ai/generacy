@@ -105,14 +105,23 @@ function baseOptions(
   };
 }
 
+/**
+ * A well-formed FROZEN down-path gate-answer line (Shape 3). Default gateKey
+ * issue-ref shares the bound epic's owner/repo so it passes the repo-scope
+ * filter. `gateId` is a short opaque label (the tailer pins it `min(1)`, not
+ * `length(24)` — format is validated upstream at the /cockpit/answers route).
+ */
 function goodLine(overrides: Record<string, unknown> = {}): string {
   return (
     JSON.stringify({
+      type: 'gate-answer',
       gateId: 'g1',
-      deliveryId: 'd1',
-      scope: { owner: 'owner', repo: 'repo', number: 5 },
-      answer: { text: 'yes' },
+      gateKey: 'owner/repo#5:clarification:batch-abc',
+      optionId: 'opt-1',
+      freeText: null,
+      actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
       answeredAt: '2027-01-14T12:00:00.000Z',
+      deliveryId: 'd1',
       ...overrides,
     }) + '\n'
   );
@@ -166,7 +175,7 @@ describe('AnswersFileSource — constructor validation', () => {
 });
 
 describe('AnswersFileSource — line pipeline (unit)', () => {
-  it('happy path: valid line matching epicRef emits one event with correct shape', async () => {
+  it('happy path: valid frozen line matching epicRef emits one event with flat answer fields', async () => {
     const mem = makeMemFs();
     mem.setContent(goodLine());
     const onEvent = vi.fn();
@@ -182,8 +191,52 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(event.gateId).toBe('g1');
     expect(event.deliveryId).toBe('d1');
     expect(event.epic).toBe('owner/repo#5');
-    expect(event.line.scope).toEqual({ owner: 'owner', repo: 'repo', number: 5 });
+    // Flat frozen answer fields survive on line.* (no scope / nested-answer).
+    expect(event.line.type).toBe('gate-answer');
+    expect(event.line.gateKey).toBe('owner/repo#5:clarification:batch-abc');
+    expect(event.line.optionId).toBe('opt-1');
+    expect(event.line.freeText).toBeNull();
+    expect(event.line.actor).toEqual({
+      userId: 'u1',
+      email: 'op@example.com',
+      displayName: 'Op',
+    });
     expect(event.ts).toBe(new Date(1_800_000_000_000).toISOString());
+  });
+
+  it('accepts a pure free-text answer (optionId null, freeText string)', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ optionId: null, freeText: 'do the other thing' }));
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const event = onEvent.mock.calls[0]![0] as GateAnswerEvent;
+    expect(event.line.optionId).toBeNull();
+    expect(event.line.freeText).toBe('do the other thing');
+  });
+
+  it('accepts a null-email / null-displayName actor (anonymous / partial profile)', async () => {
+    const mem = makeMemFs();
+    mem.setContent(
+      goodLine({ actor: { userId: 'u9', email: null, displayName: null } }),
+    );
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const event = onEvent.mock.calls[0]![0] as GateAnswerEvent;
+    expect(event.line.actor.userId).toBe('u9');
+    expect(event.line.actor.email).toBeNull();
+    expect(event.line.actor.displayName).toBeNull();
   });
 
   it('emitted event survives round-trip through CockpitStreamEventSchema + lineForEvent', async () => {
@@ -226,14 +279,46 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(event.line.another).toBe(42);
   });
 
+  it('missing type discriminator → skipped with logger.warn (guards the kind→type fix)', async () => {
+    const mem = makeMemFs();
+    // The OLD wrong shape used `kind:'gate-answer'` with no `type`; it must now
+    // fail schema validation and be dropped as malformed.
+    mem.setContent(
+      JSON.stringify({
+        kind: 'gate-answer',
+        gateId: 'g1',
+        gateKey: 'owner/repo#5:clarification:b',
+        optionId: 'opt-1',
+        freeText: null,
+        actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
+        answeredAt: '2027-01-14T12:00:00.000Z',
+        deliveryId: 'd1',
+      }) + '\n',
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.warn.mock.calls[0]![0]).toMatch(/malformed line/);
+  });
+
   it('missing gateId → skipped with logger.warn, no onEvent', async () => {
     const mem = makeMemFs();
     mem.setContent(
       JSON.stringify({
-        deliveryId: 'd1',
-        scope: { owner: 'owner', repo: 'repo', number: 5 },
-        answer: 'x',
+        type: 'gate-answer',
+        gateKey: 'owner/repo#5:clarification:b',
+        optionId: 'opt-1',
+        freeText: null,
+        actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
         answeredAt: '2027-01-14T12:00:00.000Z',
+        deliveryId: 'd1',
       }) + '\n',
     );
     const logger = makeLogger();
@@ -264,15 +349,17 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it('missing scope.number → skipped with warn', async () => {
+  it('missing gateKey → skipped with warn', async () => {
     const mem = makeMemFs();
     mem.setContent(
       JSON.stringify({
+        type: 'gate-answer',
         gateId: 'g1',
-        deliveryId: 'd1',
-        scope: { owner: 'owner', repo: 'repo' },
-        answer: 'x',
+        optionId: 'opt-1',
+        freeText: null,
+        actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
         answeredAt: '2027-01-14T12:00:00.000Z',
+        deliveryId: 'd1',
       }) + '\n',
     );
     const logger = makeLogger();
@@ -287,17 +374,34 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
-  it('scope.number as string → skipped with warn', async () => {
+  it('missing actor → skipped with warn', async () => {
     const mem = makeMemFs();
     mem.setContent(
       JSON.stringify({
+        type: 'gate-answer',
         gateId: 'g1',
-        deliveryId: 'd1',
-        scope: { owner: 'owner', repo: 'repo', number: '5' },
-        answer: 'x',
+        gateKey: 'owner/repo#5:clarification:b',
+        optionId: 'opt-1',
+        freeText: null,
         answeredAt: '2027-01-14T12:00:00.000Z',
+        deliveryId: 'd1',
       }) + '\n',
     );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('optionId wrong type (number) → skipped with warn', async () => {
+    const mem = makeMemFs();
+    mem.setContent(goodLine({ optionId: 5 }));
     const logger = makeLogger();
     const onEvent = vi.fn();
     const src = new AnswersFileSource(
@@ -330,10 +434,10 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(warnMsg).toMatch(/malformed line/);
   });
 
-  it('cross-epic line → dropped with logger.info naming gateId + scope + boundEpic', async () => {
+  it('cross-repo line (foreign owner in gateKey) → dropped with logger.info naming gateId + scope + boundEpic', async () => {
     const mem = makeMemFs();
     mem.setContent(
-      goodLine({ scope: { owner: 'other', repo: 'repo', number: 99 } }),
+      goodLine({ gateKey: 'other/repo#99:clarification:batch-x' }),
     );
     const logger = makeLogger();
     const onEvent = vi.fn();
@@ -353,6 +457,45 @@ describe('AnswersFileSource — line pipeline (unit)', () => {
     expect(infoMsg).toMatch(/gateId=g1/);
     expect(infoMsg).toMatch(/scope=other\/repo#99/);
     expect(infoMsg).toMatch(/boundEpic=owner\/repo#5/);
+  });
+
+  it('same-repo child-issue answer (different issue number) is NOT dropped', async () => {
+    const mem = makeMemFs();
+    // Bound epic is owner/repo#5; a gate opened on child issue owner/repo#42
+    // must still be delivered (repo-scope, not issue-number, matching).
+    mem.setContent(
+      goodLine({ gateKey: 'owner/repo#42:implementation-review:abc123' }),
+    );
+    const logger = makeLogger();
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent, logger }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    const infoDrops = logger.info.mock.calls.filter((c) =>
+      (c[0] as string).includes('cross-epic drop'),
+    );
+    expect(infoDrops).toHaveLength(0);
+  });
+
+  it('non-issue gateKey target (filing/scope-drained tracking ref) is emitted, not scope-dropped', async () => {
+    const mem = makeMemFs();
+    // A gateKey whose issue-ref does not parse as owner/repo#N (e.g. a filing
+    // draft target). The tailer cannot determine scope, so it emits.
+    mem.setContent(
+      goodLine({ gateKey: 'tracking-thread-7:filing:draft-hash-9' }),
+    );
+    const onEvent = vi.fn();
+    const src = new AnswersFileSource(
+      baseOptions({ fs: mem.fs, onEvent }),
+    );
+    await src.start();
+    await src.stop();
+
+    expect(onEvent).toHaveBeenCalledTimes(1);
   });
 
   it('event.ts uses injected now() clock (deterministic)', async () => {

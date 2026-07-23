@@ -33,14 +33,19 @@ function makeLogger(): { warn: ReturnType<typeof vi.fn>; info: ReturnType<typeof
   return { warn: vi.fn(), info: vi.fn() };
 }
 
+// FROZEN down-path gate-answer line (Shape 3). Default gateKey issue-ref shares
+// the bound epic owner/repo (owner/repo#5) so it passes the repo-scope filter.
 function goodLine(overrides: Record<string, unknown> = {}): string {
   return (
     JSON.stringify({
+      type: 'gate-answer',
       gateId: 'g1',
-      deliveryId: 'd1',
-      scope: { owner: 'owner', repo: 'repo', number: 5 },
-      answer: { text: 'yes' },
+      gateKey: 'owner/repo#5:clarification:batch-abc',
+      optionId: 'opt-1',
+      freeText: null,
+      actor: { userId: 'u1', email: 'op@example.com', displayName: 'Op' },
       answeredAt: '2027-01-14T12:00:00.000Z',
+      deliveryId: 'd1',
       ...overrides,
     }) + '\n'
   );

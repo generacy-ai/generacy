@@ -8,28 +8,26 @@ The **wire shape** of a single line of `/workspaces/.generacy/cockpit/answers.nd
 
 This document captures the **minimum subset** the tailer parses locally to satisfy this feature's requirements:
 
-- Fields required for scope filtering (Q1).
+- Fields required for repo-scope filtering (Q1) — the `gateKey` issue-ref.
 - Fields required for cross-epic drop logging (Q1).
 - Fields required for `GateAnswerEvent` derivation (data-model §E-2).
 
 All other fields flow through the `GateAnswerLine.line` payload via Zod `.passthrough()` and reach downstream (D.12 dispatch) unchanged. This feature does not need to know them.
 
+The line is the FROZEN down-path Shape 3 (flat). There is **no** `scope`, nested `answer`, or top-level `generation` — `generation` is folded into `gateKey`.
+
 ## Required fields (tailer-side)
 
 | Field | Type | Consumer inside this feature |
 |---|---|---|
-| `gateId` | `string`, `min(1)` | Cross-epic drop info log; hoisted onto `GateAnswerEvent.gateId` for consumer convenience. |
+| `type` | `'gate-answer'` (literal) | Discriminator. A line lacking it (e.g. the old `kind`) fails schema and is dropped as malformed. |
+| `gateId` | `string`, `min(1)` | Cross-epic drop info log; hoisted onto `GateAnswerEvent.gateId`. Format (24-hex) is validated upstream at `POST /cockpit/answers`. |
+| `gateKey` | `string`, `min(1)` (`<owner>/<repo>#<issue>:<gateType>:<generation>`) | Repo-scope filter: owner/repo parsed from the issue-ref (up to first `:`) and compared to the bound `epicRef` on **owner/repo only** (child-issue numbers pass). Non-issue targets emit. |
+| `optionId` | `string \| null` | Pass-through. `null` on a pure free-text answer. |
+| `freeText` | `string \| null` | Pass-through. Present-and-`null` on an option-only answer — must be `.nullable()`, not `.optional()`. |
+| `actor` | `{ userId: string; email: string \| null; displayName: string \| null }` | Pass-through. `email`/`displayName` nullable for anonymous / partial-profile actors. |
 | `deliveryId` | `string`, `min(1)` | Hoisted onto `GateAnswerEvent.deliveryId`. Deduplication is the session's concern, not the tailer's. |
-| `scope` | `{ owner: string; repo: string; number: number (int, positive) }` | Compared against the bound `epicRef` (parsed as `owner/repo#number`). Cross-scope lines dropped + logged. |
-| `answer` | `unknown` | Opaque pass-through — the operator's payload; validated by the gate record, not the tailer. |
 | `answeredAt` | `string` (ISO 8601 datetime) | Opaque pass-through — used downstream for gate-currency checks. |
-
-## Optional fields (tailer-side)
-
-| Field | Type | Consumer inside this feature |
-|---|---|---|
-| `answeredBy` | `string` | Pass-through. |
-| `generation` | `number` (int, ≥ 0) | Pass-through. Required if the epic-plan doc's generation rules apply — the tailer neither enforces nor interprets. |
 
 ## Unknown fields
 
@@ -49,10 +47,11 @@ If the epic-plan doc's wire shape diverges from `GateAnswerLineSchema` in a way 
 
 The tailer's line-validation contract is exercised in `answers-file-source.unit.test.ts`:
 
-1. **Happy path**: a line matching the required-field set parses and emits.
-2. **Missing `gateId`**: skipped with `warn`.
-3. **Missing `scope.number`**: skipped with `warn`.
-4. **Malformed JSON**: skipped with `warn`; byte-offset field present.
-5. **Extra unknown fields**: preserved on `line.*` via `.passthrough()`.
-6. **`scope.number` type mismatch (string instead of int)**: skipped with `warn`.
-7. **Empty string `gateId`**: skipped with `warn` (`min(1)` violation).
+1. **Happy path**: a valid frozen line matching the bound epic's owner/repo parses and emits one event with flat answer fields.
+2. **Pure free-text answer** (`optionId: null`, `freeText` string) and **option-only answer** (`freeText: null`) both parse.
+3. **Null-`email` / null-`displayName` actor** (anonymous / partial profile): parses (guards against tightening `actor` to non-null).
+4. **Missing `type` discriminator** (e.g. the old `kind`): skipped with `warn` — guards the `kind`→`type` fix.
+5. **Missing `gateId` / empty-string `gateId` / missing `gateKey` / missing `actor` / `optionId` wrong type**: skipped with `warn`.
+6. **Malformed JSON**: skipped with `warn`; byte-offset named in the message.
+7. **Extra unknown fields**: preserved on `line.*` via `.passthrough()`.
+8. **Cross-repo line** (foreign owner/repo in `gateKey`): dropped with `info` naming gateId + scope + boundEpic. **Same-repo child-issue** (different issue number) and **non-issue `gateKey` target** (filing / scope-drained tracking ref): NOT dropped.
