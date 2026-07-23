@@ -12,6 +12,13 @@
  */
 import { isCockpitExit, type CockpitExit } from '../exit.js';
 
+// #1038 — `query-unreachable` is distinct from `transport` because the read
+// side (`cockpit_gate_status` / `cockpit_gate_list`) and the write side
+// (`cockpit_gate_open` / `cockpit_gate_ack`) dispatch differently downstream:
+// `transport` triggers the local AskUserQuestion fallback in the sweep's
+// write-path (opening a gate anyway); `query-unreachable` MUST abort the
+// scope's `--gates=ui` run (so we don't re-draft a gate that is already open
+// in the cloud but temporarily unreadable). See specs/1038-issue-1038 R5/R13.
 export type ErrorClass =
   | 'invalid-args'
   | 'wrong-kind'
@@ -19,6 +26,7 @@ export type ErrorClass =
   | 'not-an-epic'
   | 'gate-refusal'
   | 'transport'
+  | 'query-unreachable'
   | 'invalid-cursor'
   | 'not-worker'
   | 'contended'

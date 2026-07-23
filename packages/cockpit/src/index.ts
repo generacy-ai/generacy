@@ -122,11 +122,17 @@ export {
   derivePhaseQueueGeneration,
   deriveFilingGeneration,
   deriveScopeDrainedGeneration,
+  // #1038 — canonical clarification-batch hash (input to deriveClarificationGeneration)
+  computeClarificationAnswerSetHash,
+  type ClarificationQuestion,
+  type ComputeClarificationAnswerSetHashInput,
   // Fixtures
   VALID_FIXTURES,
   MALFORMED_FIXTURES,
   VALID_ANSWER_FIXTURES,
   VALID_ACK_FIXTURES,
+  CLARIFICATION_ANSWER_SET_FIXTURES,
+  type ClarificationAnswerSetFixture,
   // Wire-frame fixture builders (#1024 integration harness)
   gateOpenFixture,
   gateOutcomeFixture,

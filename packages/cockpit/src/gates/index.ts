@@ -56,10 +56,18 @@ export {
 } from './generation.js';
 
 export {
+  computeClarificationAnswerSetHash,
+  type ClarificationQuestion,
+  type ComputeClarificationAnswerSetHashInput,
+} from './clarification-hash.js';
+
+export {
   VALID_FIXTURES,
   MALFORMED_FIXTURES,
   VALID_ANSWER_FIXTURES,
   VALID_ACK_FIXTURES,
+  CLARIFICATION_ANSWER_SET_FIXTURES,
+  type ClarificationAnswerSetFixture,
 } from './fixtures.js';
 
 export {

@@ -20,6 +20,7 @@ import {
   derivePhaseQueueGeneration,
   deriveScopeDrainedGeneration,
 } from './generation.js';
+import type { ClarificationQuestion } from './clarification-hash.js';
 
 const EPIC_REF: IssueRef = { owner: 'generacy-ai', repo: 'generacy', number: 1000 };
 const ISSUE_REF: IssueRef = { owner: 'generacy-ai', repo: 'generacy', number: 1020 };
@@ -243,3 +244,42 @@ export const MALFORMED_FIXTURES: Record<string, unknown> = {
     type: 'gate-open',
   },
 };
+
+// #1038 — canonical fixture inputs for `computeClarificationAnswerSetHash`
+// (per specs/1038 data-model.md § Fixtures). Used by
+// __tests__/clarification-hash.test.ts and __tests__/generation-parity.test.ts
+// to prove SC-002 (sweep-derived and live-derived gateIds coalesce for the
+// same GitHub state).
+export interface ClarificationAnswerSetFixture {
+  readonly questions: readonly ClarificationQuestion[];
+}
+
+export const CLARIFICATION_ANSWER_SET_FIXTURES = Object.freeze({
+  singleQuestion: Object.freeze({
+    questions: Object.freeze([
+      Object.freeze({ questionNumber: 1, questionText: 'Which auth method?' }),
+    ]),
+  }) as ClarificationAnswerSetFixture,
+  // Deliberately out-of-order to prove sort determinism (SC-002).
+  threeQuestions: Object.freeze({
+    questions: Object.freeze([
+      Object.freeze({ questionNumber: 3, questionText: 'Timezone?' }),
+      Object.freeze({ questionNumber: 1, questionText: 'Which auth method?' }),
+      Object.freeze({ questionNumber: 2, questionText: 'Which DB?' }),
+    ]),
+  }) as ClarificationAnswerSetFixture,
+  // Non-ASCII bytes to exercise UTF-8 canonicalization end to end.
+  unicode: Object.freeze({
+    questions: Object.freeze([
+      Object.freeze({
+        questionNumber: 1,
+        questionText: 'Préférence pour l’heure locale? 🌍',
+      }),
+      Object.freeze({
+        questionNumber: 2,
+        questionText: '中文文本 — 数据库偏好?',
+      }),
+    ]),
+  }) as ClarificationAnswerSetFixture,
+} as const);
+

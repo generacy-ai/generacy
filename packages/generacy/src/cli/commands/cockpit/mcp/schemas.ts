@@ -12,6 +12,10 @@ import {
   GateOpenInputSchema as InternalGateOpenInputSchema,
   GateAckInputSchema as InternalGateAckInputSchema,
 } from './gates/schemas.js';
+import {
+  CockpitGateStatusInputSchema as InternalGateStatusInputSchema,
+  CockpitGateListInputSchema as InternalGateListInputSchema,
+} from './gates/query-schemas.js';
 
 /** Structured issue/epic reference. */
 export const IssueRefObjectSchema = z
@@ -203,3 +207,15 @@ export type CockpitGateOpenInput = z.infer<typeof CockpitGateOpenInputSchema>;
 
 export const CockpitGateAckInputSchema = InternalGateAckInputSchema;
 export type CockpitGateAckInput = z.infer<typeof CockpitGateAckInputSchema>;
+
+/**
+ * #1038 — read-only gate-query MCP-boundary schemas. Re-exported from
+ * `./gates/query-schemas.ts` so tool-schema-audit sees them on the public
+ * import surface. See specs/1038-issue-1038/contracts/cockpit_gate_status.md
+ * and cockpit_gate_list.md.
+ */
+export const CockpitGateStatusInputSchema = InternalGateStatusInputSchema;
+export type CockpitGateStatusInput = z.infer<typeof CockpitGateStatusInputSchema>;
+
+export const CockpitGateListInputSchema = InternalGateListInputSchema;
+export type CockpitGateListInput = z.infer<typeof CockpitGateListInputSchema>;
