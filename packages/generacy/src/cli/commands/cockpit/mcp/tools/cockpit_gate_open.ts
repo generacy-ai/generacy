@@ -100,6 +100,17 @@ export function cockpitGateOpen(
         detail: 'orchestrator returned malformed gate-open response',
       };
     }
-    return { status: 'ok', data: envelope.data as CockpitGateOpenData };
+    // The orchestrator ack is `{ accepted, retained }` (fire-and-forget; no
+    // echoed gateId). Return the caller-facing `{ gateId, status }` using the
+    // gateId the tool derived: `retained` (relay down → queued) vs `open`
+    // (emitted to the cloud). Pass through any extra ack fields (retainQueue…).
+    return {
+      status: 'ok',
+      data: {
+        ...envelope.data,
+        gateId,
+        status: envelope.data.retained ? 'retained' : 'open',
+      },
+    };
   });
 }
